@@ -13,6 +13,8 @@ Current working baseline:
 - CLI chat runtime
 - Ollama backend
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
+- official-first dependency policy for providers/channels
+- Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
 ## Why Use It
 
@@ -64,3 +66,4 @@ Useful commands inside chat:
 - `ARCHITECTURE.md`
 - `ROADMAP_MVP.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
+- `DEPENDENCY_POLICY.md`

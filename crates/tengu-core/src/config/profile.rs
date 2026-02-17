@@ -22,6 +22,11 @@ pub struct SystemCapabilities {
 }
 
 impl SystemCapabilities {
+    /// Detect coarse hardware capabilities for runtime profile selection.
+    ///
+    /// TODO(epic-profile-detection): Replace heuristic GPU detection with provider/runtime
+    /// probing (Metal/CUDA/ROCm availability and usable memory), then wire profile
+    /// outputs to Candle backend selection for local acceleration.
     pub fn detect() -> Self {
         let mut sys = System::new_all();
         sys.refresh_all();
@@ -44,6 +49,9 @@ impl SystemCapabilities {
     }
 
     pub fn recommended_profile(&self) -> RuntimeProfile {
+        // TODO(epic-profile-tuning): Calibrate thresholds with benchmark data and
+        // allow override knobs per deployment environment, including explicit
+        // "prefer CUDA/Metal" hints for Candle-enabled local optimization.
         match (self.available_ram_mb, self.has_gpu) {
             (ram, true) if ram > 16_000 => RuntimeProfile::Cloud,
             (ram, _) if ram > 4_000 => RuntimeProfile::Desktop,

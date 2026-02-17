@@ -13,6 +13,7 @@ pub struct CliPipe {
 }
 
 impl CliPipe {
+    /// Create a new CLI pipe instance.
     pub fn new() -> Self {
         Self {
             shutdown: Arc::new(Mutex::new(None)),
@@ -48,6 +49,8 @@ impl Pipe for CliPipe {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         *self.shutdown.lock().await = Some(shutdown_tx);
 
+        // TODO(epic-channel-lifecycle): Track spawned task handles so disconnect can
+        // await clean shutdown and surface task errors.
         tokio::spawn(async move {
             let stdin = tokio::io::stdin();
             let reader = BufReader::new(stdin);
@@ -63,6 +66,8 @@ impl Pipe for CliPipe {
                                     continue;
                                 }
 
+                                // TODO(epic-pipe-policies): Route inbound messages through
+                                // access-policy enforcement middleware before forwarding.
                                 debug!(input = %text, "CLI input received");
 
                                 let msg = InboundMessage {
@@ -102,6 +107,7 @@ impl Pipe for CliPipe {
         if let Some(tx) = self.shutdown.lock().await.take() {
             let _ = tx.send(());
         }
+        // TODO(epic-channel-lifecycle): Confirm background task exited before returning.
         Ok(())
     }
 
@@ -111,6 +117,8 @@ impl Pipe for CliPipe {
         text: &str,
         _opts: &DeliveryOptions,
     ) -> anyhow::Result<()> {
+        // TODO(epic-channel-streaming): Support incremental streaming display for text
+        // deltas instead of only final buffered output.
         println!("\n{}\n", text);
         Ok(())
     }
@@ -120,6 +128,7 @@ impl Pipe for CliPipe {
         _target: &Recipient,
         media: &MediaPayload,
     ) -> anyhow::Result<()> {
+        // TODO(epic-channel-cli-media): Add local rendering/preview hooks for media payloads.
         println!(
             "[Media: {} ({} bytes)]",
             media.filename.as_deref().unwrap_or("unnamed"),

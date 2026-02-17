@@ -1,3 +1,7 @@
+//! Core traits and shared types for engines, pipes, tools, and refinement.
+//!
+//! TODO(epic-tool-loop): Wire tool calling lifecycle end-to-end in runtime.
+//! TODO(epic-flow-persistence): Add flow/session manager interfaces once persistence lands.
 pub mod config;
 pub mod routing;
 pub mod types;
@@ -35,6 +39,8 @@ pub trait Engine: Send + Sync {
         tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>>;
+    // TODO(epic-backend-telemetry): Standardize backend diagnostic metadata
+    // surfaced to runtime for cost/latency tracking.
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +91,7 @@ pub trait Pipe: Send + Sync {
         target: &Recipient,
         media: &MediaPayload,
     ) -> anyhow::Result<()>;
+    // TODO(epic-channel-ack): Add optional delivery ack/result contract.
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +111,7 @@ pub trait Refiner: Send + Sync {
 
     /// Current memory footprint of loaded models in bytes.
     fn memory_footprint(&self) -> usize;
+    // TODO(epic-refiner-observability): Add optional quality/latency stats hooks.
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +138,7 @@ pub trait Tool: Send + Sync {
         params: serde_json::Value,
         ctx: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
+    // TODO(epic-tool-security): Add per-tool policy metadata (risk level, approval requirements).
 }
 
 // ---------------------------------------------------------------------------

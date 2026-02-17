@@ -262,19 +262,25 @@ pub enum StreamEvent {
 | Engine | Crate | Status | Key Behavior |
 |--------|-------|--------|-------------|
 | `OllamaEngine` | `tengu-backends` | ✅ Implemented | HTTP to localhost:11434, non-streaming |
-| `AnthropicEngine` | `tengu-backends` | 🔲 Planned | HTTPS to api.anthropic.com, streaming, tool use |
-| `OpenAIEngine` | `tengu-backends` | 🔲 Planned | HTTPS to api.openai.com, streaming, tool use |
+| `AnthropicEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.anthropic.com, streaming, tool use |
+| `OpenAIEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.openai.com, streaming, tool use |
+| `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
+| `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | `hf-hub` + typed inference client |
+| `CandleLocalEngine` | `tengu-backends` | 🔲 Planned | In-process local inference; prefer CUDA/Metal, CPU fallback |
 
 ### Engine Selection Flow
 
 ```
-config.toml: agent.engine = "ollama" | "anthropic" | "openai"
+config.toml: agent.engine = "ollama" | "anthropic" | "openai" | "google" | "huggingface" | "candle-local"
                      │
                      ▼
 match agent_config.engine.as_str() {
     "ollama"    => Box::new(OllamaEngine::new(url, model)),
     "anthropic" => Box::new(AnthropicEngine::new(api_key, model)),
     "openai"    => Box::new(OpenAIEngine::new(api_key, model)),
+    "google"    => Box::new(GoogleEngine::new(api_key, model)),
+    "huggingface" => Box::new(HuggingFaceEngine::new(token, model)),
+    "candle-local" => Box::new(CandleLocalEngine::new(model)),
     // ...
 }
 ```
@@ -354,7 +360,7 @@ pub struct Recipient {
 |------|--------|-------------|-------|
 | `CliPipe` | ✅ | tokio stdin/stdout | `AccessPolicy::Open`, spawns async read loop |
 | `TelegramPipe` | 🔲 | [teloxide](https://docs.rs/teloxide) | Long-polling or webhook, `AccessPolicy::Approval` default |
-| `DiscordPipe` | 🔲 | [serenity](https://docs.rs/serenity) | Gateway WebSocket connection |
+| `DiscordPipe` | 🔲 | [serenity](https://docs.rs/serenity) or [twilight](https://docs.rs/twilight-gateway) | Gateway WebSocket connection |
 | `WebChatPipe` | 🔲 | axum / warp | HTTP + WebSocket, serves embedded HTML |
 
 ### Message Splitting Strategy
@@ -767,6 +773,8 @@ User Input → Refiner.compress() → Compressed Input → Engine
                   0 RAM       0 RAM        ~2GB RAM
 ```
 
+Acceleration policy: Candle should use GPU backends when available (CUDA/Metal), with CPU fallback on minimal hardware.
+
 ### RuleRefiner Details (implemented: `tengu-optimizer/src/rules/mod.rs`)
 
 **Pipeline:** `strip_hedging → strip_filler → collapse_whitespace`
@@ -1070,13 +1078,17 @@ Layer 6: RESOURCE LIMITS (Limits level)
 
 ## Appendix: Feature Flags
 
+Provider/channel dependency selection follows `DEPENDENCY_POLICY.md` (official-first; typed REST fallback).
+
 ```toml
 [features]
-default = ["ollama", "anthropic", "huggingface", "webchat"]
+default = ["ollama", "anthropic", "openai", "google", "webchat"]
 
 # Engines
 ollama    = ["tengu-backends/ollama"]       # Local models
 anthropic = ["tengu-backends/anthropic"]    # Claude API
+openai    = ["tengu-backends/openai"]       # OpenAI API
+google    = ["tengu-backends/google"]       # Gemini API
 huggingface = ["tengu-backends/huggingface"] # HF API
 
 # Pipes
@@ -1084,8 +1096,8 @@ telegram = ["tengu-channels/telegram"]       # Telegram bot
 discord  = ["tengu-channels/discord"]        # Discord bot
 webchat  = ["tengu-channels/webchat"]        # Browser UI
 
-# Optimizer
-candle = ["tengu-optimizer/candle"]           # ML-powered refiner
+# Optimizer / local ML acceleration
+candle = ["tengu-optimizer/candle"]           # Candle-enabled local ML path (GPU preferred, CPU fallback)
 ```
 
 ### Minimal Build (Raspberry Pi)

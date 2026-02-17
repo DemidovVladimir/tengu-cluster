@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Events emitted by an engine during response generation.
+///
+/// TODO(epic-stream-contract): Define strict ordering/terminal-event guarantees and
+/// add conformance tests across backends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
     /// Incremental text content.

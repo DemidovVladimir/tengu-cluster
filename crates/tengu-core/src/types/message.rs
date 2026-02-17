@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+/// Role of a message in a model conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
     #[serde(rename = "system")]
@@ -13,6 +14,10 @@ pub enum Role {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Normalized chat message passed to engines.
+///
+/// TODO(epic-message-schema): Expand content model beyond flat text for richer
+/// multimodal/tool-safe structured payloads.
 pub struct Message {
     pub role: Role,
     pub content: String,
@@ -23,6 +28,7 @@ pub struct Message {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Tool call emitted by a model.
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -30,6 +36,7 @@ pub struct ToolCall {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Tool definition exposed to model backends.
 pub struct ToolDef {
     pub name: String,
     pub description: String,
@@ -37,6 +44,7 @@ pub struct ToolDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Backend/model metadata surfaced to runtime.
 pub struct ModelInfo {
     pub id: String,
     pub provider: String,
@@ -47,6 +55,7 @@ pub struct ModelInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Addressable recipient identity for a channel/pipe.
 pub struct Recipient {
     pub pipe_id: String,
     pub peer_id: String,
@@ -57,6 +66,7 @@ pub struct Recipient {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Inbound user message envelope produced by a `Pipe`.
 pub struct InboundMessage {
     pub sender: Recipient,
     pub content: String,
@@ -66,6 +76,10 @@ pub struct InboundMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Raw media payload attached to an inbound message.
+///
+/// TODO(epic-media-storage): Add externalized media references for large payloads
+/// to avoid keeping full blobs in memory.
 pub struct MediaPayload {
     pub mime_type: String,
     pub data: Vec<u8>,
@@ -74,6 +88,7 @@ pub struct MediaPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Delivery options used by channel adapters for outbound sends.
 pub struct DeliveryOptions {
     pub reply_to_message_id: Option<String>,
     pub parse_mode: Option<String>,

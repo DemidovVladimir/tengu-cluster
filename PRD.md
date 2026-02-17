@@ -257,10 +257,11 @@ trait Engine: Send + Sync {
 | Engine | Status | Notes |
 |--------|--------|-------|
 | `ollama` | Implemented | Non-streaming request/response via `/api/chat` |
-| `anthropic` | Planned | Feature scaffold only |
-| `huggingface` | Planned | Feature scaffold only |
-| `openai` | Planned | PRD target only (not in current Cargo feature list) |
-| `google` | Planned | PRD target only |
+| `anthropic` | Planned | Feature scaffold only, typed REST target |
+| `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
+| `openai` | Planned | Feature scaffold only, typed REST target |
+| `google` | Planned | Feature scaffold only, typed REST target |
+| `candle-local` | Planned | In-process local inference, CUDA/Metal preferred with CPU fallback |
 
 ### 6.3 Engine Switching Mid-Chat
 
@@ -290,6 +291,11 @@ trait ModelProvider: Send + Sync {
 ```
 
 Provider format: `provider/model` (e.g., `anthropic/claude-sonnet-4-5`, `ollama/deepseek-coder-v2`).
+
+Dependency policy:
+- Prefer official provider SDKs when available and maintained.
+- If not available, use typed direct REST against official API docs.
+- Avoid third-party multi-provider abstraction crates in core runtime.
 
 ### 6.5 Auth Profiles
 
@@ -577,6 +583,8 @@ Implementations: `NoopRefiner`, `RuleRefiner`, `CandleRefiner`, `RemoteRefiner`.
 
 - Small quantized model in-process (Phi-3-mini, SmolLM2, Qwen2.5-1.5B)
 - Semantic compression preserving intent
+- Hardware acceleration path: prefer CUDA/Metal when available, CPU fallback otherwise
+- Explicit goal: saturate available local compute for faster/cheaper optimization passes
 - ~5-50ms per message
 - Saves 60-70% tokens
 
@@ -692,8 +700,9 @@ files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
 list = [
     "ollama/deepseek-coder-v2:16b",
     "anthropic/claude-sonnet-4-5-20250929",
+    "openai/gpt-4o-mini",
+    "google/gemini-2.0-flash",
     "huggingface/meta-llama/Llama-3.3-70B-Instruct",
-    "claude-code",
 ]
 
 [[routing]]
@@ -760,7 +769,7 @@ cargo build --release --no-default-features \
   --features "ollama"
 
 # Optional compile-time scaffolds (not fully implemented yet)
-# telegram, discord, webchat, anthropic, huggingface, claude-code, candle
+# telegram, discord, webchat, anthropic, openai, google, huggingface, candle
 ```
 
 ### Remote Refinement

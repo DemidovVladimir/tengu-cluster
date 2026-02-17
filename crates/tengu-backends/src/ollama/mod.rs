@@ -44,6 +44,7 @@ struct OllamaResponseMessage {
 }
 
 impl OllamaEngine {
+    /// Create an Ollama engine using a base URL and default model id.
     pub fn new(base_url: &str, model: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -76,11 +77,13 @@ impl Engine for OllamaEngine {
     }
 
     fn context_window(&self) -> usize {
-        // Ollama models vary; default to a reasonable size
+        // TODO(epic-backend-capabilities): Resolve per-model context windows via
+        // model metadata or cached `/api/tags` inspection instead of fixed default.
         8192
     }
 
     fn supports_tool_use(&self) -> bool {
+        // TODO(epic-backend-capabilities): Detect tool-use support per model.
         false // Depends on specific model; conservative default
     }
 
@@ -120,7 +123,9 @@ impl Engine for OllamaEngine {
         let request = OllamaChatRequest {
             model: self.model.clone(),
             messages: ollama_messages,
-            stream: false, // Non-streaming for simplicity in Phase 1
+            // TODO(epic-backend-ollama-streaming): Enable true streaming and map
+            // chunked responses into incremental `StreamEvent::TextDelta`.
+            stream: false, // Non-streaming fallback
         };
 
         debug!(model = %self.model, "Sending request to Ollama");
@@ -145,6 +150,8 @@ impl Engine for OllamaEngine {
 
         let mut events = Vec::new();
 
+        // TODO(epic-backend-usage-accounting): Improve usage accuracy and include
+        // cached/prompt breakdown where backend provides it.
         if let Some(msg) = chat_response.message {
             events.push(StreamEvent::TextDelta { text: msg.content });
         }

@@ -14,10 +14,12 @@ reqwest.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+hf-hub = { version = "0.4.3", optional = true }
 
 [features]
 default = []
 ollama = []
 anthropic = []
-huggingface = []
-claude-code = []
+openai = []
+google = []
+huggingface = ["dep:hf-hub"]

@@ -4,6 +4,8 @@ use tengu_core::Refiner;
 /// Rule-based refiner — zero ML, pure Rust string processing.
 /// Strips filler words, hedging, redundant whitespace.
 /// Saves 20-40% tokens with microsecond latency.
+///
+/// TODO(epic-refiner-quality): Add language-aware and domain-aware compression profiles.
 pub struct RuleRefiner {
     filler_words: Vec<&'static str>,
     hedging_phrases: Vec<&'static str>,
@@ -146,8 +148,9 @@ impl Refiner for RuleRefiner {
     }
 
     async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
-        // TF-IDF would go here for minimal builds.
-        // For now, return empty — knowledge store will fall back to keyword search.
+        // TODO(epic-retrieval-ranking): Implement lightweight lexical embeddings (e.g. TF-IDF)
+        // for better ranking quality without ML dependencies.
+        // For now, return empty — knowledge store falls back to keyword scoring.
         Ok(vec![])
     }
 

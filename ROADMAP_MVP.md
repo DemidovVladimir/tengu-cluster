@@ -211,7 +211,7 @@ Week 5-6:  Sprint 5 (Polish)           ██████████
 | Claude Code Engine | Full AI coder via subprocess | High |
 | WebChat Pipe | Browser interface | Medium |
 | Skills System | Capabilities from markdown files | High |
-| Candle ML Refiner | Local token optimization | Medium |
+| Candle ML Refiner + GPU Acceleration | Local token optimization with CUDA/Metal fallback strategy | Medium |
 | Discord Pipe | Discord support | Low |
 | Sandboxing | Docker, workspace isolation | Medium |
 

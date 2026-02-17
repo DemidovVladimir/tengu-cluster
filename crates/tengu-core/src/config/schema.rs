@@ -138,11 +138,19 @@ pub struct IdentityConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Flow/session behavior controls.
+///
+/// NOTE: These fields are currently configuration-level contracts.
+/// TODO(epic-flow-persistence): Enforce them in runtime flow/session manager
+/// (scoping, reset policy, idle timeout, persisted flow metadata).
 pub struct FlowConfig {
+    /// Flow key strategy (`main`, `per-sender`, `per-pipe-sender`, `per-group`).
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// Reset strategy (`manual`, `daily`, `idle`).
     #[serde(default = "default_reset_mode")]
     pub reset_mode: String,
+    /// Idle timeout before reset/rotation when `reset_mode = idle`.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_minutes: u32,
 }
@@ -162,6 +170,10 @@ fn default_reset_mode() -> String { "idle".to_string() }
 fn default_idle_timeout() -> u32 { 30 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-flow safety limits.
+///
+/// TODO(epic-runtime-budgets): Enforce hard token/cost guards in the runtime
+/// request path and flow accounting layer.
 pub struct LimitsConfig {
     #[serde(default = "default_max_tokens")]
     pub max_tokens_per_flow: u64,
@@ -184,6 +196,10 @@ impl Default for LimitsConfig {
 fn default_max_tokens() -> u64 { 500_000 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Lens-specific tuning knobs.
+///
+/// TODO(epic-runtime-retrieval): Wire these controls into prompt assembly and
+/// retrieval selection logic in the chat runtime.
 pub struct LensConfig {
     #[serde(default = "default_eco_max")]
     pub eco_max_tokens: u32,
@@ -216,9 +232,15 @@ pub struct KitConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Workspace knowledge indexing inputs.
+///
+/// TODO(epic-runtime-retrieval): Wire store config into a runtime ingestion/indexing
+/// lifecycle (startup ingest, incremental refresh, diagnostics).
 pub struct StoreConfig {
+    /// Glob/file patterns to ingest from workspace.
     #[serde(default = "default_store_files")]
     pub files: Vec<String>,
+    /// Extra absolute or workspace-relative paths to include.
     #[serde(default)]
     pub extra_paths: Vec<String>,
 }

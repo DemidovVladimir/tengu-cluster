@@ -360,10 +360,11 @@ trait Engine: Send + Sync {
 | Движок | Статус | Примечание |
 |--------|--------|------------|
 | `ollama` | Реализовано | Нестриминговый запрос/ответ через `/api/chat` |
-| `anthropic` | Запланировано | Пока только scaffold фичи |
-| `huggingface` | Запланировано | Пока только scaffold фичи |
-| `claude-code` | Запланировано | Пока только scaffold фичи |
-| `openai` | Запланировано | Целевой PRD-объём (сейчас нет в Cargo features) |
+| `anthropic` | Запланировано | Пока scaffold фичи, цель: typed REST |
+| `openai` | Запланировано | Пока scaffold фичи, цель: typed REST |
+| `google` | Запланировано | Пока scaffold фичи, цель: typed REST |
+| `huggingface` | Запланировано | Пока scaffold фичи, цель: `hf-hub` |
+| `candle-local` | Запланировано | In-process локальный inference, приоритет CUDA/Metal, CPU fallback |
 
 ### 6.3 Переключение движка в процессе чата
 
@@ -393,6 +394,11 @@ trait ModelProvider: Send + Sync {
 ```
 
 Формат провайдера: `provider/model` (напр., `anthropic/claude-sonnet-4-5`, `ollama/deepseek-coder-v2`).
+
+Политика зависимостей:
+- Предпочитаем официальные SDK провайдера при их наличии и активной поддержке.
+- Если официального Rust SDK нет, используем typed direct REST по официальной API-документации.
+- Не используем сторонние multi-provider abstraction crates в core runtime.
 
 ### 6.5 Профили аутентификации
 
@@ -680,6 +686,8 @@ trait Refiner: Send + Sync {
 
 - Маленькая квантованная модель в процессе (Phi-3-mini, SmolLM2, Qwen2.5-1.5B)
 - Семантическое сжатие с сохранением намерения
+- Путь ускорения: при наличии использовать CUDA/Metal, иначе CPU fallback
+- Явная цель: максимально использовать локальные ресурсы для ускорения/удешевления оптимизации
 - ~5-50мс на сообщение
 - Экономия 60-70% токенов
 
@@ -795,8 +803,9 @@ files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
 list = [
     "ollama/deepseek-coder-v2:16b",
     "anthropic/claude-sonnet-4-5-20250929",
+    "openai/gpt-4o-mini",
+    "google/gemini-2.0-flash",
     "huggingface/meta-llama/Llama-3.3-70B-Instruct",
-    "claude-code",
 ]
 
 [[routing]]
@@ -863,7 +872,7 @@ cargo build --release --no-default-features \
   --features "ollama"
 
 # Дополнительные compile-time scaffold-фичи (ещё не полностью реализованы):
-# telegram, discord, webchat, anthropic, huggingface, claude-code, candle
+# telegram, discord, webchat, anthropic, openai, google, huggingface, candle
 ```
 
 ### Удалённая оптимизация

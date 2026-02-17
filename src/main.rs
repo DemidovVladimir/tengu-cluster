@@ -7,7 +7,7 @@ use tracing::{error, info};
 use tengu_backends::OllamaEngine;
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
-use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
+use tengu_core::types::{DeliveryOptions, Message, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
@@ -70,6 +70,8 @@ async fn main() -> Result<()> {
     match cli.command.unwrap_or(Commands::Chat) {
         Commands::Chat => run_chat(config, profile).await,
         Commands::Serve => {
+            // TODO(epic-hub-runtime): Implement long-running daemon mode with pipe multiplexing,
+            // auth, and graceful shutdown semantics.
             info!("Hub daemon not yet implemented (Phase 8)");
             Ok(())
         }
@@ -84,6 +86,11 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Run the interactive single-process chat loop.
+///
+/// Current scope is a CLI-only runtime and in-memory flow state.
+/// TODO(epic-flow-persistence): Replace in-memory `messages` with persisted flow sessions
+/// (`flows/index.json` + per-flow JSONL transcripts + lock-safe updates).
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -109,6 +116,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             Box::new(OllamaEngine::new(&base_url, &agent_config.model))
         }
         other => {
+            // TODO(epic-multi-engine): Add Anthropic/OpenAI/HuggingFace backends and
+            // runtime model switching with capability checks.
             error!(engine = %other, "Engine not yet implemented");
             return Err(anyhow::anyhow!("Engine '{}' not yet implemented", other));
         }
@@ -122,14 +131,18 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     pipe.connect(PipeContext { inbound_tx: tx }).await?;
 
-    // Conversation state
+    // Conversation state.
+    // TODO(epic-flow-persistence): Resolve flow key from sender/pipe scope and restore
+    // persisted history at startup of each turn instead of process-local Vec<Message>.
     let mut messages: Vec<Message> = Vec::new();
-    let mut lens = Lens::from_str(&agent_config.default_lens);
+    let mut active_lens = Lens::from_str(&agent_config.default_lens);
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
     let mut tokens_saved: u32 = 0;
 
     // Build system prompt from workspace files
+    // TODO(epic-prompt-budgeting): Apply file-level and total token caps for system/bootstrap
+    // blocks so static context cannot crowd out runtime context.
     let system_prompt = build_system_prompt(&agent_config);
 
     println!("Type your message (Ctrl+D to quit):\n");
@@ -141,17 +154,17 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         if inbound.content.starts_with('/') {
             match inbound.content.as_str() {
                 "/eco" => {
-                    lens = Lens::Eco;
+                    active_lens = Lens::Eco;
                     println!("Switched to eco lens (summaries only)\n");
                     continue;
                 }
                 "/standard" => {
-                    lens = Lens::Standard;
+                    active_lens = Lens::Standard;
                     println!("Switched to standard lens (auto-expand)\n");
                     continue;
                 }
                 "/precise" => {
-                    lens = Lens::Precise;
+                    active_lens = Lens::Precise;
                     println!("Switched to precise lens (full content)\n");
                     continue;
                 }
@@ -172,11 +185,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                 "/context" => {
                     let used: usize = messages.iter().map(|m| m.content.len() / 4).sum();
                     let window = engine.context_window();
+                    let lens_name = match active_lens {
+                        Lens::Eco => "eco",
+                        Lens::Standard => "standard",
+                        Lens::Precise => "precise",
+                    };
                     println!("Context: ~{} / {} tokens ({}%)\n",
                         used, window, (used * 100) / window.max(1));
+                    println!("Lens: {}\n", lens_name);
                     continue;
                 }
                 "/reset" => {
+                    // TODO(epic-flow-persistence): When persistence is enabled, `/reset`
+                    // must rotate to a new flow/session id rather than only clearing RAM.
                     messages.clear();
                     total_input_tokens = 0;
                     total_output_tokens = 0;
@@ -223,6 +244,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             tool_calls: None,
         });
 
+        // TODO(epic-runtime-retrieval): Run KnowledgeStore retrieval here using:
+        // - active lens (`active_lens`)
+        // - hard retrieval token cap (`query_with_budget`)
+        // - ranking + budget packing before context assembly.
+        //
+        // TODO(epic-prompt-budgeting): Build final prompt via bucketed assembly:
+        // system/static + recent turns + retrieval + compacted summaries + reserved output.
+        // Fail closed by dropping lower-priority context if budget is exceeded.
+        //
+        // TODO(epic-compaction): Add threshold/overflow compaction path for long-running
+        // flows (keep recent turns verbatim, summarize older ranges).
+        //
+        // TODO(epic-history-limits): Apply per-flow history turn limits before engine call.
         // Run engine
         let context = EngineContext {
             workspace: agent_config.workspace.clone(),
@@ -280,6 +314,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     Ok(())
 }
 
+/// Build a simple system prompt by concatenating workspace control files.
+///
+/// TODO(epic-prompt-budgeting): Track per-file token estimates and enforce hard caps.
 fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {
     let workspace = agent_config.workspace.as_ref()?;
     let mut parts = Vec::new();
@@ -301,6 +338,7 @@ fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option
     }
 }
 
+/// Print startup details for the selected agent/runtime profile.
 fn print_banner(
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
@@ -322,6 +360,7 @@ fn print_banner(
     println!();
 }
 
+/// Print a compact runtime/config status snapshot.
 fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
     println!("  TENGU CLUSTER — Status");
@@ -338,6 +377,10 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
 }
 
+/// Run environment diagnostics for configured engines.
+///
+/// TODO(epic-doctor): Expand diagnostics to include storage/retrieval checks:
+/// flow index readability, transcript dir permissions, and compaction config sanity.
 async fn run_doctor(config: &Config) {
     println!();
     println!("  TENGU CLUSTER — Doctor");

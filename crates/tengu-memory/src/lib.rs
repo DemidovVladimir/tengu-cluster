@@ -25,6 +25,13 @@ pub struct RetrievedKnowledge {
 }
 
 /// The knowledge store — indexes workspace files for retrieval.
+///
+/// Current implementation is in-memory only.
+/// TODO(epic-retrieval-persistence): Add persisted on-disk index metadata to avoid
+/// full cold-start re-ingestion.
+/// TODO(epic-retrieval-chunking): Add chunk-level indexing for large files.
+/// TODO(epic-retrieval-citations): Attach line/offset citation metadata to results.
+/// TODO(epic-retrieval-telemetry): Track retrieval hit-rate and dropped-by-budget metrics.
 pub struct KnowledgeStore {
     entries: Vec<KnowledgeEntry>,
     workspace: PathBuf,
@@ -39,6 +46,9 @@ impl KnowledgeStore {
     }
 
     /// Ingest a file into the store.
+    ///
+    /// TODO(epic-retrieval-persistence): Persist entry metadata/hash so unchanged files
+    /// can be skipped across process restarts.
     pub async fn ingest(
         &mut self,
         path: &std::path::Path,
@@ -86,6 +96,8 @@ impl KnowledgeStore {
     ///
     /// Phase 1 scoring is lightweight keyword/path matching to avoid adding heavy
     /// dependencies while still preventing "return everything" behavior.
+    ///
+    /// TODO(epic-retrieval-ranking): Replace heuristic scoring with TF-IDF / hybrid ranking.
     pub fn query(&self, query: &str, lens: Lens, max_results: usize) -> Vec<RetrievedKnowledge> {
         if self.entries.is_empty() || max_results == 0 {
             return Vec::new();
@@ -141,6 +153,8 @@ impl KnowledgeStore {
     ///
     /// This is intentionally greedy + ordered: high-score entries are picked first
     /// until budget is exhausted.
+    /// TODO(epic-retrieval-packing): Consider knapsack-style packing for better
+    /// relevance density when a large high-score item blocks several smaller ones.
     pub fn query_with_budget(
         &self,
         query: &str,

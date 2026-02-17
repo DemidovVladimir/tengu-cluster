@@ -3,6 +3,9 @@ use tengu_core::Refiner;
 
 /// No-op refiner — passes everything through unchanged.
 /// Used when optimizer.mode = "off".
+///
+/// TODO(epic-runtime-budgets): In budget-constrained profiles, consider optional
+/// lightweight guards even in noop mode (e.g., max input chars hard stop).
 pub struct NoopRefiner;
 
 #[async_trait]

@@ -8,12 +8,18 @@ pub struct Router {
 }
 
 impl Router {
+    /// Build a deterministic router from static bindings.
+    ///
+    /// TODO(epic-routing-hot-reload): Support lock-safe runtime binding reload.
     pub fn new(bindings: Vec<RoutingBinding>, default_agent: String) -> Self {
         Self { bindings, default_agent }
     }
 
     /// Resolve which agent should handle a message from the given sender.
     /// Uses deterministic matching — most specific binding wins.
+    ///
+    /// TODO(epic-routing-observability): Return structured match metadata for diagnostics
+    /// (which rule matched and why).
     pub fn resolve(&self, sender: &Recipient) -> &str {
         // Priority 1: exact peer match
         for b in &self.bindings {
