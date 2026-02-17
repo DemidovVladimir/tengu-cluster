@@ -1,14 +1,24 @@
+//! Tengu binary entry point and CLI runtime orchestration.
+//!
+//! Potential use case:
+//! Run one command (`tengu chat`) to execute ingest, budgeting, model call, and response delivery.
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use std::path::PathBuf;
 use tracing::{error, info};
 
+mod flow_store;
+
+use flow_store::FlowStore;
 use tengu_backends::OllamaEngine;
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
-use tengu_core::types::{DeliveryOptions, Message, Role};
+use tengu_core::token::estimate_tokens_approx_min1;
+use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
+use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
 #[derive(Parser)]
@@ -19,21 +29,44 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Path to config file
     #[arg(short, long)]
     config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start interactive CLI chat (default)
     Chat,
-    /// Start the hub daemon
     Serve,
-    /// Show system status
     Status,
-    /// Diagnose configuration issues
     Doctor,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PromptAssemblyReport {
+    system_tokens: usize,
+    retrieval_tokens: usize,
+    retrieval_budget_requested: usize,
+    retrieval_budget_effective: usize,
+    history_tokens: usize,
+    dropped_history_messages: usize,
+    dropped_retrieval_items: usize,
+    reserved_output_tokens: usize,
+    total_input_budget: usize,
+    flow_budget_remaining: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HistoryAssembly {
+    messages: Vec<Message>,
+    used_tokens: usize,
+    dropped_messages: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RetrievalAssembly {
+    block: Option<String>,
+    used_tokens: usize,
+    dropped_items: usize,
 }
 
 #[tokio::main]
@@ -50,17 +83,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Load config
-    let config_path = cli.config.unwrap_or_else(|| {
-        let home = std::env::var("TENGU_HOME")
-            .unwrap_or_else(|_| {
-                dirs_next::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".tengu")
-                    .to_string_lossy()
-                    .to_string()
-            });
-        PathBuf::from(home).join("config.toml")
-    });
+    let config_path = cli
+        .config
+        .unwrap_or_else(|| resolve_tengu_home().join("config.toml"));
 
     let config = Config::load_or_default(&config_path);
 
@@ -86,11 +111,9 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Run the interactive single-process chat loop.
+/// Run interactive chat runtime for the configured default agent.
 ///
-/// Current scope is a CLI-only runtime and in-memory flow state.
-/// TODO(epic-flow-persistence): Replace in-memory `messages` with persisted flow sessions
-/// (`flows/index.json` + per-flow JSONL transcripts + lock-safe updates).
+/// Current implemented path is CLI + Ollama + optional refiner + flow store.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -124,25 +147,34 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     };
 
     // Print startup banner
-    print_banner(&agent_id, &agent_config, profile, &config.refiner.mode, engine.as_ref());
+    print_banner(
+        &agent_id,
+        &agent_config,
+        profile,
+        &config.refiner.mode,
+        engine.as_ref(),
+    );
 
     // Create CLI pipe
     let pipe = CliPipe::new();
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     pipe.connect(PipeContext { inbound_tx: tx }).await?;
 
-    // Conversation state.
-    // TODO(epic-flow-persistence): Resolve flow key from sender/pipe scope and restore
-    // persisted history at startup of each turn instead of process-local Vec<Message>.
+    let flow_store = FlowStore::new(&resolve_tengu_home())?;
+    let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
+
+    // Conversation state for the currently active flow.
     let mut messages: Vec<Message> = Vec::new();
-    let mut active_lens = Lens::from_str(&agent_config.default_lens);
+    let mut active_flow_key: Option<String> = None;
+    let mut manual_session_id: Option<String> = None;
+    let mut flow_token_usage: u64 = 0;
+    let mut active_lens = agent_config.default_lens.parse().unwrap_or(Lens::Eco);
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
     let mut tokens_saved: u32 = 0;
+    let mut last_prompt_report: Option<PromptAssemblyReport> = None;
 
-    // Build system prompt from workspace files
-    // TODO(epic-prompt-budgeting): Apply file-level and total token caps for system/bootstrap
-    // blocks so static context cannot crowd out runtime context.
+    // Build system prompt from workspace files with static token caps.
     let system_prompt = build_system_prompt(&agent_config);
 
     println!("Type your message (Ctrl+D to quit):\n");
@@ -173,7 +205,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     println!("─────────────────────────────");
                     println!(" Input tokens:  {}", total_input_tokens);
                     println!(" Output tokens: {}", total_output_tokens);
-                    println!(" Total:         {}", total_input_tokens + total_output_tokens);
+                    println!(
+                        " Total:         {}",
+                        total_input_tokens + total_output_tokens
+                    );
                     if tokens_saved > 0 {
                         println!();
                         println!(" Saved by refiner:");
@@ -183,26 +218,45 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     continue;
                 }
                 "/context" => {
-                    let used: usize = messages.iter().map(|m| m.content.len() / 4).sum();
+                    let used: usize = messages
+                        .iter()
+                        .map(|m| estimate_tokens_approx_min1(&m.content))
+                        .sum();
                     let window = engine.context_window();
-                    let lens_name = match active_lens {
-                        Lens::Eco => "eco",
-                        Lens::Standard => "standard",
-                        Lens::Precise => "precise",
-                    };
-                    println!("Context: ~{} / {} tokens ({}%)\n",
-                        used, window, (used * 100) / window.max(1));
+                    let lens_name = active_lens.as_str();
+                    println!(
+                        "Context: ~{} / {} tokens ({}%)\n",
+                        used,
+                        window,
+                        (used * 100) / window.max(1)
+                    );
                     println!("Lens: {}\n", lens_name);
+                    if let Some(report) = &last_prompt_report {
+                        println!("Last prompt assembly:");
+                        println!("  System:    {} tokens", report.system_tokens);
+                        println!("  Retrieval: {} tokens", report.retrieval_tokens);
+                        println!(
+                            "    requested/effective: {}/{}",
+                            report.retrieval_budget_requested, report.retrieval_budget_effective
+                        );
+                        println!("  History:   {} tokens", report.history_tokens);
+                        println!("    dropped messages: {}", report.dropped_history_messages);
+                        println!("    dropped retrieval: {}", report.dropped_retrieval_items);
+                        println!("  Reserved:  {} tokens", report.reserved_output_tokens);
+                        println!("  Budget:    {} tokens", report.total_input_budget);
+                        println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
+                    }
                     continue;
                 }
                 "/reset" => {
-                    // TODO(epic-flow-persistence): When persistence is enabled, `/reset`
-                    // must rotate to a new flow/session id rather than only clearing RAM.
+                    manual_session_id = Some(uuid::Uuid::new_v4().to_string());
+                    active_flow_key = None;
                     messages.clear();
+                    flow_token_usage = 0;
                     total_input_tokens = 0;
                     total_output_tokens = 0;
                     tokens_saved = 0;
-                    println!("Flow reset.\n");
+                    println!("Flow reset and rotated to a new session.\n");
                     continue;
                 }
                 "/engine" => {
@@ -237,33 +291,105 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             tokens_saved += saved;
         }
 
-        messages.push(Message {
+        let flow_key = resolve_runtime_flow_key(
+            &agent_id,
+            &agent_config.flow.scope,
+            &inbound.sender,
+            manual_session_id.as_deref(),
+        );
+        if active_flow_key.as_deref() != Some(flow_key.as_str()) {
+            messages = flow_store.load_messages(&flow_key, 240)?;
+            flow_token_usage = messages
+                .iter()
+                .map(|m| estimate_tokens_approx_min1(&m.content) as u64)
+                .sum();
+            active_flow_key = Some(flow_key.clone());
+        }
+
+        let user_message = Message {
             role: Role::User,
             content: compressed,
             tool_call_id: None,
             tool_calls: None,
-        });
+        };
+        flow_store.append_message(&flow_key, &agent_id, &user_message)?;
+        flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
+        messages.push(user_message);
 
-        // TODO(epic-runtime-retrieval): Run KnowledgeStore retrieval here using:
-        // - active lens (`active_lens`)
-        // - hard retrieval token cap (`query_with_budget`)
-        // - ranking + budget packing before context assembly.
-        //
-        // TODO(epic-prompt-budgeting): Build final prompt via bucketed assembly:
-        // system/static + recent turns + retrieval + compacted summaries + reserved output.
-        // Fail closed by dropping lower-priority context if budget is exceeded.
-        //
         // TODO(epic-compaction): Add threshold/overflow compaction path for long-running
         // flows (keep recent turns verbatim, summarize older ranges).
-        //
         // TODO(epic-history-limits): Apply per-flow history turn limits before engine call.
+        if flow_token_usage >= agent_config.limits.max_tokens_per_flow {
+            println!(
+                "Flow token limit reached ({}). Use /reset to start a new session.\n",
+                agent_config.limits.max_tokens_per_flow
+            );
+            continue;
+        }
+
+        let remaining_flow_tokens = agent_config
+            .limits
+            .max_tokens_per_flow
+            .saturating_sub(flow_token_usage);
+        let base_input_budget = compute_base_input_budget(
+            engine.context_window(),
+            system_prompt.as_deref(),
+            remaining_flow_tokens,
+        );
+        let history_assembly = assemble_recent_history(&messages, base_input_budget);
+        let retrieval_budget_requested =
+            compute_retrieval_bucket_budget(active_lens, &agent_config.lens, base_input_budget);
+        let retrieval_budget_effective = retrieval_budget_requested
+            .min(base_input_budget.saturating_sub(history_assembly.used_tokens));
+
+        let retrieved = if let Some(store) = knowledge_store.as_ref() {
+            // TODO(epic-runtime-retrieval): Add periodic/incremental re-ingestion hooks.
+            store.query_with_budget(
+                &inbound.content,
+                active_lens,
+                6,
+                retrieval_budget_effective as u32,
+            )
+        } else {
+            Vec::new()
+        };
+        let retrieval_assembly = build_retrieval_block(&retrieved, retrieval_budget_effective);
+
+        let prompt_messages = history_assembly.messages;
+        let system_tokens = system_prompt
+            .as_deref()
+            .map(estimate_tokens_approx_min1)
+            .unwrap_or(0);
+        let total_input_budget =
+            compute_total_input_budget(engine.context_window(), remaining_flow_tokens);
+        let report = PromptAssemblyReport {
+            system_tokens,
+            retrieval_tokens: retrieval_assembly.used_tokens,
+            retrieval_budget_requested,
+            retrieval_budget_effective,
+            history_tokens: history_assembly.used_tokens,
+            dropped_history_messages: history_assembly.dropped_messages,
+            dropped_retrieval_items: retrieval_assembly.dropped_items,
+            reserved_output_tokens: reserved_output_tokens(engine.context_window()),
+            total_input_budget,
+            flow_budget_remaining: remaining_flow_tokens as usize,
+        };
+        last_prompt_report = Some(report);
+
+        if prompt_messages.is_empty() {
+            println!("Context budget exhausted. Use /reset to continue.\n");
+            continue;
+        }
+
         // Run engine
+        let turn_system_prompt =
+            merge_system_prompt(system_prompt.clone(), retrieval_assembly.block.as_deref());
         let context = EngineContext {
             workspace: agent_config.workspace.clone(),
-            system_prompt: system_prompt.clone(),
+            system_prompt: turn_system_prompt,
         };
 
-        match engine.run(&messages, &[], &context).await {
+        match engine.run(&prompt_messages, &[], &context).await {
             Ok(mut stream) => {
                 let mut response_text = String::new();
 
@@ -289,19 +415,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
                 if !response_text.is_empty() {
                     // Send through pipe
-                    pipe.send_text(
-                        &inbound.sender,
-                        &response_text,
-                        &DeliveryOptions::default(),
-                    )
-                    .await?;
+                    pipe.send_text(&inbound.sender, &response_text, &DeliveryOptions::default())
+                        .await?;
 
-                    messages.push(Message {
+                    let assistant_message = Message {
                         role: Role::Assistant,
                         content: response_text,
                         tool_call_id: None,
                         tool_calls: None,
-                    });
+                    };
+                    flow_store.append_message(&flow_key, &agent_id, &assistant_message)?;
+                    flow_token_usage +=
+                        estimate_tokens_approx_min1(&assistant_message.content) as u64;
+                    messages.push(assistant_message);
                 }
             }
             Err(e) => {
@@ -314,19 +440,27 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     Ok(())
 }
 
-/// Build a simple system prompt by concatenating workspace control files.
-///
-/// TODO(epic-prompt-budgeting): Track per-file token estimates and enforce hard caps.
 fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {
+    const MAX_FILE_TOKENS: usize = 1200;
+    const MAX_TOTAL_TOKENS: usize = 2400;
+
     let workspace = agent_config.workspace.as_ref()?;
     let mut parts = Vec::new();
+    let mut total_tokens = 0usize;
 
     // Load workspace files in order: IDENTITY.md, PROFILE.md, CONTEXT.md
     for filename in &["IDENTITY.md", "PROFILE.md", "CONTEXT.md"] {
         let path = workspace.join(filename);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if !content.trim().is_empty() {
-                parts.push(format!("# {}\n\n{}", filename, content));
+                let truncated = truncate_to_token_budget(&content, MAX_FILE_TOKENS);
+                let chunk = format!("# {}\n\n{}", filename, truncated);
+                let chunk_tokens = estimate_tokens_approx_min1(&chunk);
+                if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
+                    break;
+                }
+                total_tokens += chunk_tokens;
+                parts.push(chunk);
             }
         }
     }
@@ -338,7 +472,189 @@ fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option
     }
 }
 
-/// Print startup details for the selected agent/runtime profile.
+/// Assemble newest contiguous history suffix that fits the token budget.
+fn assemble_recent_history(messages: &[Message], history_budget: usize) -> HistoryAssembly {
+    const MAX_HISTORY_MESSAGES: usize = 120;
+
+    if history_budget == 0 || messages.is_empty() {
+        return HistoryAssembly::default();
+    }
+
+    let mut selected_rev: Vec<Message> = Vec::new();
+    let mut used = 0usize;
+    let start = messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
+    let recent = &messages[start..];
+
+    for msg in recent.iter().rev() {
+        let msg_tokens = estimate_tokens_approx_min1(&msg.content);
+        if used + msg_tokens > history_budget {
+            break;
+        }
+        used += msg_tokens;
+        selected_rev.push(msg.clone());
+    }
+
+    selected_rev.reverse();
+    HistoryAssembly {
+        dropped_messages: recent.len().saturating_sub(selected_rev.len()),
+        messages: selected_rev,
+        used_tokens: used,
+    }
+}
+
+/// Truncate string content using the shared `~4 chars/token` approximation.
+fn truncate_to_token_budget(content: &str, max_tokens: usize) -> String {
+    let max_chars = max_tokens.saturating_mul(4);
+    if content.len() <= max_chars {
+        content.to_string()
+    } else {
+        let mut truncated = content.chars().take(max_chars).collect::<String>();
+        truncated.push_str("\n\n[truncated]");
+        truncated
+    }
+}
+
+/// Reserve output tokens as a fraction of the model context window.
+fn reserved_output_tokens(context_window: usize) -> usize {
+    const RESERVED_OUTPUT_TOKENS_MIN: usize = 256;
+    (context_window / 5).max(RESERVED_OUTPUT_TOKENS_MIN)
+}
+
+/// Compute input budget after output reserve and static system prompt footprint.
+fn compute_base_input_budget(
+    context_window: usize,
+    system_prompt: Option<&str>,
+    remaining_flow_tokens: u64,
+) -> usize {
+    let total_budget = compute_total_input_budget(context_window, remaining_flow_tokens);
+    let system_tokens = system_prompt.map(estimate_tokens_approx_min1).unwrap_or(0);
+    total_budget.saturating_sub(system_tokens)
+}
+
+/// Compute maximum input budget before prompt-bucket allocation.
+fn compute_total_input_budget(context_window: usize, remaining_flow_tokens: u64) -> usize {
+    let reserved_output = reserved_output_tokens(context_window);
+    context_window
+        .saturating_sub(reserved_output)
+        .min(remaining_flow_tokens as usize)
+}
+
+/// Compute retrieval bucket budget from lens settings and overall input budget.
+fn compute_retrieval_bucket_budget(
+    lens: Lens,
+    lens_cfg: &tengu_core::config::LensConfig,
+    base_input_budget: usize,
+) -> usize {
+    if base_input_budget == 0 {
+        return 0;
+    }
+
+    let desired = match lens {
+        Lens::Eco => lens_cfg.eco_max_tokens as usize,
+        Lens::Standard => ((base_input_budget as f32) * 0.2) as usize,
+        Lens::Precise => ((base_input_budget as f32) * lens_cfg.precise_budget) as usize,
+    };
+    let hard_cap = (base_input_budget / 2).max(32).min(base_input_budget);
+    desired.min(hard_cap).max(32.min(hard_cap))
+}
+
+/// Build retrieval context block under a fixed token budget.
+fn build_retrieval_block(hits: &[RetrievedKnowledge], max_tokens: usize) -> RetrievalAssembly {
+    if hits.is_empty() || max_tokens == 0 {
+        return RetrievalAssembly::default();
+    }
+
+    let header = "Relevant workspace context:\n\n";
+    let separator = "\n\n---\n\n";
+    let header_tokens = estimate_tokens_approx_min1(header);
+    let separator_tokens = estimate_tokens_approx_min1(separator);
+    if header_tokens >= max_tokens {
+        return RetrievalAssembly {
+            block: None,
+            used_tokens: 0,
+            dropped_items: hits.len(),
+        };
+    }
+
+    let mut chunks = Vec::new();
+    let mut used = 0usize;
+    let mut dropped = 0usize;
+
+    for (idx, hit) in hits.iter().enumerate() {
+        let section = format!(
+            "[{} | {} | score {:.2}]\n{}",
+            hit.source.display(),
+            if hit.is_summary { "summary" } else { "full" },
+            hit.score,
+            hit.content
+        );
+        let section_tokens = estimate_tokens_approx_min1(&section);
+        let additional_tokens = if chunks.is_empty() {
+            header_tokens.saturating_add(section_tokens)
+        } else {
+            separator_tokens.saturating_add(section_tokens)
+        };
+        if additional_tokens > max_tokens {
+            dropped += 1;
+            continue;
+        }
+        if used.saturating_add(additional_tokens) > max_tokens {
+            dropped += hits.len().saturating_sub(idx);
+            break;
+        }
+        used = used.saturating_add(additional_tokens);
+        chunks.push(section);
+    }
+
+    RetrievalAssembly {
+        block: if chunks.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Relevant workspace context:\n\n{}",
+                chunks.join("\n\n---\n\n")
+            ))
+        },
+        used_tokens: if chunks.is_empty() { 0 } else { used },
+        dropped_items: dropped,
+    }
+}
+
+/// Merge static system prompt with dynamic per-turn retrieval context.
+fn merge_system_prompt(base: Option<String>, retrieval_block: Option<&str>) -> Option<String> {
+    match (base, retrieval_block) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(r)) => Some(r.to_string()),
+        (Some(b), Some(r)) => Some(format!("{b}\n\n---\n\n{r}")),
+    }
+}
+
+/// Initialize workspace knowledge store and run startup ingest patterns.
+async fn init_knowledge_store(
+    agent_config: &tengu_core::config::AgentConfig,
+    refiner: &dyn Refiner,
+) -> Option<KnowledgeStore> {
+    let workspace = agent_config.workspace.clone()?;
+    let mut store = KnowledgeStore::new(workspace);
+
+    let mut patterns = agent_config.store.files.clone();
+    patterns.extend(agent_config.store.extra_paths.clone());
+    if patterns.is_empty() {
+        return Some(store);
+    }
+
+    match store.ingest_patterns(&patterns, refiner).await {
+        Ok(indexed) => info!(
+            indexed_files = indexed,
+            "Knowledge store ingested workspace files"
+        ),
+        Err(e) => error!(error = %e, "Knowledge store ingest failed"),
+    }
+    Some(store)
+}
+
+/// Print startup runtime banner.
 fn print_banner(
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
@@ -360,7 +676,7 @@ fn print_banner(
     println!();
 }
 
-/// Print a compact runtime/config status snapshot.
+/// Print compact runtime status snapshot.
 fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
     println!("  TENGU CLUSTER — Status");
@@ -369,18 +685,20 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
     println!("  Refiner:  {}", config.refiner.mode);
     println!("  Agents:   {}", config.agents.len());
     for (id, ac) in &config.agents {
-        println!("    - {} ({}/{}){}", id, ac.engine, ac.model,
-            if ac.default { " [default]" } else { "" });
+        println!(
+            "    - {} ({}/{}){}",
+            id,
+            ac.engine,
+            ac.model,
+            if ac.default { " [default]" } else { "" }
+        );
     }
     println!("  Hub:      {}:{}", config.hub.bind, config.hub.port);
     println!("  ─────────────────────────────────────");
     println!();
 }
 
-/// Run environment diagnostics for configured engines.
-///
-/// TODO(epic-doctor): Expand diagnostics to include storage/retrieval checks:
-/// flow index readability, transcript dir permissions, and compaction config sanity.
+/// Run environment diagnostics for configured runtimes.
 async fn run_doctor(config: &Config) {
     println!();
     println!("  TENGU CLUSTER — Doctor");
@@ -400,6 +718,118 @@ async fn run_doctor(config: &Config) {
         }
     }
 
+    print!("  Flow store... ");
+    match FlowStore::new(&resolve_tengu_home()).and_then(|store| store.health_check()) {
+        Ok(_) => println!("OK"),
+        Err(e) => println!("Error: {}", e),
+    }
+
     println!("  ─────────────────────────────────────");
     println!();
+}
+
+/// Resolve Tengu home path from `TENGU_HOME` or `~/.tengu`.
+fn resolve_tengu_home() -> PathBuf {
+    if let Ok(home) = std::env::var("TENGU_HOME") {
+        return PathBuf::from(home);
+    }
+    dirs_next::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".tengu")
+}
+
+/// Resolve deterministic flow key for the current inbound turn.
+fn resolve_runtime_flow_key(
+    agent_id: &str,
+    flow_scope: &str,
+    sender: &Recipient,
+    manual_session_id: Option<&str>,
+) -> String {
+    FlowStore::resolve_flow_key(agent_id, flow_scope, sender, manual_session_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn msg(content: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn hit(source: &str, content: &str) -> RetrievedKnowledge {
+        RetrievedKnowledge {
+            source: PathBuf::from(source),
+            content: content.to_string(),
+            is_summary: true,
+            score: 1.0,
+        }
+    }
+
+    #[test]
+    fn history_drop_policy_keeps_newest_contiguous_suffix() {
+        let messages = vec![
+            msg(&"a".repeat(40)),
+            msg(&"b".repeat(400)),
+            msg(&"c".repeat(40)),
+        ];
+        let assembled = assemble_recent_history(&messages, 25);
+
+        assert_eq!(assembled.messages.len(), 1);
+        assert_eq!(assembled.messages[0].content, "c".repeat(40));
+        assert_eq!(assembled.dropped_messages, 2);
+    }
+
+    #[test]
+    fn retrieval_drop_policy_drops_tail_after_first_overflow() {
+        let first = hit("a.md", &"alpha".repeat(24));
+        let second = hit("b.md", &"beta".repeat(24));
+        let first_section = format!(
+            "[{} | {} | score {:.2}]\n{}",
+            first.source.display(),
+            "summary",
+            first.score,
+            first.content
+        );
+        let budget = estimate_tokens_approx_min1("Relevant workspace context:\n\n")
+            .saturating_add(estimate_tokens_approx_min1(&first_section))
+            .saturating_add(1);
+
+        let assembled = build_retrieval_block(&[first, second], budget);
+        let block = assembled.block.unwrap_or_default();
+
+        assert!(block.contains("a.md"));
+        assert!(!block.contains("b.md"));
+        assert_eq!(assembled.dropped_items, 1);
+        assert!(assembled.used_tokens <= budget);
+    }
+
+    #[test]
+    fn retrieval_drop_policy_skips_individually_oversized_entries() {
+        let huge = hit("huge.md", &"x".repeat(2_000));
+        let small = hit("small.md", &"y".repeat(160));
+        let small_section = format!(
+            "[{} | {} | score {:.2}]\n{}",
+            small.source.display(),
+            "summary",
+            small.score,
+            small.content
+        );
+        let budget = estimate_tokens_approx_min1("Relevant workspace context:\n\n")
+            .saturating_add(estimate_tokens_approx_min1(&small_section))
+            .saturating_add(2);
+
+        let assembled = build_retrieval_block(&[huge, small], budget);
+        let block = assembled.block.unwrap_or_default();
+
+        assert!(block.contains("small.md"));
+        assert!(!block.contains("huge.md"));
+        assert_eq!(assembled.dropped_items, 1);
+        assert!(assembled.used_tokens <= budget);
+    }
 }

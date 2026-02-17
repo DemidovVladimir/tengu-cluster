@@ -1,3 +1,8 @@
+//! Ollama backend implementation.
+//!
+//! Potential use case:
+//! Run a local model server (`OLLAMA_HOST`) and stream/collect responses in CLI mode.
+
 use async_trait::async_trait;
 use futures::stream;
 use futures::Stream;
@@ -8,7 +13,7 @@ use tracing::{debug, error};
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
 use tengu_core::{Engine, EngineContext};
 
-/// Engine backed by a local Ollama instance.
+/// Engine implementation backed by a local Ollama instance.
 pub struct OllamaEngine {
     base_url: String,
     model: String,
@@ -44,7 +49,7 @@ struct OllamaResponseMessage {
 }
 
 impl OllamaEngine {
-    /// Create an Ollama engine using a base URL and default model id.
+    /// Create a new Ollama engine from base URL and default model.
     pub fn new(base_url: &str, model: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -77,13 +82,10 @@ impl Engine for OllamaEngine {
     }
 
     fn context_window(&self) -> usize {
-        // TODO(epic-backend-capabilities): Resolve per-model context windows via
-        // model metadata or cached `/api/tags` inspection instead of fixed default.
         8192
     }
 
     fn supports_tool_use(&self) -> bool {
-        // TODO(epic-backend-capabilities): Detect tool-use support per model.
         false // Depends on specific model; conservative default
     }
 
@@ -110,7 +112,6 @@ impl Engine for OllamaEngine {
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
         let mut ollama_messages = Vec::new();
 
-        // Prepend system prompt if provided
         if let Some(ref system) = context.system_prompt {
             ollama_messages.push(OllamaMessage {
                 role: "system".to_string(),
@@ -123,9 +124,7 @@ impl Engine for OllamaEngine {
         let request = OllamaChatRequest {
             model: self.model.clone(),
             messages: ollama_messages,
-            // TODO(epic-backend-ollama-streaming): Enable true streaming and map
-            // chunked responses into incremental `StreamEvent::TextDelta`.
-            stream: false, // Non-streaming fallback
+            stream: false, // Non-streaming fallback.
         };
 
         debug!(model = %self.model, "Sending request to Ollama");
@@ -150,8 +149,6 @@ impl Engine for OllamaEngine {
 
         let mut events = Vec::new();
 
-        // TODO(epic-backend-usage-accounting): Improve usage accuracy and include
-        // cached/prompt breakdown where backend provides it.
         if let Some(msg) = chat_response.message {
             events.push(StreamEvent::TextDelta { text: msg.content });
         }

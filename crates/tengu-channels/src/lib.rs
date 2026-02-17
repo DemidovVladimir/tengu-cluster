@@ -1,18 +1,11 @@
-//! Channel adapters (pipes) for inbound/outbound messaging surfaces.
+//! Channel adapters (`Pipe` implementations) for inbound/outbound messaging.
 //!
-//! Current implementation:
-//! - `cli` pipe is implemented.
+//! Current baseline implementation:
+//! - `cli`
 //!
-//! Dependency policy:
-//! - Prefer platform-first crates with strong maintenance and security posture.
-//! - Telegram target crate: `teloxide`.
-//! - Discord target crate: `serenity` or `twilight` (final selection pending benchmark).
-//! - WebChat target stack: `axum` + WebSocket runtime.
-//!
-//! TODO(epic-channel-webchat): Add WebChat pipe module and runtime wiring.
-//! TODO(epic-channel-telegram): Add Telegram pipe module (teloxide) with access policy support.
-//! TODO(epic-channel-discord): Add Discord pipe module (serenity/twilight) with thread/channel routing support.
-//! TODO(epic-channel-lifecycle): Add unified connect/disconnect health semantics across pipes.
+//! Potential use case:
+//! Keep message transport pluggable so the same agent runtime can run on CLI/Telegram/Web.
+
 pub mod cli;
 
 // Feature-gated modules

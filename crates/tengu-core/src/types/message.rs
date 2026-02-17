@@ -1,6 +1,11 @@
+//! Core message and envelope types used throughout runtime.
+//!
+//! Potential use case:
+//! Convert inbound channel messages into one normalized shape consumable by any engine backend.
+
 use serde::{Deserialize, Serialize};
 
-/// Role of a message in a model conversation.
+/// Role of a chat message passed to model engines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Role {
     #[serde(rename = "system")]
@@ -13,92 +18,106 @@ pub enum Role {
     Tool,
 }
 
+/// Normalized chat message exchanged with engines.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Normalized chat message passed to engines.
-///
-/// TODO(epic-message-schema): Expand content model beyond flat text for richer
-/// multimodal/tool-safe structured payloads.
 pub struct Message {
+    /// Message role.
     pub role: Role,
+    /// Message text content.
     pub content: String,
+    /// Optional tool-call ID when responding to a tool invocation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Optional model-generated tool calls attached to the message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Tool call emitted by a model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Unique tool call identifier.
     pub id: String,
+    /// Tool name.
     pub name: String,
+    /// JSON arguments for the tool.
     pub arguments: serde_json::Value,
 }
 
+/// Tool definition exposed to model providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Tool definition exposed to model backends.
 pub struct ToolDef {
+    /// Tool name.
     pub name: String,
+    /// Human-readable description.
     pub description: String,
+    /// JSON Schema of accepted parameters.
     pub parameters: serde_json::Value,
 }
 
+/// Provider/model metadata published to runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Backend/model metadata surfaced to runtime.
 pub struct ModelInfo {
+    /// Provider-native model ID.
     pub id: String,
+    /// Provider name.
     pub provider: String,
+    /// Display name suitable for CLI/status output.
     pub display_name: String,
+    /// Model context window in tokens.
     pub context_window: usize,
+    /// Whether tool calls are supported.
     pub supports_tools: bool,
+    /// Whether streaming responses are supported.
     pub supports_streaming: bool,
 }
 
+/// Channel-recipient identity used by pipes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Addressable recipient identity for a channel/pipe.
 pub struct Recipient {
+    /// Pipe identifier (for example: `cli`, `telegram`).
     pub pipe_id: String,
+    /// Peer/user/channel identifier.
     pub peer_id: String,
+    /// Optional account/server identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    /// Optional thread/group identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
 }
 
+/// Inbound message envelope emitted by pipes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Inbound user message envelope produced by a `Pipe`.
 pub struct InboundMessage {
+    /// Sender identity.
     pub sender: Recipient,
+    /// Text payload.
     pub content: String,
+    /// Inbound timestamp.
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Optional attached media payloads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<Vec<MediaPayload>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Raw media payload attached to an inbound message.
-///
-/// TODO(epic-media-storage): Add externalized media references for large payloads
-/// to avoid keeping full blobs in memory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaPayload {
+    /// MIME type of the payload.
     pub mime_type: String,
+    /// Raw media bytes.
     pub data: Vec<u8>,
+    /// Optional original filename.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Delivery options used by channel adapters for outbound sends.
+/// Delivery options for outbound messages.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DeliveryOptions {
+    /// Optional message ID to reply to.
     pub reply_to_message_id: Option<String>,
+    /// Optional parse/render mode defined by the target pipe.
     pub parse_mode: Option<String>,
-}
-
-impl Default for DeliveryOptions {
-    fn default() -> Self {
-        Self {
-            reply_to_message_id: None,
-            parse_mode: None,
-        }
-    }
 }

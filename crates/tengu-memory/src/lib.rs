@@ -1,43 +1,54 @@
+//! Workspace knowledge ingestion and budget-aware retrieval.
+//!
+//! Potential use case:
+//! Index project docs on startup and retrieve only token-bounded relevant snippets per user turn.
+
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::PathBuf;
+use tengu_core::token::estimate_tokens_approx_u32;
 use tengu_core::Lens;
 
-/// A single entry in the knowledge store.
+/// Indexed knowledge entry persisted in memory for retrieval.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeEntry {
+    /// Workspace-relative source path.
     pub source: PathBuf,
+    /// Full file content.
     pub full_content: String,
+    /// Approximate token count for full content.
     pub full_token_estimate: u32,
+    /// Optional summarized version used by lower-cost lenses.
     pub summary: Option<String>,
+    /// Approximate token count for summary.
     pub summary_token_estimate: Option<u32>,
+    /// Content hash used for change detection.
     pub content_hash: u64,
+    /// Last indexing timestamp.
     pub last_indexed: chrono::DateTime<chrono::Utc>,
 }
 
-/// Result of a knowledge query.
+/// Retrieval hit selected for prompt assembly.
 #[derive(Debug, Clone)]
 pub struct RetrievedKnowledge {
+    /// Workspace-relative source path.
     pub source: PathBuf,
+    /// Selected content (summary or full text).
     pub content: String,
+    /// Whether `content` is a summary.
     pub is_summary: bool,
+    /// Relevance score used for ranking.
     pub score: f32,
 }
 
-/// The knowledge store — indexes workspace files for retrieval.
-///
-/// Current implementation is in-memory only.
-/// TODO(epic-retrieval-persistence): Add persisted on-disk index metadata to avoid
-/// full cold-start re-ingestion.
-/// TODO(epic-retrieval-chunking): Add chunk-level indexing for large files.
-/// TODO(epic-retrieval-citations): Attach line/offset citation metadata to results.
-/// TODO(epic-retrieval-telemetry): Track retrieval hit-rate and dropped-by-budget metrics.
+/// In-memory knowledge store scoped to a workspace root.
 pub struct KnowledgeStore {
     entries: Vec<KnowledgeEntry>,
     workspace: PathBuf,
 }
 
 impl KnowledgeStore {
+    /// Create an empty store for the given workspace.
     pub fn new(workspace: PathBuf) -> Self {
         Self {
             entries: Vec::new(),
@@ -45,10 +56,7 @@ impl KnowledgeStore {
         }
     }
 
-    /// Ingest a file into the store.
-    ///
-    /// TODO(epic-retrieval-persistence): Persist entry metadata/hash so unchanged files
-    /// can be skipped across process restarts.
+    /// Ingest a file from workspace and upsert its indexed representation.
     pub async fn ingest(
         &mut self,
         path: &std::path::Path,
@@ -59,17 +67,15 @@ impl KnowledgeStore {
 
         let hash = Self::hash_content(&content);
 
-        // Check if already indexed and unchanged
         if let Some(existing) = self.entries.iter().find(|e| e.source == path) {
             if existing.content_hash == hash {
                 return Ok(());
             }
         }
 
-        // Generate summary if refiner supports it
         let (summary, summary_tokens) = if refiner.memory_footprint() > 0 || !content.is_empty() {
             let s = refiner.summarize(&content, 100).await?;
-            let tokens = (s.len() / 4) as u32;
+            let tokens = estimate_tokens_approx_u32(&s);
             (Some(s), Some(tokens))
         } else {
             (None, None)
@@ -78,26 +84,21 @@ impl KnowledgeStore {
         let entry = KnowledgeEntry {
             source: path.to_path_buf(),
             full_content: content.clone(),
-            full_token_estimate: (content.len() / 4) as u32,
+            full_token_estimate: estimate_tokens_approx_u32(&content),
             summary,
             summary_token_estimate: summary_tokens,
             content_hash: hash,
             last_indexed: chrono::Utc::now(),
         };
 
-        // Upsert
+        // Upsert.
         self.entries.retain(|e| e.source != path);
         self.entries.push(entry);
 
         Ok(())
     }
 
-    /// Query the store respecting the user's lens setting.
-    ///
-    /// Phase 1 scoring is lightweight keyword/path matching to avoid adding heavy
-    /// dependencies while still preventing "return everything" behavior.
-    ///
-    /// TODO(epic-retrieval-ranking): Replace heuristic scoring with TF-IDF / hybrid ranking.
+    /// Query best matching entries using lightweight lexical scoring.
     pub fn query(&self, query: &str, lens: Lens, max_results: usize) -> Vec<RetrievedKnowledge> {
         if self.entries.is_empty() || max_results == 0 {
             return Vec::new();
@@ -112,7 +113,6 @@ impl KnowledgeStore {
             .enumerate()
             .filter_map(|(idx, entry)| {
                 let score = Self::score_entry(entry, &normalized_query, &tokens);
-                // For non-empty queries, drop completely irrelevant entries.
                 if !normalized_query.is_empty() && score <= 0.0 {
                     None
                 } else {
@@ -122,7 +122,6 @@ impl KnowledgeStore {
             .collect();
 
         scored.sort_by(|(score_a, idx_a), (score_b, idx_b)| {
-            // Sort by score desc, then recency desc.
             score_b
                 .partial_cmp(score_a)
                 .unwrap_or(Ordering::Equal)
@@ -149,12 +148,7 @@ impl KnowledgeStore {
             .collect()
     }
 
-    /// Query with a hard token budget for prompt assembly.
-    ///
-    /// This is intentionally greedy + ordered: high-score entries are picked first
-    /// until budget is exhausted.
-    /// TODO(epic-retrieval-packing): Consider knapsack-style packing for better
-    /// relevance density when a large high-score item blocks several smaller ones.
+    /// Query and pack retrieval results under a hard token budget.
     pub fn query_with_budget(
         &self,
         query: &str,
@@ -171,13 +165,11 @@ impl KnowledgeStore {
         let mut used: u32 = 0;
 
         for item in candidates {
-            let est = Self::estimate_tokens(&item.content);
+            let est = estimate_tokens_approx_u32(&item.content);
             if est > max_tokens {
                 continue;
             }
 
-            // Skip items that do not fit and continue scanning lower-ranked candidates.
-            // This keeps retrieval within budget while avoiding under-filled context.
             if used.saturating_add(est) > max_tokens {
                 continue;
             }
@@ -189,7 +181,7 @@ impl KnowledgeStore {
         out
     }
 
-    /// Load workspace files matching glob patterns.
+    /// Ingest all files matching provided glob patterns.
     pub async fn ingest_patterns(
         &mut self,
         patterns: &[String],
@@ -199,15 +191,17 @@ impl KnowledgeStore {
 
         for pattern in patterns {
             let full_pattern = self.workspace.join(pattern);
-            let pattern_str = full_pattern.to_string_lossy().to_string();
+            let pattern_str = full_pattern.to_string_lossy();
+            let entries = match glob::glob(&pattern_str) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
 
-            for entry in glob::glob(&pattern_str).unwrap_or_else(|_| glob::glob("").unwrap()) {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        let relative = path.strip_prefix(&self.workspace).unwrap_or(&path);
-                        if self.ingest(relative, refiner).await.is_ok() {
-                            count += 1;
-                        }
+            for path in entries.flatten() {
+                if path.is_file() {
+                    let relative = path.strip_prefix(&self.workspace).unwrap_or(&path);
+                    if self.ingest(relative, refiner).await.is_ok() {
+                        count += 1;
                     }
                 }
             }
@@ -221,10 +215,6 @@ impl KnowledgeStore {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         content.hash(&mut hasher);
         hasher.finish()
-    }
-
-    fn estimate_tokens(content: &str) -> u32 {
-        (content.len() / 4) as u32
     }
 
     fn tokenize_query(query: &str) -> Vec<&str> {

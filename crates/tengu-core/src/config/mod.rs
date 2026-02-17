@@ -1,7 +1,8 @@
-//! Configuration schema and runtime profile resolution.
+//! Configuration schema and runtime profile helpers.
 //!
-//! TODO(epic-config-validation): Add explicit validation pass for cross-field constraints
-//! (engine availability, lens/budget sanity, store path checks).
+//! Potential use case:
+//! Import one module to load agent config and choose a runtime profile.
+
 mod profile;
 mod schema;
 

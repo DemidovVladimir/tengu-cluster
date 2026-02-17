@@ -1,3 +1,8 @@
+//! Interactive CLI pipe implementation.
+//!
+//! Potential use case:
+//! Use Tengu from a local terminal for development without external chat platforms.
+
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -7,9 +12,15 @@ use tracing::debug;
 use tengu_core::types::{DeliveryOptions, InboundMessage, MediaPayload, Recipient};
 use tengu_core::{AccessPolicy, Pipe, PipeCapabilities, PipeContext};
 
-/// Interactive CLI pipe — reads from stdin, writes to stdout.
+/// Local stdin/stdout channel adapter.
 pub struct CliPipe {
     shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+}
+
+impl Default for CliPipe {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CliPipe {
@@ -49,8 +60,6 @@ impl Pipe for CliPipe {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         *self.shutdown.lock().await = Some(shutdown_tx);
 
-        // TODO(epic-channel-lifecycle): Track spawned task handles so disconnect can
-        // await clean shutdown and surface task errors.
         tokio::spawn(async move {
             let stdin = tokio::io::stdin();
             let reader = BufReader::new(stdin);
@@ -66,8 +75,6 @@ impl Pipe for CliPipe {
                                     continue;
                                 }
 
-                                // TODO(epic-pipe-policies): Route inbound messages through
-                                // access-policy enforcement middleware before forwarding.
                                 debug!(input = %text, "CLI input received");
 
                                 let msg = InboundMessage {
@@ -107,7 +114,6 @@ impl Pipe for CliPipe {
         if let Some(tx) = self.shutdown.lock().await.take() {
             let _ = tx.send(());
         }
-        // TODO(epic-channel-lifecycle): Confirm background task exited before returning.
         Ok(())
     }
 
@@ -117,18 +123,11 @@ impl Pipe for CliPipe {
         text: &str,
         _opts: &DeliveryOptions,
     ) -> anyhow::Result<()> {
-        // TODO(epic-channel-streaming): Support incremental streaming display for text
-        // deltas instead of only final buffered output.
         println!("\n{}\n", text);
         Ok(())
     }
 
-    async fn send_media(
-        &self,
-        _target: &Recipient,
-        media: &MediaPayload,
-    ) -> anyhow::Result<()> {
-        // TODO(epic-channel-cli-media): Add local rendering/preview hooks for media payloads.
+    async fn send_media(&self, _target: &Recipient, media: &MediaPayload) -> anyhow::Result<()> {
         println!(
             "[Media: {} ({} bytes)]",
             media.filename.as_deref().unwrap_or("unnamed"),

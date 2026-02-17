@@ -1,41 +1,37 @@
+//! Streaming event model emitted by `Engine::run`.
+//!
+//! Potential use case:
+//! Handle text deltas, usage stats, and tool-call lifecycle in one unified event loop.
+
 use serde::{Deserialize, Serialize};
 
-/// Events emitted by an engine during response generation.
-///
-/// TODO(epic-stream-contract): Define strict ordering/terminal-event guarantees and
-/// add conformance tests across backends.
+/// Incremental events produced during model generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
-    /// Incremental text content.
+    /// Text delta chunk from the model.
     TextDelta { text: String },
 
-    /// The model is requesting a tool call.
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    /// Start of a tool call emitted by the model.
+    ToolCallStart { id: String, name: String },
 
-    /// Incremental arguments for the current tool call.
-    ToolCallDelta {
-        id: String,
-        arguments_delta: String,
-    },
+    /// Incremental tool-call argument payload.
+    ToolCallDelta { id: String, arguments_delta: String },
 
-    /// Tool call arguments are complete.
+    /// End of the current tool call.
     ToolCallEnd { id: String },
 
-    /// Thinking/reasoning output (if supported).
+    /// Optional thinking/reasoning text chunk.
     ThinkingDelta { text: String },
 
-    /// Token usage stats for this turn.
+    /// Usage accounting for a turn.
     Usage {
         input_tokens: u32,
         output_tokens: u32,
     },
 
-    /// The response stream is complete.
+    /// Terminal event indicating successful completion.
     Done,
 
-    /// An error occurred during generation.
+    /// Terminal event indicating generation failure.
     Error { message: String },
 }

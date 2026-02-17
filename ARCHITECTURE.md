@@ -12,7 +12,7 @@ This document describes full target architecture. The currently running path in 
 - Engine: `OllamaEngine` only
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
-- Not implemented yet: daemonized hub, external pipes, tool loop, persistent flows, skill loader
+- Not implemented yet: daemonized hub, external pipes, tool loop, skill loader
 
 ---
 
@@ -78,8 +78,10 @@ This document describes full target architecture. The currently running path in 
 CLI stdin
   -> CliPipe
     -> (optional) Refiner.compress
-      -> OllamaEngine.run
-        -> CLI stdout
+      -> FlowStore load/append
+        -> Budget-aware prompt assembly (history + retrieval)
+          -> OllamaEngine.run
+            -> CLI stdout
 ```
 
 ---

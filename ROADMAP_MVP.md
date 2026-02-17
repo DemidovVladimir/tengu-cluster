@@ -21,7 +21,8 @@
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
 | `tengu doctor` (Ollama health check) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
-| Knowledge Store (skeleton) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` (not wired up) |
+| Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/main.rs` |
+| Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` |
 
 ### 🔲 Stubs (defined but not implemented)
 
@@ -29,13 +30,12 @@
 |-----------|--------|
 | Anthropic Engine | Feature flag exists, code not written |
 | HuggingFace Engine | Feature flag exists, code not written |
-| Claude Code Engine | Feature flag exists, code not written |
 | Telegram Pipe | Feature flag exists, code not written |
 | Discord Pipe | Feature flag exists, code not written |
 | WebChat Pipe | Feature flag exists, code not written |
 | Tool System (Kit) | Trait defined, no tools implemented |
-| Flow Persistence | None (conversations lost on exit) |
-| Multi-agent routing | Config exists, logic not implemented |
+| Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
+| Multi-agent routing | Partial (router implemented, serve runtime pending) |
 | Skills System | Config exists, loader not implemented |
 
 ---
@@ -150,7 +150,7 @@ Definition of done for Sprint 4:
 | 5.1 | Error handling & recovery | All | Medium |
 | 5.2 | `/cost` with real $ data | `src/main.rs` | Easy |
 | 5.3 | Multi-agent in a single process | `src/main.rs` | Medium |
-| 5.4 | README.md (English + Russian) | Project | Easy |
+| 5.4 | README.md (English) | Project | Easy |
 | 5.5 | Docker image (optional) | Project | Medium |
 | 5.6 | E2E test: "Sanya" scenario | Tests | Medium |
 
@@ -225,7 +225,7 @@ Why:
 1. The `Engine` trait is already defined and battle-tested with Ollama
 2. Anthropic API is well-documented and predictable
 3. Claude gives **dramatically better** response quality for the use case demos
-4. Can immediately test scenarios from `USE_CASES_RUS.md`
+4. Can immediately test scenarios from product use-case docs
 5. ~2-3 hours of work for a basic version
 
 Ready to start?

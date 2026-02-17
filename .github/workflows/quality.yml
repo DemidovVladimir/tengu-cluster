@@ -1,0 +1,26 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check Rust file descriptions
+        run: scripts/check_rust_file_descriptions.sh
+
+      - name: Rustfmt
+        run: cargo fmt --all --check
+
+      - name: Tests
+        run: cargo test --workspace

@@ -1,32 +1,39 @@
+//! Runtime profile detection based on coarse hardware capabilities.
+//!
+//! Potential use case:
+//! Auto-select minimal/desktop/cloud behavior when deploying the same binary on Pi and on desktop.
+
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use tracing::info;
 
-/// Hardware runtime profile — determines what capabilities are available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeProfile {
+    /// High-resource environment (cloud GPU/large RAM).
     Cloud,
+    /// Typical desktop/laptop environment.
     Desktop,
+    /// Constrained environment (SBC/VPS/low-RAM).
     Minimal,
 }
 
-/// Detected system capabilities.
 #[derive(Debug, Clone)]
 pub struct SystemCapabilities {
+    /// Total system RAM in MB.
     pub total_ram_mb: u64,
+    /// Currently available RAM in MB.
     pub available_ram_mb: u64,
+    /// Logical CPU core count.
     pub cpu_cores: usize,
+    /// Current process architecture.
     pub arch: String,
+    /// Coarse GPU availability signal.
     pub has_gpu: bool,
 }
 
 impl SystemCapabilities {
-    /// Detect coarse hardware capabilities for runtime profile selection.
-    ///
-    /// TODO(epic-profile-detection): Replace heuristic GPU detection with provider/runtime
-    /// probing (Metal/CUDA/ROCm availability and usable memory), then wire profile
-    /// outputs to Candle backend selection for local acceleration.
+    /// Detect current host capabilities using lightweight heuristics.
     pub fn detect() -> Self {
         let mut sys = System::new_all();
         sys.refresh_all();
@@ -36,7 +43,6 @@ impl SystemCapabilities {
         let cpu_cores = sys.cpus().len();
         let arch = std::env::consts::ARCH.to_string();
 
-        // Basic GPU detection — check for known GPU indicators
         let has_gpu = Self::detect_gpu();
 
         Self {
@@ -49,9 +55,6 @@ impl SystemCapabilities {
     }
 
     pub fn recommended_profile(&self) -> RuntimeProfile {
-        // TODO(epic-profile-tuning): Calibrate thresholds with benchmark data and
-        // allow override knobs per deployment environment, including explicit
-        // "prefer CUDA/Metal" hints for Candle-enabled local optimization.
         match (self.available_ram_mb, self.has_gpu) {
             (ram, true) if ram > 16_000 => RuntimeProfile::Cloud,
             (ram, _) if ram > 4_000 => RuntimeProfile::Desktop,
@@ -60,11 +63,9 @@ impl SystemCapabilities {
     }
 
     fn detect_gpu() -> bool {
-        // Check for CUDA
         if std::env::var("CUDA_VISIBLE_DEVICES").is_ok() {
             return true;
         }
-        // macOS Metal is available on all Apple Silicon
         if cfg!(target_os = "macos") && std::env::consts::ARCH == "aarch64" {
             return true;
         }
@@ -73,6 +74,7 @@ impl SystemCapabilities {
 }
 
 impl RuntimeProfile {
+    /// Resolve profile from explicit config override or auto-detection.
     pub fn resolve(configured: Option<&str>) -> Self {
         match configured {
             Some("cloud") => RuntimeProfile::Cloud,

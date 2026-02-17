@@ -1800,6 +1800,7 @@ dependencies = [
  "futures",
  "reqwest",
  "serde",
+ "serde_json",
  "tengu-backends",
  "tengu-channels",
  "tengu-core",
@@ -1809,6 +1810,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

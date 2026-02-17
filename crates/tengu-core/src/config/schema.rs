@@ -1,8 +1,13 @@
+//! TOML-backed runtime configuration schema.
+//!
+//! Potential use case:
+//! Parse `~/.tengu/config.toml` into strongly typed runtime settings with env substitution.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Top-level configuration.
+/// Root configuration object loaded from `config.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_profile")]
@@ -31,6 +36,7 @@ fn default_profile() -> String {
     "auto".to_string()
 }
 
+/// Hub runtime/network configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubConfig {
     #[serde(default = "default_bind")]
@@ -57,10 +63,17 @@ impl Default for HubConfig {
     }
 }
 
-fn default_bind() -> String { "127.0.0.1".to_string() }
-fn default_port() -> u16 { 7070 }
-fn default_auth_mode() -> String { "token".to_string() }
+fn default_bind() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_port() -> u16 {
+    7070
+}
+fn default_auth_mode() -> String {
+    "token".to_string()
+}
 
+/// Hot-reload behavior for runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReloadConfig {
     #[serde(default = "default_reload_mode")]
@@ -78,9 +91,14 @@ impl Default for ReloadConfig {
     }
 }
 
-fn default_reload_mode() -> String { "hybrid".to_string() }
-fn default_debounce_ms() -> u64 { 300 }
+fn default_reload_mode() -> String {
+    "hybrid".to_string()
+}
+fn default_debounce_ms() -> u64 {
+    300
+}
 
+/// Prompt refiner configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefinerConfig {
     #[serde(default = "default_refiner_mode")]
@@ -99,8 +117,11 @@ impl Default for RefinerConfig {
     }
 }
 
-fn default_refiner_mode() -> String { "off".to_string() }
+fn default_refiner_mode() -> String {
+    "off".to_string()
+}
 
+/// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     #[serde(default)]
@@ -129,28 +150,24 @@ pub struct AgentConfig {
     pub sandbox: SandboxConfig,
 }
 
-fn default_lens() -> String { "eco".to_string() }
+fn default_lens() -> String {
+    "eco".to_string()
+}
 
+/// Optional identity metadata used for prompts/UI.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IdentityConfig {
     #[serde(default)]
     pub name: Option<String>,
 }
 
+/// Flow/session behavior (scope and reset strategy).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Flow/session behavior controls.
-///
-/// NOTE: These fields are currently configuration-level contracts.
-/// TODO(epic-flow-persistence): Enforce them in runtime flow/session manager
-/// (scoping, reset policy, idle timeout, persisted flow metadata).
 pub struct FlowConfig {
-    /// Flow key strategy (`main`, `per-sender`, `per-pipe-sender`, `per-group`).
     #[serde(default = "default_scope")]
     pub scope: String,
-    /// Reset strategy (`manual`, `daily`, `idle`).
     #[serde(default = "default_reset_mode")]
     pub reset_mode: String,
-    /// Idle timeout before reset/rotation when `reset_mode = idle`.
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_minutes: u32,
 }
@@ -165,15 +182,18 @@ impl Default for FlowConfig {
     }
 }
 
-fn default_scope() -> String { "per-sender".to_string() }
-fn default_reset_mode() -> String { "idle".to_string() }
-fn default_idle_timeout() -> u32 { 30 }
+fn default_scope() -> String {
+    "per-sender".to_string()
+}
+fn default_reset_mode() -> String {
+    "idle".to_string()
+}
+fn default_idle_timeout() -> u32 {
+    30
+}
 
+/// Hard limits applied to flow lifecycle and budgeting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Per-flow safety limits.
-///
-/// TODO(epic-runtime-budgets): Enforce hard token/cost guards in the runtime
-/// request path and flow accounting layer.
 pub struct LimitsConfig {
     #[serde(default = "default_max_tokens")]
     pub max_tokens_per_flow: u64,
@@ -193,13 +213,12 @@ impl Default for LimitsConfig {
     }
 }
 
-fn default_max_tokens() -> u64 { 500_000 }
+fn default_max_tokens() -> u64 {
+    500_000
+}
 
+/// Lens-specific retrieval and budgeting parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Lens-specific tuning knobs.
-///
-/// TODO(epic-runtime-retrieval): Wire these controls into prompt assembly and
-/// retrieval selection logic in the chat runtime.
 pub struct LensConfig {
     #[serde(default = "default_eco_max")]
     pub eco_max_tokens: u32,
@@ -219,10 +238,17 @@ impl Default for LensConfig {
     }
 }
 
-fn default_eco_max() -> u32 { 100 }
-fn default_threshold() -> f32 { 0.7 }
-fn default_budget() -> f32 { 0.5 }
+fn default_eco_max() -> u32 {
+    100
+}
+fn default_threshold() -> f32 {
+    0.7
+}
+fn default_budget() -> f32 {
+    0.5
+}
 
+/// Tool allow/deny lists for agent kit policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KitConfig {
     #[serde(default)]
@@ -231,16 +257,11 @@ pub struct KitConfig {
     pub deny: Vec<String>,
 }
 
+/// Workspace knowledge ingest configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Workspace knowledge indexing inputs.
-///
-/// TODO(epic-runtime-retrieval): Wire store config into a runtime ingestion/indexing
-/// lifecycle (startup ingest, incremental refresh, diagnostics).
 pub struct StoreConfig {
-    /// Glob/file patterns to ingest from workspace.
     #[serde(default = "default_store_files")]
     pub files: Vec<String>,
-    /// Extra absolute or workspace-relative paths to include.
     #[serde(default)]
     pub extra_paths: Vec<String>,
 }
@@ -264,12 +285,14 @@ fn default_store_files() -> Vec<String> {
     ]
 }
 
+/// Sandbox runtime mode configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SandboxConfig {
     #[serde(default)]
     pub mode: String,
 }
 
+/// Sender-to-agent routing binding rule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingBinding {
     pub agent: String,
@@ -282,6 +305,7 @@ pub struct RoutingBinding {
     pub account_id: Option<String>,
 }
 
+/// Pipe configurations keyed by channel type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PipesConfig {
     #[serde(default)]
@@ -294,14 +318,18 @@ pub struct PipesConfig {
     pub webchat: Option<WebchatPipeConfig>,
 }
 
+/// Generic on/off pipe entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipeEntry {
     #[serde(default = "bool_true")]
     pub enabled: bool,
 }
 
-fn bool_true() -> bool { true }
+fn bool_true() -> bool {
+    true
+}
 
+/// Telegram pipe configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelegramPipeConfig {
     #[serde(default)]
@@ -314,8 +342,11 @@ pub struct TelegramPipeConfig {
     pub allow_from: Vec<String>,
 }
 
-fn default_access_policy() -> String { "approval".to_string() }
+fn default_access_policy() -> String {
+    "approval".to_string()
+}
 
+/// Discord pipe configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscordPipeConfig {
     #[serde(default)]
@@ -324,6 +355,7 @@ pub struct DiscordPipeConfig {
     pub token: Option<String>,
 }
 
+/// WebChat pipe configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebchatPipeConfig {
     #[serde(default)]
@@ -332,8 +364,11 @@ pub struct WebchatPipeConfig {
     pub bind: String,
 }
 
-fn default_webchat_bind() -> String { "127.0.0.1:7071".to_string() }
+fn default_webchat_bind() -> String {
+    "127.0.0.1:7071".to_string()
+}
 
+/// Skills discovery/watch configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillsConfig {
     #[serde(default)]
@@ -343,7 +378,7 @@ pub struct SkillsConfig {
 }
 
 impl Config {
-    /// Load config from a TOML file, with env var substitution.
+    /// Load config from path and apply `${ENV_VAR}` substitution.
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let content = Self::substitute_env_vars(&content)?;
@@ -351,15 +386,12 @@ impl Config {
         Ok(config)
     }
 
-    /// Load config or return defaults if file doesn't exist.
+    /// Load config or fallback to default when file is missing/invalid.
     pub fn load_or_default(path: &std::path::Path) -> Self {
-        match Self::load(path) {
-            Ok(config) => config,
-            Err(_) => Self::default(),
-        }
+        Self::load(path).unwrap_or_default()
     }
 
-    /// Substitute ${VAR_NAME} patterns with environment variable values.
+    /// Replace `${VAR}` placeholders with environment values when present.
     fn substitute_env_vars(content: &str) -> anyhow::Result<String> {
         let mut result = content.to_string();
         let re = regex_lite::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
@@ -380,21 +412,26 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         let mut agents = HashMap::new();
-        agents.insert("main".to_string(), AgentConfig {
-            default: true,
-            engine: "ollama".to_string(),
-            model: "llama3.2".to_string(),
-            workspace: None,
-            default_lens: "eco".to_string(),
-            identity: IdentityConfig { name: Some("Tengu".to_string()) },
-            flow: FlowConfig::default(),
-            limits: LimitsConfig::default(),
-            lens: LensConfig::default(),
-            kit: KitConfig::default(),
-            store: StoreConfig::default(),
-            allowed_engines: vec![],
-            sandbox: SandboxConfig::default(),
-        });
+        agents.insert(
+            "main".to_string(),
+            AgentConfig {
+                default: true,
+                engine: "ollama".to_string(),
+                model: "llama3.2".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: IdentityConfig {
+                    name: Some("Tengu".to_string()),
+                },
+                flow: FlowConfig::default(),
+                limits: LimitsConfig::default(),
+                lens: LensConfig::default(),
+                kit: KitConfig::default(),
+                store: StoreConfig::default(),
+                allowed_engines: vec![],
+                sandbox: SandboxConfig::default(),
+            },
+        );
 
         Self {
             runtime_profile: "auto".to_string(),

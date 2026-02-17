@@ -1,67 +1,94 @@
+//! Deterministic sender-to-agent routing.
+//!
+//! Priority order:
+//! 1. `peer`
+//! 2. `group_id`
+//! 3. `account_id`
+//! 4. pipe-only binding
+//! 5. default agent fallback
+//!
+//! Potential use case:
+//! Route Telegram user A to `sales-agent` and user B to `support-agent` in one runtime.
+
 use crate::config::RoutingBinding;
 use crate::types::Recipient;
 
-/// Routes inbound messages to the correct agent.
+/// Router resolving inbound senders to target agent IDs.
 pub struct Router {
+    /// Candidate routing bindings scanned in deterministic order.
+    ///
+    /// Within each priority tier, the first matching binding wins.
     bindings: Vec<RoutingBinding>,
+    /// Fallback agent used when no binding matches.
     default_agent: String,
 }
 
 impl Router {
-    /// Build a deterministic router from static bindings.
-    ///
-    /// TODO(epic-routing-hot-reload): Support lock-safe runtime binding reload.
+    /// Build a router from ordered bindings and default fallback agent.
     pub fn new(bindings: Vec<RoutingBinding>, default_agent: String) -> Self {
-        Self { bindings, default_agent }
+        Self {
+            bindings,
+            default_agent,
+        }
     }
 
-    /// Resolve which agent should handle a message from the given sender.
-    /// Uses deterministic matching — most specific binding wins.
+    /// Resolve sender identity into an agent ID.
     ///
-    /// TODO(epic-routing-observability): Return structured match metadata for diagnostics
-    /// (which rule matched and why).
+    /// Matching precedence is fixed:
+    /// `peer` -> `group_id` -> `account_id` -> pipe-only -> default.
     pub fn resolve(&self, sender: &Recipient) -> &str {
-        // Priority 1: exact peer match
-        for b in &self.bindings {
-            if b.pipe == sender.pipe_id {
-                if let Some(ref peer) = b.peer {
-                    if peer == &sender.peer_id {
-                        return &b.agent;
-                    }
-                }
-            }
-        }
+        // Priority order: peer -> group -> account -> pipe-only -> default.
+        self.bindings
+            .iter()
+            .find(|b| Self::matches_peer(b, sender))
+            .or_else(|| {
+                self.bindings
+                    .iter()
+                    .find(|b| Self::matches_group(b, sender))
+            })
+            .or_else(|| {
+                self.bindings
+                    .iter()
+                    .find(|b| Self::matches_account(b, sender))
+            })
+            .or_else(|| {
+                self.bindings
+                    .iter()
+                    .find(|b| Self::matches_pipe_only(b, sender))
+            })
+            .map(|b| b.agent.as_str())
+            .unwrap_or(self.default_agent.as_str())
+    }
 
-        // Priority 2: group match
-        for b in &self.bindings {
-            if b.pipe == sender.pipe_id {
-                if let (Some(ref group), Some(ref thread)) = (&b.group_id, &sender.thread_id) {
-                    if group == thread {
-                        return &b.agent;
-                    }
-                }
-            }
-        }
+    /// Return true when binding and sender belong to the same pipe.
+    fn same_pipe(binding: &RoutingBinding, sender: &Recipient) -> bool {
+        binding.pipe == sender.pipe_id
+    }
 
-        // Priority 3: account match
-        for b in &self.bindings {
-            if b.pipe == sender.pipe_id {
-                if let (Some(ref acc_b), Some(ref acc_s)) = (&b.account_id, &sender.account_id) {
-                    if acc_b == acc_s {
-                        return &b.agent;
-                    }
-                }
-            }
-        }
+    /// Match a binding scoped to an exact peer identifier.
+    fn matches_peer(binding: &RoutingBinding, sender: &Recipient) -> bool {
+        Self::same_pipe(binding, sender) && binding.peer.as_deref() == Some(sender.peer_id.as_str())
+    }
 
-        // Priority 4: pipe-level match (no peer/group/account specified)
-        for b in &self.bindings {
-            if b.pipe == sender.pipe_id && b.peer.is_none() && b.group_id.is_none() && b.account_id.is_none() {
-                return &b.agent;
-            }
-        }
+    /// Match a binding scoped to a thread/group identifier.
+    fn matches_group(binding: &RoutingBinding, sender: &Recipient) -> bool {
+        Self::same_pipe(binding, sender)
+            && binding.group_id.as_deref() == sender.thread_id.as_deref()
+            && binding.group_id.is_some()
+    }
 
-        // Fallback
-        &self.default_agent
+    /// Match a binding scoped to an account identifier.
+    fn matches_account(binding: &RoutingBinding, sender: &Recipient) -> bool {
+        Self::same_pipe(binding, sender)
+            && binding.account_id.as_deref() == sender.account_id.as_deref()
+            && binding.account_id.is_some()
+    }
+
+    /// Match a binding that targets the whole pipe without extra scoping.
+    fn matches_pipe_only(binding: &RoutingBinding, sender: &Recipient) -> bool {
+        Self::same_pipe(binding, sender)
+            && binding.peer.is_none()
+            && binding.group_id.is_none()
+            && binding.account_id.is_none()
     }
 }

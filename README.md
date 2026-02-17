@@ -59,11 +59,27 @@ Useful commands inside chat:
 - `/eco`, `/standard`, `/precise`
 - `/reset`
 
+## Development Checks
+
+Run local quality checks:
+
+```bash
+scripts/check_rust_file_descriptions.sh
+cargo fmt --all
+cargo test --workspace
+```
+
+Enable the pre-commit hook:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Key Docs
 
 - `PRD.md`
-- `PRD_rus.md`
 - `ARCHITECTURE.md`
 - `ROADMAP_MVP.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `DEPENDENCY_POLICY.md`
+- `RUST_PATTERNS_PLAYBOOK.md`

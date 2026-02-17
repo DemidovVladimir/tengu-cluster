@@ -1,17 +1,11 @@
-//! Prompt/refinement implementations used before model execution.
+//! Prompt refinement implementations used before model invocation.
 //!
 //! Current implementations:
 //! - `noop` (passthrough)
 //! - `rules` (heuristic compression/summarization)
 //!
-//! Candle policy:
-//! - Use Candle for in-process local ML acceleration.
-//! - Prefer GPU execution when available (CUDA/Metal), with CPU fallback.
-//!
-//! TODO(epic-refiner-candle): Add local ML refiner for embeddings/summarization.
-//! TODO(epic-refiner-candle-gpu): Add CUDA/Metal backend selection and runtime telemetry.
-//! TODO(epic-refiner-remote): Add remote refiner client mode.
-//! TODO(epic-refiner-selection): Add runtime profile based auto-selection.
+//! Potential use case:
+//! Switch between zero-cost passthrough and lightweight prompt compression by config profile.
 pub mod noop;
 pub mod rules;
 

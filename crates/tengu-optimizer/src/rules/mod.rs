@@ -1,25 +1,52 @@
+//! Heuristic refiner for low-cost prompt compression and summarization.
+//!
+//! Potential use case:
+//! Reduce prompt size in business chat flows where small wording losses are acceptable.
+
 use async_trait::async_trait;
 use tengu_core::Refiner;
 
-/// Rule-based refiner — zero ML, pure Rust string processing.
-/// Strips filler words, hedging, redundant whitespace.
-/// Saves 20-40% tokens with microsecond latency.
-///
-/// TODO(epic-refiner-quality): Add language-aware and domain-aware compression profiles.
+/// Rule-based refiner with filler/hedging stripping and extractive summaries.
 pub struct RuleRefiner {
     filler_words: Vec<&'static str>,
     hedging_phrases: Vec<&'static str>,
 }
 
+impl Default for RuleRefiner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuleRefiner {
+    /// Create the default rule set.
     pub fn new() -> Self {
         Self {
             filler_words: vec![
-                "basically", "actually", "just", "really", "very", "quite",
-                "perhaps", "maybe", "like", "literally", "honestly",
-                "essentially", "simply", "totally", "absolutely",
-                "definitely", "certainly", "obviously", "clearly",
-                "anyway", "anyways", "so", "well", "right",
+                "basically",
+                "actually",
+                "just",
+                "really",
+                "very",
+                "quite",
+                "perhaps",
+                "maybe",
+                "like",
+                "literally",
+                "honestly",
+                "essentially",
+                "simply",
+                "totally",
+                "absolutely",
+                "definitely",
+                "certainly",
+                "obviously",
+                "clearly",
+                "anyway",
+                "anyways",
+                "so",
+                "well",
+                "right",
             ],
             hedging_phrases: vec![
                 "i think",
@@ -59,10 +86,9 @@ impl RuleRefiner {
 
         for phrase in &self.hedging_phrases {
             if let Some(pos) = lower.find(phrase) {
-                // Remove the phrase and any trailing comma/space
                 let end = pos + phrase.len();
                 let after = &result[end..];
-                let after = after.trim_start_matches(|c: char| c == ',' || c == ' ');
+                let after = after.trim_start_matches([',', ' ']);
                 result = format!("{}{}", &result[..pos], after);
             }
         }
@@ -89,14 +115,12 @@ impl RuleRefiner {
         result.trim().to_string()
     }
 
-    /// Extract key lines from source code for a summary.
     fn extractive_summarize(content: &str, max_chars: usize) -> String {
         let mut summary = String::new();
 
         for line in content.lines() {
             let trimmed = line.trim();
 
-            // Keep: function signatures, struct/class defs, comments, imports
             let is_significant = trimmed.starts_with("pub ")
                 || trimmed.starts_with("fn ")
                 || trimmed.starts_with("struct ")
@@ -130,7 +154,6 @@ impl RuleRefiner {
         }
 
         if summary.is_empty() {
-            // Fallback: take first N characters
             content.chars().take(max_chars).collect()
         } else {
             summary
@@ -148,20 +171,16 @@ impl Refiner for RuleRefiner {
     }
 
     async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
-        // TODO(epic-retrieval-ranking): Implement lightweight lexical embeddings (e.g. TF-IDF)
-        // for better ranking quality without ML dependencies.
-        // For now, return empty — knowledge store falls back to keyword scoring.
         Ok(vec![])
     }
 
     async fn summarize(&self, content: &str, max_tokens: u32) -> anyhow::Result<String> {
-        // ~4 chars per token
         let max_chars = (max_tokens * 4) as usize;
         Ok(Self::extractive_summarize(content, max_chars))
     }
 
     fn memory_footprint(&self) -> usize {
-        0 // Negligible — just static word lists
+        0 // Negligible - only static word lists.
     }
 }
 
@@ -197,7 +216,6 @@ mod tests {
         let refiner = RuleRefiner::new();
         let input = "fn main() { println!(\"hello\"); }";
         let result = refiner.compress(input).await.unwrap();
-        // Code should mostly pass through
         assert!(result.contains("fn main()"));
         assert!(result.contains("println!"));
     }
@@ -207,7 +225,6 @@ mod tests {
         let content = r#"
 use std::collections::HashMap;
 
-/// A user account in the system.
 pub struct User {
     pub id: u64,
     pub name: String,

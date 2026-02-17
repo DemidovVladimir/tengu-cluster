@@ -15,8 +15,8 @@ This document contains both current behavior and target-state requirements.
 | Engines | Partial | `ollama` only |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Planned | Traits exist, runtime tool loop not wired |
-| Flows persistence | Planned | In-memory session only |
-| Knowledge store | Partial | In-memory skeleton exists, not wired to chat loop |
+| Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
+| Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -420,12 +420,8 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 
 | Gap | Why It Matters | Priority |
 |-----|----------------|----------|
-| No persisted flow index/transcript writer | Full flow history is lost on restart | P0 |
-| No atomic write + lock discipline for index updates | Risk of index corruption under concurrent writes/crash | P0 |
-| No transcript path validation/sanitization | Risk of unsafe path usage and broken recovery | P0 |
-| No runtime prompt-window assembler for budget buckets | Token budgets are documented, not enforced in runtime | P0 |
 | No compaction execution path (overflow/threshold triggers) | Long flows eventually exceed model context | P0 |
-| No history-turn limit policy per flow scope | Context can grow too fast and unpredictably | P1 |
+| No history-turn limit policy per flow scope | Context can grow too fast and unpredictably | P0 |
 | No transcript retention/rotation jobs | Storage grows without lifecycle control | P1 |
 | No corruption detection/repair path for transcript files | Single broken transcript can break flow continuity | P1 |
 
@@ -433,7 +429,7 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 
 ## 9. Store (Knowledge System)
 
-Current status: `KnowledgeStore` exists as an in-memory component and is not wired into the main chat loop yet.
+Current status: `KnowledgeStore` is in-memory and wired into the CLI chat loop with budget-capped retrieval.
 
 ### 9.1 Knowledge Indexing
 
@@ -501,7 +497,7 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 
 | Gap | Why It Matters | Priority |
 |-----|----------------|----------|
-| KnowledgeStore not wired to chat loop | Retrieval quality/cost controls are not active at runtime | P0 |
+| No incremental retrieval refresh | Workspace changes after startup are not reflected automatically | P1 |
 | No persisted retrieval index | Re-indexing on every restart wastes startup time | P1 |
 | No chunking for large files | Single large documents can dominate retrieval budget | P1 |
 | No retrieval citation metadata (line/offset references) | Low auditability and weaker explainability | P1 |
