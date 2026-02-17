@@ -1,0 +1,17 @@
+[package]
+name = "tengu-optimizer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tengu-core.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[features]
+default = []
+candle = []

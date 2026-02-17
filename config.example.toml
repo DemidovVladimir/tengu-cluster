@@ -1,0 +1,73 @@
+# Tengu Cluster — Example Configuration
+# Copy to ~/.tengu/config.toml and customize
+
+# Runtime profile: "auto" | "cloud" | "desktop" | "minimal"
+runtime_profile = "auto"
+
+[hub]
+bind = "127.0.0.1"
+port = 7070
+auth_mode = "token"
+# auth_token = "${TENGU_TOKEN}"
+
+[hub.reload]
+mode = "hybrid"
+
+# Refiner: "off" | "rules" | "local" | "remote"
+[refiner]
+mode = "off"
+# model = "SmolLM2-360M"          # for mode = "local"
+# url = "http://192.168.1.100:7070" # for mode = "remote"
+
+[agents.main]
+default = true
+engine = "ollama"
+model = "llama3.2"
+# workspace = "~/projects/my-app"
+default_lens = "eco"
+
+[agents.main.identity]
+name = "Tengu"
+
+[agents.main.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.main.limits]
+max_tokens_per_flow = 500_000
+# max_cost_per_flow = 5.00
+# warn_at_cost = 2.00
+
+[agents.main.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]
+deny = []
+
+[agents.main.store]
+files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
+
+# Routing: which pipe sends to which agent
+[[routing]]
+agent = "main"
+pipe = "cli"
+
+# Pipes
+[pipes.cli]
+enabled = true
+
+# [pipes.telegram]
+# enabled = true
+# token = "${TELEGRAM_BOT_TOKEN}"
+# access_policy = "approval"
+
+# [pipes.discord]
+# enabled = false
+# token = "${DISCORD_BOT_TOKEN}"
+
+# [pipes.webchat]
+# enabled = false
+# bind = "127.0.0.1:7071"
+
+[skills]
+watch = true
+extra_dirs = []

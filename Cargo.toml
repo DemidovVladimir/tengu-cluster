@@ -1,0 +1,69 @@
+[workspace]
+members = [
+    "crates/tengu-core",
+    "crates/tengu-backends",
+    "crates/tengu-channels",
+    "crates/tengu-optimizer",
+    "crates/tengu-memory",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.33"
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tengu-core = { path = "crates/tengu-core" }
+tengu-backends = { path = "crates/tengu-backends" }
+tengu-channels = { path = "crates/tengu-channels" }
+tengu-optimizer = { path = "crates/tengu-optimizer" }
+tengu-memory = { path = "crates/tengu-memory" }
+
+[package]
+name = "tengu-cluster"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tengu-core.workspace = true
+tengu-backends.workspace = true
+tengu-channels.workspace = true
+tengu-optimizer.workspace = true
+tengu-memory.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+dirs-next = "2.0"
+
+[features]
+default = ["ollama", "anthropic", "huggingface", "webchat"]
+candle = ["tengu-optimizer/candle"]
+telegram = ["tengu-channels/telegram"]
+discord = ["tengu-channels/discord"]
+webchat = ["tengu-channels/webchat"]
+ollama = ["tengu-backends/ollama"]
+anthropic = ["tengu-backends/anthropic"]
+huggingface = ["tengu-backends/huggingface"]
+claude-code = ["tengu-backends/claude-code"]
