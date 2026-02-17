@@ -4,6 +4,23 @@
 
 ---
 
+## Implementation Status (2026-02-17)
+
+This document contains both current behavior and target-state requirements.
+
+| Area | Status Today | Notes |
+|------|--------------|-------|
+| CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
+| Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
+| Engines | Partial | `ollama` only |
+| Pipes | Partial | `cli` only |
+| Tools (Kit) | Planned | Traits exist, runtime tool loop not wired |
+| Flows persistence | Planned | In-memory session only |
+| Knowledge store | Partial | In-memory skeleton exists, not wired to chat loop |
+| Skills | Planned | Config schema exists, loader/runtime not implemented |
+
+---
+
 ## 1. Vision
 
 A single Rust binary that lets users run AI coding agents across any messaging platform, with any model provider, on any hardware — from a Raspberry Pi to a cloud GPU server. Users have full control over their agents, models, memory, tools, and spending.
@@ -114,15 +131,16 @@ trait Pipe: Send + Sync {
 
 ### 4.2 Supported Pipes
 
-| Pipe | Rust Crate | Priority |
-|------|-----------|----------|
-| CLI (stdin/stdout) | Built-in | Phase 1 |
-| WebChat (HTTP + WS) | `axum` + `tokio-tungstenite` | Phase 2 |
-| Telegram | `teloxide` | Phase 3 |
-| Discord | `serenity` / `poise` | Phase 4 |
-| Slack | `slack-morphism` | Future |
-| WhatsApp | TBD | Future |
-| Signal | CLI bridge | Future |
+| Pipe | Status | Notes |
+|------|--------|-------|
+| CLI (stdin/stdout) | Implemented | `crates/tengu-channels/src/cli/mod.rs` |
+| WebChat (HTTP + WS) | Planned | Config + feature flag scaffold only |
+| Telegram | Planned | Config + feature flag scaffold only |
+| Discord | Planned | Config + feature flag scaffold only |
+| Slack | Planned | PRD target only |
+| WhatsApp | Planned | PRD target only |
+| Signal | Planned | PRD target only |
+| Iroh | Planned | PRD target only |
 
 ### 4.3 Access Policies
 
@@ -236,22 +254,22 @@ trait Engine: Send + Sync {
 
 ### 6.2 Supported Engines
 
-| Engine | Description | Tool Use | Workspace |
-|--------|-------------|----------|-----------|
-| `claude-code` | Spawns `claude` CLI subprocess | Native (own tools) | Self-managed |
-| `anthropic` | Direct Anthropic Messages API | Native `tool_use` | Hub-provided |
-| `openai` | OpenAI or any compatible API | Function calling | Hub-provided |
-| `huggingface` | HF Inference API or TGI | Prompt-based or FC | Hub-provided |
-| `ollama` | Local Ollama instance | Model-dependent | Hub-provided |
+| Engine | Status | Notes |
+|--------|--------|-------|
+| `ollama` | Implemented | Non-streaming request/response via `/api/chat` |
+| `anthropic` | Planned | Feature scaffold only |
+| `huggingface` | Planned | Feature scaffold only |
+| `openai` | Planned | PRD target only (not in current Cargo feature list) |
+| `google` | Planned | PRD target only |
 
 ### 6.3 Engine Switching Mid-Chat
 
-Users switch engines/models mid-conversation via `/engine <name>`:
+Current behavior:
+- `/engine` shows current engine/model and context window.
+- Runtime switching via `/engine <name>` is not implemented yet.
 
-- Recent messages preserved verbatim
-- Older messages compressed if new engine has smaller context
-- Knowledge retrieval adjusts (mini/full) based on available context
-- User warned of any context truncation
+Planned behavior:
+- Mid-chat engine/model switching with context preservation and compaction safeguards.
 
 ### 6.4 Model Providers
 
@@ -306,17 +324,12 @@ trait Tool: Send + Sync {
 
 ### 7.2 Built-in Tools
 
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file content (workspace-sandboxed) |
-| `write_file` | Write file content |
-| `edit_file` | String replacement edits |
-| `find_files` | Glob pattern matching |
-| `search_content` | Regex content search |
-| `shell` | Execute shell commands (with approval system) |
-| `recall` | Search knowledge store |
-| `fetch_url` | Fetch web page with content extraction |
-| `web_search` | Web search |
+Current behavior:
+- No built-in tools are currently executable in the chat runtime.
+- `Tool` trait and message/tool event types are implemented as core interfaces.
+
+Planned built-in tools:
+- `read_file`, `write_file`, `edit_file`, `find_files`, `search_content`, `shell`, `recall`, `fetch_url`, `web_search`.
 
 ### 7.3 Tool Security
 
@@ -330,10 +343,22 @@ trait Tool: Send + Sync {
 
 ## 8. Flows (Sessions)
 
+Current status: flow state is in-memory per process; history is lost on restart.
+
 ### 8.1 Flow Persistence
 
-- **Flow index**: JSON file mapping flow keys to metadata
-- **Transcripts**: JSONL files with full message history
+Current runtime:
+- In-memory only (no persistence yet).
+
+Target persistence model:
+- **Flow index (`flows/index.json`)**:
+  - maps `flow_key -> metadata` (`transcript_path`, `updated_at`, `message_count`, `token_estimate`, `last_compacted_at`).
+- **Transcript files (`*.jsonl`)**:
+  - append-only event log per flow (user/assistant/tool/system lines).
+  - optimized for sequential writes, easy backups, and crash-safe recovery.
+
+Important: transcript file size does **not** directly determine prompt token usage.
+Only a budgeted subset is loaded per turn.
 
 ### 8.2 Flow Scoping
 
@@ -354,24 +379,67 @@ trait Tool: Send + Sync {
 
 ### 8.4 Compaction
 
-When context window fills:
-1. Split messages by token share
-2. Summarize oldest chunk (via current or cheaper model)
-3. Replace oldest messages with summary
-4. 20% safety margin for token estimation
-5. Configurable chunk ratio (40% default)
+Goal: keep prompts bounded even when transcript/history grows forever.
+
+Per-turn prompt assembly (target):
+1. Reserve response budget (for model output).
+2. Allocate fixed input budget buckets:
+   - system/static context
+   - recent turns window
+   - retrieved knowledge
+   - compaction summaries
+3. Load newest messages first until the window budget is reached.
+4. If needed, include compacted summary blocks instead of old raw turns.
+5. Never load full transcript JSONL into a prompt.
+
+Compaction strategy (target):
+1. Keep recent N turns verbatim.
+2. Summarize older contiguous ranges into compact blocks.
+3. Replace old ranges in active window with references to summary blocks.
+4. Recompute flow token estimate in index metadata.
+5. Preserve raw transcript on disk for audit/replay.
+
+### 8.5 Flow Storage Policy
+
+Target operational rules:
+- Rotate large transcript files (size-based) while keeping one active append file.
+- Keep flow index small and O(1) to load at startup.
+- Apply retention/pruning to archived transcripts by age and activity.
+- Store compaction artifacts as separate files (do not overwrite raw history).
+
+### 8.6 Critical Gaps vs OpenClaw (Storage)
+
+Current gaps that block production-grade flow storage:
+Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
+
+| Gap | Why It Matters | Priority |
+|-----|----------------|----------|
+| No persisted flow index/transcript writer | Full flow history is lost on restart | P0 |
+| No atomic write + lock discipline for index updates | Risk of index corruption under concurrent writes/crash | P0 |
+| No transcript path validation/sanitization | Risk of unsafe path usage and broken recovery | P0 |
+| No runtime prompt-window assembler for budget buckets | Token budgets are documented, not enforced in runtime | P0 |
+| No compaction execution path (overflow/threshold triggers) | Long flows eventually exceed model context | P0 |
+| No history-turn limit policy per flow scope | Context can grow too fast and unpredictably | P1 |
+| No transcript retention/rotation jobs | Storage grows without lifecycle control | P1 |
+| No corruption detection/repair path for transcript files | Single broken transcript can break flow continuity | P1 |
 
 ---
 
 ## 9. Store (Knowledge System)
 
+Current status: `KnowledgeStore` exists as an in-memory component and is not wired into the main chat loop yet.
+
 ### 9.1 Knowledge Indexing
 
-Files from the agent workspace are indexed for semantic retrieval:
-- SQLite database with vector embeddings
-- Chunking: ~400 tokens per chunk, 80-token overlap
-- Hybrid search: BM25 text search + vector similarity
-- File watching for auto-reindex on changes
+Current implementation:
+- In-memory `Vec<KnowledgeEntry>` storage.
+- File ingestion and summary generation APIs.
+- Query relevance scoring (path + keyword match).
+- Lens-aware content selection.
+- Token-budgeted retrieval API (`query_with_budget`).
+
+Planned evolution:
+- Persistent index, semantic retrieval, auto-reindexing, and richer ranking.
 
 ### 9.2 Two-Tier Retrieval (Tengu Innovation)
 
@@ -382,6 +450,11 @@ Each indexed file has two representations:
 | **Summary** | Compressed version (10-20% of original) | Fast, cheap retrieval |
 | **Full** | Original content | Precise, detailed retrieval |
 
+Retrieval contract (target):
+- Retrieval must be **bounded by both `top_k` and `max_tokens`**.
+- Results are ranked first, then greedily packed into budget.
+- If budget is exhausted, lower-ranked results are dropped (never overflow prompt budget).
+
 ### 9.3 Lens (Precision Modes)
 
 Users control which tier is used:
@@ -389,25 +462,50 @@ Users control which tier is used:
 | Command | Lens | Behavior |
 |---------|------|----------|
 | `/eco` | Eco (default) | Summaries only. Cheapest. |
-| `/standard` | Standard | Summary first, auto-expand when confidence low. |
+| `/standard` | Standard | Summary-first (same retrieval behavior as Eco today). |
 | `/precise` | Precise | Full content always. Maximum tokens. |
 
 When refiner is `off`, everything is full content (no summaries generated).
 
 ### 9.4 Embedding Providers
 
-| Provider | How | When |
-|----------|-----|------|
-| OpenAI `text-embedding-3-small` | API call | Remote, high quality |
-| Gemini `gemini-embedding-001` | API call | Remote, alternative |
-| Candle (in-process) | GGUF model | Local, no network |
-| TF-IDF | Pure Rust | Zero-ML fallback (minimal builds) |
+Phased retrieval plan:
 
-Auto-selection: try configured provider → fall back to local → fall back to TF-IDF.
+| Phase | Retrieval Mode | Cost Profile | Notes |
+|-------|----------------|--------------|-------|
+| Current | Keyword/path scoring | Lowest | Zero external deps, fast for small/medium workspaces |
+| Next | TF-IDF / lexical ranking | Low | Better relevance without ML dependency |
+| Optional | Embeddings (local or API) | Higher | Only when required by scale/quality |
+
+Embedding providers (optional phase):
+- OpenAI/Gemini APIs, local Candle, or pure-Rust fallback strategies.
+
+### 9.5 Token Guard Rails
+
+Non-negotiable rules for cost control:
+- Retrieval budget is independent from flow history budget.
+- `Lens::Eco` defaults to summary-only retrieval.
+- Full-content retrieval is explicit (`Lens::Precise`) and still budget-capped.
+- Prompt assembly fails closed (drop low-priority context) rather than exceeding budget.
+
+### 9.6 Critical Gaps vs OpenClaw (Retrieval)
+
+Current gaps that block robust retrieval:
+Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
+
+| Gap | Why It Matters | Priority |
+|-----|----------------|----------|
+| KnowledgeStore not wired to chat loop | Retrieval quality/cost controls are not active at runtime | P0 |
+| No persisted retrieval index | Re-indexing on every restart wastes startup time | P1 |
+| No chunking for large files | Single large documents can dominate retrieval budget | P1 |
+| No retrieval citation metadata (line/offset references) | Low auditability and weaker explainability | P1 |
+| No retrieval quality telemetry (hit rate, dropped-by-budget) | Hard to tune token/cost behavior with data | P1 |
 
 ---
 
 ## 10. Skills
+
+Current status: skills configuration schema exists, but skill discovery/loading/execution is planned.
 
 ### 10.1 Skill Format
 
@@ -511,7 +609,11 @@ Session Stats (47 messages)
 
 ### 12.1 Architecture
 
-`axum` HTTP server + `tokio-tungstenite` WebSocket on configurable port (default: 7070).
+Current behavior:
+- `serve` command is present but does not start a daemon yet.
+
+Planned behavior:
+- HTTP + WebSocket hub daemon with RPC/event protocol and web surfaces.
 
 ### 12.2 RPC Protocol
 
@@ -525,24 +627,15 @@ JSON frame protocol over WebSocket:
 
 ### 12.3 HTTP Endpoints
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /` | Web UI (embedded static assets) |
-| `POST /v1/chat` | Chat API |
-| `GET /health` | Health check |
-| `WS /ws` | WebSocket for real-time |
+Status: planned (not implemented in current runtime).
 
 ### 12.4 Auth
 
-- Token-based and password-based
-- Bind modes: loopback (default), LAN, custom
-- Rate limiting on auth failures
+Status: planned for hub daemon. Current executable has no remote hub endpoint.
 
 ### 12.5 Config Hot Reload
 
-File watching via `notify`:
-- Safe changes (pipes, agents, routing) — apply immediately
-- Structural changes (port, bind, TLS) — require restart
+Status: planned for hub daemon.
 
 ---
 
@@ -662,14 +755,17 @@ On startup, detect: RAM, CPU cores, architecture, GPU availability.
 # Full build
 cargo build --release
 
-# Minimal for Pi — no ML, only Telegram + API engines
+# Minimal currently-working runtime (CLI + Ollama)
 cargo build --release --no-default-features \
-  --features "telegram,anthropic,huggingface"
+  --features "ollama"
+
+# Optional compile-time scaffolds (not fully implemented yet)
+# telegram, discord, webchat, anthropic, huggingface, claude-code, candle
 ```
 
 ### Remote Refinement
 
-Minimal devices offload to a beefy machine:
+Planned mode: minimal devices offload refinement to another machine.
 
 ```toml
 [refiner]
@@ -681,47 +777,34 @@ url = "http://192.168.1.100:7070"
 
 ## 15. User Commands
 
+Implemented now:
+
 | Command | Description |
 |---------|-------------|
-| `/eco` | Switch to eco lens (summaries only) |
-| `/standard` | Switch to standard lens (auto-expand) |
-| `/precise` | Switch to precise lens (full content) |
-| `/engine` | Show/switch engine and model |
-| `/engine <name>` | Switch to specific engine |
-| `/engines` | List available engines |
-| `/cost` | Token usage + savings breakdown |
-| `/context` | Context window usage |
-| `/reset` | Clear flow history |
-| `/export` | Export conversation as markdown |
-| `/store` | Show indexed knowledge files |
-| `/store add <path>` | Add file to knowledge store |
-| `/store rm <path>` | Remove from store |
-| `/agent` | Show/switch agent |
-| `/kit` | List available tools |
-| `/status` | System overview |
-| `/stop` | Abort current generation |
-| `/compact` | Force context compaction |
-| `/help` | List commands |
+| `/eco` | Switch to eco lens |
+| `/standard` | Switch to standard lens |
+| `/precise` | Switch to precise lens |
+| `/engine` | Show current engine/model |
+| `/cost` | Token usage stats |
+| `/context` | Context window usage estimate |
+| `/reset` | Clear current in-memory flow |
+| `/help` | List chat commands |
+
+Planned:
+- `/engine <name>`, `/engines`, `/store*`, `/agent`, `/kit`, `/status`, `/stop`, `/compact`, `/export`.
 
 ---
 
 ## 16. CLI Commands
 
 ```bash
-tengu                          # Start interactive CLI
-tengu chat                     # Alias for interactive CLI
-tengu serve                    # Start hub daemon
-tengu serve-refiner            # Serve refiner API for remote mode
-tengu config get <key>
-tengu config set <key> <val>
-tengu agents list
-tengu agents add <id>
-tengu pipes status
-tengu engines list
-tengu engines scan
-tengu doctor
-tengu status
-tengu security check
+# Current binary name in this repo:
+tengu-cluster chat             # Interactive CLI chat
+tengu-cluster status           # Show config/profile summary
+tengu-cluster doctor           # Ollama connectivity check
+tengu-cluster serve            # Placeholder (daemon not implemented yet)
+
+# If renamed/installed as `tengu`, same subcommands apply.
 ```
 
 ---

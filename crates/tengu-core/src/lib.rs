@@ -140,7 +140,7 @@ pub trait Tool: Send + Sync {
 pub enum Lens {
     /// Summaries only. Cheapest.
     Eco,
-    /// Summary first, auto-expand when confidence is low.
+    /// Summary-first mode. Auto-expand policy is planned.
     Standard,
     /// Full content always. Maximum tokens.
     Precise,
