@@ -412,6 +412,7 @@ Target operational rules:
 - Keep flow index small and O(1) to load at startup.
 - Apply retention/pruning to archived transcripts by age and activity.
 - Store compaction artifacts as separate files (do not overwrite raw history).
+- Enforce a scope-aware active history turn cap (`flow.max_history_turns` or runtime defaults).
 
 ### 8.6 Critical Gaps vs OpenClaw (Storage)
 
@@ -421,7 +422,6 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 | Gap | Why It Matters | Priority |
 |-----|----------------|----------|
 | No compaction execution path (overflow/threshold triggers) | Long flows eventually exceed model context | P0 |
-| No history-turn limit policy per flow scope | Context can grow too fast and unpredictably | P0 |
 | No transcript retention/rotation jobs | Storage grows without lifecycle control | P1 |
 | No corruption detection/repair path for transcript files | Single broken transcript can break flow continuity | P1 |
 
@@ -674,6 +674,7 @@ name = "Tengu"
 scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
+max_history_turns = 80
 
 [agents.main.limits]
 max_tokens_per_flow = 500_000

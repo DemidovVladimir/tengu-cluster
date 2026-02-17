@@ -170,6 +170,11 @@ pub struct FlowConfig {
     pub reset_mode: String,
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_minutes: u32,
+    /// Optional hard cap for recent user turns kept in active runtime history.
+    ///
+    /// If omitted, runtime derives a scope-aware default.
+    #[serde(default)]
+    pub max_history_turns: Option<u32>,
 }
 
 impl Default for FlowConfig {
@@ -178,6 +183,7 @@ impl Default for FlowConfig {
             scope: default_scope(),
             reset_mode: default_reset_mode(),
             idle_timeout_minutes: default_idle_timeout(),
+            max_history_turns: None,
         }
     }
 }

@@ -33,6 +33,7 @@ name = "Tengu"
 scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
+# max_history_turns = 80
 
 [agents.main.limits]
 max_tokens_per_flow = 500_000

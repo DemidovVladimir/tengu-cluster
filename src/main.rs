@@ -169,6 +169,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let mut manual_session_id: Option<String> = None;
     let mut flow_token_usage: u64 = 0;
     let mut active_lens = agent_config.default_lens.parse().unwrap_or(Lens::Eco);
+    let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
     let mut tokens_saved: u32 = 0;
@@ -231,6 +232,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                         (used * 100) / window.max(1)
                     );
                     println!("Lens: {}\n", lens_name);
+                    println!("History turn limit: {}\n", history_turn_limit);
                     if let Some(report) = &last_prompt_report {
                         println!("Last prompt assembly:");
                         println!("  System:    {} tokens", report.system_tokens);
@@ -298,7 +300,17 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             manual_session_id.as_deref(),
         );
         if active_flow_key.as_deref() != Some(flow_key.as_str()) {
-            messages = flow_store.load_messages(&flow_key, 240)?;
+            messages = flow_store
+                .load_messages(&flow_key, history_load_message_cap(history_turn_limit))?;
+            let dropped = enforce_history_turn_limit(&mut messages, history_turn_limit);
+            if dropped > 0 {
+                info!(
+                    flow_key = %flow_key,
+                    dropped_messages = dropped,
+                    history_turn_limit,
+                    "Applied history turn limit to loaded flow messages"
+                );
+            }
             flow_token_usage = messages
                 .iter()
                 .map(|m| estimate_tokens_approx_min1(&m.content) as u64)
@@ -315,10 +327,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         flow_store.append_message(&flow_key, &agent_id, &user_message)?;
         flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
         messages.push(user_message);
+        enforce_history_turn_limit(&mut messages, history_turn_limit);
 
         // TODO(epic-compaction): Add threshold/overflow compaction path for long-running
         // flows (keep recent turns verbatim, summarize older ranges).
-        // TODO(epic-history-limits): Apply per-flow history turn limits before engine call.
         if flow_token_usage >= agent_config.limits.max_tokens_per_flow {
             println!(
                 "Flow token limit reached ({}). Use /reset to start a new session.\n",
@@ -428,6 +440,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     flow_token_usage +=
                         estimate_tokens_approx_min1(&assistant_message.content) as u64;
                     messages.push(assistant_message);
+                    enforce_history_turn_limit(&mut messages, history_turn_limit);
                 }
             }
             Err(e) => {
@@ -663,6 +676,7 @@ fn print_banner(
     engine: &dyn Engine,
 ) {
     let identity = agent_config.identity.name.as_deref().unwrap_or("Tengu");
+    let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     println!();
     println!("  TENGU CLUSTER");
     println!("  ─────────────────────────────────────");
@@ -671,6 +685,10 @@ fn print_banner(
     println!("  Context:  {} tokens", engine.context_window());
     println!("  Refiner:  {}", refiner_mode);
     println!("  Lens:     {}", agent_config.default_lens);
+    println!(
+        "  Flow:     scope={}, history_turn_limit={}",
+        agent_config.flow.scope, history_turn_limit
+    );
     println!("  Profile:  {:?}", profile);
     println!("  ─────────────────────────────────────");
     println!();
@@ -748,6 +766,71 @@ fn resolve_runtime_flow_key(
     FlowStore::resolve_flow_key(agent_id, flow_scope, sender, manual_session_id)
 }
 
+/// Resolve active history turn limit from flow config.
+///
+/// If config does not provide `max_history_turns`, runtime applies scope defaults:
+/// - `main`: 160 turns
+/// - `per-group`: 120 turns
+/// - `per-pipe-sender`: 100 turns
+/// - default (`per-sender`): 80 turns
+fn resolve_history_turn_limit(flow: &tengu_core::config::FlowConfig) -> usize {
+    flow.max_history_turns
+        .map(|v| v.max(1) as usize)
+        .unwrap_or_else(|| default_history_turn_limit_for_scope(&flow.scope))
+}
+
+/// Return scope-aware default history turn limit.
+fn default_history_turn_limit_for_scope(scope: &str) -> usize {
+    match scope {
+        "main" => 160,
+        "per-group" => 120,
+        "per-pipe-sender" => 100,
+        _ => 80,
+    }
+}
+
+/// Compute transcript load cap for disk reads based on turn limit.
+///
+/// Uses a multiplier to account for assistant/tool messages around each user turn.
+fn history_load_message_cap(history_turn_limit: usize) -> usize {
+    history_turn_limit.saturating_mul(4).max(64)
+}
+
+/// Enforce max number of user turns in active in-memory history.
+///
+/// Returns number of dropped messages from the oldest side.
+fn enforce_history_turn_limit(messages: &mut Vec<Message>, max_turns: usize) -> usize {
+    if max_turns == 0 || messages.is_empty() {
+        let dropped = messages.len();
+        messages.clear();
+        return dropped;
+    }
+
+    let mut seen_user_turns = 0usize;
+    let mut start_index = None;
+
+    for (idx, message) in messages.iter().enumerate().rev() {
+        if matches!(message.role, Role::User) {
+            seen_user_turns += 1;
+            if seen_user_turns == max_turns {
+                start_index = Some(idx);
+                break;
+            }
+        }
+    }
+
+    let Some(start) = start_index else {
+        return 0;
+    };
+
+    if start == 0 {
+        return 0;
+    }
+
+    messages.drain(0..start);
+    start
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -756,6 +839,15 @@ mod tests {
     fn msg(content: &str) -> Message {
         Message {
             role: Role::User,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn assistant_msg(content: &str) -> Message {
+        Message {
+            role: Role::Assistant,
             content: content.to_string(),
             tool_call_id: None,
             tool_calls: None,
@@ -831,5 +923,44 @@ mod tests {
         assert!(!block.contains("huge.md"));
         assert_eq!(assembled.dropped_items, 1);
         assert!(assembled.used_tokens <= budget);
+    }
+
+    #[test]
+    fn history_turn_limit_keeps_latest_user_turn_suffix() {
+        let mut messages = vec![
+            msg("u1"),
+            assistant_msg("a1"),
+            msg("u2"),
+            assistant_msg("a2"),
+            msg("u3"),
+            assistant_msg("a3"),
+        ];
+
+        let dropped = enforce_history_turn_limit(&mut messages, 2);
+
+        assert_eq!(dropped, 2);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].content, "u2");
+        assert_eq!(messages[3].content, "a3");
+    }
+
+    #[test]
+    fn history_turn_limit_scope_defaults_are_stable() {
+        assert_eq!(default_history_turn_limit_for_scope("main"), 160);
+        assert_eq!(default_history_turn_limit_for_scope("per-group"), 120);
+        assert_eq!(default_history_turn_limit_for_scope("per-pipe-sender"), 100);
+        assert_eq!(default_history_turn_limit_for_scope("per-sender"), 80);
+    }
+
+    #[test]
+    fn flow_config_override_history_turn_limit_takes_precedence() {
+        let flow = tengu_core::config::FlowConfig {
+            scope: "per-sender".to_string(),
+            reset_mode: "idle".to_string(),
+            idle_timeout_minutes: 30,
+            max_history_turns: Some(42),
+        };
+
+        assert_eq!(resolve_history_turn_limit(&flow), 42);
     }
 }

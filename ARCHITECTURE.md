@@ -866,12 +866,8 @@ Token budget split (target default):
 - reserved output margin
 
 Critical hardening backlog (before production):
-- Add persisted flow index + JSONL transcript writer (restart-safe flows).
-- Enforce atomic index updates with file-level lock discipline.
-- Validate/sanitize transcript paths (containment within flow/session root).
-- Implement runtime budget assembler (system/recent/retrieval/summary buckets).
 - Implement compaction triggers (overflow + threshold), not manual-only.
-- Add history turn limits and oversized tool-result guards.
+- Add oversized tool-result guards.
 - Add retention/rotation and transcript corruption repair routines.
 
 ---

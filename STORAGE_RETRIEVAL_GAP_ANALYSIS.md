@@ -49,22 +49,23 @@ History control:
 ## Current Tengu State
 
 What exists:
-- In-memory chat history in CLI loop only:
-  - `src/main.rs:126`
-- Config schema for flow/store settings:
-  - `crates/tengu-core/src/config/schema.rs:141`
-  - `crates/tengu-core/src/config/schema.rs:219`
-- In-memory KnowledgeStore with relevance scoring + hard budget API:
-  - `crates/tengu-memory/src/lib.rs:89`
-  - `crates/tengu-memory/src/lib.rs:144`
+- Persisted flow/session index + JSONL transcript append with lock-safe and atomic writes:
+  - `src/flow_store.rs`
+- Runtime prompt budget assembly (system/history/retrieval/output reserve):
+  - `src/main.rs`
+- Runtime retrieval wiring with hard token-capped query path:
+  - `src/main.rs`
+  - `crates/tengu-memory/src/lib.rs`
+- Scope-aware history turn limits enforced in runtime:
+  - `src/main.rs`
+  - `crates/tengu-core/src/config/schema.rs`
 
 What does not exist yet:
-- Persisted flow/session index and transcript writer
-- Atomic flow-index writes + lock discipline
-- Runtime prompt assembly buckets with enforced token budgets
 - Compaction/pruning execution path
-- History-limit and oversized tool-result safety path
-- Retrieval integration into runtime loop
+- Oversized tool-result safety/truncation path
+- Retention/rotation jobs for archived flow artifacts
+- Corruption repair workflow beyond base health checks
+- Persisted retrieval index and incremental refresh path
 
 ---
 
@@ -72,19 +73,15 @@ What does not exist yet:
 
 ### P0 (must-have before production)
 
-1. Durable flow persistence (`index.json` + JSONL transcript append)
-2. Atomic + lock-safe flow index updates
-3. Runtime token-budget assembler (never load full transcript)
-4. Compaction triggers (overflow and threshold)
-5. Retrieval wired to runtime with hard `max_tokens` enforcement
+1. Compaction triggers (overflow and threshold)
+2. Oversized tool-result safety/truncation path
 
 ### P1 (hardening after P0)
 
 1. Retention/rotation policies for flow artifacts
 2. Transcript path safety and corruption recovery tooling
-3. History-turn limits per flow scope
-4. Oversized tool-result trimming/clearing strategy
-5. Retrieval telemetry: hit rate, dropped-by-budget, token footprint
+3. Retrieval telemetry: hit rate, dropped-by-budget, token footprint
+4. Persisted retrieval index + incremental refresh
 
 ---
 
