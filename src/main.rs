@@ -21,6 +21,11 @@ use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
+/// Fixed heading prepended to runtime retrieval context blocks.
+const RETRIEVAL_CONTEXT_HEADER: &str = "Relevant workspace context:\n\n";
+/// Separator between multiple retrieval hits packed into one block.
+const RETRIEVAL_CONTEXT_SEPARATOR: &str = "\n\n---\n\n";
+
 #[derive(Parser)]
 #[command(name = "tengu")]
 #[command(about = "Model-agnostic AI agent hub. Single binary, zero dependencies.")]
@@ -164,19 +169,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     };
 
     // Create engine
-    let engine: Box<dyn Engine> = match agent_config.engine.as_str() {
-        "ollama" => {
-            let base_url = std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            Box::new(OllamaEngine::new(&base_url, &agent_config.model))
-        }
-        other => {
-            // TODO(epic-multi-engine): Add Anthropic/OpenAI/HuggingFace backends and
-            // runtime model switching with capability checks.
-            error!(engine = %other, "Engine not yet implemented");
-            return Err(anyhow::anyhow!("Engine '{}' not yet implemented", other));
-        }
-    };
+    let engine = build_engine(&agent_config)?;
 
     // Print startup banner
     print_banner(
@@ -309,9 +302,23 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     continue;
                 }
                 "/engine" => {
-                    let caps = engine.capabilities();
+                    let diagnostics = engine.diagnostics();
+                    let caps = &diagnostics.capabilities;
                     println!("Current: {}/{}", agent_config.engine, agent_config.model);
-                    println!("Context window: {}\n", engine.context_window());
+                    println!("Engine id: {}", diagnostics.engine_id);
+                    println!(
+                        "Configured model: {}",
+                        diagnostics.configured_model.as_deref().unwrap_or("n/a")
+                    );
+                    println!(
+                        "Endpoint: {}",
+                        diagnostics.endpoint.as_deref().unwrap_or("n/a")
+                    );
+                    println!(
+                        "Transport: {}",
+                        diagnostics.transport.as_deref().unwrap_or("n/a")
+                    );
+                    println!("Context window: {}\n", caps.context_window);
                     println!(
                         "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
                         caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
@@ -587,7 +594,11 @@ fn log_prompt_budget_report(
 ///
 /// Contract: providers should emit cumulative per-turn usage in `StreamEvent::Usage`.
 /// Runtime stores the latest snapshot and applies it once when the turn ends.
-fn absorb_turn_usage_snapshot(snapshot: &mut Option<(u32, u32)>, input_tokens: u32, output_tokens: u32) {
+fn absorb_turn_usage_snapshot(
+    snapshot: &mut Option<(u32, u32)>,
+    input_tokens: u32,
+    output_tokens: u32,
+) {
     if let Some((prev_input, prev_output)) = *snapshot {
         if input_tokens < prev_input || output_tokens < prev_output {
             debug!(
@@ -738,10 +749,8 @@ fn build_retrieval_block(hits: &[RetrievedKnowledge], max_tokens: usize) -> Retr
         return RetrievalAssembly::default();
     }
 
-    let header = "Relevant workspace context:\n\n";
-    let separator = "\n\n---\n\n";
-    let header_tokens = estimate_tokens_approx_min1(header);
-    let separator_tokens = estimate_tokens_approx_min1(separator);
+    let header_tokens = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER);
+    let separator_tokens = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_SEPARATOR);
     if header_tokens >= max_tokens {
         return RetrievalAssembly {
             block: None,
@@ -785,12 +794,50 @@ fn build_retrieval_block(hits: &[RetrievedKnowledge], max_tokens: usize) -> Retr
             None
         } else {
             Some(format!(
-                "Relevant workspace context:\n\n{}",
-                chunks.join("\n\n---\n\n")
+                "{}{}",
+                RETRIEVAL_CONTEXT_HEADER,
+                chunks.join(RETRIEVAL_CONTEXT_SEPARATOR)
             ))
         },
         used_tokens: if chunks.is_empty() { 0 } else { used },
         dropped_items: dropped,
+    }
+}
+
+/// Format one compact engine diagnostics line for CLI status/doctor output.
+fn format_engine_diagnostics_compact(diagnostics: &tengu_core::EngineDiagnostics) -> String {
+    let caps = &diagnostics.capabilities;
+    format!(
+        "model={} endpoint={} transport={} context={} tools={} streaming={} workspace={}",
+        diagnostics.configured_model.as_deref().unwrap_or("n/a"),
+        diagnostics.endpoint.as_deref().unwrap_or("n/a"),
+        diagnostics.transport.as_deref().unwrap_or("n/a"),
+        caps.context_window,
+        caps.supports_tool_use,
+        caps.supports_streaming,
+        caps.manages_own_workspace
+    )
+}
+
+/// Run provider connectivity probe for diagnostics-capable engines.
+///
+/// Returns a human-readable probe status when probe logic exists for the engine.
+async fn run_engine_probe(diagnostics: &tengu_core::EngineDiagnostics) -> Option<String> {
+    match diagnostics.engine_id.as_str() {
+        "ollama" => {
+            let base_url = diagnostics
+                .endpoint
+                .as_deref()
+                .unwrap_or("http://localhost:11434");
+            let probe = reqwest::get(format!("{}/api/tags", base_url)).await;
+            let status = match probe {
+                Ok(resp) if resp.status().is_success() => "OK".to_string(),
+                Ok(resp) => format!("Error: HTTP {}", resp.status()),
+                Err(err) => format!("Unreachable: {}", err),
+            };
+            Some(format!("probe /api/tags... {}", status))
+        }
+        _ => None,
     }
 }
 
@@ -828,6 +875,23 @@ async fn init_knowledge_store(
     Some(store)
 }
 
+/// Build configured engine instance for one agent.
+fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dyn Engine>> {
+    match agent_config.engine.as_str() {
+        "ollama" => {
+            let base_url = std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            Ok(Box::new(OllamaEngine::new(&base_url, &agent_config.model)))
+        }
+        other => {
+            // TODO(epic-multi-engine): Add Anthropic/OpenAI/HuggingFace backends and
+            // runtime model switching with capability checks.
+            error!(engine = %other, "Engine not yet implemented");
+            Err(anyhow::anyhow!("Engine '{}' not yet implemented", other))
+        }
+    }
+}
+
 /// Print startup runtime banner.
 fn print_banner(
     agent_id: &str,
@@ -848,11 +912,17 @@ fn print_banner(
     println!("  ─────────────────────────────────────");
     println!("  Agent:    {} ({})", identity, agent_id);
     println!("  Engine:   {}/{}", agent_config.engine, agent_config.model);
-    println!("  Context:  {} tokens", engine.context_window());
-    let caps = engine.capabilities();
+    let diagnostics = engine.diagnostics();
+    let caps = &diagnostics.capabilities;
+    println!("  Context:  {} tokens", caps.context_window);
     println!(
         "  Engine capabilities: tools={} streaming={} manages_workspace={}",
         caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
+    );
+    println!(
+        "  Engine transport: endpoint={} transport={}",
+        diagnostics.endpoint.as_deref().unwrap_or("n/a"),
+        diagnostics.transport.as_deref().unwrap_or("n/a")
     );
     println!("  Refiner:  {}", refiner_mode);
     println!("  Lens:     {}", agent_config.default_lens);
@@ -887,6 +957,18 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
             ac.model,
             if ac.default { " [default]" } else { "" }
         );
+        match build_engine(ac) {
+            Ok(engine) => {
+                let diagnostics = engine.diagnostics();
+                println!(
+                    "      diagnostics: {}",
+                    format_engine_diagnostics_compact(&diagnostics)
+                );
+            }
+            Err(err) => {
+                println!("      diagnostics: unavailable ({})", err);
+            }
+        }
     }
     println!("  Hub:      {}:{}", config.hub.bind, config.hub.port);
     println!("  ─────────────────────────────────────");
@@ -899,16 +981,26 @@ async fn run_doctor(config: &Config) {
     println!("  TENGU CLUSTER — Doctor");
     println!("  ─────────────────────────────────────");
 
-    // Check Ollama connectivity
+    println!("  Backend diagnostics:");
+    // Check backend metadata and provider reachability where probes exist.
     for (id, ac) in &config.agents {
-        if ac.engine == "ollama" {
-            let base_url = std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            print!("  Ollama ({})... ", id);
-            match reqwest::get(format!("{}/api/tags", base_url)).await {
-                Ok(resp) if resp.status().is_success() => println!("OK"),
-                Ok(resp) => println!("Error: HTTP {}", resp.status()),
-                Err(e) => println!("Unreachable: {}", e),
+        match build_engine(ac) {
+            Ok(engine) => {
+                let diagnostics = engine.diagnostics();
+                println!(
+                    "    {}: engine={} {}",
+                    id,
+                    diagnostics.engine_id,
+                    format_engine_diagnostics_compact(&diagnostics)
+                );
+
+                let probe = run_engine_probe(&diagnostics)
+                    .await
+                    .unwrap_or_else(|| "probe: skipped (no provider probe configured)".to_string());
+                println!("      {}", probe);
+            }
+            Err(err) => {
+                println!("    {}: backend init error: {}", id, err);
             }
         }
     }
@@ -1301,7 +1393,7 @@ mod tests {
             first.score,
             first.content
         );
-        let budget = estimate_tokens_approx_min1("Relevant workspace context:\n\n")
+        let budget = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER)
             .saturating_add(estimate_tokens_approx_min1(&first_section))
             .saturating_add(1);
 
@@ -1325,7 +1417,7 @@ mod tests {
             small.score,
             small.content
         );
-        let budget = estimate_tokens_approx_min1("Relevant workspace context:\n\n")
+        let budget = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER)
             .saturating_add(estimate_tokens_approx_min1(&small_section))
             .saturating_add(2);
 

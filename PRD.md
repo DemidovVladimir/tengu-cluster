@@ -21,6 +21,7 @@ This document contains both current behavior and target-state requirements.
 | Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
 | Tool-result truncation guard | Implemented | Core utility enforces hard token caps for tool outputs before prompt insertion |
 | Backend capability contract | Implemented | `Engine::capabilities()` exposes runtime-discoverable backend capabilities |
+| Backend diagnostics contract | Implemented | `Engine::diagnostics()` metadata is surfaced in `status`, `doctor`, startup banner, and `/engine` |
 | Usage accounting contract | Implemented | Runtime treats `Usage` as cumulative turn snapshots and applies latest once per turn |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
@@ -249,6 +250,7 @@ trait Engine: Send + Sync {
     fn supports_streaming(&self) -> bool;
     fn manages_own_workspace(&self) -> bool;
     fn capabilities(&self) -> EngineCapabilities;
+    fn diagnostics(&self) -> EngineDiagnostics;
 
     async fn run(
         &self,

@@ -12,6 +12,7 @@ Tengu Cluster is a single Rust application that routes messages to AI models and
 Current working baseline:
 - CLI chat runtime
 - Ollama backend
+- backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
@@ -91,7 +92,7 @@ cargo run -- chat
 ```
 
 If `doctor` prints:
-- `Ollama ... Unreachable`: start Ollama or fix `OLLAMA_HOST`
+- `probe /api/tags... Unreachable`: start Ollama or fix `OLLAMA_HOST`
 - `Flow store ... Error`: ensure `TENGU_HOME` parent is writable
 
 ## Development Checks

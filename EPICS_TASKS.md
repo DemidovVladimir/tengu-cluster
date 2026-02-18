@@ -37,6 +37,7 @@ Completed tasks:
 16. `E5-T1`
 17. `E5-T2`
 18. `E5-T3`
+19. `E5-T4`
 
 Partially completed:
 1. No partially completed P0 tasks.
@@ -49,7 +50,7 @@ Partially completed:
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
 | `E4` | Planned | Additional backend providers pending. |
-| `E5` | In Progress | Capability contract + Ollama streaming + usage accounting done; diagnostics/fixtures pending. |
+| `E5` | In Progress | Capability contract + Ollama streaming + usage accounting + backend diagnostics done; stream fixtures pending. |
 | `E6` | Planned | Multi-pipe hub runtime and channel adapters pending. |
 | `E7` | Planned | Routing reload and diagnostics pending. |
 | `E8` | Planned | Tool loop runtime and policy/audit controls pending. |

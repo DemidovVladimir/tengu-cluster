@@ -25,6 +25,11 @@ Source: `EPICS_TASKS.md`
 | E5-T1 | Done | Engine capability discovery contract added in `tengu-core`; surfaced in runtime engine/banner output |
 | E5-T2 | Done | Ollama backend now emits true streamed `TextDelta` events with terminal usage/done frames |
 | E5-T3 | Done | Usage accounting standardized as cumulative turn snapshots with single-apply runtime aggregation |
+| E5-T4 | Done | Backend diagnostics metadata contract added and surfaced in `status`/`doctor`/`/engine` |
+
+## Next Start (2026-02-19)
+
+- `E5-T5` — Add stream ordering + terminal-state fixtures.
 
 ## Epics
 

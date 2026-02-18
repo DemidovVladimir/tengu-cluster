@@ -226,6 +226,7 @@ pub trait Engine: Send + Sync {
     fn supports_streaming(&self) -> bool;      // Emits incremental text deltas
     fn manages_own_workspace(&self) -> bool;   // Future: engines that manage their own file access
     fn capabilities(&self) -> EngineCapabilities; // Runtime-discoverable capability contract
+    fn diagnostics(&self) -> EngineDiagnostics; // Runtime diagnostics metadata (status/doctor)
     fn available_models(&self) -> Vec<ModelInfo>;
 
     async fn run(
@@ -243,6 +244,7 @@ pub trait Engine: Send + Sync {
 |----------|-----------|
 | **Streaming output** | Returns a `Stream<Item = StreamEvent>`, not a `String`. Enables real-time display and tool call interception mid-stream. |
 | **Capability contract** | `Engine::capabilities()` provides one stable runtime surface for status, diagnostics, and future engine selection policies. |
+| **Diagnostics contract** | `Engine::diagnostics()` standardizes endpoint/model/transport metadata surfaced by `status`, `doctor`, and `/engine`. |
 | **Usage accounting contract** | `StreamEvent::Usage` is treated as a cumulative per-turn snapshot; runtime applies the latest snapshot once at turn end. |
 | **ToolDef / ToolCall** | Tools are passed as JSON Schema definitions. Engine returns `ToolCallStart` → `ToolCallDelta` → `ToolCallEnd` events when it wants to use a tool. |
 | **manages_own_workspace** | Reserved for future engines that run as subprocesses with direct filesystem access. Regular engines (Ollama, Anthropic, OpenAI) use the Kit for file access. |

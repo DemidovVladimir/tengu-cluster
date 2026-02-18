@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error};
 
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
-use tengu_core::{Engine, EngineContext};
+use tengu_core::{Engine, EngineContext, EngineDiagnostics};
 
 /// Engine implementation backed by a local Ollama instance.
 pub struct OllamaEngine {
@@ -231,6 +231,16 @@ impl Engine for OllamaEngine {
         true
     }
 
+    fn diagnostics(&self) -> EngineDiagnostics {
+        EngineDiagnostics {
+            engine_id: self.id().to_string(),
+            configured_model: Some(self.model.clone()),
+            endpoint: Some(self.base_url.clone()),
+            transport: Some("http-ndjson".to_string()),
+            capabilities: self.capabilities(),
+        }
+    }
+
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![ModelInfo {
             id: self.model.clone(),
@@ -354,5 +364,20 @@ mod tests {
         );
         assert_eq!(OllamaEngine::take_next_line(&mut buffer), None);
         assert_eq!(buffer, "c");
+    }
+
+    #[test]
+    fn diagnostics_report_endpoint_model_and_transport() {
+        let engine = OllamaEngine::new("http://localhost:11434/", "llama3.2");
+        let diagnostics = engine.diagnostics();
+
+        assert_eq!(diagnostics.engine_id, "ollama");
+        assert_eq!(diagnostics.configured_model.as_deref(), Some("llama3.2"));
+        assert_eq!(
+            diagnostics.endpoint.as_deref(),
+            Some("http://localhost:11434")
+        );
+        assert_eq!(diagnostics.transport.as_deref(), Some("http-ndjson"));
+        assert!(diagnostics.capabilities.supports_streaming);
     }
 }

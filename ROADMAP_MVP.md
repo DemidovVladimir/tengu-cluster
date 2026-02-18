@@ -22,7 +22,8 @@
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
 | Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/main.rs` |
-| Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` |
+| Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` (index/transcripts + compaction wired; retention/rotation remains) |
+| Backend diagnostics metadata | ✅ | `crates/tengu-core/src/lib.rs` + `src/main.rs` (`status`/`doctor`/`/engine`) |
 
 ### 🔲 Stubs (defined but not implemented)
 
@@ -63,7 +64,7 @@ Requirements:
 | # | Task | Crate | Complexity |
 |---|------|-------|------------|
 | 1.1 | Anthropic Engine (Claude API) | `tengu-backends` | Medium |
-| 1.2 | Streaming for Ollama | `tengu-backends` | Easy |
+| 1.2 | Streaming for Ollama (Done) | `tengu-backends` | Easy |
 | 1.3 | `/engine` — switch model at runtime | `src/main.rs` | Easy |
 | 1.4 | Anthropic feature flag + conditional compilation | `Cargo.toml` | Easy |
 

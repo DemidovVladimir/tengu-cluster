@@ -284,9 +284,9 @@ mod tests {
         KnowledgeEntry {
             source: PathBuf::from(source),
             full_content: full.to_string(),
-            full_token_estimate: (full.len() / 4) as u32,
+            full_token_estimate: estimate_tokens_approx_u32(full),
             summary: summary.map(|s| s.to_string()),
-            summary_token_estimate: summary.map(|s| (s.len() / 4) as u32),
+            summary_token_estimate: summary.map(estimate_tokens_approx_u32),
             content_hash: 1,
             last_indexed: chrono::Utc::now(),
         }

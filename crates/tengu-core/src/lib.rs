@@ -39,6 +39,21 @@ pub struct EngineCapabilities {
     pub manages_own_workspace: bool,
 }
 
+/// Runtime diagnostics metadata surfaced by engines for status/doctor output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineDiagnostics {
+    /// Stable engine identifier (for example: `ollama`).
+    pub engine_id: String,
+    /// Provider-specific configured model identifier, if available.
+    pub configured_model: Option<String>,
+    /// Provider endpoint/base URL, if applicable (for example local HTTP host).
+    pub endpoint: Option<String>,
+    /// Transport flavor used by the backend (for example `http-ndjson`).
+    pub transport: Option<String>,
+    /// Capability snapshot reported by this backend.
+    pub capabilities: EngineCapabilities,
+}
+
 pub struct EngineContext {
     /// Optional workspace path associated with the current request.
     pub workspace: Option<std::path::PathBuf>,
@@ -69,6 +84,16 @@ pub trait Engine: Send + Sync {
             manages_own_workspace: self.manages_own_workspace(),
         }
     }
+    /// Runtime diagnostics metadata used by `status` and `doctor` commands.
+    fn diagnostics(&self) -> EngineDiagnostics {
+        EngineDiagnostics {
+            engine_id: self.id().to_string(),
+            configured_model: self.available_models().first().map(|m| m.id.clone()),
+            endpoint: None,
+            transport: None,
+            capabilities: self.capabilities(),
+        }
+    }
     /// List of models exposed by this engine.
     fn available_models(&self) -> Vec<ModelInfo>;
 
@@ -79,8 +104,6 @@ pub trait Engine: Send + Sync {
         tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>>;
-    // TODO(epic-backend-telemetry): Standardize backend diagnostic metadata
-    // surfaced to runtime for cost/latency tracking.
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +402,83 @@ mod tests {
                 manages_own_workspace: true,
             }
         );
+    }
+
+    #[test]
+    fn engine_diagnostics_default_shape_is_stable() {
+        let engine = DefaultCapsEngine;
+        let diagnostics = engine.diagnostics();
+
+        assert_eq!(diagnostics.engine_id, "default-caps");
+        assert_eq!(diagnostics.configured_model, None);
+        assert_eq!(diagnostics.endpoint, None);
+        assert_eq!(diagnostics.transport, None);
+        assert_eq!(diagnostics.capabilities.context_window, 4_096);
+        assert!(!diagnostics.capabilities.supports_streaming);
+    }
+
+    struct CustomDiagnosticsEngine;
+
+    #[async_trait]
+    impl Engine for CustomDiagnosticsEngine {
+        fn id(&self) -> &str {
+            "custom-diagnostics"
+        }
+
+        fn context_window(&self) -> usize {
+            16_384
+        }
+
+        fn supports_tool_use(&self) -> bool {
+            true
+        }
+
+        fn manages_own_workspace(&self) -> bool {
+            false
+        }
+
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+
+        fn diagnostics(&self) -> EngineDiagnostics {
+            EngineDiagnostics {
+                engine_id: self.id().to_string(),
+                configured_model: Some("test-model".to_string()),
+                endpoint: Some("https://example.test".to_string()),
+                transport: Some("http-json".to_string()),
+                capabilities: self.capabilities(),
+            }
+        }
+
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDef],
+            _context: &EngineContext,
+        ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+            Ok(Box::pin(stream::iter(vec![StreamEvent::Done])))
+        }
+    }
+
+    #[test]
+    fn engine_diagnostics_can_be_overridden_by_provider() {
+        let engine = CustomDiagnosticsEngine;
+        let diagnostics = engine.diagnostics();
+
+        assert_eq!(diagnostics.engine_id, "custom-diagnostics");
+        assert_eq!(diagnostics.configured_model.as_deref(), Some("test-model"));
+        assert_eq!(
+            diagnostics.endpoint.as_deref(),
+            Some("https://example.test")
+        );
+        assert_eq!(diagnostics.transport.as_deref(), Some("http-json"));
+        assert!(diagnostics.capabilities.supports_tool_use);
+        assert!(diagnostics.capabilities.supports_streaming);
     }
 
     #[test]
