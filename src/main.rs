@@ -43,17 +43,29 @@ enum Commands {
 
 #[derive(Debug, Clone, Default)]
 struct PromptAssemblyReport {
+    /// Tokens contributed by static system/workspace prompt.
     system_tokens: usize,
+    /// Tokens contributed by retrieval block injected for this request.
     retrieval_tokens: usize,
+    /// Requested retrieval bucket before final budget arbitration.
     retrieval_budget_requested: usize,
+    /// Effective retrieval bucket after history/system usage.
     retrieval_budget_effective: usize,
+    /// Tokens contributed by selected recent history suffix.
     history_tokens: usize,
+    /// Count of history messages excluded by budget/window.
     dropped_history_messages: usize,
+    /// Count of retrieval hits excluded by retrieval block packer.
     dropped_retrieval_items: usize,
+    /// Reserved tokens kept for model output.
     reserved_output_tokens: usize,
+    /// Total available input budget for this turn.
     total_input_budget: usize,
+    /// Remaining flow token budget before executing the request.
     flow_budget_remaining: usize,
+    /// Whether compaction executed before assembling this prompt.
     compaction_applied: bool,
+    /// Number of messages compacted in current turn (if any).
     compacted_messages: usize,
 }
 
@@ -409,8 +421,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         } else {
             Vec::new()
         };
+        let retrieved_candidates = retrieved.len();
         let retrieval_assembly = build_retrieval_block(&retrieved, retrieval_budget_effective);
 
+        let history_messages_selected = history_assembly.messages.len();
         let prompt_messages = history_assembly.messages;
         let system_tokens = system_prompt
             .as_deref()
@@ -432,6 +446,14 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             compaction_applied: compaction_outcome.applied,
             compacted_messages: compaction_outcome.compacted_messages,
         };
+        log_prompt_budget_report(
+            &flow_key,
+            active_lens,
+            engine.context_window(),
+            &report,
+            history_messages_selected,
+            retrieved_candidates,
+        );
         last_prompt_report = Some(report);
 
         if prompt_messages.is_empty() {
@@ -514,6 +536,37 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     pipe.disconnect().await?;
     Ok(())
+}
+
+/// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.
+fn log_prompt_budget_report(
+    flow_key: &str,
+    lens: Lens,
+    context_window: usize,
+    report: &PromptAssemblyReport,
+    history_messages_selected: usize,
+    retrieval_candidates: usize,
+) {
+    info!(
+        flow_key = %flow_key,
+        lens = lens.as_str(),
+        context_window,
+        total_input_budget = report.total_input_budget,
+        reserved_output_tokens = report.reserved_output_tokens,
+        flow_budget_remaining = report.flow_budget_remaining,
+        system_tokens = report.system_tokens,
+        history_tokens = report.history_tokens,
+        history_messages_selected,
+        dropped_history_messages = report.dropped_history_messages,
+        retrieval_tokens = report.retrieval_tokens,
+        retrieval_candidates,
+        retrieval_budget_requested = report.retrieval_budget_requested,
+        retrieval_budget_effective = report.retrieval_budget_effective,
+        dropped_retrieval_items = report.dropped_retrieval_items,
+        compaction_applied = report.compaction_applied,
+        compacted_messages = report.compacted_messages,
+        "Prompt budget report"
+    );
 }
 
 fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {

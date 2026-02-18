@@ -19,7 +19,7 @@ Source: `EPICS_TASKS.md`
 | E2-T3 | Done | Retrieval bucket wired through `query_with_budget` in chat loop |
 | E2-T4 | Done | Deterministic over-budget drop order implemented (history suffix + retrieval tail-drop) |
 | E1-T9 | Done | `doctor` now runs flow index + transcript integrity diagnostics with actionable findings |
-| E2-T5 | In Progress | Base `/context` bucket report exists; full per-request telemetry pending |
+| E2-T5 | Done | Per-request prompt budget telemetry now emitted by runtime (bucket-level tracing + `/context` snapshot) |
 
 ## Epics
 

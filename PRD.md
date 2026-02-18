@@ -17,6 +17,7 @@ This document contains both current behavior and target-state requirements.
 | Tools (Kit) | Planned | Traits exist, runtime tool loop not wired |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
+| Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---

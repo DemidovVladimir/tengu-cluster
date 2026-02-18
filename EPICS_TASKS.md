@@ -31,9 +31,10 @@ Completed tasks:
 10. `E2-T2`
 11. `E2-T3`
 12. `E2-T4`
+13. `E2-T5`
 
 Partially completed:
-1. `E2-T5` (base prompt-bucket report exists in `/context`; full per-request telemetry still pending)
+1. No partially completed P0 tasks.
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 
