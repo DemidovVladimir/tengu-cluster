@@ -34,6 +34,10 @@ scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
 # max_history_turns = 80
+# Defaults are derived from model context/input budget if omitted.
+# compaction_threshold_ratio = 0.82
+# compaction_keep_turns = 24
+# compaction_summary_max_tokens = 320
 
 [agents.main.limits]
 max_tokens_per_flow = 500_000

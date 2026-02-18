@@ -25,10 +25,11 @@ Completed tasks:
 4. `E1-T4`
 5. `E1-T5`
 6. `E1-T6`
-7. `E2-T1`
-8. `E2-T2`
-9. `E2-T3`
-10. `E2-T4`
+7. `E1-T7`
+8. `E2-T1`
+9. `E2-T2`
+10. `E2-T3`
+11. `E2-T4`
 
 Partially completed:
 1. `E1-T9` (base flow-store health check added in `doctor`; repair checks still pending)

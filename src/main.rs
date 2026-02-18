@@ -53,6 +53,8 @@ struct PromptAssemblyReport {
     reserved_output_tokens: usize,
     total_input_budget: usize,
     flow_budget_remaining: usize,
+    compaction_applied: bool,
+    compacted_messages: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,6 +69,24 @@ struct RetrievalAssembly {
     block: Option<String>,
     used_tokens: usize,
     dropped_items: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FlowCompactionPolicy {
+    /// Flow token usage threshold that triggers compaction.
+    threshold_tokens: u64,
+    /// Number of recent user turns to preserve verbatim.
+    keep_turns: usize,
+    /// Maximum token budget for generated summary block.
+    summary_max_tokens: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CompactionOutcome {
+    /// Whether compaction was executed in this step.
+    applied: bool,
+    /// Number of old messages replaced by summary.
+    compacted_messages: usize,
 }
 
 #[tokio::main]
@@ -170,6 +190,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let mut flow_token_usage: u64 = 0;
     let mut active_lens = agent_config.default_lens.parse().unwrap_or(Lens::Eco);
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
+    let compaction_policy = resolve_flow_compaction_policy(
+        &agent_config.flow,
+        agent_config.limits.max_tokens_per_flow,
+        engine.context_window(),
+    );
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
     let mut tokens_saved: u32 = 0;
@@ -233,6 +258,12 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     );
                     println!("Lens: {}\n", lens_name);
                     println!("History turn limit: {}\n", history_turn_limit);
+                    println!(
+                        "Compaction: threshold={} keep_turns={} summary_max_tokens={}\n",
+                        compaction_policy.threshold_tokens,
+                        compaction_policy.keep_turns,
+                        compaction_policy.summary_max_tokens
+                    );
                     if let Some(report) = &last_prompt_report {
                         println!("Last prompt assembly:");
                         println!("  System:    {} tokens", report.system_tokens);
@@ -247,6 +278,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                         println!("  Reserved:  {} tokens", report.reserved_output_tokens);
                         println!("  Budget:    {} tokens", report.total_input_budget);
                         println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
+                        println!(
+                            "  Compaction: applied={}, compacted_messages={}\n",
+                            report.compaction_applied, report.compacted_messages
+                        );
                     }
                     continue;
                 }
@@ -328,9 +363,18 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
         messages.push(user_message);
         enforce_history_turn_limit(&mut messages, history_turn_limit);
+        let mut compaction_outcome = maybe_compact_flow(
+            &flow_store,
+            &flow_key,
+            &agent_id,
+            &mut messages,
+            &mut flow_token_usage,
+            &*refiner,
+            compaction_policy,
+            "pre-engine",
+        )
+        .await?;
 
-        // TODO(epic-compaction): Add threshold/overflow compaction path for long-running
-        // flows (keep recent turns verbatim, summarize older ranges).
         if flow_token_usage >= agent_config.limits.max_tokens_per_flow {
             println!(
                 "Flow token limit reached ({}). Use /reset to start a new session.\n",
@@ -385,6 +429,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             reserved_output_tokens: reserved_output_tokens(engine.context_window()),
             total_input_budget,
             flow_budget_remaining: remaining_flow_tokens as usize,
+            compaction_applied: compaction_outcome.applied,
+            compacted_messages: compaction_outcome.compacted_messages,
         };
         last_prompt_report = Some(report);
 
@@ -441,6 +487,23 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                         estimate_tokens_approx_min1(&assistant_message.content) as u64;
                     messages.push(assistant_message);
                     enforce_history_turn_limit(&mut messages, history_turn_limit);
+                    let post_outcome = maybe_compact_flow(
+                        &flow_store,
+                        &flow_key,
+                        &agent_id,
+                        &mut messages,
+                        &mut flow_token_usage,
+                        &*refiner,
+                        compaction_policy,
+                        "post-engine",
+                    )
+                    .await?;
+                    if post_outcome.applied {
+                        compaction_outcome.applied = true;
+                        compaction_outcome.compacted_messages = compaction_outcome
+                            .compacted_messages
+                            .saturating_add(post_outcome.compacted_messages);
+                    }
                 }
             }
             Err(e) => {
@@ -677,6 +740,11 @@ fn print_banner(
 ) {
     let identity = agent_config.identity.name.as_deref().unwrap_or("Tengu");
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
+    let compaction_policy = resolve_flow_compaction_policy(
+        &agent_config.flow,
+        agent_config.limits.max_tokens_per_flow,
+        engine.context_window(),
+    );
     println!();
     println!("  TENGU CLUSTER");
     println!("  ─────────────────────────────────────");
@@ -688,6 +756,12 @@ fn print_banner(
     println!(
         "  Flow:     scope={}, history_turn_limit={}",
         agent_config.flow.scope, history_turn_limit
+    );
+    println!(
+        "            compaction_threshold={} keep_turns={} summary_max_tokens={}",
+        compaction_policy.threshold_tokens,
+        compaction_policy.keep_turns,
+        compaction_policy.summary_max_tokens
     );
     println!("  Profile:  {:?}", profile);
     println!("  ─────────────────────────────────────");
@@ -831,6 +905,181 @@ fn enforce_history_turn_limit(messages: &mut Vec<Message>, max_turns: usize) -> 
     start
 }
 
+/// Resolve compaction policy from flow config and limits.
+fn resolve_flow_compaction_policy(
+    flow: &tengu_core::config::FlowConfig,
+    max_tokens_per_flow: u64,
+    context_window: usize,
+) -> FlowCompactionPolicy {
+    let threshold_ratio = flow
+        .compaction_threshold_ratio
+        .unwrap_or_else(|| default_compaction_threshold_ratio_for_scope(&flow.scope))
+        .clamp(0.1, 1.0);
+    let threshold_tokens = ((max_tokens_per_flow as f32) * threshold_ratio) as u64;
+
+    let keep_turns = flow
+        .compaction_keep_turns
+        .map(|v| v.max(1) as usize)
+        .unwrap_or_else(|| default_compaction_keep_turns_for_scope(&flow.scope));
+
+    let max_input_budget = compute_total_input_budget(context_window, max_tokens_per_flow);
+    let summary_max_tokens = flow
+        .compaction_summary_max_tokens
+        .unwrap_or_else(|| default_compaction_summary_max_tokens(max_input_budget));
+
+    FlowCompactionPolicy {
+        threshold_tokens: threshold_tokens.max(1),
+        keep_turns,
+        summary_max_tokens,
+    }
+}
+
+/// Derive default summary token budget from effective model input budget.
+///
+/// This is intentionally tied to context-window economics (not lifetime flow limits),
+/// so defaults remain intuitive across small and large models.
+fn default_compaction_summary_max_tokens(max_input_budget: usize) -> u32 {
+    let target = ((max_input_budget as f32) * 0.15).round() as usize;
+    let max_cap = (max_input_budget / 3).clamp(256, 4096);
+    target.clamp(128, max_cap) as u32
+}
+
+/// Return scope-aware default compaction threshold ratio.
+fn default_compaction_threshold_ratio_for_scope(scope: &str) -> f32 {
+    match scope {
+        "main" => 0.88,
+        "per-group" => 0.86,
+        "per-pipe-sender" => 0.84,
+        _ => 0.82,
+    }
+}
+
+/// Return scope-aware default number of recent user turns to keep verbatim.
+fn default_compaction_keep_turns_for_scope(scope: &str) -> usize {
+    match scope {
+        "main" => 60,
+        "per-group" => 40,
+        "per-pipe-sender" => 32,
+        _ => 24,
+    }
+}
+
+/// Compact long-running flow history when threshold/overflow triggers are hit.
+async fn maybe_compact_flow(
+    flow_store: &FlowStore,
+    flow_key: &str,
+    agent_id: &str,
+    messages: &mut Vec<Message>,
+    flow_token_usage: &mut u64,
+    refiner: &dyn Refiner,
+    policy: FlowCompactionPolicy,
+    phase: &str,
+) -> Result<CompactionOutcome> {
+    if messages.is_empty() {
+        return Ok(CompactionOutcome::default());
+    }
+
+    let should_compact = *flow_token_usage >= policy.threshold_tokens;
+    if !should_compact {
+        return Ok(CompactionOutcome::default());
+    }
+
+    let Some(split_idx) = compaction_split_index(messages, policy.keep_turns) else {
+        return Ok(CompactionOutcome::default());
+    };
+
+    if split_idx == 0 {
+        return Ok(CompactionOutcome::default());
+    }
+
+    let compacted_slice = &messages[..split_idx];
+    if !compacted_slice.iter().any(|m| matches!(m.role, Role::User)) {
+        return Ok(CompactionOutcome::default());
+    }
+    let compaction_source = build_compaction_source(compacted_slice);
+    let raw_summary = match refiner
+        .summarize(&compaction_source, policy.summary_max_tokens)
+        .await
+    {
+        Ok(text) if !text.trim().is_empty() => text,
+        _ => truncate_to_token_budget(&compaction_source, policy.summary_max_tokens as usize),
+    };
+    let summary = truncate_to_token_budget(raw_summary.trim(), policy.summary_max_tokens as usize);
+
+    let compacted_messages = compacted_slice.len();
+    let summary_message = Message {
+        role: Role::Assistant,
+        content: format!(
+            "[Flow compaction summary]\n{}\n\n[compacted_messages={}, phase={}]",
+            summary.trim(),
+            compacted_messages,
+            phase
+        ),
+        tool_call_id: None,
+        tool_calls: None,
+    };
+
+    messages.drain(0..split_idx);
+    messages.insert(0, summary_message.clone());
+    *flow_token_usage = messages
+        .iter()
+        .map(|m| estimate_tokens_approx_min1(&m.content) as u64)
+        .sum();
+
+    flow_store.append_message(flow_key, agent_id, &summary_message)?;
+    info!(
+        flow_key = %flow_key,
+        phase,
+        compacted_messages,
+        flow_tokens = *flow_token_usage,
+        threshold_tokens = policy.threshold_tokens,
+        "Applied flow compaction summary"
+    );
+
+    Ok(CompactionOutcome {
+        applied: true,
+        compacted_messages,
+    })
+}
+
+/// Find split index for compaction based on number of recent user turns to keep.
+fn compaction_split_index(messages: &[Message], keep_turns: usize) -> Option<usize> {
+    if keep_turns == 0 || messages.is_empty() {
+        return Some(messages.len());
+    }
+
+    let mut seen_user_turns = 0usize;
+    for (idx, message) in messages.iter().enumerate().rev() {
+        if matches!(message.role, Role::User) {
+            seen_user_turns += 1;
+            if seen_user_turns == keep_turns {
+                return Some(idx);
+            }
+        }
+    }
+
+    None
+}
+
+/// Build compaction source text from a slice of older messages.
+fn build_compaction_source(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .map(|msg| format!("[{}] {}", role_label(&msg.role), msg.content))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Render canonical label for message role in compaction source text.
+fn role_label(role: &Role) -> &'static str {
+    match role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,6 +1103,10 @@ mod tests {
         }
     }
 
+    /// Build a deterministic retrieval hit fixture for retrieval budget tests.
+    ///
+    /// The helper defaults to `is_summary = true` and `score = 1.0` so tests
+    /// can focus on token packing/drop behavior instead of ranking variance.
     fn hit(source: &str, content: &str) -> RetrievedKnowledge {
         RetrievedKnowledge {
             source: PathBuf::from(source),
@@ -959,8 +1212,78 @@ mod tests {
             reset_mode: "idle".to_string(),
             idle_timeout_minutes: 30,
             max_history_turns: Some(42),
+            compaction_threshold_ratio: None,
+            compaction_keep_turns: None,
+            compaction_summary_max_tokens: None,
         };
 
         assert_eq!(resolve_history_turn_limit(&flow), 42);
+    }
+
+    #[test]
+    fn compaction_split_index_keeps_recent_turn_suffix() {
+        let messages = vec![
+            msg("u1"),
+            assistant_msg("a1"),
+            msg("u2"),
+            assistant_msg("a2"),
+            msg("u3"),
+            assistant_msg("a3"),
+        ];
+
+        assert_eq!(compaction_split_index(&messages, 2), Some(2));
+    }
+
+    #[test]
+    fn compaction_policy_defaults_are_scope_aware() {
+        assert_eq!(default_compaction_keep_turns_for_scope("main"), 60);
+        assert_eq!(default_compaction_keep_turns_for_scope("per-group"), 40);
+        assert_eq!(
+            default_compaction_keep_turns_for_scope("per-pipe-sender"),
+            32
+        );
+        assert_eq!(default_compaction_keep_turns_for_scope("per-sender"), 24);
+
+        assert!(default_compaction_threshold_ratio_for_scope("main") > 0.85);
+        assert!(default_compaction_threshold_ratio_for_scope("per-sender") < 0.85);
+    }
+
+    #[test]
+    fn resolve_compaction_policy_honors_overrides() {
+        let flow = tengu_core::config::FlowConfig {
+            scope: "per-sender".to_string(),
+            reset_mode: "idle".to_string(),
+            idle_timeout_minutes: 30,
+            max_history_turns: Some(50),
+            compaction_threshold_ratio: Some(0.9),
+            compaction_keep_turns: Some(12),
+            compaction_summary_max_tokens: Some(300),
+        };
+
+        let policy = resolve_flow_compaction_policy(&flow, 1_000, 8_192);
+        assert_eq!(policy.threshold_tokens, 900);
+        assert_eq!(policy.keep_turns, 12);
+        assert_eq!(policy.summary_max_tokens, 300);
+    }
+
+    #[test]
+    fn compaction_summary_default_scales_with_context_budget() {
+        let flow = tengu_core::config::FlowConfig {
+            scope: "per-sender".to_string(),
+            reset_mode: "idle".to_string(),
+            idle_timeout_minutes: 30,
+            max_history_turns: None,
+            compaction_threshold_ratio: None,
+            compaction_keep_turns: None,
+            compaction_summary_max_tokens: None,
+        };
+
+        let small_ctx = resolve_flow_compaction_policy(&flow, 500_000, 8_192);
+        let large_ctx = resolve_flow_compaction_policy(&flow, 500_000, 128_000);
+
+        assert!(small_ctx.summary_max_tokens >= 128);
+        assert!(small_ctx.summary_max_tokens < 1_500);
+        assert!(large_ctx.summary_max_tokens > small_ctx.summary_max_tokens);
+        assert!(large_ctx.summary_max_tokens <= 4_096);
     }
 }

@@ -866,7 +866,7 @@ Token budget split (target default):
 - reserved output margin
 
 Critical hardening backlog (before production):
-- Implement compaction triggers (overflow + threshold), not manual-only.
+- Add durable compaction artifact lifecycle (retention + repair hooks).
 - Add oversized tool-result guards.
 - Add retention/rotation and transcript corruption repair routines.
 
@@ -893,6 +893,9 @@ Critical hardening backlog (before production):
 
 5. Serde defaults fill any missing fields
 ```
+
+Environment reference:
+- `.env.example` lists implemented and planned variables with usage notes.
 
 ### Full Config Structure
 
@@ -962,6 +965,8 @@ pub struct SystemCapabilities {
 
 ```rust
 fn detect_gpu() -> bool {
+    // Manual override (cpu/gpu/cuda/metal/mps)
+    if env::var("TENGU_GPU_HINT").is_ok() { /* parse + return */ }
     // CUDA
     if env::var("CUDA_VISIBLE_DEVICES").is_ok() { return true; }
     // Apple Silicon Metal

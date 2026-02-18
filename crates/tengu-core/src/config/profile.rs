@@ -62,10 +62,27 @@ impl SystemCapabilities {
         }
     }
 
+    /// Detect coarse GPU availability for profile resolution.
+    ///
+    /// Heuristic order:
+    /// 1. Explicit operator override via `TENGU_GPU_HINT`
+    /// 2. CUDA visibility env hint
+    /// 3. Apple Silicon host (assume Metal-capable)
     fn detect_gpu() -> bool {
+        if let Ok(hint) = std::env::var("TENGU_GPU_HINT") {
+            let normalized = hint.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "none" | "cpu" | "off" | "false" => return false,
+                "gpu" | "cuda" | "metal" | "mps" | "on" | "true" => return true,
+                _ => {}
+            }
+        }
+
         if std::env::var("CUDA_VISIBLE_DEVICES").is_ok() {
             return true;
         }
+
+        // Apple Silicon machines are treated as Metal-capable by default.
         if cfg!(target_os = "macos") && std::env::consts::ARCH == "aarch64" {
             return true;
         }

@@ -59,9 +59,10 @@ What exists:
 - Scope-aware history turn limits enforced in runtime:
   - `src/main.rs`
   - `crates/tengu-core/src/config/schema.rs`
+- Runtime compaction trigger path (threshold + overflow) with summary insertion:
+  - `src/main.rs`
 
 What does not exist yet:
-- Compaction/pruning execution path
 - Oversized tool-result safety/truncation path
 - Retention/rotation jobs for archived flow artifacts
 - Corruption repair workflow beyond base health checks
@@ -73,15 +74,15 @@ What does not exist yet:
 
 ### P0 (must-have before production)
 
-1. Compaction triggers (overflow and threshold)
-2. Oversized tool-result safety/truncation path
+1. Oversized tool-result safety/truncation path
 
 ### P1 (hardening after P0)
 
 1. Retention/rotation policies for flow artifacts
 2. Transcript path safety and corruption recovery tooling
-3. Retrieval telemetry: hit rate, dropped-by-budget, token footprint
-4. Persisted retrieval index + incremental refresh
+3. Durable compaction artifact lifecycle (archival/retention/repair hooks)
+4. Retrieval telemetry: hit rate, dropped-by-budget, token footprint
+5. Persisted retrieval index + incremental refresh
 
 ---
 
@@ -90,5 +91,5 @@ What does not exist yet:
 1. Flow store foundation (`flows/index.json`, per-flow JSONL, lock + atomic writes)
 2. Prompt-budget assembler (system/recent/retrieval/summary + reserved output)
 3. Retrieval wiring (`query_with_budget`) into chat loop
-4. Compaction path (manual first, then threshold/overflow auto path)
+4. Oversized tool-result safety path
 5. Retention + repair + diagnostics commands

@@ -421,7 +421,7 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 
 | Gap | Why It Matters | Priority |
 |-----|----------------|----------|
-| No compaction execution path (overflow/threshold triggers) | Long flows eventually exceed model context | P0 |
+| No durable compaction artifact lifecycle (rotation/retention of summaries) | Runtime compaction works, but long-term storage hygiene is incomplete | P1 |
 | No transcript retention/rotation jobs | Storage grows without lifecycle control | P1 |
 | No corruption detection/repair path for transcript files | Single broken transcript can break flow continuity | P1 |
 
@@ -675,6 +675,9 @@ scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
 max_history_turns = 80
+compaction_threshold_ratio = 0.82
+compaction_keep_turns = 24
+compaction_summary_max_tokens = 320
 
 [agents.main.limits]
 max_tokens_per_flow = 500_000
@@ -729,17 +732,21 @@ extra_dirs = []
 
 ### Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `TENGU_HOME` | Base directory (default: `~/.tengu`) |
-| `TENGU_CONFIG_PATH` | Config file override |
-| `TENGU_LOG_LEVEL` | Log level |
-| `TENGU_HUB_PORT` | Port override |
-| `TENGU_TOKEN` | Auth token |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `HF_TOKEN` | HuggingFace token |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token |
+| Variable | Purpose | Status |
+|----------|---------|--------|
+| `TENGU_HOME` | Base directory for config/state (fallback `~/.tengu`) | Implemented |
+| `OLLAMA_HOST` | Ollama base URL for runtime calls and doctor checks | Implemented |
+| `CUDA_VISIBLE_DEVICES` | Optional GPU visibility hint used in profile heuristics | Implemented |
+| `TENGU_GPU_HINT` | Optional profile override for GPU detection (`cpu`/`gpu`/`metal`/`cuda`) | Implemented |
+| `TENGU_TOKEN` | Hub auth token placeholder in config (`${TENGU_TOKEN}`) | Config-substituted |
+| `TELEGRAM_BOT_TOKEN` | Telegram pipe token placeholder in config | Config-substituted (feature planned) |
+| `DISCORD_BOT_TOKEN` | Discord pipe token placeholder in config | Config-substituted (feature planned) |
+| `ANTHROPIC_API_KEY` | Anthropic provider credential | Planned backend |
+| `OPENAI_API_KEY` | OpenAI provider credential | Planned backend |
+| `GOOGLE_API_KEY` | Google provider credential | Planned backend |
+| `HF_TOKEN` | Hugging Face credential | Planned backend |
+
+Reference file: `.env.example`
 
 ---
 

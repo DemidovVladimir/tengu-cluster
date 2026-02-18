@@ -40,11 +40,16 @@ mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
 ```
 
-Set your Ollama host if needed:
+Export environment variables as needed:
 
 ```bash
-export OLLAMA_HOST=http://localhost:11434
+cp .env.example .env
+# then export variables from .env using your shell tool of choice
+# (or export directly, e.g. `export OLLAMA_HOST=http://localhost:11434`)
 ```
+
+Environment variable details:
+- `.env.example`
 
 ### 3. Run
 

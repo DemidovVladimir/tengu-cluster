@@ -175,6 +175,21 @@ pub struct FlowConfig {
     /// If omitted, runtime derives a scope-aware default.
     #[serde(default)]
     pub max_history_turns: Option<u32>,
+    /// Optional trigger ratio for compaction (`0.0..=1.0`) against `max_tokens_per_flow`.
+    ///
+    /// If omitted, runtime derives a scope-aware default.
+    #[serde(default)]
+    pub compaction_threshold_ratio: Option<f32>,
+    /// Optional count of recent user turns to keep verbatim during compaction.
+    ///
+    /// If omitted, runtime derives a scope-aware default.
+    #[serde(default)]
+    pub compaction_keep_turns: Option<u32>,
+    /// Optional max token budget used for generated compaction summaries.
+    ///
+    /// If omitted, runtime derives a value from effective model input budget.
+    #[serde(default)]
+    pub compaction_summary_max_tokens: Option<u32>,
 }
 
 impl Default for FlowConfig {
@@ -184,6 +199,9 @@ impl Default for FlowConfig {
             reset_mode: default_reset_mode(),
             idle_timeout_minutes: default_idle_timeout(),
             max_history_turns: None,
+            compaction_threshold_ratio: None,
+            compaction_keep_turns: None,
+            compaction_summary_max_tokens: None,
         }
     }
 }
@@ -398,6 +416,9 @@ impl Config {
     }
 
     /// Replace `${VAR}` placeholders with environment values when present.
+    ///
+    /// Missing environment variables are intentionally left unchanged so optional
+    /// placeholders can remain in config templates.
     fn substitute_env_vars(content: &str) -> anyhow::Result<String> {
         let mut result = content.to_string();
         let re = regex_lite::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
