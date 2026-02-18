@@ -18,6 +18,7 @@ This document contains both current behavior and target-state requirements.
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
+| Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---

@@ -1289,6 +1289,48 @@ mod tests {
     }
 
     #[test]
+    fn budget_overflow_small_context_window_preserves_output_reserve() {
+        // For tiny windows, reserve floor (256) can consume all available input.
+        let total_input_budget = compute_total_input_budget(128, 10_000);
+        assert_eq!(total_input_budget, 0);
+    }
+
+    #[test]
+    fn budget_overflow_remaining_flow_tokens_hard_caps_input_budget() {
+        let total_input_budget = compute_total_input_budget(8_192, 500);
+        assert_eq!(total_input_budget, 500);
+    }
+
+    #[test]
+    fn budget_overflow_base_budget_saturates_when_system_prompt_is_too_large() {
+        let large_system = "x".repeat(4_096);
+        let base_input_budget = compute_base_input_budget(512, Some(&large_system), 1_000);
+        assert_eq!(base_input_budget, 0);
+    }
+
+    #[test]
+    fn budget_overflow_retrieval_bucket_respects_half_input_hard_cap() {
+        let lens_cfg = tengu_core::config::LensConfig {
+            eco_max_tokens: 10_000,
+            standard_threshold: 0.7,
+            precise_budget: 0.9,
+        };
+        let budget = compute_retrieval_bucket_budget(Lens::Eco, &lens_cfg, 100);
+        assert_eq!(budget, 50);
+    }
+
+    #[test]
+    fn history_overflow_applies_recent_window_cap_even_with_large_budget() {
+        let messages: Vec<Message> = (0..200).map(|i| msg(&format!("m{i}"))).collect();
+        let assembled = assemble_recent_history(&messages, 100_000);
+        assert_eq!(assembled.messages.len(), 120);
+        // `dropped_messages` is tracked within the 120-message recent window.
+        assert_eq!(assembled.dropped_messages, 0);
+        assert_eq!(assembled.messages[0].content, "m80");
+        assert_eq!(assembled.messages[119].content, "m199");
+    }
+
+    #[test]
     fn history_turn_limit_keeps_latest_user_turn_suffix() {
         let mut messages = vec![
             msg("u1"),

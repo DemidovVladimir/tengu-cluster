@@ -20,6 +20,7 @@ Source: `EPICS_TASKS.md`
 | E2-T4 | Done | Deterministic over-budget drop order implemented (history suffix + retrieval tail-drop) |
 | E1-T9 | Done | `doctor` now runs flow index + transcript integrity diagnostics with actionable findings |
 | E2-T5 | Done | Per-request prompt budget telemetry now emitted by runtime (bucket-level tracing + `/context` snapshot) |
+| E2-T6 | Done | Added budget overflow regression tests for small windows, reserves, and bucket hard-caps |
 
 ## Epics
 
