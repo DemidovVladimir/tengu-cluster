@@ -14,6 +14,7 @@ Source: `EPICS_TASKS.md`
 | E1-T5 | Done | Lock discipline implemented |
 | E1-T6 | Done | Scope-aware history turn limits enforced in runtime (`flow.max_history_turns` + defaults) |
 | E1-T7 | Done | Runtime compaction trigger path implemented (threshold + overflow with summary compaction) |
+| E1-T8 | Done | Core tool-result token guard/truncation utility implemented with regression tests |
 | E2-T1 | Done | Budget-safe recent-history assembler implemented |
 | E2-T2 | Done | Hard runtime budget guards implemented |
 | E2-T3 | Done | Retrieval bucket wired through `query_with_budget` in chat loop |

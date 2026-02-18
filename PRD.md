@@ -14,11 +14,12 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` only |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Planned | Traits exist, runtime tool loop not wired |
+| Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
 | Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
+| Tool-result truncation guard | Implemented | Core utility enforces hard token caps for tool outputs before prompt insertion |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -341,6 +342,7 @@ Planned built-in tools:
 
 ### 7.3 Tool Security
 
+- Oversized tool-result token guard/truncation utility (implemented in core, runtime tool loop integration pending)
 - Per-agent allow/deny lists
 - Safe command allowlist for shell
 - Approval system for dangerous operations

@@ -64,9 +64,10 @@ What exists:
 - `doctor` flow-store integrity diagnostics (missing/unsafe/corrupt transcript checks):
   - `src/main.rs`
   - `src/flow_store.rs`
+- Core tool-result oversized payload guard/truncation utility:
+  - `crates/tengu-core/src/lib.rs`
 
 What does not exist yet:
-- Oversized tool-result safety/truncation path
 - Retention/rotation jobs for archived flow artifacts
 - Automated corruption repair workflow (detection now exists in `doctor`)
 - Persisted retrieval index and incremental refresh path
@@ -77,7 +78,7 @@ What does not exist yet:
 
 ### P0 (must-have before production)
 
-1. Oversized tool-result safety/truncation path
+1. No open P0 gaps in storage/retrieval scope.
 
 ### P1 (hardening after P0)
 
@@ -94,5 +95,4 @@ What does not exist yet:
 1. Flow store foundation (`flows/index.json`, per-flow JSONL, lock + atomic writes)
 2. Prompt-budget assembler (system/recent/retrieval/summary + reserved output)
 3. Retrieval wiring (`query_with_budget`) into chat loop
-4. Oversized tool-result safety path
-5. Retention + repair + diagnostics commands
+4. Retention + repair + diagnostics commands
