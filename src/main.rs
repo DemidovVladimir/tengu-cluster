@@ -309,8 +309,13 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     continue;
                 }
                 "/engine" => {
+                    let caps = engine.capabilities();
                     println!("Current: {}/{}", agent_config.engine, agent_config.model);
                     println!("Context window: {}\n", engine.context_window());
+                    println!(
+                        "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
+                        caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
+                    );
                     continue;
                 }
                 "/help" => {
@@ -804,6 +809,11 @@ fn print_banner(
     println!("  Agent:    {} ({})", identity, agent_id);
     println!("  Engine:   {}/{}", agent_config.engine, agent_config.model);
     println!("  Context:  {} tokens", engine.context_window());
+    let caps = engine.capabilities();
+    println!(
+        "  Engine capabilities: tools={} streaming={} manages_workspace={}",
+        caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
+    );
     println!("  Refiner:  {}", refiner_mode);
     println!("  Lens:     {}", agent_config.default_lens);
     println!(

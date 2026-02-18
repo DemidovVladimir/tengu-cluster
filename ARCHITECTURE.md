@@ -4,7 +4,7 @@
 
 ---
 
-## Current Implementation Snapshot (2026-02-17)
+## Current Implementation Snapshot (2026-02-18)
 
 This document describes full target architecture. The currently running path in code is narrower:
 
@@ -223,7 +223,9 @@ pub trait Engine: Send + Sync {
     fn id(&self) -> &str;                     // "ollama", "anthropic", "openai"
     fn context_window(&self) -> usize;         // e.g., 128_000 for Claude
     fn supports_tool_use(&self) -> bool;       // Can handle ToolDef + ToolCall
+    fn supports_streaming(&self) -> bool;      // Emits incremental text deltas
     fn manages_own_workspace(&self) -> bool;   // Future: engines that manage their own file access
+    fn capabilities(&self) -> EngineCapabilities; // Runtime-discoverable capability contract
     fn available_models(&self) -> Vec<ModelInfo>;
 
     async fn run(
@@ -240,6 +242,7 @@ pub trait Engine: Send + Sync {
 | Decision | Rationale |
 |----------|-----------|
 | **Streaming output** | Returns a `Stream<Item = StreamEvent>`, not a `String`. Enables real-time display and tool call interception mid-stream. |
+| **Capability contract** | `Engine::capabilities()` provides one stable runtime surface for status, diagnostics, and future engine selection policies. |
 | **ToolDef / ToolCall** | Tools are passed as JSON Schema definitions. Engine returns `ToolCallStart` → `ToolCallDelta` → `ToolCallEnd` events when it wants to use a tool. |
 | **manages_own_workspace** | Reserved for future engines that run as subprocesses with direct filesystem access. Regular engines (Ollama, Anthropic, OpenAI) use the Kit for file access. |
 | **EngineContext** | Minimal context bag — just workspace path and system prompt. Keeps the trait clean; agents add context via messages. |

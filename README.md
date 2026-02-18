@@ -64,6 +64,36 @@ Useful commands inside chat:
 - `/eco`, `/standard`, `/precise`
 - `/reset`
 
+## Manual Smoke Test
+
+Preconditions before chat testing:
+- `~/.tengu/` is writable (or `TENGU_HOME` points to a writable directory)
+- Ollama is running at `OLLAMA_HOST`
+- the configured model is available locally (for example `llama3.2`)
+
+Suggested check sequence:
+
+```bash
+mkdir -p ~/.tengu
+cp config.example.toml ~/.tengu/config.toml
+
+# Ensure model is available in local Ollama registry
+ollama pull llama3.2
+
+# Optional: load env vars
+set -a
+source .env
+set +a
+
+cargo run -- status
+cargo run -- doctor
+cargo run -- chat
+```
+
+If `doctor` prints:
+- `Ollama ... Unreachable`: start Ollama or fix `OLLAMA_HOST`
+- `Flow store ... Error`: ensure `TENGU_HOME` parent is writable
+
 ## Development Checks
 
 Run local quality checks:

@@ -93,6 +93,10 @@ impl Engine for OllamaEngine {
         false
     }
 
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
     fn available_models(&self) -> Vec<ModelInfo> {
         vec![ModelInfo {
             id: self.model.clone(),
@@ -100,7 +104,7 @@ impl Engine for OllamaEngine {
             display_name: self.model.clone(),
             context_window: self.context_window(),
             supports_tools: false,
-            supports_streaming: true,
+            supports_streaming: false,
         }]
     }
 

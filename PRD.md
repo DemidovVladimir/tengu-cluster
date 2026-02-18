@@ -4,7 +4,7 @@
 
 ---
 
-## Implementation Status (2026-02-17)
+## Implementation Status (2026-02-18)
 
 This document contains both current behavior and target-state requirements.
 
@@ -20,6 +20,7 @@ This document contains both current behavior and target-state requirements.
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
 | Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
 | Tool-result truncation guard | Implemented | Core utility enforces hard token caps for tool outputs before prompt insertion |
+| Backend capability contract | Implemented | `Engine::capabilities()` exposes runtime-discoverable backend capabilities |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -244,7 +245,9 @@ trait Engine: Send + Sync {
     fn id(&self) -> &str;
     fn context_window(&self) -> usize;
     fn supports_tool_use(&self) -> bool;
+    fn supports_streaming(&self) -> bool;
     fn manages_own_workspace(&self) -> bool;
+    fn capabilities(&self) -> EngineCapabilities;
 
     async fn run(
         &self,
@@ -269,7 +272,7 @@ trait Engine: Send + Sync {
 ### 6.3 Engine Switching Mid-Chat
 
 Current behavior:
-- `/engine` shows current engine/model and context window.
+- `/engine` shows current engine/model, context window, and capability flags.
 - Runtime switching via `/engine <name>` is not implemented yet.
 
 Planned behavior:
@@ -742,6 +745,7 @@ extra_dirs = []
 |----------|---------|--------|
 | `TENGU_HOME` | Base directory for config/state (fallback `~/.tengu`) | Implemented |
 | `OLLAMA_HOST` | Ollama base URL for runtime calls and doctor checks | Implemented |
+| `RUST_LOG` | Runtime tracing verbosity (`info`, `debug`, `tengu=debug`) | Implemented |
 | `CUDA_VISIBLE_DEVICES` | Optional GPU visibility hint used in profile heuristics | Implemented |
 | `TENGU_GPU_HINT` | Optional profile override for GPU detection (`cpu`/`gpu`/`metal`/`cuda`) | Implemented |
 | `TENGU_TOKEN` | Hub auth token placeholder in config (`${TENGU_TOKEN}`) | Config-substituted |

@@ -26,6 +26,19 @@ use types::{
 // Engine — the AI backend powering an agent
 // ---------------------------------------------------------------------------
 
+/// Runtime-discoverable engine capability snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineCapabilities {
+    /// Maximum supported context window in tokens.
+    pub context_window: usize,
+    /// Whether the backend supports runtime tool-calling.
+    pub supports_tool_use: bool,
+    /// Whether the backend can emit incremental streamed output.
+    pub supports_streaming: bool,
+    /// Whether workspace/file operations are handled natively by backend.
+    pub manages_own_workspace: bool,
+}
+
 pub struct EngineContext {
     /// Optional workspace path associated with the current request.
     pub workspace: Option<std::path::PathBuf>,
@@ -43,6 +56,19 @@ pub trait Engine: Send + Sync {
     fn supports_tool_use(&self) -> bool;
     /// Whether this engine manages workspace access internally.
     fn manages_own_workspace(&self) -> bool;
+    /// Whether this engine supports incremental text streaming.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+    /// Runtime capability contract used by status/diagnostics layers.
+    fn capabilities(&self) -> EngineCapabilities {
+        EngineCapabilities {
+            context_window: self.context_window(),
+            supports_tool_use: self.supports_tool_use(),
+            supports_streaming: self.supports_streaming(),
+            manages_own_workspace: self.manages_own_workspace(),
+        }
+    }
     /// List of models exposed by this engine.
     fn available_models(&self) -> Vec<ModelInfo>;
 
@@ -249,6 +275,111 @@ pub trait Tool: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::stream;
+
+    struct DefaultCapsEngine;
+
+    #[async_trait]
+    impl Engine for DefaultCapsEngine {
+        fn id(&self) -> &str {
+            "default-caps"
+        }
+
+        fn context_window(&self) -> usize {
+            4_096
+        }
+
+        fn supports_tool_use(&self) -> bool {
+            false
+        }
+
+        fn manages_own_workspace(&self) -> bool {
+            false
+        }
+
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDef],
+            _context: &EngineContext,
+        ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+            Ok(Box::pin(stream::iter(vec![StreamEvent::Done])))
+        }
+    }
+
+    struct StreamingCapsEngine;
+
+    #[async_trait]
+    impl Engine for StreamingCapsEngine {
+        fn id(&self) -> &str {
+            "streaming-caps"
+        }
+
+        fn context_window(&self) -> usize {
+            8_192
+        }
+
+        fn supports_tool_use(&self) -> bool {
+            true
+        }
+
+        fn manages_own_workspace(&self) -> bool {
+            true
+        }
+
+        fn supports_streaming(&self) -> bool {
+            true
+        }
+
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDef],
+            _context: &EngineContext,
+        ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+            Ok(Box::pin(stream::iter(vec![StreamEvent::Done])))
+        }
+    }
+
+    #[test]
+    fn engine_capabilities_default_streaming_is_false() {
+        let engine = DefaultCapsEngine;
+        let caps = engine.capabilities();
+
+        assert_eq!(
+            caps,
+            EngineCapabilities {
+                context_window: 4_096,
+                supports_tool_use: false,
+                supports_streaming: false,
+                manages_own_workspace: false,
+            }
+        );
+    }
+
+    #[test]
+    fn engine_capabilities_reflect_overrides() {
+        let engine = StreamingCapsEngine;
+        let caps = engine.capabilities();
+
+        assert_eq!(
+            caps,
+            EngineCapabilities {
+                context_window: 8_192,
+                supports_tool_use: true,
+                supports_streaming: true,
+                manages_own_workspace: true,
+            }
+        );
+    }
 
     #[test]
     fn tool_output_guard_passthrough_when_within_budget() {

@@ -6,7 +6,7 @@ This backlog is derived from:
 - `ARCHITECTURE.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 
-Date: 2026-02-17
+Date: 2026-02-18
 
 ## Priority Waves
 
@@ -16,7 +16,7 @@ Date: 2026-02-17
 | P1 | Provider/channel expansion + tool loop + observability | Enables real platform usage |
 | P2 | Advanced retrieval/refiner quality + schema evolution | Scale quality/performance after core is stable |
 
-## Progress Snapshot (2026-02-17)
+## Progress Snapshot (2026-02-18)
 
 Completed tasks:
 1. `E1-T1`
@@ -34,9 +34,25 @@ Completed tasks:
 13. `E2-T4`
 14. `E2-T5`
 15. `E2-T6`
+16. `E5-T1`
 
 Partially completed:
 1. No partially completed P0 tasks.
+
+## Epic Status Snapshot
+
+| Epic | Status | Notes |
+|---|---|---|
+| `E1` | Done | All P0 storage/session resilience tasks are complete. |
+| `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete. |
+| `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
+| `E4` | Planned | Additional backend providers pending. |
+| `E5` | In Progress | Capability contract done; streaming + usage telemetry pending. |
+| `E6` | Planned | Multi-pipe hub runtime and channel adapters pending. |
+| `E7` | Planned | Routing reload and diagnostics pending. |
+| `E8` | Planned | Tool loop runtime and policy/audit controls pending. |
+| `E9` | Planned | Candle/refiner acceleration backlog pending. |
+| `E10` | Planned | Config/schema contract hardening pending. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 

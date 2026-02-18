@@ -1,9 +1,9 @@
 # Jira-Style Task Backlog
 
-Date: 2026-02-17
+Date: 2026-02-18
 Source: `EPICS_TASKS.md`
 
-## Status Snapshot (2026-02-17)
+## Status Snapshot (2026-02-18)
 
 | Key | Status | Comment |
 |---|---|---|
@@ -22,21 +22,22 @@ Source: `EPICS_TASKS.md`
 | E1-T9 | Done | `doctor` now runs flow index + transcript integrity diagnostics with actionable findings |
 | E2-T5 | Done | Per-request prompt budget telemetry now emitted by runtime (bucket-level tracing + `/context` snapshot) |
 | E2-T6 | Done | Added budget overflow regression tests for small windows, reserves, and bucket hard-caps |
+| E5-T1 | Done | Engine capability discovery contract added in `tengu-core`; surfaced in runtime engine/banner output |
 
 ## Epics
 
-| Key | Type | Summary | Priority |
-|---|---|---|---|
-| E1 | Epic | Flow Persistence and Session Resilience | P0 |
-| E2 | Epic | Prompt Budgeting and Runtime Retrieval Wiring | P0 |
-| E3 | Epic | Retrieval Quality and Index Persistence | P1 |
-| E4 | Epic | Backend Provider Expansion | P1 |
-| E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 |
-| E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 |
-| E7 | Epic | Routing Operations and Diagnostics | P1 |
-| E8 | Epic | Tool Loop and Safety Controls | P1 |
-| E9 | Epic | Refiner and Candle Acceleration | P1 |
-| E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 |
+| Key | Type | Summary | Priority | Status |
+|---|---|---|---|---|
+| E1 | Epic | Flow Persistence and Session Resilience | P0 | Done |
+| E2 | Epic | Prompt Budgeting and Runtime Retrieval Wiring | P0 | Done |
+| E3 | Epic | Retrieval Quality and Index Persistence | P1 | Planned |
+| E4 | Epic | Backend Provider Expansion | P1 | Planned |
+| E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | In Progress |
+| E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | Planned |
+| E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
+| E8 | Epic | Tool Loop and Safety Controls | P1 | Planned |
+| E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |
+| E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | Planned |
 
 ## Epic Closure Rules
 
