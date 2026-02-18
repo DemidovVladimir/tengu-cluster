@@ -11,7 +11,7 @@
 | Component | Status | File |
 |-----------|--------|------|
 | CLI interface | ✅ Working | `src/main.rs` |
-| Ollama Engine | ✅ Working (non-streaming) | `crates/tengu-backends/src/ollama/mod.rs` |
+| Ollama Engine | ✅ Working (streaming `TextDelta`) | `crates/tengu-backends/src/ollama/mod.rs` |
 | Full config schema | ✅ | `crates/tengu-core/src/config/schema.rs` (399 lines) |
 | Env var substitution (`${VAR}`) | ✅ | `config/schema.rs` |
 | Runtime Profile Detection | ✅ | `crates/tengu-core/src/config/profile.rs` |

@@ -12,7 +12,7 @@ This document contains both current behavior and target-state requirements.
 |------|--------------|-------|
 | CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
-| Engines | Partial | `ollama` only |
+| Engines | Partial | `ollama` only (streaming `TextDelta` path implemented) |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
@@ -262,7 +262,7 @@ trait Engine: Send + Sync {
 
 | Engine | Status | Notes |
 |--------|--------|-------|
-| `ollama` | Implemented | Non-streaming request/response via `/api/chat` |
+| `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
 | `anthropic` | Planned | Feature scaffold only, typed REST target |
 | `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
 | `openai` | Planned | Feature scaffold only, typed REST target |

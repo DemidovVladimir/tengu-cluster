@@ -23,6 +23,7 @@ Source: `EPICS_TASKS.md`
 | E2-T5 | Done | Per-request prompt budget telemetry now emitted by runtime (bucket-level tracing + `/context` snapshot) |
 | E2-T6 | Done | Added budget overflow regression tests for small windows, reserves, and bucket hard-caps |
 | E5-T1 | Done | Engine capability discovery contract added in `tengu-core`; surfaced in runtime engine/banner output |
+| E5-T2 | Done | Ollama backend now emits true streamed `TextDelta` events with terminal usage/done frames |
 
 ## Epics
 

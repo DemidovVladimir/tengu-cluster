@@ -266,7 +266,7 @@ pub enum StreamEvent {
 
 | Engine | Crate | Status | Key Behavior |
 |--------|-------|--------|-------------|
-| `OllamaEngine` | `tengu-backends` | ✅ Implemented | HTTP to localhost:11434, non-streaming |
+| `OllamaEngine` | `tengu-backends` | ✅ Implemented | HTTP to localhost:11434 with streamed `TextDelta` output |
 | `AnthropicEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.anthropic.com, streaming, tool use |
 | `OpenAIEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.openai.com, streaming, tool use |
 | `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
