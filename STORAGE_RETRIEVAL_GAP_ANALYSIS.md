@@ -61,11 +61,14 @@ What exists:
   - `crates/tengu-core/src/config/schema.rs`
 - Runtime compaction trigger path (threshold + overflow) with summary insertion:
   - `src/main.rs`
+- `doctor` flow-store integrity diagnostics (missing/unsafe/corrupt transcript checks):
+  - `src/main.rs`
+  - `src/flow_store.rs`
 
 What does not exist yet:
 - Oversized tool-result safety/truncation path
 - Retention/rotation jobs for archived flow artifacts
-- Corruption repair workflow beyond base health checks
+- Automated corruption repair workflow (detection now exists in `doctor`)
 - Persisted retrieval index and incremental refresh path
 
 ---
@@ -79,7 +82,7 @@ What does not exist yet:
 ### P1 (hardening after P0)
 
 1. Retention/rotation policies for flow artifacts
-2. Transcript path safety and corruption recovery tooling
+2. Transcript corruption repair tooling (path safety checks are implemented in diagnostics)
 3. Durable compaction artifact lifecycle (archival/retention/repair hooks)
 4. Retrieval telemetry: hit rate, dropped-by-budget, token footprint
 5. Persisted retrieval index + incremental refresh

@@ -349,12 +349,14 @@ Planned built-in tools:
 
 ## 8. Flows (Sessions)
 
-Current status: flow state is in-memory per process; history is lost on restart.
+Current status: flow state is persisted to disk and restored by flow key.
 
 ### 8.1 Flow Persistence
 
 Current runtime:
-- In-memory only (no persistence yet).
+- Persistent flow index at `~/.tengu/state/flows/index.json`.
+- Per-flow append-only transcripts at `~/.tengu/state/flows/<flow>/transcript.jsonl`.
+- Atomic index updates and lock-safe write discipline.
 
 Target persistence model:
 - **Flow index (`flows/index.json`)**:
@@ -387,7 +389,7 @@ Only a budgeted subset is loaded per turn.
 
 Goal: keep prompts bounded even when transcript/history grows forever.
 
-Per-turn prompt assembly (target):
+Per-turn prompt assembly (current):
 1. Reserve response budget (for model output).
 2. Allocate fixed input budget buckets:
    - system/static context
@@ -398,12 +400,12 @@ Per-turn prompt assembly (target):
 4. If needed, include compacted summary blocks instead of old raw turns.
 5. Never load full transcript JSONL into a prompt.
 
-Compaction strategy (target):
+Compaction strategy (current):
 1. Keep recent N turns verbatim.
 2. Summarize older contiguous ranges into compact blocks.
 3. Replace old ranges in active window with references to summary blocks.
-4. Recompute flow token estimate in index metadata.
-5. Preserve raw transcript on disk for audit/replay.
+4. Recompute active flow token estimate after summary insertion.
+5. Persist compaction summary as a transcript message for restart continuity.
 
 ### 8.5 Flow Storage Policy
 
@@ -423,7 +425,7 @@ Reference deep-dive: `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`.
 |-----|----------------|----------|
 | No durable compaction artifact lifecycle (rotation/retention of summaries) | Runtime compaction works, but long-term storage hygiene is incomplete | P1 |
 | No transcript retention/rotation jobs | Storage grows without lifecycle control | P1 |
-| No corruption detection/repair path for transcript files | Single broken transcript can break flow continuity | P1 |
+| No automated corruption repair path for transcript files | `doctor` can detect issues, but repair remains manual | P1 |
 
 ---
 
@@ -814,7 +816,7 @@ Planned:
 # Current binary name in this repo:
 tengu-cluster chat             # Interactive CLI chat
 tengu-cluster status           # Show config/profile summary
-tengu-cluster doctor           # Ollama connectivity check
+tengu-cluster doctor           # Runtime diagnostics (Ollama + flow-store integrity)
 tengu-cluster serve            # Placeholder (daemon not implemented yet)
 
 # If renamed/installed as `tengu`, same subcommands apply.

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tengu_core::token::estimate_tokens_approx_min1;
@@ -62,6 +62,42 @@ pub struct FlowStore {
     lock_path: PathBuf,
 }
 
+/// Transcript scan counters used by integrity diagnostics.
+#[derive(Debug, Default)]
+struct TranscriptScanStats {
+    parsed_count: u64,
+    parsed_tokens: u64,
+    had_invalid_rows: bool,
+}
+
+/// Aggregated integrity findings for persisted flow artifacts.
+#[derive(Debug, Clone, Default)]
+pub struct FlowStoreIntegrityReport {
+    /// Number of index entries inspected.
+    pub checked_flows: usize,
+    /// Flows whose transcript file is missing on disk.
+    pub missing_transcripts: Vec<String>,
+    /// Flows with unsafe transcript paths (absolute or parent traversal).
+    pub unsafe_transcript_paths: Vec<String>,
+    /// Flows whose transcript file could not be opened/read.
+    pub unreadable_transcripts: Vec<String>,
+    /// Invalid JSONL rows discovered while scanning transcripts.
+    pub invalid_transcript_lines: Vec<String>,
+    /// Flows where transcript-derived counters differ from index metadata.
+    pub metadata_mismatches: Vec<String>,
+}
+
+impl FlowStoreIntegrityReport {
+    /// Return true when any integrity issue was detected.
+    pub fn has_issues(&self) -> bool {
+        !self.missing_transcripts.is_empty()
+            || !self.unsafe_transcript_paths.is_empty()
+            || !self.unreadable_transcripts.is_empty()
+            || !self.invalid_transcript_lines.is_empty()
+            || !self.metadata_mismatches.is_empty()
+    }
+}
+
 impl FlowStore {
     /// Initialize flow store under `<home>/state/flows`.
     pub fn new(home: &Path) -> Result<Self> {
@@ -92,6 +128,114 @@ impl FlowStore {
         fs::create_dir_all(&probe_dir)?;
         fs::remove_dir_all(&probe_dir)?;
         Ok(())
+    }
+
+    /// Run transcript/index integrity checks and collect non-fatal findings.
+    pub fn integrity_report(&self) -> Result<FlowStoreIntegrityReport> {
+        let index = self.load_index()?;
+        let mut report = FlowStoreIntegrityReport::default();
+
+        index.flows.iter().for_each(|(flow_key, meta)| {
+            report.checked_flows = report.checked_flows.saturating_add(1);
+            let Some(reader) = self.open_transcript_reader(flow_key, meta, &mut report) else {
+                return;
+            };
+            let stats = Self::scan_transcript(flow_key, reader, &mut report);
+
+            // Skip strict metadata matching when transcript has invalid rows.
+            if !stats.had_invalid_rows
+                && (stats.parsed_count != meta.message_count
+                    || stats.parsed_tokens != meta.token_estimate)
+            {
+                report.metadata_mismatches.push(format!(
+                    "flow={} index(count={},tokens={}) transcript(count={},tokens={})",
+                    flow_key,
+                    meta.message_count,
+                    meta.token_estimate,
+                    stats.parsed_count,
+                    stats.parsed_tokens
+                ));
+            }
+        });
+
+        Ok(report)
+    }
+
+    /// Open transcript reader for integrity checks and record non-fatal path/open issues.
+    fn open_transcript_reader(
+        &self,
+        flow_key: &str,
+        meta: &FlowMetadata,
+        report: &mut FlowStoreIntegrityReport,
+    ) -> Option<BufReader<File>> {
+        let relpath = Path::new(&meta.transcript_relpath);
+        if !is_safe_transcript_relpath(relpath) {
+            report.unsafe_transcript_paths.push(flow_key.to_string());
+            return None;
+        }
+
+        let transcript_path = self.flows_root.join(relpath);
+        if !transcript_path.exists() {
+            report.missing_transcripts.push(flow_key.to_string());
+            return None;
+        }
+
+        File::open(&transcript_path)
+            .map(BufReader::new)
+            .ok()
+            .or_else(|| {
+                report.unreadable_transcripts.push(flow_key.to_string());
+                None
+            })
+    }
+
+    /// Scan one transcript and record invalid lines while accumulating parsed counters.
+    fn scan_transcript(
+        flow_key: &str,
+        reader: BufReader<File>,
+        report: &mut FlowStoreIntegrityReport,
+    ) -> TranscriptScanStats {
+        let mut stats = TranscriptScanStats::default();
+
+        reader.lines().enumerate().for_each(|(line_idx, line_res)| {
+            let line_no = line_idx + 1;
+            let line = match line_res {
+                Ok(line) => line,
+                Err(err) => {
+                    report.invalid_transcript_lines.push(format!(
+                        "flow={} line={} read_error={}",
+                        flow_key, line_no, err
+                    ));
+                    stats.had_invalid_rows = true;
+                    return;
+                }
+            };
+
+            if line.trim().is_empty() {
+                return;
+            }
+
+            match serde_json::from_str::<TranscriptLine>(&line) {
+                Ok(parsed) => {
+                    stats.parsed_count = stats.parsed_count.saturating_add(1);
+                    stats.parsed_tokens =
+                        stats
+                            .parsed_tokens
+                            .saturating_add(
+                                estimate_tokens_approx_min1(&parsed.message.content) as u64
+                            );
+                }
+                Err(err) => {
+                    report.invalid_transcript_lines.push(format!(
+                        "flow={} line={} parse_error={}",
+                        flow_key, line_no, err
+                    ));
+                    stats.had_invalid_rows = true;
+                }
+            }
+        });
+
+        stats
     }
 
     /// Load recent transcript messages for a flow.
@@ -275,6 +419,16 @@ impl FlowStore {
     }
 }
 
+/// Return true if transcript path is relative and does not escape flow root.
+fn is_safe_transcript_relpath(relpath: &Path) -> bool {
+    !relpath.as_os_str().is_empty()
+        && !relpath.is_absolute()
+        && relpath
+            .components()
+            .all(|c| matches!(c, Component::Normal(_)))
+}
+
+/// Sanitize flow key into a filesystem-safe path component with hash suffix.
 fn sanitize_flow_component(flow_key: &str) -> String {
     let mut prefix = String::new();
     for ch in flow_key.chars().take(48) {
@@ -295,6 +449,7 @@ fn sanitize_flow_component(flow_key: &str) -> String {
     format!("{}-{:x}", prefix, hash)
 }
 
+/// Return current UNIX epoch seconds.
 fn epoch_s_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -306,6 +461,27 @@ fn epoch_s_now() -> u64 {
 mod tests {
     use super::*;
     use tengu_core::types::Recipient;
+    use tengu_core::types::Role;
+    use uuid::Uuid;
+
+    fn temp_home() -> PathBuf {
+        let home = std::env::temp_dir().join(format!(
+            "tengu-flow-store-test-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&home).expect("create temp home");
+        home
+    }
+
+    fn sample_message(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
 
     #[test]
     fn resolve_flow_key_per_sender_scope() {
@@ -327,5 +503,48 @@ mod tests {
         assert!(a
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+    }
+
+    #[test]
+    fn integrity_report_flags_missing_transcript() {
+        let home = temp_home();
+        let store = FlowStore::new(&home).expect("flow store");
+        let message = sample_message("hello");
+
+        store
+            .append_message("agent:sender", "agent", &message)
+            .expect("append");
+
+        let index = store.load_index().expect("load index");
+        let meta = index.flows.get("agent:sender").expect("meta").clone();
+        let transcript_path = store.flows_root.join(meta.transcript_relpath);
+        fs::remove_file(transcript_path).expect("remove transcript");
+        store.write_index(&index).expect("write index");
+
+        let report = store.integrity_report().expect("report");
+        assert_eq!(report.checked_flows, 1);
+        assert_eq!(report.missing_transcripts.len(), 1);
+        assert!(report.has_issues());
+    }
+
+    #[test]
+    fn integrity_report_flags_unsafe_path() {
+        let home = temp_home();
+        let store = FlowStore::new(&home).expect("flow store");
+        let message = sample_message("hello");
+
+        store
+            .append_message("agent:sender", "agent", &message)
+            .expect("append");
+
+        let mut index = store.load_index().expect("load index");
+        let meta = index.flows.get_mut("agent:sender").expect("meta");
+        meta.transcript_relpath = "../escape/transcript.jsonl".to_string();
+        store.write_index(&index).expect("write index");
+
+        let report = store.integrity_report().expect("report");
+        assert_eq!(report.checked_flows, 1);
+        assert_eq!(report.unsafe_transcript_paths.len(), 1);
+        assert!(report.has_issues());
     }
 }

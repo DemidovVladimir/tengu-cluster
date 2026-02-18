@@ -19,7 +19,7 @@
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
-| `tengu doctor` (Ollama health check) | ✅ | `src/main.rs` |
+| `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
 | Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/main.rs` |
 | Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` |

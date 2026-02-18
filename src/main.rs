@@ -11,7 +11,7 @@ use tracing::{error, info};
 
 mod flow_store;
 
-use flow_store::FlowStore;
+use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::OllamaEngine;
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
@@ -810,14 +810,71 @@ async fn run_doctor(config: &Config) {
         }
     }
 
-    print!("  Flow store... ");
-    match FlowStore::new(&resolve_tengu_home()).and_then(|store| store.health_check()) {
-        Ok(_) => println!("OK"),
-        Err(e) => println!("Error: {}", e),
+    let flow_store = FlowStore::new(&resolve_tengu_home());
+    match flow_store {
+        Ok(store) => {
+            print!("  Flow store... ");
+            match store.health_check() {
+                Ok(_) => println!("OK"),
+                Err(e) => {
+                    println!("Error: {}", e);
+                    println!("  ─────────────────────────────────────");
+                    println!();
+                    return;
+                }
+            }
+
+            print!("  Flow integrity... ");
+            match store.integrity_report() {
+                Ok(report) if !report.has_issues() => {
+                    println!("OK (checked {} flows)", report.checked_flows);
+                }
+                Ok(report) => {
+                    println!("WARN");
+                    print_flow_integrity_findings(&report);
+                }
+                Err(e) => println!("Error: {}", e),
+            }
+        }
+        Err(e) => {
+            print!("  Flow store... ");
+            println!("Error: {}", e);
+        }
     }
 
     println!("  ─────────────────────────────────────");
     println!();
+}
+
+/// Print actionable integrity findings from `FlowStore::integrity_report`.
+fn print_flow_integrity_findings(report: &FlowStoreIntegrityReport) {
+    println!("    checked flows: {}", report.checked_flows);
+    print_findings("missing transcripts", &report.missing_transcripts);
+    print_findings("unsafe transcript paths", &report.unsafe_transcript_paths);
+    print_findings("unreadable transcripts", &report.unreadable_transcripts);
+    print_findings("invalid transcript lines", &report.invalid_transcript_lines);
+    print_findings(
+        "index/transcript metadata mismatches",
+        &report.metadata_mismatches,
+    );
+    println!("    guidance:");
+    println!("      1) Back up `~/.tengu/state/flows`.");
+    println!("      2) Inspect listed flow entries and transcript files.");
+    println!("      3) Repair or remove broken flow entries from `index.json` if needed.");
+}
+
+/// Print at most three findings per category to keep `doctor` output readable.
+fn print_findings(label: &str, entries: &[String]) {
+    if entries.is_empty() {
+        return;
+    }
+    println!("    {}: {}", label, entries.len());
+    for entry in entries.iter().take(3) {
+        println!("      - {}", entry);
+    }
+    if entries.len() > 3 {
+        println!("      - ... and {} more", entries.len() - 3);
+    }
 }
 
 /// Resolve Tengu home path from `TENGU_HOME` or `~/.tengu`.

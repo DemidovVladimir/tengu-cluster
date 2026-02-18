@@ -18,7 +18,7 @@ Source: `EPICS_TASKS.md`
 | E2-T2 | Done | Hard runtime budget guards implemented |
 | E2-T3 | Done | Retrieval bucket wired through `query_with_budget` in chat loop |
 | E2-T4 | Done | Deterministic over-budget drop order implemented (history suffix + retrieval tail-drop) |
-| E1-T9 | In Progress | Base flow-store check in doctor is done; repair checks still pending |
+| E1-T9 | Done | `doctor` now runs flow index + transcript integrity diagnostics with actionable findings |
 | E2-T5 | In Progress | Base `/context` bucket report exists; full per-request telemetry pending |
 
 ## Epics

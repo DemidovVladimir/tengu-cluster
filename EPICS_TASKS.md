@@ -26,14 +26,14 @@ Completed tasks:
 5. `E1-T5`
 6. `E1-T6`
 7. `E1-T7`
-8. `E2-T1`
-9. `E2-T2`
-10. `E2-T3`
-11. `E2-T4`
+8. `E1-T9`
+9. `E2-T1`
+10. `E2-T2`
+11. `E2-T3`
+12. `E2-T4`
 
 Partially completed:
-1. `E1-T9` (base flow-store health check added in `doctor`; repair checks still pending)
-2. `E2-T5` (base prompt-bucket report exists in `/context`; full per-request telemetry still pending)
+1. `E2-T5` (base prompt-bucket report exists in `/context`; full per-request telemetry still pending)
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 
