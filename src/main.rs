@@ -7,7 +7,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 mod flow_store;
 
@@ -477,6 +477,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         match engine.run(&prompt_messages, &[], &context).await {
             Ok(mut stream) => {
                 let mut response_text = String::new();
+                let mut turn_usage_snapshot: Option<(u32, u32)> = None;
 
                 while let Some(event) = stream.next().await {
                     match event {
@@ -487,8 +488,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                             input_tokens,
                             output_tokens,
                         } => {
-                            total_input_tokens += input_tokens;
-                            total_output_tokens += output_tokens;
+                            absorb_turn_usage_snapshot(
+                                &mut turn_usage_snapshot,
+                                input_tokens,
+                                output_tokens,
+                            );
                         }
                         tengu_core::types::StreamEvent::Error { message } => {
                             eprintln!("Engine error: {}", message);
@@ -497,6 +501,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                         _ => {}
                     }
                 }
+                apply_turn_usage_to_session_totals(
+                    &mut total_input_tokens,
+                    &mut total_output_tokens,
+                    turn_usage_snapshot,
+                );
 
                 if !response_text.is_empty() {
                     // Send through pipe
@@ -572,6 +581,37 @@ fn log_prompt_budget_report(
         compacted_messages = report.compacted_messages,
         "Prompt budget report"
     );
+}
+
+/// Keep the latest usage snapshot emitted during one model turn.
+///
+/// Contract: providers should emit cumulative per-turn usage in `StreamEvent::Usage`.
+/// Runtime stores the latest snapshot and applies it once when the turn ends.
+fn absorb_turn_usage_snapshot(snapshot: &mut Option<(u32, u32)>, input_tokens: u32, output_tokens: u32) {
+    if let Some((prev_input, prev_output)) = *snapshot {
+        if input_tokens < prev_input || output_tokens < prev_output {
+            debug!(
+                prev_input,
+                prev_output,
+                input_tokens,
+                output_tokens,
+                "Usage snapshot is non-monotonic; replacing with latest frame"
+            );
+        }
+    }
+    *snapshot = Some((input_tokens, output_tokens));
+}
+
+/// Apply one finalized turn usage snapshot to session-level cumulative totals.
+fn apply_turn_usage_to_session_totals(
+    total_input_tokens: &mut u32,
+    total_output_tokens: &mut u32,
+    turn_usage_snapshot: Option<(u32, u32)>,
+) {
+    if let Some((input_tokens, output_tokens)) = turn_usage_snapshot {
+        *total_input_tokens = total_input_tokens.saturating_add(input_tokens);
+        *total_output_tokens = total_output_tokens.saturating_add(output_tokens);
+    }
 }
 
 fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {
@@ -1303,6 +1343,26 @@ mod tests {
         // For tiny windows, reserve floor (256) can consume all available input.
         let total_input_budget = compute_total_input_budget(128, 10_000);
         assert_eq!(total_input_budget, 0);
+    }
+
+    #[test]
+    fn usage_accounting_keeps_latest_turn_snapshot() {
+        let mut snapshot = None;
+        absorb_turn_usage_snapshot(&mut snapshot, 120, 20);
+        absorb_turn_usage_snapshot(&mut snapshot, 130, 30);
+
+        assert_eq!(snapshot, Some((130, 30)));
+    }
+
+    #[test]
+    fn usage_accounting_applies_turn_snapshot_once_to_session_totals() {
+        let mut total_in = 100u32;
+        let mut total_out = 40u32;
+        apply_turn_usage_to_session_totals(&mut total_in, &mut total_out, Some((50, 10)));
+        apply_turn_usage_to_session_totals(&mut total_in, &mut total_out, None);
+
+        assert_eq!(total_in, 150);
+        assert_eq!(total_out, 50);
     }
 
     #[test]

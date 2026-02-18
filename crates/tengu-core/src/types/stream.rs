@@ -23,7 +23,10 @@ pub enum StreamEvent {
     /// Optional thinking/reasoning text chunk.
     ThinkingDelta { text: String },
 
-    /// Usage accounting for a turn.
+    /// Usage accounting snapshot for the current turn.
+    ///
+    /// Contract: values are cumulative within the turn. Runtime should keep the
+    /// latest snapshot and apply it once after the turn completes.
     Usage {
         input_tokens: u32,
         output_tokens: u32,

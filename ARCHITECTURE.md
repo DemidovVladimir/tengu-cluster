@@ -243,6 +243,7 @@ pub trait Engine: Send + Sync {
 |----------|-----------|
 | **Streaming output** | Returns a `Stream<Item = StreamEvent>`, not a `String`. Enables real-time display and tool call interception mid-stream. |
 | **Capability contract** | `Engine::capabilities()` provides one stable runtime surface for status, diagnostics, and future engine selection policies. |
+| **Usage accounting contract** | `StreamEvent::Usage` is treated as a cumulative per-turn snapshot; runtime applies the latest snapshot once at turn end. |
 | **ToolDef / ToolCall** | Tools are passed as JSON Schema definitions. Engine returns `ToolCallStart` → `ToolCallDelta` → `ToolCallEnd` events when it wants to use a tool. |
 | **manages_own_workspace** | Reserved for future engines that run as subprocesses with direct filesystem access. Regular engines (Ollama, Anthropic, OpenAI) use the Kit for file access. |
 | **EngineContext** | Minimal context bag — just workspace path and system prompt. Keeps the trait clean; agents add context via messages. |
@@ -256,7 +257,7 @@ pub enum StreamEvent {
     ToolCallDelta { id: String, arguments_delta: String },
     ToolCallEnd { id: String },
     ThinkingDelta { text: String },          // Reasoning (Claude 3.5+)
-    Usage { input_tokens: u32, output_tokens: u32 },
+    Usage { input_tokens: u32, output_tokens: u32 }, // cumulative per-turn snapshot
     Done,
     Error { message: String },
 }
