@@ -62,7 +62,7 @@ Partially completed:
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
 | `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including topology-aware multi-agent execution loop. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
-| `E8` | Planned | Tool loop runtime/policy/audit pending, including inter-agent handoff contract. |
+| `E8` | In Progress | Runtime policy foundations are added for engine selection and tool-call gate events; full tool loop/audit/delegation flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
 

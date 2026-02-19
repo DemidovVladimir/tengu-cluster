@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists (`kit`/`allowed_engines`/`skills`/`sandbox`), runtime enforcement + delegated lead control are pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime now enforces engine allowlist and checks tool-call start events against `kit`, while full tool execution/skills/delegated lead control is pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---

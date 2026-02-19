@@ -7,14 +7,14 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use std::path::PathBuf;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 mod flow_store;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
-use tengu_core::config::{Config, RuntimeProfile};
+use tengu_core::config::{ensure_engine_allowed, evaluate_tool_policy, Config, RuntimeProfile};
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
@@ -240,7 +240,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     };
 
     // Create engine
-    let engine = build_engine(&agent_config)?;
+    let engine = build_engine(&agent_id, &agent_config)?;
 
     // Print startup banner
     print_banner(
@@ -454,6 +454,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             engine.as_ref(),
             &prompt_messages,
             &context,
+            &agent_id,
+            &agent_config,
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
         )
@@ -639,6 +641,8 @@ async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
     context: &EngineContext,
+    agent_id: &str,
+    agent_config: &tengu_core::config::AgentConfig,
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
 ) -> Result<String> {
@@ -664,6 +668,29 @@ async fn collect_engine_response(
                     }
                     tengu_core::types::StreamEvent::Error { message } => {
                         eprintln!("Engine error: {}", message);
+                    }
+                    tengu_core::types::StreamEvent::ToolCallStart { name, .. } => {
+                        let decision = evaluate_tool_policy(agent_config, &name);
+                        if !decision.is_allowed() {
+                            warn!(
+                                agent_id,
+                                tool = %name,
+                                reason = decision.reason(),
+                                "Tool call denied by runtime capability policy"
+                            );
+                            eprintln!(
+                                "Tool call '{}' denied by policy for agent '{}': {}",
+                                name,
+                                agent_id,
+                                decision.reason()
+                            );
+                        } else {
+                            debug!(
+                                agent_id,
+                                tool = %name,
+                                "Tool call allowed by runtime capability policy"
+                            );
+                        }
                     }
                     tengu_core::types::StreamEvent::Done => {}
                     _ => {}
@@ -1034,7 +1061,14 @@ async fn init_knowledge_store(
 /// Shared per-agent limit overrides:
 /// - `agents.<id>.limits.context_window_override`
 /// - `agents.<id>.limits.max_output_tokens_per_turn`
-fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dyn Engine>> {
+fn build_engine(
+    agent_id: &str,
+    agent_config: &tengu_core::config::AgentConfig,
+) -> Result<Box<dyn Engine>> {
+    // Runtime defense-in-depth: enforce policy even if config was loaded from
+    // non-validating entry points.
+    ensure_engine_allowed(agent_id, agent_config)?;
+
     let context_window_override = agent_config
         .limits
         .context_window_override
@@ -1166,7 +1200,7 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
             ac.model,
             if ac.default { " [default]" } else { "" }
         );
-        match build_engine(ac) {
+        match build_engine(id, ac) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(
@@ -1193,7 +1227,7 @@ async fn run_doctor(config: &Config) {
     println!("  Backend diagnostics:");
     // Check backend metadata and provider reachability where probes exist.
     for (id, ac) in &config.agents {
-        match build_engine(ac) {
+        match build_engine(id, ac) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(

@@ -230,7 +230,9 @@ Acceptance targets:
 Current coverage:
 - `Implemented` strict cross-field config validation and fail-fast startup loading.
 - `Implemented` governance-boundary validation for `kit`, `allowed_engines`, `skills`, sandbox mode, and routing/pipe consistency.
-- `Missing` runtime enforcement for `allowed_engines` and `kit` in active execution path.
+- `Partial` runtime enforcement for `allowed_engines` and `kit` in active execution path:
+  - engine/model allowlist is enforced in runtime engine construction
+  - tool-call start events are checked against per-agent `kit` policy
 - `Missing` skills loading/execution policy controls.
 - `Missing` lead-agent delegated capability control and audit pipeline.
   References:
