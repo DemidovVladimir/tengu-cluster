@@ -3,6 +3,10 @@
 //! Potential use case:
 //! Keep an append-only JSONL trail of tool-call policy decisions and execution
 //! outcomes so operators can inspect what happened across sessions.
+//!
+//! Migration note:
+//! Audit appends are currently called by runtime directly and are scheduled to
+//! move behind internal event-bus subscribers as part of `E11`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

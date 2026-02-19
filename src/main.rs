@@ -2,6 +2,11 @@
 //!
 //! Potential use case:
 //! Run one command (`tengu chat`) to execute ingest, budgeting, model call, and response delivery.
+//!
+//! Architecture notes:
+//! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
+//! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
+//! - Internal domain event bus migration (`E11`) is planned to decouple side-effects from this file.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -243,6 +248,10 @@ async fn main() -> Result<()> {
 /// 2) Receive inbound turns and process slash commands.
 /// 3) Apply refiner + flow persistence + budget/retrieval assembly.
 /// 4) Execute engine turn and persist assistant output.
+///
+/// Note:
+/// This function is intentionally transitional and will be decomposed further as
+/// internal event bus subscribers are introduced for audit/metrics/policy side-effects.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config

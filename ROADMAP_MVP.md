@@ -19,6 +19,7 @@
 | CLI Pipe | ✅ | `crates/tengu-channels/src/cli/mod.rs` |
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
+| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; internal domain event bus migration is pending |
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
@@ -39,6 +40,8 @@
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router implemented, serve runtime pending) |
 | Skills System | Config exists, loader not implemented |
+| Internal domain event bus | Planned (runtime currently orchestrates directly in `main.rs`) |
+| Single-orchestrator topology profile | Planned (docs/config shape defined; runtime execution pending) |
 
 ---
 
@@ -133,6 +136,7 @@ Tengu: ✅ File created: drivers/serik.md
 | 4.6 | History limit + oversized tool-result guards | `tengu-core` | Medium |
 | 4.7 | Transcript retention/rotation + corruption recovery path | `tengu-core` | Medium |
 | 4.8 | `/store` + storage diagnostics commands | `src/main.rs` | Easy |
+| 4.9 | Internal event bus v1 (`DomainEvent` + bounded in-process bus + runtime emitters) | `tengu-core` + `src/main.rs` | Hard |
 
 **Outcome:** Tengu remembers past conversations and knows the contents of workspace files.
 
@@ -155,6 +159,7 @@ Definition of done for Sprint 4:
 | 5.4 | README.md (English) | Project | Easy |
 | 5.5 | Docker image (optional) | Project | Medium |
 | 5.6 | E2E test: "Sanya" scenario | Tests | Medium |
+| 5.7 | Migrate audit/metrics side-effects to event subscribers + backpressure validation | `src/main.rs` + `src/tool_audit.rs` | Hard |
 
 **Outcome:** Ready to record a demo video showing the full journey from install to running a business via Telegram.
 

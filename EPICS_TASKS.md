@@ -13,7 +13,7 @@ Date: 2026-02-19
 
 | Wave | Goal | Why |
 |---|---|---|
-| P0 | Reliability + token safety + runtime retrieval | Core business goal: predictable low cost and restart-safe flows |
+| P0 | Reliability + token safety + runtime retrieval + event-bus foundation | Core business goal: predictable low cost, restart-safe flows, and low-risk architecture evolution |
 | P1 | Provider/channel expansion + tool loop + observability | Enables real platform usage |
 | P2 | Advanced retrieval/refiner quality + schema evolution | Scale quality/performance after core is stable |
 
@@ -49,7 +49,7 @@ Completed tasks:
 27. `E10-T7`
 
 Partially completed:
-1. No partially completed P0 tasks.
+1. `E11` internal event-bus migration planned and ready for incremental execution.
 
 ## Epic Status Snapshot
 
@@ -60,11 +60,12 @@ Partially completed:
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
 | `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google/HF and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including topology-aware multi-agent execution loop. |
+| `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including single-orchestrator-first multi-agent execution loop. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
 | `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, and persists tool audit JSONL events; approvals/delegation flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
+| `E11` | In Progress | Adapter contracts and stream events are active; internal domain event bus migration is now tracked to decouple runtime side-effects. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 
@@ -192,8 +193,8 @@ Scope:
 6. Implement WebChat adapter.
 7. Add streaming output support for channel responders.
 8. Add optional delivery ack contract where supported.
-9. Implement topology-aware multi-agent execution loop (single-lead/multi-lead/layered delegation).
-10. Add lead-agent capability control plane with user-defined hard boundaries.
+9. Implement topology-aware multi-agent execution loop (single-orchestrator with flexible dependents).
+10. Add orchestrator control plane for dependent capability assignment within user-defined hard boundaries.
 
 Primary files:
 `src/main.rs`, `crates/tengu-channels/src/lib.rs`, `crates/tengu-channels/src/cli/mod.rs`, `crates/tengu-core/src/lib.rs`
@@ -208,7 +209,7 @@ Scope:
 2. Add structured match traces (what matched and why).
 3. Expose routing diagnostics via status/doctor.
 4. Add route resolution tests for precedence and conflicts.
-5. Add role/capability-aware routing for agent graph execution.
+5. Add role/capability-aware routing for orchestrator/dependent execution graph.
 
 Primary files:
 `crates/tengu-core/src/routing/mod.rs`, `src/main.rs`
@@ -263,3 +264,32 @@ Scope:
 
 Primary files:
 `crates/tengu-core/src/config/mod.rs`, `crates/tengu-core/src/types/stream.rs`, `crates/tengu-core/src/types/message.rs`, `USER_STORIES.md`
+
+## Epic E11: Internal Event Bus and Runtime Decoupling (P0)
+
+Mapped TODO tags:
+`epic-event-bus-core`, `epic-event-bus-runtime`, `epic-event-bus-subscribers`, `epic-event-bus-backpressure`, `epic-event-bus-observability`
+
+Scope:
+1. Define typed `DomainEvent` contract for runtime lifecycle (inbound turn, engine turn, tool lifecycle, flow events, policy outcomes).
+2. Add `EventBus` abstraction and in-process implementation (`tokio` fanout) with bounded queues.
+3. Publish runtime events from existing chat path without breaking current behavior.
+4. Move audit/metrics/policy side-effects to event subscribers incrementally.
+5. Add explicit backpressure/drop-policy behavior for minimal single-core deployments.
+6. Add optional parallel subscriber execution profile for multi-core hosts.
+7. Add diagnostics for subscriber lag, dropped events, and queue saturation.
+
+Acceptance criteria:
+1. Current runtime behavior remains stable while side-effects are served by subscribers.
+2. Event delivery and terminal state handling are deterministic under capacity pressure.
+3. Minimal profile remains bounded (no unbounded queues, no deadlocks).
+4. Desktop/cloud profiles can enable higher subscriber parallelism safely.
+
+Validation strategy:
+1. Unit tests for event ordering, overflow handling, and terminal guarantees.
+2. Integration tests proving audit subscriber receives full tool lifecycle payloads.
+3. Profile tests for minimal (single worker) and desktop (parallel workers) runtime modes.
+4. Regression suite: `cargo test --workspace`.
+
+Primary files:
+`src/main.rs`, `src/tool_audit.rs`, `crates/tengu-core/src/lib.rs`, `crates/tengu-core/src/types/stream.rs`

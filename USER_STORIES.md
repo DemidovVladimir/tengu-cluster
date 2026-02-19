@@ -27,18 +27,19 @@ Coverage status values:
 | US-008 | Portable runtime from Raspberry Pi to high-end GPU workstations | Partial |
 | US-009 | Provider portability including Claude Code + hosted APIs | Partial |
 | US-010 | Scenario-level acceptance validation before epic closure | Partial |
-| US-011 | Capability governance for tools/skills/agent specs (user-led or lead-agent-led) | Partial |
+| US-011 | Capability governance for tools/skills/agent specs (user-led or orchestrator-led) | Partial |
+| US-012 | Adapter-first + event-driven architecture for plug-and-play extensibility and auditable runtime | Partial |
 
 ---
 
 ## US-001
 
-As a founder, I want to run a flexible coordination hierarchy (single lead, multi-lead, or layered leads) with specialist agents (hardware, software, marketing, product, frontend, backend, smart contract) so they collaborate on one product outcome and report consistently.
+As a founder, I want a single-orchestrator setup with flexible dependent agents (hardware, software, marketing, product, frontend, backend, smart contract) so collaboration stays clear and centrally governed.
 
 Acceptance targets:
-1. Multi-agent runtime supports multiple coordination topologies in one workflow.
-2. Lead agents can delegate tasks and collect specialist outputs.
-3. User can receive synthesized outputs from one or multiple reporting leads with traceable sub-results.
+1. Multi-agent runtime supports one orchestrator with flexible dependents in one workflow.
+2. One orchestrator can govern/approve dependent-agent interactions and collect specialist outputs.
+3. User receives one synthesized output with traceable sub-results from dependents.
 
 Current coverage:
 - `Partial`: multiple agents can be configured, but runtime path is still single-agent chat-first.
@@ -53,7 +54,7 @@ Required tasks:
 
 ## US-002
 
-As an operator, I want to assign different provider/model tiers per role (for example OpenAI for CTO/CPO lead agents, Qwen local/free for hardware, Claude-class for software) so cost/performance is optimized by function.
+As an operator, I want to assign different provider/model tiers per role (for example OpenAI for orchestrator, Qwen local/free for hardware dependent, Claude-class for software dependent) so cost/performance is optimized by function.
 
 Acceptance targets:
 1. Per-agent engine/model selection is first-class and validated.
@@ -217,7 +218,7 @@ Required tasks:
 
 ## US-011
 
-As a platform owner, I want strict capability governance so either the user directly controls tools/skills/agent specs, or designated lead agents control subordinate agent capabilities within policy boundaries.
+As a platform owner, I want strict capability governance so either the user directly controls tools/skills/agent specs, or one designated orchestrator controls subordinate agent capabilities within policy boundaries.
 
 Acceptance targets:
 1. User can define per-agent capability policy:
@@ -225,9 +226,9 @@ Acceptance targets:
    - skills allow/deny
    - engine/model allowlist
    - sandbox mode
-2. Lead-agent control mode can be enabled so leads can propose/assign subordinate capabilities.
-3. Platform enforces hard guardrails so lead decisions cannot exceed user-defined global boundaries.
-4. Every capability change is audited with actor (`user` or `lead-agent`), reason, and timestamp.
+2. Orchestrator-control mode can be enabled so orchestrator can propose/assign subordinate capabilities.
+3. Platform enforces hard guardrails so orchestrator decisions cannot exceed user-defined global boundaries.
+4. Every capability change is audited with actor (`user` or `orchestrator`), reason, and timestamp.
 
 Current coverage:
 - `Implemented` strict cross-field config validation and fail-fast startup loading.
@@ -236,7 +237,7 @@ Current coverage:
   - engine/model allowlist is enforced in runtime engine construction
   - tool-call start events are checked against per-agent `kit` policy and fail closed until tool loop support exists
 - `Missing` skills loading/execution policy controls.
-- `Missing` lead-agent delegated capability control and audit pipeline.
+- `Missing` delegated orchestrator control and audit pipeline.
   References:
   - schema fields: `crates/tengu-core/src/config/schema.rs`
   - runtime enforcement gap (no active usage paths): `src/main.rs`
@@ -248,22 +249,41 @@ Required tasks:
 
 ---
 
+## US-012
+
+As a platform engineer, I want runtime behavior to be adapter-first and event-driven so integrations stay plug-and-play while side-effects remain traceable and easy to review.
+
+Acceptance targets:
+1. Providers/channels/tools/refiners integrate only via shared adapter traits.
+2. Runtime lifecycle activity is emitted as typed domain events.
+3. Audit/metrics/policy reactions run as event subscribers instead of tightly coupled inline calls.
+4. Event handling remains bounded and deterministic on single-core devices, and can scale with parallel subscribers on multi-core machines.
+
+Current coverage:
+- `Implemented` adapter boundaries via core traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
+- `Partial` event-driven execution via stream events and async channels in runtime.
+- `Missing` internal domain event bus and subscriber-based side-effect migration.
+
+Required tasks:
+- `E11-T1` to `E11-T6`
+- `E10-T2` (stream/event contract hardening)
+
+---
+
 ## Scenario Focus: Product-Team Cluster (Reference Case)
 
 Scenario (topology options):
-1. Single-lead:
-- One orchestrator lead: high-capacity hosted model
-- Specialists: hardware/software/marketing/product
-2. Multi-lead:
-- CTO lead + CPO lead (both report to user)
-- Specialists report to one or both leads by domain
-3. Layered hierarchy:
-- Executive leads (for example CTO/CPO)
-- Domain leads (for example backend/frontend/product)
-- Specialists (for example smart contract, hardware, marketing)
+1. Single-orchestrator (v1):
+- One orchestrator: high-capacity hosted model
+- Dependents: hardware/software/marketing/product
+2. Single-orchestrator with grouped dependents (v1):
+- Engineering + Product + Marketing dependent pools
+- All cross-pool communication goes through orchestrator policy
+3. Advanced multi-controller topology:
+- Deferred until single-orchestrator path is stable and validated
 
 Model mix example:
-- Lead(s): high-capacity hosted model
+- Orchestrator: high-capacity hosted model
 - Hardware specialist: cost-efficient/free model
 - Software specialist: high-reliability coding model
 - Marketing specialist: low-cost copy/research model
@@ -272,10 +292,10 @@ Model mix example:
 What must be true before this scenario is considered production-ready:
 1. Multi-agent hierarchy execution loop is implemented.
 2. Provider mix works per agent in one runtime.
-3. Reporting topology supports one or multiple lead agents returning results to user.
+3. Reporting topology supports one orchestrator returning synthesized results to user.
 4. Output reserve and context budgets are aligned per agent backend.
 5. Retrieval and tool usage are policy-governed and auditable.
 6. Hub/channel runtime supports operational lifecycle controls.
 7. Capability governance supports both modes:
    - direct user control
-   - delegated lead-agent control within user-defined hard boundaries.
+   - delegated orchestrator control within user-defined hard boundaries.

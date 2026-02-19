@@ -2,6 +2,8 @@
 //!
 //! This crate defines the runtime-neutral traits (`Engine`, `Pipe`, `Refiner`, `Tool`),
 //! common configuration models, routing helpers, and shared transport types.
+//! Together these traits form the adapter layer for plug-and-play architecture.
+//! `types::StreamEvent` provides the base event contract for runtime-driven orchestration.
 //!
 //! Potential use case:
 //! Implement a new provider/channel crate by depending only on these traits and shared types.

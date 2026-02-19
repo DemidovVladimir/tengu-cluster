@@ -2,6 +2,10 @@
 
 Fast, low-cost Rust agent hub for business workflows across chat channels.
 
+Architecture style:
+- Adapter-first runtime boundaries (`Engine`, `Pipe`, `Refiner`, `Tool`) for plug-and-play providers/channels/tools.
+- Event-driven runtime processing (stream events + channel message queues), with internal domain event bus migration now tracked in backlog.
+
 ## What It Is
 
 Tengu Cluster is a single Rust application that routes messages to AI models and keeps strict control over:
@@ -15,6 +19,7 @@ Current working baseline:
 - Anthropic backend (typed REST, non-streaming)
 - OpenAI backend (typed REST, non-streaming)
 - Claude Code backend (subprocess, non-streaming)
+- single-orchestrator-first topology direction with one central policy/audit control plane (dependent agents remain flexible)
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
@@ -27,6 +32,9 @@ Current working baseline:
 - Lower running cost through explicit token budgeting
 - Predictable behavior for long-running business chats
 - Rust-first architecture for speed and deploy simplicity
+- Adapter + event-driven design keeps integrations modular and auditable
+- Runtime is designed to run both on minimal single-core devices and higher-core machines
+- Single configuration surface keeps orchestration/policy/model defaults simple for users
 - Clear path to durable flows, compaction, and retrieval guard rails
 
 ## How To Use
@@ -151,6 +159,7 @@ git config core.hooksPath .githooks
 - `USER_STORIES.md`
 - `ARCHITECTURE.md`
 - `ROADMAP_MVP.md`
+- `EVENT_BUS_MIGRATION_PLAN.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `DEPENDENCY_POLICY.md`
 - `RUST_PATTERNS_PLAYBOOK.md`

@@ -9,10 +9,11 @@
 This document describes full target architecture. The currently running path in code is narrower:
 
 - Inbound: `CliPipe` only
-- Engine: `OllamaEngine` + `AnthropicEngine`
+- Engine: `OllamaEngine` + `AnthropicEngine` + `OpenAIEngine` + `ClaudeCodeEngine`
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
-- Not implemented yet: daemonized hub, external pipes, tool loop, skill loader
+- Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
+- Not implemented yet: daemonized hub, external pipes, skill loader, internal domain event bus
 
 ---
 
@@ -48,29 +49,54 @@ This document describes full target architecture. The currently running path in 
 │       │              │              │                                    │
 │       └──────────────┼──────────────┘                                    │
 │                      ▼                                                   │
-│              ┌──────────────┐                                            │
-│              │   Router     │  sender → agent resolution                 │
-│              └──────┬───────┘                                            │
-│                     │                                                    │
-│       ┌─────────────┼─────────────┐                                      │
-│       ▼             ▼             ▼                                      │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐                                  │
-│  │ Agent A │  │ Agent B │  │ Agent C │  Isolated agents                  │
-│  │ Engine  │  │ Engine  │  │ Engine  │  (own workspace, model, tools)    │
-│  │ Kit     │  │ Kit     │  │ Kit     │                                   │
-│  │ Store   │  │ Store   │  │ Store   │                                   │
-│  │ Flow    │  │ Flow    │  │ Flow    │                                   │
-│  └─────────┘  └─────────┘  └─────────┘                                  │
-│       │             │             │                                      │
-│       └─────────────┼─────────────┘                                      │
-│                     ▼                                                   │
-│              ┌──────────────┐                                            │
-│              │   Refiner    │  Token optimization (shared)               │
-│              └──────────────┘                                            │
+│              ┌──────────────────────┐                                    │
+│              │ Ingress Router       │  sender -> entry role set           │
+│              │ (pipe/peer/group/..) │                                    │
+│              └──────────┬───────────┘                                    │
+│                         ▼                                                │
+│              ┌──────────────────────┐                                    │
+│              │ Orchestrator Plane   │  single control point               │
+│              │ (policy + audit +    │  for tools/adapters/skills          │
+│              │ dependency dispatch) │                                    │
+│              └──────────┬───────────┘                                    │
+│                         ▼                                                │
+│              ┌──────────────────────┐                                    │
+│              │ Dependent Agents     │  flexible pool (engineering,        │
+│              │ (optional)           │  product, marketing, etc.)          │
+│              └──────────┬───────────┘                                    │
+│                         ▼                                                │
+│              ┌──────────────────────┐                                    │
+│              │ Adapter Gate         │  central allow/deny + direction     │
+│              │ (inter-agent comms)  │  policy enforced by orchestrator    │
+│              └──────────┬───────────┘                                    │
+│                         ▼                                                │
+│              ┌──────────────────────┐                                    │
+│              │ Runtime Audit Log    │  all approvals/executions tracked   │
+│              └──────────────────────┘                                    │
+│                                                                         │
+│   Shared Services: FlowStore | KnowledgeStore | ToolKit | Refiner |      │
+│   Runtime/Event Bus | Policy/Audit | Communication Adapters             │
+│                                                                         │
+│   Response Synthesizer -> orchestrator -> Pipe output                    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Core Principle:** Single binary, zero external dependencies. Everything compiles into one executable via feature flags.
+**Core Principle:** Adapter-first + event-driven runtime in one binary. Integrations compile behind traits/feature flags; orchestration evolves toward an internal domain event bus.
+
+### 1.1 Architectural Style
+
+1. **Adapter-first boundaries**  
+   Provider/channel/tool/refiner integrations implement shared traits from `tengu-core`, keeping runtime orchestration provider-agnostic.
+2. **Event-driven activity**  
+   Engines emit `StreamEvent` sequences; runtime handles tool lifecycle and usage as typed events.
+3. **Domain event bus migration (active backlog)**  
+   Next refactor phase introduces an internal bus so audit/metrics/policy reactions subscribe to events instead of coupling to `main.rs`.
+4. **Hardware-scalable execution**  
+   The same architecture must run with bounded queues on single-core/minimal devices and use parallel subscribers on multi-core hosts.
+5. **Topology-flexible orchestration**  
+   Runtime keeps one orchestrator control plane while allowing a flexible set of dependent agents and adapter policies.
+6. **Single configuration surface**  
+   One config block controls orchestration, policy, adapter rules, and default model inheritance for dependents.
 
 **Implemented runtime path (today):**
 
@@ -80,9 +106,14 @@ CLI stdin
     -> (optional) Refiner.compress
       -> FlowStore load/append
         -> Budget-aware prompt assembly (history + retrieval)
-          -> OllamaEngine.run
+          -> SelectedEngine.run
             -> CLI stdout
 ```
+
+**Target coordination profile (planned runtime path):**
+1. **Single-orchestrator (required)**: one orchestrator governs all dependency dispatch, adapter access, and runtime auditing.
+2. **Flexible dependents**: user can add/remove dependent agents by domain without introducing extra control planes.
+3. **Advanced multi-controller topologies**: explicitly deferred until after single-orchestrator path is proven stable.
 
 ---
 
@@ -110,8 +141,9 @@ tengu-cluster/
 │   │   └── src/
 │   │       ├── lib.rs           # Feature-gated module registry
 │   │       ├── ollama/mod.rs    # Ollama HTTP API engine (implemented)
-│   │       └── anthropic/mod.rs # Anthropic Messages API engine (implemented)
-│   │       # openai/            # (planned – Phase 2)
+│   │       ├── anthropic/mod.rs # Anthropic Messages API engine (implemented)
+│   │       ├── openai/mod.rs    # OpenAI Chat Completions API engine (implemented)
+│   │       └── claude_code/mod.rs # Claude Code subprocess engine (implemented)
 │   │
 │   ├── tengu-channels/      # Messaging platform connectors
 │   │   └── src/
@@ -272,7 +304,8 @@ pub enum StreamEvent {
 |--------|-------|--------|-------------|
 | `OllamaEngine` | `tengu-backends` | ✅ Implemented | HTTP to localhost:11434 with streamed `TextDelta` output |
 | `AnthropicEngine` | `tengu-backends` | ✅ Implemented | Typed REST to api.anthropic.com (`/v1/messages`), non-streaming terminal events |
-| `OpenAIEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.openai.com, streaming, tool use |
+| `OpenAIEngine` | `tengu-backends` | ✅ Implemented | Typed REST to api.openai.com (`/v1/chat/completions`), non-streaming terminal events |
+| `ClaudeCodeEngine` | `tengu-backends` | ✅ Implemented | Subprocess CLI path (`claude --print`) with usage parsing and terminal events |
 | `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
 | `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | `hf-hub` + typed inference client |
 | `CandleLocalEngine` | `tengu-backends` | 🔲 Planned | In-process local inference; prefer CUDA/Metal, CPU fallback |
@@ -400,7 +433,7 @@ pub struct Router {
 
 ### 4-Priority Cascading Resolution
 
-The router resolves `sender → agent` using a **most-specific-wins** strategy:
+Current router resolves **sender -> entry agent/role** using a most-specific-wins strategy:
 
 ```
 Priority 1: EXACT PEER MATCH
@@ -420,10 +453,13 @@ Priority 4: PIPE-LEVEL FALLBACK
     Example: cli + (any sender) → "main"
 
 Fallback: DEFAULT AGENT
-    If nothing matches → default_agent (first agent with default=true)
+    If nothing matches -> default_agent (first agent with default=true)
 ```
 
-### Config Example
+This is ingress routing only. In target topology mode, ingress resolution is followed by
+orchestrator dispatch (`entry role -> dependent agent plan`).
+
+### Ingress Config Example (current)
 
 ```toml
 # Priority 1: Exact peer match
@@ -449,6 +485,54 @@ agent = "family"
 pipe = "cli"
 agent = "main"
 ```
+
+### Single-Orchestrator Topology Schema (target v1)
+
+```toml
+[topology]
+mode = "single-orchestrator"
+orchestrator_agent = "orchestrator"
+dependent_agents = ["engineering", "marketing", "product"]
+allow_direct_dependent_communication = false
+max_handoff_depth = 2
+
+[topology.defaults]
+engine = "openai"
+model = "gpt-4o-mini"
+inherit_to_dependents = true
+
+[topology.policy]
+require_orchestrator_approval = true
+tool_policy_source = "global"      # "global" | "agent-override"
+adapter_policy_source = "global"   # "global" | "agent-override"
+
+[[topology.agent_overrides]]
+agent = "engineering"
+engine = "anthropic"
+model = "claude-sonnet-4-5-20250929"
+
+[[topology.adapter_rules]]
+from = "engineering"
+to = "marketing"
+adapter = "eng_to_mkt_summary"
+direction = "one-way"
+status = "allow"
+
+[[topology.adapter_rules]]
+from = "marketing"
+to = "engineering"
+direction = "one-way"
+status = "deny"
+reason = "prevent engineering bias from marketing directives"
+```
+
+Validation rules for this target schema:
+1. Exactly one `orchestrator_agent` must be configured.
+2. All `dependent_agents` must reference existing agents.
+3. All tool/skill/adapter executions require orchestrator policy approval.
+4. Direct dependent-to-dependent communication is blocked unless an adapter rule explicitly allows it.
+5. Directional deny rules must be enforceable at runtime (for example `marketing -> engineering` blocked).
+6. Capability policies cannot exceed user-defined hard boundaries.
 
 ### Resolution Diagram
 
@@ -512,8 +596,15 @@ Agent "erzhan"
 │  - aigul's files     │   │  - salary data       │
 │  - system files      │   │  - contracts         │
 └─────────────────────┘   └─────────────────────┘
-          ✗ No cross-agent data flow ✗
+          ✗ No unmanaged cross-agent data flow ✗
 ```
+
+Cross-agent collaboration policy (target):
+1. Agent-to-agent exchange is allowed only through explicit task/result envelopes.
+2. Every handoff is policy-checked by orchestrator and auditable.
+3. Cross-domain exchange must pass through declared communication adapters.
+4. Directional policies are enforceable (example: allow `engineering -> marketing`, block `marketing -> engineering`).
+5. Direct workspace access across agents remains forbidden.
 
 ### Config Structure per Agent (`config/schema.rs`)
 
@@ -571,7 +662,7 @@ pub trait Tool: Send + Sync {
 }
 ```
 
-### Tool-Calling Loop (to be implemented)
+### Tool-Calling Loop (current baseline + target)
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -587,13 +678,19 @@ pub trait Tool: Send + Sync {
 │     ─── no ─── → Error: "tool not permitted"     │
 │  6. Check: does tool need user confirmation?      │
 │     ─── yes (shell) ─── → Ask user, wait         │
-│  7. Execute tool                                 │
+│  7. Execute tool (baseline: `read_file`)         │
 │  8. Append: Message { role: Tool, content: ... } │
 │  9. Re-run engine with updated messages          │
 │  10. Repeat from step 2 (max 10 iterations)      │
 │                                                  │
 └─────────────────────────────────────────────────┘
 ```
+
+Current implemented baseline:
+1. Runtime assembles `ToolCallStart/ToolCallDelta/ToolCallEnd`.
+2. Runtime enforces `kit` policy guards.
+3. Runtime executes built-in `read_file` via `ToolRegistry`.
+4. Runtime persists append-only JSONL audit events.
 
 ### Planned Tools
 
@@ -906,6 +1003,8 @@ Environment reference:
 
 ### Full Config Structure
 
+Current implemented config shape:
+
 ```
 Config
 ├── runtime_profile: String          # "auto", "cloud", "desktop", "minimal"
@@ -923,8 +1022,8 @@ Config
 │   └── url: Option<String>          # for remote
 ├── agents: HashMap<String, AgentConfig>    # "main", "erzhan", "timur"...
 │   └── (see Agent Isolation section)
-├── routing: Vec<RoutingBinding>
-│   └── { agent, pipe, peer?, group_id?, account_id? }
+├── routing: Vec<RoutingBinding>     # ingress mapping only
+│   └── { agent, pipe, peer?, group_id?, account_id? } 
 ├── pipes: PipesConfig
 │   ├── cli: Option<PipeEntry>
 │   ├── telegram: Option<TelegramPipeConfig>
@@ -933,6 +1032,37 @@ Config
 └── skills: SkillsConfig
     ├── watch: bool                  # Hot-reload skills
     └── extra_dirs: Vec<String>      # Additional skill directories
+```
+
+Target extension for single-orchestrator runtime:
+
+```
+Config
+└── topology: TopologyConfig
+    ├── mode: String                 # "single-orchestrator"
+    ├── orchestrator_agent: String   # points to agents.<id>
+    ├── dependent_agents: Vec<String>
+    ├── allow_direct_dependent_communication: bool
+    ├── max_handoff_depth: u8
+    ├── defaults: TopologyDefaults
+    │   ├── engine: String
+    │   ├── model: String
+    │   └── inherit_to_dependents: bool
+    ├── policy: TopologyPolicy
+    │   ├── require_orchestrator_approval: bool
+    │   ├── tool_policy_source: String    # "global" | "agent-override"
+    │   └── adapter_policy_source: String # "global" | "agent-override"
+    ├── agent_overrides: Vec<TopologyAgentOverride>
+    │   ├── agent: String
+    │   ├── engine: String
+    │   └── model: String
+    └── adapter_rules: Vec<TopologyAdapterRule>
+        ├── from: String
+        ├── to: String
+        ├── adapter: Option<String>
+        ├── direction: String             # "one-way" | "two-way"
+        ├── status: String                # "allow" | "deny"
+        └── reason: Option<String>
 ```
 
 ---

@@ -27,7 +27,9 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while skills/delegated lead control is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
+| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`) and runtime already consumes stream events; internal domain event bus migration is now planned/tracked |
+| Coordination topology model | Partial | Ingress routing exists; single-orchestrator control plane with flexible dependent agents is planned as default topology extension |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -56,6 +58,7 @@ A single Rust binary that lets users run AI coding agents across any messaging p
 5. **Token efficient** — Optional. Off by default. User enables when they want savings.
 6. **Transparent** — Real-time cost and context visibility.
 7. **Extensible** — Pipes, engines, plugins, skills — all pluggable via traits and config.
+8. **Adapter + event driven** — Integrations are adapter-based; runtime state changes are modeled as events to keep orchestration decoupled and auditable.
 
 ---
 
@@ -91,20 +94,56 @@ tengu-cluster/
 | **Kit** | A set of tools available to an agent (file ops, shell, web, etc.) |
 | **Flow** | A conversation session with history and context management |
 | **Lens** | The user-controlled precision mode (eco/standard/precise) |
+| **Orchestrator** | Single control-plane agent that dispatches dependent work and enforces policy/audit |
+| **Dependent Agent** | Domain agent (engineering/marketing/product/etc.) invoked by orchestrator |
+| **Communication Adapter** | Policy-enforced bridge for dependent-agent communication |
 
 ### 3.3 Data Flow
 
 ```
 Pipe (Telegram/Discord/CLI/WebChat)
-  → Router (agent bindings, deterministic matching)
-    → Flow Manager (resolve/create session, load history)
-      → Refiner (optional: compress prompt, strip noise)
-        → Store (optional: retrieve relevant knowledge)
-          → Prompt Assembler (skills, identity, workspace context)
-            → Engine (Claude Code / Anthropic / OpenAI / Ollama / HF)
-              → Stream Processor (chunk for platform limits)
-                → Pipe (deliver response)
+  → Ingress Router (sender -> entry agent/role)
+    → Orchestrator Control Plane (single orchestrator + flexible dependents)
+      → Flow Manager (resolve/create session, load history)
+        → Refiner (optional: compress prompt, strip noise)
+          → Store (optional: retrieve relevant knowledge)
+            → Prompt Assembler (skills, identity, workspace context)
+              → Engine (Claude Code / Anthropic / OpenAI / Ollama / HF)
+                → Stream Processor (chunk for platform limits)
+                  → Response Synthesizer (orchestrator-owned output)
+                    → Pipe (deliver response)
 ```
+
+### 3.4 Architecture Pattern Requirements
+
+1. **Adapter-first contracts (required)**  
+   `Engine`, `Pipe`, `Refiner`, and `Tool` remain the only integration seams for providers/channels/optimizers/tools.
+2. **Event-driven runtime (required)**  
+   Stream and lifecycle activity must be represented as typed events with deterministic terminal states.
+3. **Internal domain event bus (migration in progress)**  
+   Runtime side-effects (audit, metrics, policy reactions, diagnostics) should move from direct inline calls to subscriber handlers.
+4. **Device profile compatibility (required)**  
+   Event bus implementation must support minimal single-core deployments with bounded queues/backpressure and scale to multi-core machines with parallel subscribers.
+5. **Topology-flexible orchestration (required)**  
+   Runtime must keep one orchestrator control plane and allow flexible dependent-agent topology without changing provider/channel adapters.
+6. **Single configuration surface (required)**  
+   Users configure orchestration/policy once and dependents inherit default model settings unless explicitly overridden.
+
+### 3.5 Single-Orchestrator Topology (Target v1)
+
+1. **Single orchestrator (required)**  
+   One orchestrator governs all dependency dispatch and returns one synthesized response.
+2. **Flexible dependents**  
+   Dependent agents can be added/removed by domain without adding extra control planes.
+3. **Central policy + audit**  
+   Tool/adapter/skill approvals and runtime audit are enforced from one config surface.
+
+Execution requirements:
+1. Ingress routing resolves only entry points.
+2. Orchestrator dispatches tasks to dependent agents and aggregates results.
+3. Direct dependent-to-dependent communication is blocked unless adapter rules allow it.
+4. Capability approvals must remain inside user-defined hard boundaries.
+5. Directional adapter policy must support explicit bias guards (for example block `marketing -> engineering` while allowing `engineering -> marketing`).
 
 ---
 
@@ -176,6 +215,10 @@ Deterministic binding rules, most-specific wins:
 8. Default agent fallback
 
 Multiple match fields require all to match (AND).
+
+Important:
+- This routing stage resolves ingress entry agent/role only.
+- Multi-level execution uses a separate orchestrator control stage after routing.
 
 ### 4.5 Response Chunking
 
@@ -360,7 +403,7 @@ Planned built-in tools:
 - Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events)
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
-  - delegated lead-agent control constrained by user-defined hard boundaries
+  - delegated orchestrator control constrained by user-defined hard boundaries
 - Safe command allowlist for shell
 - Approval system for dangerous operations
 - Workspace-only file access when sandboxing enabled
@@ -733,6 +776,43 @@ list = [
 [[routing]]
 agent = "main"
 pipe = "cli"
+
+# Planned topology extension (not yet enforced by runtime):
+# [topology]
+# mode = "single-orchestrator"
+# orchestrator_agent = "orchestrator"
+# dependent_agents = ["engineering", "marketing", "product"]
+# allow_direct_dependent_communication = false
+# max_handoff_depth = 2
+#
+# [topology.defaults]
+# engine = "openai"
+# model = "gpt-4o-mini"
+# inherit_to_dependents = true
+#
+# [topology.policy]
+# require_orchestrator_approval = true
+# tool_policy_source = "global"
+# adapter_policy_source = "global"
+#
+# [[topology.agent_overrides]]
+# agent = "engineering"
+# engine = "anthropic"
+# model = "claude-sonnet-4-5-20250929"
+#
+# [[topology.adapter_rules]]
+# from = "engineering"
+# to = "marketing"
+# adapter = "eng_to_mkt_summary"
+# direction = "one-way"
+# status = "allow"
+#
+# [[topology.adapter_rules]]
+# from = "marketing"
+# to = "engineering"
+# direction = "one-way"
+# status = "deny"
+# reason = "prevent engineering bias from marketing directives"
 
 [pipes.cli]
 enabled = true

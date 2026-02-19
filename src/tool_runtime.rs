@@ -3,6 +3,10 @@
 //! Potential use case:
 //! Execute model-emitted tool calls (for example `read_file`) through one
 //! policy-checked registry without coupling engine adapters to filesystem logic.
+//!
+//! Migration note:
+//! Tool execution is currently invoked directly from runtime orchestration and is
+//! targeted to run behind domain-event subscribers during `E11` migration.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;

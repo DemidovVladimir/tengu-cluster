@@ -37,7 +37,10 @@ Source: `EPICS_TASKS.md`
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
 | E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) for policy/protocol/execution events |
-| E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated control pending |
+| E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
+| E11-T1 | Planned | Define domain event contract and event bus abstraction for runtime decoupling |
+| E11-T2 | Planned | Add in-process bounded event bus implementation with deterministic overflow policy |
+| E11-T3 | Planned | Migrate runtime side-effects (audit/metrics/policy hooks) to subscriber model incrementally |
 
 ## Completed Start Task (2026-02-19)
 
@@ -52,7 +55,7 @@ Source: `EPICS_TASKS.md`
 
 ## Next Start (2026-02-20)
 
-- `E8-T3` — Add per-tool policy metadata + approvals.
+- `E11-T1` — Define domain event contract + event bus abstraction.
 
 ## Epics
 
@@ -65,9 +68,10 @@ Source: `EPICS_TASKS.md`
 | E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | Done |
 | E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | Planned |
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
-| E8 | Epic | Tool Loop and Safety Controls | P1 | Planned |
+| E8 | Epic | Tool Loop and Safety Controls | P1 | In Progress |
 | E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |
 | E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | In Progress |
+| E11 | Epic | Internal Event Bus and Runtime Decoupling | P0 | In Progress |
 
 ## Epic Closure Rules
 
@@ -149,8 +153,8 @@ Source: `EPICS_TASKS.md`
 | E6-T6 | Task | Implement WebChat adapter | P1 | E6-T2,E6-T3 | Post-MVP |
 | E6-T7 | Task | Add streaming output support for channel responders | P1 | E5-T2,E6-T2 | Sprint 5 |
 | E6-T8 | Task | Add optional channel delivery ack contract | P1 | E6-T2 | Sprint 5 |
-| E6-T9 | Task | Implement topology-aware multi-agent execution loop (single-lead/multi-lead/layered delegation) | P1 | E6-T1,E7-T1,E8-T2 | Sprint 5 |
-| E6-T10 | Task | Add lead-agent control plane for subordinate capability assignment with user-boundary checks | P1 | E6-T9,E8-T7,E10-T7 | Sprint 5 |
+| E6-T9 | Task | Implement topology-aware multi-agent execution loop (single-orchestrator with flexible dependents) | P1 | E6-T1,E7-T1,E8-T2 | Sprint 5 |
+| E6-T10 | Task | Add orchestrator control plane for dependent capability assignment with user-boundary checks | P1 | E6-T9,E8-T7,E10-T7 | Sprint 5 |
 
 ## Epic E7 Tasks
 
@@ -160,7 +164,7 @@ Source: `EPICS_TASKS.md`
 | E7-T2 | Task | Add structured routing match traces | P1 | E7-T1 | Sprint 4 |
 | E7-T3 | Task | Expose routing diagnostics via status/doctor | P1 | E7-T2 | Sprint 5 |
 | E7-T4 | Task | Add route precedence/conflict resolution tests | P1 | E7-T1 | Sprint 5 |
-| E7-T5 | Task | Add role/capability-aware routing for agent graph execution | P1 | E7-T1,E6-T9 | Sprint 5 |
+| E7-T5 | Task | Add role/capability-aware routing for orchestrator/dependent execution graph | P1 | E7-T1,E6-T9 | Sprint 5 |
 
 ## Epic E8 Tasks
 
@@ -172,7 +176,7 @@ Source: `EPICS_TASKS.md`
 | E8-T4 | Task | Add allow/deny policy checks before tool execution | P1 | E8-T2 | Sprint 5 |
 | E8-T5 | Task | Add audit trail for tool calls/results | P1 | E8-T2 | Sprint 5 |
 | E8-T6 | Task | Define and implement inter-agent handoff contract (task/result envelopes) | P1 | E8-T1,E8-T2,E6-T9 | Sprint 5 |
-| E8-T7 | Task | Enforce capability policies for tools/skills/engine usage at runtime (user + delegated lead modes) | P1 | E8-T2,E10-T7 | Sprint 5 |
+| E8-T7 | Task | Enforce capability policies for tools/skills/engine usage at runtime (user + delegated orchestrator modes) | P1 | E8-T2,E10-T7 | Sprint 5 |
 
 ## Epic E9 Tasks
 
@@ -197,3 +201,14 @@ Source: `EPICS_TASKS.md`
 | E10-T5 | Task | Add schema migration compatibility tests | P2 | E10-T1,E10-T3 | Post-MVP |
 | E10-T6 | Task | Add user-story acceptance matrix and scenario-driven release checklist | P2 | E10-T1 | Sprint 4 |
 | E10-T7 | Task | Add config/runtime validation for capability governance (`kit`, `skills`, `allowed_engines`, sandbox boundaries) | P2 | E10-T1 | Sprint 4 |
+
+## Epic E11 Tasks
+
+| Key | Type | Description | Priority | Dependencies | Sprint |
+|---|---|---|---|---|---|
+| E11-T1 | Task | Define `DomainEvent` schema + `EventBus` trait for runtime lifecycle events | P0 | E5-T5,E10-T2 | Sprint 4 |
+| E11-T2 | Task | Implement bounded in-process event bus with explicit overflow policy | P0 | E11-T1 | Sprint 4 |
+| E11-T3 | Task | Emit domain events from chat runtime path (`src/main.rs`) without behavior regressions | P0 | E11-T2 | Sprint 4 |
+| E11-T4 | Task | Migrate tool audit writes to subscriber handler (event-driven side-effect) | P0 | E11-T3,E8-T5 | Sprint 4 |
+| E11-T5 | Task | Add metrics/policy subscribers and lag/saturation diagnostics | P0 | E11-T3 | Sprint 5 |
+| E11-T6 | Task | Validate minimal single-core and multi-core profiles for queue/backpressure behavior | P0 | E11-T2,E11-T5 | Sprint 5 |
