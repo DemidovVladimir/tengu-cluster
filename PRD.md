@@ -14,7 +14,7 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Partial | Runtime assembles tool-call events and executes policy-checked `read_file`; broader tool loop, approvals, and audit are pending |
+| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked `read_file`, and persists append-only tool audit records; broader tool loop and approvals are pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, while skills/delegated lead control is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while skills/delegated lead control is pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -357,6 +357,7 @@ Planned built-in tools:
 
 - Oversized tool-result token guard/truncation utility (implemented in core and applied by runtime tool registry)
 - Per-agent allow/deny lists
+- Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events)
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated lead-agent control constrained by user-defined hard boundaries

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
 mod flow_store;
+mod tool_audit;
 mod tool_runtime;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
@@ -21,6 +22,7 @@ use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
+use tool_audit::{audit_now_epoch_s, truncate_audit_text, ToolAuditEvent, ToolAuditStore};
 use tool_runtime::ToolRegistry;
 
 /// Fixed heading prepended to runtime retrieval context blocks.
@@ -130,6 +132,15 @@ struct PendingToolCall {
     id: String,
     name: String,
     arguments_delta: String,
+}
+
+/// Normalized tool execution outcome used by runtime rendering and audit logging.
+#[derive(Debug, Clone)]
+struct ToolExecutionOutcome {
+    user_message: String,
+    status: &'static str,
+    reason: Option<String>,
+    result_preview: Option<String>,
 }
 
 /// Mutable per-session runtime state for chat loop execution.
@@ -269,6 +280,13 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
     let tool_registry = ToolRegistry::with_defaults();
+    let tool_audit = match ToolAuditStore::new(&resolve_tengu_home()) {
+        Ok(store) => Some(store),
+        Err(err) => {
+            warn!(error = %err, "Tool audit store unavailable; continuing without audit persistence");
+            None
+        }
+    };
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -465,9 +483,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             engine.as_ref(),
             &prompt_messages,
             &context,
+            &flow_key,
             &agent_id,
             &agent_config,
             &tool_registry,
+            tool_audit.as_ref(),
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
         )
@@ -653,9 +673,11 @@ async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
     context: &EngineContext,
+    flow_key: &str,
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
     tool_registry: &ToolRegistry,
+    tool_audit: Option<&ToolAuditStore>,
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
 ) -> Result<String> {
@@ -687,6 +709,23 @@ async fn collect_engine_response(
                     }
                     tengu_core::types::StreamEvent::ToolCallStart { id, name } => {
                         if pending_tool_call.is_some() {
+                            append_tool_audit(
+                                tool_audit,
+                                ToolAuditEvent {
+                                    ts_epoch_s: audit_now_epoch_s(),
+                                    flow_key: flow_key.to_string(),
+                                    agent_id: agent_id.to_string(),
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    phase: "protocol".to_string(),
+                                    status: "error".to_string(),
+                                    reason: Some(
+                                        "runtime supports only one active tool call".to_string(),
+                                    ),
+                                    arguments_preview: None,
+                                    result_preview: None,
+                                },
+                            );
                             policy_terminal_message = Some(
                                 "Tool runtime currently supports one active tool call at a time."
                                     .to_string(),
@@ -695,6 +734,21 @@ async fn collect_engine_response(
                         }
                         let decision = evaluate_tool_policy(agent_config, &name);
                         if !decision.is_allowed() {
+                            append_tool_audit(
+                                tool_audit,
+                                ToolAuditEvent {
+                                    ts_epoch_s: audit_now_epoch_s(),
+                                    flow_key: flow_key.to_string(),
+                                    agent_id: agent_id.to_string(),
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    phase: "policy".to_string(),
+                                    status: "denied".to_string(),
+                                    reason: Some(decision.reason().to_string()),
+                                    arguments_preview: None,
+                                    result_preview: None,
+                                },
+                            );
                             policy_terminal_message = Some(format!(
                                 "Tool call '{}' denied by policy for agent '{}': {}",
                                 name,
@@ -709,6 +763,21 @@ async fn collect_engine_response(
                             );
                             break;
                         }
+                        append_tool_audit(
+                            tool_audit,
+                            ToolAuditEvent {
+                                ts_epoch_s: audit_now_epoch_s(),
+                                flow_key: flow_key.to_string(),
+                                agent_id: agent_id.to_string(),
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                                phase: "policy".to_string(),
+                                status: "allowed".to_string(),
+                                reason: None,
+                                arguments_preview: None,
+                                result_preview: None,
+                            },
+                        );
                         pending_tool_call = Some(PendingToolCall {
                             id,
                             name,
@@ -721,6 +790,27 @@ async fn collect_engine_response(
                     } => {
                         if let Some(pending) = pending_tool_call.as_mut() {
                             if pending.id != id {
+                                append_tool_audit(
+                                    tool_audit,
+                                    ToolAuditEvent {
+                                        ts_epoch_s: audit_now_epoch_s(),
+                                        flow_key: flow_key.to_string(),
+                                        agent_id: agent_id.to_string(),
+                                        tool_call_id: pending.id.clone(),
+                                        tool_name: pending.name.clone(),
+                                        phase: "protocol".to_string(),
+                                        status: "error".to_string(),
+                                        reason: Some(format!(
+                                            "delta id mismatch: expected '{}', got '{}'",
+                                            pending.id, id
+                                        )),
+                                        arguments_preview: Some(truncate_audit_text(
+                                            &pending.arguments_delta,
+                                            256,
+                                        )),
+                                        result_preview: None,
+                                    },
+                                );
                                 policy_terminal_message = Some(format!(
                                     "Tool call delta id mismatch: expected '{}', got '{}'.",
                                     pending.id, id
@@ -733,20 +823,59 @@ async fn collect_engine_response(
                     tengu_core::types::StreamEvent::ToolCallEnd { id } => {
                         if let Some(pending) = pending_tool_call.take() {
                             if pending.id != id {
+                                append_tool_audit(
+                                    tool_audit,
+                                    ToolAuditEvent {
+                                        ts_epoch_s: audit_now_epoch_s(),
+                                        flow_key: flow_key.to_string(),
+                                        agent_id: agent_id.to_string(),
+                                        tool_call_id: pending.id.clone(),
+                                        tool_name: pending.name.clone(),
+                                        phase: "protocol".to_string(),
+                                        status: "error".to_string(),
+                                        reason: Some(format!(
+                                            "end id mismatch: expected '{}', got '{}'",
+                                            pending.id, id
+                                        )),
+                                        arguments_preview: Some(truncate_audit_text(
+                                            &pending.arguments_delta,
+                                            256,
+                                        )),
+                                        result_preview: None,
+                                    },
+                                );
                                 policy_terminal_message = Some(format!(
                                     "Tool call end id mismatch: expected '{}', got '{}'.",
                                     pending.id, id
                                 ));
                                 break;
                             }
-                            let message = execute_tool_call(
+                            let outcome = execute_tool_call(
                                 &pending,
                                 tool_registry,
                                 context.workspace.as_ref(),
                                 agent_id,
                             )
                             .await;
-                            tool_runtime_messages.push(message);
+                            append_tool_audit(
+                                tool_audit,
+                                ToolAuditEvent {
+                                    ts_epoch_s: audit_now_epoch_s(),
+                                    flow_key: flow_key.to_string(),
+                                    agent_id: agent_id.to_string(),
+                                    tool_call_id: pending.id.clone(),
+                                    tool_name: pending.name.clone(),
+                                    phase: "execute".to_string(),
+                                    status: outcome.status.to_string(),
+                                    reason: outcome.reason.clone(),
+                                    arguments_preview: Some(truncate_audit_text(
+                                        &pending.arguments_delta,
+                                        256,
+                                    )),
+                                    result_preview: outcome.result_preview.clone(),
+                                },
+                            );
+                            tool_runtime_messages.push(outcome.user_message);
                         }
                     }
                     tengu_core::types::StreamEvent::Done => {}
@@ -762,6 +891,21 @@ async fn collect_engine_response(
                 return Ok(message);
             }
             if let Some(pending) = pending_tool_call {
+                append_tool_audit(
+                    tool_audit,
+                    ToolAuditEvent {
+                        ts_epoch_s: audit_now_epoch_s(),
+                        flow_key: flow_key.to_string(),
+                        agent_id: agent_id.to_string(),
+                        tool_call_id: pending.id.clone(),
+                        tool_name: pending.name.clone(),
+                        phase: "protocol".to_string(),
+                        status: "error".to_string(),
+                        reason: Some("missing ToolCallEnd".to_string()),
+                        arguments_preview: Some(truncate_audit_text(&pending.arguments_delta, 256)),
+                        result_preview: None,
+                    },
+                );
                 return Ok(format!(
                     "Tool call '{}' did not complete (missing ToolCallEnd).",
                     pending.name
@@ -790,30 +934,45 @@ async fn execute_tool_call(
     tool_registry: &ToolRegistry,
     workspace: Option<&PathBuf>,
     agent_id: &str,
-) -> String {
+) -> ToolExecutionOutcome {
     let args_value = if pending.arguments_delta.trim().is_empty() {
         serde_json::json!({})
     } else {
         match serde_json::from_str::<serde_json::Value>(&pending.arguments_delta) {
             Ok(parsed) => parsed,
             Err(err) => {
-                return format!(
-                    "[tool:{} parse-error]\nInvalid JSON arguments: {}",
-                    pending.name, err
-                );
+                return ToolExecutionOutcome {
+                    user_message: format!(
+                        "[tool:{} parse-error]\nInvalid JSON arguments: {}",
+                        pending.name, err
+                    ),
+                    status: "parse_error",
+                    reason: Some(err.to_string()),
+                    result_preview: None,
+                };
             }
         }
     };
 
     if !tool_registry.has(&pending.name) {
-        return format!("[tool:{} error]\nTool is not registered.", pending.name);
+        return ToolExecutionOutcome {
+            user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
+            status: "not_registered",
+            reason: Some("tool is not registered".to_string()),
+            result_preview: None,
+        };
     }
 
     let Some(workspace) = workspace else {
-        return format!(
-            "[tool:{} error]\nWorkspace is not configured for this agent.",
-            pending.name
-        );
+        return ToolExecutionOutcome {
+            user_message: format!(
+                "[tool:{} error]\nWorkspace is not configured for this agent.",
+                pending.name
+            ),
+            status: "workspace_missing",
+            reason: Some("workspace is not configured".to_string()),
+            result_preview: None,
+        };
     };
 
     let tool_ctx = ToolContext {
@@ -824,14 +983,40 @@ async fn execute_tool_call(
         .execute(&pending.name, args_value, &tool_ctx)
         .await
     {
-        Ok(output) => {
-            if output.is_error {
-                format!("[tool:{} error]\n{}", pending.name, output.content)
-            } else {
-                format!("[tool:{} ok]\n{}", pending.name, output.content)
-            }
-        }
-        Err(err) => format!("[tool:{} error]\n{}", pending.name, err),
+        Ok(output) if output.is_error => ToolExecutionOutcome {
+            user_message: format!("[tool:{} error]\n{}", pending.name, output.content),
+            status: "error",
+            reason: Some("tool returned error output".to_string()),
+            result_preview: Some(truncate_audit_text(&output.content, 512)),
+        },
+        Ok(output) => ToolExecutionOutcome {
+            user_message: format!("[tool:{} ok]\n{}", pending.name, output.content),
+            status: "ok",
+            reason: None,
+            result_preview: Some(truncate_audit_text(&output.content, 512)),
+        },
+        Err(err) => ToolExecutionOutcome {
+            user_message: format!("[tool:{} error]\n{}", pending.name, err),
+            status: "exec_error",
+            reason: Some(err.to_string()),
+            result_preview: None,
+        },
+    }
+}
+
+/// Append tool audit event and keep runtime resilient on audit write failure.
+fn append_tool_audit(store: Option<&ToolAuditStore>, event: ToolAuditEvent) {
+    let Some(store) = store else {
+        return;
+    };
+    if let Err(err) = store.append(&event) {
+        warn!(
+            error = %err,
+            tool = %event.tool_name,
+            phase = %event.phase,
+            status = %event.status,
+            "Failed to append tool audit event"
+        );
     }
 }
 
@@ -1991,9 +2176,10 @@ mod tests {
             arguments_delta: "{\"command\":\"ls\"}".to_string(),
         };
 
-        let message =
+        let outcome =
             execute_tool_call(&pending, &registry, Some(&PathBuf::from(".")), "main").await;
-        assert!(message.contains("not registered"));
+        assert_eq!(outcome.status, "not_registered");
+        assert!(outcome.user_message.contains("not registered"));
     }
 
     #[tokio::test]
@@ -2009,10 +2195,11 @@ mod tests {
             name: "read_file".to_string(),
             arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
         };
-        let message = execute_tool_call(&pending, &registry, Some(&workspace), "main").await;
+        let outcome = execute_tool_call(&pending, &registry, Some(&workspace), "main").await;
 
-        assert!(message.contains("[tool:read_file ok]"));
-        assert!(message.contains("hello from tool"));
+        assert_eq!(outcome.status, "ok");
+        assert!(outcome.user_message.contains("[tool:read_file ok]"));
+        assert!(outcome.user_message.contains("hello from tool"));
         let _ = std::fs::remove_dir_all(&workspace);
     }
 

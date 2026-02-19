@@ -36,6 +36,7 @@ Source: `EPICS_TASKS.md`
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
+| E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) for policy/protocol/execution events |
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated control pending |
 
 ## Completed Start Task (2026-02-19)
@@ -51,7 +52,7 @@ Source: `EPICS_TASKS.md`
 
 ## Next Start (2026-02-20)
 
-- `E8-T5` — Add audit trail for tool calls/results (policy decision + args/result metadata).
+- `E8-T3` — Add per-tool policy metadata + approvals.
 
 ## Epics
 

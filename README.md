@@ -18,6 +18,7 @@ Current working baseline:
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
+- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) for runtime tool policy/execution events
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 

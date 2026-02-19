@@ -136,11 +136,12 @@ Acceptance targets:
 3. Audit trail records tool input/output and decisions.
 
 Current coverage:
-- `Partial`: runtime can assemble tool-call events and execute a policy-checked `read_file` tool via registry; approvals, broader toolset, and audit trail are pending.
+- `Partial`: runtime can assemble tool-call events, execute a policy-checked `read_file` tool via registry, and persist append-only JSONL audit records for policy/protocol/execution outcomes; approvals and broader toolset are pending.
 
 Required tasks:
 - `E8-T1`, `E8-T2` partial baseline
-- `E8-T3` to `E8-T6`
+- `E8-T5` partial baseline
+- `E8-T3`, `E8-T4`, `E8-T6`
 
 ---
 
