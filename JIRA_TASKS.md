@@ -34,7 +34,7 @@ Source: `EPICS_TASKS.md`
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
-| E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call gate events; full tool execution/skills/delegated control pending |
+| E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + fail-closed tool-call gating; full tool execution/skills/delegated control pending |
 
 ## Completed Start Task (2026-02-19)
 

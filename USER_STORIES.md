@@ -232,7 +232,7 @@ Current coverage:
 - `Implemented` governance-boundary validation for `kit`, `allowed_engines`, `skills`, sandbox mode, and routing/pipe consistency.
 - `Partial` runtime enforcement for `allowed_engines` and `kit` in active execution path:
   - engine/model allowlist is enforced in runtime engine construction
-  - tool-call start events are checked against per-agent `kit` policy
+  - tool-call start events are checked against per-agent `kit` policy and fail closed until tool loop support exists
 - `Missing` skills loading/execution policy controls.
 - `Missing` lead-agent delegated capability control and audit pipeline.
   References:

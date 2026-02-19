@@ -650,6 +650,7 @@ async fn collect_engine_response(
         Ok(mut stream) => {
             let mut response_text = String::new();
             let mut turn_usage_snapshot: Option<(u32, u32)> = None;
+            let mut policy_terminal_message: Option<String> = None;
 
             while let Some(event) = stream.next().await {
                 match event {
@@ -670,26 +671,10 @@ async fn collect_engine_response(
                         eprintln!("Engine error: {}", message);
                     }
                     tengu_core::types::StreamEvent::ToolCallStart { name, .. } => {
-                        let decision = evaluate_tool_policy(agent_config, &name);
-                        if !decision.is_allowed() {
-                            warn!(
-                                agent_id,
-                                tool = %name,
-                                reason = decision.reason(),
-                                "Tool call denied by runtime capability policy"
-                            );
-                            eprintln!(
-                                "Tool call '{}' denied by policy for agent '{}': {}",
-                                name,
-                                agent_id,
-                                decision.reason()
-                            );
-                        } else {
-                            debug!(
-                                agent_id,
-                                tool = %name,
-                                "Tool call allowed by runtime capability policy"
-                            );
+                        policy_terminal_message =
+                            evaluate_tool_call_guard(agent_id, agent_config, &name);
+                        if policy_terminal_message.is_some() {
+                            break;
                         }
                     }
                     tengu_core::types::StreamEvent::Done => {}
@@ -701,6 +686,9 @@ async fn collect_engine_response(
                 total_output_tokens,
                 turn_usage_snapshot,
             );
+            if let Some(message) = policy_terminal_message {
+                return Ok(message);
+            }
             Ok(response_text)
         }
         Err(err) => {
@@ -708,6 +696,43 @@ async fn collect_engine_response(
             Ok(String::new())
         }
     }
+}
+
+/// Validate one model-emitted tool call against runtime capability guards.
+///
+/// Current runtime does not execute tools yet, so this function fails closed:
+/// - denied by policy -> explicit policy block message
+/// - allowed by policy -> explicit "tool loop not enabled" message
+fn evaluate_tool_call_guard(
+    agent_id: &str,
+    agent_config: &tengu_core::config::AgentConfig,
+    tool_name: &str,
+) -> Option<String> {
+    let decision = evaluate_tool_policy(agent_config, tool_name);
+    if !decision.is_allowed() {
+        warn!(
+            agent_id,
+            tool = %tool_name,
+            reason = decision.reason(),
+            "Tool call denied by runtime capability policy"
+        );
+        return Some(format!(
+            "Tool call '{}' denied by policy for agent '{}': {}",
+            tool_name,
+            agent_id,
+            decision.reason()
+        ));
+    }
+
+    warn!(
+        agent_id,
+        tool = %tool_name,
+        "Tool call allowed by policy, but runtime tool loop is not enabled yet"
+    );
+    Some(format!(
+        "Tool call '{}' is allowed by policy for agent '{}' but tool execution is not enabled in this runtime yet.",
+        tool_name, agent_id
+    ))
 }
 
 /// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.
@@ -1855,5 +1880,29 @@ mod tests {
         assert!(small_ctx.summary_max_tokens < 1_500);
         assert!(large_ctx.summary_max_tokens > small_ctx.summary_max_tokens);
         assert!(large_ctx.summary_max_tokens <= 4_096);
+    }
+
+    #[test]
+    fn tool_call_guard_blocks_when_tool_is_denied() {
+        let mut config = tengu_core::config::Config::default();
+        let agent = config.agents.get_mut("main").expect("main");
+        agent.kit.allow.clear();
+        agent.kit.deny = vec!["shell".to_string()];
+
+        let message =
+            evaluate_tool_call_guard("main", agent, "shell").expect("guard should terminate turn");
+        assert!(message.contains("denied by policy"));
+    }
+
+    #[test]
+    fn tool_call_guard_blocks_until_tool_loop_is_enabled() {
+        let mut config = tengu_core::config::Config::default();
+        let agent = config.agents.get_mut("main").expect("main");
+        agent.kit.allow = vec!["shell".to_string()];
+        agent.kit.deny.clear();
+
+        let message =
+            evaluate_tool_call_guard("main", agent, "shell").expect("guard should terminate turn");
+        assert!(message.contains("tool execution is not enabled"));
     }
 }
