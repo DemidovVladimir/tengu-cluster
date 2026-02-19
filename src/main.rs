@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
 mod flow_store;
+mod tool_runtime;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
@@ -17,9 +18,10 @@ use tengu_channels::CliPipe;
 use tengu_core::config::{ensure_engine_allowed, evaluate_tool_policy, Config, RuntimeProfile};
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
-use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
+use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
+use tool_runtime::ToolRegistry;
 
 /// Fixed heading prepended to runtime retrieval context blocks.
 const RETRIEVAL_CONTEXT_HEADER: &str = "Relevant workspace context:\n\n";
@@ -120,6 +122,14 @@ struct CompactionOutcome {
     applied: bool,
     /// Number of old messages replaced by summary.
     compacted_messages: usize,
+}
+
+/// In-flight tool call assembly state for streamed tool arguments.
+#[derive(Debug, Clone)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments_delta: String,
 }
 
 /// Mutable per-session runtime state for chat loop execution.
@@ -258,6 +268,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
+    let tool_registry = ToolRegistry::with_defaults();
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -456,6 +467,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             &context,
             &agent_id,
             &agent_config,
+            &tool_registry,
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
         )
@@ -643,6 +655,7 @@ async fn collect_engine_response(
     context: &EngineContext,
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
+    tool_registry: &ToolRegistry,
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
 ) -> Result<String> {
@@ -651,6 +664,8 @@ async fn collect_engine_response(
             let mut response_text = String::new();
             let mut turn_usage_snapshot: Option<(u32, u32)> = None;
             let mut policy_terminal_message: Option<String> = None;
+            let mut pending_tool_call: Option<PendingToolCall> = None;
+            let mut tool_runtime_messages: Vec<String> = Vec::new();
 
             while let Some(event) = stream.next().await {
                 match event {
@@ -670,11 +685,68 @@ async fn collect_engine_response(
                     tengu_core::types::StreamEvent::Error { message } => {
                         eprintln!("Engine error: {}", message);
                     }
-                    tengu_core::types::StreamEvent::ToolCallStart { name, .. } => {
-                        policy_terminal_message =
-                            evaluate_tool_call_guard(agent_id, agent_config, &name);
-                        if policy_terminal_message.is_some() {
+                    tengu_core::types::StreamEvent::ToolCallStart { id, name } => {
+                        if pending_tool_call.is_some() {
+                            policy_terminal_message = Some(
+                                "Tool runtime currently supports one active tool call at a time."
+                                    .to_string(),
+                            );
                             break;
+                        }
+                        let decision = evaluate_tool_policy(agent_config, &name);
+                        if !decision.is_allowed() {
+                            policy_terminal_message = Some(format!(
+                                "Tool call '{}' denied by policy for agent '{}': {}",
+                                name,
+                                agent_id,
+                                decision.reason()
+                            ));
+                            warn!(
+                                agent_id,
+                                tool = %name,
+                                reason = decision.reason(),
+                                "Tool call denied by runtime capability policy"
+                            );
+                            break;
+                        }
+                        pending_tool_call = Some(PendingToolCall {
+                            id,
+                            name,
+                            arguments_delta: String::new(),
+                        });
+                    }
+                    tengu_core::types::StreamEvent::ToolCallDelta {
+                        id,
+                        arguments_delta,
+                    } => {
+                        if let Some(pending) = pending_tool_call.as_mut() {
+                            if pending.id != id {
+                                policy_terminal_message = Some(format!(
+                                    "Tool call delta id mismatch: expected '{}', got '{}'.",
+                                    pending.id, id
+                                ));
+                                break;
+                            }
+                            pending.arguments_delta.push_str(&arguments_delta);
+                        }
+                    }
+                    tengu_core::types::StreamEvent::ToolCallEnd { id } => {
+                        if let Some(pending) = pending_tool_call.take() {
+                            if pending.id != id {
+                                policy_terminal_message = Some(format!(
+                                    "Tool call end id mismatch: expected '{}', got '{}'.",
+                                    pending.id, id
+                                ));
+                                break;
+                            }
+                            let message = execute_tool_call(
+                                &pending,
+                                tool_registry,
+                                context.workspace.as_ref(),
+                                agent_id,
+                            )
+                            .await;
+                            tool_runtime_messages.push(message);
                         }
                     }
                     tengu_core::types::StreamEvent::Done => {}
@@ -689,6 +761,20 @@ async fn collect_engine_response(
             if let Some(message) = policy_terminal_message {
                 return Ok(message);
             }
+            if let Some(pending) = pending_tool_call {
+                return Ok(format!(
+                    "Tool call '{}' did not complete (missing ToolCallEnd).",
+                    pending.name
+                ));
+            }
+            if !tool_runtime_messages.is_empty() {
+                let tool_block = tool_runtime_messages.join("\n\n");
+                if response_text.trim().is_empty() {
+                    return Ok(tool_block);
+                }
+                response_text.push_str("\n\n");
+                response_text.push_str(&tool_block);
+            }
             Ok(response_text)
         }
         Err(err) => {
@@ -698,41 +784,55 @@ async fn collect_engine_response(
     }
 }
 
-/// Validate one model-emitted tool call against runtime capability guards.
-///
-/// Current runtime does not execute tools yet, so this function fails closed:
-/// - denied by policy -> explicit policy block message
-/// - allowed by policy -> explicit "tool loop not enabled" message
-fn evaluate_tool_call_guard(
+/// Execute one assembled tool call through registry and return user-facing result text.
+async fn execute_tool_call(
+    pending: &PendingToolCall,
+    tool_registry: &ToolRegistry,
+    workspace: Option<&PathBuf>,
     agent_id: &str,
-    agent_config: &tengu_core::config::AgentConfig,
-    tool_name: &str,
-) -> Option<String> {
-    let decision = evaluate_tool_policy(agent_config, tool_name);
-    if !decision.is_allowed() {
-        warn!(
-            agent_id,
-            tool = %tool_name,
-            reason = decision.reason(),
-            "Tool call denied by runtime capability policy"
-        );
-        return Some(format!(
-            "Tool call '{}' denied by policy for agent '{}': {}",
-            tool_name,
-            agent_id,
-            decision.reason()
-        ));
+) -> String {
+    let args_value = if pending.arguments_delta.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str::<serde_json::Value>(&pending.arguments_delta) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return format!(
+                    "[tool:{} parse-error]\nInvalid JSON arguments: {}",
+                    pending.name, err
+                );
+            }
+        }
+    };
+
+    if !tool_registry.has(&pending.name) {
+        return format!("[tool:{} error]\nTool is not registered.", pending.name);
     }
 
-    warn!(
-        agent_id,
-        tool = %tool_name,
-        "Tool call allowed by policy, but runtime tool loop is not enabled yet"
-    );
-    Some(format!(
-        "Tool call '{}' is allowed by policy for agent '{}' but tool execution is not enabled in this runtime yet.",
-        tool_name, agent_id
-    ))
+    let Some(workspace) = workspace else {
+        return format!(
+            "[tool:{} error]\nWorkspace is not configured for this agent.",
+            pending.name
+        );
+    };
+
+    let tool_ctx = ToolContext {
+        workspace: workspace.clone(),
+        agent_id: agent_id.to_string(),
+    };
+    match tool_registry
+        .execute(&pending.name, args_value, &tool_ctx)
+        .await
+    {
+        Ok(output) => {
+            if output.is_error {
+                format!("[tool:{} error]\n{}", pending.name, output.content)
+            } else {
+                format!("[tool:{} ok]\n{}", pending.name, output.content)
+            }
+        }
+        Err(err) => format!("[tool:{} error]\n{}", pending.name, err),
+    }
 }
 
 /// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.
@@ -1882,27 +1982,48 @@ mod tests {
         assert!(large_ctx.summary_max_tokens <= 4_096);
     }
 
+    #[tokio::test]
+    async fn execute_tool_call_reports_unregistered_tool() {
+        let registry = ToolRegistry::with_defaults();
+        let pending = PendingToolCall {
+            id: "tool-1".to_string(),
+            name: "shell".to_string(),
+            arguments_delta: "{\"command\":\"ls\"}".to_string(),
+        };
+
+        let message =
+            execute_tool_call(&pending, &registry, Some(&PathBuf::from(".")), "main").await;
+        assert!(message.contains("not registered"));
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_runs_read_file_tool() {
+        let workspace =
+            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace");
+        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
+
+        let registry = ToolRegistry::with_defaults();
+        let pending = PendingToolCall {
+            id: "tool-2".to_string(),
+            name: "read_file".to_string(),
+            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
+        };
+        let message = execute_tool_call(&pending, &registry, Some(&workspace), "main").await;
+
+        assert!(message.contains("[tool:read_file ok]"));
+        assert!(message.contains("hello from tool"));
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
     #[test]
-    fn tool_call_guard_blocks_when_tool_is_denied() {
+    fn tool_policy_denies_blocked_tool_name() {
         let mut config = tengu_core::config::Config::default();
         let agent = config.agents.get_mut("main").expect("main");
         agent.kit.allow.clear();
         agent.kit.deny = vec!["shell".to_string()];
 
-        let message =
-            evaluate_tool_call_guard("main", agent, "shell").expect("guard should terminate turn");
-        assert!(message.contains("denied by policy"));
-    }
-
-    #[test]
-    fn tool_call_guard_blocks_until_tool_loop_is_enabled() {
-        let mut config = tengu_core::config::Config::default();
-        let agent = config.agents.get_mut("main").expect("main");
-        agent.kit.allow = vec!["shell".to_string()];
-        agent.kit.deny.clear();
-
-        let message =
-            evaluate_tool_call_guard("main", agent, "shell").expect("guard should terminate turn");
-        assert!(message.contains("tool execution is not enabled"));
+        let decision = evaluate_tool_policy(agent, "shell");
+        assert!(!decision.is_allowed());
     }
 }

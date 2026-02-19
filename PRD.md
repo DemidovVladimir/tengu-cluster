@@ -14,7 +14,7 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
+| Tools (Kit) | Partial | Runtime assembles tool-call events and executes policy-checked `read_file`; broader tool loop, approvals, and audit are pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime now enforces engine allowlist and fail-closed `kit` checks for tool-call start events, while full tool execution/skills/delegated lead control is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, while skills/delegated lead control is pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -346,15 +346,16 @@ trait Tool: Send + Sync {
 ### 7.2 Built-in Tools
 
 Current behavior:
-- No built-in tools are currently executable in the chat runtime.
-- `Tool` trait and message/tool event types are implemented as core interfaces.
+- Runtime consumes `ToolCallStart/Delta/End` events and can execute built-in `read_file` via registry.
+- Execution is policy-checked (`kit` allow/deny) and workspace-path constrained.
+- Provider backends are not yet emitting tool-call events in default chat flows.
 
 Planned built-in tools:
 - `read_file`, `write_file`, `edit_file`, `find_files`, `search_content`, `shell`, `recall`, `fetch_url`, `web_search`.
 
 ### 7.3 Tool Security
 
-- Oversized tool-result token guard/truncation utility (implemented in core, runtime tool loop integration pending)
+- Oversized tool-result token guard/truncation utility (implemented in core and applied by runtime tool registry)
 - Per-agent allow/deny lists
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies

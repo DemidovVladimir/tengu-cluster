@@ -22,7 +22,7 @@ Coverage status values:
 | US-003 | Large-context models without prompt-budget waste | Partial |
 | US-004 | Per-agent token/cost governance with deterministic degradation | Partial |
 | US-005 | Workspace memory + retrieval that stays bounded and source-aware | Partial |
-| US-006 | Tool execution with approvals, policy, and audit trails | Missing |
+| US-006 | Tool execution with approvals, policy, and audit trails | Partial |
 | US-007 | Hub runtime across multiple channels with lifecycle/health | Missing |
 | US-008 | Portable runtime from Raspberry Pi to high-end GPU workstations | Partial |
 | US-009 | Provider portability including Claude Code + hosted APIs | Partial |
@@ -136,10 +136,11 @@ Acceptance targets:
 3. Audit trail records tool input/output and decisions.
 
 Current coverage:
-- `Missing`: contracts exist; runtime loop/policies/audit not implemented.
+- `Partial`: runtime can assemble tool-call events and execute a policy-checked `read_file` tool via registry; approvals, broader toolset, and audit trail are pending.
 
 Required tasks:
-- `E8-T1` to `E8-T6`
+- `E8-T1`, `E8-T2` partial baseline
+- `E8-T3` to `E8-T6`
 
 ---
 
