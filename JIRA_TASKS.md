@@ -27,10 +27,16 @@ Source: `EPICS_TASKS.md`
 | E5-T3 | Done | Usage accounting standardized as cumulative turn snapshots with single-apply runtime aggregation |
 | E5-T4 | Done | Backend diagnostics metadata contract added and surfaced in `status`/`doctor`/`/engine` |
 | E5-T5 | Done | Added stream ordering/terminal-state fixtures for success and parse-error paths in Ollama backend tests |
+| E4-T1 | Done | Anthropic backend implemented via typed REST and wired into runtime engine selection |
 
 ## Completed Start Task (2026-02-19)
 
 - `E5-T5` — Add stream ordering + terminal-state fixtures.
+- `E4-T1` — Implement Anthropic backend via typed REST.
+
+## Next Start (2026-02-20)
+
+- `E4-T2` — Implement OpenAI backend via typed REST.
 
 ## Epics
 
@@ -39,7 +45,7 @@ Source: `EPICS_TASKS.md`
 | E1 | Epic | Flow Persistence and Session Resilience | P0 | Done |
 | E2 | Epic | Prompt Budgeting and Runtime Retrieval Wiring | P0 | Done |
 | E3 | Epic | Retrieval Quality and Index Persistence | P1 | Planned |
-| E4 | Epic | Backend Provider Expansion | P1 | Planned |
+| E4 | Epic | Backend Provider Expansion | P1 | In Progress |
 | E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | Done |
 | E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | Planned |
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |

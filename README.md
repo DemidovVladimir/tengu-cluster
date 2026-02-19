@@ -11,7 +11,8 @@ Tengu Cluster is a single Rust application that routes messages to AI models and
 
 Current working baseline:
 - CLI chat runtime
-- Ollama backend
+- Ollama backend (streaming)
+- Anthropic backend (typed REST, non-streaming)
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - official-first dependency policy for providers/channels
@@ -47,6 +48,7 @@ Export environment variables as needed:
 cp .env.example .env
 # then export variables from .env using your shell tool of choice
 # (or export directly, e.g. `export OLLAMA_HOST=http://localhost:11434`)
+# for Anthropic engine also set `ANTHROPIC_API_KEY`
 ```
 
 Environment variable details:

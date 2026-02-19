@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 mod flow_store;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
-use tengu_backends::OllamaEngine;
+use tengu_backends::{AnthropicEngine, OllamaEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
 use tengu_core::token::estimate_tokens_approx_min1;
@@ -30,19 +30,27 @@ const RETRIEVAL_CONTEXT_SEPARATOR: &str = "\n\n---\n\n";
 #[command(name = "tengu")]
 #[command(about = "Model-agnostic AI agent hub. Single binary, zero dependencies.")]
 #[command(version)]
+/// CLI entry arguments for runtime command dispatch.
 struct Cli {
+    /// Selected subcommand (`chat` by default).
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Optional explicit config path (otherwise `$TENGU_HOME/config.toml`).
     #[arg(short, long)]
     config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
+/// Top-level runtime commands.
 enum Commands {
+    /// Run interactive chat loop.
     Chat,
+    /// Planned daemon/hub runtime.
     Serve,
+    /// Print static runtime status snapshot.
     Status,
+    /// Run runtime/environment diagnostics.
     Doctor,
 }
 
@@ -76,15 +84,21 @@ struct PromptAssemblyReport {
 
 #[derive(Debug, Clone, Default)]
 struct HistoryAssembly {
+    /// Selected history suffix kept for current prompt.
     messages: Vec<Message>,
+    /// Token estimate used by selected history.
     used_tokens: usize,
+    /// Count of history messages dropped by budgeting/windowing.
     dropped_messages: usize,
 }
 
 #[derive(Debug, Clone, Default)]
 struct RetrievalAssembly {
+    /// Optional formatted retrieval block merged into system prompt.
     block: Option<String>,
+    /// Token estimate used by selected retrieval entries.
     used_tokens: usize,
+    /// Retrieval entries dropped during packing.
     dropped_items: usize,
 }
 
@@ -104,6 +118,42 @@ struct CompactionOutcome {
     applied: bool,
     /// Number of old messages replaced by summary.
     compacted_messages: usize,
+}
+
+/// Mutable per-session runtime state for chat loop execution.
+#[derive(Debug, Clone)]
+struct ChatLoopState {
+    /// In-memory conversation messages for active flow key.
+    messages: Vec<Message>,
+    /// Currently loaded flow key.
+    active_flow_key: Option<String>,
+    /// Manual rotation key set by `/reset`.
+    manual_session_id: Option<String>,
+    /// Approximate total tokens accumulated in active flow.
+    flow_token_usage: u64,
+    /// Active prompt lens for retrieval behavior.
+    active_lens: Lens,
+    /// Session-level input token total.
+    total_input_tokens: u32,
+    /// Session-level output token total.
+    total_output_tokens: u32,
+    /// Approximate tokens saved by refiner compression.
+    tokens_saved: u32,
+    /// Last prompt assembly report surfaced by `/context`.
+    last_prompt_report: Option<PromptAssemblyReport>,
+}
+
+impl ChatLoopState {
+    /// Rotate to a new manual session and clear in-memory flow/tokens.
+    fn reset_for_new_session(&mut self) {
+        self.manual_session_id = Some(uuid::Uuid::new_v4().to_string());
+        self.active_flow_key = None;
+        self.messages.clear();
+        self.flow_token_usage = 0;
+        self.total_input_tokens = 0;
+        self.total_output_tokens = 0;
+        self.tokens_saved = 0;
+    }
 }
 
 #[tokio::main]
@@ -150,7 +200,13 @@ async fn main() -> Result<()> {
 
 /// Run interactive chat runtime for the configured default agent.
 ///
-/// Current implemented path is CLI + Ollama + optional refiner + flow store.
+/// Current implemented path is CLI + selected engine + optional refiner + flow store.
+///
+/// Execution phases:
+/// 1) Resolve agent/refiner/engine and connect CLI pipe.
+/// 2) Receive inbound turns and process slash commands.
+/// 3) Apply refiner + flow persistence + budget/retrieval assembly.
+/// 4) Execute engine turn and persist assistant output.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -188,22 +244,23 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
 
-    // Conversation state for the currently active flow.
-    let mut messages: Vec<Message> = Vec::new();
-    let mut active_flow_key: Option<String> = None;
-    let mut manual_session_id: Option<String> = None;
-    let mut flow_token_usage: u64 = 0;
-    let mut active_lens = agent_config.default_lens.parse().unwrap_or(Lens::Eco);
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
         &agent_config.flow,
         agent_config.limits.max_tokens_per_flow,
         engine.context_window(),
     );
-    let mut total_input_tokens: u32 = 0;
-    let mut total_output_tokens: u32 = 0;
-    let mut tokens_saved: u32 = 0;
-    let mut last_prompt_report: Option<PromptAssemblyReport> = None;
+    let mut state = ChatLoopState {
+        messages: Vec::new(),
+        active_flow_key: None,
+        manual_session_id: None,
+        flow_token_usage: 0,
+        active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        tokens_saved: 0,
+        last_prompt_report: None,
+    };
 
     // Build system prompt from workspace files with static token caps.
     let system_prompt = build_system_prompt(&agent_config);
@@ -214,134 +271,17 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         let original_len = inbound.content.len();
 
         // Handle slash commands
-        if inbound.content.starts_with('/') {
-            match inbound.content.as_str() {
-                "/eco" => {
-                    active_lens = Lens::Eco;
-                    println!("Switched to eco lens (summaries only)\n");
-                    continue;
-                }
-                "/standard" => {
-                    active_lens = Lens::Standard;
-                    println!("Switched to standard lens (auto-expand)\n");
-                    continue;
-                }
-                "/precise" => {
-                    active_lens = Lens::Precise;
-                    println!("Switched to precise lens (full content)\n");
-                    continue;
-                }
-                "/cost" => {
-                    println!("Session Stats");
-                    println!("─────────────────────────────");
-                    println!(" Input tokens:  {}", total_input_tokens);
-                    println!(" Output tokens: {}", total_output_tokens);
-                    println!(
-                        " Total:         {}",
-                        total_input_tokens + total_output_tokens
-                    );
-                    if tokens_saved > 0 {
-                        println!();
-                        println!(" Saved by refiner:");
-                        println!("   Prompt compression: -{} tokens", tokens_saved);
-                    }
-                    println!();
-                    continue;
-                }
-                "/context" => {
-                    let used: usize = messages
-                        .iter()
-                        .map(|m| estimate_tokens_approx_min1(&m.content))
-                        .sum();
-                    let window = engine.context_window();
-                    let lens_name = active_lens.as_str();
-                    println!(
-                        "Context: ~{} / {} tokens ({}%)\n",
-                        used,
-                        window,
-                        (used * 100) / window.max(1)
-                    );
-                    println!("Lens: {}\n", lens_name);
-                    println!("History turn limit: {}\n", history_turn_limit);
-                    println!(
-                        "Compaction: threshold={} keep_turns={} summary_max_tokens={}\n",
-                        compaction_policy.threshold_tokens,
-                        compaction_policy.keep_turns,
-                        compaction_policy.summary_max_tokens
-                    );
-                    if let Some(report) = &last_prompt_report {
-                        println!("Last prompt assembly:");
-                        println!("  System:    {} tokens", report.system_tokens);
-                        println!("  Retrieval: {} tokens", report.retrieval_tokens);
-                        println!(
-                            "    requested/effective: {}/{}",
-                            report.retrieval_budget_requested, report.retrieval_budget_effective
-                        );
-                        println!("  History:   {} tokens", report.history_tokens);
-                        println!("    dropped messages: {}", report.dropped_history_messages);
-                        println!("    dropped retrieval: {}", report.dropped_retrieval_items);
-                        println!("  Reserved:  {} tokens", report.reserved_output_tokens);
-                        println!("  Budget:    {} tokens", report.total_input_budget);
-                        println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
-                        println!(
-                            "  Compaction: applied={}, compacted_messages={}\n",
-                            report.compaction_applied, report.compacted_messages
-                        );
-                    }
-                    continue;
-                }
-                "/reset" => {
-                    manual_session_id = Some(uuid::Uuid::new_v4().to_string());
-                    active_flow_key = None;
-                    messages.clear();
-                    flow_token_usage = 0;
-                    total_input_tokens = 0;
-                    total_output_tokens = 0;
-                    tokens_saved = 0;
-                    println!("Flow reset and rotated to a new session.\n");
-                    continue;
-                }
-                "/engine" => {
-                    let diagnostics = engine.diagnostics();
-                    let caps = &diagnostics.capabilities;
-                    println!("Current: {}/{}", agent_config.engine, agent_config.model);
-                    println!("Engine id: {}", diagnostics.engine_id);
-                    println!(
-                        "Configured model: {}",
-                        diagnostics.configured_model.as_deref().unwrap_or("n/a")
-                    );
-                    println!(
-                        "Endpoint: {}",
-                        diagnostics.endpoint.as_deref().unwrap_or("n/a")
-                    );
-                    println!(
-                        "Transport: {}",
-                        diagnostics.transport.as_deref().unwrap_or("n/a")
-                    );
-                    println!("Context window: {}\n", caps.context_window);
-                    println!(
-                        "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
-                        caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
-                    );
-                    continue;
-                }
-                "/help" => {
-                    println!("Commands:");
-                    println!("  /eco       — Eco lens (summaries)");
-                    println!("  /standard  — Standard lens (auto-expand)");
-                    println!("  /precise   — Precise lens (full content)");
-                    println!("  /engine    — Show current engine");
-                    println!("  /cost      — Token usage stats");
-                    println!("  /context   — Context window usage");
-                    println!("  /reset     — Clear conversation");
-                    println!("  /help      — This help\n");
-                    continue;
-                }
-                _ => {
-                    println!("Unknown command. Type /help for available commands.\n");
-                    continue;
-                }
-            }
+        if inbound.content.starts_with('/')
+            && handle_chat_command(
+                inbound.content.as_str(),
+                &mut state,
+                engine.as_ref(),
+                &agent_config,
+                history_turn_limit,
+                compaction_policy,
+            )
+        {
+            continue;
         }
 
         // Apply refiner
@@ -349,19 +289,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         let compressed_len = compressed.len();
         if compressed_len < original_len {
             let saved = ((original_len - compressed_len) / 4) as u32;
-            tokens_saved += saved;
+            state.tokens_saved += saved;
         }
 
         let flow_key = resolve_runtime_flow_key(
             &agent_id,
             &agent_config.flow.scope,
             &inbound.sender,
-            manual_session_id.as_deref(),
+            state.manual_session_id.as_deref(),
         );
-        if active_flow_key.as_deref() != Some(flow_key.as_str()) {
-            messages = flow_store
+        if state.active_flow_key.as_deref() != Some(flow_key.as_str()) {
+            state.messages = flow_store
                 .load_messages(&flow_key, history_load_message_cap(history_turn_limit))?;
-            let dropped = enforce_history_turn_limit(&mut messages, history_turn_limit);
+            let dropped = enforce_history_turn_limit(&mut state.messages, history_turn_limit);
             if dropped > 0 {
                 info!(
                     flow_key = %flow_key,
@@ -370,11 +310,12 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                     "Applied history turn limit to loaded flow messages"
                 );
             }
-            flow_token_usage = messages
+            state.flow_token_usage = state
+                .messages
                 .iter()
                 .map(|m| estimate_tokens_approx_min1(&m.content) as u64)
                 .sum();
-            active_flow_key = Some(flow_key.clone());
+            state.active_flow_key = Some(flow_key.clone());
         }
 
         let user_message = Message {
@@ -384,22 +325,22 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             tool_calls: None,
         };
         flow_store.append_message(&flow_key, &agent_id, &user_message)?;
-        flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
-        messages.push(user_message);
-        enforce_history_turn_limit(&mut messages, history_turn_limit);
+        state.flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
+        state.messages.push(user_message);
+        enforce_history_turn_limit(&mut state.messages, history_turn_limit);
         let mut compaction_outcome = maybe_compact_flow(
             &flow_store,
             &flow_key,
             &agent_id,
-            &mut messages,
-            &mut flow_token_usage,
+            &mut state.messages,
+            &mut state.flow_token_usage,
             &*refiner,
             compaction_policy,
             "pre-engine",
         )
         .await?;
 
-        if flow_token_usage >= agent_config.limits.max_tokens_per_flow {
+        if state.flow_token_usage >= agent_config.limits.max_tokens_per_flow {
             println!(
                 "Flow token limit reached ({}). Use /reset to start a new session.\n",
                 agent_config.limits.max_tokens_per_flow
@@ -410,15 +351,18 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         let remaining_flow_tokens = agent_config
             .limits
             .max_tokens_per_flow
-            .saturating_sub(flow_token_usage);
+            .saturating_sub(state.flow_token_usage);
         let base_input_budget = compute_base_input_budget(
             engine.context_window(),
             system_prompt.as_deref(),
             remaining_flow_tokens,
         );
-        let history_assembly = assemble_recent_history(&messages, base_input_budget);
-        let retrieval_budget_requested =
-            compute_retrieval_bucket_budget(active_lens, &agent_config.lens, base_input_budget);
+        let history_assembly = assemble_recent_history(&state.messages, base_input_budget);
+        let retrieval_budget_requested = compute_retrieval_bucket_budget(
+            state.active_lens,
+            &agent_config.lens,
+            base_input_budget,
+        );
         let retrieval_budget_effective = retrieval_budget_requested
             .min(base_input_budget.saturating_sub(history_assembly.used_tokens));
 
@@ -426,7 +370,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             // TODO(epic-runtime-retrieval): Add periodic/incremental re-ingestion hooks.
             store.query_with_budget(
                 &inbound.content,
-                active_lens,
+                state.active_lens,
                 6,
                 retrieval_budget_effective as u32,
             )
@@ -460,13 +404,13 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         };
         log_prompt_budget_report(
             &flow_key,
-            active_lens,
+            state.active_lens,
             engine.context_window(),
             &report,
             history_messages_selected,
             retrieved_candidates,
         );
-        last_prompt_report = Some(report);
+        state.last_prompt_report = Some(report);
 
         if prompt_messages.is_empty() {
             println!("Context budget exhausted. Use /reset to continue.\n");
@@ -481,82 +425,235 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             system_prompt: turn_system_prompt,
         };
 
-        match engine.run(&prompt_messages, &[], &context).await {
-            Ok(mut stream) => {
-                let mut response_text = String::new();
-                let mut turn_usage_snapshot: Option<(u32, u32)> = None;
+        let response_text = collect_engine_response(
+            engine.as_ref(),
+            &prompt_messages,
+            &context,
+            &mut state.total_input_tokens,
+            &mut state.total_output_tokens,
+        )
+        .await?;
 
-                while let Some(event) = stream.next().await {
-                    match event {
-                        tengu_core::types::StreamEvent::TextDelta { text } => {
-                            response_text.push_str(&text);
-                        }
-                        tengu_core::types::StreamEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                        } => {
-                            absorb_turn_usage_snapshot(
-                                &mut turn_usage_snapshot,
-                                input_tokens,
-                                output_tokens,
-                            );
-                        }
-                        tengu_core::types::StreamEvent::Error { message } => {
-                            eprintln!("Engine error: {}", message);
-                        }
-                        tengu_core::types::StreamEvent::Done => {}
-                        _ => {}
-                    }
-                }
-                apply_turn_usage_to_session_totals(
-                    &mut total_input_tokens,
-                    &mut total_output_tokens,
-                    turn_usage_snapshot,
-                );
+        if !response_text.is_empty() {
+            // Send through pipe
+            pipe.send_text(&inbound.sender, &response_text, &DeliveryOptions::default())
+                .await?;
 
-                if !response_text.is_empty() {
-                    // Send through pipe
-                    pipe.send_text(&inbound.sender, &response_text, &DeliveryOptions::default())
-                        .await?;
-
-                    let assistant_message = Message {
-                        role: Role::Assistant,
-                        content: response_text,
-                        tool_call_id: None,
-                        tool_calls: None,
-                    };
-                    flow_store.append_message(&flow_key, &agent_id, &assistant_message)?;
-                    flow_token_usage +=
-                        estimate_tokens_approx_min1(&assistant_message.content) as u64;
-                    messages.push(assistant_message);
-                    enforce_history_turn_limit(&mut messages, history_turn_limit);
-                    let post_outcome = maybe_compact_flow(
-                        &flow_store,
-                        &flow_key,
-                        &agent_id,
-                        &mut messages,
-                        &mut flow_token_usage,
-                        &*refiner,
-                        compaction_policy,
-                        "post-engine",
-                    )
-                    .await?;
-                    if post_outcome.applied {
-                        compaction_outcome.applied = true;
-                        compaction_outcome.compacted_messages = compaction_outcome
-                            .compacted_messages
-                            .saturating_add(post_outcome.compacted_messages);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Engine error: {}\n", e);
+            let assistant_message = Message {
+                role: Role::Assistant,
+                content: response_text,
+                tool_call_id: None,
+                tool_calls: None,
+            };
+            flow_store.append_message(&flow_key, &agent_id, &assistant_message)?;
+            state.flow_token_usage +=
+                estimate_tokens_approx_min1(&assistant_message.content) as u64;
+            state.messages.push(assistant_message);
+            enforce_history_turn_limit(&mut state.messages, history_turn_limit);
+            let post_outcome = maybe_compact_flow(
+                &flow_store,
+                &flow_key,
+                &agent_id,
+                &mut state.messages,
+                &mut state.flow_token_usage,
+                &*refiner,
+                compaction_policy,
+                "post-engine",
+            )
+            .await?;
+            if post_outcome.applied {
+                compaction_outcome.applied = true;
+                compaction_outcome.compacted_messages = compaction_outcome
+                    .compacted_messages
+                    .saturating_add(post_outcome.compacted_messages);
             }
         }
     }
 
     pipe.disconnect().await?;
     Ok(())
+}
+
+/// Process one slash command and return `true` when loop should continue.
+fn handle_chat_command(
+    command: &str,
+    state: &mut ChatLoopState,
+    engine: &dyn Engine,
+    agent_config: &tengu_core::config::AgentConfig,
+    history_turn_limit: usize,
+    compaction_policy: FlowCompactionPolicy,
+) -> bool {
+    match command {
+        "/eco" => {
+            state.active_lens = Lens::Eco;
+            println!("Switched to eco lens (summaries only)\n");
+            true
+        }
+        "/standard" => {
+            state.active_lens = Lens::Standard;
+            println!("Switched to standard lens (auto-expand)\n");
+            true
+        }
+        "/precise" => {
+            state.active_lens = Lens::Precise;
+            println!("Switched to precise lens (full content)\n");
+            true
+        }
+        "/cost" => {
+            println!("Session Stats");
+            println!("─────────────────────────────");
+            println!(" Input tokens:  {}", state.total_input_tokens);
+            println!(" Output tokens: {}", state.total_output_tokens);
+            println!(
+                " Total:         {}",
+                state.total_input_tokens + state.total_output_tokens
+            );
+            if state.tokens_saved > 0 {
+                println!();
+                println!(" Saved by refiner:");
+                println!("   Prompt compression: -{} tokens", state.tokens_saved);
+            }
+            println!();
+            true
+        }
+        "/context" => {
+            let used: usize = state
+                .messages
+                .iter()
+                .map(|m| estimate_tokens_approx_min1(&m.content))
+                .sum();
+            let window = engine.context_window();
+            let lens_name = state.active_lens.as_str();
+            println!(
+                "Context: ~{} / {} tokens ({}%)\n",
+                used,
+                window,
+                (used * 100) / window.max(1)
+            );
+            println!("Lens: {}\n", lens_name);
+            println!("History turn limit: {}\n", history_turn_limit);
+            println!(
+                "Compaction: threshold={} keep_turns={} summary_max_tokens={}\n",
+                compaction_policy.threshold_tokens,
+                compaction_policy.keep_turns,
+                compaction_policy.summary_max_tokens
+            );
+            if let Some(report) = &state.last_prompt_report {
+                println!("Last prompt assembly:");
+                println!("  System:    {} tokens", report.system_tokens);
+                println!("  Retrieval: {} tokens", report.retrieval_tokens);
+                println!(
+                    "    requested/effective: {}/{}",
+                    report.retrieval_budget_requested, report.retrieval_budget_effective
+                );
+                println!("  History:   {} tokens", report.history_tokens);
+                println!("    dropped messages: {}", report.dropped_history_messages);
+                println!("    dropped retrieval: {}", report.dropped_retrieval_items);
+                println!("  Reserved:  {} tokens", report.reserved_output_tokens);
+                println!("  Budget:    {} tokens", report.total_input_budget);
+                println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
+                println!(
+                    "  Compaction: applied={}, compacted_messages={}\n",
+                    report.compaction_applied, report.compacted_messages
+                );
+            }
+            true
+        }
+        "/reset" => {
+            state.reset_for_new_session();
+            println!("Flow reset and rotated to a new session.\n");
+            true
+        }
+        "/engine" => {
+            let diagnostics = engine.diagnostics();
+            let caps = &diagnostics.capabilities;
+            println!("Current: {}/{}", agent_config.engine, agent_config.model);
+            println!("Engine id: {}", diagnostics.engine_id);
+            println!(
+                "Configured model: {}",
+                diagnostics.configured_model.as_deref().unwrap_or("n/a")
+            );
+            println!(
+                "Endpoint: {}",
+                diagnostics.endpoint.as_deref().unwrap_or("n/a")
+            );
+            println!(
+                "Transport: {}",
+                diagnostics.transport.as_deref().unwrap_or("n/a")
+            );
+            println!("Context window: {}\n", caps.context_window);
+            println!(
+                "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
+                caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
+            );
+            true
+        }
+        "/help" => {
+            println!("Commands:");
+            println!("  /eco       — Eco lens (summaries)");
+            println!("  /standard  — Standard lens (auto-expand)");
+            println!("  /precise   — Precise lens (full content)");
+            println!("  /engine    — Show current engine");
+            println!("  /cost      — Token usage stats");
+            println!("  /context   — Context window usage");
+            println!("  /reset     — Clear conversation");
+            println!("  /help      — This help\n");
+            true
+        }
+        _ => {
+            println!("Unknown command. Type /help for available commands.\n");
+            true
+        }
+    }
+}
+
+/// Execute one engine call and collect text/usage events into session counters.
+async fn collect_engine_response(
+    engine: &dyn Engine,
+    prompt_messages: &[Message],
+    context: &EngineContext,
+    total_input_tokens: &mut u32,
+    total_output_tokens: &mut u32,
+) -> Result<String> {
+    match engine.run(prompt_messages, &[], context).await {
+        Ok(mut stream) => {
+            let mut response_text = String::new();
+            let mut turn_usage_snapshot: Option<(u32, u32)> = None;
+
+            while let Some(event) = stream.next().await {
+                match event {
+                    tengu_core::types::StreamEvent::TextDelta { text } => {
+                        response_text.push_str(&text);
+                    }
+                    tengu_core::types::StreamEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                    } => {
+                        absorb_turn_usage_snapshot(
+                            &mut turn_usage_snapshot,
+                            input_tokens,
+                            output_tokens,
+                        );
+                    }
+                    tengu_core::types::StreamEvent::Error { message } => {
+                        eprintln!("Engine error: {}", message);
+                    }
+                    tengu_core::types::StreamEvent::Done => {}
+                    _ => {}
+                }
+            }
+            apply_turn_usage_to_session_totals(
+                total_input_tokens,
+                total_output_tokens,
+                turn_usage_snapshot,
+            );
+            Ok(response_text)
+        }
+        Err(err) => {
+            eprintln!("Engine error: {}\n", err);
+            Ok(String::new())
+        }
+    }
 }
 
 /// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.
@@ -625,6 +722,7 @@ fn apply_turn_usage_to_session_totals(
     }
 }
 
+/// Build bounded static system prompt from workspace identity/profile/context files.
 fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {
     const MAX_FILE_TOKENS: usize = 1200;
     const MAX_TOTAL_TOKENS: usize = 2400;
@@ -883,8 +981,20 @@ fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dy
                 .unwrap_or_else(|_| "http://localhost:11434".to_string());
             Ok(Box::new(OllamaEngine::new(&base_url, &agent_config.model)))
         }
+        "anthropic" => {
+            let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY is required for anthropic engine")
+            })?;
+            let base_url = std::env::var("ANTHROPIC_BASE_URL")
+                .unwrap_or_else(|_| "https://api.anthropic.com".to_string());
+            Ok(Box::new(AnthropicEngine::new(
+                &base_url,
+                &agent_config.model,
+                &api_key,
+            )))
+        }
         other => {
-            // TODO(epic-multi-engine): Add Anthropic/OpenAI/HuggingFace backends and
+            // TODO(epic-multi-engine): Add OpenAI/Google/HuggingFace backends and
             // runtime model switching with capability checks.
             error!(engine = %other, "Engine not yet implemented");
             Err(anyhow::anyhow!("Engine '{}' not yet implemented", other))

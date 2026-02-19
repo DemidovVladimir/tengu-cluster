@@ -23,6 +23,9 @@ mode = "off"
 default = true
 engine = "ollama"
 model = "llama3.2"
+# Example hosted provider setup:
+# engine = "anthropic"
+# model = "claude-3-5-sonnet-latest"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 

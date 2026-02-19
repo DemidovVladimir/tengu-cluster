@@ -12,6 +12,7 @@
 |-----------|--------|------|
 | CLI interface | ✅ Working | `src/main.rs` |
 | Ollama Engine | ✅ Working (streaming `TextDelta`) | `crates/tengu-backends/src/ollama/mod.rs` |
+| Anthropic Engine | ✅ Working (typed REST, non-streaming) | `crates/tengu-backends/src/anthropic/mod.rs` |
 | Full config schema | ✅ | `crates/tengu-core/src/config/schema.rs` (399 lines) |
 | Env var substitution (`${VAR}`) | ✅ | `config/schema.rs` |
 | Runtime Profile Detection | ✅ | `crates/tengu-core/src/config/profile.rs` |
@@ -29,7 +30,6 @@
 
 | Component | Status |
 |-----------|--------|
-| Anthropic Engine | Feature flag exists, code not written |
 | HuggingFace Engine | Feature flag exists, code not written |
 | Telegram Pipe | Feature flag exists, code not written |
 | Discord Pipe | Feature flag exists, code not written |
@@ -63,12 +63,12 @@ Requirements:
 
 | # | Task | Crate | Complexity |
 |---|------|-------|------------|
-| 1.1 | Anthropic Engine (Claude API) | `tengu-backends` | Medium |
+| 1.1 | Anthropic Engine (Claude API) (Done) | `tengu-backends` | Medium |
 | 1.2 | Streaming for Ollama (Done) | `tengu-backends` | Easy |
 | 1.3 | `/engine` — switch model at runtime | `src/main.rs` | Easy |
 | 1.4 | Anthropic feature flag + conditional compilation | `Cargo.toml` | Easy |
 
-**Outcome:** `tengu chat` works with both Claude and Ollama, streaming responses.
+**Outcome:** `tengu chat` works with both Claude and Ollama. Ollama is streamed; Anthropic is typed REST (non-streaming for now).
 
 ```
 $ tengu chat --engine anthropic --model claude-sonnet-4-5-20250929
@@ -220,13 +220,13 @@ Week 5-6:  Sprint 5 (Polish)           ██████████
 
 ## ⚡ Quick Start: What to Do Right Now
 
-**Recommendation:** Start with Sprint 1.1 — **Anthropic Engine**.
+**Recommendation:** Start with Sprint 2.1 — **Tool definitions (JSON Schema)**.
 
 Why:
-1. The `Engine` trait is already defined and battle-tested with Ollama
-2. Anthropic API is well-documented and predictable
-3. Claude gives **dramatically better** response quality for the use case demos
-4. Can immediately test scenarios from product use-case docs
-5. ~2-3 hours of work for a basic version
+1. Multi-provider baseline now exists (`ollama` + `anthropic`), so next bottleneck is tool execution.
+2. Tool schema is the contract required for the full tool loop (`E8` epic).
+3. It unlocks concrete business workflows (file reads/writes/search/shell) instead of chat-only demos.
+4. It de-risks provider expansion by standardizing tool payload shape first.
+5. It reduces later rework in runtime orchestration and policy/audit layers.
 
 Ready to start?

@@ -39,6 +39,7 @@ Completed tasks:
 18. `E5-T3`
 19. `E5-T4`
 20. `E5-T5`
+21. `E4-T1`
 
 Partially completed:
 1. No partially completed P0 tasks.
@@ -50,7 +51,7 @@ Partially completed:
 | `E1` | Done | All P0 storage/session resilience tasks are complete. |
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
-| `E4` | Planned | Additional backend providers pending. |
+| `E4` | In Progress | Anthropic backend is implemented; OpenAI/Google/HF are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
 | `E6` | Planned | Multi-pipe hub runtime and channel adapters pending. |
 | `E7` | Planned | Routing reload and diagnostics pending. |

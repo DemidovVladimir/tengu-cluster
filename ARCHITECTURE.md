@@ -9,7 +9,7 @@
 This document describes full target architecture. The currently running path in code is narrower:
 
 - Inbound: `CliPipe` only
-- Engine: `OllamaEngine` only
+- Engine: `OllamaEngine` + `AnthropicEngine`
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Not implemented yet: daemonized hub, external pipes, tool loop, skill loader
@@ -109,8 +109,8 @@ tengu-cluster/
 │   ├── tengu-backends/      # AI model integrations
 │   │   └── src/
 │   │       ├── lib.rs           # Feature-gated module registry
-│   │       └── ollama/mod.rs    # Ollama HTTP API engine (implemented)
-│   │       # anthropic/         # (planned – Sprint 1)
+│   │       ├── ollama/mod.rs    # Ollama HTTP API engine (implemented)
+│   │       └── anthropic/mod.rs # Anthropic Messages API engine (implemented)
 │   │       # openai/            # (planned – Phase 2)
 │   │
 │   ├── tengu-channels/      # Messaging platform connectors
@@ -271,7 +271,7 @@ pub enum StreamEvent {
 | Engine | Crate | Status | Key Behavior |
 |--------|-------|--------|-------------|
 | `OllamaEngine` | `tengu-backends` | ✅ Implemented | HTTP to localhost:11434 with streamed `TextDelta` output |
-| `AnthropicEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.anthropic.com, streaming, tool use |
+| `AnthropicEngine` | `tengu-backends` | ✅ Implemented | Typed REST to api.anthropic.com (`/v1/messages`), non-streaming terminal events |
 | `OpenAIEngine` | `tengu-backends` | 🔲 Planned | Typed REST to api.openai.com, streaming, tool use |
 | `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
 | `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | `hf-hub` + typed inference client |
@@ -285,7 +285,7 @@ config.toml: agent.engine = "ollama" | "anthropic" | "openai" | "google" | "hugg
                      ▼
 match agent_config.engine.as_str() {
     "ollama"    => Box::new(OllamaEngine::new(url, model)),
-    "anthropic" => Box::new(AnthropicEngine::new(api_key, model)),
+    "anthropic" => Box::new(AnthropicEngine::new(base_url, model, api_key)),
     "openai"    => Box::new(OpenAIEngine::new(api_key, model)),
     "google"    => Box::new(GoogleEngine::new(api_key, model)),
     "huggingface" => Box::new(HuggingFaceEngine::new(token, model)),

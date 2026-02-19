@@ -12,7 +12,7 @@ This document contains both current behavior and target-state requirements.
 |------|--------------|-------|
 | CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
-| Engines | Partial | `ollama` only (streaming `TextDelta` path implemented) |
+| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
@@ -267,7 +267,7 @@ trait Engine: Send + Sync {
 | Engine | Status | Notes |
 |--------|--------|-------|
 | `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
-| `anthropic` | Planned | Feature scaffold only, typed REST target |
+| `anthropic` | Implemented | Typed REST `/v1/messages` path with text + usage + terminal done events |
 | `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
 | `openai` | Planned | Feature scaffold only, typed REST target |
 | `google` | Planned | Feature scaffold only, typed REST target |
@@ -755,7 +755,8 @@ extra_dirs = []
 | `TENGU_TOKEN` | Hub auth token placeholder in config (`${TENGU_TOKEN}`) | Config-substituted |
 | `TELEGRAM_BOT_TOKEN` | Telegram pipe token placeholder in config | Config-substituted (feature planned) |
 | `DISCORD_BOT_TOKEN` | Discord pipe token placeholder in config | Config-substituted (feature planned) |
-| `ANTHROPIC_API_KEY` | Anthropic provider credential | Planned backend |
+| `ANTHROPIC_API_KEY` | Anthropic provider credential | Implemented backend |
+| `ANTHROPIC_BASE_URL` | Anthropic API base URL override | Implemented backend |
 | `OPENAI_API_KEY` | OpenAI provider credential | Planned backend |
 | `GOOGLE_API_KEY` | Google provider credential | Planned backend |
 | `HF_TOKEN` | Hugging Face credential | Planned backend |
