@@ -22,21 +22,27 @@ Source: `EPICS_TASKS.md`
 | E1-T9 | Done | `doctor` now runs flow index + transcript integrity diagnostics with actionable findings |
 | E2-T5 | Done | Per-request prompt budget telemetry now emitted by runtime (bucket-level tracing + `/context` snapshot) |
 | E2-T6 | Done | Added budget overflow regression tests for small windows, reserves, and bucket hard-caps |
+| E2-T7 | Done | Prompt reserve now aligns to engine output cap (not raw context fraction), avoiding over-reserve on large-context models |
 | E5-T1 | Done | Engine capability discovery contract added in `tengu-core`; surfaced in runtime engine/banner output |
 | E5-T2 | Done | Ollama backend now emits true streamed `TextDelta` events with terminal usage/done frames |
 | E5-T3 | Done | Usage accounting standardized as cumulative turn snapshots with single-apply runtime aggregation |
 | E5-T4 | Done | Backend diagnostics metadata contract added and surfaced in `status`/`doctor`/`/engine` |
 | E5-T5 | Done | Added stream ordering/terminal-state fixtures for success and parse-error paths in Ollama backend tests |
 | E4-T1 | Done | Anthropic backend implemented via typed REST and wired into runtime engine selection |
+| E4-T2 | Done | OpenAI backend implemented via typed REST and wired into runtime engine selection |
+| E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 
 ## Completed Start Task (2026-02-19)
 
 - `E5-T5` — Add stream ordering + terminal-state fixtures.
 - `E4-T1` — Implement Anthropic backend via typed REST.
+- `E4-T2` — Implement OpenAI backend via typed REST.
+- `E4-T8` — Add provider capability/output fallback + per-agent override contract.
+- `E2-T7` — Align runtime output reserve with engine output cap.
 
 ## Next Start (2026-02-20)
 
-- `E4-T2` — Implement OpenAI backend via typed REST.
+- `E4-T9` — Implement Claude Code backend via subprocess/auth profile.
 
 ## Epics
 
@@ -83,6 +89,7 @@ Source: `EPICS_TASKS.md`
 | E2-T4 | Task | Define deterministic drop order under over-budget conditions | P0 | E2-T2,E2-T3 | Sprint 2 |
 | E2-T5 | Task | Add per-request budget metrics by bucket | P0 | E2-T2 | Sprint 2 |
 | E2-T6 | Task | Add regression tests for budget overflow scenarios | P0 | E2-T4 | Sprint 2 |
+| E2-T7 | Task | Align output reserve with engine output cap and add large-context regression tests | P0 | E2-T2,E5-T1 | Sprint 3 |
 
 ## Epic E3 Tasks
 
@@ -107,6 +114,8 @@ Source: `EPICS_TASKS.md`
 | E4-T5 | Task | Add runtime engine selection/switching | P1 | E4-T1,E4-T2 | Sprint 3 |
 | E4-T6 | Task | Define feasibility/scope for `candle-local` backend | P1 | E9-T1 | Post-MVP |
 | E4-T7 | Task | Add provider integration tests (mocked + smoke) | P1 | E4-T1,E4-T2,E4-T3,E4-T4 | Sprint 5 |
+| E4-T8 | Task | Add model-aware context/output defaults + config overrides for all provider backends | P1 | E4-T1,E4-T2 | Sprint 3 |
+| E4-T9 | Task | Implement Claude Code backend via subprocess with profile-based auth | P1 | E5-T1 | Sprint 4 |
 
 ## Epic E5 Tasks
 
@@ -130,6 +139,8 @@ Source: `EPICS_TASKS.md`
 | E6-T6 | Task | Implement WebChat adapter | P1 | E6-T2,E6-T3 | Post-MVP |
 | E6-T7 | Task | Add streaming output support for channel responders | P1 | E5-T2,E6-T2 | Sprint 5 |
 | E6-T8 | Task | Add optional channel delivery ack contract | P1 | E6-T2 | Sprint 5 |
+| E6-T9 | Task | Implement topology-aware multi-agent execution loop (single-lead/multi-lead/layered delegation) | P1 | E6-T1,E7-T1,E8-T2 | Sprint 5 |
+| E6-T10 | Task | Add lead-agent control plane for subordinate capability assignment with user-boundary checks | P1 | E6-T9,E8-T7,E10-T7 | Sprint 5 |
 
 ## Epic E7 Tasks
 
@@ -139,6 +150,7 @@ Source: `EPICS_TASKS.md`
 | E7-T2 | Task | Add structured routing match traces | P1 | E7-T1 | Sprint 4 |
 | E7-T3 | Task | Expose routing diagnostics via status/doctor | P1 | E7-T2 | Sprint 5 |
 | E7-T4 | Task | Add route precedence/conflict resolution tests | P1 | E7-T1 | Sprint 5 |
+| E7-T5 | Task | Add role/capability-aware routing for agent graph execution | P1 | E7-T1,E6-T9 | Sprint 5 |
 
 ## Epic E8 Tasks
 
@@ -149,6 +161,8 @@ Source: `EPICS_TASKS.md`
 | E8-T3 | Task | Apply per-tool policy metadata + approvals | P1 | E8-T2 | Sprint 5 |
 | E8-T4 | Task | Add allow/deny policy checks before tool execution | P1 | E8-T2 | Sprint 5 |
 | E8-T5 | Task | Add audit trail for tool calls/results | P1 | E8-T2 | Sprint 5 |
+| E8-T6 | Task | Define and implement inter-agent handoff contract (task/result envelopes) | P1 | E8-T1,E8-T2,E6-T9 | Sprint 5 |
+| E8-T7 | Task | Enforce capability policies for tools/skills/engine usage at runtime (user + delegated lead modes) | P1 | E8-T2,E10-T7 | Sprint 5 |
 
 ## Epic E9 Tasks
 
@@ -171,3 +185,5 @@ Source: `EPICS_TASKS.md`
 | E10-T3 | Task | Extend message schema for richer structured content | P2 | E10-T1 | Post-MVP |
 | E10-T4 | Task | Add externalized media storage references | P2 | E10-T3 | Post-MVP |
 | E10-T5 | Task | Add schema migration compatibility tests | P2 | E10-T1,E10-T3 | Post-MVP |
+| E10-T6 | Task | Add user-story acceptance matrix and scenario-driven release checklist | P2 | E10-T1 | Sprint 4 |
+| E10-T7 | Task | Add config/runtime validation for capability governance (`kit`, `skills`, `allowed_engines`, sandbox boundaries) | P2 | E10-T1 | Sprint 4 |

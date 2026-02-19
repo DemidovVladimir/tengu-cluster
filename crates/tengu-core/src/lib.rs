@@ -31,6 +31,8 @@ use types::{
 pub struct EngineCapabilities {
     /// Maximum supported context window in tokens.
     pub context_window: usize,
+    /// Effective per-turn output token cap used by runtime/provider calls.
+    pub max_output_tokens_per_turn: u32,
     /// Whether the backend supports runtime tool-calling.
     pub supports_tool_use: bool,
     /// Whether the backend can emit incremental streamed output.
@@ -67,6 +69,13 @@ pub trait Engine: Send + Sync {
     fn id(&self) -> &str;
     /// Maximum supported context window in tokens.
     fn context_window(&self) -> usize;
+    /// Effective per-turn output token cap used for model generation.
+    ///
+    /// Runtime budgeting uses this together with `context_window()` to reserve
+    /// output space without over-reserving on very large-context models.
+    fn max_output_tokens_per_turn(&self) -> u32 {
+        ((self.context_window() / 8).clamp(256, 8_192)) as u32
+    }
     /// Whether this engine can issue tool calls.
     fn supports_tool_use(&self) -> bool;
     /// Whether this engine manages workspace access internally.
@@ -79,6 +88,7 @@ pub trait Engine: Send + Sync {
     fn capabilities(&self) -> EngineCapabilities {
         EngineCapabilities {
             context_window: self.context_window(),
+            max_output_tokens_per_turn: self.max_output_tokens_per_turn(),
             supports_tool_use: self.supports_tool_use(),
             supports_streaming: self.supports_streaming(),
             manages_own_workspace: self.manages_own_workspace(),
@@ -381,6 +391,7 @@ mod tests {
             caps,
             EngineCapabilities {
                 context_window: 4_096,
+                max_output_tokens_per_turn: 512,
                 supports_tool_use: false,
                 supports_streaming: false,
                 manages_own_workspace: false,
@@ -397,6 +408,7 @@ mod tests {
             caps,
             EngineCapabilities {
                 context_window: 8_192,
+                max_output_tokens_per_turn: 1_024,
                 supports_tool_use: true,
                 supports_streaming: true,
                 manages_own_workspace: true,

@@ -12,18 +12,21 @@ This document contains both current behavior and target-state requirements.
 |------|--------------|-------|
 | CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
-| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) |
+| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
 | Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
+| Output reserve alignment | Implemented | Prompt reserve is derived from engine output cap (with headroom), not raw context fraction |
 | Tool-result truncation guard | Implemented | Core utility enforces hard token caps for tool outputs before prompt insertion |
 | Backend capability contract | Implemented | `Engine::capabilities()` exposes runtime-discoverable backend capabilities |
 | Backend diagnostics contract | Implemented | `Engine::diagnostics()` metadata is surfaced in `status`, `doctor`, startup banner, and `/engine` |
 | Usage accounting contract | Implemented | Runtime treats `Usage` as cumulative turn snapshots and applies latest once per turn |
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
+| User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
+| Capability governance control plane | Partial | Config schema has `kit`/`allowed_engines`/`skills`/`sandbox`, but runtime enforcement + delegated lead control are pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -268,15 +271,16 @@ trait Engine: Send + Sync {
 |--------|--------|-------|
 | `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
 | `anthropic` | Implemented | Typed REST `/v1/messages` path with text + usage + terminal done events |
+| `claude-code` | Planned | Subprocess/backend path tracked for MAX-style subscriptions |
 | `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
-| `openai` | Planned | Feature scaffold only, typed REST target |
+| `openai` | Implemented | Typed REST `/v1/chat/completions` path with text + usage + terminal done events |
 | `google` | Planned | Feature scaffold only, typed REST target |
 | `candle-local` | Planned | In-process local inference, CUDA/Metal preferred with CPU fallback |
 
 ### 6.3 Engine Switching Mid-Chat
 
 Current behavior:
-- `/engine` shows current engine/model, context window, and capability flags.
+- `/engine` shows current engine/model, context window, output cap, and capability flags.
 - Runtime switching via `/engine <name>` is not implemented yet.
 
 Planned behavior:
@@ -351,6 +355,9 @@ Planned built-in tools:
 
 - Oversized tool-result token guard/truncation utility (implemented in core, runtime tool loop integration pending)
 - Per-agent allow/deny lists
+- Capability governance modes:
+  - direct user control of tools/skills/engine/sandbox policies
+  - delegated lead-agent control constrained by user-defined hard boundaries
 - Safe command allowlist for shell
 - Approval system for dangerous operations
 - Workspace-only file access when sandboxing enabled
@@ -401,7 +408,7 @@ Only a budgeted subset is loaded per turn.
 Goal: keep prompts bounded even when transcript/history grows forever.
 
 Per-turn prompt assembly (current):
-1. Reserve response budget (for model output).
+1. Reserve response budget using engine output cap + safety headroom.
 2. Allocate fixed input budget buckets:
    - system/static context
    - recent turns window
@@ -696,6 +703,8 @@ compaction_summary_max_tokens = 320
 max_tokens_per_flow = 500_000
 max_cost_per_flow = 5.00
 warn_at_cost = 2.00
+context_window_override = 128000
+max_output_tokens_per_turn = 4096
 
 [agents.main.lens]
 eco_max_tokens = 100
@@ -757,7 +766,8 @@ extra_dirs = []
 | `DISCORD_BOT_TOKEN` | Discord pipe token placeholder in config | Config-substituted (feature planned) |
 | `ANTHROPIC_API_KEY` | Anthropic provider credential | Implemented backend |
 | `ANTHROPIC_BASE_URL` | Anthropic API base URL override | Implemented backend |
-| `OPENAI_API_KEY` | OpenAI provider credential | Planned backend |
+| `OPENAI_API_KEY` | OpenAI provider credential | Implemented backend |
+| `OPENAI_BASE_URL` | OpenAI API base URL override | Implemented backend |
 | `GOOGLE_API_KEY` | Google provider credential | Planned backend |
 | `HF_TOKEN` | Hugging Face credential | Planned backend |
 

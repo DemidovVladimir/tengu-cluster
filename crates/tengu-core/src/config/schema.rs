@@ -225,6 +225,16 @@ pub struct LimitsConfig {
     pub max_cost_per_flow: Option<f64>,
     #[serde(default)]
     pub warn_at_cost: Option<f64>,
+    /// Optional provider context-window override for this agent model.
+    ///
+    /// When omitted, each backend uses its model-aware fallback map.
+    #[serde(default)]
+    pub context_window_override: Option<u32>,
+    /// Optional per-turn output token cap passed to provider APIs.
+    ///
+    /// When omitted, runtime uses provider-specific fallback defaults.
+    #[serde(default)]
+    pub max_output_tokens_per_turn: Option<u32>,
 }
 
 impl Default for LimitsConfig {
@@ -233,6 +243,8 @@ impl Default for LimitsConfig {
             max_tokens_per_flow: default_max_tokens(),
             max_cost_per_flow: None,
             warn_at_cost: None,
+            context_window_override: None,
+            max_output_tokens_per_turn: None,
         }
     }
 }

@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 mod flow_store;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
-use tengu_backends::{AnthropicEngine, OllamaEngine};
+use tengu_backends::{AnthropicEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
 use tengu_core::token::estimate_tokens_approx_min1;
@@ -72,6 +72,8 @@ struct PromptAssemblyReport {
     dropped_retrieval_items: usize,
     /// Reserved tokens kept for model output.
     reserved_output_tokens: usize,
+    /// Engine output cap used to derive the reserve for this turn.
+    output_token_cap: usize,
     /// Total available input budget for this turn.
     total_input_budget: usize,
     /// Remaining flow token budget before executing the request.
@@ -249,7 +251,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         &agent_config.flow,
         agent_config.limits.max_tokens_per_flow,
         engine.context_window(),
+        engine.max_output_tokens_per_turn() as usize,
     );
+    let engine_output_token_cap = engine.max_output_tokens_per_turn() as usize;
     let mut state = ChatLoopState {
         messages: Vec::new(),
         active_flow_key: None,
@@ -354,6 +358,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             .saturating_sub(state.flow_token_usage);
         let base_input_budget = compute_base_input_budget(
             engine.context_window(),
+            engine_output_token_cap,
             system_prompt.as_deref(),
             remaining_flow_tokens,
         );
@@ -386,8 +391,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             .as_deref()
             .map(estimate_tokens_approx_min1)
             .unwrap_or(0);
-        let total_input_budget =
-            compute_total_input_budget(engine.context_window(), remaining_flow_tokens);
+        let total_input_budget = compute_total_input_budget(
+            engine.context_window(),
+            engine_output_token_cap,
+            remaining_flow_tokens,
+        );
         let report = PromptAssemblyReport {
             system_tokens,
             retrieval_tokens: retrieval_assembly.used_tokens,
@@ -396,7 +404,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             history_tokens: history_assembly.used_tokens,
             dropped_history_messages: history_assembly.dropped_messages,
             dropped_retrieval_items: retrieval_assembly.dropped_items,
-            reserved_output_tokens: reserved_output_tokens(engine.context_window()),
+            reserved_output_tokens: reserved_output_tokens(
+                engine.context_window(),
+                engine_output_token_cap,
+            ),
+            output_token_cap: engine_output_token_cap,
             total_input_budget,
             flow_budget_remaining: remaining_flow_tokens as usize,
             compaction_applied: compaction_outcome.applied,
@@ -550,6 +562,7 @@ fn handle_chat_command(
                 println!("    dropped messages: {}", report.dropped_history_messages);
                 println!("    dropped retrieval: {}", report.dropped_retrieval_items);
                 println!("  Reserved:  {} tokens", report.reserved_output_tokens);
+                println!("  Output cap: {} tokens", report.output_token_cap);
                 println!("  Budget:    {} tokens", report.total_input_budget);
                 println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
                 println!(
@@ -582,6 +595,7 @@ fn handle_chat_command(
                 diagnostics.transport.as_deref().unwrap_or("n/a")
             );
             println!("Context window: {}\n", caps.context_window);
+            println!("Output cap: {}\n", caps.max_output_tokens_per_turn);
             println!(
                 "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
                 caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
@@ -669,6 +683,7 @@ fn log_prompt_budget_report(
         flow_key = %flow_key,
         lens = lens.as_str(),
         context_window,
+        output_token_cap = report.output_token_cap,
         total_input_budget = report.total_input_budget,
         reserved_output_tokens = report.reserved_output_tokens,
         flow_budget_remaining = report.flow_budget_remaining,
@@ -797,26 +812,47 @@ fn truncate_to_token_budget(content: &str, max_tokens: usize) -> String {
     }
 }
 
-/// Reserve output tokens as a fraction of the model context window.
-fn reserved_output_tokens(context_window: usize) -> usize {
-    const RESERVED_OUTPUT_TOKENS_MIN: usize = 256;
-    (context_window / 5).max(RESERVED_OUTPUT_TOKENS_MIN)
+/// Reserve output tokens from explicit engine output cap with safety headroom.
+///
+/// This avoids over-reserving on very large context windows while still keeping
+/// room for provider overhead and streamed terminal frames.
+fn reserved_output_tokens(context_window: usize, output_token_cap: usize) -> usize {
+    if context_window == 0 {
+        return 0;
+    }
+
+    let capped_output = output_token_cap.max(1).min(context_window);
+    let headroom = (capped_output / 4).max(64);
+    let adaptive_floor = (context_window / 50).clamp(64, 2_048);
+
+    capped_output
+        .saturating_add(headroom)
+        .max(adaptive_floor)
+        .min(context_window)
 }
 
 /// Compute input budget after output reserve and static system prompt footprint.
 fn compute_base_input_budget(
     context_window: usize,
+    output_token_cap: usize,
     system_prompt: Option<&str>,
     remaining_flow_tokens: u64,
 ) -> usize {
-    let total_budget = compute_total_input_budget(context_window, remaining_flow_tokens);
+    let total_budget =
+        compute_total_input_budget(context_window, output_token_cap, remaining_flow_tokens);
     let system_tokens = system_prompt.map(estimate_tokens_approx_min1).unwrap_or(0);
     total_budget.saturating_sub(system_tokens)
 }
 
 /// Compute maximum input budget before prompt-bucket allocation.
-fn compute_total_input_budget(context_window: usize, remaining_flow_tokens: u64) -> usize {
-    let reserved_output = reserved_output_tokens(context_window);
+///
+/// Output reserve is derived from effective output cap, not from context ratio.
+fn compute_total_input_budget(
+    context_window: usize,
+    output_token_cap: usize,
+    remaining_flow_tokens: u64,
+) -> usize {
+    let reserved_output = reserved_output_tokens(context_window, output_token_cap);
     context_window
         .saturating_sub(reserved_output)
         .min(remaining_flow_tokens as usize)
@@ -906,11 +942,12 @@ fn build_retrieval_block(hits: &[RetrievedKnowledge], max_tokens: usize) -> Retr
 fn format_engine_diagnostics_compact(diagnostics: &tengu_core::EngineDiagnostics) -> String {
     let caps = &diagnostics.capabilities;
     format!(
-        "model={} endpoint={} transport={} context={} tools={} streaming={} workspace={}",
+        "model={} endpoint={} transport={} context={} output_cap={} tools={} streaming={} workspace={}",
         diagnostics.configured_model.as_deref().unwrap_or("n/a"),
         diagnostics.endpoint.as_deref().unwrap_or("n/a"),
         diagnostics.transport.as_deref().unwrap_or("n/a"),
         caps.context_window,
+        caps.max_output_tokens_per_turn,
         caps.supports_tool_use,
         caps.supports_streaming,
         caps.manages_own_workspace
@@ -974,12 +1011,35 @@ async fn init_knowledge_store(
 }
 
 /// Build configured engine instance for one agent.
+///
+/// Provider-specific environment requirements:
+/// - `ollama`: optional `OLLAMA_HOST` (defaults to local Ollama endpoint)
+/// - `anthropic`: `ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL`
+/// - `openai`: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`
+///
+/// Shared per-agent limit overrides:
+/// - `agents.<id>.limits.context_window_override`
+/// - `agents.<id>.limits.max_output_tokens_per_turn`
 fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dyn Engine>> {
+    let context_window_override = agent_config
+        .limits
+        .context_window_override
+        .map(|value| value.max(1) as usize);
+    let max_output_tokens_override = agent_config
+        .limits
+        .max_output_tokens_per_turn
+        .map(|value| value.max(1));
+
     match agent_config.engine.as_str() {
         "ollama" => {
             let base_url = std::env::var("OLLAMA_HOST")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            Ok(Box::new(OllamaEngine::new(&base_url, &agent_config.model)))
+            Ok(Box::new(OllamaEngine::new(
+                &base_url,
+                &agent_config.model,
+                context_window_override,
+                max_output_tokens_override,
+            )))
         }
         "anthropic" => {
             let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
@@ -991,10 +1051,25 @@ fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dy
                 &base_url,
                 &agent_config.model,
                 &api_key,
+                context_window_override,
+                max_output_tokens_override,
+            )))
+        }
+        "openai" => {
+            let api_key = std::env::var("OPENAI_API_KEY")
+                .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY is required for openai engine"))?;
+            let base_url = std::env::var("OPENAI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com".to_string());
+            Ok(Box::new(OpenAIEngine::new(
+                &base_url,
+                &agent_config.model,
+                &api_key,
+                context_window_override,
+                max_output_tokens_override,
             )))
         }
         other => {
-            // TODO(epic-multi-engine): Add OpenAI/Google/HuggingFace backends and
+            // TODO(epic-multi-engine): Add Google/HuggingFace backends and
             // runtime model switching with capability checks.
             error!(engine = %other, "Engine not yet implemented");
             Err(anyhow::anyhow!("Engine '{}' not yet implemented", other))
@@ -1016,6 +1091,7 @@ fn print_banner(
         &agent_config.flow,
         agent_config.limits.max_tokens_per_flow,
         engine.context_window(),
+        engine.max_output_tokens_per_turn() as usize,
     );
     println!();
     println!("  TENGU CLUSTER");
@@ -1025,6 +1101,10 @@ fn print_banner(
     let diagnostics = engine.diagnostics();
     let caps = &diagnostics.capabilities;
     println!("  Context:  {} tokens", caps.context_window);
+    println!(
+        "  Output cap: {} tokens/turn",
+        caps.max_output_tokens_per_turn
+    );
     println!(
         "  Engine capabilities: tools={} streaming={} manages_workspace={}",
         caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
@@ -1268,10 +1348,13 @@ fn enforce_history_turn_limit(messages: &mut Vec<Message>, max_turns: usize) -> 
 }
 
 /// Resolve compaction policy from flow config and limits.
+///
+/// Summary defaults are derived from effective input budget (context minus reserve).
 fn resolve_flow_compaction_policy(
     flow: &tengu_core::config::FlowConfig,
     max_tokens_per_flow: u64,
     context_window: usize,
+    output_token_cap: usize,
 ) -> FlowCompactionPolicy {
     let threshold_ratio = flow
         .compaction_threshold_ratio
@@ -1284,7 +1367,8 @@ fn resolve_flow_compaction_policy(
         .map(|v| v.max(1) as usize)
         .unwrap_or_else(|| default_compaction_keep_turns_for_scope(&flow.scope));
 
-    let max_input_budget = compute_total_input_budget(context_window, max_tokens_per_flow);
+    let max_input_budget =
+        compute_total_input_budget(context_window, output_token_cap, max_tokens_per_flow);
     let summary_max_tokens = flow
         .compaction_summary_max_tokens
         .unwrap_or_else(|| default_compaction_summary_max_tokens(max_input_budget));
@@ -1542,8 +1626,8 @@ mod tests {
 
     #[test]
     fn budget_overflow_small_context_window_preserves_output_reserve() {
-        // For tiny windows, reserve floor (256) can consume all available input.
-        let total_input_budget = compute_total_input_budget(128, 10_000);
+        // For tiny windows, capped output reserve can consume all available input.
+        let total_input_budget = compute_total_input_budget(128, 1_024, 10_000);
         assert_eq!(total_input_budget, 0);
     }
 
@@ -1569,15 +1653,24 @@ mod tests {
 
     #[test]
     fn budget_overflow_remaining_flow_tokens_hard_caps_input_budget() {
-        let total_input_budget = compute_total_input_budget(8_192, 500);
+        let total_input_budget = compute_total_input_budget(8_192, 1_024, 500);
         assert_eq!(total_input_budget, 500);
     }
 
     #[test]
     fn budget_overflow_base_budget_saturates_when_system_prompt_is_too_large() {
         let large_system = "x".repeat(4_096);
-        let base_input_budget = compute_base_input_budget(512, Some(&large_system), 1_000);
+        let base_input_budget = compute_base_input_budget(512, 1_024, Some(&large_system), 1_000);
         assert_eq!(base_input_budget, 0);
+    }
+
+    #[test]
+    fn budget_overflow_large_context_uses_output_cap_aligned_reserve() {
+        let reserve = reserved_output_tokens(1_047_576, 8_192);
+        let total_input_budget = compute_total_input_budget(1_047_576, 8_192, 2_000_000);
+
+        assert!(reserve < 20_000);
+        assert!(total_input_budget > 1_000_000);
     }
 
     #[test]
@@ -1684,7 +1777,7 @@ mod tests {
             compaction_summary_max_tokens: Some(300),
         };
 
-        let policy = resolve_flow_compaction_policy(&flow, 1_000, 8_192);
+        let policy = resolve_flow_compaction_policy(&flow, 1_000, 8_192, 1_024);
         assert_eq!(policy.threshold_tokens, 900);
         assert_eq!(policy.keep_turns, 12);
         assert_eq!(policy.summary_max_tokens, 300);
@@ -1702,8 +1795,8 @@ mod tests {
             compaction_summary_max_tokens: None,
         };
 
-        let small_ctx = resolve_flow_compaction_policy(&flow, 500_000, 8_192);
-        let large_ctx = resolve_flow_compaction_policy(&flow, 500_000, 128_000);
+        let small_ctx = resolve_flow_compaction_policy(&flow, 500_000, 8_192, 1_024);
+        let large_ctx = resolve_flow_compaction_policy(&flow, 500_000, 128_000, 8_192);
 
         assert!(small_ctx.summary_max_tokens >= 128);
         assert!(small_ctx.summary_max_tokens < 1_500);

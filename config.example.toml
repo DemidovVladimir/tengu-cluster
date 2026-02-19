@@ -26,6 +26,8 @@ model = "llama3.2"
 # Example hosted provider setup:
 # engine = "anthropic"
 # model = "claude-3-5-sonnet-latest"
+# engine = "openai"
+# model = "gpt-4o-mini"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 
@@ -46,6 +48,10 @@ idle_timeout_minutes = 30
 max_tokens_per_flow = 500_000
 # max_cost_per_flow = 5.00
 # warn_at_cost = 2.00
+# Optional per-model override when provider default context mapping is not accurate.
+# context_window_override = 128000
+# Optional per-turn provider output cap (replaces backend fallback defaults).
+# max_output_tokens_per_turn = 4096
 
 [agents.main.kit]
 allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]

@@ -18,6 +18,8 @@ use tengu_core::{Engine, EngineContext, EngineDiagnostics};
 pub struct OllamaEngine {
     base_url: String,
     model: String,
+    context_window_tokens: usize,
+    max_output_tokens: u32,
     client: reqwest::Client,
 }
 
@@ -29,6 +31,15 @@ struct OllamaChatRequest {
     messages: Vec<OllamaMessage>,
     /// Enable NDJSON incremental streaming mode.
     stream: bool,
+    /// Optional provider-specific generation options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaChatOptions>,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaChatOptions {
+    /// Max generated tokens for this turn (`num_predict` in Ollama API).
+    num_predict: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -85,10 +96,27 @@ impl OllamaStreamState {
 
 impl OllamaEngine {
     /// Create a new Ollama engine from base URL and default model.
-    pub fn new(base_url: &str, model: &str) -> Self {
+    ///
+    /// `context_window_override` and `max_output_tokens_override` are optional
+    /// per-agent hard overrides. When absent, conservative defaults are used.
+    pub fn new(
+        base_url: &str,
+        model: &str,
+        context_window_override: Option<usize>,
+        max_output_tokens_override: Option<u32>,
+    ) -> Self {
+        let context_window_tokens = context_window_override
+            .filter(|value| *value > 0)
+            .unwrap_or(8_192);
+        let max_output_tokens = max_output_tokens_override
+            .filter(|value| *value > 0)
+            .unwrap_or_else(|| ((context_window_tokens / 8).clamp(512, 8_192)) as u32);
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
+            context_window_tokens,
+            max_output_tokens,
             client: reqwest::Client::new(),
         }
     }
@@ -225,7 +253,11 @@ impl Engine for OllamaEngine {
     }
 
     fn context_window(&self) -> usize {
-        8192
+        self.context_window_tokens
+    }
+
+    fn max_output_tokens_per_turn(&self) -> u32 {
+        self.max_output_tokens
     }
 
     fn supports_tool_use(&self) -> bool {
@@ -272,6 +304,9 @@ impl Engine for OllamaEngine {
             model: self.model.clone(),
             messages: Self::assemble_ollama_messages(context.system_prompt.as_deref(), messages),
             stream: true,
+            options: Some(OllamaChatOptions {
+                num_predict: self.max_output_tokens,
+            }),
         };
 
         debug!(model = %self.model, "Sending request to Ollama");
@@ -383,7 +418,7 @@ mod tests {
 
     #[test]
     fn diagnostics_report_endpoint_model_and_transport() {
-        let engine = OllamaEngine::new("http://localhost:11434/", "llama3.2");
+        let engine = OllamaEngine::new("http://localhost:11434/", "llama3.2", None, None);
         let diagnostics = engine.diagnostics();
 
         assert_eq!(diagnostics.engine_id, "ollama");
@@ -394,6 +429,21 @@ mod tests {
         );
         assert_eq!(diagnostics.transport.as_deref(), Some("http-ndjson"));
         assert!(diagnostics.capabilities.supports_streaming);
+    }
+
+    #[test]
+    fn constructor_resolves_context_and_output_limits() {
+        let default_engine = OllamaEngine::new("http://localhost:11434/", "llama3.2", None, None);
+        assert_eq!(default_engine.context_window(), 8_192);
+
+        let overridden = OllamaEngine::new(
+            "http://localhost:11434/",
+            "llama3.2",
+            Some(32_768),
+            Some(6_000),
+        );
+        assert_eq!(overridden.context_window(), 32_768);
+        assert_eq!(overridden.max_output_tokens, 6_000);
     }
 
     #[test]

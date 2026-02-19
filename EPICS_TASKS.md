@@ -5,6 +5,7 @@ This backlog is derived from:
 - `PRD.md`
 - `ARCHITECTURE.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
+- `USER_STORIES.md`
 
 Date: 2026-02-19
 
@@ -34,12 +35,15 @@ Completed tasks:
 13. `E2-T4`
 14. `E2-T5`
 15. `E2-T6`
-16. `E5-T1`
-17. `E5-T2`
-18. `E5-T3`
-19. `E5-T4`
-20. `E5-T5`
-21. `E4-T1`
+16. `E2-T7`
+17. `E5-T1`
+18. `E5-T2`
+19. `E5-T3`
+20. `E5-T4`
+21. `E5-T5`
+22. `E4-T1`
+23. `E4-T2`
+24. `E4-T8`
 
 Partially completed:
 1. No partially completed P0 tasks.
@@ -49,15 +53,15 @@ Partially completed:
 | Epic | Status | Notes |
 |---|---|---|
 | `E1` | Done | All P0 storage/session resilience tasks are complete. |
-| `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete. |
+| `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete, including output-reserve alignment to engine output caps. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
-| `E4` | In Progress | Anthropic backend is implemented; OpenAI/Google/HF are pending. |
+| `E4` | In Progress | Anthropic + OpenAI backends are implemented with overrideable context/output defaults; Google/HF/Claude Code and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | Planned | Multi-pipe hub runtime and channel adapters pending. |
-| `E7` | Planned | Routing reload and diagnostics pending. |
-| `E8` | Planned | Tool loop runtime and policy/audit controls pending. |
+| `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including topology-aware multi-agent execution loop. |
+| `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
+| `E8` | Planned | Tool loop runtime/policy/audit pending, including inter-agent handoff contract. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
-| `E10` | Planned | Config/schema contract hardening pending. |
+| `E10` | Planned | Config/schema contract hardening pending, including scenario-driven acceptance governance. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 
@@ -103,6 +107,7 @@ Scope:
 4. Define deterministic drop order for over-budget conditions.
 5. Add per-request bucket budget metrics.
 6. Add regression tests for budget overflow scenarios.
+7. Align reserved output budget to engine output caps for large-context providers.
 
 Acceptance criteria:
 1. Runtime enforces configured caps for every request.
@@ -149,6 +154,8 @@ Scope:
 5. Add runtime engine selection/switching.
 6. Define feasibility/scope for optional `candle-local` backend.
 7. Add provider integration tests (mocked + smoke).
+8. Enforce model-aware context/output fallbacks plus config overrides on all provider backends.
+9. Implement Claude Code backend path via subprocess/auth profile.
 
 Primary files:
 `src/main.rs`, `crates/tengu-backends/src/lib.rs`, `crates/tengu-backends/src/ollama/mod.rs`
@@ -182,6 +189,8 @@ Scope:
 6. Implement WebChat adapter.
 7. Add streaming output support for channel responders.
 8. Add optional delivery ack contract where supported.
+9. Implement topology-aware multi-agent execution loop (single-lead/multi-lead/layered delegation).
+10. Add lead-agent capability control plane with user-defined hard boundaries.
 
 Primary files:
 `src/main.rs`, `crates/tengu-channels/src/lib.rs`, `crates/tengu-channels/src/cli/mod.rs`, `crates/tengu-core/src/lib.rs`
@@ -196,6 +205,7 @@ Scope:
 2. Add structured match traces (what matched and why).
 3. Expose routing diagnostics via status/doctor.
 4. Add route resolution tests for precedence and conflicts.
+5. Add role/capability-aware routing for agent graph execution.
 
 Primary files:
 `crates/tengu-core/src/routing/mod.rs`, `src/main.rs`
@@ -211,6 +221,8 @@ Scope:
 3. Apply per-tool policy metadata and approvals.
 4. Add allow/deny checks before tool execution.
 5. Add audit trail for tool calls/results.
+6. Define and implement inter-agent handoff contract (task/result envelopes).
+7. Enforce capability policies for tools/skills/engines at runtime.
 
 Primary files:
 `src/main.rs`, `crates/tengu-core/src/types/stream.rs`, `crates/tengu-core/src/types/message.rs`
@@ -243,6 +255,8 @@ Scope:
 3. Extend message schema for richer structured content.
 4. Add externalized media storage references for large payloads.
 5. Add compatibility tests for schema migration.
+6. Add user-story acceptance matrix and release checklist as a required quality gate.
+7. Add config/runtime validation for capability governance boundaries.
 
 Primary files:
-`crates/tengu-core/src/config/mod.rs`, `crates/tengu-core/src/types/stream.rs`, `crates/tengu-core/src/types/message.rs`
+`crates/tengu-core/src/config/mod.rs`, `crates/tengu-core/src/types/stream.rs`, `crates/tengu-core/src/types/message.rs`, `USER_STORIES.md`

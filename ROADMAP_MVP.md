@@ -25,6 +25,7 @@
 | Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/main.rs` |
 | Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` (index/transcripts + compaction wired; retention/rotation remains) |
 | Backend diagnostics metadata | ✅ | `crates/tengu-core/src/lib.rs` + `src/main.rs` (`status`/`doctor`/`/engine`) |
+| User story coverage matrix | ✅ Artifact | `USER_STORIES.md` |
 
 ### 🔲 Stubs (defined but not implemented)
 
@@ -223,7 +224,7 @@ Week 5-6:  Sprint 5 (Polish)           ██████████
 **Recommendation:** Start with Sprint 2.1 — **Tool definitions (JSON Schema)**.
 
 Why:
-1. Multi-provider baseline now exists (`ollama` + `anthropic`), so next bottleneck is tool execution.
+1. Multi-provider baseline now exists (`ollama` + `anthropic` + `openai`), so next bottleneck is tool execution.
 2. Tool schema is the contract required for the full tool loop (`E8` epic).
 3. It unlocks concrete business workflows (file reads/writes/search/shell) instead of chat-only demos.
 4. It de-risks provider expansion by standardizing tool payload shape first.

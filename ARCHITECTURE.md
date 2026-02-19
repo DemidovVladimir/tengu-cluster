@@ -870,7 +870,7 @@ Token budget split (target default):
 - recent conversational window
 - retrieval context
 - compacted summaries
-- reserved output margin
+- reserved output margin (derived from output token cap + safety headroom)
 
 Critical hardening backlog (before production):
 - Add durable compaction artifact lifecycle (retention + repair hooks).
@@ -1070,7 +1070,9 @@ Layer 5: SHELL SAFETY (Tool level)
 Layer 6: RESOURCE LIMITS (Limits level)
 ├── max_tokens_per_flow = 500_000
 ├── max_cost_per_flow = $5.00
-└── warn_at_cost = $2.00
+├── warn_at_cost = $2.00
+├── context_window_override = 128000
+└── max_output_tokens_per_turn = 4096
 ```
 
 ### File System Permissions

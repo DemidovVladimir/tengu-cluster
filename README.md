@@ -13,7 +13,9 @@ Current working baseline:
 - CLI chat runtime
 - Ollama backend (streaming)
 - Anthropic backend (typed REST, non-streaming)
+- OpenAI backend (typed REST, non-streaming)
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
+- prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
@@ -48,7 +50,23 @@ Export environment variables as needed:
 cp .env.example .env
 # then export variables from .env using your shell tool of choice
 # (or export directly, e.g. `export OLLAMA_HOST=http://localhost:11434`)
-# for Anthropic engine also set `ANTHROPIC_API_KEY`
+# for Anthropic/OpenAI engines set provider API keys
+```
+
+To run with OpenAI, set your agent config to:
+
+```toml
+[agents.main]
+engine = "openai"
+model = "gpt-4o-mini"
+```
+
+Optional per-agent provider tuning:
+
+```toml
+[agents.main.limits]
+context_window_override = 128000
+max_output_tokens_per_turn = 4096
 ```
 
 Environment variable details:
@@ -116,6 +134,7 @@ git config core.hooksPath .githooks
 ## Key Docs
 
 - `PRD.md`
+- `USER_STORIES.md`
 - `ARCHITECTURE.md`
 - `ROADMAP_MVP.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
