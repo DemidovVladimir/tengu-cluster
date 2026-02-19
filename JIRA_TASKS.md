@@ -1,9 +1,9 @@
 # Jira-Style Task Backlog
 
-Date: 2026-02-18
+Date: 2026-02-19
 Source: `EPICS_TASKS.md`
 
-## Status Snapshot (2026-02-18)
+## Status Snapshot (2026-02-19)
 
 | Key | Status | Comment |
 |---|---|---|
@@ -26,8 +26,9 @@ Source: `EPICS_TASKS.md`
 | E5-T2 | Done | Ollama backend now emits true streamed `TextDelta` events with terminal usage/done frames |
 | E5-T3 | Done | Usage accounting standardized as cumulative turn snapshots with single-apply runtime aggregation |
 | E5-T4 | Done | Backend diagnostics metadata contract added and surfaced in `status`/`doctor`/`/engine` |
+| E5-T5 | Done | Added stream ordering/terminal-state fixtures for success and parse-error paths in Ollama backend tests |
 
-## Next Start (2026-02-19)
+## Completed Start Task (2026-02-19)
 
 - `E5-T5` — Add stream ordering + terminal-state fixtures.
 
@@ -39,7 +40,7 @@ Source: `EPICS_TASKS.md`
 | E2 | Epic | Prompt Budgeting and Runtime Retrieval Wiring | P0 | Done |
 | E3 | Epic | Retrieval Quality and Index Persistence | P1 | Planned |
 | E4 | Epic | Backend Provider Expansion | P1 | Planned |
-| E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | In Progress |
+| E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | Done |
 | E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | Planned |
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
 | E8 | Epic | Tool Loop and Safety Controls | P1 | Planned |

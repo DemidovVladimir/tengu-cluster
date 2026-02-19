@@ -207,6 +207,15 @@ impl OllamaEngine {
             None => Ok(()),
         }
     }
+
+    /// Emit terminal success frames in stable order: `Usage` then `Done`.
+    fn emit_success_terminal_events(tx: &UnboundedSender<StreamEvent>, state: &OllamaStreamState) {
+        let _ = tx.send(StreamEvent::Usage {
+            input_tokens: state.input_tokens,
+            output_tokens: state.output_tokens,
+        });
+        let _ = tx.send(StreamEvent::Done);
+    }
 }
 
 #[async_trait]
@@ -315,11 +324,7 @@ impl Engine for OllamaEngine {
             }
 
             // 4) Always emit terminal usage + done events, even with zero usage counters.
-            let _ = tx.send(StreamEvent::Usage {
-                input_tokens: state.input_tokens,
-                output_tokens: state.output_tokens,
-            });
-            let _ = tx.send(StreamEvent::Done);
+            Self::emit_success_terminal_events(&tx, &state);
 
             if !state.saw_done {
                 debug!("Ollama stream ended without explicit done=true frame");
@@ -337,6 +342,16 @@ impl Engine for OllamaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc::UnboundedReceiver;
+
+    /// Drain currently buffered stream events from a test receiver.
+    fn drain_events(rx: &mut UnboundedReceiver<StreamEvent>) -> Vec<StreamEvent> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            out.push(event);
+        }
+        out
+    }
 
     #[test]
     fn normalize_stream_payload_handles_plain_and_data_prefix() {
@@ -379,5 +394,53 @@ mod tests {
         );
         assert_eq!(diagnostics.transport.as_deref(), Some("http-ndjson"));
         assert!(diagnostics.capabilities.supports_streaming);
+    }
+
+    #[test]
+    fn stream_fixture_orders_text_then_usage_then_done_on_success() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = OllamaStreamState::default();
+
+        assert!(OllamaEngine::process_payload_frame(
+            r#"{"message":{"content":"hello"},"done":false}"#,
+            &tx,
+            &mut state
+        )
+        .is_ok());
+        assert!(OllamaEngine::process_payload_frame(
+            r#"{"message":{"content":" world"},"done":true,"prompt_eval_count":42,"eval_count":7}"#,
+            &tx,
+            &mut state
+        )
+        .is_ok());
+
+        OllamaEngine::emit_success_terminal_events(&tx, &state);
+        drop(tx);
+        let events = drain_events(&mut rx);
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], StreamEvent::TextDelta { ref text } if text == "hello"));
+        assert!(matches!(events[1], StreamEvent::TextDelta { ref text } if text == " world"));
+        assert!(matches!(
+            events[2],
+            StreamEvent::Usage {
+                input_tokens: 42,
+                output_tokens: 7
+            }
+        ));
+        assert!(matches!(events[3], StreamEvent::Done));
+    }
+
+    #[test]
+    fn stream_fixture_parse_error_emits_terminal_error_only() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = OllamaStreamState::default();
+
+        assert!(OllamaEngine::process_payload_frame("{not-json", &tx, &mut state).is_err());
+        drop(tx);
+        let events = drain_events(&mut rx);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], StreamEvent::Error { .. }));
     }
 }

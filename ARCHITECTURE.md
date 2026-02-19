@@ -4,7 +4,7 @@
 
 ---
 
-## Current Implementation Snapshot (2026-02-18)
+## Current Implementation Snapshot (2026-02-19)
 
 This document describes full target architecture. The currently running path in code is narrower:
 
@@ -246,6 +246,7 @@ pub trait Engine: Send + Sync {
 | **Capability contract** | `Engine::capabilities()` provides one stable runtime surface for status, diagnostics, and future engine selection policies. |
 | **Diagnostics contract** | `Engine::diagnostics()` standardizes endpoint/model/transport metadata surfaced by `status`, `doctor`, and `/engine`. |
 | **Usage accounting contract** | `StreamEvent::Usage` is treated as a cumulative per-turn snapshot; runtime applies the latest snapshot once at turn end. |
+| **Stream fixture coverage** | Ollama backend tests verify terminal event ordering for success (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior (`Error`). |
 | **ToolDef / ToolCall** | Tools are passed as JSON Schema definitions. Engine returns `ToolCallStart` → `ToolCallDelta` → `ToolCallEnd` events when it wants to use a tool. |
 | **manages_own_workspace** | Reserved for future engines that run as subprocesses with direct filesystem access. Regular engines (Ollama, Anthropic, OpenAI) use the Kit for file access. |
 | **EngineContext** | Minimal context bag — just workspace path and system prompt. Keeps the trait clean; agents add context via messages. |

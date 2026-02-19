@@ -4,7 +4,7 @@
 
 ---
 
-## Implementation Status (2026-02-18)
+## Implementation Status (2026-02-19)
 
 This document contains both current behavior and target-state requirements.
 
@@ -23,6 +23,7 @@ This document contains both current behavior and target-state requirements.
 | Backend capability contract | Implemented | `Engine::capabilities()` exposes runtime-discoverable backend capabilities |
 | Backend diagnostics contract | Implemented | `Engine::diagnostics()` metadata is surfaced in `status`, `doctor`, startup banner, and `/engine` |
 | Usage accounting contract | Implemented | Runtime treats `Usage` as cumulative turn snapshots and applies latest once per turn |
+| Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---

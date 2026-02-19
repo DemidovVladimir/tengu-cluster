@@ -6,6 +6,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Incremental events produced during model generation.
+///
+/// Runtime fixture expectation today:
+/// - Success path: zero-or-more non-terminal events, optional `Usage`, then `Done`.
+/// - Failure path: terminal `Error`.
+/// Strict cross-provider terminal guarantees are tracked as post-MVP work (`E10-T2`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
     /// Text delta chunk from the model.

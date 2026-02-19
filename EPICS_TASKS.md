@@ -6,7 +6,7 @@ This backlog is derived from:
 - `ARCHITECTURE.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 
-Date: 2026-02-18
+Date: 2026-02-19
 
 ## Priority Waves
 
@@ -16,7 +16,7 @@ Date: 2026-02-18
 | P1 | Provider/channel expansion + tool loop + observability | Enables real platform usage |
 | P2 | Advanced retrieval/refiner quality + schema evolution | Scale quality/performance after core is stable |
 
-## Progress Snapshot (2026-02-18)
+## Progress Snapshot (2026-02-19)
 
 Completed tasks:
 1. `E1-T1`
@@ -38,6 +38,7 @@ Completed tasks:
 17. `E5-T2`
 18. `E5-T3`
 19. `E5-T4`
+20. `E5-T5`
 
 Partially completed:
 1. No partially completed P0 tasks.
@@ -50,7 +51,7 @@ Partially completed:
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
 | `E4` | Planned | Additional backend providers pending. |
-| `E5` | In Progress | Capability contract + Ollama streaming + usage accounting + backend diagnostics done; stream fixtures pending. |
+| `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
 | `E6` | Planned | Multi-pipe hub runtime and channel adapters pending. |
 | `E7` | Planned | Routing reload and diagnostics pending. |
 | `E8` | Planned | Tool loop runtime and policy/audit controls pending. |
