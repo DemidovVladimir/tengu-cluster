@@ -27,7 +27,7 @@ Coverage status values:
 | US-008 | Portable runtime from Raspberry Pi to high-end GPU workstations | Partial |
 | US-009 | Provider portability including Claude Code + hosted APIs | Partial |
 | US-010 | Scenario-level acceptance validation before epic closure | Partial |
-| US-011 | Capability governance for tools/skills/agent specs (user-led or lead-agent-led) | Missing |
+| US-011 | Capability governance for tools/skills/agent specs (user-led or lead-agent-led) | Partial |
 
 ---
 
@@ -61,10 +61,11 @@ Acceptance targets:
 3. Fallback strategy is explicit when one provider fails.
 
 Current coverage:
-- `Partial`: Anthropic/OpenAI/Ollama implemented; runtime switching and multi-agent orchestration are pending.
+- `Partial`: Anthropic/OpenAI/Ollama/Claude Code implemented; runtime switching and multi-agent orchestration are pending.
 
 Required tasks:
-- `E4-T5`, `E4-T9`, `E4-T7`
+- `E4-T5`, `E4-T7`
+- `E4-T9` completed baseline
 - `E6-T1`, `E7-T1`
 - `E10-T1`
 
@@ -186,10 +187,11 @@ Acceptance targets:
 3. Integration tests cover provider contracts and terminal stream guarantees.
 
 Current coverage:
-- `Partial`: Anthropic/OpenAI/Ollama are implemented; Google/HF/Claude Code production path is pending.
+- `Partial`: Anthropic/OpenAI/Ollama/Claude Code are implemented; Google/HF coverage and provider integration tests are pending.
 
 Required tasks:
-- `E4-T3`, `E4-T4`, `E4-T7`, `E4-T9`
+- `E4-T3`, `E4-T4`, `E4-T7`
+- `E4-T9` completed baseline
 - `E5-T5` completed baseline
 
 ---
@@ -226,10 +228,11 @@ Acceptance targets:
 4. Every capability change is audited with actor (`user` or `lead-agent`), reason, and timestamp.
 
 Current coverage:
+- `Implemented` strict cross-field config validation and fail-fast startup loading.
+- `Implemented` governance-boundary validation for `kit`, `allowed_engines`, `skills`, sandbox mode, and routing/pipe consistency.
 - `Missing` runtime enforcement for `allowed_engines` and `kit` in active execution path.
 - `Missing` skills loading/execution policy controls.
 - `Missing` lead-agent delegated capability control and audit pipeline.
-- `Partial` schema foundation exists (`kit`, `allowed_engines`, `skills`, `sandbox`).
   References:
   - schema fields: `crates/tengu-core/src/config/schema.rs`
   - runtime enforcement gap (no active usage paths): `src/main.rs`

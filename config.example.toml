@@ -28,6 +28,8 @@ model = "llama3.2"
 # model = "claude-3-5-sonnet-latest"
 # engine = "openai"
 # model = "gpt-4o-mini"
+# engine = "claude-code"
+# model = "claude-sonnet-4-5-20250929"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 

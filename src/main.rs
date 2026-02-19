@@ -3,7 +3,7 @@
 //! Potential use case:
 //! Run one command (`tengu chat`) to execute ingest, budgeting, model call, and response delivery.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 mod flow_store;
 
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
-use tengu_backends::{AnthropicEngine, OllamaEngine, OpenAIEngine};
+use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{Config, RuntimeProfile};
 use tengu_core::token::estimate_tokens_approx_min1;
@@ -176,7 +176,20 @@ async fn main() -> Result<()> {
         .config
         .unwrap_or_else(|| resolve_tengu_home().join("config.toml"));
 
-    let config = Config::load_or_default(&config_path);
+    let config = if config_path.exists() {
+        Config::load(&config_path)
+            .with_context(|| format!("Failed to load config at {}", config_path.display()))?
+    } else {
+        info!(
+            path = %config_path.display(),
+            "Config file not found; using built-in defaults"
+        );
+        let config = Config::default();
+        config.validate().with_context(|| {
+            "Built-in default config failed validation; this is a runtime bug".to_string()
+        })?;
+        config
+    };
 
     // Detect runtime profile
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
@@ -1016,6 +1029,7 @@ async fn init_knowledge_store(
 /// - `ollama`: optional `OLLAMA_HOST` (defaults to local Ollama endpoint)
 /// - `anthropic`: `ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL`
 /// - `openai`: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`
+/// - `claude-code`: optional `CLAUDE_CODE_BIN` (defaults to `claude`)
 ///
 /// Shared per-agent limit overrides:
 /// - `agents.<id>.limits.context_window_override`
@@ -1068,6 +1082,11 @@ fn build_engine(agent_config: &tengu_core::config::AgentConfig) -> Result<Box<dy
                 max_output_tokens_override,
             )))
         }
+        "claude-code" => Ok(Box::new(ClaudeCodeEngine::new(
+            &agent_config.model,
+            context_window_override,
+            max_output_tokens_override,
+        ))),
         other => {
             // TODO(epic-multi-engine): Add Google/HuggingFace backends and
             // runtime model switching with capability checks.

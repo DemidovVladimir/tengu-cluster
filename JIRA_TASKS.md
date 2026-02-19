@@ -30,19 +30,25 @@ Source: `EPICS_TASKS.md`
 | E5-T5 | Done | Added stream ordering/terminal-state fixtures for success and parse-error paths in Ollama backend tests |
 | E4-T1 | Done | Anthropic backend implemented via typed REST and wired into runtime engine selection |
 | E4-T2 | Done | OpenAI backend implemented via typed REST and wired into runtime engine selection |
+| E4-T9 | Done | Claude Code backend implemented via subprocess (`claude --print`) and wired into runtime engine selection |
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
+| E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
+| E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 
 ## Completed Start Task (2026-02-19)
 
 - `E5-T5` — Add stream ordering + terminal-state fixtures.
 - `E4-T1` — Implement Anthropic backend via typed REST.
 - `E4-T2` — Implement OpenAI backend via typed REST.
+- `E4-T9` — Implement Claude Code backend via subprocess/auth profile.
 - `E4-T8` — Add provider capability/output fallback + per-agent override contract.
 - `E2-T7` — Align runtime output reserve with engine output cap.
+- `E10-T1` — Implement cross-field config validation.
+- `E10-T7` — Add config/runtime validation for capability governance boundaries.
 
 ## Next Start (2026-02-20)
 
-- `E4-T9` — Implement Claude Code backend via subprocess/auth profile.
+- `E8-T7` — Enforce capability policies for tools/skills/engine usage at runtime (user + delegated lead modes).
 
 ## Epics
 
@@ -57,7 +63,7 @@ Source: `EPICS_TASKS.md`
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
 | E8 | Epic | Tool Loop and Safety Controls | P1 | Planned |
 | E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |
-| E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | Planned |
+| E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | In Progress |
 
 ## Epic Closure Rules
 

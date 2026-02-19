@@ -60,7 +60,7 @@ uuid.workspace = true
 dirs-next = "2.0"
 
 [features]
-default = ["ollama", "anthropic", "openai", "google", "webchat"]
+default = ["ollama", "anthropic", "openai", "claude-code", "google", "webchat"]
 candle = ["tengu-optimizer/candle"]
 telegram = ["tengu-channels/telegram"]
 discord = ["tengu-channels/discord"]
@@ -68,5 +68,6 @@ webchat = ["tengu-channels/webchat"]
 ollama = ["tengu-backends/ollama"]
 anthropic = ["tengu-backends/anthropic"]
 openai = ["tengu-backends/openai"]
+claude-code = ["tengu-backends/claude-code"]
 google = ["tengu-backends/google"]
 huggingface = ["tengu-backends/huggingface"]

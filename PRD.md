@@ -12,7 +12,7 @@ This document contains both current behavior and target-state requirements.
 |------|--------------|-------|
 | CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
-| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) |
+| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Partial | Traits exist; tool loop is pending, but oversized tool-result guard utility is implemented |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
@@ -26,7 +26,8 @@ This document contains both current behavior and target-state requirements.
 | Usage accounting contract | Implemented | Runtime treats `Usage` as cumulative turn snapshots and applies latest once per turn |
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
-| Capability governance control plane | Partial | Config schema has `kit`/`allowed_engines`/`skills`/`sandbox`, but runtime enforcement + delegated lead control are pending |
+| Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists (`kit`/`allowed_engines`/`skills`/`sandbox`), runtime enforcement + delegated lead control are pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---
@@ -271,7 +272,7 @@ trait Engine: Send + Sync {
 |--------|--------|-------|
 | `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
 | `anthropic` | Implemented | Typed REST `/v1/messages` path with text + usage + terminal done events |
-| `claude-code` | Planned | Subprocess/backend path tracked for MAX-style subscriptions |
+| `claude-code` | Implemented | Subprocess CLI backend (`claude --print --output-format json`) for subscription/auth-profile workflows |
 | `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
 | `openai` | Implemented | Typed REST `/v1/chat/completions` path with text + usage + terminal done events |
 | `google` | Planned | Feature scaffold only, typed REST target |

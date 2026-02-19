@@ -44,6 +44,9 @@ Completed tasks:
 22. `E4-T1`
 23. `E4-T2`
 24. `E4-T8`
+25. `E4-T9`
+26. `E10-T1`
+27. `E10-T7`
 
 Partially completed:
 1. No partially completed P0 tasks.
@@ -55,13 +58,13 @@ Partially completed:
 | `E1` | Done | All P0 storage/session resilience tasks are complete. |
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete, including output-reserve alignment to engine output caps. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
-| `E4` | In Progress | Anthropic + OpenAI backends are implemented with overrideable context/output defaults; Google/HF/Claude Code and runtime switching are pending. |
+| `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google/HF and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
 | `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including topology-aware multi-agent execution loop. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
 | `E8` | Planned | Tool loop runtime/policy/audit pending, including inter-agent handoff contract. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
-| `E10` | Planned | Config/schema contract hardening pending, including scenario-driven acceptance governance. |
+| `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 

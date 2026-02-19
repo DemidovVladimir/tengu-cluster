@@ -14,6 +14,7 @@ Current working baseline:
 - Ollama backend (streaming)
 - Anthropic backend (typed REST, non-streaming)
 - OpenAI backend (typed REST, non-streaming)
+- Claude Code backend (subprocess, non-streaming)
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
@@ -60,6 +61,18 @@ To run with OpenAI, set your agent config to:
 engine = "openai"
 model = "gpt-4o-mini"
 ```
+
+To run with Claude Code CLI, set your agent config to:
+
+```toml
+[agents.main]
+engine = "claude-code"
+model = "claude-sonnet-4-5-20250929"
+```
+
+Claude Code backend notes:
+- ensure `claude` is installed and authenticated in your shell profile
+- optional binary override via `CLAUDE_CODE_BIN`
 
 Optional per-agent provider tuning:
 
