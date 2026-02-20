@@ -12,7 +12,7 @@ This document describes full target architecture. The currently running path in 
 - Engine: `OllamaEngine` + `AnthropicEngine` + `OpenAIEngine` + `ClaudeCodeEngine`
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
-- Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
+- Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + config-driven tool approvals + audit trail)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
@@ -711,19 +711,18 @@ Current implemented baseline:
 | `shell` | `{ command: String }` | Execute shell command (requires confirmation) |
 | `list_directory` | `{ path: String }` | List directory contents |
 
-### Security: Shell Confirmation
+### Security: Current Approval Baseline
 
 ```
 Engine says: shell({ command: "rm -rf /tmp/old_data" })
 
-Tengu:  ⚠️ Agent wants to run:
-        $ rm -rf /tmp/old_data
-        [Allow] [Deny] [Allow Always for this session]
+Tengu:  ❌ Tool denied (requires explicit approval)
+        Add "shell" to agents.main.kit.approved to grant.
 
 Config override:
 [agents.main.kit]
-shell_safe_commands = ["ls", "cat", "head", "wc", "date"]  # Auto-approved
-shell_blocked_commands = ["rm -rf", "sudo", "chmod"]        # Auto-denied
+approval_required = ["shell", "write_file", "edit_file"]
+approved = ["write_file"]
 ```
 
 ---

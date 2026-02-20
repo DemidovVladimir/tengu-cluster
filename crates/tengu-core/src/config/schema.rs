@@ -287,10 +287,20 @@ fn default_budget() -> f32 {
 /// Tool allow/deny lists for agent kit policy.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KitConfig {
+    /// Optional allow-list. Empty means "all tools allowed unless denied".
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Explicit deny-list. Deny always wins.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// Tools that require explicit approval before execution.
+    ///
+    /// This is additive to per-tool metadata defaults.
+    #[serde(default)]
+    pub approval_required: Vec<String>,
+    /// Tools explicitly approved for execution when approval is required.
+    #[serde(default)]
+    pub approved: Vec<String>,
 }
 
 /// Workspace knowledge ingest configuration.
@@ -785,14 +795,47 @@ impl Config {
 
         let allow_path = format!("agents.{agent_id}.kit.allow");
         let deny_path = format!("agents.{agent_id}.kit.deny");
+        let approval_required_path = format!("agents.{agent_id}.kit.approval_required");
+        let approved_path = format!("agents.{agent_id}.kit.approved");
         let seen_allow = validate_nonempty_unique_entries(&allow_path, &agent.kit.allow, errors);
         let seen_deny = validate_nonempty_unique_entries(&deny_path, &agent.kit.deny, errors);
+        let seen_approval_required = validate_nonempty_unique_entries(
+            &approval_required_path,
+            &agent.kit.approval_required,
+            errors,
+        );
+        let seen_approved =
+            validate_nonempty_unique_entries(&approved_path, &agent.kit.approved, errors);
         seen_allow.intersection(&seen_deny).for_each(|tool_name| {
             errors.push(format!(
                 "agents.{}.kit.allow and kit.deny both contain '{}'",
                 agent_id, tool_name
             ))
         });
+        seen_deny
+            .intersection(&seen_approved)
+            .for_each(|tool_name| {
+                errors.push(format!(
+                    "agents.{}.kit.deny and kit.approved both contain '{}'",
+                    agent_id, tool_name
+                ))
+            });
+        if !seen_allow.is_empty() {
+            seen_approved.difference(&seen_allow).for_each(|tool_name| {
+                errors.push(format!(
+                    "agents.{}.kit.approved contains '{}' which is not present in kit.allow",
+                    agent_id, tool_name
+                ))
+            });
+            seen_approval_required
+                .difference(&seen_allow)
+                .for_each(|tool_name| {
+                    errors.push(format!(
+                        "agents.{}.kit.approval_required contains '{}' which is not present in kit.allow",
+                        agent_id, tool_name
+                    ))
+                });
+        }
 
         let mut seen_allowed_engines = HashSet::<String>::new();
         let selected_engine = format!("{}/{}", agent.engine.trim(), agent.model.trim());
@@ -954,6 +997,31 @@ mod tests {
 
         let err = config.validate().expect_err("expected validation error");
         assert!(err.to_string().contains("kit.allow and kit.deny"));
+    }
+
+    #[test]
+    fn validate_rejects_tool_deny_approved_overlap() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.kit.allow = vec!["shell".to_string()];
+        main.kit.deny = vec!["shell".to_string()];
+        main.kit.approved = vec!["shell".to_string()];
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("kit.deny and kit.approved"));
+    }
+
+    #[test]
+    fn validate_rejects_approved_tool_outside_allowlist() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.kit.allow = vec!["read_file".to_string()];
+        main.kit.approved = vec!["shell".to_string()];
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("kit.approved contains 'shell' which is not present in kit.allow"));
     }
 
     #[test]

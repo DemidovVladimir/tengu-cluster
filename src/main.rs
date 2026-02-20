@@ -8,7 +8,7 @@
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
 //! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
 //!   contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy
-//!   subscribers are implemented; remaining work focuses on profile/backpressure validation.
+//!   subscribers are implemented.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -24,7 +24,10 @@ mod tool_runtime;
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
-use tengu_core::config::{ensure_engine_allowed, evaluate_tool_policy, Config, RuntimeProfile};
+use tengu_core::config::{
+    ensure_engine_allowed, evaluate_tool_approval_policy, evaluate_tool_policy, Config,
+    RuntimeProfile,
+};
 use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
     EngineTurnStarted, EventBus, EventBusOverflowPolicy, FlowCompacted, FlowResolved,
@@ -272,7 +275,7 @@ async fn main() -> Result<()> {
 ///
 /// Note:
 /// This function is intentionally transitional and will be decomposed further as
-/// profile/backpressure validation hardens event-bus behavior across device classes.
+/// tool-loop and multi-channel runtime work (`E6`/`E8`) is completed.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -987,25 +990,48 @@ async fn collect_engine_response(
                             }
                             let outcome = execute_tool_call(
                                 &pending,
+                                agent_config,
                                 tool_registry,
                                 context.workspace.as_ref(),
                                 agent_id,
                             )
                             .await;
-                            emit_domain_event(
-                                event_bus,
-                                Some(agent_id),
-                                Some(flow_key),
-                                Some(turn_correlation_id),
-                                DomainEventPayload::ToolCallCompleted(ToolCallCompleted {
-                                    tool_call_id: pending.id.clone(),
-                                    tool_name: pending.name.clone(),
-                                    status: outcome.status.to_string(),
-                                    reason: outcome.reason.clone(),
-                                }),
-                            )
-                            .await;
-                            tool_runtime_messages.push(outcome.user_message);
+                            match outcome.status {
+                                "denied_approval" => {
+                                    emit_domain_event(
+                                        event_bus,
+                                        Some(agent_id),
+                                        Some(flow_key),
+                                        Some(turn_correlation_id),
+                                        DomainEventPayload::ToolCallDenied(ToolCallDenied {
+                                            tool_call_id: pending.id.clone(),
+                                            tool_name: pending.name.clone(),
+                                            phase: "approval".to_string(),
+                                            reason: outcome.reason.clone().unwrap_or_else(|| {
+                                                "tool requires explicit approval".to_string()
+                                            }),
+                                        }),
+                                    )
+                                    .await;
+                                    tool_runtime_messages.push(outcome.user_message);
+                                }
+                                _ => {
+                                    emit_domain_event(
+                                        event_bus,
+                                        Some(agent_id),
+                                        Some(flow_key),
+                                        Some(turn_correlation_id),
+                                        DomainEventPayload::ToolCallCompleted(ToolCallCompleted {
+                                            tool_call_id: pending.id.clone(),
+                                            tool_name: pending.name.clone(),
+                                            status: outcome.status.to_string(),
+                                            reason: outcome.reason.clone(),
+                                        }),
+                                    )
+                                    .await;
+                                    tool_runtime_messages.push(outcome.user_message);
+                                }
+                            }
                         }
                     }
                     tengu_core::types::StreamEvent::Done => {}
@@ -1093,6 +1119,7 @@ async fn collect_engine_response(
 /// Execute one assembled tool call through registry and return user-facing result text.
 async fn execute_tool_call(
     pending: &PendingToolCall,
+    agent_config: &tengu_core::config::AgentConfig,
     tool_registry: &ToolRegistry,
     workspace: Option<&PathBuf>,
     agent_id: &str,
@@ -1120,6 +1147,25 @@ async fn execute_tool_call(
             user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
             status: "not_registered",
             reason: Some("tool is not registered".to_string()),
+        };
+    }
+
+    let policy_metadata = tool_registry
+        .policy_metadata(&pending.name)
+        .unwrap_or_default();
+    let approval_decision = evaluate_tool_approval_policy(
+        agent_config,
+        &pending.name,
+        policy_metadata.requires_approval,
+    );
+    if !approval_decision.is_allowed() {
+        return ToolExecutionOutcome {
+            user_message: format!(
+                "[tool:{} denied]\nTool requires approval. Add '{}' to agents.{}.kit.approved in config.",
+                pending.name, pending.name, agent_id
+            ),
+            status: "denied_approval",
+            reason: Some(approval_decision.reason().to_string()),
         };
     }
 
@@ -2640,14 +2686,25 @@ mod tests {
     #[tokio::test]
     async fn execute_tool_call_reports_unregistered_tool() {
         let registry = ToolRegistry::with_defaults();
+        let agent_config = tengu_core::config::Config::default()
+            .agents
+            .get("main")
+            .expect("main")
+            .clone();
         let pending = PendingToolCall {
             id: "tool-1".to_string(),
             name: "shell".to_string(),
             arguments_delta: "{\"command\":\"ls\"}".to_string(),
         };
 
-        let outcome =
-            execute_tool_call(&pending, &registry, Some(&PathBuf::from(".")), "main").await;
+        let outcome = execute_tool_call(
+            &pending,
+            &agent_config,
+            &registry,
+            Some(&PathBuf::from(".")),
+            "main",
+        )
+        .await;
         assert_eq!(outcome.status, "not_registered");
         assert!(outcome.user_message.contains("not registered"));
     }
@@ -2660,16 +2717,51 @@ mod tests {
         std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
 
         let registry = ToolRegistry::with_defaults();
+        let mut agent_config = tengu_core::config::Config::default()
+            .agents
+            .get("main")
+            .expect("main")
+            .clone();
+        agent_config.kit.approved = vec!["read_file".to_string()];
         let pending = PendingToolCall {
             id: "tool-2".to_string(),
             name: "read_file".to_string(),
             arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
         };
-        let outcome = execute_tool_call(&pending, &registry, Some(&workspace), "main").await;
+        let outcome =
+            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
 
         assert_eq!(outcome.status, "ok");
         assert!(outcome.user_message.contains("[tool:read_file ok]"));
         assert!(outcome.user_message.contains("hello from tool"));
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_denies_when_approval_required_but_missing() {
+        let workspace =
+            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace");
+        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
+
+        let registry = ToolRegistry::with_defaults();
+        let mut agent_config = tengu_core::config::Config::default()
+            .agents
+            .get("main")
+            .expect("main")
+            .clone();
+        agent_config.kit.approval_required = vec!["read_file".to_string()];
+        agent_config.kit.approved.clear();
+        let pending = PendingToolCall {
+            id: "tool-3".to_string(),
+            name: "read_file".to_string(),
+            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
+        };
+        let outcome =
+            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
+
+        assert_eq!(outcome.status, "denied_approval");
+        assert!(outcome.user_message.contains("requires approval"));
         let _ = std::fs::remove_dir_all(&workspace);
     }
 

@@ -53,6 +53,40 @@ pub struct ToolDef {
     pub description: String,
     /// JSON Schema of accepted parameters.
     pub parameters: serde_json::Value,
+    /// Optional policy metadata used by runtime governance/approval checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ToolPolicyMetadata>,
+}
+
+/// Coarse risk level assigned to a tool definition.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolRiskLevel {
+    /// Read-only or low-impact operations.
+    #[default]
+    Low,
+    /// Potentially mutating operations with bounded impact.
+    Medium,
+    /// High-impact operations (for example shell or external side effects).
+    High,
+}
+
+/// Runtime tool-governance metadata attached to tool definitions.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPolicyMetadata {
+    /// Declared tool risk tier.
+    pub risk_level: ToolRiskLevel,
+    /// Whether this tool requires explicit approval by default.
+    pub requires_approval: bool,
+}
+
+impl Default for ToolPolicyMetadata {
+    fn default() -> Self {
+        Self {
+            risk_level: ToolRiskLevel::Low,
+            requires_approval: false,
+        }
+    }
 }
 
 /// Provider/model metadata published to runtime.

@@ -119,6 +119,67 @@ pub fn evaluate_tool_policy(agent: &AgentConfig, tool_name: &str) -> ToolPolicyD
     }
 }
 
+/// Decision emitted by per-agent tool approval evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolApprovalDecision {
+    /// Approval is not required for this tool.
+    AllowedNotRequired,
+    /// Approval is required and present in `kit.approved`.
+    AllowedByPreApproval,
+    /// Approval is required but missing from `kit.approved`.
+    DeniedNotApproved,
+}
+
+impl ToolApprovalDecision {
+    /// Whether tool execution is approved.
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::AllowedNotRequired | Self::AllowedByPreApproval)
+    }
+
+    /// Human-readable approval reason used in runtime diagnostics.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::AllowedNotRequired => "approval not required",
+            Self::AllowedByPreApproval => "approved by kit.approved",
+            Self::DeniedNotApproved => "tool requires explicit approval",
+        }
+    }
+}
+
+/// Evaluate whether a tool call passes approval requirements.
+///
+/// Approval is required when either:
+/// - per-tool metadata marks `requires_approval`, or
+/// - tool is listed in `agent.kit.approval_required`.
+///
+/// When approval is required, the tool must be listed in `agent.kit.approved`.
+pub fn evaluate_tool_approval_policy(
+    agent: &AgentConfig,
+    tool_name: &str,
+    metadata_requires_approval: bool,
+) -> ToolApprovalDecision {
+    let candidate = tool_name.trim();
+    let requires_approval = metadata_requires_approval
+        || agent
+            .kit
+            .approval_required
+            .iter()
+            .any(|value| value.trim() == candidate);
+    if !requires_approval {
+        return ToolApprovalDecision::AllowedNotRequired;
+    }
+    if agent
+        .kit
+        .approved
+        .iter()
+        .any(|value| value.trim() == candidate)
+    {
+        ToolApprovalDecision::AllowedByPreApproval
+    } else {
+        ToolApprovalDecision::DeniedNotApproved
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +230,39 @@ mod tests {
         assert_eq!(
             evaluate_tool_policy(&agent, "read_file"),
             ToolPolicyDecision::Allowed
+        );
+    }
+
+    #[test]
+    fn tool_approval_policy_denies_when_required_but_not_approved() {
+        let mut agent = agent();
+        agent.kit.approval_required = vec!["read_file".to_string()];
+        agent.kit.approved.clear();
+        assert_eq!(
+            evaluate_tool_approval_policy(&agent, "read_file", false),
+            ToolApprovalDecision::DeniedNotApproved
+        );
+    }
+
+    #[test]
+    fn tool_approval_policy_allows_when_required_and_preapproved() {
+        let mut agent = agent();
+        agent.kit.approval_required = vec!["read_file".to_string()];
+        agent.kit.approved = vec!["read_file".to_string()];
+        assert_eq!(
+            evaluate_tool_approval_policy(&agent, "read_file", false),
+            ToolApprovalDecision::AllowedByPreApproval
+        );
+    }
+
+    #[test]
+    fn tool_approval_policy_uses_tool_metadata_requirement() {
+        let mut agent = agent();
+        agent.kit.approval_required.clear();
+        agent.kit.approved.clear();
+        assert_eq!(
+            evaluate_tool_approval_policy(&agent, "read_file", true),
+            ToolApprovalDecision::DeniedNotApproved
         );
     }
 }

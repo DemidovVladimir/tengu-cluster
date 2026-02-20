@@ -16,15 +16,22 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 
+use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
 use tengu_core::{Tool, ToolContext, ToolOutput};
 
 /// Hard output cap for tool payloads returned to runtime prompt assembly.
 const TOOL_OUTPUT_MAX_TOKENS: u32 = 2_048;
 
+/// Registered tool entry with immutable metadata snapshot.
+struct RegisteredTool {
+    implementation: Arc<dyn Tool>,
+    definition: ToolDef,
+}
+
 /// In-memory registry of tool implementations keyed by stable tool name.
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: HashMap<String, RegisteredTool>,
 }
 
 impl ToolRegistry {
@@ -47,12 +54,27 @@ impl ToolRegistry {
     where
         T: Tool + 'static,
     {
-        self.tools.insert(tool.name().to_string(), Arc::new(tool));
+        let definition = tool.definition();
+        let name = definition.name.clone();
+        self.tools.insert(
+            name,
+            RegisteredTool {
+                implementation: Arc::new(tool),
+                definition,
+            },
+        );
     }
 
     /// Return whether a tool with this name is present.
     pub fn has(&self, name: &str) -> bool {
         self.tools.contains_key(name)
+    }
+
+    /// Return tool policy metadata for a registered tool name.
+    pub fn policy_metadata(&self, name: &str) -> Option<ToolPolicyMetadata> {
+        self.tools
+            .get(name)
+            .and_then(|entry| entry.definition.policy)
     }
 
     /// Execute a named tool and apply hard output token guard.
@@ -66,7 +88,7 @@ impl ToolRegistry {
             .tools
             .get(name)
             .ok_or_else(|| anyhow!("Tool '{}' is not registered", name))?;
-        let output = tool.execute(arguments, context).await?;
+        let output = tool.implementation.execute(arguments, context).await?;
         Ok(output.enforce_token_limit(TOOL_OUTPUT_MAX_TOKENS).output)
     }
 }
@@ -97,6 +119,13 @@ impl Tool for ReadFileTool {
                 "path": { "type": "string" }
             }
         })
+    }
+
+    fn policy_metadata(&self) -> ToolPolicyMetadata {
+        ToolPolicyMetadata {
+            risk_level: ToolRiskLevel::Low,
+            requires_approval: false,
+        }
     }
 
     async fn execute(
@@ -208,5 +237,15 @@ mod tests {
         assert!(err.to_string().contains("escapes workspace root"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn read_file_policy_metadata_defaults_to_low_without_approval() {
+        let registry = ToolRegistry::with_defaults();
+        let policy = registry
+            .policy_metadata("read_file")
+            .expect("read_file policy metadata");
+        assert_eq!(policy.risk_level, ToolRiskLevel::Low);
+        assert!(!policy.requires_approval);
     }
 }

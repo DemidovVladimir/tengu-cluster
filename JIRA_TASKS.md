@@ -36,6 +36,7 @@ Source: `EPICS_TASKS.md`
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
+| E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
 | E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) persisted from tool lifecycle domain-event subscriber |
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
@@ -61,10 +62,11 @@ Source: `EPICS_TASKS.md`
 - `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
 - `E11-T5` — Add metrics/policy subscribers and lag/saturation diagnostics.
 - `E11-T6` — Validate minimal single-core and multi-core profiles for queue/backpressure behavior.
+- `E8-T3` — Apply per-tool policy metadata + approvals.
 
 ## Next Start (2026-02-20)
 
-- `E8-T3` — Apply per-tool policy metadata + approvals.
+- `E8-T4` — Add allow/deny policy checks before tool execution.
 
 ## Epics
 

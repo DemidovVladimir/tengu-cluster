@@ -14,7 +14,7 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked `read_file`, and persists append-only tool audit records via event subscriber; broader tool loop and approvals are pending |
+| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked tools via registry (`read_file` baseline), enforces config-driven approval gates (`kit.approval_required`/`kit.approved`), and persists append-only tool audit records via event subscriber; broader tool loop remains pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
@@ -766,6 +766,9 @@ precise_budget = 0.5
 [agents.main.kit]
 allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]
 deny = []
+# Optional explicit approval gates:
+# approval_required = ["write_file", "edit_file", "shell"]
+# approved = ["write_file"]
 
 [agents.main.store]
 files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]

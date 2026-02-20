@@ -58,6 +58,9 @@ max_tokens_per_flow = 500_000
 [agents.main.kit]
 allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]
 deny = []
+# Optional explicit approval gates:
+# approval_required = ["write_file", "edit_file", "shell"]
+# approved = ["write_file"]
 
 [agents.main.store]
 files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]

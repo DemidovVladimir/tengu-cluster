@@ -23,7 +23,7 @@ use std::str::FromStr;
 use crate::token::estimate_tokens_approx_min1;
 use types::{
     DeliveryOptions, InboundMessage, MediaPayload, Message, ModelInfo, Recipient, StreamEvent,
-    ToolDef,
+    ToolDef, ToolPolicyMetadata,
 };
 
 // ---------------------------------------------------------------------------
@@ -300,13 +300,25 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     /// JSON Schema describing accepted tool parameters.
     fn parameters_schema(&self) -> serde_json::Value;
+    /// Policy metadata used by runtime for risk/approval governance.
+    fn policy_metadata(&self) -> ToolPolicyMetadata {
+        ToolPolicyMetadata::default()
+    }
+    /// Build provider-facing tool definition including policy metadata.
+    fn definition(&self) -> ToolDef {
+        ToolDef {
+            name: self.name().to_string(),
+            description: self.description().to_string(),
+            parameters: self.parameters_schema(),
+            policy: Some(self.policy_metadata()),
+        }
+    }
     /// Execute the tool for the provided JSON parameters and context.
     async fn execute(
         &self,
         params: serde_json::Value,
         ctx: &ToolContext,
     ) -> anyhow::Result<ToolOutput>;
-    // TODO(epic-tool-security): Add per-tool policy metadata (risk level, approval requirements).
 }
 
 #[cfg(test)]
