@@ -6,7 +6,8 @@ Related epic: `E11` (`EPICS_TASKS.md`, `JIRA_TASKS.md`)
 ## Implementation Status (2026-02-20)
 
 1. ✅ `E11-T1`: `DomainEvent` v1 schema + `EventBus` trait implemented in `crates/tengu-core/src/events.rs`.
-2. ⏳ `E11-T2`: bounded in-process bus implementation is the active next step.
+2. ✅ `E11-T2`: bounded in-process bus implemented with explicit overflow policies and tests.
+3. ⏳ `E11-T3`: runtime event emitters are the active next step.
 
 ## Goal
 
@@ -39,7 +40,7 @@ Introduce an internal domain event bus to decouple runtime side-effects (audit/m
 
 1. ✅ Define `DomainEvent` enum and payload structs (`E11-T1`).
 2. ✅ Define `EventBus` trait (`publish`, `subscribe`) with clear delivery semantics (`E11-T1`).
-3. Implement bounded in-process bus with explicit overflow policy (`E11-T2`).
+3. ✅ Implement bounded in-process bus with explicit overflow policy (`E11-T2`).
 
 Exit criteria:
 1. Unit tests prove publish/subscribe behavior and overflow policy.

@@ -5,9 +5,11 @@
 //! (audit, metrics, policy reactions) through subscribers instead of direct calls.
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{stream, Stream};
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::sync::RwLock;
+use tokio::sync::{broadcast, mpsc};
 
 /// Stable stream type returned by event-bus subscribers.
 pub type DomainEventStream = Pin<Box<dyn Stream<Item = DomainEvent> + Send>>;
@@ -196,4 +198,228 @@ pub trait EventBus: Send + Sync {
     /// Implementations may choose whether each subscriber receives all events
     /// or a filtered subset; behavior must be documented by the implementation.
     fn subscribe(&self) -> DomainEventStream;
+}
+
+/// In-process bounded event bus used by runtime orchestration.
+///
+/// Strategy by overflow policy:
+/// - `DropNewest`: per-subscriber bounded channels + non-blocking `try_send`
+/// - `DropOldest`: shared bounded broadcast ring buffer (slow subscribers lag)
+/// - `BlockProducer`: per-subscriber bounded channels + blocking `send().await`
+pub struct InProcessEventBus {
+    capacity: usize,
+    policy: EventBusOverflowPolicy,
+    backend: InProcessEventBusBackend,
+}
+
+enum InProcessEventBusBackend {
+    /// Per-subscriber queue fanout used by `DropNewest` and `BlockProducer`.
+    PerSubscriber {
+        subscribers: RwLock<Vec<mpsc::Sender<DomainEvent>>>,
+    },
+    /// Shared broadcast queue used by `DropOldest`.
+    Broadcast { tx: broadcast::Sender<DomainEvent> },
+}
+
+impl InProcessEventBus {
+    /// Create a new in-process bounded bus.
+    pub fn new(capacity: usize, policy: EventBusOverflowPolicy) -> Self {
+        let capacity = capacity.max(1);
+        let backend = match policy {
+            EventBusOverflowPolicy::DropOldest => {
+                let (tx, _) = broadcast::channel(capacity);
+                InProcessEventBusBackend::Broadcast { tx }
+            }
+            EventBusOverflowPolicy::DropNewest | EventBusOverflowPolicy::BlockProducer => {
+                InProcessEventBusBackend::PerSubscriber {
+                    subscribers: RwLock::new(Vec::new()),
+                }
+            }
+        };
+        Self {
+            capacity,
+            policy,
+            backend,
+        }
+    }
+
+    /// Effective bounded queue capacity.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Overflow policy used by this bus.
+    pub fn policy(&self) -> EventBusOverflowPolicy {
+        self.policy
+    }
+}
+
+impl Default for InProcessEventBus {
+    fn default() -> Self {
+        Self::new(256, EventBusOverflowPolicy::DropNewest)
+    }
+}
+
+#[async_trait]
+impl EventBus for InProcessEventBus {
+    async fn publish(&self, event: DomainEvent) -> anyhow::Result<()> {
+        match &self.backend {
+            InProcessEventBusBackend::Broadcast { tx } => {
+                // Best-effort delivery: no active subscribers is not an error.
+                let _ = tx.send(event);
+            }
+            InProcessEventBusBackend::PerSubscriber { subscribers } => {
+                let senders: Vec<mpsc::Sender<DomainEvent>> = subscribers
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+
+                for sender in &senders {
+                    match self.policy {
+                        EventBusOverflowPolicy::DropNewest => {
+                            let _ = sender.try_send(event.clone());
+                        }
+                        EventBusOverflowPolicy::BlockProducer => {
+                            let _ = sender.send(event.clone()).await;
+                        }
+                        EventBusOverflowPolicy::DropOldest => {
+                            unreachable!("DropOldest always uses broadcast backend")
+                        }
+                    }
+                }
+
+                subscribers
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .retain(|sender| !sender.is_closed());
+            }
+        }
+        Ok(())
+    }
+
+    fn subscribe(&self) -> DomainEventStream {
+        match &self.backend {
+            InProcessEventBusBackend::Broadcast { tx } => {
+                let rx = tx.subscribe();
+                Box::pin(stream::unfold(rx, |mut rx| async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => return Some((event, rx)),
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                            Err(broadcast::error::RecvError::Closed) => return None,
+                        }
+                    }
+                }))
+            }
+            InProcessEventBusBackend::PerSubscriber { subscribers } => {
+                let (tx, rx) = mpsc::channel(self.capacity);
+                subscribers
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(tx);
+                Box::pin(stream::unfold(rx, |mut rx| async move {
+                    rx.recv().await.map(|event| (event, rx))
+                }))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use tokio::time::{timeout, Duration};
+
+    fn test_event(seq: &str) -> DomainEvent {
+        DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 1,
+                flow_key: Some(format!("flow-{}", seq)),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some(format!("corr-{}", seq)),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::FlowResolved(FlowResolved {
+                flow_key: format!("flow-{}", seq),
+                reused_existing: false,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn drop_newest_keeps_oldest_when_queue_is_full() {
+        let bus = InProcessEventBus::new(1, EventBusOverflowPolicy::DropNewest);
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(test_event("a")).await.expect("publish a");
+        bus.publish(test_event("b")).await.expect("publish b");
+
+        let first = subscriber.next().await.expect("first event");
+        let payload = match first.payload {
+            DomainEventPayload::FlowResolved(payload) => payload,
+            _ => panic!("unexpected payload"),
+        };
+        assert_eq!(payload.flow_key, "flow-a");
+
+        let maybe_second = timeout(Duration::from_millis(30), subscriber.next()).await;
+        assert!(
+            maybe_second.is_err(),
+            "queue should have dropped newest event"
+        );
+    }
+
+    #[tokio::test]
+    async fn block_producer_waits_for_capacity() {
+        let bus = Arc::new(InProcessEventBus::new(
+            1,
+            EventBusOverflowPolicy::BlockProducer,
+        ));
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(test_event("a")).await.expect("publish a");
+        let bus_publish = Arc::clone(&bus);
+        let mut publish_task =
+            tokio::spawn(async move { bus_publish.publish(test_event("b")).await });
+
+        // Queue is full and subscriber has not consumed yet, so producer should block.
+        let blocked = timeout(Duration::from_millis(40), &mut publish_task).await;
+        assert!(blocked.is_err(), "producer publish unexpectedly completed");
+
+        let _ = subscriber
+            .next()
+            .await
+            .expect("consume first to free capacity");
+
+        let join_result = timeout(Duration::from_millis(100), &mut publish_task)
+            .await
+            .expect("blocked producer should complete after capacity frees")
+            .expect("publish task join");
+        assert!(
+            join_result.is_ok(),
+            "publish should succeed after unblocking"
+        );
+    }
+
+    #[tokio::test]
+    async fn drop_oldest_yields_latest_after_lag() {
+        let bus = InProcessEventBus::new(2, EventBusOverflowPolicy::DropOldest);
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(test_event("1")).await.expect("publish 1");
+        bus.publish(test_event("2")).await.expect("publish 2");
+        bus.publish(test_event("3")).await.expect("publish 3");
+        bus.publish(test_event("4")).await.expect("publish 4");
+
+        let first_visible = subscriber.next().await.expect("first visible after lag");
+        let payload = match first_visible.payload {
+            DomainEventPayload::FlowResolved(payload) => payload,
+            _ => panic!("unexpected payload"),
+        };
+        assert_eq!(
+            payload.flow_key, "flow-3",
+            "lagging receiver should observe most recent retained events"
+        );
+    }
 }

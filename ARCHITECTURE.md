@@ -13,7 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
-- Not implemented yet: daemonized hub, external pipes, skill loader, bounded internal domain event bus + subscriber migration
+- Not implemented yet: daemonized hub, external pipes, skill loader, domain-event emitters/subscriber migration in runtime
 
 ---
 
@@ -90,7 +90,7 @@ This document describes full target architecture. The currently running path in 
 2. **Event-driven activity**  
    Engines emit `StreamEvent` sequences; runtime handles tool lifecycle and usage as typed events.
 3. **Domain event bus migration (active backlog)**  
-   `DomainEvent` + `EventBus` contracts are implemented; next phase adds bounded bus runtime and migrates audit/metrics/policy reactions to subscribers.
+   `DomainEvent` + `EventBus` contracts and bounded in-process bus are implemented; next phase migrates runtime emitters and audit/metrics/policy reactions to subscribers.
 4. **Hardware-scalable execution**  
    The same architecture must run with bounded queues on single-core/minimal devices and use parallel subscribers on multi-core hosts.
 5. **Topology-flexible orchestration**  
@@ -136,7 +136,7 @@ tengu-cluster/
 │   │       │   ├── mod.rs
 │   │       │   ├── schema.rs    # 15+ config structs, TOML parsing, env var substitution
 │   │       │   └── profile.rs   # Hardware detection, runtime profile selection
-│   │       ├── events.rs        # DomainEvent schema + EventBus trait (implemented)
+│   │       ├── events.rs        # DomainEvent schema + EventBus + bounded in-process bus
 │   │       ├── routing/
 │   │       │   └── mod.rs       # 4-priority cascading router
 │   │       └── types/

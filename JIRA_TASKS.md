@@ -39,7 +39,7 @@ Source: `EPICS_TASKS.md`
 | E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) for policy/protocol/execution events |
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
-| E11-T2 | Planned | Bounded in-process bus implementation with overflow policy pending |
+| E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
 | E11-T3 | Planned | Migrate runtime side-effects (audit/metrics/policy hooks) to subscriber model incrementally |
 
 ## Completed Start Task (2026-02-20)
@@ -53,10 +53,11 @@ Source: `EPICS_TASKS.md`
 - `E10-T1` — Implement cross-field config validation.
 - `E10-T7` — Add config/runtime validation for capability governance boundaries.
 - `E11-T1` — Define runtime `DomainEvent` schema + `EventBus` abstraction.
+- `E11-T2` — Implement bounded in-process event bus + overflow policy tests.
 
 ## Next Start (2026-02-20)
 
-- `E11-T2` — Implement bounded in-process event bus with explicit overflow policy.
+- `E11-T3` — Emit domain events from chat runtime path (`src/main.rs`) without behavior regressions.
 
 ## Epics
 
