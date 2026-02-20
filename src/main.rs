@@ -27,8 +27,9 @@ use tengu_channels::CliPipe;
 use tengu_core::config::{ensure_engine_allowed, evaluate_tool_policy, Config, RuntimeProfile};
 use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
-    EngineTurnStarted, EventBus, FlowCompacted, FlowResolved, InProcessEventBus,
-    InboundTurnReceived, PromptAssembled, ToolCallCompleted, ToolCallDenied, ToolCallStarted,
+    EngineTurnStarted, EventBus, EventBusOverflowPolicy, FlowCompacted, FlowResolved,
+    InProcessEventBus, InboundTurnReceived, PromptAssembled, ToolCallCompleted, ToolCallDenied,
+    ToolCallStarted,
 };
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
@@ -178,6 +179,19 @@ struct ChatLoopState {
     last_prompt_report: Option<PromptAssemblyReport>,
 }
 
+/// Runtime-tuned event bus settings derived from deployment profile.
+#[derive(Debug, Clone, Copy)]
+struct EventBusRuntimeConfig {
+    /// Queue capacity used by in-process bus.
+    capacity: usize,
+    /// Overflow policy for saturated queues.
+    policy: EventBusOverflowPolicy,
+    /// Event count interval for metrics snapshot logs.
+    metrics_log_every: u64,
+    /// Time interval for periodic diagnostics logs.
+    diagnostics_interval_secs: u64,
+}
+
 impl ChatLoopState {
     /// Rotate to a new manual session and clear in-memory flow/tokens.
     fn reset_for_new_session(&mut self) {
@@ -296,7 +310,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
     let tool_registry = ToolRegistry::with_defaults();
-    let event_bus = Arc::new(InProcessEventBus::default());
+    let event_bus_cfg = resolve_event_bus_runtime_config(profile);
+    let event_bus = Arc::new(InProcessEventBus::new(
+        event_bus_cfg.capacity,
+        event_bus_cfg.policy,
+    ));
+    info!(
+        profile = ?profile,
+        bus_capacity = event_bus_cfg.capacity,
+        bus_policy = ?event_bus_cfg.policy,
+        metrics_log_every = event_bus_cfg.metrics_log_every,
+        diagnostics_interval_secs = event_bus_cfg.diagnostics_interval_secs,
+        "Configured runtime event bus"
+    );
     let tool_audit = match ToolAuditStore::new(&resolve_tengu_home()) {
         Ok(store) => Some(store),
         Err(err) => {
@@ -306,9 +332,13 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     };
     let mut tool_audit_subscriber =
         spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
-    let mut event_metrics_subscriber = spawn_event_metrics_subscriber(Arc::clone(&event_bus));
+    let mut event_metrics_subscriber =
+        spawn_event_metrics_subscriber(Arc::clone(&event_bus), event_bus_cfg.metrics_log_every);
     let mut policy_reaction_subscriber = spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
-    let mut bus_diagnostics_reporter = spawn_event_bus_diagnostics_reporter(Arc::clone(&event_bus));
+    let mut bus_diagnostics_reporter = spawn_event_bus_diagnostics_reporter(
+        Arc::clone(&event_bus),
+        event_bus_cfg.diagnostics_interval_secs,
+    );
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -1166,7 +1196,9 @@ struct EventMetricsState {
 /// Spawn metrics subscriber that tracks high-level domain event counts.
 fn spawn_event_metrics_subscriber(
     event_bus: Arc<InProcessEventBus>,
+    log_every: u64,
 ) -> Option<tokio::task::JoinHandle<()>> {
+    let log_every = log_every.max(1);
     let mut stream = event_bus.subscribe();
     Some(tokio::spawn(async move {
         let mut metrics = EventMetricsState::default();
@@ -1185,7 +1217,7 @@ fn spawn_event_metrics_subscriber(
                 _ => {}
             }
 
-            if metrics.total_events % 50 == 0 {
+            if metrics.total_events % log_every == 0 {
                 let snapshot = event_bus.diagnostics_snapshot();
                 info!(
                     total_events = metrics.total_events,
@@ -1227,9 +1259,11 @@ fn spawn_policy_reaction_subscriber(
 /// Spawn periodic diagnostics reporter for event bus lag/saturation counters.
 fn spawn_event_bus_diagnostics_reporter(
     event_bus: Arc<InProcessEventBus>,
+    interval_secs: u64,
 ) -> Option<tokio::task::JoinHandle<()>> {
+    let interval_secs = interval_secs.max(1);
     Some(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
@@ -1263,6 +1297,34 @@ fn spawn_event_bus_diagnostics_reporter(
             }
         }
     }))
+}
+
+/// Resolve event-bus settings from runtime profile for backpressure behavior.
+///
+/// Strategy:
+/// - `Minimal`: `DropNewest` with small queue keeps single-core latency stable.
+/// - `Desktop`/`Cloud`: `DropOldest` retains freshest events for lagging subscribers.
+fn resolve_event_bus_runtime_config(profile: RuntimeProfile) -> EventBusRuntimeConfig {
+    match profile {
+        RuntimeProfile::Minimal => EventBusRuntimeConfig {
+            capacity: 64,
+            policy: EventBusOverflowPolicy::DropNewest,
+            metrics_log_every: 100,
+            diagnostics_interval_secs: 45,
+        },
+        RuntimeProfile::Desktop => EventBusRuntimeConfig {
+            capacity: 256,
+            policy: EventBusOverflowPolicy::DropOldest,
+            metrics_log_every: 75,
+            diagnostics_interval_secs: 30,
+        },
+        RuntimeProfile::Cloud => EventBusRuntimeConfig {
+            capacity: 1024,
+            policy: EventBusOverflowPolicy::DropOldest,
+            metrics_log_every: 200,
+            diagnostics_interval_secs: 15,
+        },
+    }
 }
 
 /// Convert emitted domain events into persisted tool audit records.
@@ -2231,6 +2293,7 @@ fn role_label(role: &Role) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use std::path::PathBuf;
 
     fn msg(content: &str) -> Message {
@@ -2262,6 +2325,74 @@ mod tests {
             is_summary: true,
             score: 1.0,
         }
+    }
+
+    /// Build a deterministic domain event fixture for bus profile validation tests.
+    fn runtime_event(seq: &str) -> DomainEvent {
+        DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 1,
+                flow_key: Some(format!("flow-{seq}")),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some(format!("corr-{seq}")),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::FlowResolved(FlowResolved {
+                flow_key: format!("flow-{seq}"),
+                reused_existing: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn event_bus_profile_config_is_scope_appropriate() {
+        let minimal = resolve_event_bus_runtime_config(RuntimeProfile::Minimal);
+        let desktop = resolve_event_bus_runtime_config(RuntimeProfile::Desktop);
+        let cloud = resolve_event_bus_runtime_config(RuntimeProfile::Cloud);
+
+        assert_eq!(minimal.policy, EventBusOverflowPolicy::DropNewest);
+        assert_eq!(desktop.policy, EventBusOverflowPolicy::DropOldest);
+        assert_eq!(cloud.policy, EventBusOverflowPolicy::DropOldest);
+
+        assert!(minimal.capacity < desktop.capacity);
+        assert!(desktop.capacity < cloud.capacity);
+        assert!(cloud.diagnostics_interval_secs < desktop.diagnostics_interval_secs);
+    }
+
+    #[tokio::test]
+    async fn event_bus_profile_validation_minimal_tracks_drop_newest_under_pressure() {
+        let cfg = resolve_event_bus_runtime_config(RuntimeProfile::Minimal);
+        let bus = InProcessEventBus::new(1, cfg.policy);
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(runtime_event("a")).await.expect("publish a");
+        bus.publish(runtime_event("b")).await.expect("publish b");
+
+        let _ = subscriber.next().await.expect("consume one");
+        let snapshot = bus.diagnostics_snapshot();
+        assert!(
+            snapshot.dropped_newest_total >= 1,
+            "minimal profile should drop newest under saturation"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_bus_profile_validation_desktop_tracks_lag_for_drop_oldest() {
+        let cfg = resolve_event_bus_runtime_config(RuntimeProfile::Desktop);
+        let bus = InProcessEventBus::new(2, cfg.policy);
+        let mut subscriber = bus.subscribe();
+
+        bus.publish(runtime_event("1")).await.expect("publish 1");
+        bus.publish(runtime_event("2")).await.expect("publish 2");
+        bus.publish(runtime_event("3")).await.expect("publish 3");
+        bus.publish(runtime_event("4")).await.expect("publish 4");
+
+        let _ = subscriber.next().await.expect("receive latest");
+        let snapshot = bus.diagnostics_snapshot();
+        assert!(
+            snapshot.lagged_events_total >= 1,
+            "desktop profile should record lag when receivers fall behind"
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ This document contains both current behavior and target-state requirements.
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
 | Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
-| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers are implemented; profile/backpressure validation remains |
+| Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; single-orchestrator control plane with flexible dependent agents is planned as default topology extension |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
@@ -126,8 +126,8 @@ Pipe (Telegram/Discord/CLI/WebChat)
    `Engine`, `Pipe`, `Refiner`, and `Tool` remain the only integration seams for providers/channels/optimizers/tools.
 2. **Event-driven runtime (required)**  
    Stream and lifecycle activity must be represented as typed events with deterministic terminal states.
-3. **Internal domain event bus (migration in progress)**  
-   `DomainEvent` + `EventBus` contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy subscribers are implemented; remaining work focuses on profile/backpressure validation and tuning.
+3. **Internal domain event bus (implemented baseline)**  
+   `DomainEvent` + `EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile/backpressure validation are implemented.
 4. **Device profile compatibility (required)**  
    Event bus implementation must support minimal single-core deployments with bounded queues/backpressure and scale to multi-core machines with parallel subscribers.
 5. **Topology-flexible orchestration (required)**  

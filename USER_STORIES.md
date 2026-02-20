@@ -266,10 +266,10 @@ Current coverage:
 - `Implemented` runtime domain-event emission wiring for lifecycle hotspots.
 - `Implemented` tool-audit subscriber persistence from tool lifecycle events.
 - `Implemented` metrics/policy subscriber side-effects and event-bus lag diagnostics.
-- `Partial` profile-level backpressure validation is still pending.
+- `Implemented` profile-aware backpressure behavior and validation for minimal vs desktop/cloud runtime modes.
+- `Partial` stream/event contract hardening is still tracked under schema evolution.
 
 Required tasks:
-- `E11-T6`
 - `E10-T2` (stream/event contract hardening)
 
 ---

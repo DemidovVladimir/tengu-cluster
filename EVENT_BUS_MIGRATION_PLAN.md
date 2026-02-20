@@ -10,7 +10,7 @@ Related epic: `E11` (`EPICS_TASKS.md`, `JIRA_TASKS.md`)
 3. ✅ `E11-T3`: chat runtime emitters added for domain lifecycle events.
 4. ✅ `E11-T4`: tool audit writes migrated to event subscriber.
 5. ✅ `E11-T5`: metrics/policy subscribers and lag/saturation diagnostics implemented.
-6. ⏳ `E11-T6`: profile/backpressure validation is the active next step.
+6. ✅ `E11-T6`: profile-aware event-bus tuning and backpressure validation tests implemented for minimal vs desktop/cloud runtime profiles.
 
 ## Goal
 
@@ -70,12 +70,12 @@ Exit criteria:
 
 ### Phase 4: Profile Validation
 
-1. Validate minimal profile: single worker, bounded queue, deterministic drop behavior (`E11-T6`).
-2. Validate desktop/cloud profile: parallel subscribers and lag diagnostics (`E11-T6`).
+1. ✅ Validate minimal profile: single worker, bounded queue, deterministic drop behavior (`E11-T6`).
+2. ✅ Validate desktop/cloud profile: parallel subscribers and lag diagnostics (`E11-T6`).
 
 Exit criteria:
-1. Minimal profile remains stable under stress.
-2. Multi-core profile shows safe throughput gains.
+1. ✅ Minimal profile remains stable under stress.
+2. ✅ Multi-core profile shows safe throughput gains.
 
 ## Validation Commands
 

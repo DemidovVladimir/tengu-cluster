@@ -13,7 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
-- Not implemented yet: daemonized hub, external pipes, skill loader, profile/backpressure validation for event-bus subscribers
+- Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
 
@@ -81,7 +81,7 @@ This document describes full target architecture. The currently running path in 
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Core Principle:** Adapter-first + event-driven runtime in one binary. Integrations compile behind traits/feature flags; orchestration evolves toward an internal domain event bus.
+**Core Principle:** Adapter-first + event-driven runtime in one binary. Integrations compile behind traits/feature flags; runtime side-effects are decoupled through an internal domain event bus.
 
 ### 1.1 Architectural Style
 
@@ -89,8 +89,8 @@ This document describes full target architecture. The currently running path in 
    Provider/channel/tool/refiner integrations implement shared traits from `tengu-core`, keeping runtime orchestration provider-agnostic.
 2. **Event-driven activity**  
    Engines emit `StreamEvent` sequences; runtime handles tool lifecycle and usage as typed events.
-3. **Domain event bus migration (active backlog)**  
-   `DomainEvent` + `EventBus` contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy subscribers are implemented; next phase validates minimal vs multi-core backpressure behavior.
+3. **Domain event bus (implemented baseline)**  
+   `DomainEvent` + `EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation are implemented.
 4. **Hardware-scalable execution**  
    The same architecture must run with bounded queues on single-core/minimal devices and use parallel subscribers on multi-core hosts.
 5. **Topology-flexible orchestration**  

@@ -43,6 +43,7 @@ Source: `EPICS_TASKS.md`
 | E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |
 | E11-T4 | Done | Tool audit persistence migrated to event subscriber fed by tool lifecycle `DomainEvent`s |
 | E11-T5 | Done | Added metrics + policy subscribers and periodic lag/saturation diagnostics from event bus counters |
+| E11-T6 | Done | Added profile-aware event-bus runtime tuning and validation tests for minimal (`DropNewest`) vs desktop/cloud (`DropOldest`) backpressure behavior |
 
 ## Completed Start Task (2026-02-20)
 
@@ -59,10 +60,11 @@ Source: `EPICS_TASKS.md`
 - `E11-T3` — Emit runtime domain events from chat path without behavior regressions.
 - `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
 - `E11-T5` — Add metrics/policy subscribers and lag/saturation diagnostics.
+- `E11-T6` — Validate minimal single-core and multi-core profiles for queue/backpressure behavior.
 
 ## Next Start (2026-02-20)
 
-- `E11-T6` — Validate minimal single-core and multi-core profiles for queue/backpressure behavior.
+- `E8-T3` — Apply per-tool policy metadata + approvals.
 
 ## Epics
 
@@ -78,7 +80,7 @@ Source: `EPICS_TASKS.md`
 | E8 | Epic | Tool Loop and Safety Controls | P1 | In Progress |
 | E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |
 | E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | In Progress |
-| E11 | Epic | Internal Event Bus and Runtime Decoupling | P0 | In Progress |
+| E11 | Epic | Internal Event Bus and Runtime Decoupling | P0 | Done |
 
 ## Epic Closure Rules
 

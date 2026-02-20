@@ -19,7 +19,7 @@
 | CLI Pipe | ✅ | `crates/tengu-channels/src/cli/mod.rs` |
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
-| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy subscribers are implemented; profile/backpressure validation is pending |
+| Adapter + event-driven runtime baseline | ✅ Working | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile/backpressure validation are implemented |
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
@@ -36,11 +36,11 @@
 | Telegram Pipe | Feature flag exists, code not written |
 | Discord Pipe | Feature flag exists, code not written |
 | WebChat Pipe | Feature flag exists, code not written |
-| Tool System (Kit) | Trait defined, no tools implemented |
+| Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path implemented; approvals and broader toolset pending) |
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router implemented, serve runtime pending) |
 | Skills System | Config exists, loader not implemented |
-| Internal domain event bus | ⚠️ In progress (`DomainEvent` + `EventBus` contracts, bounded bus, runtime emitters, and audit/metrics/policy subscribers done; profile/backpressure validation pending) |
+| Internal domain event bus | ✅ Working (`DomainEvent` + `EventBus` contracts, bounded bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation implemented) |
 | Single-orchestrator topology profile | Planned (docs/config shape defined; runtime execution pending) |
 
 ---
@@ -159,7 +159,7 @@ Definition of done for Sprint 4:
 | 5.4 | README.md (English) | Project | Easy |
 | 5.5 | Docker image (optional) | Project | Medium |
 | 5.6 | E2E test: "Sanya" scenario | Tests | Medium |
-| 5.7 | Migrate audit/metrics side-effects to event subscribers + backpressure validation | `src/main.rs` + `src/tool_audit.rs` | Hard |
+| 5.7 | Migrate audit/metrics side-effects to event subscribers + backpressure validation (Done baseline) | `src/main.rs` + `src/tool_audit.rs` | Hard |
 
 **Outcome:** Ready to record a demo video showing the full journey from install to running a business via Telegram.
 
