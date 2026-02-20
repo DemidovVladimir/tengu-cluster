@@ -9,7 +9,8 @@ Related epic: `E11` (`EPICS_TASKS.md`, `JIRA_TASKS.md`)
 2. ✅ `E11-T2`: bounded in-process bus implemented with explicit overflow policies and tests.
 3. ✅ `E11-T3`: chat runtime emitters added for domain lifecycle events.
 4. ✅ `E11-T4`: tool audit writes migrated to event subscriber.
-5. ⏳ `E11-T5`: metrics/policy subscribers and lag diagnostics are the active next step.
+5. ✅ `E11-T5`: metrics/policy subscribers and lag/saturation diagnostics implemented.
+6. ⏳ `E11-T6`: profile/backpressure validation is the active next step.
 
 ## Goal
 
@@ -60,8 +61,8 @@ Exit criteria:
 ### Phase 3: Subscriber Migration
 
 1. ✅ Move tool audit writing to event subscriber (`E11-T4`).
-2. Add metrics/policy subscribers (`E11-T5`).
-3. Remove redundant inline side-effects once parity is validated.
+2. ✅ Add metrics/policy subscribers (`E11-T5`).
+3. ✅ Remove redundant inline side-effects for migrated audit path.
 
 Exit criteria:
 1. Audit and metrics are subscriber-driven.

@@ -265,10 +265,11 @@ Current coverage:
 - `Implemented` bounded in-process event bus with explicit overflow policies.
 - `Implemented` runtime domain-event emission wiring for lifecycle hotspots.
 - `Implemented` tool-audit subscriber persistence from tool lifecycle events.
-- `Partial` metrics/policy subscriber side-effects are still pending.
+- `Implemented` metrics/policy subscriber side-effects and event-bus lag diagnostics.
+- `Partial` profile-level backpressure validation is still pending.
 
 Required tasks:
-- `E11-T5` to `E11-T6`
+- `E11-T6`
 - `E10-T2` (stream/event contract hardening)
 
 ---

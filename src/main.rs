@@ -7,13 +7,14 @@
 //! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
 //! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
-//!   contracts, bounded in-process bus, runtime emitters, and tool-audit subscriber
-//!   are implemented; remaining side-effects now move to subscribers incrementally.
+//!   contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy
+//!   subscribers are implemented; remaining work focuses on profile/backpressure validation.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 mod flow_store;
@@ -257,7 +258,7 @@ async fn main() -> Result<()> {
 ///
 /// Note:
 /// This function is intentionally transitional and will be decomposed further as
-/// additional event-bus subscribers are introduced for metrics/policy side-effects.
+/// profile/backpressure validation hardens event-bus behavior across device classes.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -295,7 +296,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
     let tool_registry = ToolRegistry::with_defaults();
-    let event_bus = InProcessEventBus::default();
+    let event_bus = Arc::new(InProcessEventBus::default());
     let tool_audit = match ToolAuditStore::new(&resolve_tengu_home()) {
         Ok(store) => Some(store),
         Err(err) => {
@@ -303,7 +304,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             None
         }
     };
-    let mut tool_audit_subscriber = spawn_tool_audit_subscriber(&event_bus, tool_audit.clone());
+    let mut tool_audit_subscriber =
+        spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
+    let mut event_metrics_subscriber = spawn_event_metrics_subscriber(Arc::clone(&event_bus));
+    let mut policy_reaction_subscriber = spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
+    let mut bus_diagnostics_reporter = spawn_event_bus_diagnostics_reporter(Arc::clone(&event_bus));
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -333,7 +338,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     while let Some(inbound) = rx.recv().await {
         let turn_correlation_id = uuid::Uuid::new_v4().to_string();
         emit_domain_event(
-            &event_bus,
+            event_bus.as_ref(),
             Some(&agent_id),
             None,
             Some(&turn_correlation_id),
@@ -401,7 +406,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             true
         };
         emit_domain_event(
-            &event_bus,
+            event_bus.as_ref(),
             Some(&agent_id),
             Some(&flow_key),
             Some(&turn_correlation_id),
@@ -436,7 +441,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         .await?;
         if compaction_outcome.applied {
             emit_domain_event(
-                &event_bus,
+                event_bus.as_ref(),
                 Some(&agent_id),
                 Some(&flow_key),
                 Some(&turn_correlation_id),
@@ -528,7 +533,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             retrieved_candidates,
         );
         emit_domain_event(
-            &event_bus,
+            event_bus.as_ref(),
             Some(&agent_id),
             Some(&flow_key),
             Some(&turn_correlation_id),
@@ -556,7 +561,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             system_prompt: turn_system_prompt,
         };
         emit_domain_event(
-            &event_bus,
+            event_bus.as_ref(),
             Some(&agent_id),
             Some(&flow_key),
             Some(&turn_correlation_id),
@@ -575,7 +580,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             &agent_id,
             &agent_config,
             &tool_registry,
-            &event_bus,
+            event_bus.as_ref(),
             &turn_correlation_id,
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
@@ -612,7 +617,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             .await?;
             if post_outcome.applied {
                 emit_domain_event(
-                    &event_bus,
+                    event_bus.as_ref(),
                     Some(&agent_id),
                     Some(&flow_key),
                     Some(&turn_correlation_id),
@@ -633,6 +638,15 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     pipe.disconnect().await?;
     if let Some(handle) = tool_audit_subscriber.take() {
+        handle.abort();
+    }
+    if let Some(handle) = event_metrics_subscriber.take() {
+        handle.abort();
+    }
+    if let Some(handle) = policy_reaction_subscriber.take() {
+        handle.abort();
+    }
+    if let Some(handle) = bus_diagnostics_reporter.take() {
         handle.abort();
     }
     Ok(())
@@ -864,12 +878,6 @@ async fn collect_engine_response(
                                 agent_id,
                                 decision.reason()
                             ));
-                            warn!(
-                                agent_id,
-                                tool = %name,
-                                reason = decision.reason(),
-                                "Tool call denied by runtime capability policy"
-                            );
                             emit_domain_event(
                                 event_bus,
                                 Some(agent_id),
@@ -1124,7 +1132,7 @@ async fn execute_tool_call(
 
 /// Spawn tool-audit subscriber that persists tool lifecycle domain events to JSONL.
 fn spawn_tool_audit_subscriber(
-    event_bus: &InProcessEventBus,
+    event_bus: Arc<InProcessEventBus>,
     store: Option<ToolAuditStore>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let store = store?;
@@ -1141,6 +1149,116 @@ fn spawn_tool_audit_subscriber(
                     phase = %audit_event.phase,
                     status = %audit_event.status,
                     "Failed to append tool audit event from subscriber"
+                );
+            }
+        }
+    }))
+}
+
+#[derive(Debug, Default)]
+struct EventMetricsState {
+    total_events: u64,
+    engine_failures: u64,
+    tool_denials: u64,
+    tool_completions: u64,
+}
+
+/// Spawn metrics subscriber that tracks high-level domain event counts.
+fn spawn_event_metrics_subscriber(
+    event_bus: Arc<InProcessEventBus>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let mut stream = event_bus.subscribe();
+    Some(tokio::spawn(async move {
+        let mut metrics = EventMetricsState::default();
+        while let Some(event) = stream.next().await {
+            metrics.total_events = metrics.total_events.saturating_add(1);
+            match event.payload {
+                DomainEventPayload::EngineTurnFailed(_) => {
+                    metrics.engine_failures = metrics.engine_failures.saturating_add(1);
+                }
+                DomainEventPayload::ToolCallDenied(_) => {
+                    metrics.tool_denials = metrics.tool_denials.saturating_add(1);
+                }
+                DomainEventPayload::ToolCallCompleted(_) => {
+                    metrics.tool_completions = metrics.tool_completions.saturating_add(1);
+                }
+                _ => {}
+            }
+
+            if metrics.total_events % 50 == 0 {
+                let snapshot = event_bus.diagnostics_snapshot();
+                info!(
+                    total_events = metrics.total_events,
+                    engine_failures = metrics.engine_failures,
+                    tool_denials = metrics.tool_denials,
+                    tool_completions = metrics.tool_completions,
+                    bus_published_total = snapshot.published_total,
+                    bus_active_subscribers = snapshot.active_subscribers,
+                    "Runtime event metrics snapshot"
+                );
+            }
+        }
+    }))
+}
+
+/// Spawn policy reaction subscriber that handles policy-denied tool events.
+fn spawn_policy_reaction_subscriber(
+    event_bus: Arc<InProcessEventBus>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let mut stream = event_bus.subscribe();
+    Some(tokio::spawn(async move {
+        while let Some(event) = stream.next().await {
+            if let DomainEventPayload::ToolCallDenied(payload) = &event.payload {
+                if payload.phase != "policy" {
+                    continue;
+                }
+                warn!(
+                    agent_id = event.meta.agent_id.as_deref().unwrap_or("n/a"),
+                    flow_key = event.meta.flow_key.as_deref().unwrap_or("n/a"),
+                    tool = %payload.tool_name,
+                    reason = %payload.reason,
+                    "Policy subscriber observed tool denial"
+                );
+            }
+        }
+    }))
+}
+
+/// Spawn periodic diagnostics reporter for event bus lag/saturation counters.
+fn spawn_event_bus_diagnostics_reporter(
+    event_bus: Arc<InProcessEventBus>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    Some(tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+            let snapshot = event_bus.diagnostics_snapshot();
+            if snapshot.published_total == 0 {
+                continue;
+            }
+
+            info!(
+                capacity = snapshot.capacity,
+                policy = ?snapshot.policy,
+                active_subscribers = snapshot.active_subscribers,
+                published_total = snapshot.published_total,
+                dropped_newest_total = snapshot.dropped_newest_total,
+                lagged_events_total = snapshot.lagged_events_total,
+                send_errors_total = snapshot.send_errors_total,
+                "Event bus diagnostics snapshot"
+            );
+
+            if snapshot.dropped_newest_total > 0
+                || snapshot.lagged_events_total > 0
+                || snapshot.send_errors_total > 0
+            {
+                warn!(
+                    dropped_newest_total = snapshot.dropped_newest_total,
+                    lagged_events_total = snapshot.lagged_events_total,
+                    send_errors_total = snapshot.send_errors_total,
+                    "Event bus saturation or lag indicators detected"
                 );
             }
         }

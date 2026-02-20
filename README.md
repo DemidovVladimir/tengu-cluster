@@ -4,7 +4,7 @@ Fast, low-cost Rust agent hub for business workflows across chat channels.
 
 Architecture style:
 - Adapter-first runtime boundaries (`Engine`, `Pipe`, `Refiner`, `Tool`) for plug-and-play providers/channels/tools.
-- Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, and tool-audit subscriber implemented; metrics/policy subscribers tracked in backlog.
+- Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy subscribers implemented; profile/backpressure validation tracked in backlog.
 
 Architecture guardrail:
 - New providers/channels/tools/refiners must be added via `tengu-core` adapter traits and must not introduce provider-specific orchestration coupling in `src/main.rs`.

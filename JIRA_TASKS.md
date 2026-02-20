@@ -36,13 +36,13 @@ Source: `EPICS_TASKS.md`
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
-| E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) for policy/protocol/execution events |
+| E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) persisted from tool lifecycle domain-event subscriber |
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
 | E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
 | E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |
 | E11-T4 | Done | Tool audit persistence migrated to event subscriber fed by tool lifecycle `DomainEvent`s |
-| E11-T5 | Planned | Metrics/policy subscriber handlers + lag/saturation diagnostics pending |
+| E11-T5 | Done | Added metrics + policy subscribers and periodic lag/saturation diagnostics from event bus counters |
 
 ## Completed Start Task (2026-02-20)
 
@@ -58,10 +58,11 @@ Source: `EPICS_TASKS.md`
 - `E11-T2` — Implement bounded in-process event bus + overflow policy tests.
 - `E11-T3` — Emit runtime domain events from chat path without behavior regressions.
 - `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
+- `E11-T5` — Add metrics/policy subscribers and lag/saturation diagnostics.
 
 ## Next Start (2026-02-20)
 
-- `E11-T5` — Add metrics/policy subscribers and lag/saturation diagnostics.
+- `E11-T6` — Validate minimal single-core and multi-core profiles for queue/backpressure behavior.
 
 ## Epics
 
