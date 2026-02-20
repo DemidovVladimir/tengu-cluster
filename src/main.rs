@@ -25,8 +25,8 @@ use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{
-    ensure_engine_allowed, evaluate_tool_approval_policy, evaluate_tool_policy, Config,
-    RuntimeProfile,
+    ensure_capability_governance_actor_allowed, ensure_engine_allowed,
+    evaluate_tool_approval_policy, evaluate_tool_policy, Config, RuntimeProfile,
 };
 use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
@@ -285,6 +285,11 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         .or_else(|| config.agents.iter().next())
         .map(|(id, ac)| (id.clone(), ac.clone()))
         .expect("No agents configured");
+
+    // Runtime capability-governance guardrail:
+    // in delegated mode only delegated orchestrator may request direct capabilities.
+    ensure_capability_governance_actor_allowed(&config, &agent_id)
+        .with_context(|| "Selected chat agent cannot request direct runtime capabilities")?;
 
     // Create refiner based on config
     let refiner: Box<dyn Refiner> = match config.refiner.mode.as_str() {
@@ -607,6 +612,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
         let response_text = collect_engine_response(
             engine.as_ref(),
+            &config,
             &prompt_messages,
             &context,
             &flow_key,
@@ -823,6 +829,7 @@ fn handle_chat_command(
 /// Execute one engine call and collect text/usage events into session counters.
 async fn collect_engine_response(
     engine: &dyn Engine,
+    config: &Config,
     prompt_messages: &[Message],
     context: &EngineContext,
     flow_key: &str,
@@ -871,6 +878,29 @@ async fn collect_engine_response(
                         eprintln!("Engine error: {}", message);
                     }
                     tengu_core::types::StreamEvent::ToolCallStart { id, name } => {
+                        if let Err(err) =
+                            ensure_capability_governance_actor_allowed(config, agent_id)
+                        {
+                            let reason = err.to_string();
+                            emit_domain_event(
+                                event_bus,
+                                Some(agent_id),
+                                Some(flow_key),
+                                Some(turn_correlation_id),
+                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    phase: "governance".to_string(),
+                                    reason: reason.clone(),
+                                }),
+                            )
+                            .await;
+                            policy_terminal_message = Some(format!(
+                                "Tool call '{}' denied by capability governance: {}",
+                                name, reason
+                            ));
+                            break;
+                        }
                         emit_domain_event(
                             event_bus,
                             Some(agent_id),
@@ -990,6 +1020,7 @@ async fn collect_engine_response(
                             }
                             let outcome = execute_tool_call(
                                 &pending,
+                                config,
                                 agent_config,
                                 tool_registry,
                                 context.workspace.as_ref(),
@@ -1124,15 +1155,28 @@ async fn collect_engine_response(
 /// Execute one assembled tool call through registry and return user-facing result text.
 ///
 /// Runtime applies defense-in-depth checks before execution:
+/// - capability governance actor gate (`user` / `delegated`)
 /// - `kit` allow/deny policy
 /// - approval policy (`kit.approval_required` + `kit.approved` + tool metadata)
 async fn execute_tool_call(
     pending: &PendingToolCall,
+    config: &Config,
     agent_config: &tengu_core::config::AgentConfig,
     tool_registry: &ToolRegistry,
     workspace: Option<&PathBuf>,
     agent_id: &str,
 ) -> ToolExecutionOutcome {
+    if let Err(err) = ensure_capability_governance_actor_allowed(config, agent_id) {
+        return ToolExecutionOutcome {
+            user_message: format!(
+                "[tool:{} denied]\nCapability governance denied runtime actor '{}': {}",
+                pending.name, agent_id, err
+            ),
+            status: "denied_governance",
+            reason: Some(err.to_string()),
+        };
+    }
+
     let args_value = if pending.arguments_delta.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -2709,11 +2753,8 @@ mod tests {
     #[tokio::test]
     async fn execute_tool_call_reports_unregistered_tool() {
         let registry = ToolRegistry::with_defaults();
-        let agent_config = tengu_core::config::Config::default()
-            .agents
-            .get("main")
-            .expect("main")
-            .clone();
+        let config = tengu_core::config::Config::default();
+        let agent_config = config.agents.get("main").expect("main").clone();
         let pending = PendingToolCall {
             id: "tool-1".to_string(),
             name: "shell".to_string(),
@@ -2722,6 +2763,7 @@ mod tests {
 
         let outcome = execute_tool_call(
             &pending,
+            &config,
             &agent_config,
             &registry,
             Some(&PathBuf::from(".")),
@@ -2740,19 +2782,23 @@ mod tests {
         std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
 
         let registry = ToolRegistry::with_defaults();
-        let mut agent_config = tengu_core::config::Config::default()
-            .agents
-            .get("main")
-            .expect("main")
-            .clone();
+        let config = tengu_core::config::Config::default();
+        let mut agent_config = config.agents.get("main").expect("main").clone();
         agent_config.kit.approved = vec!["read_file".to_string()];
         let pending = PendingToolCall {
             id: "tool-2".to_string(),
             name: "read_file".to_string(),
             arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
         };
-        let outcome =
-            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
+        let outcome = execute_tool_call(
+            &pending,
+            &config,
+            &agent_config,
+            &registry,
+            Some(&workspace),
+            "main",
+        )
+        .await;
 
         assert_eq!(outcome.status, "ok");
         assert!(outcome.user_message.contains("[tool:read_file ok]"));
@@ -2768,11 +2814,8 @@ mod tests {
         std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
 
         let registry = ToolRegistry::with_defaults();
-        let mut agent_config = tengu_core::config::Config::default()
-            .agents
-            .get("main")
-            .expect("main")
-            .clone();
+        let config = tengu_core::config::Config::default();
+        let mut agent_config = config.agents.get("main").expect("main").clone();
         agent_config.kit.approval_required = vec!["read_file".to_string()];
         agent_config.kit.approved.clear();
         let pending = PendingToolCall {
@@ -2780,8 +2823,15 @@ mod tests {
             name: "read_file".to_string(),
             arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
         };
-        let outcome =
-            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
+        let outcome = execute_tool_call(
+            &pending,
+            &config,
+            &agent_config,
+            &registry,
+            Some(&workspace),
+            "main",
+        )
+        .await;
 
         assert_eq!(outcome.status, "denied_approval");
         assert!(outcome.user_message.contains("requires approval"));
@@ -2796,11 +2846,8 @@ mod tests {
         std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
 
         let registry = ToolRegistry::with_defaults();
-        let mut agent_config = tengu_core::config::Config::default()
-            .agents
-            .get("main")
-            .expect("main")
-            .clone();
+        let config = tengu_core::config::Config::default();
+        let mut agent_config = config.agents.get("main").expect("main").clone();
         agent_config.kit.deny = vec!["read_file".to_string()];
         agent_config.kit.approval_required.clear();
         agent_config.kit.approved = vec!["read_file".to_string()];
@@ -2809,11 +2856,55 @@ mod tests {
             name: "read_file".to_string(),
             arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
         };
-        let outcome =
-            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
+        let outcome = execute_tool_call(
+            &pending,
+            &config,
+            &agent_config,
+            &registry,
+            Some(&workspace),
+            "main",
+        )
+        .await;
 
         assert_eq!(outcome.status, "denied_policy");
         assert!(outcome.user_message.contains("blocked by policy"));
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_denies_non_orchestrator_in_delegated_mode() {
+        let workspace =
+            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace");
+        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
+
+        let registry = ToolRegistry::with_defaults();
+        let mut config = tengu_core::config::Config::default();
+        config.capability_governance.mode = "delegated".to_string();
+        config.capability_governance.delegated_orchestrator_agent =
+            Some("orchestrator".to_string());
+
+        let mut agent_config = config.agents.get("main").expect("main").clone();
+        agent_config.kit.approved = vec!["read_file".to_string()];
+        let pending = PendingToolCall {
+            id: "tool-5".to_string(),
+            name: "read_file".to_string(),
+            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
+        };
+        let outcome = execute_tool_call(
+            &pending,
+            &config,
+            &agent_config,
+            &registry,
+            Some(&workspace),
+            "main",
+        )
+        .await;
+
+        assert_eq!(outcome.status, "denied_governance");
+        assert!(outcome
+            .user_message
+            .contains("Capability governance denied"));
         let _ = std::fs::remove_dir_all(&workspace);
     }
 

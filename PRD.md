@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, and core handoff capability policy supports user/delegated orchestrator modes with typed envelope checks; delegated multi-agent runtime loop is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, and supports typed handoff capability policy checks; delegated multi-agent runtime loop is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, while single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
@@ -410,6 +410,7 @@ Planned built-in tools:
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries
+  - runtime now denies direct capability requests from non-orchestrator agents when `mode=delegated`
 - Safe command allowlist for shell
 - Approval system for dangerous operations
 - Workspace-only file access when sandboxing enabled

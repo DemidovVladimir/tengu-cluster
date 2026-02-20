@@ -9,6 +9,114 @@ use anyhow::Result;
 use super::{AgentConfig, Config};
 use crate::types::HandoffTaskEnvelope;
 
+/// Decision emitted by actor-level capability governance checks.
+///
+/// This gate is used at runtime entry points where an agent requests direct
+/// capability usage (for example tool execution from an engine turn) without
+/// an explicit inter-agent handoff envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityGovernanceActorDecision {
+    /// Runtime uses direct user-defined agent policies (`mode=user`).
+    AllowedUserMode,
+    /// Runtime uses delegated mode and actor matches configured orchestrator.
+    AllowedDelegatedOrchestrator { orchestrator_agent_id: String },
+    /// Runtime uses delegated mode and actor is not orchestrator.
+    DeniedDelegatedActor {
+        actor_agent_id: String,
+        delegated_orchestrator_agent: String,
+    },
+    /// Runtime actor id is missing or not configured.
+    DeniedUnknownActor { actor_agent_id: String },
+}
+
+impl CapabilityGovernanceActorDecision {
+    /// Whether capability requests from this actor are allowed at runtime.
+    pub fn is_allowed(&self) -> bool {
+        matches!(
+            self,
+            Self::AllowedUserMode | Self::AllowedDelegatedOrchestrator { .. }
+        )
+    }
+
+    /// Human-readable reason used by runtime diagnostics/errors.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::AllowedUserMode => "capability governance mode=user".to_string(),
+            Self::AllowedDelegatedOrchestrator {
+                orchestrator_agent_id,
+            } => format!(
+                "capability governance mode=delegated (actor matches orchestrator '{}')",
+                orchestrator_agent_id
+            ),
+            Self::DeniedDelegatedActor {
+                actor_agent_id,
+                delegated_orchestrator_agent,
+            } => format!(
+                "actor '{}' is not delegated orchestrator '{}'",
+                actor_agent_id, delegated_orchestrator_agent
+            ),
+            Self::DeniedUnknownActor { actor_agent_id } => {
+                format!("unknown runtime actor '{}'", actor_agent_id)
+            }
+        }
+    }
+}
+
+/// Evaluate whether `actor_agent_id` may request direct runtime capabilities.
+///
+/// Policy contract:
+/// - `mode=user`: any configured agent may use its own user-defined bounds.
+/// - `mode=delegated`: only `delegated_orchestrator_agent` may issue direct requests.
+pub fn evaluate_capability_governance_actor(
+    config: &Config,
+    actor_agent_id: &str,
+) -> CapabilityGovernanceActorDecision {
+    let actor = actor_agent_id.trim();
+    if actor.is_empty() || !config.agents.contains_key(actor) {
+        return CapabilityGovernanceActorDecision::DeniedUnknownActor {
+            actor_agent_id: actor.to_string(),
+        };
+    }
+
+    if config.capability_governance.mode.trim() != "delegated" {
+        return CapabilityGovernanceActorDecision::AllowedUserMode;
+    }
+
+    let delegated = config
+        .capability_governance
+        .delegated_orchestrator_agent
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if actor == delegated {
+        CapabilityGovernanceActorDecision::AllowedDelegatedOrchestrator {
+            orchestrator_agent_id: delegated.to_string(),
+        }
+    } else {
+        CapabilityGovernanceActorDecision::DeniedDelegatedActor {
+            actor_agent_id: actor.to_string(),
+            delegated_orchestrator_agent: delegated.to_string(),
+        }
+    }
+}
+
+/// Enforce actor-level capability governance and return actionable error text.
+pub fn ensure_capability_governance_actor_allowed(
+    config: &Config,
+    actor_agent_id: &str,
+) -> Result<()> {
+    let decision = evaluate_capability_governance_actor(config, actor_agent_id);
+    if decision.is_allowed() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "runtime capability governance denied actor '{}': {}",
+            actor_agent_id,
+            decision.reason()
+        ))
+    }
+}
+
 /// Decision emitted by engine allowlist policy evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnginePolicyDecision {
@@ -652,6 +760,43 @@ mod tests {
         assert!(matches!(
             decision,
             HandoffCapabilityPolicyDecision::DeniedSenderNotDelegatedOrchestrator { .. }
+        ));
+    }
+
+    #[test]
+    fn capability_governance_actor_allows_user_mode_for_known_agent() {
+        let config = Config::default();
+        let decision = evaluate_capability_governance_actor(&config, "main");
+        assert!(matches!(
+            decision,
+            CapabilityGovernanceActorDecision::AllowedUserMode
+        ));
+    }
+
+    #[test]
+    fn capability_governance_actor_denies_unknown_actor() {
+        let config = Config::default();
+        let decision = evaluate_capability_governance_actor(&config, "unknown");
+        assert!(matches!(
+            decision,
+            CapabilityGovernanceActorDecision::DeniedUnknownActor { .. }
+        ));
+    }
+
+    #[test]
+    fn capability_governance_actor_allows_delegated_orchestrator_only() {
+        let mut config = Config::default();
+        config.capability_governance.mode = "delegated".to_string();
+        config.capability_governance.delegated_orchestrator_agent = Some("main".to_string());
+
+        let allow = evaluate_capability_governance_actor(&config, "main");
+        assert!(allow.is_allowed());
+
+        config.agents.insert("worker".to_string(), agent());
+        let deny = evaluate_capability_governance_actor(&config, "worker");
+        assert!(matches!(
+            deny,
+            CapabilityGovernanceActorDecision::DeniedDelegatedActor { .. }
         ));
     }
 }

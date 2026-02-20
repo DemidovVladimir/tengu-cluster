@@ -142,7 +142,6 @@ Current coverage:
 Required tasks:
 - `E8-T1`, `E8-T2` partial baseline
 - `E8-T5` partial baseline
-- `E8-T7`
 
 ---
 
@@ -233,9 +232,11 @@ Acceptance targets:
 Current coverage:
 - `Implemented` strict cross-field config validation and fail-fast startup loading.
 - `Implemented` governance-boundary validation for `kit`, `allowed_engines`, `skills`, sandbox mode, and routing/pipe consistency.
-- `Partial` runtime enforcement for `allowed_engines` and `kit` in active execution path:
+- `Implemented` runtime enforcement for `allowed_engines` and `kit` in active execution path:
   - engine/model allowlist is enforced in runtime engine construction
   - tool calls are checked against per-agent `kit` policy at start and before execution
+- `Implemented` delegated actor gate for direct runtime capability requests:
+  - in `mode=delegated`, only configured orchestrator can request direct capabilities in active runtime path
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
 - `Missing` skills loading/execution runtime path.
 - `Missing` delegated orchestrator execution loop and audit pipeline.
@@ -246,8 +247,6 @@ Current coverage:
 
 Required tasks:
 - `E6-T10`
-- `E8-T7`
-- `E10-T7`
 
 ---
 

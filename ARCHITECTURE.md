@@ -646,6 +646,7 @@ pub struct AgentConfig {
 | **Workspace path** | Tools can only read/write within `agent.workspace`. Paths are canonicalized and checked against the workspace root. |
 | **Kit allow/deny** | Each agent has its own tool allowlist. Timur (kid) might have `[read_file]` only. Erzhan (business) gets `[read_file, write_file, shell]`. |
 | **Skill allow/deny** | Each agent has independent skill policy bounds used by capability-governance checks. |
+| **Governance mode** | In `mode=delegated`, only configured orchestrator can issue direct runtime capability requests; other agents are denied until multi-agent handoff path is used. |
 | **Flow scope** | `per-sender` means each Telegram user gets their own conversation history. Even if two users hit the same agent, they don't see each other's messages. |
 | **Limits** | Token and cost limits prevent a single agent from consuming excessive resources. |
 | **Sandbox** | `workspace` mode restricts shell to agent directory. `docker` runs shell commands in a container. |

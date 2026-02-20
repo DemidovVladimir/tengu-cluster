@@ -36,7 +36,7 @@
 | Telegram Pipe | Feature flag exists, code not written |
 | Discord Pipe | Feature flag exists, code not written |
 | WebChat Pipe | Feature flag exists, code not written |
-| Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path + config-driven approvals + pre-execution allow/deny checks + handoff capability policy evaluator implemented; broader toolset and delegated execution loop pending) |
+| Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path + config-driven approvals + pre-execution allow/deny checks + runtime governance actor gate + handoff capability policy evaluator implemented; broader toolset and delegated execution loop pending) |
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router + typed handoff task/result envelopes implemented, serve/runtime execution loop pending) |
 | Skills System | Config exists, loader not implemented |
@@ -69,15 +69,19 @@ Requirements:
 |---|------|-------|------------|
 | 1.1 | Anthropic Engine (Claude API) (Done) | `tengu-backends` | Medium |
 | 1.2 | Streaming for Ollama (Done) | `tengu-backends` | Easy |
-| 1.3 | `/engine` — switch model at runtime | `src/main.rs` | Easy |
+| 1.3 | `/engine` — print current engine diagnostics | `src/main.rs` | Easy |
 | 1.4 | Anthropic feature flag + conditional compilation | `Cargo.toml` | Easy |
 
-**Outcome:** `tengu chat` works with both Claude and Ollama. Ollama is streamed; Anthropic is typed REST (non-streaming for now).
+**Outcome:** `tengu chat` works with both Claude and Ollama (selected via config). Ollama is streamed; Anthropic is typed REST (non-streaming for now).
 
+```toml
+[agents.main]
+engine = "anthropic"
+model = "claude-sonnet-4-5-20250929"
 ```
-$ tengu chat --engine anthropic --model claude-sonnet-4-5-20250929
-> Hello, tell me about yourself
-[streaming response from Claude]
+
+```bash
+cargo run -- chat
 ```
 
 ---
