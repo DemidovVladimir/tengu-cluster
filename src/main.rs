@@ -997,7 +997,12 @@ async fn collect_engine_response(
                             )
                             .await;
                             match outcome.status {
-                                "denied_approval" => {
+                                "denied_approval" | "denied_policy" => {
+                                    let phase = if outcome.status == "denied_approval" {
+                                        "approval"
+                                    } else {
+                                        "policy"
+                                    };
                                     emit_domain_event(
                                         event_bus,
                                         Some(agent_id),
@@ -1006,9 +1011,9 @@ async fn collect_engine_response(
                                         DomainEventPayload::ToolCallDenied(ToolCallDenied {
                                             tool_call_id: pending.id.clone(),
                                             tool_name: pending.name.clone(),
-                                            phase: "approval".to_string(),
+                                            phase: phase.to_string(),
                                             reason: outcome.reason.clone().unwrap_or_else(|| {
-                                                "tool requires explicit approval".to_string()
+                                                "tool denied by runtime policy".to_string()
                                             }),
                                         }),
                                     )
@@ -1117,6 +1122,10 @@ async fn collect_engine_response(
 }
 
 /// Execute one assembled tool call through registry and return user-facing result text.
+///
+/// Runtime applies defense-in-depth checks before execution:
+/// - `kit` allow/deny policy
+/// - approval policy (`kit.approval_required` + `kit.approved` + tool metadata)
 async fn execute_tool_call(
     pending: &PendingToolCall,
     agent_config: &tengu_core::config::AgentConfig,
@@ -1147,6 +1156,20 @@ async fn execute_tool_call(
             user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
             status: "not_registered",
             reason: Some("tool is not registered".to_string()),
+        };
+    }
+
+    let policy_decision = evaluate_tool_policy(agent_config, &pending.name);
+    if !policy_decision.is_allowed() {
+        return ToolExecutionOutcome {
+            user_message: format!(
+                "[tool:{} denied]\nTool blocked by policy for agent '{}': {}",
+                pending.name,
+                agent_id,
+                policy_decision.reason()
+            ),
+            status: "denied_policy",
+            reason: Some(policy_decision.reason().to_string()),
         };
     }
 
@@ -2762,6 +2785,35 @@ mod tests {
 
         assert_eq!(outcome.status, "denied_approval");
         assert!(outcome.user_message.contains("requires approval"));
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    #[tokio::test]
+    async fn execute_tool_call_denies_when_policy_blocks_tool() {
+        let workspace =
+            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace");
+        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
+
+        let registry = ToolRegistry::with_defaults();
+        let mut agent_config = tengu_core::config::Config::default()
+            .agents
+            .get("main")
+            .expect("main")
+            .clone();
+        agent_config.kit.deny = vec!["read_file".to_string()];
+        agent_config.kit.approval_required.clear();
+        agent_config.kit.approved = vec!["read_file".to_string()];
+        let pending = PendingToolCall {
+            id: "tool-4".to_string(),
+            name: "read_file".to_string(),
+            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
+        };
+        let outcome =
+            execute_tool_call(&pending, &agent_config, &registry, Some(&workspace), "main").await;
+
+        assert_eq!(outcome.status, "denied_policy");
+        assert!(outcome.user_message.contains("blocked by policy"));
         let _ = std::fs::remove_dir_all(&workspace);
     }
 

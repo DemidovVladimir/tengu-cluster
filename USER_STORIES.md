@@ -142,7 +142,7 @@ Current coverage:
 Required tasks:
 - `E8-T1`, `E8-T2` partial baseline
 - `E8-T5` partial baseline
-- `E8-T4`, `E8-T6`, `E8-T7`
+- `E8-T6`, `E8-T7`
 
 ---
 

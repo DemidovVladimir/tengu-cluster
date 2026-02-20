@@ -396,7 +396,7 @@ trait Tool: Send + Sync {
 
 Current behavior:
 - Runtime consumes `ToolCallStart/Delta/End` events and can execute built-in `read_file` via registry.
-- Execution is policy-checked (`kit` allow/deny) and workspace-path constrained.
+- Execution is policy-checked (`kit` allow/deny) at tool-start and again before tool execution, and remains workspace-path constrained.
 - Provider backends are not yet emitting tool-call events in default chat flows.
 
 Planned built-in tools:

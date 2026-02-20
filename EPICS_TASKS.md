@@ -61,6 +61,7 @@ Completed tasks:
 32. `E11-T5`
 33. `E11-T6`
 34. `E8-T3`
+35. `E8-T4`
 
 Partially completed:
 1. `E8` tool loop remains in progress (approvals, broader toolset, and inter-agent handoff contract pending).
@@ -76,7 +77,7 @@ Partially completed:
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
 | `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including single-orchestrator-first multi-agent execution loop. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
-| `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approval gates, and persists tool audit JSONL events; broader approvals/delegation flow remains pending. |
+| `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, and persists tool audit JSONL events; broader toolset/delegation flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
 | `E11` | Done | Adapter contracts, stream events, bounded bus, runtime emitters, audit/metrics/policy subscribers, and profile/backpressure validation are complete. |

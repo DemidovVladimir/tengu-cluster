@@ -28,7 +28,7 @@ Current working baseline:
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
-- config-driven tool approval gates (`kit.approval_required` + `kit.approved`) enforced before tool execution
+- config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
