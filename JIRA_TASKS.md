@@ -40,7 +40,7 @@ Source: `EPICS_TASKS.md`
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
 | E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
-| E11-T3 | Planned | Migrate runtime side-effects (audit/metrics/policy hooks) to subscriber model incrementally |
+| E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |
 
 ## Completed Start Task (2026-02-20)
 
@@ -54,10 +54,11 @@ Source: `EPICS_TASKS.md`
 - `E10-T7` — Add config/runtime validation for capability governance boundaries.
 - `E11-T1` — Define runtime `DomainEvent` schema + `EventBus` abstraction.
 - `E11-T2` — Implement bounded in-process event bus + overflow policy tests.
+- `E11-T3` — Emit runtime domain events from chat path without behavior regressions.
 
 ## Next Start (2026-02-20)
 
-- `E11-T3` — Emit domain events from chat runtime path (`src/main.rs`) without behavior regressions.
+- `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
 
 ## Epics
 

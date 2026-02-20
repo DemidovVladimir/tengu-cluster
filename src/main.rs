@@ -7,8 +7,8 @@
 //! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
 //! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
-//!   contracts and bounded in-process bus are implemented, and side-effects will
-//!   move to subscribers incrementally.
+//!   contracts, bounded in-process bus, and runtime emitters are implemented;
+//!   side-effects now move to subscribers incrementally.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -24,6 +24,11 @@ use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{ensure_engine_allowed, evaluate_tool_policy, Config, RuntimeProfile};
+use tengu_core::events::{
+    DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
+    EngineTurnStarted, EventBus, FlowCompacted, FlowResolved, InProcessEventBus,
+    InboundTurnReceived, PromptAssembled, ToolCallCompleted, ToolCallDenied, ToolCallStarted,
+};
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
@@ -291,6 +296,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
     let tool_registry = ToolRegistry::with_defaults();
+    let event_bus = InProcessEventBus::default();
     let tool_audit = match ToolAuditStore::new(&resolve_tengu_home()) {
         Ok(store) => Some(store),
         Err(err) => {
@@ -325,6 +331,20 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     println!("Type your message (Ctrl+D to quit):\n");
 
     while let Some(inbound) = rx.recv().await {
+        let turn_correlation_id = uuid::Uuid::new_v4().to_string();
+        emit_domain_event(
+            &event_bus,
+            Some(&agent_id),
+            None,
+            Some(&turn_correlation_id),
+            DomainEventPayload::InboundTurnReceived(InboundTurnReceived {
+                pipe_id: inbound.sender.pipe_id.clone(),
+                sender_id: format_recipient_identity(&inbound.sender),
+                input_tokens: as_u32_saturating(estimate_tokens_approx_min1(&inbound.content)),
+            }),
+        )
+        .await;
+
         let original_len = inbound.content.len();
 
         // Handle slash commands
@@ -355,7 +375,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             &inbound.sender,
             state.manual_session_id.as_deref(),
         );
-        if state.active_flow_key.as_deref() != Some(flow_key.as_str()) {
+        let switched_flow = state.active_flow_key.as_deref() != Some(flow_key.as_str());
+        if switched_flow {
             state.messages = flow_store
                 .load_messages(&flow_key, history_load_message_cap(history_turn_limit))?;
             let dropped = enforce_history_turn_limit(&mut state.messages, history_turn_limit);
@@ -374,6 +395,22 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                 .sum();
             state.active_flow_key = Some(flow_key.clone());
         }
+        let reused_existing = if switched_flow {
+            !state.messages.is_empty()
+        } else {
+            true
+        };
+        emit_domain_event(
+            &event_bus,
+            Some(&agent_id),
+            Some(&flow_key),
+            Some(&turn_correlation_id),
+            DomainEventPayload::FlowResolved(FlowResolved {
+                flow_key: flow_key.clone(),
+                reused_existing,
+            }),
+        )
+        .await;
 
         let user_message = Message {
             role: Role::User,
@@ -385,6 +422,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         state.flow_token_usage += estimate_tokens_approx_min1(&user_message.content) as u64;
         state.messages.push(user_message);
         enforce_history_turn_limit(&mut state.messages, history_turn_limit);
+        let pre_compaction_tokens_before = state.flow_token_usage;
         let mut compaction_outcome = maybe_compact_flow(
             &flow_store,
             &flow_key,
@@ -396,6 +434,20 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             "pre-engine",
         )
         .await?;
+        if compaction_outcome.applied {
+            emit_domain_event(
+                &event_bus,
+                Some(&agent_id),
+                Some(&flow_key),
+                Some(&turn_correlation_id),
+                DomainEventPayload::FlowCompacted(FlowCompacted {
+                    compacted_messages: as_u32_saturating(compaction_outcome.compacted_messages),
+                    tokens_before: pre_compaction_tokens_before,
+                    tokens_after: state.flow_token_usage,
+                }),
+            )
+            .await;
+        }
 
         if state.flow_token_usage >= agent_config.limits.max_tokens_per_flow {
             println!(
@@ -475,6 +527,20 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             history_messages_selected,
             retrieved_candidates,
         );
+        emit_domain_event(
+            &event_bus,
+            Some(&agent_id),
+            Some(&flow_key),
+            Some(&turn_correlation_id),
+            DomainEventPayload::PromptAssembled(PromptAssembled {
+                system_tokens: as_u32_saturating(report.system_tokens),
+                retrieval_tokens: as_u32_saturating(report.retrieval_tokens),
+                history_tokens: as_u32_saturating(report.history_tokens),
+                reserved_output_tokens: as_u32_saturating(report.reserved_output_tokens),
+                total_input_budget: as_u32_saturating(report.total_input_budget),
+            }),
+        )
+        .await;
         state.last_prompt_report = Some(report);
 
         if prompt_messages.is_empty() {
@@ -489,6 +555,17 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             workspace: agent_config.workspace.clone(),
             system_prompt: turn_system_prompt,
         };
+        emit_domain_event(
+            &event_bus,
+            Some(&agent_id),
+            Some(&flow_key),
+            Some(&turn_correlation_id),
+            DomainEventPayload::EngineTurnStarted(EngineTurnStarted {
+                engine_id: engine.id().to_string(),
+                model_id: agent_config.model.clone(),
+            }),
+        )
+        .await;
 
         let response_text = collect_engine_response(
             engine.as_ref(),
@@ -498,6 +575,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             &agent_id,
             &agent_config,
             &tool_registry,
+            &event_bus,
+            &turn_correlation_id,
             tool_audit.as_ref(),
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
@@ -520,6 +599,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                 estimate_tokens_approx_min1(&assistant_message.content) as u64;
             state.messages.push(assistant_message);
             enforce_history_turn_limit(&mut state.messages, history_turn_limit);
+            let post_compaction_tokens_before = state.flow_token_usage;
             let post_outcome = maybe_compact_flow(
                 &flow_store,
                 &flow_key,
@@ -532,6 +612,18 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             )
             .await?;
             if post_outcome.applied {
+                emit_domain_event(
+                    &event_bus,
+                    Some(&agent_id),
+                    Some(&flow_key),
+                    Some(&turn_correlation_id),
+                    DomainEventPayload::FlowCompacted(FlowCompacted {
+                        compacted_messages: as_u32_saturating(post_outcome.compacted_messages),
+                        tokens_before: post_compaction_tokens_before,
+                        tokens_after: state.flow_token_usage,
+                    }),
+                )
+                .await;
                 compaction_outcome.applied = true;
                 compaction_outcome.compacted_messages = compaction_outcome
                     .compacted_messages
@@ -688,6 +780,8 @@ async fn collect_engine_response(
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
     tool_registry: &ToolRegistry,
+    event_bus: &dyn EventBus,
+    turn_correlation_id: &str,
     tool_audit: Option<&ToolAuditStore>,
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
@@ -716,9 +810,30 @@ async fn collect_engine_response(
                         );
                     }
                     tengu_core::types::StreamEvent::Error { message } => {
+                        emit_domain_event(
+                            event_bus,
+                            Some(agent_id),
+                            Some(flow_key),
+                            Some(turn_correlation_id),
+                            DomainEventPayload::EngineTurnFailed(EngineTurnFailed {
+                                reason: message.clone(),
+                            }),
+                        )
+                        .await;
                         eprintln!("Engine error: {}", message);
                     }
                     tengu_core::types::StreamEvent::ToolCallStart { id, name } => {
+                        emit_domain_event(
+                            event_bus,
+                            Some(agent_id),
+                            Some(flow_key),
+                            Some(turn_correlation_id),
+                            DomainEventPayload::ToolCallStarted(ToolCallStarted {
+                                tool_call_id: id.clone(),
+                                tool_name: name.clone(),
+                            }),
+                        )
+                        .await;
                         if pending_tool_call.is_some() {
                             append_tool_audit(
                                 tool_audit,
@@ -737,6 +852,19 @@ async fn collect_engine_response(
                                     result_preview: None,
                                 },
                             );
+                            emit_domain_event(
+                                event_bus,
+                                Some(agent_id),
+                                Some(flow_key),
+                                Some(turn_correlation_id),
+                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    reason: "runtime supports only one active tool call"
+                                        .to_string(),
+                                }),
+                            )
+                            .await;
                             policy_terminal_message = Some(
                                 "Tool runtime currently supports one active tool call at a time."
                                     .to_string(),
@@ -772,6 +900,18 @@ async fn collect_engine_response(
                                 reason = decision.reason(),
                                 "Tool call denied by runtime capability policy"
                             );
+                            emit_domain_event(
+                                event_bus,
+                                Some(agent_id),
+                                Some(flow_key),
+                                Some(turn_correlation_id),
+                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
+                                    tool_call_id: id.clone(),
+                                    tool_name: name.clone(),
+                                    reason: decision.reason().to_string(),
+                                }),
+                            )
+                            .await;
                             break;
                         }
                         append_tool_audit(
@@ -868,6 +1008,22 @@ async fn collect_engine_response(
                                 agent_id,
                             )
                             .await;
+                            emit_domain_event(
+                                event_bus,
+                                Some(agent_id),
+                                Some(flow_key),
+                                Some(turn_correlation_id),
+                                DomainEventPayload::ToolCallCompleted(ToolCallCompleted {
+                                    tool_call_id: pending.id.clone(),
+                                    tool_name: pending.name.clone(),
+                                    status: if outcome.status == "ok" {
+                                        "ok".to_string()
+                                    } else {
+                                        "error".to_string()
+                                    },
+                                }),
+                            )
+                            .await;
                             append_tool_audit(
                                 tool_audit,
                                 ToolAuditEvent {
@@ -899,6 +1055,18 @@ async fn collect_engine_response(
                 turn_usage_snapshot,
             );
             if let Some(message) = policy_terminal_message {
+                emit_domain_event(
+                    event_bus,
+                    Some(agent_id),
+                    Some(flow_key),
+                    Some(turn_correlation_id),
+                    DomainEventPayload::EngineTurnCompleted(EngineTurnCompleted {
+                        input_tokens: turn_usage_snapshot.map(|(input, _)| input).unwrap_or(0),
+                        output_tokens: turn_usage_snapshot.map(|(_, output)| output).unwrap_or(0),
+                        response_tokens: as_u32_saturating(estimate_tokens_approx_min1(&message)),
+                    }),
+                )
+                .await;
                 return Ok(message);
             }
             if let Some(pending) = pending_tool_call {
@@ -917,6 +1085,18 @@ async fn collect_engine_response(
                         result_preview: None,
                     },
                 );
+                emit_domain_event(
+                    event_bus,
+                    Some(agent_id),
+                    Some(flow_key),
+                    Some(turn_correlation_id),
+                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
+                        tool_call_id: pending.id.clone(),
+                        tool_name: pending.name.clone(),
+                        reason: "missing ToolCallEnd".to_string(),
+                    }),
+                )
+                .await;
                 return Ok(format!(
                     "Tool call '{}' did not complete (missing ToolCallEnd).",
                     pending.name
@@ -930,9 +1110,31 @@ async fn collect_engine_response(
                 response_text.push_str("\n\n");
                 response_text.push_str(&tool_block);
             }
+            emit_domain_event(
+                event_bus,
+                Some(agent_id),
+                Some(flow_key),
+                Some(turn_correlation_id),
+                DomainEventPayload::EngineTurnCompleted(EngineTurnCompleted {
+                    input_tokens: turn_usage_snapshot.map(|(input, _)| input).unwrap_or(0),
+                    output_tokens: turn_usage_snapshot.map(|(_, output)| output).unwrap_or(0),
+                    response_tokens: as_u32_saturating(estimate_tokens_approx_min1(&response_text)),
+                }),
+            )
+            .await;
             Ok(response_text)
         }
         Err(err) => {
+            emit_domain_event(
+                event_bus,
+                Some(agent_id),
+                Some(flow_key),
+                Some(turn_correlation_id),
+                DomainEventPayload::EngineTurnFailed(EngineTurnFailed {
+                    reason: err.to_string(),
+                }),
+            )
+            .await;
             eprintln!("Engine error: {}\n", err);
             Ok(String::new())
         }
@@ -1029,6 +1231,53 @@ fn append_tool_audit(store: Option<&ToolAuditStore>, event: ToolAuditEvent) {
             "Failed to append tool audit event"
         );
     }
+}
+
+/// Emit one runtime domain event without affecting user-visible flow on failure.
+async fn emit_domain_event(
+    event_bus: &dyn EventBus,
+    agent_id: Option<&str>,
+    flow_key: Option<&str>,
+    correlation_id: Option<&str>,
+    payload: DomainEventPayload,
+) {
+    let event = DomainEvent {
+        meta: DomainEventMeta {
+            ts_epoch_ms: now_epoch_ms(),
+            flow_key: flow_key.map(ToOwned::to_owned),
+            agent_id: agent_id.map(ToOwned::to_owned),
+            correlation_id: correlation_id.map(ToOwned::to_owned),
+            source: Some("chat-runtime".to_string()),
+        },
+        payload,
+    };
+    if let Err(err) = event_bus.publish(event).await {
+        warn!(error = %err, "Failed to publish runtime domain event");
+    }
+}
+
+/// Convert usize counters to a saturating `u32` payload-safe value.
+fn as_u32_saturating(value: usize) -> u32 {
+    value.min(u32::MAX as usize) as u32
+}
+
+/// Build deterministic sender identity for domain events.
+fn format_recipient_identity(sender: &Recipient) -> String {
+    let mut parts = vec![sender.pipe_id.clone(), sender.peer_id.clone()];
+    if let Some(thread_id) = sender.thread_id.as_deref() {
+        parts.push(thread_id.to_string());
+    }
+    parts.join(":")
+}
+
+/// Return current unix epoch timestamp in milliseconds.
+fn now_epoch_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 /// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.

@@ -13,7 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
-- Not implemented yet: daemonized hub, external pipes, skill loader, domain-event emitters/subscriber migration in runtime
+- Not implemented yet: daemonized hub, external pipes, skill loader, subscriber migration for runtime side-effects
 
 ---
 
@@ -90,7 +90,7 @@ This document describes full target architecture. The currently running path in 
 2. **Event-driven activity**  
    Engines emit `StreamEvent` sequences; runtime handles tool lifecycle and usage as typed events.
 3. **Domain event bus migration (active backlog)**  
-   `DomainEvent` + `EventBus` contracts and bounded in-process bus are implemented; next phase migrates runtime emitters and audit/metrics/policy reactions to subscribers.
+   `DomainEvent` + `EventBus` contracts, bounded in-process bus, and runtime emitters are implemented; next phase migrates audit/metrics/policy reactions to subscribers.
 4. **Hardware-scalable execution**  
    The same architecture must run with bounded queues on single-core/minimal devices and use parallel subscribers on multi-core hosts.
 5. **Topology-flexible orchestration**  

@@ -7,7 +7,8 @@ Related epic: `E11` (`EPICS_TASKS.md`, `JIRA_TASKS.md`)
 
 1. ✅ `E11-T1`: `DomainEvent` v1 schema + `EventBus` trait implemented in `crates/tengu-core/src/events.rs`.
 2. ✅ `E11-T2`: bounded in-process bus implemented with explicit overflow policies and tests.
-3. ⏳ `E11-T3`: runtime event emitters are the active next step.
+3. ✅ `E11-T3`: chat runtime emitters added for domain lifecycle events.
+4. ⏳ `E11-T4`: subscriber-driven side-effects are the active next step.
 
 ## Goal
 
@@ -48,8 +49,8 @@ Exit criteria:
 
 ### Phase 2: Runtime Producers
 
-1. Emit v1 events from runtime hotspots in `src/main.rs` (`E11-T3`).
-2. Keep existing direct side-effects active for parity during transition.
+1. ✅ Emit v1 events from runtime hotspots in `src/main.rs` (`E11-T3`).
+2. ✅ Keep existing direct side-effects active for parity during transition.
 
 Exit criteria:
 1. Existing chat/tool behavior unchanged.

@@ -19,7 +19,7 @@
 | CLI Pipe | ✅ | `crates/tengu-channels/src/cli/mod.rs` |
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
-| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts and bounded in-process bus are implemented, runtime emitters/subscribers are pending |
+| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts, bounded in-process bus, and runtime emitters are implemented, subscriber migration is pending |
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
@@ -40,7 +40,7 @@
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router implemented, serve runtime pending) |
 | Skills System | Config exists, loader not implemented |
-| Internal domain event bus | ⚠️ In progress (`DomainEvent` + `EventBus` contracts and bounded bus done; runtime emitters/subscribers pending) |
+| Internal domain event bus | ⚠️ In progress (`DomainEvent` + `EventBus` contracts, bounded bus, and runtime emitters done; subscriber migration pending) |
 | Single-orchestrator topology profile | Planned (docs/config shape defined; runtime execution pending) |
 
 ---

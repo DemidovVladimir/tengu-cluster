@@ -263,10 +263,11 @@ Current coverage:
 - `Implemented` adapter boundaries via core traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 - `Implemented` `DomainEvent`/`EventBus` core contracts in `tengu-core`.
 - `Implemented` bounded in-process event bus with explicit overflow policies.
-- `Partial` runtime still needs event emission wiring and subscriber-based side-effects.
+- `Implemented` runtime domain-event emission wiring for lifecycle hotspots.
+- `Partial` subscriber-based side-effects are still pending.
 
 Required tasks:
-- `E11-T3` to `E11-T6`
+- `E11-T4` to `E11-T6`
 - `E10-T2` (stream/event contract hardening)
 
 ---
