@@ -4,7 +4,7 @@
 
 ---
 
-## Implementation Status (2026-02-19)
+## Implementation Status (2026-02-20)
 
 This document contains both current behavior and target-state requirements.
 
@@ -28,7 +28,7 @@ This document contains both current behavior and target-state requirements.
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
 | Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
-| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`) and runtime already consumes stream events; internal domain event bus migration is now planned/tracked |
+| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` contracts are implemented; bounded bus + subscriber migration remain |
 | Coordination topology model | Partial | Ingress routing exists; single-orchestrator control plane with flexible dependent agents is planned as default topology extension |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
@@ -59,6 +59,12 @@ A single Rust binary that lets users run AI coding agents across any messaging p
 6. **Transparent** — Real-time cost and context visibility.
 7. **Extensible** — Pipes, engines, plugins, skills — all pluggable via traits and config.
 8. **Adapter + event driven** — Integrations are adapter-based; runtime state changes are modeled as events to keep orchestration decoupled and auditable.
+
+### 2.1 Architecture Guardrail (Non-Negotiable)
+
+1. All new providers/channels/refiners/tools must integrate via shared adapter traits in `tengu-core`.
+2. Runtime orchestration (`src/main.rs`) must not grow provider-specific branches for new integrations.
+3. Runtime side-effects must move toward `DomainEvent` + `EventBus` subscribers; temporary inline behavior must be marked with migration TODOs and linked backlog tasks.
 
 ---
 
@@ -121,7 +127,7 @@ Pipe (Telegram/Discord/CLI/WebChat)
 2. **Event-driven runtime (required)**  
    Stream and lifecycle activity must be represented as typed events with deterministic terminal states.
 3. **Internal domain event bus (migration in progress)**  
-   Runtime side-effects (audit, metrics, policy reactions, diagnostics) should move from direct inline calls to subscriber handlers.
+   `DomainEvent` + `EventBus` contracts are implemented; runtime side-effects (audit, metrics, policy reactions, diagnostics) now migrate incrementally from direct inline calls to subscriber handlers.
 4. **Device profile compatibility (required)**  
    Event bus implementation must support minimal single-core deployments with bounded queues/backpressure and scale to multi-core machines with parallel subscribers.
 5. **Topology-flexible orchestration (required)**  

@@ -4,7 +4,7 @@
 
 ---
 
-## Current Implementation Snapshot (2026-02-19)
+## Current Implementation Snapshot (2026-02-20)
 
 This document describes full target architecture. The currently running path in code is narrower:
 
@@ -13,7 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + audit trail)
-- Not implemented yet: daemonized hub, external pipes, skill loader, internal domain event bus
+- Not implemented yet: daemonized hub, external pipes, skill loader, bounded internal domain event bus + subscriber migration
 
 ---
 
@@ -90,13 +90,19 @@ This document describes full target architecture. The currently running path in 
 2. **Event-driven activity**  
    Engines emit `StreamEvent` sequences; runtime handles tool lifecycle and usage as typed events.
 3. **Domain event bus migration (active backlog)**  
-   Next refactor phase introduces an internal bus so audit/metrics/policy reactions subscribe to events instead of coupling to `main.rs`.
+   `DomainEvent` + `EventBus` contracts are implemented; next phase adds bounded bus runtime and migrates audit/metrics/policy reactions to subscribers.
 4. **Hardware-scalable execution**  
    The same architecture must run with bounded queues on single-core/minimal devices and use parallel subscribers on multi-core hosts.
 5. **Topology-flexible orchestration**  
    Runtime keeps one orchestrator control plane while allowing a flexible set of dependent agents and adapter policies.
 6. **Single configuration surface**  
    One config block controls orchestration, policy, adapter rules, and default model inheritance for dependents.
+
+### 1.2 Conformance Rules (Required For Future Work)
+
+1. New provider/channel/refiner/tool code must be introduced behind `tengu-core` adapter traits, not runtime-specific branches.
+2. Runtime lifecycle transitions must use typed events (`StreamEvent` and `DomainEvent` families), not ad-hoc string protocols.
+3. New side-effects must target subscriber handlers over time; if temporarily inline, they must carry explicit migration references to `E11`.
 
 **Implemented runtime path (today):**
 
@@ -130,6 +136,7 @@ tengu-cluster/
 │   │       │   ├── mod.rs
 │   │       │   ├── schema.rs    # 15+ config structs, TOML parsing, env var substitution
 │   │       │   └── profile.rs   # Hardware detection, runtime profile selection
+│   │       ├── events.rs        # DomainEvent schema + EventBus trait (implemented)
 │   │       ├── routing/
 │   │       │   └── mod.rs       # 4-priority cascading router
 │   │       └── types/

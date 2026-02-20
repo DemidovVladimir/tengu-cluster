@@ -15,6 +15,15 @@ This document defines dependency rules for Tengu Cluster.
 3. Avoid third-party multi-provider abstraction crates in the core runtime.
 4. New dependencies must be optional behind feature flags unless required for baseline (`cli` + `ollama`).
 5. Keep default features lightweight and aligned with current implemented modules.
+6. Provider/channel/refiner/tool integrations must enter runtime only through `tengu-core` adapter traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
+7. Runtime side-effects (audit/metrics/policy reactions) must migrate to domain-event subscribers (`DomainEvent` + `EventBus`) instead of adding new tight inline coupling in `main.rs`.
+
+## Architecture Conformance Requirements
+
+For every new runtime-facing feature:
+1. Define or reuse adapter-trait contracts in `tengu-core` instead of introducing provider-specific logic branches in orchestration code.
+2. Emit/consume typed events for lifecycle transitions; avoid stringly-typed event payloads.
+3. Document current-vs-target state explicitly when event-bus migration is partial.
 
 ## Provider Decisions (as of 2026-02-17)
 

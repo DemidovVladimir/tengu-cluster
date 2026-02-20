@@ -1,6 +1,6 @@
 # Tengu Cluster - User Stories and Coverage Matrix
 
-Date: 2026-02-19
+Date: 2026-02-20
 Owner: Product + Architecture
 
 ## Purpose
@@ -261,11 +261,11 @@ Acceptance targets:
 
 Current coverage:
 - `Implemented` adapter boundaries via core traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
-- `Partial` event-driven execution via stream events and async channels in runtime.
-- `Missing` internal domain event bus and subscriber-based side-effect migration.
+- `Implemented` `DomainEvent`/`EventBus` core contracts in `tengu-core`.
+- `Partial` event-driven execution via stream events and async channels in runtime; bounded in-process bus and subscriber migration are pending.
 
 Required tasks:
-- `E11-T1` to `E11-T6`
+- `E11-T2` to `E11-T6`
 - `E10-T2` (stream/event contract hardening)
 
 ---

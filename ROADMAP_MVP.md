@@ -19,7 +19,7 @@
 | CLI Pipe | ✅ | `crates/tengu-channels/src/cli/mod.rs` |
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
-| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; internal domain event bus migration is pending |
+| Adapter + event-driven runtime baseline | ⚠️ Partial | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts are implemented and bounded bus migration is pending |
 | Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
@@ -40,7 +40,7 @@
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router implemented, serve runtime pending) |
 | Skills System | Config exists, loader not implemented |
-| Internal domain event bus | Planned (runtime currently orchestrates directly in `main.rs`) |
+| Internal domain event bus | ⚠️ In progress (`DomainEvent` + `EventBus` contracts done; bounded bus + emitters/subscribers pending) |
 | Single-orchestrator topology profile | Planned (docs/config shape defined; runtime execution pending) |
 
 ---
@@ -176,6 +176,13 @@ Week 5-6:  Sprint 5 (Polish)           ██████████
                                         ─────────────
                                         ~6 weeks to MVP
 ```
+
+## Architecture Acceptance Gate (All Sprints)
+
+Every sprint item that touches runtime orchestration must confirm:
+1. New integrations stay behind adapter traits in `tengu-core`.
+2. Lifecycle changes use typed events/contracts.
+3. Any temporary inline side-effect path is explicitly tagged for `E11` subscriber migration.
 
 ---
 

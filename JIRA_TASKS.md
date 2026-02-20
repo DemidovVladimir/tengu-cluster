@@ -1,9 +1,9 @@
 # Jira-Style Task Backlog
 
-Date: 2026-02-19
+Date: 2026-02-20
 Source: `EPICS_TASKS.md`
 
-## Status Snapshot (2026-02-19)
+## Status Snapshot (2026-02-20)
 
 | Key | Status | Comment |
 |---|---|---|
@@ -38,11 +38,11 @@ Source: `EPICS_TASKS.md`
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
 | E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) for policy/protocol/execution events |
 | E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
-| E11-T1 | Planned | Define domain event contract and event bus abstraction for runtime decoupling |
-| E11-T2 | Planned | Add in-process bounded event bus implementation with deterministic overflow policy |
+| E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
+| E11-T2 | Planned | Bounded in-process bus implementation with overflow policy pending |
 | E11-T3 | Planned | Migrate runtime side-effects (audit/metrics/policy hooks) to subscriber model incrementally |
 
-## Completed Start Task (2026-02-19)
+## Completed Start Task (2026-02-20)
 
 - `E5-T5` — Add stream ordering + terminal-state fixtures.
 - `E4-T1` — Implement Anthropic backend via typed REST.
@@ -52,10 +52,11 @@ Source: `EPICS_TASKS.md`
 - `E2-T7` — Align runtime output reserve with engine output cap.
 - `E10-T1` — Implement cross-field config validation.
 - `E10-T7` — Add config/runtime validation for capability governance boundaries.
+- `E11-T1` — Define runtime `DomainEvent` schema + `EventBus` abstraction.
 
 ## Next Start (2026-02-20)
 
-- `E11-T1` — Define domain event contract + event bus abstraction.
+- `E11-T2` — Implement bounded in-process event bus with explicit overflow policy.
 
 ## Epics
 
@@ -78,6 +79,10 @@ Source: `EPICS_TASKS.md`
 1. A task moves to `Done` only with code + docs update + validation evidence.
 2. An epic moves to `Done` only when all acceptance criteria and validation checks in `EPICS_TASKS.md` are closed.
 3. Evidence must include exact commands and outcomes (for example, `cargo test --workspace` pass).
+4. Architecture conformance must be shown for runtime changes:
+   - adapter boundary preserved (`Engine`/`Pipe`/`Refiner`/`Tool`)
+   - event contract preserved (`StreamEvent`/`DomainEvent`)
+   - no new long-lived inline side-effects without `E11` migration task linkage
 
 ## Epic E1 Tasks
 

@@ -1,7 +1,12 @@
 # Event Bus Migration Plan
 
-Date: 2026-02-19
+Date: 2026-02-20
 Related epic: `E11` (`EPICS_TASKS.md`, `JIRA_TASKS.md`)
+
+## Implementation Status (2026-02-20)
+
+1. ✅ `E11-T1`: `DomainEvent` v1 schema + `EventBus` trait implemented in `crates/tengu-core/src/events.rs`.
+2. ⏳ `E11-T2`: bounded in-process bus implementation is the active next step.
 
 ## Goal
 
@@ -13,6 +18,7 @@ Introduce an internal domain event bus to decouple runtime side-effects (audit/m
 2. Event handling must be bounded and deterministic on minimal single-core devices.
 3. Multi-core hosts can enable parallel subscribers for higher throughput.
 4. Migration is incremental; no big-bang runtime rewrite.
+5. New runtime side-effects should not add permanent inline coupling in `main.rs`; they must target subscriber paths or be explicitly marked as temporary.
 
 ## Domain Event v1 (Initial)
 
@@ -31,8 +37,8 @@ Introduce an internal domain event bus to decouple runtime side-effects (audit/m
 
 ### Phase 1: Contracts and Bus Core
 
-1. Define `DomainEvent` enum and payload structs (`E11-T1`).
-2. Define `EventBus` trait (`publish`, `subscribe`) with clear delivery semantics (`E11-T1`).
+1. ✅ Define `DomainEvent` enum and payload structs (`E11-T1`).
+2. ✅ Define `EventBus` trait (`publish`, `subscribe`) with clear delivery semantics (`E11-T1`).
 3. Implement bounded in-process bus with explicit overflow policy (`E11-T2`).
 
 Exit criteria:

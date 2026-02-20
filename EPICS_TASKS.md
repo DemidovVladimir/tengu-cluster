@@ -7,7 +7,7 @@ This backlog is derived from:
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `USER_STORIES.md`
 
-Date: 2026-02-19
+Date: 2026-02-20
 
 ## Priority Waves
 
@@ -17,7 +17,14 @@ Date: 2026-02-19
 | P1 | Provider/channel expansion + tool loop + observability | Enables real platform usage |
 | P2 | Advanced retrieval/refiner quality + schema evolution | Scale quality/performance after core is stable |
 
-## Progress Snapshot (2026-02-19)
+## Cross-Epic Architecture Guardrail
+
+All runtime-facing epics must preserve:
+1. Adapter-first integration boundaries via `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
+2. Typed event contracts for lifecycle behavior (`StreamEvent` now, `DomainEvent` bus migration for side-effects).
+3. Clear current-vs-target documentation when migration is partial (especially `E11` tasks).
+
+## Progress Snapshot (2026-02-20)
 
 Completed tasks:
 1. `E1-T1`
@@ -47,9 +54,10 @@ Completed tasks:
 25. `E4-T9`
 26. `E10-T1`
 27. `E10-T7`
+28. `E11-T1`
 
 Partially completed:
-1. `E11` internal event-bus migration planned and ready for incremental execution.
+1. `E11` internal event-bus migration started (`DomainEvent` contract + `EventBus` abstraction complete; bounded bus wiring pending).
 
 ## Epic Status Snapshot
 
@@ -65,7 +73,7 @@ Partially completed:
 | `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, and persists tool audit JSONL events; approvals/delegation flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
-| `E11` | In Progress | Adapter contracts and stream events are active; internal domain event bus migration is now tracked to decouple runtime side-effects. |
+| `E11` | In Progress | Adapter contracts and stream events are active; `DomainEvent`/`EventBus` contracts are implemented and bounded bus migration is in progress. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 

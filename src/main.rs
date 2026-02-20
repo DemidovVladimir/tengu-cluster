@@ -6,7 +6,8 @@
 //! Architecture notes:
 //! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
-//! - Internal domain event bus migration (`E11`) is planned to decouple side-effects from this file.
+//! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
+//!   contracts exist and side-effects will move to subscribers incrementally.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
