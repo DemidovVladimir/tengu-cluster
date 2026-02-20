@@ -613,6 +613,11 @@ Cross-agent collaboration policy (target):
 4. Directional policies are enforceable (example: allow `engineering -> marketing`, block `marketing -> engineering`).
 5. Direct workspace access across agents remains forbidden.
 
+Current baseline:
+1. Typed task/result envelopes are implemented in `crates/tengu-core/src/types/handoff.rs`.
+2. Domain-event payloads include handoff dispatch/result events for auditable wiring.
+3. Multi-agent execution loop that uses these envelopes is still pending.
+
 ### Config Structure per Agent (`config/schema.rs`)
 
 ```rust

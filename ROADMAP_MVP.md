@@ -38,7 +38,7 @@
 | WebChat Pipe | Feature flag exists, code not written |
 | Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path + config-driven approvals + pre-execution allow/deny checks implemented; broader toolset and delegated approvals pending) |
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
-| Multi-agent routing | Partial (router implemented, serve runtime pending) |
+| Multi-agent routing | Partial (router + typed handoff task/result envelopes implemented, serve/runtime execution loop pending) |
 | Skills System | Config exists, loader not implemented |
 | Internal domain event bus | ✅ Working (`DomainEvent` + `EventBus` contracts, bounded bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation implemented) |
 | Single-orchestrator topology profile | Planned (docs/config shape defined; runtime execution pending) |

@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 
+use crate::types::{HandoffResultEnvelope, HandoffTaskEnvelope};
+
 /// Stable stream type returned by event-bus subscribers.
 pub type DomainEventStream = Pin<Box<dyn Stream<Item = DomainEvent> + Send>>;
 
@@ -44,6 +46,8 @@ pub struct DomainEvent {
 /// Version note:
 /// This v1 schema mirrors `EVENT_BUS_MIGRATION_PLAN.md` and is intentionally
 /// minimal so producers/subscribers can evolve without breaking contracts.
+/// Handoff events are included as typed envelope carriers for future
+/// multi-agent orchestration paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DomainEventPayload {
     /// New inbound turn arrived from a channel adapter.
@@ -64,6 +68,10 @@ pub enum DomainEventPayload {
     ToolCallCompleted(ToolCallCompleted),
     /// Tool call denied by policy/approval/runtime checks.
     ToolCallDenied(ToolCallDenied),
+    /// Inter-agent task handoff dispatched.
+    HandoffTaskDispatched(HandoffTaskDispatched),
+    /// Inter-agent handoff result received.
+    HandoffResultReceived(HandoffResultReceived),
     /// Flow compaction replaced older history with summary.
     FlowCompacted(FlowCompacted),
 }
@@ -175,6 +183,20 @@ pub struct FlowCompacted {
     pub tokens_before: u64,
     /// Approximate token usage after compaction.
     pub tokens_after: u64,
+}
+
+/// Payload for `HandoffTaskDispatched`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffTaskDispatched {
+    /// Typed task envelope produced by sender agent.
+    pub envelope: HandoffTaskEnvelope,
+}
+
+/// Payload for `HandoffResultReceived`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandoffResultReceived {
+    /// Typed result envelope produced by receiver agent.
+    pub envelope: HandoffResultEnvelope,
 }
 
 /// Overflow handling policy for bounded bus implementations.

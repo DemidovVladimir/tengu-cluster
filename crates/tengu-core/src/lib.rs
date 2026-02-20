@@ -5,6 +5,8 @@
 //! Together these traits form the adapter layer for plug-and-play architecture.
 //! `types::StreamEvent` provides model-stream lifecycle events, and `events`
 //! defines internal runtime domain events for event-bus-driven side-effects.
+//! `types::handoff` defines inter-agent task/result envelopes for orchestrator
+//! delegation contracts.
 //!
 //! Potential use case:
 //! Implement a new provider/channel crate by depending only on these traits and shared types.

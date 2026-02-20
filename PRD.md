@@ -29,7 +29,7 @@ This document contains both current behavior and target-state requirements.
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
 | Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
-| Coordination topology model | Partial | Ingress routing exists; single-orchestrator control plane with flexible dependent agents is planned as default topology extension |
+| Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, while single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
 ---

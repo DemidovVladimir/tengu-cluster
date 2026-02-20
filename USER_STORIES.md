@@ -43,12 +43,12 @@ Acceptance targets:
 
 Current coverage:
 - `Partial`: multiple agents can be configured, but runtime path is still single-agent chat-first.
-- `Missing`: explicit hierarchy/delegation loop and inter-agent handoff protocol.
+- `Partial`: inter-agent handoff protocol is now defined as typed task/result envelopes, but explicit hierarchy/delegation execution loop is still missing.
 
 Required tasks:
 - `E6-T1`, `E6-T2`, `E6-T9`
 - `E7-T1`, `E7-T5`
-- `E8-T1`, `E8-T2`, `E8-T6`
+- `E8-T1`, `E8-T2`
 
 ---
 
@@ -142,7 +142,7 @@ Current coverage:
 Required tasks:
 - `E8-T1`, `E8-T2` partial baseline
 - `E8-T5` partial baseline
-- `E8-T6`, `E8-T7`
+- `E8-T7`
 
 ---
 
