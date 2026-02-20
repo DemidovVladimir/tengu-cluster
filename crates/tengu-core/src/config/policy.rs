@@ -6,7 +6,8 @@
 
 use anyhow::Result;
 
-use super::AgentConfig;
+use super::{AgentConfig, Config};
+use crate::types::HandoffTaskEnvelope;
 
 /// Decision emitted by engine allowlist policy evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,36 @@ impl ToolPolicyDecision {
         match self {
             Self::Allowed => "allowed",
             Self::DeniedEmptyName => "empty tool name",
+            Self::DeniedByDenyList => "blocked by deny list",
+            Self::DeniedNotAllowListed => "not listed in allow list",
+        }
+    }
+}
+
+/// Decision emitted by per-agent skill policy evaluation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillPolicyDecision {
+    /// Skill is allowed to run.
+    Allowed,
+    /// Skill name is empty after trim.
+    DeniedEmptyName,
+    /// Skill appears in deny list.
+    DeniedByDenyList,
+    /// Allow list is non-empty and skill is not included.
+    DeniedNotAllowListed,
+}
+
+impl SkillPolicyDecision {
+    /// Whether the evaluated skill usage is allowed.
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+
+    /// Human-readable policy reason used in runtime diagnostics.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::DeniedEmptyName => "empty skill name",
             Self::DeniedByDenyList => "blocked by deny list",
             Self::DeniedNotAllowListed => "not listed in allow list",
         }
@@ -119,6 +150,40 @@ pub fn evaluate_tool_policy(agent: &AgentConfig, tool_name: &str) -> ToolPolicyD
     }
 }
 
+/// Evaluate one skill identifier against per-agent `skill_policy.allow` / `skill_policy.deny`.
+///
+/// Policy contract:
+/// - `deny` always wins over `allow`.
+/// - Empty `allow` means "all skills allowed unless denied".
+/// - Non-empty `allow` means skill must be explicitly listed.
+pub fn evaluate_skill_policy(agent: &AgentConfig, skill_name: &str) -> SkillPolicyDecision {
+    let candidate = skill_name.trim();
+    if candidate.is_empty() {
+        return SkillPolicyDecision::DeniedEmptyName;
+    }
+
+    if agent
+        .skill_policy
+        .deny
+        .iter()
+        .any(|value| value.trim() == candidate)
+    {
+        return SkillPolicyDecision::DeniedByDenyList;
+    }
+
+    if agent.skill_policy.allow.is_empty()
+        || agent
+            .skill_policy
+            .allow
+            .iter()
+            .any(|value| value.trim() == candidate)
+    {
+        SkillPolicyDecision::Allowed
+    } else {
+        SkillPolicyDecision::DeniedNotAllowListed
+    }
+}
+
 /// Decision emitted by per-agent tool approval evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolApprovalDecision {
@@ -180,13 +245,207 @@ pub fn evaluate_tool_approval_policy(
     }
 }
 
+/// Decision emitted by inter-agent handoff capability policy checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandoffCapabilityPolicyDecision {
+    /// Requested handoff capabilities are allowed.
+    Allowed,
+    /// Task envelope failed structural validation.
+    DeniedInvalidTaskEnvelope { reason: String },
+    /// Sender or receiver agent is unknown to current config.
+    DeniedUnknownAgent { agent_id: String },
+    /// Delegated mode requires one orchestrator; sender is not that orchestrator.
+    DeniedSenderNotDelegatedOrchestrator {
+        sender_agent_id: String,
+        delegated_orchestrator_agent: String,
+    },
+    /// Capability request is denied by target-agent policy bounds.
+    DeniedCapability { capability: String, reason: String },
+}
+
+impl HandoffCapabilityPolicyDecision {
+    /// Whether requested handoff capabilities are allowed.
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+/// Enforce handoff capability requests against user/delegated governance mode.
+///
+/// Supported capability identifiers:
+/// - `tool:<name>`
+/// - `skill:<name>`
+/// - `engine:<provider/model>`
+pub fn evaluate_handoff_capability_policy(
+    config: &Config,
+    task: &HandoffTaskEnvelope,
+) -> HandoffCapabilityPolicyDecision {
+    if let Err(err) = task.validate() {
+        return HandoffCapabilityPolicyDecision::DeniedInvalidTaskEnvelope {
+            reason: err.to_string(),
+        };
+    }
+
+    let sender_id = task.from_agent_id.trim();
+    let receiver_id = task.to_agent_id.trim();
+    if !config.agents.contains_key(sender_id) {
+        return HandoffCapabilityPolicyDecision::DeniedUnknownAgent {
+            agent_id: sender_id.to_string(),
+        };
+    }
+    let Some(receiver_agent) = config.agents.get(receiver_id) else {
+        return HandoffCapabilityPolicyDecision::DeniedUnknownAgent {
+            agent_id: receiver_id.to_string(),
+        };
+    };
+
+    if config.capability_governance.mode.trim() == "delegated" {
+        let delegated = config
+            .capability_governance
+            .delegated_orchestrator_agent
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default();
+        if sender_id != delegated {
+            return HandoffCapabilityPolicyDecision::DeniedSenderNotDelegatedOrchestrator {
+                sender_agent_id: sender_id.to_string(),
+                delegated_orchestrator_agent: delegated.to_string(),
+            };
+        }
+    }
+
+    for capability in &task.requested_capabilities {
+        let capability = capability.trim();
+        if capability.is_empty() {
+            return HandoffCapabilityPolicyDecision::DeniedCapability {
+                capability: capability.to_string(),
+                reason: "capability identifier cannot be empty".to_string(),
+            };
+        }
+        let Some((kind, value)) = capability.split_once(':') else {
+            return HandoffCapabilityPolicyDecision::DeniedCapability {
+                capability: capability.to_string(),
+                reason: "invalid capability format (expected kind:value)".to_string(),
+            };
+        };
+        let value = value.trim();
+        if value.is_empty() {
+            return HandoffCapabilityPolicyDecision::DeniedCapability {
+                capability: capability.to_string(),
+                reason: "capability value cannot be empty".to_string(),
+            };
+        }
+
+        match kind.trim() {
+            "tool" => {
+                let tool_policy = evaluate_tool_policy(receiver_agent, value);
+                if !tool_policy.is_allowed() {
+                    return HandoffCapabilityPolicyDecision::DeniedCapability {
+                        capability: capability.to_string(),
+                        reason: format!("tool policy: {}", tool_policy.reason()),
+                    };
+                }
+                let approval_policy = evaluate_tool_approval_policy(receiver_agent, value, false);
+                if !approval_policy.is_allowed() {
+                    return HandoffCapabilityPolicyDecision::DeniedCapability {
+                        capability: capability.to_string(),
+                        reason: format!("tool approval: {}", approval_policy.reason()),
+                    };
+                }
+            }
+            "skill" => {
+                let skill_policy = evaluate_skill_policy(receiver_agent, value);
+                if !skill_policy.is_allowed() {
+                    return HandoffCapabilityPolicyDecision::DeniedCapability {
+                        capability: capability.to_string(),
+                        reason: format!("skill policy: {}", skill_policy.reason()),
+                    };
+                }
+            }
+            "engine" => {
+                if !evaluate_engine_override_policy(receiver_agent, value).is_allowed() {
+                    return HandoffCapabilityPolicyDecision::DeniedCapability {
+                        capability: capability.to_string(),
+                        reason: "engine is not in target allowed_engines".to_string(),
+                    };
+                }
+            }
+            other => {
+                return HandoffCapabilityPolicyDecision::DeniedCapability {
+                    capability: capability.to_string(),
+                    reason: format!("unsupported capability kind '{}'", other),
+                };
+            }
+        }
+    }
+
+    HandoffCapabilityPolicyDecision::Allowed
+}
+
+/// Decision for evaluating one runtime engine override request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineOverridePolicyDecision {
+    Allowed,
+    DeniedNotAllowListed,
+}
+
+impl EngineOverridePolicyDecision {
+    pub fn is_allowed(&self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+/// Evaluate whether `engine_key` is allowed as runtime override for an agent.
+///
+/// Policy contract:
+/// - Empty `allowed_engines` means "all overrides allowed".
+/// - Otherwise override must match one explicit `provider/model` entry.
+pub fn evaluate_engine_override_policy(
+    agent: &AgentConfig,
+    engine_key: &str,
+) -> EngineOverridePolicyDecision {
+    let normalized = engine_key.trim();
+    if normalized.is_empty() {
+        return EngineOverridePolicyDecision::DeniedNotAllowListed;
+    }
+    if agent.allowed_engines.is_empty()
+        || agent
+            .allowed_engines
+            .iter()
+            .any(|value| value.trim() == normalized)
+    {
+        EngineOverridePolicyDecision::Allowed
+    } else {
+        EngineOverridePolicyDecision::DeniedNotAllowListed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{AgentConfig, Config};
+    use crate::types::{HandoffTaskEnvelope, HANDOFF_SCHEMA_VERSION};
+    use std::collections::HashMap;
 
     fn agent() -> AgentConfig {
         Config::default().agents.get("main").expect("main").clone()
+    }
+
+    fn handoff_task(requested_capabilities: Vec<String>) -> HandoffTaskEnvelope {
+        HandoffTaskEnvelope {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            handoff_id: "handoff-1".to_string(),
+            flow_key: "flow-1".to_string(),
+            from_agent_id: "main".to_string(),
+            to_agent_id: "worker".to_string(),
+            objective: "Do a bounded subtask".to_string(),
+            constraints: Vec::new(),
+            requested_capabilities,
+            context_summary: None,
+            max_output_tokens: 256,
+            ttl_seconds: None,
+            metadata: HashMap::new(),
+        }
     }
 
     #[test]
@@ -264,5 +523,135 @@ mod tests {
             evaluate_tool_approval_policy(&agent, "read_file", true),
             ToolApprovalDecision::DeniedNotApproved
         );
+    }
+
+    #[test]
+    fn skill_policy_deny_has_precedence() {
+        let mut agent = agent();
+        agent.skill_policy.allow = vec!["analysis".to_string()];
+        agent.skill_policy.deny = vec!["analysis".to_string()];
+        assert_eq!(
+            evaluate_skill_policy(&agent, "analysis"),
+            SkillPolicyDecision::DeniedByDenyList
+        );
+    }
+
+    #[test]
+    fn engine_override_policy_uses_allowlist() {
+        let mut agent = agent();
+        agent.allowed_engines = vec!["openai/gpt-4o-mini".to_string()];
+        assert!(!evaluate_engine_override_policy(&agent, "anthropic/claude-3-7").is_allowed());
+        assert!(evaluate_engine_override_policy(&agent, "openai/gpt-4o-mini").is_allowed());
+    }
+
+    #[test]
+    fn handoff_capability_policy_allows_user_mode_when_bounds_pass() {
+        let mut config = Config::default();
+        config.agents.insert(
+            "worker".to_string(),
+            AgentConfig {
+                default: false,
+                engine: "openai".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: Default::default(),
+                flow: Default::default(),
+                limits: Default::default(),
+                lens: Default::default(),
+                kit: crate::config::KitConfig {
+                    allow: vec!["read_file".to_string()],
+                    deny: vec![],
+                    approval_required: vec![],
+                    approved: vec![],
+                },
+                store: Default::default(),
+                allowed_engines: vec!["openai/gpt-4o-mini".to_string()],
+                sandbox: Default::default(),
+                skill_policy: crate::config::SkillPolicyConfig {
+                    allow: vec!["analysis".to_string()],
+                    deny: vec![],
+                },
+            },
+        );
+        let task = handoff_task(vec![
+            "tool:read_file".to_string(),
+            "skill:analysis".to_string(),
+            "engine:openai/gpt-4o-mini".to_string(),
+        ]);
+        assert!(evaluate_handoff_capability_policy(&config, &task).is_allowed());
+    }
+
+    #[test]
+    fn handoff_capability_policy_denies_tool_outside_receiver_bounds() {
+        let mut config = Config::default();
+        config.agents.insert(
+            "worker".to_string(),
+            AgentConfig {
+                default: false,
+                engine: "ollama".to_string(),
+                model: "llama3.2".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: Default::default(),
+                flow: Default::default(),
+                limits: Default::default(),
+                lens: Default::default(),
+                kit: Default::default(),
+                store: Default::default(),
+                allowed_engines: vec![],
+                sandbox: Default::default(),
+                skill_policy: Default::default(),
+            },
+        );
+        let worker = config.agents.get_mut("main").expect("main");
+        worker.kit.allow = vec!["read_file".to_string()];
+        worker.kit.deny = vec!["shell".to_string()];
+        let task = HandoffTaskEnvelope {
+            from_agent_id: "worker".to_string(),
+            to_agent_id: "main".to_string(),
+            requested_capabilities: vec!["tool:shell".to_string()],
+            ..handoff_task(vec![])
+        };
+
+        let decision = evaluate_handoff_capability_policy(&config, &task);
+        assert!(matches!(
+            decision,
+            HandoffCapabilityPolicyDecision::DeniedCapability { .. }
+        ));
+    }
+
+    #[test]
+    fn handoff_capability_policy_denies_sender_outside_delegated_mode() {
+        let mut config = Config::default();
+        config.capability_governance.mode = "delegated".to_string();
+        config.capability_governance.delegated_orchestrator_agent =
+            Some("orchestrator".to_string());
+        config.agents.insert(
+            "worker".to_string(),
+            AgentConfig {
+                default: false,
+                engine: "ollama".to_string(),
+                model: "llama3.2".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: Default::default(),
+                flow: Default::default(),
+                limits: Default::default(),
+                lens: Default::default(),
+                kit: Default::default(),
+                store: Default::default(),
+                allowed_engines: vec![],
+                sandbox: Default::default(),
+                skill_policy: Default::default(),
+            },
+        );
+
+        let task = handoff_task(vec!["tool:read_file".to_string()]);
+        let decision = evaluate_handoff_capability_policy(&config, &task);
+        assert!(matches!(
+            decision,
+            HandoffCapabilityPolicyDecision::DeniedSenderNotDelegatedOrchestrator { .. }
+        ));
     }
 }

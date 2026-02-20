@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, and core handoff capability policy supports user/delegated orchestrator modes with typed envelope checks; delegated multi-agent runtime loop is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, while single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
@@ -770,6 +770,10 @@ deny = []
 # approval_required = ["write_file", "edit_file", "shell"]
 # approved = ["write_file"]
 
+[agents.main.skill_policy]
+allow = []
+deny = []
+
 [agents.main.store]
 files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
 
@@ -842,6 +846,10 @@ bind = "127.0.0.1:7071"
 [skills]
 watch = true
 extra_dirs = []
+
+[capability_governance]
+mode = "user" # user | delegated
+# delegated_orchestrator_agent = "orchestrator"
 ```
 
 ### Environment Variables

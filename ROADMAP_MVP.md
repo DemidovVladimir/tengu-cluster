@@ -36,7 +36,7 @@
 | Telegram Pipe | Feature flag exists, code not written |
 | Discord Pipe | Feature flag exists, code not written |
 | WebChat Pipe | Feature flag exists, code not written |
-| Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path + config-driven approvals + pre-execution allow/deny checks implemented; broader toolset and delegated approvals pending) |
+| Tool System (Kit) | ⚠️ Partial (`read_file` runtime tool + policy/audit path + config-driven approvals + pre-execution allow/deny checks + handoff capability policy evaluator implemented; broader toolset and delegated execution loop pending) |
 | Flow Persistence | Partial (CLI transcripts/index implemented, compaction/retention pending) |
 | Multi-agent routing | Partial (router + typed handoff task/result envelopes implemented, serve/runtime execution loop pending) |
 | Skills System | Config exists, loader not implemented |

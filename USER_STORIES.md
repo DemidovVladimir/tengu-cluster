@@ -235,12 +235,14 @@ Current coverage:
 - `Implemented` governance-boundary validation for `kit`, `allowed_engines`, `skills`, sandbox mode, and routing/pipe consistency.
 - `Partial` runtime enforcement for `allowed_engines` and `kit` in active execution path:
   - engine/model allowlist is enforced in runtime engine construction
-  - tool-call start events are checked against per-agent `kit` policy and fail closed until tool loop support exists
-- `Missing` skills loading/execution policy controls.
-- `Missing` delegated orchestrator control and audit pipeline.
+  - tool calls are checked against per-agent `kit` policy at start and before execution
+- `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
+- `Missing` skills loading/execution runtime path.
+- `Missing` delegated orchestrator execution loop and audit pipeline.
   References:
   - schema fields: `crates/tengu-core/src/config/schema.rs`
-  - runtime enforcement gap (no active usage paths): `src/main.rs`
+  - policy helpers: `crates/tengu-core/src/config/policy.rs`
+  - runtime execution gap (multi-agent path not yet active): `src/main.rs`
 
 Required tasks:
 - `E6-T10`

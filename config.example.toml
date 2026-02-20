@@ -62,6 +62,11 @@ deny = []
 # approval_required = ["write_file", "edit_file", "shell"]
 # approved = ["write_file"]
 
+[agents.main.skill_policy]
+# Optional skill allow/deny policy for runtime capability checks.
+allow = []
+deny = []
+
 [agents.main.store]
 files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
 
@@ -129,3 +134,9 @@ enabled = true
 [skills]
 watch = true
 extra_dirs = []
+
+[capability_governance]
+# "user" keeps capability usage strictly within user-defined static policy.
+# "delegated" lets one orchestrator request bounded capabilities via handoff envelopes.
+mode = "user"
+# delegated_orchestrator_agent = "orchestrator"

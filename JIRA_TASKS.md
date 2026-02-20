@@ -40,7 +40,7 @@ Source: `EPICS_TASKS.md`
 | E8-T4 | Done | Enforced allow/deny policy before execution (defense-in-depth gate in `execute_tool_call`) with denial event path and regression tests |
 | E8-T6 | Done | Added typed inter-agent handoff task/result envelopes with schema validation and domain-event payload integration for auditable dispatch/result lifecycle |
 | E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) persisted from tool lifecycle domain-event subscriber |
-| E8-T7 | In Progress | Added runtime capability-policy helpers and enforcement for engine selection + tool-call policy guards; skills/delegated orchestrator control pending |
+| E8-T7 | In Progress | Added capability-governance policy helpers for engine/tool/skill checks and handoff capability evaluation (`user`/`delegated` mode); delegated multi-agent runtime execution path is still pending |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
 | E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
 | E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |

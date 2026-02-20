@@ -30,6 +30,8 @@ pub struct Config {
 
     #[serde(default)]
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub capability_governance: CapabilityGovernanceConfig,
 }
 
 fn default_profile() -> String {
@@ -148,6 +150,8 @@ pub struct AgentConfig {
     pub allowed_engines: Vec<String>,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default)]
+    pub skill_policy: SkillPolicyConfig,
 }
 
 fn default_lens() -> String {
@@ -423,6 +427,43 @@ pub struct SkillsConfig {
     pub extra_dirs: Vec<String>,
 }
 
+/// Global capability-governance mode for runtime policy decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityGovernanceConfig {
+    /// Governance mode:
+    /// - `user`: only static user-defined per-agent capability sets are allowed.
+    /// - `delegated`: one orchestrator agent may request bounded capability usage.
+    #[serde(default = "default_capability_governance_mode")]
+    pub mode: String,
+    /// Agent id allowed to request delegated capability usage in `delegated` mode.
+    #[serde(default)]
+    pub delegated_orchestrator_agent: Option<String>,
+}
+
+impl Default for CapabilityGovernanceConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_capability_governance_mode(),
+            delegated_orchestrator_agent: None,
+        }
+    }
+}
+
+fn default_capability_governance_mode() -> String {
+    "user".to_string()
+}
+
+/// Skill allow/deny policy for one agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SkillPolicyConfig {
+    /// Optional allow-list. Empty means "all skills allowed unless denied".
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Explicit deny-list. Deny always wins.
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
 /// Aggregates config validation issues with reusable guard helpers.
 #[derive(Debug, Default)]
 struct ValidationErrors {
@@ -584,6 +625,32 @@ impl Config {
             !self.agents.is_empty(),
             "at least one agent must be configured",
         );
+        errors.require_one_of(
+            "capability_governance.mode",
+            &self.capability_governance.mode,
+            &["user", "delegated"],
+        );
+        if self.capability_governance.mode.trim() == "delegated" {
+            match self
+                .capability_governance
+                .delegated_orchestrator_agent
+                .as_deref()
+                .map(str::trim)
+            {
+                Some("") | None => errors.push(
+                    "capability_governance.mode=delegated requires capability_governance.delegated_orchestrator_agent"
+                        .to_string(),
+                ),
+                Some(agent_id) => {
+                    if !self.agents.contains_key(agent_id) {
+                        errors.push(format!(
+                            "capability_governance.delegated_orchestrator_agent '{}' does not match configured agents",
+                            agent_id
+                        ));
+                    }
+                }
+            }
+        }
 
         let default_count = self.agents.values().filter(|agent| agent.default).count();
         if default_count > 1 {
@@ -837,6 +904,21 @@ impl Config {
                 });
         }
 
+        let skill_allow_path = format!("agents.{agent_id}.skill_policy.allow");
+        let skill_deny_path = format!("agents.{agent_id}.skill_policy.deny");
+        let seen_skill_allow =
+            validate_nonempty_unique_entries(&skill_allow_path, &agent.skill_policy.allow, errors);
+        let seen_skill_deny =
+            validate_nonempty_unique_entries(&skill_deny_path, &agent.skill_policy.deny, errors);
+        seen_skill_allow
+            .intersection(&seen_skill_deny)
+            .for_each(|skill_name| {
+                errors.push(format!(
+                    "agents.{}.skill_policy.allow and skill_policy.deny both contain '{}'",
+                    agent_id, skill_name
+                ))
+            });
+
         let mut seen_allowed_engines = HashSet::<String>::new();
         let selected_engine = format!("{}/{}", agent.engine.trim(), agent.model.trim());
         agent
@@ -952,6 +1034,7 @@ impl Default for Config {
                 store: StoreConfig::default(),
                 allowed_engines: vec![],
                 sandbox: SandboxConfig::default(),
+                skill_policy: SkillPolicyConfig::default(),
             },
         );
 
@@ -974,6 +1057,7 @@ impl Default for Config {
                 webchat: None,
             },
             skills: SkillsConfig::default(),
+            capability_governance: CapabilityGovernanceConfig::default(),
         }
     }
 }
@@ -1080,5 +1164,30 @@ mod tests {
         assert!(err
             .to_string()
             .contains("cannot exceed context_window_override"));
+    }
+
+    #[test]
+    fn validate_rejects_skill_allow_deny_overlap() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.skill_policy.allow = vec!["analysis".to_string()];
+        main.skill_policy.deny = vec!["analysis".to_string()];
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("skill_policy.allow and skill_policy.deny"));
+    }
+
+    #[test]
+    fn validate_rejects_delegated_mode_without_orchestrator() {
+        let mut config = Config::default();
+        config.capability_governance.mode = "delegated".to_string();
+        config.capability_governance.delegated_orchestrator_agent = None;
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains(
+            "mode=delegated requires capability_governance.delegated_orchestrator_agent"
+        ));
     }
 }

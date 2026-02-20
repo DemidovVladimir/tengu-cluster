@@ -30,6 +30,7 @@ Current working baseline:
 - append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
+- capability governance policy evaluator for handoff requests (`user` vs `delegated` orchestrator mode) with bounded tool/skill/engine checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 

@@ -632,6 +632,7 @@ pub struct AgentConfig {
     pub limits: LimitsConfig,          // { max_tokens: 500_000, max_cost: 5.00 }
     pub lens: LensConfig,             // { eco_max_tokens: 100 }
     pub kit: KitConfig,               // { allow: [...], deny: [...] }
+    pub skill_policy: SkillPolicyConfig, // { allow: [...], deny: [...] }
     pub store: StoreConfig,            // { files: ["CONTEXT.md", ...] }
     pub allowed_engines: Vec<String>,  // Restrict engine switching
     pub sandbox: SandboxConfig,        // { mode: "workspace" | "docker" | "off" }
@@ -644,6 +645,7 @@ pub struct AgentConfig {
 |-----------|-------------|
 | **Workspace path** | Tools can only read/write within `agent.workspace`. Paths are canonicalized and checked against the workspace root. |
 | **Kit allow/deny** | Each agent has its own tool allowlist. Timur (kid) might have `[read_file]` only. Erzhan (business) gets `[read_file, write_file, shell]`. |
+| **Skill allow/deny** | Each agent has independent skill policy bounds used by capability-governance checks. |
 | **Flow scope** | `per-sender` means each Telegram user gets their own conversation history. Even if two users hit the same agent, they don't see each other's messages. |
 | **Limits** | Token and cost limits prevent a single agent from consuming excessive resources. |
 | **Sandbox** | `workspace` mode restricts shell to agent directory. `docker` runs shell commands in a container. |
@@ -1040,9 +1042,12 @@ Config
 │   ├── telegram: Option<TelegramPipeConfig>
 │   ├── discord: Option<DiscordPipeConfig>
 │   └── webchat: Option<WebchatPipeConfig>
-└── skills: SkillsConfig
-    ├── watch: bool                  # Hot-reload skills
-    └── extra_dirs: Vec<String>      # Additional skill directories
+├── skills: SkillsConfig
+│   ├── watch: bool                  # Hot-reload skills
+│   └── extra_dirs: Vec<String>      # Additional skill directories
+└── capability_governance: CapabilityGovernanceConfig
+    ├── mode: String                 # "user" | "delegated"
+    └── delegated_orchestrator_agent: Option<String>
 ```
 
 Target extension for single-orchestrator runtime:
