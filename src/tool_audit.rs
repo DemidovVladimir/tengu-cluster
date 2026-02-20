@@ -5,19 +5,19 @@
 //! outcomes so operators can inspect what happened across sessions.
 //!
 //! Migration note:
-//! Audit appends are currently called by runtime directly and are scheduled to
-//! move behind internal event-bus subscribers as part of `E11`.
+//! Runtime now appends audit records through an internal domain-event subscriber.
+//! Additional policy/metrics side-effects will follow the same subscriber model.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const TOOL_AUDIT_FILENAME: &str = "tool_calls.jsonl";
 
 /// Persistent append-only JSONL writer for tool audit records.
+#[derive(Clone)]
 pub struct ToolAuditStore {
     path: PathBuf,
 }
@@ -78,23 +78,6 @@ impl ToolAuditStore {
         file.flush()?;
         Ok(())
     }
-}
-
-/// Build a stable timestamp for audit events.
-pub fn audit_now_epoch_s() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-/// Truncate string payload for compact audit storage.
-pub fn truncate_audit_text(text: &str, max_chars: usize) -> String {
-    let mut out: String = text.chars().take(max_chars).collect();
-    if text.chars().count() > max_chars {
-        out.push_str("…");
-    }
-    out
 }
 
 #[cfg(test)]

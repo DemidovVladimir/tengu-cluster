@@ -41,6 +41,8 @@ Source: `EPICS_TASKS.md`
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
 | E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
 | E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |
+| E11-T4 | Done | Tool audit persistence migrated to event subscriber fed by tool lifecycle `DomainEvent`s |
+| E11-T5 | Planned | Metrics/policy subscriber handlers + lag/saturation diagnostics pending |
 
 ## Completed Start Task (2026-02-20)
 
@@ -55,10 +57,11 @@ Source: `EPICS_TASKS.md`
 - `E11-T1` — Define runtime `DomainEvent` schema + `EventBus` abstraction.
 - `E11-T2` — Implement bounded in-process event bus + overflow policy tests.
 - `E11-T3` — Emit runtime domain events from chat path without behavior regressions.
+- `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
 
 ## Next Start (2026-02-20)
 
-- `E11-T4` — Migrate tool audit writes to subscriber handler (event-driven side-effect).
+- `E11-T5` — Add metrics/policy subscribers and lag/saturation diagnostics.
 
 ## Epics
 

@@ -7,8 +7,8 @@
 //! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
 //! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
-//!   contracts, bounded in-process bus, and runtime emitters are implemented;
-//!   side-effects now move to subscribers incrementally.
+//!   contracts, bounded in-process bus, runtime emitters, and tool-audit subscriber
+//!   are implemented; remaining side-effects now move to subscribers incrementally.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -34,7 +34,7 @@ use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
-use tool_audit::{audit_now_epoch_s, truncate_audit_text, ToolAuditEvent, ToolAuditStore};
+use tool_audit::{ToolAuditEvent, ToolAuditStore};
 use tool_runtime::ToolRegistry;
 
 /// Fixed heading prepended to runtime retrieval context blocks.
@@ -152,7 +152,6 @@ struct ToolExecutionOutcome {
     user_message: String,
     status: &'static str,
     reason: Option<String>,
-    result_preview: Option<String>,
 }
 
 /// Mutable per-session runtime state for chat loop execution.
@@ -258,7 +257,7 @@ async fn main() -> Result<()> {
 ///
 /// Note:
 /// This function is intentionally transitional and will be decomposed further as
-/// internal event bus subscribers are introduced for audit/metrics/policy side-effects.
+/// additional event-bus subscribers are introduced for metrics/policy side-effects.
 async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     // Resolve default agent
     let (agent_id, agent_config) = config
@@ -304,6 +303,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             None
         }
     };
+    let mut tool_audit_subscriber = spawn_tool_audit_subscriber(&event_bus, tool_audit.clone());
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -577,7 +577,6 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             &tool_registry,
             &event_bus,
             &turn_correlation_id,
-            tool_audit.as_ref(),
             &mut state.total_input_tokens,
             &mut state.total_output_tokens,
         )
@@ -633,6 +632,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     }
 
     pipe.disconnect().await?;
+    if let Some(handle) = tool_audit_subscriber.take() {
+        handle.abort();
+    }
     Ok(())
 }
 
@@ -782,7 +784,6 @@ async fn collect_engine_response(
     tool_registry: &ToolRegistry,
     event_bus: &dyn EventBus,
     turn_correlation_id: &str,
-    tool_audit: Option<&ToolAuditStore>,
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
 ) -> Result<String> {
@@ -835,23 +836,6 @@ async fn collect_engine_response(
                         )
                         .await;
                         if pending_tool_call.is_some() {
-                            append_tool_audit(
-                                tool_audit,
-                                ToolAuditEvent {
-                                    ts_epoch_s: audit_now_epoch_s(),
-                                    flow_key: flow_key.to_string(),
-                                    agent_id: agent_id.to_string(),
-                                    tool_call_id: id.clone(),
-                                    tool_name: name.clone(),
-                                    phase: "protocol".to_string(),
-                                    status: "error".to_string(),
-                                    reason: Some(
-                                        "runtime supports only one active tool call".to_string(),
-                                    ),
-                                    arguments_preview: None,
-                                    result_preview: None,
-                                },
-                            );
                             emit_domain_event(
                                 event_bus,
                                 Some(agent_id),
@@ -860,6 +844,7 @@ async fn collect_engine_response(
                                 DomainEventPayload::ToolCallDenied(ToolCallDenied {
                                     tool_call_id: id.clone(),
                                     tool_name: name.clone(),
+                                    phase: "protocol".to_string(),
                                     reason: "runtime supports only one active tool call"
                                         .to_string(),
                                 }),
@@ -873,21 +858,6 @@ async fn collect_engine_response(
                         }
                         let decision = evaluate_tool_policy(agent_config, &name);
                         if !decision.is_allowed() {
-                            append_tool_audit(
-                                tool_audit,
-                                ToolAuditEvent {
-                                    ts_epoch_s: audit_now_epoch_s(),
-                                    flow_key: flow_key.to_string(),
-                                    agent_id: agent_id.to_string(),
-                                    tool_call_id: id.clone(),
-                                    tool_name: name.clone(),
-                                    phase: "policy".to_string(),
-                                    status: "denied".to_string(),
-                                    reason: Some(decision.reason().to_string()),
-                                    arguments_preview: None,
-                                    result_preview: None,
-                                },
-                            );
                             policy_terminal_message = Some(format!(
                                 "Tool call '{}' denied by policy for agent '{}': {}",
                                 name,
@@ -908,27 +878,13 @@ async fn collect_engine_response(
                                 DomainEventPayload::ToolCallDenied(ToolCallDenied {
                                     tool_call_id: id.clone(),
                                     tool_name: name.clone(),
+                                    phase: "policy".to_string(),
                                     reason: decision.reason().to_string(),
                                 }),
                             )
                             .await;
                             break;
                         }
-                        append_tool_audit(
-                            tool_audit,
-                            ToolAuditEvent {
-                                ts_epoch_s: audit_now_epoch_s(),
-                                flow_key: flow_key.to_string(),
-                                agent_id: agent_id.to_string(),
-                                tool_call_id: id.clone(),
-                                tool_name: name.clone(),
-                                phase: "policy".to_string(),
-                                status: "allowed".to_string(),
-                                reason: None,
-                                arguments_preview: None,
-                                result_preview: None,
-                            },
-                        );
                         pending_tool_call = Some(PendingToolCall {
                             id,
                             name,
@@ -941,27 +897,22 @@ async fn collect_engine_response(
                     } => {
                         if let Some(pending) = pending_tool_call.as_mut() {
                             if pending.id != id {
-                                append_tool_audit(
-                                    tool_audit,
-                                    ToolAuditEvent {
-                                        ts_epoch_s: audit_now_epoch_s(),
-                                        flow_key: flow_key.to_string(),
-                                        agent_id: agent_id.to_string(),
+                                emit_domain_event(
+                                    event_bus,
+                                    Some(agent_id),
+                                    Some(flow_key),
+                                    Some(turn_correlation_id),
+                                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
                                         tool_call_id: pending.id.clone(),
                                         tool_name: pending.name.clone(),
                                         phase: "protocol".to_string(),
-                                        status: "error".to_string(),
-                                        reason: Some(format!(
+                                        reason: format!(
                                             "delta id mismatch: expected '{}', got '{}'",
                                             pending.id, id
-                                        )),
-                                        arguments_preview: Some(truncate_audit_text(
-                                            &pending.arguments_delta,
-                                            256,
-                                        )),
-                                        result_preview: None,
-                                    },
-                                );
+                                        ),
+                                    }),
+                                )
+                                .await;
                                 policy_terminal_message = Some(format!(
                                     "Tool call delta id mismatch: expected '{}', got '{}'.",
                                     pending.id, id
@@ -974,27 +925,22 @@ async fn collect_engine_response(
                     tengu_core::types::StreamEvent::ToolCallEnd { id } => {
                         if let Some(pending) = pending_tool_call.take() {
                             if pending.id != id {
-                                append_tool_audit(
-                                    tool_audit,
-                                    ToolAuditEvent {
-                                        ts_epoch_s: audit_now_epoch_s(),
-                                        flow_key: flow_key.to_string(),
-                                        agent_id: agent_id.to_string(),
+                                emit_domain_event(
+                                    event_bus,
+                                    Some(agent_id),
+                                    Some(flow_key),
+                                    Some(turn_correlation_id),
+                                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
                                         tool_call_id: pending.id.clone(),
                                         tool_name: pending.name.clone(),
                                         phase: "protocol".to_string(),
-                                        status: "error".to_string(),
-                                        reason: Some(format!(
+                                        reason: format!(
                                             "end id mismatch: expected '{}', got '{}'",
                                             pending.id, id
-                                        )),
-                                        arguments_preview: Some(truncate_audit_text(
-                                            &pending.arguments_delta,
-                                            256,
-                                        )),
-                                        result_preview: None,
-                                    },
-                                );
+                                        ),
+                                    }),
+                                )
+                                .await;
                                 policy_terminal_message = Some(format!(
                                     "Tool call end id mismatch: expected '{}', got '{}'.",
                                     pending.id, id
@@ -1016,32 +962,11 @@ async fn collect_engine_response(
                                 DomainEventPayload::ToolCallCompleted(ToolCallCompleted {
                                     tool_call_id: pending.id.clone(),
                                     tool_name: pending.name.clone(),
-                                    status: if outcome.status == "ok" {
-                                        "ok".to_string()
-                                    } else {
-                                        "error".to_string()
-                                    },
+                                    status: outcome.status.to_string(),
+                                    reason: outcome.reason.clone(),
                                 }),
                             )
                             .await;
-                            append_tool_audit(
-                                tool_audit,
-                                ToolAuditEvent {
-                                    ts_epoch_s: audit_now_epoch_s(),
-                                    flow_key: flow_key.to_string(),
-                                    agent_id: agent_id.to_string(),
-                                    tool_call_id: pending.id.clone(),
-                                    tool_name: pending.name.clone(),
-                                    phase: "execute".to_string(),
-                                    status: outcome.status.to_string(),
-                                    reason: outcome.reason.clone(),
-                                    arguments_preview: Some(truncate_audit_text(
-                                        &pending.arguments_delta,
-                                        256,
-                                    )),
-                                    result_preview: outcome.result_preview.clone(),
-                                },
-                            );
                             tool_runtime_messages.push(outcome.user_message);
                         }
                     }
@@ -1070,21 +995,6 @@ async fn collect_engine_response(
                 return Ok(message);
             }
             if let Some(pending) = pending_tool_call {
-                append_tool_audit(
-                    tool_audit,
-                    ToolAuditEvent {
-                        ts_epoch_s: audit_now_epoch_s(),
-                        flow_key: flow_key.to_string(),
-                        agent_id: agent_id.to_string(),
-                        tool_call_id: pending.id.clone(),
-                        tool_name: pending.name.clone(),
-                        phase: "protocol".to_string(),
-                        status: "error".to_string(),
-                        reason: Some("missing ToolCallEnd".to_string()),
-                        arguments_preview: Some(truncate_audit_text(&pending.arguments_delta, 256)),
-                        result_preview: None,
-                    },
-                );
                 emit_domain_event(
                     event_bus,
                     Some(agent_id),
@@ -1093,6 +1003,7 @@ async fn collect_engine_response(
                     DomainEventPayload::ToolCallDenied(ToolCallDenied {
                         tool_call_id: pending.id.clone(),
                         tool_name: pending.name.clone(),
+                        phase: "protocol".to_string(),
                         reason: "missing ToolCallEnd".to_string(),
                     }),
                 )
@@ -1161,7 +1072,6 @@ async fn execute_tool_call(
                     ),
                     status: "parse_error",
                     reason: Some(err.to_string()),
-                    result_preview: None,
                 };
             }
         }
@@ -1172,7 +1082,6 @@ async fn execute_tool_call(
             user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
             status: "not_registered",
             reason: Some("tool is not registered".to_string()),
-            result_preview: None,
         };
     }
 
@@ -1184,7 +1093,6 @@ async fn execute_tool_call(
             ),
             status: "workspace_missing",
             reason: Some("workspace is not configured".to_string()),
-            result_preview: None,
         };
     };
 
@@ -1200,36 +1108,89 @@ async fn execute_tool_call(
             user_message: format!("[tool:{} error]\n{}", pending.name, output.content),
             status: "error",
             reason: Some("tool returned error output".to_string()),
-            result_preview: Some(truncate_audit_text(&output.content, 512)),
         },
         Ok(output) => ToolExecutionOutcome {
             user_message: format!("[tool:{} ok]\n{}", pending.name, output.content),
             status: "ok",
             reason: None,
-            result_preview: Some(truncate_audit_text(&output.content, 512)),
         },
         Err(err) => ToolExecutionOutcome {
             user_message: format!("[tool:{} error]\n{}", pending.name, err),
             status: "exec_error",
             reason: Some(err.to_string()),
-            result_preview: None,
         },
     }
 }
 
-/// Append tool audit event and keep runtime resilient on audit write failure.
-fn append_tool_audit(store: Option<&ToolAuditStore>, event: ToolAuditEvent) {
-    let Some(store) = store else {
-        return;
-    };
-    if let Err(err) = store.append(&event) {
-        warn!(
-            error = %err,
-            tool = %event.tool_name,
-            phase = %event.phase,
-            status = %event.status,
-            "Failed to append tool audit event"
-        );
+/// Spawn tool-audit subscriber that persists tool lifecycle domain events to JSONL.
+fn spawn_tool_audit_subscriber(
+    event_bus: &InProcessEventBus,
+    store: Option<ToolAuditStore>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let store = store?;
+    let mut stream = event_bus.subscribe();
+    Some(tokio::spawn(async move {
+        while let Some(event) = stream.next().await {
+            let Some(audit_event) = map_domain_event_to_tool_audit_event(&event) else {
+                continue;
+            };
+            if let Err(err) = store.append(&audit_event) {
+                warn!(
+                    error = %err,
+                    tool = %audit_event.tool_name,
+                    phase = %audit_event.phase,
+                    status = %audit_event.status,
+                    "Failed to append tool audit event from subscriber"
+                );
+            }
+        }
+    }))
+}
+
+/// Convert emitted domain events into persisted tool audit records.
+fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Option<ToolAuditEvent> {
+    let flow_key = event.meta.flow_key.clone()?;
+    let agent_id = event.meta.agent_id.clone()?;
+    let ts_epoch_s = event.meta.ts_epoch_ms / 1000;
+
+    match &event.payload {
+        DomainEventPayload::ToolCallStarted(payload) => Some(ToolAuditEvent {
+            ts_epoch_s,
+            flow_key,
+            agent_id,
+            tool_call_id: payload.tool_call_id.clone(),
+            tool_name: payload.tool_name.clone(),
+            phase: "protocol".to_string(),
+            status: "started".to_string(),
+            reason: None,
+            arguments_preview: None,
+            result_preview: None,
+        }),
+        DomainEventPayload::ToolCallCompleted(payload) => Some(ToolAuditEvent {
+            ts_epoch_s,
+            flow_key,
+            agent_id,
+            tool_call_id: payload.tool_call_id.clone(),
+            tool_name: payload.tool_name.clone(),
+            phase: "execute".to_string(),
+            status: payload.status.clone(),
+            reason: payload.reason.clone(),
+            arguments_preview: None,
+            result_preview: None,
+        }),
+        DomainEventPayload::ToolCallDenied(payload) => Some(ToolAuditEvent {
+            ts_epoch_s,
+            flow_key,
+            agent_id,
+            tool_call_id: payload.tool_call_id.clone(),
+            tool_name: payload.tool_name.clone(),
+            phase: payload.phase.clone(),
+            status: "denied".to_string(),
+            reason: Some(payload.reason.clone()),
+            arguments_preview: None,
+            result_preview: None,
+        }),
+        _ => None,
     }
 }
 

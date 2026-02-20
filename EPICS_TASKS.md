@@ -57,9 +57,10 @@ Completed tasks:
 28. `E11-T1`
 29. `E11-T2`
 30. `E11-T3`
+31. `E11-T4`
 
 Partially completed:
-1. `E11` internal event-bus migration started (`DomainEvent` contract + `EventBus` abstraction + bounded bus + runtime emitters complete; subscriber migration pending).
+1. `E11` internal event-bus migration started (`DomainEvent` contract + `EventBus` abstraction + bounded bus + runtime emitters + tool-audit subscriber complete; metrics/policy subscribers pending).
 
 ## Epic Status Snapshot
 
@@ -75,7 +76,7 @@ Partially completed:
 | `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, and persists tool audit JSONL events; approvals/delegation flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
-| `E11` | In Progress | Adapter contracts, stream events, bounded in-process bus, and runtime emitters are implemented; subscriber migration is pending. |
+| `E11` | In Progress | Adapter contracts, stream events, bounded bus, runtime emitters, and tool-audit subscriber are implemented; metrics/policy subscribers are pending. |
 
 ## Epic E1: Flow Persistence and Session Resilience (P0)
 

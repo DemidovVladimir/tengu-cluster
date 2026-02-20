@@ -14,7 +14,7 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked `read_file`, and persists append-only tool audit records; broader tool loop and approvals are pending |
+| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked `read_file`, and persists append-only tool audit records via event subscriber; broader tool loop and approvals are pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
@@ -28,7 +28,7 @@ This document contains both current behavior and target-state requirements.
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
 | Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events with persisted audit records, while delegated orchestrator control is pending |
-| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters are implemented; subscriber migration remains |
+| Architecture style | Partial | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + tool-audit subscriber are implemented; metrics/policy subscriber migration remains |
 | Coordination topology model | Partial | Ingress routing exists; single-orchestrator control plane with flexible dependent agents is planned as default topology extension |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
 
@@ -127,7 +127,7 @@ Pipe (Telegram/Discord/CLI/WebChat)
 2. **Event-driven runtime (required)**  
    Stream and lifecycle activity must be represented as typed events with deterministic terminal states.
 3. **Internal domain event bus (migration in progress)**  
-   `DomainEvent` + `EventBus` contracts, bounded in-process bus, and runtime emitters are implemented; runtime side-effects (audit, metrics, policy reactions, diagnostics) now migrate incrementally from direct inline calls to subscriber handlers.
+   `DomainEvent` + `EventBus` contracts, bounded in-process bus, runtime emitters, and tool-audit subscriber are implemented; remaining side-effects (metrics, policy reactions, diagnostics) now migrate incrementally from direct inline calls to subscriber handlers.
 4. **Device profile compatibility (required)**  
    Event bus implementation must support minimal single-core deployments with bounded queues/backpressure and scale to multi-core machines with parallel subscribers.
 5. **Topology-flexible orchestration (required)**  
@@ -406,7 +406,7 @@ Planned built-in tools:
 
 - Oversized tool-result token guard/truncation utility (implemented in core and applied by runtime tool registry)
 - Per-agent allow/deny lists
-- Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events)
+- Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events via event subscriber)
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries

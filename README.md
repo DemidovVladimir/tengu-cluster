@@ -4,7 +4,7 @@ Fast, low-cost Rust agent hub for business workflows across chat channels.
 
 Architecture style:
 - Adapter-first runtime boundaries (`Engine`, `Pipe`, `Refiner`, `Tool`) for plug-and-play providers/channels/tools.
-- Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, and runtime emitters implemented; subscriber migration tracked in backlog.
+- Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, and tool-audit subscriber implemented; metrics/policy subscribers tracked in backlog.
 
 Architecture guardrail:
 - New providers/channels/tools/refiners must be added via `tengu-core` adapter traits and must not introduce provider-specific orchestration coupling in `src/main.rs`.
@@ -27,7 +27,7 @@ Current working baseline:
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
-- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) for runtime tool policy/execution events
+- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 

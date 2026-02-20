@@ -145,8 +145,11 @@ pub struct ToolCallCompleted {
     pub tool_call_id: String,
     /// Tool name that was executed.
     pub tool_name: String,
-    /// Outcome status (`ok` or `error`).
+    /// Outcome status (for example: `ok`, `parse_error`, `exec_error`).
     pub status: String,
+    /// Optional reason for non-ok outcomes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Payload for `ToolCallDenied`.
@@ -156,6 +159,8 @@ pub struct ToolCallDenied {
     pub tool_call_id: String,
     /// Tool name requested by model.
     pub tool_name: String,
+    /// Decision phase (`policy` or `protocol`).
+    pub phase: String,
     /// Policy/approval/runtime reason for denial.
     pub reason: String,
 }
