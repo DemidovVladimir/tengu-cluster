@@ -140,5 +140,6 @@ extra_dirs = []
 # "delegated" lets one orchestrator request bounded capabilities via handoff envelopes.
 # In delegated mode, chat runtime exposes `/assign` and `/assignments` commands
 # for bounded dependent capability assignment by delegated orchestrator.
+# Assignment lifecycle events are persisted to `~/.tengu/state/audit/capability_assignments.jsonl`.
 mode = "user"
 # delegated_orchestrator_agent = "orchestrator"

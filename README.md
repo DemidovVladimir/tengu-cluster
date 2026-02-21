@@ -28,6 +28,7 @@ Current working baseline:
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
+- append-only delegated assignment audit trail (`~/.tengu/state/audit/capability_assignments.jsonl`) persisted by event subscriber from handoff lifecycle events
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks

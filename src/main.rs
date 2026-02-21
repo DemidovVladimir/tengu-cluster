@@ -18,11 +18,13 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 mod control_plane;
+mod control_plane_audit;
 mod flow_store;
 mod tool_audit;
 mod tool_runtime;
 
 use control_plane::{build_assignment_envelope, parse_assign_command, CapabilityAssignmentRecord};
+use control_plane_audit::{ControlPlaneAuditEvent, ControlPlaneAuditStore};
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
@@ -346,8 +348,17 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             None
         }
     };
+    let control_plane_audit = match ControlPlaneAuditStore::new(&resolve_tengu_home()) {
+        Ok(store) => Some(store),
+        Err(err) => {
+            warn!(error = %err, "Control-plane audit store unavailable; continuing without assignment audit persistence");
+            None
+        }
+    };
     let mut tool_audit_subscriber =
         spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
+    let mut control_plane_audit_subscriber =
+        spawn_control_plane_audit_subscriber(Arc::clone(&event_bus), control_plane_audit.clone());
     let mut event_metrics_subscriber =
         spawn_event_metrics_subscriber(Arc::clone(&event_bus), event_bus_cfg.metrics_log_every);
     let mut policy_reaction_subscriber = spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
@@ -705,6 +716,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     pipe.disconnect().await?;
     if let Some(handle) = tool_audit_subscriber.take() {
+        handle.abort();
+    }
+    if let Some(handle) = control_plane_audit_subscriber.take() {
         handle.abort();
     }
     if let Some(handle) = event_metrics_subscriber.take() {
@@ -1426,6 +1440,30 @@ fn spawn_tool_audit_subscriber(
     }))
 }
 
+/// Spawn control-plane audit subscriber for delegated assignment lifecycle events.
+fn spawn_control_plane_audit_subscriber(
+    event_bus: Arc<InProcessEventBus>,
+    store: Option<ControlPlaneAuditStore>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let store = store?;
+    let mut stream = event_bus.subscribe();
+    Some(tokio::spawn(async move {
+        while let Some(event) = stream.next().await {
+            let Some(audit_event) = map_domain_event_to_control_plane_audit_event(&event) else {
+                continue;
+            };
+            if let Err(err) = store.append(&audit_event) {
+                warn!(
+                    error = %err,
+                    handoff_id = %audit_event.handoff_id,
+                    status = %audit_event.status,
+                    "Failed to append control-plane audit event from subscriber"
+                );
+            }
+        }
+    }))
+}
+
 #[derive(Debug, Default)]
 struct EventMetricsState {
     total_events: u64,
@@ -1611,6 +1649,44 @@ fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Option<ToolAudit
             arguments_preview: None,
             result_preview: None,
         }),
+        _ => None,
+    }
+}
+
+/// Convert emitted domain events into persisted delegated assignment audit records.
+fn map_domain_event_to_control_plane_audit_event(
+    event: &DomainEvent,
+) -> Option<ControlPlaneAuditEvent> {
+    let ts_epoch_s = event.meta.ts_epoch_ms / 1000;
+
+    match &event.payload {
+        DomainEventPayload::HandoffTaskDispatched(payload) => Some(ControlPlaneAuditEvent {
+            ts_epoch_s,
+            flow_key: payload.envelope.flow_key.clone(),
+            handoff_id: payload.envelope.handoff_id.clone(),
+            orchestrator_agent_id: payload.envelope.from_agent_id.clone(),
+            dependent_agent_id: payload.envelope.to_agent_id.clone(),
+            status: "approved".to_string(),
+            reason: None,
+            requested_capabilities: payload.envelope.requested_capabilities.clone(),
+            objective: Some(payload.envelope.objective.clone()),
+        }),
+        DomainEventPayload::HandoffResultReceived(payload) => {
+            if payload.envelope.status != HandoffResultStatus::Denied {
+                return None;
+            }
+            Some(ControlPlaneAuditEvent {
+                ts_epoch_s,
+                flow_key: payload.envelope.flow_key.clone(),
+                handoff_id: payload.envelope.handoff_id.clone(),
+                orchestrator_agent_id: payload.envelope.to_agent_id.clone(),
+                dependent_agent_id: payload.envelope.from_agent_id.clone(),
+                status: "denied".to_string(),
+                reason: payload.envelope.error_reason.clone(),
+                requested_capabilities: Vec::new(),
+                objective: None,
+            })
+        }
         _ => None,
     }
 }
@@ -3045,5 +3121,74 @@ mod tests {
 
         let decision = evaluate_tool_policy(agent, "shell");
         assert!(!decision.is_allowed());
+    }
+
+    #[test]
+    fn control_plane_audit_map_captures_handoff_dispatch() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 1_000,
+                flow_key: Some("ignored-meta-flow".to_string()),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some("corr-1".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffTaskDispatched(HandoffTaskDispatched {
+                envelope: tengu_core::types::HandoffTaskEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-1".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "main".to_string(),
+                    to_agent_id: "worker".to_string(),
+                    objective: "Inspect one file".to_string(),
+                    constraints: vec!["bounded-by-user-policy".to_string()],
+                    requested_capabilities: vec!["tool:read_file".to_string()],
+                    context_summary: None,
+                    max_output_tokens: 256,
+                    ttl_seconds: Some(300),
+                    metadata: std::collections::HashMap::new(),
+                },
+            }),
+        };
+
+        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
+        assert_eq!(mapped.status, "approved");
+        assert_eq!(mapped.flow_key, "flow-1");
+        assert_eq!(mapped.orchestrator_agent_id, "main");
+        assert_eq!(mapped.dependent_agent_id, "worker");
+    }
+
+    #[test]
+    fn control_plane_audit_map_captures_handoff_denial() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 2_000,
+                flow_key: Some("flow-1".to_string()),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some("corr-2".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-2".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "worker".to_string(),
+                    to_agent_id: "main".to_string(),
+                    status: HandoffResultStatus::Denied,
+                    summary: String::new(),
+                    artifacts: Vec::new(),
+                    output_tokens: 0,
+                    error_reason: Some("policy denied".to_string()),
+                    metadata: std::collections::HashMap::new(),
+                },
+            }),
+        };
+
+        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
+        assert_eq!(mapped.status, "denied");
+        assert_eq!(mapped.reason.as_deref(), Some("policy denied"));
+        assert_eq!(mapped.orchestrator_agent_id, "main");
+        assert_eq!(mapped.dependent_agent_id, "worker");
     }
 }

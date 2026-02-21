@@ -78,7 +78,7 @@ Partially completed:
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
 | `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google/HF and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`) with user-boundary checks and handoff events; multi-pipe lifecycle and multi-agent execution loop remain pending. |
+| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`) with user-boundary checks, handoff events, and persisted assignment audit events; multi-pipe lifecycle and multi-agent execution loop remain pending. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
 | `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, persists tool audit JSONL events, defines typed inter-agent handoff task/result envelopes, and enforces capability governance in runtime (`user` vs `delegated` actor gate) plus tool/skill/engine handoff policy checks; delegated multi-agent execution flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |

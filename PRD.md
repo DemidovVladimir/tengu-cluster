@@ -408,6 +408,7 @@ Planned built-in tools:
 - Oversized tool-result token guard/truncation utility (implemented in core and applied by runtime tool registry)
 - Per-agent allow/deny lists
 - Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events via event subscriber)
+- Append-only delegated assignment audit log at `~/.tengu/state/audit/capability_assignments.jsonl` (handoff dispatch/denial events via event subscriber)
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries

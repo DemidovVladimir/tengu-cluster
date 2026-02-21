@@ -241,6 +241,7 @@ Current coverage:
 - `Partial` delegated control-plane baseline:
   - chat runtime supports `/assign` + `/assignments` for bounded dependent capability assignment
   - emitted handoff lifecycle events capture approved and denied assignment attempts
+  - assignment approvals/denials are persisted as append-only JSONL audit records
 - `Missing` skills loading/execution runtime path.
 - `Missing` delegated orchestrator execution loop and audit pipeline.
   References:

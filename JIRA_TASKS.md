@@ -34,7 +34,7 @@ Source: `EPICS_TASKS.md`
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
-| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`) with user-boundary checks and handoff lifecycle events; full multi-agent execution loop integration remains pending under `E6-T9` |
+| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`) with user-boundary checks, handoff lifecycle events, and persisted assignment audit JSONL; full multi-agent execution loop integration remains pending under `E6-T9` |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
 | E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
