@@ -29,10 +29,12 @@ Current working baseline:
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
 - append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
 - append-only delegated assignment audit trail (`~/.tengu/state/audit/capability_assignments.jsonl`) persisted by event subscriber from handoff lifecycle events
+- startup replay of approved delegated assignments from audit log (`/assignments` survives restarts)
+- delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry and startup audit-log pruning
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks
-- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`) with user-boundary checks
+- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
@@ -115,6 +117,8 @@ Useful commands inside chat:
 - `/context`
 - `/assign <dependent> <cap1,cap2,...> [objective...]` (delegated mode)
 - `/assignments` (delegated mode)
+- `/unassign <handoff-id|dependent-agent-id>` (delegated mode)
+- `/assignments clear` (delegated mode)
 - `/eco`, `/standard`, `/precise`
 - `/reset`
 

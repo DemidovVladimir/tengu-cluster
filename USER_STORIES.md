@@ -239,9 +239,11 @@ Current coverage:
   - in `mode=delegated`, only configured orchestrator can request direct capabilities in active runtime path
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
 - `Partial` delegated control-plane baseline:
-  - chat runtime supports `/assign` + `/assignments` for bounded dependent capability assignment
+  - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear` for bounded delegated capability lifecycle
   - emitted handoff lifecycle events capture approved and denied assignment attempts
   - assignment approvals/denials are persisted as append-only JSONL audit records
+  - approved assignments are replayed from audit log at startup for session continuity
+  - delegated assignments are auto-expired by TTL and stale audit rows are pruned at startup
 - `Missing` skills loading/execution runtime path.
 - `Missing` delegated orchestrator execution loop and audit pipeline.
   References:
@@ -250,7 +252,7 @@ Current coverage:
   - runtime execution gap (multi-agent path not yet active): `src/main.rs`
 
 Required tasks:
-- `E6-T10` (continue: persist assignments + connect delegated execution path)
+- `E6-T10` (continue: connect delegated execution path)
 
 ---
 

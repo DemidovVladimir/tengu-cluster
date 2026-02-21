@@ -41,7 +41,7 @@
 | Multi-agent routing | Partial (router + typed handoff task/result envelopes implemented, serve/runtime execution loop pending) |
 | Skills System | Config exists, loader not implemented |
 | Internal domain event bus | ✅ Working (`DomainEvent` + `EventBus` contracts, bounded bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation implemented) |
-| Single-orchestrator topology profile | Partial (chat runtime has delegated control-plane baseline commands with bounded assignment checks + persisted assignment audit trail; execution loop pending) |
+| Single-orchestrator topology profile | Partial (chat runtime has delegated control-plane baseline commands with bounded assignment checks + persisted assignment audit trail + startup replay + TTL/pruning cleanup; execution loop pending) |
 
 ---
 

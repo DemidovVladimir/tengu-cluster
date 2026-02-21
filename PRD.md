@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks, and exposes delegated assignment baseline commands (`/assign`, `/assignments`); delegated multi-agent runtime loop is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks, and exposes delegated assignment lifecycle commands (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with persisted audit replay and runtime cleanup; delegated multi-agent runtime loop is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, and delegated assignment control-plane baseline is available in chat runtime; single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
@@ -409,6 +409,9 @@ Planned built-in tools:
 - Per-agent allow/deny lists
 - Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events via event subscriber)
 - Append-only delegated assignment audit log at `~/.tengu/state/audit/capability_assignments.jsonl` (handoff dispatch/denial events via event subscriber)
+- Startup replay of approved delegated assignments from audit log for control-plane continuity.
+- Delegated assignment cleanup controls (`/unassign`, `/assignments clear`) with automatic TTL expiry in runtime.
+- Startup audit-log retention pruning for delegated assignments (`TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS`).
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries
@@ -930,6 +933,8 @@ Implemented now:
 | `/context` | Context window usage estimate |
 | `/assign` | Delegated capability assignment (`mode=delegated`) |
 | `/assignments` | List approved delegated assignments in current session |
+| `/unassign` | Revoke delegated assignment by handoff id or dependent id |
+| `/assignments clear` | Revoke and clear all delegated assignments in session |
 | `/reset` | Clear current in-memory flow |
 | `/help` | List chat commands |
 

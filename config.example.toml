@@ -138,8 +138,10 @@ extra_dirs = []
 [capability_governance]
 # "user" keeps capability usage strictly within user-defined static policy.
 # "delegated" lets one orchestrator request bounded capabilities via handoff envelopes.
-# In delegated mode, chat runtime exposes `/assign` and `/assignments` commands
-# for bounded dependent capability assignment by delegated orchestrator.
+# In delegated mode, chat runtime exposes `/assign`, `/assignments`, `/unassign`,
+# and `/assignments clear` commands for bounded dependent capability assignment lifecycle.
 # Assignment lifecycle events are persisted to `~/.tengu/state/audit/capability_assignments.jsonl`.
+# Approved assignments are replayed from this audit log at startup.
+# Runtime also auto-expires stale delegated assignments by TTL policy.
 mode = "user"
 # delegated_orchestrator_agent = "orchestrator"

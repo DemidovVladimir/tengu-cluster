@@ -91,19 +91,29 @@ pub fn parse_assign_command(input: &str) -> Option<ParsedAssignCommand> {
     })
 }
 
-/// Build and validate delegated capability-assignment envelope.
+/// Parse `/unassign` command.
 ///
-/// Validation sequence:
-/// 1. Governance mode must be `delegated`.
-/// 2. Caller must match configured delegated orchestrator.
-/// 3. Dependent must be a configured non-orchestrator agent.
-/// 4. Requested capabilities must pass user-boundary handoff policy checks.
-pub fn build_assignment_envelope(
+/// Expected shape:
+/// `/unassign <handoff-id|dependent-agent-id>`
+pub fn parse_unassign_command(input: &str) -> Option<String> {
+    let mut parts = input.split_whitespace();
+    if parts.next()? != "/unassign" {
+        return None;
+    }
+    let target = parts.next()?.trim();
+    if target.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    Some(target.to_string())
+}
+
+/// Ensure delegated governance mode is enabled and caller is orchestrator.
+///
+/// Returns normalized delegated orchestrator id when validation passes.
+pub fn ensure_delegated_orchestrator(
     config: &Config,
-    flow_key: &str,
     orchestrator_agent_id: &str,
-    command: &ParsedAssignCommand,
-) -> Result<HandoffTaskEnvelope> {
+) -> Result<String> {
     if config.capability_governance.mode.trim() != "delegated" {
         return Err(anyhow!(
             "delegated assignment is disabled (capability_governance.mode must be 'delegated')"
@@ -128,6 +138,23 @@ pub fn build_assignment_envelope(
             delegated
         ));
     }
+    Ok(delegated.to_string())
+}
+
+/// Build and validate delegated capability-assignment envelope.
+///
+/// Validation sequence:
+/// 1. Governance mode must be `delegated`.
+/// 2. Caller must match configured delegated orchestrator.
+/// 3. Dependent must be a configured non-orchestrator agent.
+/// 4. Requested capabilities must pass user-boundary handoff policy checks.
+pub fn build_assignment_envelope(
+    config: &Config,
+    flow_key: &str,
+    orchestrator_agent_id: &str,
+    command: &ParsedAssignCommand,
+) -> Result<HandoffTaskEnvelope> {
+    let delegated = ensure_delegated_orchestrator(config, orchestrator_agent_id)?;
 
     let dependent = command.dependent_agent_id.trim();
     if !config.agents.contains_key(dependent) {
@@ -220,6 +247,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_unassign_command_parses_minimal_shape() {
+        let parsed = parse_unassign_command("/unassign h-1").expect("parsed");
+        assert_eq!(parsed, "h-1");
+    }
+
+    #[test]
+    fn parse_unassign_command_rejects_invalid_shapes() {
+        assert!(parse_unassign_command("/unassign").is_none());
+        assert!(parse_unassign_command("/unassign   ").is_none());
+        assert!(parse_unassign_command("/unassign a b").is_none());
+    }
+
+    #[test]
     fn build_assignment_envelope_allows_bounded_request() {
         let config = config_with_worker();
         let command = ParsedAssignCommand {
@@ -244,6 +284,13 @@ mod tests {
         let err = build_assignment_envelope(&config, "flow-1", "worker", &command)
             .expect_err("must deny");
         assert!(err.to_string().contains("not delegated orchestrator"));
+    }
+
+    #[test]
+    fn ensure_delegated_orchestrator_denies_when_mode_is_user() {
+        let config = Config::default();
+        let err = ensure_delegated_orchestrator(&config, "main").expect_err("must deny");
+        assert!(err.to_string().contains("mode must be 'delegated'"));
     }
 
     #[test]

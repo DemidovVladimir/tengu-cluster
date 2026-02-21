@@ -13,6 +13,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -23,7 +24,10 @@ mod flow_store;
 mod tool_audit;
 mod tool_runtime;
 
-use control_plane::{build_assignment_envelope, parse_assign_command, CapabilityAssignmentRecord};
+use control_plane::{
+    build_assignment_envelope, ensure_delegated_orchestrator, parse_assign_command,
+    parse_unassign_command, CapabilityAssignmentRecord,
+};
 use control_plane_audit::{ControlPlaneAuditEvent, ControlPlaneAuditStore};
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
@@ -53,6 +57,12 @@ use tool_runtime::ToolRegistry;
 const RETRIEVAL_CONTEXT_HEADER: &str = "Relevant workspace context:\n\n";
 /// Separator between multiple retrieval hits packed into one block.
 const RETRIEVAL_CONTEXT_SEPARATOR: &str = "\n\n---\n\n";
+/// Default max rows retained in delegated assignment audit JSONL.
+const CONTROL_PLANE_AUDIT_MAX_ROWS_DEFAULT: usize = 20_000;
+/// Default recent rows scanned for startup assignment replay.
+const CONTROL_PLANE_AUDIT_REPLAY_LIMIT_DEFAULT: usize = 512;
+/// Default delegated assignment lifetime before automatic runtime expiry cleanup.
+const DELEGATED_ASSIGNMENT_TTL_SECS_DEFAULT: u64 = 900;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -355,6 +365,35 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             None
         }
     };
+    let control_plane_audit_max_rows =
+        resolve_positive_usize_env("TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS")
+            .unwrap_or(CONTROL_PLANE_AUDIT_MAX_ROWS_DEFAULT);
+    let control_plane_replay_limit =
+        resolve_positive_usize_env("TENGU_CONTROL_PLANE_AUDIT_REPLAY_LIMIT")
+            .unwrap_or(CONTROL_PLANE_AUDIT_REPLAY_LIMIT_DEFAULT)
+            .min(control_plane_audit_max_rows);
+    let delegated_assignment_ttl_secs =
+        resolve_positive_u64_env("TENGU_DELEGATED_ASSIGNMENT_TTL_SECS")
+            .unwrap_or(DELEGATED_ASSIGNMENT_TTL_SECS_DEFAULT);
+    if let Some(store) = control_plane_audit.as_ref() {
+        match store.prune_retain_last(control_plane_audit_max_rows) {
+            Ok(dropped) if dropped > 0 => {
+                info!(
+                    dropped_rows = dropped,
+                    retained_rows = control_plane_audit_max_rows,
+                    "Pruned delegated assignment audit rows by retention policy"
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    retained_rows = control_plane_audit_max_rows,
+                    "Failed to prune delegated assignment audit rows"
+                );
+            }
+        }
+    }
     let mut tool_audit_subscriber =
         spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
     let mut control_plane_audit_subscriber =
@@ -366,6 +405,19 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         Arc::clone(&event_bus),
         event_bus_cfg.diagnostics_interval_secs,
     );
+    let persisted_capability_assignments = load_persisted_capability_assignments(
+        control_plane_audit.as_ref(),
+        &agent_id,
+        control_plane_replay_limit,
+        delegated_assignment_ttl_secs,
+    );
+    if !persisted_capability_assignments.is_empty() {
+        info!(
+            agent_id = %agent_id,
+            recovered_assignments = persisted_capability_assignments.len(),
+            "Recovered delegated capability assignments from audit log"
+        );
+    }
 
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
@@ -384,7 +436,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         total_input_tokens: 0,
         total_output_tokens: 0,
         tokens_saved: 0,
-        capability_assignments: Vec::new(),
+        capability_assignments: persisted_capability_assignments,
         last_prompt_report: None,
     };
 
@@ -395,6 +447,21 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     while let Some(inbound) = rx.recv().await {
         let turn_correlation_id = uuid::Uuid::new_v4().to_string();
+        let expired_assignments = prune_expired_capability_assignments(
+            &mut state.capability_assignments,
+            delegated_assignment_ttl_secs,
+            event_bus.as_ref(),
+            &agent_id,
+            &turn_correlation_id,
+        )
+        .await;
+        if expired_assignments > 0 {
+            info!(
+                expired_assignments,
+                ttl_secs = delegated_assignment_ttl_secs,
+                "Expired delegated assignments by retention policy"
+            );
+        }
         emit_domain_event(
             event_bus.as_ref(),
             Some(&agent_id),
@@ -738,6 +805,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 /// Supported commands:
 /// - `/assign <dependent> <cap1,cap2,...> [objective...]`
 /// - `/assignments`
+/// - `/unassign <handoff-id|dependent-agent-id>`
+/// - `/assignments clear`
 ///
 /// Assignment commands are available only when `capability_governance.mode=delegated`
 /// and current chat agent is configured as delegated orchestrator.
@@ -750,6 +819,39 @@ async fn handle_control_plane_command(
     event_bus: &dyn EventBus,
     turn_correlation_id: &str,
 ) -> bool {
+    if command.trim() == "/assignments clear" {
+        if let Err(err) = ensure_delegated_orchestrator(config, agent_id) {
+            println!("Delegated assignment cleanup denied: {}\n", err);
+            return true;
+        }
+        if state.capability_assignments.is_empty() {
+            println!("No delegated capability assignments to clear.\n");
+            return true;
+        }
+        let removed: Vec<CapabilityAssignmentRecord> =
+            state.capability_assignments.drain(..).collect();
+        for assignment in &removed {
+            emit_domain_event(
+                event_bus,
+                Some(agent_id),
+                Some(&assignment.flow_key),
+                Some(turn_correlation_id),
+                DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                    envelope: build_assignment_revocation_result(
+                        assignment,
+                        "revoked by orchestrator via /assignments clear",
+                    ),
+                }),
+            )
+            .await;
+        }
+        println!(
+            "Cleared {} delegated assignment(s) and emitted revocation events.\n",
+            removed.len()
+        );
+        return true;
+    }
+
     if command.trim() == "/assignments" {
         if state.capability_assignments.is_empty() {
             println!("No delegated capability assignments in this session.\n");
@@ -769,6 +871,60 @@ async fn handle_control_plane_command(
             println!("    handoff_id: {}", assignment.handoff_id);
         }
         println!();
+        return true;
+    }
+
+    if command.trim_start().starts_with("/unassign") {
+        if let Err(err) = ensure_delegated_orchestrator(config, agent_id) {
+            println!("Delegated assignment cleanup denied: {}\n", err);
+            return true;
+        }
+
+        let Some(target) = parse_unassign_command(command) else {
+            println!("Usage: /unassign <handoff-id|dependent-agent-id>\n");
+            return true;
+        };
+
+        let mut removed = Vec::<CapabilityAssignmentRecord>::new();
+        state.capability_assignments.retain(|assignment| {
+            let matches_target =
+                assignment.handoff_id == target || assignment.dependent_agent_id == target;
+            if matches_target {
+                removed.push(assignment.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        if removed.is_empty() {
+            println!(
+                "No delegated assignment matched '{}' (handoff or dependent).\n",
+                target
+            );
+            return true;
+        }
+
+        for assignment in &removed {
+            emit_domain_event(
+                event_bus,
+                Some(agent_id),
+                Some(&assignment.flow_key),
+                Some(turn_correlation_id),
+                DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                    envelope: build_assignment_revocation_result(
+                        assignment,
+                        "revoked by orchestrator via /unassign",
+                    ),
+                }),
+            )
+            .await;
+        }
+        println!(
+            "Revoked {} delegated assignment(s) for '{}'.\n",
+            removed.len(),
+            target
+        );
         return true;
     }
 
@@ -829,6 +985,72 @@ async fn handle_control_plane_command(
     }
 
     false
+}
+
+/// Build terminal handoff-result envelope used for assignment cleanup/revocation.
+fn build_assignment_revocation_result(
+    assignment: &CapabilityAssignmentRecord,
+    reason: &str,
+) -> HandoffResultEnvelope {
+    HandoffResultEnvelope {
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        handoff_id: assignment.handoff_id.clone(),
+        flow_key: assignment.flow_key.clone(),
+        from_agent_id: assignment.dependent_agent_id.clone(),
+        to_agent_id: assignment.orchestrator_agent_id.clone(),
+        status: HandoffResultStatus::Denied,
+        summary: String::new(),
+        artifacts: Vec::new(),
+        output_tokens: 0,
+        error_reason: Some(reason.to_string()),
+        metadata: std::collections::HashMap::new(),
+    }
+}
+
+/// Remove expired delegated assignments and emit terminal lifecycle events.
+///
+/// Expiry is based on assignment `issued_at_epoch_ms + ttl_secs`.
+async fn prune_expired_capability_assignments(
+    assignments: &mut Vec<CapabilityAssignmentRecord>,
+    ttl_secs: u64,
+    event_bus: &dyn EventBus,
+    actor_agent_id: &str,
+    correlation_id: &str,
+) -> usize {
+    if assignments.is_empty() || ttl_secs == 0 {
+        return 0;
+    }
+    let now_ms = now_epoch_ms();
+    let ttl_ms = ttl_secs.saturating_mul(1_000);
+
+    let mut expired = Vec::<CapabilityAssignmentRecord>::new();
+    assignments.retain(|assignment| {
+        let expires_at = assignment.issued_at_epoch_ms.saturating_add(ttl_ms);
+        if now_ms >= expires_at {
+            expired.push(assignment.clone());
+            false
+        } else {
+            true
+        }
+    });
+
+    for assignment in &expired {
+        emit_domain_event(
+            event_bus,
+            Some(actor_agent_id),
+            Some(&assignment.flow_key),
+            Some(correlation_id),
+            DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: build_assignment_revocation_result(
+                    assignment,
+                    "expired by retention policy",
+                ),
+            }),
+        )
+        .await;
+    }
+
+    expired.len()
 }
 
 /// Process one slash command and return `true` when loop should continue.
@@ -957,6 +1179,8 @@ fn handle_chat_command(
             println!("  /context   — Context window usage");
             println!("  /assign    — Delegated capability assignment (delegated mode only)");
             println!("  /assignments — List delegated assignments (session)");
+            println!("  /assignments clear — Revoke and clear delegated assignments");
+            println!("  /unassign  — Revoke by handoff id or dependent agent");
             println!("  /reset     — Clear conversation");
             println!("  /help      — This help\n");
             true
@@ -1672,16 +1896,28 @@ fn map_domain_event_to_control_plane_audit_event(
             objective: Some(payload.envelope.objective.clone()),
         }),
         DomainEventPayload::HandoffResultReceived(payload) => {
-            if payload.envelope.status != HandoffResultStatus::Denied {
-                return None;
-            }
+            let status = match payload.envelope.status {
+                HandoffResultStatus::Denied => {
+                    let reason = payload.envelope.error_reason.as_deref().unwrap_or_default();
+                    if reason.contains("revoked by orchestrator") {
+                        "revoked".to_string()
+                    } else if reason.contains("expired by retention policy") {
+                        "expired".to_string()
+                    } else {
+                        "denied".to_string()
+                    }
+                }
+                HandoffResultStatus::Failed => "failed".to_string(),
+                HandoffResultStatus::Completed => "completed".to_string(),
+                HandoffResultStatus::Accepted => return None,
+            };
             Some(ControlPlaneAuditEvent {
                 ts_epoch_s,
                 flow_key: payload.envelope.flow_key.clone(),
                 handoff_id: payload.envelope.handoff_id.clone(),
                 orchestrator_agent_id: payload.envelope.to_agent_id.clone(),
                 dependent_agent_id: payload.envelope.from_agent_id.clone(),
-                status: "denied".to_string(),
+                status,
                 reason: payload.envelope.error_reason.clone(),
                 requested_capabilities: Vec::new(),
                 objective: None,
@@ -1689,6 +1925,67 @@ fn map_domain_event_to_control_plane_audit_event(
         }
         _ => None,
     }
+}
+
+/// Recover approved delegated assignments from persisted audit events.
+///
+/// Replay strategy:
+/// - keep only assignments initiated by current orchestrator agent
+/// - include only latest approved events not superseded by terminal statuses
+/// - skip approvals that are already expired by TTL policy
+/// - bound replay to recent `limit` rows for predictable startup latency
+fn load_persisted_capability_assignments(
+    store: Option<&ControlPlaneAuditStore>,
+    orchestrator_agent_id: &str,
+    limit: usize,
+    ttl_secs: u64,
+) -> Vec<CapabilityAssignmentRecord> {
+    let Some(store) = store else {
+        return Vec::new();
+    };
+    let Ok(events) = store.read_recent(limit) else {
+        return Vec::new();
+    };
+
+    let mut closed_handoffs = HashSet::<String>::new();
+    let mut recovered_rev = Vec::<CapabilityAssignmentRecord>::new();
+    let now_ms = now_epoch_ms();
+    let ttl_ms = ttl_secs.saturating_mul(1_000);
+
+    for event in events.into_iter().rev() {
+        let handoff_id = event.handoff_id.trim().to_string();
+        if handoff_id.is_empty() {
+            continue;
+        }
+        if event.status == "approved" {
+            if closed_handoffs.contains(&handoff_id) {
+                continue;
+            }
+            if event.orchestrator_agent_id.trim() != orchestrator_agent_id {
+                continue;
+            }
+            let issued_at_epoch_ms = event.ts_epoch_s.saturating_mul(1_000);
+            let expires_at_epoch_ms = issued_at_epoch_ms.saturating_add(ttl_ms);
+            if now_ms >= expires_at_epoch_ms {
+                closed_handoffs.insert(handoff_id);
+                continue;
+            }
+            recovered_rev.push(CapabilityAssignmentRecord {
+                handoff_id: handoff_id.clone(),
+                flow_key: event.flow_key,
+                orchestrator_agent_id: event.orchestrator_agent_id,
+                dependent_agent_id: event.dependent_agent_id,
+                requested_capabilities: event.requested_capabilities,
+                objective: event.objective.unwrap_or_else(|| "n/a".to_string()),
+                issued_at_epoch_ms,
+            });
+        } else {
+            closed_handoffs.insert(handoff_id);
+        }
+    }
+
+    recovered_rev.reverse();
+    recovered_rev
 }
 
 /// Emit one runtime domain event without affecting user-visible flow on failure.
@@ -2351,6 +2648,20 @@ fn resolve_tengu_home() -> PathBuf {
     dirs_next::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".tengu")
+}
+
+/// Parse positive integer environment override used for runtime retention limits.
+fn resolve_positive_usize_env(var_name: &str) -> Option<usize> {
+    let raw = std::env::var(var_name).ok()?;
+    let parsed = raw.trim().parse::<usize>().ok()?;
+    (parsed > 0).then_some(parsed)
+}
+
+/// Parse positive `u64` environment override for runtime TTL values.
+fn resolve_positive_u64_env(var_name: &str) -> Option<u64> {
+    let raw = std::env::var(var_name).ok()?;
+    let parsed = raw.trim().parse::<u64>().ok()?;
+    (parsed > 0).then_some(parsed)
 }
 
 /// Resolve deterministic flow key for the current inbound turn.
@@ -3190,5 +3501,194 @@ mod tests {
         assert_eq!(mapped.reason.as_deref(), Some("policy denied"));
         assert_eq!(mapped.orchestrator_agent_id, "main");
         assert_eq!(mapped.dependent_agent_id, "worker");
+    }
+
+    #[test]
+    fn control_plane_audit_map_captures_handoff_revocation() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 3_000,
+                flow_key: Some("flow-1".to_string()),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some("corr-3".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-3".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "worker".to_string(),
+                    to_agent_id: "main".to_string(),
+                    status: HandoffResultStatus::Denied,
+                    summary: String::new(),
+                    artifacts: Vec::new(),
+                    output_tokens: 0,
+                    error_reason: Some("revoked by orchestrator via /unassign".to_string()),
+                    metadata: std::collections::HashMap::new(),
+                },
+            }),
+        };
+
+        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
+        assert_eq!(mapped.status, "revoked");
+    }
+
+    #[test]
+    fn control_plane_audit_map_captures_handoff_expiry() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 4_000,
+                flow_key: Some("flow-1".to_string()),
+                agent_id: Some("main".to_string()),
+                correlation_id: Some("corr-4".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-4".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "worker".to_string(),
+                    to_agent_id: "main".to_string(),
+                    status: HandoffResultStatus::Denied,
+                    summary: String::new(),
+                    artifacts: Vec::new(),
+                    output_tokens: 0,
+                    error_reason: Some("expired by retention policy".to_string()),
+                    metadata: std::collections::HashMap::new(),
+                },
+            }),
+        };
+
+        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
+        assert_eq!(mapped.status, "expired");
+    }
+
+    #[test]
+    fn load_persisted_capability_assignments_replays_recent_approved_for_actor() {
+        let home = std::env::temp_dir().join(format!("tengu-replay-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("home");
+        let store = ControlPlaneAuditStore::new(&home).expect("store");
+        let now_s = now_epoch_ms() / 1_000;
+
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(4),
+                flow_key: "flow-1".to_string(),
+                handoff_id: "h-1".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: Some("A".to_string()),
+            })
+            .expect("append 1");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(3),
+                flow_key: "flow-2".to_string(),
+                handoff_id: "h-2".to_string(),
+                orchestrator_agent_id: "other".to_string(),
+                dependent_agent_id: "worker-b".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:search_content".to_string()],
+                objective: Some("B".to_string()),
+            })
+            .expect("append 2");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(2),
+                flow_key: "flow-3".to_string(),
+                handoff_id: "h-1".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "denied".to_string(),
+                reason: Some("closed".to_string()),
+                requested_capabilities: Vec::new(),
+                objective: None,
+            })
+            .expect("append 3");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(1),
+                flow_key: "flow-4".to_string(),
+                handoff_id: "h-4".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-c".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["skill:analysis".to_string()],
+                objective: Some("C".to_string()),
+            })
+            .expect("append 4");
+
+        let recovered = load_persisted_capability_assignments(Some(&store), "main", 64, 86_400);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].handoff_id, "h-4");
+        assert_eq!(recovered[0].dependent_agent_id, "worker-c");
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn load_persisted_capability_assignments_skips_expired_rows() {
+        let home =
+            std::env::temp_dir().join(format!("tengu-replay-expiry-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("home");
+        let store = ControlPlaneAuditStore::new(&home).expect("store");
+
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: 1,
+                flow_key: "flow-old".to_string(),
+                handoff_id: "h-old".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: Some("old".to_string()),
+            })
+            .expect("append old");
+
+        let recovered = load_persisted_capability_assignments(Some(&store), "main", 64, 1);
+        assert!(recovered.is_empty());
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[tokio::test]
+    async fn prune_expired_capability_assignments_removes_old_records() {
+        let event_bus = InProcessEventBus::new(32, EventBusOverflowPolicy::DropNewest);
+        let mut assignments = vec![
+            CapabilityAssignmentRecord {
+                handoff_id: "h-old".to_string(),
+                flow_key: "flow-1".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker".to_string(),
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: "old".to_string(),
+                issued_at_epoch_ms: now_epoch_ms().saturating_sub(2_000),
+            },
+            CapabilityAssignmentRecord {
+                handoff_id: "h-new".to_string(),
+                flow_key: "flow-1".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker".to_string(),
+                requested_capabilities: vec!["tool:search_content".to_string()],
+                objective: "new".to_string(),
+                issued_at_epoch_ms: now_epoch_ms(),
+            },
+        ];
+
+        let removed =
+            prune_expired_capability_assignments(&mut assignments, 1, &event_bus, "main", "corr-1")
+                .await;
+        assert_eq!(removed, 1);
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].handoff_id, "h-new");
     }
 }

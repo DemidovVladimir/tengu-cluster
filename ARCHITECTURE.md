@@ -13,7 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + config-driven tool approvals + audit trail)
-- Delegated control plane: partial (`/assign`, `/assignments` in chat runtime with bounded handoff capability checks + persisted assignment audit trail)
+- Delegated control plane: partial (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + persisted assignment audit trail + startup replay + TTL/pruning cleanup)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
