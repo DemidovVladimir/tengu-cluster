@@ -31,6 +31,7 @@ Current working baseline:
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks
+- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`) with user-boundary checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
@@ -111,6 +112,8 @@ Useful commands inside chat:
 - `/help`
 - `/cost`
 - `/context`
+- `/assign <dependent> <cap1,cap2,...> [objective...]` (delegated mode)
+- `/assignments` (delegated mode)
 - `/eco`, `/standard`, `/precise`
 - `/reset`
 

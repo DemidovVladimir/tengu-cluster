@@ -1,6 +1,6 @@
 # Tengu Cluster - User Stories and Coverage Matrix
 
-Date: 2026-02-20
+Date: 2026-02-21
 Owner: Product + Architecture
 
 ## Purpose
@@ -238,6 +238,9 @@ Current coverage:
 - `Implemented` delegated actor gate for direct runtime capability requests:
   - in `mode=delegated`, only configured orchestrator can request direct capabilities in active runtime path
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
+- `Partial` delegated control-plane baseline:
+  - chat runtime supports `/assign` + `/assignments` for bounded dependent capability assignment
+  - emitted handoff lifecycle events capture approved and denied assignment attempts
 - `Missing` skills loading/execution runtime path.
 - `Missing` delegated orchestrator execution loop and audit pipeline.
   References:
@@ -246,7 +249,7 @@ Current coverage:
   - runtime execution gap (multi-agent path not yet active): `src/main.rs`
 
 Required tasks:
-- `E6-T10`
+- `E6-T10` (continue: persist assignments + connect delegated execution path)
 
 ---
 

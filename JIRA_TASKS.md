@@ -1,9 +1,9 @@
 # Jira-Style Task Backlog
 
-Date: 2026-02-20
+Date: 2026-02-21
 Source: `EPICS_TASKS.md`
 
-## Status Snapshot (2026-02-20)
+## Status Snapshot (2026-02-21)
 
 | Key | Status | Comment |
 |---|---|---|
@@ -34,6 +34,7 @@ Source: `EPICS_TASKS.md`
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
+| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`) with user-boundary checks and handoff lifecycle events; full multi-agent execution loop integration remains pending under `E6-T9` |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
 | E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
@@ -69,9 +70,9 @@ Source: `EPICS_TASKS.md`
 - `E8-T6` — Define and implement inter-agent handoff contract (task/result envelopes).
 - `E8-T7` — Enforce capability policies for tools/skills/engine usage at runtime (user + delegated orchestrator modes).
 
-## Next Start (2026-02-20)
+## Next Start (2026-02-21)
 
-- `E6-T10` — Add orchestrator control plane for dependent capability assignment with user-boundary checks.
+- `E6-T10` — Continue orchestrator control plane: persist delegated assignments and connect execution loop with `E6-T9`.
 
 ## Epics
 
@@ -82,7 +83,7 @@ Source: `EPICS_TASKS.md`
 | E3 | Epic | Retrieval Quality and Index Persistence | P1 | Planned |
 | E4 | Epic | Backend Provider Expansion | P1 | In Progress |
 | E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | Done |
-| E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | Planned |
+| E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | In Progress |
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
 | E8 | Epic | Tool Loop and Safety Controls | P1 | In Progress |
 | E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |

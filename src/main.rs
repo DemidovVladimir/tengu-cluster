@@ -17,10 +17,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
+mod control_plane;
 mod flow_store;
 mod tool_audit;
 mod tool_runtime;
 
+use control_plane::{build_assignment_envelope, parse_assign_command, CapabilityAssignmentRecord};
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
@@ -31,11 +33,14 @@ use tengu_core::config::{
 use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
     EngineTurnStarted, EventBus, EventBusOverflowPolicy, FlowCompacted, FlowResolved,
-    InProcessEventBus, InboundTurnReceived, PromptAssembled, ToolCallCompleted, ToolCallDenied,
-    ToolCallStarted,
+    HandoffResultReceived, HandoffTaskDispatched, InProcessEventBus, InboundTurnReceived,
+    PromptAssembled, ToolCallCompleted, ToolCallDenied, ToolCallStarted,
 };
 use tengu_core::token::estimate_tokens_approx_min1;
-use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
+use tengu_core::types::{
+    DeliveryOptions, HandoffResultEnvelope, HandoffResultStatus, Message, Recipient, Role,
+    HANDOFF_SCHEMA_VERSION,
+};
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
@@ -178,6 +183,8 @@ struct ChatLoopState {
     total_output_tokens: u32,
     /// Approximate tokens saved by refiner compression.
     tokens_saved: u32,
+    /// Approved delegated capability assignments for current runtime session.
+    capability_assignments: Vec<CapabilityAssignmentRecord>,
     /// Last prompt assembly report surfaced by `/context`.
     last_prompt_report: Option<PromptAssemblyReport>,
 }
@@ -205,6 +212,7 @@ impl ChatLoopState {
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
         self.tokens_saved = 0;
+        self.capability_assignments.clear();
     }
 }
 
@@ -365,6 +373,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         total_input_tokens: 0,
         total_output_tokens: 0,
         tokens_saved: 0,
+        capability_assignments: Vec::new(),
         last_prompt_report: None,
     };
 
@@ -390,18 +399,37 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
         let original_len = inbound.content.len();
 
-        // Handle slash commands
-        if inbound.content.starts_with('/')
-            && handle_chat_command(
+        // Handle orchestrator control-plane commands before generic chat commands.
+        if inbound.content.starts_with('/') {
+            let command_flow_key = resolve_runtime_flow_key(
+                &agent_id,
+                &agent_config.flow.scope,
+                &inbound.sender,
+                state.manual_session_id.as_deref(),
+            );
+            if handle_control_plane_command(
+                inbound.content.as_str(),
+                &config,
+                &agent_id,
+                &command_flow_key,
+                &mut state,
+                event_bus.as_ref(),
+                &turn_correlation_id,
+            )
+            .await
+            {
+                continue;
+            }
+            if handle_chat_command(
                 inbound.content.as_str(),
                 &mut state,
                 engine.as_ref(),
                 &agent_config,
                 history_turn_limit,
                 compaction_policy,
-            )
-        {
-            continue;
+            ) {
+                continue;
+            }
         }
 
         // Apply refiner
@@ -691,6 +719,104 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     Ok(())
 }
 
+/// Process orchestrator control-plane commands and return `true` when handled.
+///
+/// Supported commands:
+/// - `/assign <dependent> <cap1,cap2,...> [objective...]`
+/// - `/assignments`
+///
+/// Assignment commands are available only when `capability_governance.mode=delegated`
+/// and current chat agent is configured as delegated orchestrator.
+async fn handle_control_plane_command(
+    command: &str,
+    config: &Config,
+    agent_id: &str,
+    flow_key: &str,
+    state: &mut ChatLoopState,
+    event_bus: &dyn EventBus,
+    turn_correlation_id: &str,
+) -> bool {
+    if command.trim() == "/assignments" {
+        if state.capability_assignments.is_empty() {
+            println!("No delegated capability assignments in this session.\n");
+            return true;
+        }
+        println!("Delegated Capability Assignments");
+        println!("─────────────────────────────");
+        for (idx, assignment) in state.capability_assignments.iter().enumerate() {
+            println!(
+                " {}. {} -> {} [{}]",
+                idx + 1,
+                assignment.orchestrator_agent_id,
+                assignment.dependent_agent_id,
+                assignment.requested_capabilities.join(", ")
+            );
+            println!("    objective: {}", assignment.objective);
+            println!("    handoff_id: {}", assignment.handoff_id);
+        }
+        println!();
+        return true;
+    }
+
+    if command.trim_start().starts_with("/assign") {
+        let Some(parsed) = parse_assign_command(command) else {
+            println!("Usage: /assign <dependent-agent-id> <cap1,cap2,...> [objective...]\n");
+            return true;
+        };
+
+        let issued_at_ms = now_epoch_ms();
+        match build_assignment_envelope(config, flow_key, agent_id, &parsed) {
+            Ok(envelope) => {
+                let record = CapabilityAssignmentRecord::from_envelope(&envelope, issued_at_ms);
+                state.capability_assignments.push(record.clone());
+                emit_domain_event(
+                    event_bus,
+                    Some(agent_id),
+                    Some(flow_key),
+                    Some(turn_correlation_id),
+                    DomainEventPayload::HandoffTaskDispatched(HandoffTaskDispatched { envelope }),
+                )
+                .await;
+                println!(
+                    "Delegated assignment approved: {} -> {} [{}]\n",
+                    record.orchestrator_agent_id,
+                    record.dependent_agent_id,
+                    record.requested_capabilities.join(", ")
+                );
+            }
+            Err(err) => {
+                let denied = HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: uuid::Uuid::new_v4().to_string(),
+                    flow_key: flow_key.to_string(),
+                    from_agent_id: parsed.dependent_agent_id.clone(),
+                    to_agent_id: agent_id.to_string(),
+                    status: HandoffResultStatus::Denied,
+                    summary: String::new(),
+                    artifacts: Vec::new(),
+                    output_tokens: 0,
+                    error_reason: Some(err.to_string()),
+                    metadata: std::collections::HashMap::new(),
+                };
+                emit_domain_event(
+                    event_bus,
+                    Some(agent_id),
+                    Some(flow_key),
+                    Some(turn_correlation_id),
+                    DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                        envelope: denied,
+                    }),
+                )
+                .await;
+                println!("Delegated assignment denied: {}\n", err);
+            }
+        }
+        return true;
+    }
+
+    false
+}
+
 /// Process one slash command and return `true` when loop should continue.
 fn handle_chat_command(
     command: &str,
@@ -815,6 +941,8 @@ fn handle_chat_command(
             println!("  /engine    — Show current engine");
             println!("  /cost      — Token usage stats");
             println!("  /context   — Context window usage");
+            println!("  /assign    — Delegated capability assignment (delegated mode only)");
+            println!("  /assignments — List delegated assignments (session)");
             println!("  /reset     — Clear conversation");
             println!("  /help      — This help\n");
             true

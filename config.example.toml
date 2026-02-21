@@ -138,5 +138,7 @@ extra_dirs = []
 [capability_governance]
 # "user" keeps capability usage strictly within user-defined static policy.
 # "delegated" lets one orchestrator request bounded capabilities via handoff envelopes.
+# In delegated mode, chat runtime exposes `/assign` and `/assignments` commands
+# for bounded dependent capability assignment by delegated orchestrator.
 mode = "user"
 # delegated_orchestrator_agent = "orchestrator"

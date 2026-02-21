@@ -4,7 +4,7 @@
 
 ---
 
-## Current Implementation Snapshot (2026-02-20)
+## Current Implementation Snapshot (2026-02-21)
 
 This document describes full target architecture. The currently running path in code is narrower:
 
@@ -13,6 +13,7 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + config-driven tool approvals + audit trail)
+- Delegated control plane: partial (`/assign`, `/assignments` in chat runtime with bounded handoff capability checks)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
@@ -128,6 +129,7 @@ CLI stdin
 ```
 tengu-cluster/
 ├── src/main.rs              # Binary entry point, event loop, CLI
+├── src/control_plane.rs     # Delegated orchestrator assignment helpers
 ├── crates/
 │   ├── tengu-core/          # Traits, types, config, routing
 │   │   └── src/

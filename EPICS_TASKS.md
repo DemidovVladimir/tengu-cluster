@@ -7,7 +7,7 @@ This backlog is derived from:
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `USER_STORIES.md`
 
-Date: 2026-02-20
+Date: 2026-02-21
 
 ## Priority Waves
 
@@ -24,7 +24,7 @@ All runtime-facing epics must preserve:
 2. Typed event contracts for lifecycle behavior (`StreamEvent` now, `DomainEvent` bus migration for side-effects).
 3. Clear current-vs-target documentation when migration is partial (especially `E11` tasks).
 
-## Progress Snapshot (2026-02-20)
+## Progress Snapshot (2026-02-21)
 
 Completed tasks:
 1. `E1-T1`
@@ -66,7 +66,8 @@ Completed tasks:
 37. `E8-T7`
 
 Partially completed:
-1. `E8` tool loop remains in progress (broader toolset and delegated multi-agent execution loop pending).
+1. `E6` control-plane baseline is live in chat runtime (`/assign`, `/assignments`) with bounded delegated checks; multi-agent execution/hub lifecycle remains pending.
+2. `E8` tool loop remains in progress (broader toolset and delegated multi-agent execution loop pending).
 
 ## Epic Status Snapshot
 
@@ -77,7 +78,7 @@ Partially completed:
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
 | `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google/HF and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | Planned | Multi-pipe hub runtime/channel lifecycle pending, including single-orchestrator-first multi-agent execution loop. |
+| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`) with user-boundary checks and handoff events; multi-pipe lifecycle and multi-agent execution loop remain pending. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
 | `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, persists tool audit JSONL events, defines typed inter-agent handoff task/result envelopes, and enforces capability governance in runtime (`user` vs `delegated` actor gate) plus tool/skill/engine handoff policy checks; delegated multi-agent execution flow remains pending. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
