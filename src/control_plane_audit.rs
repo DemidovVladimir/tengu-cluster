@@ -1,8 +1,9 @@
 //! Persistent control-plane assignment audit logging.
 //!
 //! Potential use case:
-//! Keep an append-only JSONL trail for delegated capability assignment approvals
-//! and denials so orchestrator actions are auditable across runtime sessions.
+//! Keep an append-only JSONL trail for delegated capability assignment lifecycle
+//! events (approved/denied/revoked/expired), plus bounded replay/pruning support
+//! for restart-safe runtime continuity.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

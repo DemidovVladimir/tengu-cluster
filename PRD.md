@@ -408,10 +408,11 @@ Planned built-in tools:
 - Oversized tool-result token guard/truncation utility (implemented in core and applied by runtime tool registry)
 - Per-agent allow/deny lists
 - Append-only tool audit log at `~/.tengu/state/audit/tool_calls.jsonl` (policy/protocol/execution events via event subscriber)
-- Append-only delegated assignment audit log at `~/.tengu/state/audit/capability_assignments.jsonl` (handoff dispatch/denial events via event subscriber)
-- Startup replay of approved delegated assignments from audit log for control-plane continuity.
+- Append-only delegated assignment audit log at `~/.tengu/state/audit/capability_assignments.jsonl` (handoff dispatch/result lifecycle via event subscriber, including revoked/expired outcomes)
+- Startup replay of non-expired approved delegated assignments from audit log for control-plane continuity.
 - Delegated assignment cleanup controls (`/unassign`, `/assignments clear`) with automatic TTL expiry in runtime.
 - Startup audit-log retention pruning for delegated assignments (`TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS`).
+- Event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs.
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries

@@ -142,6 +142,7 @@ extra_dirs = []
 # and `/assignments clear` commands for bounded dependent capability assignment lifecycle.
 # Assignment lifecycle events are persisted to `~/.tengu/state/audit/capability_assignments.jsonl`.
 # Approved assignments are replayed from this audit log at startup.
-# Runtime also auto-expires stale delegated assignments by TTL policy.
+# Runtime also auto-expires stale delegated assignments by TTL policy
+# (`TENGU_DELEGATED_ASSIGNMENT_TTL_SECS` env override).
 mode = "user"
 # delegated_orchestrator_agent = "orchestrator"

@@ -44,8 +44,8 @@ use tengu_core::events::{
 };
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{
-    DeliveryOptions, HandoffResultEnvelope, HandoffResultStatus, Message, Recipient, Role,
-    HANDOFF_SCHEMA_VERSION,
+    DeliveryOptions, HandoffResultEnvelope, HandoffResultStatus, HandoffTaskEnvelope, Message,
+    Recipient, Role, HANDOFF_SCHEMA_VERSION,
 };
 use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
@@ -398,6 +398,16 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
     let mut control_plane_audit_subscriber =
         spawn_control_plane_audit_subscriber(Arc::clone(&event_bus), control_plane_audit.clone());
+    let mut delegated_handoff_acceptance_subscriber =
+        if ensure_delegated_orchestrator(&config, &agent_id).is_ok() {
+            info!(
+                orchestrator_agent_id = %agent_id,
+                "Enabled delegated handoff acceptance subscriber"
+            );
+            spawn_delegated_handoff_acceptance_subscriber(Arc::clone(&event_bus), agent_id.clone())
+        } else {
+            None
+        };
     let mut event_metrics_subscriber =
         spawn_event_metrics_subscriber(Arc::clone(&event_bus), event_bus_cfg.metrics_log_every);
     let mut policy_reaction_subscriber = spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
@@ -788,6 +798,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     if let Some(handle) = control_plane_audit_subscriber.take() {
         handle.abort();
     }
+    if let Some(handle) = delegated_handoff_acceptance_subscriber.take() {
+        handle.abort();
+    }
     if let Some(handle) = event_metrics_subscriber.take() {
         handle.abort();
     }
@@ -1004,6 +1017,29 @@ fn build_assignment_revocation_result(
         output_tokens: 0,
         error_reason: Some(reason.to_string()),
         metadata: std::collections::HashMap::new(),
+    }
+}
+
+/// Build non-terminal handoff acceptance envelope for delegated queue baseline.
+fn build_handoff_accepted_result(
+    envelope: &HandoffTaskEnvelope,
+    summary: &str,
+) -> HandoffResultEnvelope {
+    HandoffResultEnvelope {
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        handoff_id: envelope.handoff_id.clone(),
+        flow_key: envelope.flow_key.clone(),
+        from_agent_id: envelope.to_agent_id.clone(),
+        to_agent_id: envelope.from_agent_id.clone(),
+        status: HandoffResultStatus::Accepted,
+        summary: summary.to_string(),
+        artifacts: Vec::new(),
+        output_tokens: 0,
+        error_reason: None,
+        metadata: std::collections::HashMap::from([(
+            "runtime".to_string(),
+            "delegated-handoff-queue".to_string(),
+        )]),
     }
 }
 
@@ -1688,6 +1724,69 @@ fn spawn_control_plane_audit_subscriber(
     }))
 }
 
+/// Spawn delegated handoff acceptance subscriber for baseline execution loop.
+///
+/// Current behavior:
+/// - listens for `HandoffTaskDispatched` events from orchestrator
+/// - emits `HandoffResultReceived(status=accepted)` as queue acknowledgement
+/// - does not execute dependent model turns yet (tracked under `E6-T9`)
+fn spawn_delegated_handoff_acceptance_subscriber(
+    event_bus: Arc<InProcessEventBus>,
+    orchestrator_agent_id: String,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let mut stream = event_bus.subscribe();
+    Some(tokio::spawn(async move {
+        while let Some(event) = stream.next().await {
+            let (task, correlation_id) = match event.payload {
+                DomainEventPayload::HandoffTaskDispatched(payload) => {
+                    (payload.envelope, event.meta.correlation_id.clone())
+                }
+                _ => continue,
+            };
+            if task.from_agent_id != orchestrator_agent_id {
+                continue;
+            }
+
+            let accepted =
+                build_handoff_accepted_result(&task, "accepted by delegated handoff queue");
+            if let Err(err) = accepted.validate_against(&task) {
+                warn!(
+                    error = %err,
+                    handoff_id = %task.handoff_id,
+                    "Invalid delegated handoff acceptance envelope"
+                );
+                continue;
+            }
+
+            let accepted_event = DomainEvent {
+                meta: DomainEventMeta {
+                    ts_epoch_ms: now_epoch_ms(),
+                    flow_key: Some(task.flow_key.clone()),
+                    agent_id: Some(task.to_agent_id.clone()),
+                    correlation_id,
+                    source: Some("delegated-handoff-queue".to_string()),
+                },
+                payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                    envelope: accepted,
+                }),
+            };
+            if let Err(err) = event_bus.publish(accepted_event).await {
+                warn!(
+                    error = %err,
+                    handoff_id = %task.handoff_id,
+                    "Failed to publish delegated handoff acceptance event"
+                );
+                continue;
+            }
+            info!(
+                handoff_id = %task.handoff_id,
+                dependent_agent_id = %task.to_agent_id,
+                "Delegated handoff accepted by baseline queue"
+            );
+        }
+    }))
+}
+
 #[derive(Debug, Default)]
 struct EventMetricsState {
     total_events: u64,
@@ -1878,6 +1977,11 @@ fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Option<ToolAudit
 }
 
 /// Convert emitted domain events into persisted delegated assignment audit records.
+///
+/// Note:
+/// `Accepted` handoff results are treated as non-terminal queue acknowledgements
+/// and are intentionally not persisted as audit rows to keep replay semantics
+/// tied to approved/terminal lifecycle states.
 fn map_domain_event_to_control_plane_audit_event(
     event: &DomainEvent,
 ) -> Option<ControlPlaneAuditEvent> {
@@ -3470,6 +3574,36 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_audit_map_ignores_handoff_acceptance() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 1_500,
+                flow_key: Some("flow-1".to_string()),
+                agent_id: Some("worker".to_string()),
+                correlation_id: Some("corr-1b".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-1".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "worker".to_string(),
+                    to_agent_id: "main".to_string(),
+                    status: HandoffResultStatus::Accepted,
+                    summary: "accepted".to_string(),
+                    artifacts: Vec::new(),
+                    output_tokens: 0,
+                    error_reason: None,
+                    metadata: std::collections::HashMap::new(),
+                },
+            }),
+        };
+
+        assert!(map_domain_event_to_control_plane_audit_event(&event).is_none());
+    }
+
+    #[test]
     fn control_plane_audit_map_captures_handoff_denial() {
         let event = DomainEvent {
             meta: DomainEventMeta {
@@ -3658,6 +3792,31 @@ mod tests {
         assert!(recovered.is_empty());
 
         let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn build_handoff_accepted_result_is_valid_against_task() {
+        let task = HandoffTaskEnvelope {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            handoff_id: "h-accepted".to_string(),
+            flow_key: "flow-accepted".to_string(),
+            from_agent_id: "main".to_string(),
+            to_agent_id: "worker".to_string(),
+            objective: "check one file".to_string(),
+            constraints: vec!["bounded-by-user-policy".to_string()],
+            requested_capabilities: vec!["tool:read_file".to_string()],
+            context_summary: None,
+            max_output_tokens: 256,
+            ttl_seconds: Some(900),
+            metadata: std::collections::HashMap::new(),
+        };
+        let accepted = build_handoff_accepted_result(&task, "accepted");
+        accepted.validate_against(&task).expect("valid accepted");
+        assert_eq!(accepted.status, HandoffResultStatus::Accepted);
+        assert_eq!(
+            accepted.metadata.get("runtime").map(String::as_str),
+            Some("delegated-handoff-queue")
+        );
     }
 
     #[tokio::test]
