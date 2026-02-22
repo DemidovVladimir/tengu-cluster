@@ -11,6 +11,7 @@
 | Component | Status | File |
 |-----------|--------|------|
 | CLI interface | ✅ Working | `src/main.rs` |
+| Runtime decomposition | ✅ Working | `src/main.rs` + `src/runtime_bus.rs` + `src/runtime_engine.rs` + `src/runtime_commands.rs` + `src/runtime_prompt.rs` |
 | Ollama Engine | ✅ Working (streaming `TextDelta`) | `crates/tengu-backends/src/ollama/mod.rs` |
 | Anthropic Engine | ✅ Working (typed REST, non-streaming) | `crates/tengu-backends/src/anthropic/mod.rs` |
 | Full config schema | ✅ | `crates/tengu-core/src/config/schema.rs` (399 lines) |
@@ -20,12 +21,12 @@
 | Noop + Rule Refiner | ✅ | `crates/tengu-optimizer/src/` |
 | Traits: Engine, Pipe, Refiner, Tool | ✅ | `crates/tengu-core/src/lib.rs` |
 | Adapter + event-driven runtime baseline | ✅ Working | Trait adapters + stream events are live; `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile/backpressure validation are implemented |
-| Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/main.rs` |
+| Slash commands (`/eco`, `/cost`, `/reset`, etc.) | ✅ | `src/runtime_commands.rs` + `src/main.rs` |
 | `tengu doctor` (Ollama + flow-store integrity checks) | ✅ | `src/main.rs` |
 | `tengu status` | ✅ | `src/main.rs` |
-| Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/main.rs` |
-| Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/main.rs` (index/transcripts + compaction wired; retention/rotation remains) |
-| Backend diagnostics metadata | ✅ | `crates/tengu-core/src/lib.rs` + `src/main.rs` (`status`/`doctor`/`/engine`) |
+| Knowledge Store (runtime-wired) | ⚠️ Basic | `crates/tengu-memory/src/lib.rs` + `src/runtime_prompt.rs` + `src/main.rs` |
+| Flow persistence (CLI flows) | ⚠️ Partial | `src/flow_store.rs` + `src/runtime_prompt.rs` + `src/main.rs` (index/transcripts + compaction wired; retention/rotation remains) |
+| Backend diagnostics metadata | ✅ | `crates/tengu-core/src/lib.rs` + `src/runtime_commands.rs` + `src/main.rs` (`status`/`doctor`/`/engine`) |
 | User story coverage matrix | ✅ Artifact | `USER_STORIES.md` |
 
 ### 🔲 Stubs (defined but not implemented)
@@ -98,7 +99,7 @@ cargo run -- chat
 | 2.5 | `find_files` tool (glob) | same | Easy |
 | 2.6 | `search_content` tool (grep) | same | Easy |
 | 2.7 | `shell` tool (with confirmation) | same | Medium |
-| 2.8 | Tool-calling loop in main.rs | `src/main.rs` | Hard |
+| 2.8 | Tool-calling loop in runtime engine path | `src/runtime_engine.rs` + `src/main.rs` | Hard |
 | 2.9 | Allow/Deny tool filtering from config | `tengu-core` | Medium |
 
 **Outcome:** Agent can read files, write data, search content.
@@ -134,13 +135,13 @@ Tengu: ✅ File created: drivers/serik.md
 |---|------|-------|------------|
 | 4.1 | Flow index + transcript writer (`flows/index.json` + JSONL) | `tengu-core` | Medium |
 | 4.2 | Atomic writes + lock discipline for flow index updates | `tengu-core` | Medium |
-| 4.3 | Prompt budget assembler (system/recent/retrieval/summary buckets) | `src/main.rs` | Hard |
-| 4.4 | Wire `KnowledgeStore::query_with_budget` into chat loop | `src/main.rs` | Medium |
+| 4.3 | Prompt budget assembler (system/recent/retrieval/summary buckets) | `src/runtime_prompt.rs` + `src/main.rs` | Hard |
+| 4.4 | Wire `KnowledgeStore::query_with_budget` into chat loop | `src/runtime_prompt.rs` + `src/main.rs` | Medium |
 | 4.5 | Compaction pipeline (keep recent + summarize old ranges) | `tengu-memory` | Medium |
 | 4.6 | History limit + oversized tool-result guards | `tengu-core` | Medium |
 | 4.7 | Transcript retention/rotation + corruption recovery path | `tengu-core` | Medium |
 | 4.8 | `/store` + storage diagnostics commands | `src/main.rs` | Easy |
-| 4.9 | Internal event bus v1 (`DomainEvent` + bounded in-process bus + runtime emitters) | `tengu-core` + `src/main.rs` | Hard |
+| 4.9 | Internal event bus v1 (`DomainEvent` + bounded in-process bus + runtime emitters) | `tengu-core` + `src/runtime_bus.rs` + `src/main.rs` | Hard |
 
 **Outcome:** Tengu remembers past conversations and knows the contents of workspace files.
 
@@ -163,7 +164,7 @@ Definition of done for Sprint 4:
 | 5.4 | README.md (English) | Project | Easy |
 | 5.5 | Docker image (optional) | Project | Medium |
 | 5.6 | E2E test: "Sanya" scenario | Tests | Medium |
-| 5.7 | Migrate audit/metrics side-effects to event subscribers + backpressure validation (Done baseline) | `src/main.rs` + `src/tool_audit.rs` | Hard |
+| 5.7 | Migrate audit/metrics side-effects to event subscribers + backpressure validation (Done baseline) | `src/runtime_bus.rs` + `src/tool_audit.rs` | Hard |
 
 **Outcome:** Ready to record a demo video showing the full journey from install to running a business via Telegram.
 
@@ -193,8 +194,8 @@ Every sprint item that touches runtime orchestration must confirm:
 ## 📐 MVP Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│                 main.rs                      │
+┌──────────────────────────────────────────────────────────────────┐
+│      Runtime orchestration modules (`main.rs` + `runtime_*`)    │
 │  ┌─────────────────────────────────────┐     │
 │  │           Event Loop                │     │
 │  │  Pipes → Routing → Agent → Engine   │     │
@@ -217,7 +218,7 @@ Every sprint item that touches runtime orchestration must confirm:
 │              │ Knowledge │                   │
 │              │  + Flows  │                   │
 │              └───────────┘                   │
-└─────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---

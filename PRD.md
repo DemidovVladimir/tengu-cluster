@@ -18,7 +18,7 @@ This document contains both current behavior and target-state requirements.
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
-| Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main.rs` |
+| Budget overflow regressions | Implemented | Runtime budget edge-cases are covered by unit tests in `src/main_tests.rs` against `src/runtime_prompt.rs` helpers |
 | Output reserve alignment | Implemented | Prompt reserve is derived from engine output cap (with headroom), not raw context fraction |
 | Tool-result truncation guard | Implemented | Core utility enforces hard token caps for tool outputs before prompt insertion |
 | Backend capability contract | Implemented | `Engine::capabilities()` exposes runtime-discoverable backend capabilities |
@@ -63,7 +63,7 @@ A single Rust binary that lets users run AI coding agents across any messaging p
 ### 2.1 Architecture Guardrail (Non-Negotiable)
 
 1. All new providers/channels/refiners/tools must integrate via shared adapter traits in `tengu-core`.
-2. Runtime orchestration (`src/main.rs`) must not grow provider-specific branches for new integrations.
+2. Runtime orchestration modules (`src/main.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/runtime_bus.rs`) must not grow provider-specific branches for new integrations.
 3. Runtime side-effects must move toward `DomainEvent` + `EventBus` subscribers; temporary inline behavior must be marked with migration TODOs and linked backlog tasks.
 
 ---
@@ -75,7 +75,11 @@ A single Rust binary that lets users run AI coding agents across any messaging p
 ```
 tengu-cluster/
 ├── Cargo.toml              # Workspace root + binary entry
-├── src/main.rs             # CLI entry point
+├── src/main.rs             # CLI entry point + high-level runtime orchestration
+├── src/runtime_bus.rs      # Event bus runtime configuration + subscribers/workers
+├── src/runtime_engine.rs   # Engine turn + tool loop stream processing
+├── src/runtime_commands.rs # Slash commands + delegated control-plane handlers
+├── src/runtime_prompt.rs   # Prompt budget and retrieval block assembly
 ├── src/control_plane.rs    # Delegated orchestrator assignment helpers
 ├── crates/
 │   ├── tengu-core/         # Shared types, traits, config, routing
@@ -413,6 +417,7 @@ Planned built-in tools:
 - Delegated assignment cleanup controls (`/unassign`, `/assignments clear`) with automatic TTL expiry in runtime.
 - Startup audit-log retention pruning for delegated assignments (`TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS`).
 - Event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs.
+- Event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events.
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries

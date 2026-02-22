@@ -240,7 +240,7 @@ Current coverage:
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
 - `Partial` delegated control-plane baseline:
   - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear` for bounded delegated capability lifecycle
-  - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus denied/revoked/expired terminal states
+  - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus terminal completed/failed/denied/revoked/expired states
   - assignment lifecycle outcomes are persisted as append-only JSONL audit records
   - non-expired approved assignments are replayed from audit log at startup for session continuity
   - delegated assignments are auto-expired by TTL and stale audit rows are pruned at startup
@@ -249,7 +249,7 @@ Current coverage:
   References:
   - schema fields: `crates/tengu-core/src/config/schema.rs`
   - policy helpers: `crates/tengu-core/src/config/policy.rs`
-  - runtime execution gap (multi-agent path not yet active): `src/main.rs`
+  - runtime execution gap (multi-agent path not yet active): `src/main.rs` + `src/runtime_engine.rs` + `src/runtime_bus.rs`
 
 Required tasks:
 - `E6-T10` (continue: connect delegated execution path)

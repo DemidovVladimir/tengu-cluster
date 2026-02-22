@@ -22,7 +22,7 @@ Introduce an internal domain event bus to decouple runtime side-effects (audit/m
 2. Event handling must be bounded and deterministic on minimal single-core devices.
 3. Multi-core hosts can enable parallel subscribers for higher throughput.
 4. Migration is incremental; no big-bang runtime rewrite.
-5. New runtime side-effects should not add permanent inline coupling in `main.rs`; they must target subscriber paths or be explicitly marked as temporary.
+5. New runtime side-effects should not add permanent inline coupling in runtime orchestration modules (`src/main.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`); they must target subscriber paths or be explicitly marked as temporary.
 
 ## Domain Event v1 (Initial)
 
@@ -51,7 +51,7 @@ Exit criteria:
 
 ### Phase 2: Runtime Producers
 
-1. ✅ Emit v1 events from runtime hotspots in `src/main.rs` (`E11-T3`).
+1. ✅ Emit v1 events from runtime hotspots in `src/main.rs` and `src/runtime_engine.rs` (`E11-T3`).
 2. ✅ Keep existing direct side-effects active for parity during transition.
 
 Exit criteria:

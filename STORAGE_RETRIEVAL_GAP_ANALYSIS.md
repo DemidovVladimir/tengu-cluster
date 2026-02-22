@@ -52,14 +52,18 @@ What exists:
 - Persisted flow/session index + JSONL transcript append with lock-safe and atomic writes:
   - `src/flow_store.rs`
 - Runtime prompt budget assembly (system/history/retrieval/output reserve):
+  - `src/runtime_prompt.rs`
   - `src/main.rs`
 - Runtime retrieval wiring with hard token-capped query path:
+  - `src/runtime_prompt.rs`
   - `src/main.rs`
   - `crates/tengu-memory/src/lib.rs`
 - Scope-aware history turn limits enforced in runtime:
+  - `src/runtime_prompt.rs`
   - `src/main.rs`
   - `crates/tengu-core/src/config/schema.rs`
 - Runtime compaction trigger path (threshold + overflow) with summary insertion:
+  - `src/runtime_prompt.rs`
   - `src/main.rs`
 - `doctor` flow-store integrity diagnostics (missing/unsafe/corrupt transcript checks):
   - `src/main.rs`

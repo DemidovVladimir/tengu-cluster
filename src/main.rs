@@ -6,14 +6,18 @@
 //! Architecture notes:
 //! - Adapter-first integration boundaries come from `tengu-core` traits (`Engine`, `Pipe`, `Refiner`, `Tool`).
 //! - Runtime execution is event-driven today through channel queues and `StreamEvent`.
+//! - Runtime orchestration is split by responsibility:
+//!   - `src/main.rs`: bootstrap + high-level chat orchestration.
+//!   - `src/runtime_bus.rs`: event bus config/subscribers/handoff workers.
+//!   - `src/runtime_engine.rs`: engine turn + tool-call stream execution.
+//!   - `src/runtime_commands.rs`: slash command and delegated control-plane handlers.
+//!   - `src/runtime_prompt.rs`: budget/retrieval prompt assembly helpers.
 //! - Internal domain event bus migration (`E11`) is in progress; `DomainEvent`/`EventBus`
 //!   contracts, bounded in-process bus, runtime emitters, and audit/metrics/policy
 //!   subscribers are implemented.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use futures::StreamExt;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -21,6 +25,12 @@ use tracing::{debug, error, info, warn};
 mod control_plane;
 mod control_plane_audit;
 mod flow_store;
+#[cfg(test)]
+mod main_tests;
+mod runtime_bus;
+mod runtime_commands;
+mod runtime_engine;
+mod runtime_prompt;
 mod tool_audit;
 mod tool_runtime;
 
@@ -28,29 +38,23 @@ use control_plane::{
     build_assignment_envelope, ensure_delegated_orchestrator, parse_assign_command,
     parse_unassign_command, CapabilityAssignmentRecord,
 };
-use control_plane_audit::{ControlPlaneAuditEvent, ControlPlaneAuditStore};
+use control_plane_audit::ControlPlaneAuditStore;
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
 use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
 use tengu_channels::CliPipe;
 use tengu_core::config::{
-    ensure_capability_governance_actor_allowed, ensure_engine_allowed,
-    evaluate_tool_approval_policy, evaluate_tool_policy, Config, RuntimeProfile,
+    ensure_capability_governance_actor_allowed, ensure_engine_allowed, Config, RuntimeProfile,
 };
 use tengu_core::events::{
-    DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnCompleted, EngineTurnFailed,
-    EngineTurnStarted, EventBus, EventBusOverflowPolicy, FlowCompacted, FlowResolved,
-    HandoffResultReceived, HandoffTaskDispatched, InProcessEventBus, InboundTurnReceived,
-    PromptAssembled, ToolCallCompleted, ToolCallDenied, ToolCallStarted,
+    DomainEvent, DomainEventMeta, DomainEventPayload, EngineTurnStarted, EventBus, FlowCompacted,
+    FlowResolved, InProcessEventBus, InboundTurnReceived, PromptAssembled,
 };
 use tengu_core::token::estimate_tokens_approx_min1;
-use tengu_core::types::{
-    DeliveryOptions, HandoffResultEnvelope, HandoffResultStatus, HandoffTaskEnvelope, Message,
-    Recipient, Role, HANDOFF_SCHEMA_VERSION,
-};
-use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner, ToolContext};
+use tengu_core::types::{DeliveryOptions, Message, Recipient, Role};
+use tengu_core::{Engine, EngineContext, Lens, Pipe, PipeContext, Refiner};
 use tengu_memory::{KnowledgeStore, RetrievedKnowledge};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
-use tool_audit::{ToolAuditEvent, ToolAuditStore};
+use tool_audit::ToolAuditStore;
 use tool_runtime::ToolRegistry;
 
 /// Fixed heading prepended to runtime retrieval context blocks.
@@ -160,22 +164,6 @@ struct CompactionOutcome {
     compacted_messages: usize,
 }
 
-/// In-flight tool call assembly state for streamed tool arguments.
-#[derive(Debug, Clone)]
-struct PendingToolCall {
-    id: String,
-    name: String,
-    arguments_delta: String,
-}
-
-/// Normalized tool execution outcome used by runtime rendering and audit logging.
-#[derive(Debug, Clone)]
-struct ToolExecutionOutcome {
-    user_message: String,
-    status: &'static str,
-    reason: Option<String>,
-}
-
 /// Mutable per-session runtime state for chat loop execution.
 #[derive(Debug, Clone)]
 struct ChatLoopState {
@@ -199,19 +187,6 @@ struct ChatLoopState {
     capability_assignments: Vec<CapabilityAssignmentRecord>,
     /// Last prompt assembly report surfaced by `/context`.
     last_prompt_report: Option<PromptAssemblyReport>,
-}
-
-/// Runtime-tuned event bus settings derived from deployment profile.
-#[derive(Debug, Clone, Copy)]
-struct EventBusRuntimeConfig {
-    /// Queue capacity used by in-process bus.
-    capacity: usize,
-    /// Overflow policy for saturated queues.
-    policy: EventBusOverflowPolicy,
-    /// Event count interval for metrics snapshot logs.
-    metrics_log_every: u64,
-    /// Time interval for periodic diagnostics logs.
-    diagnostics_interval_secs: u64,
 }
 
 impl ChatLoopState {
@@ -338,7 +313,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let knowledge_store = init_knowledge_store(&agent_config, refiner.as_ref()).await;
     let tool_registry = ToolRegistry::with_defaults();
-    let event_bus_cfg = resolve_event_bus_runtime_config(profile);
+    let event_bus_cfg = runtime_bus::resolve_event_bus_runtime_config(profile);
     let event_bus = Arc::new(InProcessEventBus::new(
         event_bus_cfg.capacity,
         event_bus_cfg.policy,
@@ -394,28 +369,51 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             }
         }
     }
+    let shared_config = Arc::new(config.clone());
     let mut tool_audit_subscriber =
-        spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
-    let mut control_plane_audit_subscriber =
-        spawn_control_plane_audit_subscriber(Arc::clone(&event_bus), control_plane_audit.clone());
+        runtime_bus::spawn_tool_audit_subscriber(Arc::clone(&event_bus), tool_audit.clone());
+    let mut control_plane_audit_subscriber = runtime_bus::spawn_control_plane_audit_subscriber(
+        Arc::clone(&event_bus),
+        control_plane_audit.clone(),
+    );
     let mut delegated_handoff_acceptance_subscriber =
         if ensure_delegated_orchestrator(&config, &agent_id).is_ok() {
             info!(
                 orchestrator_agent_id = %agent_id,
                 "Enabled delegated handoff acceptance subscriber"
             );
-            spawn_delegated_handoff_acceptance_subscriber(Arc::clone(&event_bus), agent_id.clone())
+            runtime_bus::spawn_delegated_handoff_acceptance_subscriber(
+                Arc::clone(&event_bus),
+                agent_id.clone(),
+            )
         } else {
             None
         };
-    let mut event_metrics_subscriber =
-        spawn_event_metrics_subscriber(Arc::clone(&event_bus), event_bus_cfg.metrics_log_every);
-    let mut policy_reaction_subscriber = spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
-    let mut bus_diagnostics_reporter = spawn_event_bus_diagnostics_reporter(
+    let mut delegated_handoff_execution_subscriber =
+        if ensure_delegated_orchestrator(&config, &agent_id).is_ok() {
+            info!(
+                orchestrator_agent_id = %agent_id,
+                "Enabled delegated handoff execution subscriber"
+            );
+            runtime_bus::spawn_delegated_handoff_execution_subscriber(
+                Arc::clone(&event_bus),
+                Arc::clone(&shared_config),
+                agent_id.clone(),
+            )
+        } else {
+            None
+        };
+    let mut event_metrics_subscriber = runtime_bus::spawn_event_metrics_subscriber(
+        Arc::clone(&event_bus),
+        event_bus_cfg.metrics_log_every,
+    );
+    let mut policy_reaction_subscriber =
+        runtime_bus::spawn_policy_reaction_subscriber(Arc::clone(&event_bus));
+    let mut bus_diagnostics_reporter = runtime_bus::spawn_event_bus_diagnostics_reporter(
         Arc::clone(&event_bus),
         event_bus_cfg.diagnostics_interval_secs,
     );
-    let persisted_capability_assignments = load_persisted_capability_assignments(
+    let persisted_capability_assignments = runtime_bus::load_persisted_capability_assignments(
         control_plane_audit.as_ref(),
         &agent_id,
         control_plane_replay_limit,
@@ -451,13 +449,13 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     };
 
     // Build system prompt from workspace files with static token caps.
-    let system_prompt = build_system_prompt(&agent_config);
+    let system_prompt = runtime_prompt::build_system_prompt(&agent_config);
 
     println!("Type your message (Ctrl+D to quit):\n");
 
     while let Some(inbound) = rx.recv().await {
         let turn_correlation_id = uuid::Uuid::new_v4().to_string();
-        let expired_assignments = prune_expired_capability_assignments(
+        let expired_assignments = runtime_commands::prune_expired_capability_assignments(
             &mut state.capability_assignments,
             delegated_assignment_ttl_secs,
             event_bus.as_ref(),
@@ -495,7 +493,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
                 &inbound.sender,
                 state.manual_session_id.as_deref(),
             );
-            if handle_control_plane_command(
+            if runtime_commands::handle_control_plane_command(
                 inbound.content.as_str(),
                 &config,
                 &agent_id,
@@ -508,7 +506,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             {
                 continue;
             }
-            if handle_chat_command(
+            if runtime_commands::handle_chat_command(
                 inbound.content.as_str(),
                 &mut state,
                 engine.as_ref(),
@@ -620,14 +618,15 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             .limits
             .max_tokens_per_flow
             .saturating_sub(state.flow_token_usage);
-        let base_input_budget = compute_base_input_budget(
+        let base_input_budget = runtime_prompt::compute_base_input_budget(
             engine.context_window(),
             engine_output_token_cap,
             system_prompt.as_deref(),
             remaining_flow_tokens,
         );
-        let history_assembly = assemble_recent_history(&state.messages, base_input_budget);
-        let retrieval_budget_requested = compute_retrieval_bucket_budget(
+        let history_assembly =
+            runtime_prompt::assemble_recent_history(&state.messages, base_input_budget);
+        let retrieval_budget_requested = runtime_prompt::compute_retrieval_bucket_budget(
             state.active_lens,
             &agent_config.lens,
             base_input_budget,
@@ -647,7 +646,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             Vec::new()
         };
         let retrieved_candidates = retrieved.len();
-        let retrieval_assembly = build_retrieval_block(&retrieved, retrieval_budget_effective);
+        let retrieval_assembly =
+            runtime_prompt::build_retrieval_block(&retrieved, retrieval_budget_effective);
 
         let history_messages_selected = history_assembly.messages.len();
         let prompt_messages = history_assembly.messages;
@@ -655,7 +655,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             .as_deref()
             .map(estimate_tokens_approx_min1)
             .unwrap_or(0);
-        let total_input_budget = compute_total_input_budget(
+        let total_input_budget = runtime_prompt::compute_total_input_budget(
             engine.context_window(),
             engine_output_token_cap,
             remaining_flow_tokens,
@@ -668,7 +668,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             history_tokens: history_assembly.used_tokens,
             dropped_history_messages: history_assembly.dropped_messages,
             dropped_retrieval_items: retrieval_assembly.dropped_items,
-            reserved_output_tokens: reserved_output_tokens(
+            reserved_output_tokens: runtime_prompt::reserved_output_tokens(
                 engine.context_window(),
                 engine_output_token_cap,
             ),
@@ -678,7 +678,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
             compaction_applied: compaction_outcome.applied,
             compacted_messages: compaction_outcome.compacted_messages,
         };
-        log_prompt_budget_report(
+        runtime_prompt::log_prompt_budget_report(
             &flow_key,
             state.active_lens,
             engine.context_window(),
@@ -708,8 +708,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         }
 
         // Run engine
-        let turn_system_prompt =
-            merge_system_prompt(system_prompt.clone(), retrieval_assembly.block.as_deref());
+        let turn_system_prompt = runtime_prompt::merge_system_prompt(
+            system_prompt.clone(),
+            retrieval_assembly.block.as_deref(),
+        );
         let context = EngineContext {
             workspace: agent_config.workspace.clone(),
             system_prompt: turn_system_prompt,
@@ -726,7 +728,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         )
         .await;
 
-        let response_text = collect_engine_response(
+        let response_text = runtime_engine::collect_engine_response(
             engine.as_ref(),
             &config,
             &prompt_messages,
@@ -801,6 +803,9 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     if let Some(handle) = delegated_handoff_acceptance_subscriber.take() {
         handle.abort();
     }
+    if let Some(handle) = delegated_handoff_execution_subscriber.take() {
+        handle.abort();
+    }
     if let Some(handle) = event_metrics_subscriber.take() {
         handle.abort();
     }
@@ -813,1287 +818,8 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
     Ok(())
 }
 
-/// Process orchestrator control-plane commands and return `true` when handled.
-///
-/// Supported commands:
-/// - `/assign <dependent> <cap1,cap2,...> [objective...]`
-/// - `/assignments`
-/// - `/unassign <handoff-id|dependent-agent-id>`
-/// - `/assignments clear`
-///
-/// Assignment commands are available only when `capability_governance.mode=delegated`
-/// and current chat agent is configured as delegated orchestrator.
-async fn handle_control_plane_command(
-    command: &str,
-    config: &Config,
-    agent_id: &str,
-    flow_key: &str,
-    state: &mut ChatLoopState,
-    event_bus: &dyn EventBus,
-    turn_correlation_id: &str,
-) -> bool {
-    if command.trim() == "/assignments clear" {
-        if let Err(err) = ensure_delegated_orchestrator(config, agent_id) {
-            println!("Delegated assignment cleanup denied: {}\n", err);
-            return true;
-        }
-        if state.capability_assignments.is_empty() {
-            println!("No delegated capability assignments to clear.\n");
-            return true;
-        }
-        let removed: Vec<CapabilityAssignmentRecord> =
-            state.capability_assignments.drain(..).collect();
-        for assignment in &removed {
-            emit_domain_event(
-                event_bus,
-                Some(agent_id),
-                Some(&assignment.flow_key),
-                Some(turn_correlation_id),
-                DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                    envelope: build_assignment_revocation_result(
-                        assignment,
-                        "revoked by orchestrator via /assignments clear",
-                    ),
-                }),
-            )
-            .await;
-        }
-        println!(
-            "Cleared {} delegated assignment(s) and emitted revocation events.\n",
-            removed.len()
-        );
-        return true;
-    }
-
-    if command.trim() == "/assignments" {
-        if state.capability_assignments.is_empty() {
-            println!("No delegated capability assignments in this session.\n");
-            return true;
-        }
-        println!("Delegated Capability Assignments");
-        println!("─────────────────────────────");
-        for (idx, assignment) in state.capability_assignments.iter().enumerate() {
-            println!(
-                " {}. {} -> {} [{}]",
-                idx + 1,
-                assignment.orchestrator_agent_id,
-                assignment.dependent_agent_id,
-                assignment.requested_capabilities.join(", ")
-            );
-            println!("    objective: {}", assignment.objective);
-            println!("    handoff_id: {}", assignment.handoff_id);
-        }
-        println!();
-        return true;
-    }
-
-    if command.trim_start().starts_with("/unassign") {
-        if let Err(err) = ensure_delegated_orchestrator(config, agent_id) {
-            println!("Delegated assignment cleanup denied: {}\n", err);
-            return true;
-        }
-
-        let Some(target) = parse_unassign_command(command) else {
-            println!("Usage: /unassign <handoff-id|dependent-agent-id>\n");
-            return true;
-        };
-
-        let mut removed = Vec::<CapabilityAssignmentRecord>::new();
-        state.capability_assignments.retain(|assignment| {
-            let matches_target =
-                assignment.handoff_id == target || assignment.dependent_agent_id == target;
-            if matches_target {
-                removed.push(assignment.clone());
-                false
-            } else {
-                true
-            }
-        });
-
-        if removed.is_empty() {
-            println!(
-                "No delegated assignment matched '{}' (handoff or dependent).\n",
-                target
-            );
-            return true;
-        }
-
-        for assignment in &removed {
-            emit_domain_event(
-                event_bus,
-                Some(agent_id),
-                Some(&assignment.flow_key),
-                Some(turn_correlation_id),
-                DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                    envelope: build_assignment_revocation_result(
-                        assignment,
-                        "revoked by orchestrator via /unassign",
-                    ),
-                }),
-            )
-            .await;
-        }
-        println!(
-            "Revoked {} delegated assignment(s) for '{}'.\n",
-            removed.len(),
-            target
-        );
-        return true;
-    }
-
-    if command.trim_start().starts_with("/assign") {
-        let Some(parsed) = parse_assign_command(command) else {
-            println!("Usage: /assign <dependent-agent-id> <cap1,cap2,...> [objective...]\n");
-            return true;
-        };
-
-        let issued_at_ms = now_epoch_ms();
-        match build_assignment_envelope(config, flow_key, agent_id, &parsed) {
-            Ok(envelope) => {
-                let record = CapabilityAssignmentRecord::from_envelope(&envelope, issued_at_ms);
-                state.capability_assignments.push(record.clone());
-                emit_domain_event(
-                    event_bus,
-                    Some(agent_id),
-                    Some(flow_key),
-                    Some(turn_correlation_id),
-                    DomainEventPayload::HandoffTaskDispatched(HandoffTaskDispatched { envelope }),
-                )
-                .await;
-                println!(
-                    "Delegated assignment approved: {} -> {} [{}]\n",
-                    record.orchestrator_agent_id,
-                    record.dependent_agent_id,
-                    record.requested_capabilities.join(", ")
-                );
-            }
-            Err(err) => {
-                let denied = HandoffResultEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: uuid::Uuid::new_v4().to_string(),
-                    flow_key: flow_key.to_string(),
-                    from_agent_id: parsed.dependent_agent_id.clone(),
-                    to_agent_id: agent_id.to_string(),
-                    status: HandoffResultStatus::Denied,
-                    summary: String::new(),
-                    artifacts: Vec::new(),
-                    output_tokens: 0,
-                    error_reason: Some(err.to_string()),
-                    metadata: std::collections::HashMap::new(),
-                };
-                emit_domain_event(
-                    event_bus,
-                    Some(agent_id),
-                    Some(flow_key),
-                    Some(turn_correlation_id),
-                    DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                        envelope: denied,
-                    }),
-                )
-                .await;
-                println!("Delegated assignment denied: {}\n", err);
-            }
-        }
-        return true;
-    }
-
-    false
-}
-
-/// Build terminal handoff-result envelope used for assignment cleanup/revocation.
-fn build_assignment_revocation_result(
-    assignment: &CapabilityAssignmentRecord,
-    reason: &str,
-) -> HandoffResultEnvelope {
-    HandoffResultEnvelope {
-        schema_version: HANDOFF_SCHEMA_VERSION,
-        handoff_id: assignment.handoff_id.clone(),
-        flow_key: assignment.flow_key.clone(),
-        from_agent_id: assignment.dependent_agent_id.clone(),
-        to_agent_id: assignment.orchestrator_agent_id.clone(),
-        status: HandoffResultStatus::Denied,
-        summary: String::new(),
-        artifacts: Vec::new(),
-        output_tokens: 0,
-        error_reason: Some(reason.to_string()),
-        metadata: std::collections::HashMap::new(),
-    }
-}
-
-/// Build non-terminal handoff acceptance envelope for delegated queue baseline.
-fn build_handoff_accepted_result(
-    envelope: &HandoffTaskEnvelope,
-    summary: &str,
-) -> HandoffResultEnvelope {
-    HandoffResultEnvelope {
-        schema_version: HANDOFF_SCHEMA_VERSION,
-        handoff_id: envelope.handoff_id.clone(),
-        flow_key: envelope.flow_key.clone(),
-        from_agent_id: envelope.to_agent_id.clone(),
-        to_agent_id: envelope.from_agent_id.clone(),
-        status: HandoffResultStatus::Accepted,
-        summary: summary.to_string(),
-        artifacts: Vec::new(),
-        output_tokens: 0,
-        error_reason: None,
-        metadata: std::collections::HashMap::from([(
-            "runtime".to_string(),
-            "delegated-handoff-queue".to_string(),
-        )]),
-    }
-}
-
-/// Remove expired delegated assignments and emit terminal lifecycle events.
-///
-/// Expiry is based on assignment `issued_at_epoch_ms + ttl_secs`.
-async fn prune_expired_capability_assignments(
-    assignments: &mut Vec<CapabilityAssignmentRecord>,
-    ttl_secs: u64,
-    event_bus: &dyn EventBus,
-    actor_agent_id: &str,
-    correlation_id: &str,
-) -> usize {
-    if assignments.is_empty() || ttl_secs == 0 {
-        return 0;
-    }
-    let now_ms = now_epoch_ms();
-    let ttl_ms = ttl_secs.saturating_mul(1_000);
-
-    let mut expired = Vec::<CapabilityAssignmentRecord>::new();
-    assignments.retain(|assignment| {
-        let expires_at = assignment.issued_at_epoch_ms.saturating_add(ttl_ms);
-        if now_ms >= expires_at {
-            expired.push(assignment.clone());
-            false
-        } else {
-            true
-        }
-    });
-
-    for assignment in &expired {
-        emit_domain_event(
-            event_bus,
-            Some(actor_agent_id),
-            Some(&assignment.flow_key),
-            Some(correlation_id),
-            DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                envelope: build_assignment_revocation_result(
-                    assignment,
-                    "expired by retention policy",
-                ),
-            }),
-        )
-        .await;
-    }
-
-    expired.len()
-}
-
-/// Process one slash command and return `true` when loop should continue.
-fn handle_chat_command(
-    command: &str,
-    state: &mut ChatLoopState,
-    engine: &dyn Engine,
-    agent_config: &tengu_core::config::AgentConfig,
-    history_turn_limit: usize,
-    compaction_policy: FlowCompactionPolicy,
-) -> bool {
-    match command {
-        "/eco" => {
-            state.active_lens = Lens::Eco;
-            println!("Switched to eco lens (summaries only)\n");
-            true
-        }
-        "/standard" => {
-            state.active_lens = Lens::Standard;
-            println!("Switched to standard lens (auto-expand)\n");
-            true
-        }
-        "/precise" => {
-            state.active_lens = Lens::Precise;
-            println!("Switched to precise lens (full content)\n");
-            true
-        }
-        "/cost" => {
-            println!("Session Stats");
-            println!("─────────────────────────────");
-            println!(" Input tokens:  {}", state.total_input_tokens);
-            println!(" Output tokens: {}", state.total_output_tokens);
-            println!(
-                " Total:         {}",
-                state.total_input_tokens + state.total_output_tokens
-            );
-            if state.tokens_saved > 0 {
-                println!();
-                println!(" Saved by refiner:");
-                println!("   Prompt compression: -{} tokens", state.tokens_saved);
-            }
-            println!();
-            true
-        }
-        "/context" => {
-            let used: usize = state
-                .messages
-                .iter()
-                .map(|m| estimate_tokens_approx_min1(&m.content))
-                .sum();
-            let window = engine.context_window();
-            let lens_name = state.active_lens.as_str();
-            println!(
-                "Context: ~{} / {} tokens ({}%)\n",
-                used,
-                window,
-                (used * 100) / window.max(1)
-            );
-            println!("Lens: {}\n", lens_name);
-            println!("History turn limit: {}\n", history_turn_limit);
-            println!(
-                "Compaction: threshold={} keep_turns={} summary_max_tokens={}\n",
-                compaction_policy.threshold_tokens,
-                compaction_policy.keep_turns,
-                compaction_policy.summary_max_tokens
-            );
-            if let Some(report) = &state.last_prompt_report {
-                println!("Last prompt assembly:");
-                println!("  System:    {} tokens", report.system_tokens);
-                println!("  Retrieval: {} tokens", report.retrieval_tokens);
-                println!(
-                    "    requested/effective: {}/{}",
-                    report.retrieval_budget_requested, report.retrieval_budget_effective
-                );
-                println!("  History:   {} tokens", report.history_tokens);
-                println!("    dropped messages: {}", report.dropped_history_messages);
-                println!("    dropped retrieval: {}", report.dropped_retrieval_items);
-                println!("  Reserved:  {} tokens", report.reserved_output_tokens);
-                println!("  Output cap: {} tokens", report.output_token_cap);
-                println!("  Budget:    {} tokens", report.total_input_budget);
-                println!("  Flow left: {} tokens\n", report.flow_budget_remaining);
-                println!(
-                    "  Compaction: applied={}, compacted_messages={}\n",
-                    report.compaction_applied, report.compacted_messages
-                );
-            }
-            true
-        }
-        "/reset" => {
-            state.reset_for_new_session();
-            println!("Flow reset and rotated to a new session.\n");
-            true
-        }
-        "/engine" => {
-            let diagnostics = engine.diagnostics();
-            let caps = &diagnostics.capabilities;
-            println!("Current: {}/{}", agent_config.engine, agent_config.model);
-            println!("Engine id: {}", diagnostics.engine_id);
-            println!(
-                "Configured model: {}",
-                diagnostics.configured_model.as_deref().unwrap_or("n/a")
-            );
-            println!(
-                "Endpoint: {}",
-                diagnostics.endpoint.as_deref().unwrap_or("n/a")
-            );
-            println!(
-                "Transport: {}",
-                diagnostics.transport.as_deref().unwrap_or("n/a")
-            );
-            println!("Context window: {}\n", caps.context_window);
-            println!("Output cap: {}\n", caps.max_output_tokens_per_turn);
-            println!(
-                "Capabilities: tools={}, streaming={}, manages_workspace={}\n",
-                caps.supports_tool_use, caps.supports_streaming, caps.manages_own_workspace
-            );
-            true
-        }
-        "/help" => {
-            println!("Commands:");
-            println!("  /eco       — Eco lens (summaries)");
-            println!("  /standard  — Standard lens (auto-expand)");
-            println!("  /precise   — Precise lens (full content)");
-            println!("  /engine    — Show current engine");
-            println!("  /cost      — Token usage stats");
-            println!("  /context   — Context window usage");
-            println!("  /assign    — Delegated capability assignment (delegated mode only)");
-            println!("  /assignments — List delegated assignments (session)");
-            println!("  /assignments clear — Revoke and clear delegated assignments");
-            println!("  /unassign  — Revoke by handoff id or dependent agent");
-            println!("  /reset     — Clear conversation");
-            println!("  /help      — This help\n");
-            true
-        }
-        _ => {
-            println!("Unknown command. Type /help for available commands.\n");
-            true
-        }
-    }
-}
-
-/// Execute one engine call and collect text/usage events into session counters.
-async fn collect_engine_response(
-    engine: &dyn Engine,
-    config: &Config,
-    prompt_messages: &[Message],
-    context: &EngineContext,
-    flow_key: &str,
-    agent_id: &str,
-    agent_config: &tengu_core::config::AgentConfig,
-    tool_registry: &ToolRegistry,
-    event_bus: &dyn EventBus,
-    turn_correlation_id: &str,
-    total_input_tokens: &mut u32,
-    total_output_tokens: &mut u32,
-) -> Result<String> {
-    match engine.run(prompt_messages, &[], context).await {
-        Ok(mut stream) => {
-            let mut response_text = String::new();
-            let mut turn_usage_snapshot: Option<(u32, u32)> = None;
-            let mut policy_terminal_message: Option<String> = None;
-            let mut pending_tool_call: Option<PendingToolCall> = None;
-            let mut tool_runtime_messages: Vec<String> = Vec::new();
-
-            while let Some(event) = stream.next().await {
-                match event {
-                    tengu_core::types::StreamEvent::TextDelta { text } => {
-                        response_text.push_str(&text);
-                    }
-                    tengu_core::types::StreamEvent::Usage {
-                        input_tokens,
-                        output_tokens,
-                    } => {
-                        absorb_turn_usage_snapshot(
-                            &mut turn_usage_snapshot,
-                            input_tokens,
-                            output_tokens,
-                        );
-                    }
-                    tengu_core::types::StreamEvent::Error { message } => {
-                        emit_domain_event(
-                            event_bus,
-                            Some(agent_id),
-                            Some(flow_key),
-                            Some(turn_correlation_id),
-                            DomainEventPayload::EngineTurnFailed(EngineTurnFailed {
-                                reason: message.clone(),
-                            }),
-                        )
-                        .await;
-                        eprintln!("Engine error: {}", message);
-                    }
-                    tengu_core::types::StreamEvent::ToolCallStart { id, name } => {
-                        if let Err(err) =
-                            ensure_capability_governance_actor_allowed(config, agent_id)
-                        {
-                            let reason = err.to_string();
-                            emit_domain_event(
-                                event_bus,
-                                Some(agent_id),
-                                Some(flow_key),
-                                Some(turn_correlation_id),
-                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                    tool_call_id: id.clone(),
-                                    tool_name: name.clone(),
-                                    phase: "governance".to_string(),
-                                    reason: reason.clone(),
-                                }),
-                            )
-                            .await;
-                            policy_terminal_message = Some(format!(
-                                "Tool call '{}' denied by capability governance: {}",
-                                name, reason
-                            ));
-                            break;
-                        }
-                        emit_domain_event(
-                            event_bus,
-                            Some(agent_id),
-                            Some(flow_key),
-                            Some(turn_correlation_id),
-                            DomainEventPayload::ToolCallStarted(ToolCallStarted {
-                                tool_call_id: id.clone(),
-                                tool_name: name.clone(),
-                            }),
-                        )
-                        .await;
-                        if pending_tool_call.is_some() {
-                            emit_domain_event(
-                                event_bus,
-                                Some(agent_id),
-                                Some(flow_key),
-                                Some(turn_correlation_id),
-                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                    tool_call_id: id.clone(),
-                                    tool_name: name.clone(),
-                                    phase: "protocol".to_string(),
-                                    reason: "runtime supports only one active tool call"
-                                        .to_string(),
-                                }),
-                            )
-                            .await;
-                            policy_terminal_message = Some(
-                                "Tool runtime currently supports one active tool call at a time."
-                                    .to_string(),
-                            );
-                            break;
-                        }
-                        let decision = evaluate_tool_policy(agent_config, &name);
-                        if !decision.is_allowed() {
-                            policy_terminal_message = Some(format!(
-                                "Tool call '{}' denied by policy for agent '{}': {}",
-                                name,
-                                agent_id,
-                                decision.reason()
-                            ));
-                            emit_domain_event(
-                                event_bus,
-                                Some(agent_id),
-                                Some(flow_key),
-                                Some(turn_correlation_id),
-                                DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                    tool_call_id: id.clone(),
-                                    tool_name: name.clone(),
-                                    phase: "policy".to_string(),
-                                    reason: decision.reason().to_string(),
-                                }),
-                            )
-                            .await;
-                            break;
-                        }
-                        pending_tool_call = Some(PendingToolCall {
-                            id,
-                            name,
-                            arguments_delta: String::new(),
-                        });
-                    }
-                    tengu_core::types::StreamEvent::ToolCallDelta {
-                        id,
-                        arguments_delta,
-                    } => {
-                        if let Some(pending) = pending_tool_call.as_mut() {
-                            if pending.id != id {
-                                emit_domain_event(
-                                    event_bus,
-                                    Some(agent_id),
-                                    Some(flow_key),
-                                    Some(turn_correlation_id),
-                                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                        tool_call_id: pending.id.clone(),
-                                        tool_name: pending.name.clone(),
-                                        phase: "protocol".to_string(),
-                                        reason: format!(
-                                            "delta id mismatch: expected '{}', got '{}'",
-                                            pending.id, id
-                                        ),
-                                    }),
-                                )
-                                .await;
-                                policy_terminal_message = Some(format!(
-                                    "Tool call delta id mismatch: expected '{}', got '{}'.",
-                                    pending.id, id
-                                ));
-                                break;
-                            }
-                            pending.arguments_delta.push_str(&arguments_delta);
-                        }
-                    }
-                    tengu_core::types::StreamEvent::ToolCallEnd { id } => {
-                        if let Some(pending) = pending_tool_call.take() {
-                            if pending.id != id {
-                                emit_domain_event(
-                                    event_bus,
-                                    Some(agent_id),
-                                    Some(flow_key),
-                                    Some(turn_correlation_id),
-                                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                        tool_call_id: pending.id.clone(),
-                                        tool_name: pending.name.clone(),
-                                        phase: "protocol".to_string(),
-                                        reason: format!(
-                                            "end id mismatch: expected '{}', got '{}'",
-                                            pending.id, id
-                                        ),
-                                    }),
-                                )
-                                .await;
-                                policy_terminal_message = Some(format!(
-                                    "Tool call end id mismatch: expected '{}', got '{}'.",
-                                    pending.id, id
-                                ));
-                                break;
-                            }
-                            let outcome = execute_tool_call(
-                                &pending,
-                                config,
-                                agent_config,
-                                tool_registry,
-                                context.workspace.as_ref(),
-                                agent_id,
-                            )
-                            .await;
-                            match outcome.status {
-                                "denied_approval" | "denied_policy" => {
-                                    let phase = if outcome.status == "denied_approval" {
-                                        "approval"
-                                    } else {
-                                        "policy"
-                                    };
-                                    emit_domain_event(
-                                        event_bus,
-                                        Some(agent_id),
-                                        Some(flow_key),
-                                        Some(turn_correlation_id),
-                                        DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                                            tool_call_id: pending.id.clone(),
-                                            tool_name: pending.name.clone(),
-                                            phase: phase.to_string(),
-                                            reason: outcome.reason.clone().unwrap_or_else(|| {
-                                                "tool denied by runtime policy".to_string()
-                                            }),
-                                        }),
-                                    )
-                                    .await;
-                                    tool_runtime_messages.push(outcome.user_message);
-                                }
-                                _ => {
-                                    emit_domain_event(
-                                        event_bus,
-                                        Some(agent_id),
-                                        Some(flow_key),
-                                        Some(turn_correlation_id),
-                                        DomainEventPayload::ToolCallCompleted(ToolCallCompleted {
-                                            tool_call_id: pending.id.clone(),
-                                            tool_name: pending.name.clone(),
-                                            status: outcome.status.to_string(),
-                                            reason: outcome.reason.clone(),
-                                        }),
-                                    )
-                                    .await;
-                                    tool_runtime_messages.push(outcome.user_message);
-                                }
-                            }
-                        }
-                    }
-                    tengu_core::types::StreamEvent::Done => {}
-                    _ => {}
-                }
-            }
-            apply_turn_usage_to_session_totals(
-                total_input_tokens,
-                total_output_tokens,
-                turn_usage_snapshot,
-            );
-            if let Some(message) = policy_terminal_message {
-                emit_domain_event(
-                    event_bus,
-                    Some(agent_id),
-                    Some(flow_key),
-                    Some(turn_correlation_id),
-                    DomainEventPayload::EngineTurnCompleted(EngineTurnCompleted {
-                        input_tokens: turn_usage_snapshot.map(|(input, _)| input).unwrap_or(0),
-                        output_tokens: turn_usage_snapshot.map(|(_, output)| output).unwrap_or(0),
-                        response_tokens: as_u32_saturating(estimate_tokens_approx_min1(&message)),
-                    }),
-                )
-                .await;
-                return Ok(message);
-            }
-            if let Some(pending) = pending_tool_call {
-                emit_domain_event(
-                    event_bus,
-                    Some(agent_id),
-                    Some(flow_key),
-                    Some(turn_correlation_id),
-                    DomainEventPayload::ToolCallDenied(ToolCallDenied {
-                        tool_call_id: pending.id.clone(),
-                        tool_name: pending.name.clone(),
-                        phase: "protocol".to_string(),
-                        reason: "missing ToolCallEnd".to_string(),
-                    }),
-                )
-                .await;
-                return Ok(format!(
-                    "Tool call '{}' did not complete (missing ToolCallEnd).",
-                    pending.name
-                ));
-            }
-            if !tool_runtime_messages.is_empty() {
-                let tool_block = tool_runtime_messages.join("\n\n");
-                if response_text.trim().is_empty() {
-                    return Ok(tool_block);
-                }
-                response_text.push_str("\n\n");
-                response_text.push_str(&tool_block);
-            }
-            emit_domain_event(
-                event_bus,
-                Some(agent_id),
-                Some(flow_key),
-                Some(turn_correlation_id),
-                DomainEventPayload::EngineTurnCompleted(EngineTurnCompleted {
-                    input_tokens: turn_usage_snapshot.map(|(input, _)| input).unwrap_or(0),
-                    output_tokens: turn_usage_snapshot.map(|(_, output)| output).unwrap_or(0),
-                    response_tokens: as_u32_saturating(estimate_tokens_approx_min1(&response_text)),
-                }),
-            )
-            .await;
-            Ok(response_text)
-        }
-        Err(err) => {
-            emit_domain_event(
-                event_bus,
-                Some(agent_id),
-                Some(flow_key),
-                Some(turn_correlation_id),
-                DomainEventPayload::EngineTurnFailed(EngineTurnFailed {
-                    reason: err.to_string(),
-                }),
-            )
-            .await;
-            eprintln!("Engine error: {}\n", err);
-            Ok(String::new())
-        }
-    }
-}
-
-/// Execute one assembled tool call through registry and return user-facing result text.
-///
-/// Runtime applies defense-in-depth checks before execution:
-/// - capability governance actor gate (`user` / `delegated`)
-/// - `kit` allow/deny policy
-/// - approval policy (`kit.approval_required` + `kit.approved` + tool metadata)
-async fn execute_tool_call(
-    pending: &PendingToolCall,
-    config: &Config,
-    agent_config: &tengu_core::config::AgentConfig,
-    tool_registry: &ToolRegistry,
-    workspace: Option<&PathBuf>,
-    agent_id: &str,
-) -> ToolExecutionOutcome {
-    if let Err(err) = ensure_capability_governance_actor_allowed(config, agent_id) {
-        return ToolExecutionOutcome {
-            user_message: format!(
-                "[tool:{} denied]\nCapability governance denied runtime actor '{}': {}",
-                pending.name, agent_id, err
-            ),
-            status: "denied_governance",
-            reason: Some(err.to_string()),
-        };
-    }
-
-    let args_value = if pending.arguments_delta.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        match serde_json::from_str::<serde_json::Value>(&pending.arguments_delta) {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                return ToolExecutionOutcome {
-                    user_message: format!(
-                        "[tool:{} parse-error]\nInvalid JSON arguments: {}",
-                        pending.name, err
-                    ),
-                    status: "parse_error",
-                    reason: Some(err.to_string()),
-                };
-            }
-        }
-    };
-
-    if !tool_registry.has(&pending.name) {
-        return ToolExecutionOutcome {
-            user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
-            status: "not_registered",
-            reason: Some("tool is not registered".to_string()),
-        };
-    }
-
-    let policy_decision = evaluate_tool_policy(agent_config, &pending.name);
-    if !policy_decision.is_allowed() {
-        return ToolExecutionOutcome {
-            user_message: format!(
-                "[tool:{} denied]\nTool blocked by policy for agent '{}': {}",
-                pending.name,
-                agent_id,
-                policy_decision.reason()
-            ),
-            status: "denied_policy",
-            reason: Some(policy_decision.reason().to_string()),
-        };
-    }
-
-    let policy_metadata = tool_registry
-        .policy_metadata(&pending.name)
-        .unwrap_or_default();
-    let approval_decision = evaluate_tool_approval_policy(
-        agent_config,
-        &pending.name,
-        policy_metadata.requires_approval,
-    );
-    if !approval_decision.is_allowed() {
-        return ToolExecutionOutcome {
-            user_message: format!(
-                "[tool:{} denied]\nTool requires approval. Add '{}' to agents.{}.kit.approved in config.",
-                pending.name, pending.name, agent_id
-            ),
-            status: "denied_approval",
-            reason: Some(approval_decision.reason().to_string()),
-        };
-    }
-
-    let Some(workspace) = workspace else {
-        return ToolExecutionOutcome {
-            user_message: format!(
-                "[tool:{} error]\nWorkspace is not configured for this agent.",
-                pending.name
-            ),
-            status: "workspace_missing",
-            reason: Some("workspace is not configured".to_string()),
-        };
-    };
-
-    let tool_ctx = ToolContext {
-        workspace: workspace.clone(),
-        agent_id: agent_id.to_string(),
-    };
-    match tool_registry
-        .execute(&pending.name, args_value, &tool_ctx)
-        .await
-    {
-        Ok(output) if output.is_error => ToolExecutionOutcome {
-            user_message: format!("[tool:{} error]\n{}", pending.name, output.content),
-            status: "error",
-            reason: Some("tool returned error output".to_string()),
-        },
-        Ok(output) => ToolExecutionOutcome {
-            user_message: format!("[tool:{} ok]\n{}", pending.name, output.content),
-            status: "ok",
-            reason: None,
-        },
-        Err(err) => ToolExecutionOutcome {
-            user_message: format!("[tool:{} error]\n{}", pending.name, err),
-            status: "exec_error",
-            reason: Some(err.to_string()),
-        },
-    }
-}
-
-/// Spawn tool-audit subscriber that persists tool lifecycle domain events to JSONL.
-fn spawn_tool_audit_subscriber(
-    event_bus: Arc<InProcessEventBus>,
-    store: Option<ToolAuditStore>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let store = store?;
-    let mut stream = event_bus.subscribe();
-    Some(tokio::spawn(async move {
-        while let Some(event) = stream.next().await {
-            let Some(audit_event) = map_domain_event_to_tool_audit_event(&event) else {
-                continue;
-            };
-            if let Err(err) = store.append(&audit_event) {
-                warn!(
-                    error = %err,
-                    tool = %audit_event.tool_name,
-                    phase = %audit_event.phase,
-                    status = %audit_event.status,
-                    "Failed to append tool audit event from subscriber"
-                );
-            }
-        }
-    }))
-}
-
-/// Spawn control-plane audit subscriber for delegated assignment lifecycle events.
-fn spawn_control_plane_audit_subscriber(
-    event_bus: Arc<InProcessEventBus>,
-    store: Option<ControlPlaneAuditStore>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let store = store?;
-    let mut stream = event_bus.subscribe();
-    Some(tokio::spawn(async move {
-        while let Some(event) = stream.next().await {
-            let Some(audit_event) = map_domain_event_to_control_plane_audit_event(&event) else {
-                continue;
-            };
-            if let Err(err) = store.append(&audit_event) {
-                warn!(
-                    error = %err,
-                    handoff_id = %audit_event.handoff_id,
-                    status = %audit_event.status,
-                    "Failed to append control-plane audit event from subscriber"
-                );
-            }
-        }
-    }))
-}
-
-/// Spawn delegated handoff acceptance subscriber for baseline execution loop.
-///
-/// Current behavior:
-/// - listens for `HandoffTaskDispatched` events from orchestrator
-/// - emits `HandoffResultReceived(status=accepted)` as queue acknowledgement
-/// - does not execute dependent model turns yet (tracked under `E6-T9`)
-fn spawn_delegated_handoff_acceptance_subscriber(
-    event_bus: Arc<InProcessEventBus>,
-    orchestrator_agent_id: String,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let mut stream = event_bus.subscribe();
-    Some(tokio::spawn(async move {
-        while let Some(event) = stream.next().await {
-            let (task, correlation_id) = match event.payload {
-                DomainEventPayload::HandoffTaskDispatched(payload) => {
-                    (payload.envelope, event.meta.correlation_id.clone())
-                }
-                _ => continue,
-            };
-            if task.from_agent_id != orchestrator_agent_id {
-                continue;
-            }
-
-            let accepted =
-                build_handoff_accepted_result(&task, "accepted by delegated handoff queue");
-            if let Err(err) = accepted.validate_against(&task) {
-                warn!(
-                    error = %err,
-                    handoff_id = %task.handoff_id,
-                    "Invalid delegated handoff acceptance envelope"
-                );
-                continue;
-            }
-
-            let accepted_event = DomainEvent {
-                meta: DomainEventMeta {
-                    ts_epoch_ms: now_epoch_ms(),
-                    flow_key: Some(task.flow_key.clone()),
-                    agent_id: Some(task.to_agent_id.clone()),
-                    correlation_id,
-                    source: Some("delegated-handoff-queue".to_string()),
-                },
-                payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                    envelope: accepted,
-                }),
-            };
-            if let Err(err) = event_bus.publish(accepted_event).await {
-                warn!(
-                    error = %err,
-                    handoff_id = %task.handoff_id,
-                    "Failed to publish delegated handoff acceptance event"
-                );
-                continue;
-            }
-            info!(
-                handoff_id = %task.handoff_id,
-                dependent_agent_id = %task.to_agent_id,
-                "Delegated handoff accepted by baseline queue"
-            );
-        }
-    }))
-}
-
-#[derive(Debug, Default)]
-struct EventMetricsState {
-    total_events: u64,
-    engine_failures: u64,
-    tool_denials: u64,
-    tool_completions: u64,
-}
-
-/// Spawn metrics subscriber that tracks high-level domain event counts.
-fn spawn_event_metrics_subscriber(
-    event_bus: Arc<InProcessEventBus>,
-    log_every: u64,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let log_every = log_every.max(1);
-    let mut stream = event_bus.subscribe();
-    Some(tokio::spawn(async move {
-        let mut metrics = EventMetricsState::default();
-        while let Some(event) = stream.next().await {
-            metrics.total_events = metrics.total_events.saturating_add(1);
-            match event.payload {
-                DomainEventPayload::EngineTurnFailed(_) => {
-                    metrics.engine_failures = metrics.engine_failures.saturating_add(1);
-                }
-                DomainEventPayload::ToolCallDenied(_) => {
-                    metrics.tool_denials = metrics.tool_denials.saturating_add(1);
-                }
-                DomainEventPayload::ToolCallCompleted(_) => {
-                    metrics.tool_completions = metrics.tool_completions.saturating_add(1);
-                }
-                _ => {}
-            }
-
-            if metrics.total_events % log_every == 0 {
-                let snapshot = event_bus.diagnostics_snapshot();
-                info!(
-                    total_events = metrics.total_events,
-                    engine_failures = metrics.engine_failures,
-                    tool_denials = metrics.tool_denials,
-                    tool_completions = metrics.tool_completions,
-                    bus_published_total = snapshot.published_total,
-                    bus_active_subscribers = snapshot.active_subscribers,
-                    "Runtime event metrics snapshot"
-                );
-            }
-        }
-    }))
-}
-
-/// Spawn policy reaction subscriber that handles policy-denied tool events.
-fn spawn_policy_reaction_subscriber(
-    event_bus: Arc<InProcessEventBus>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let mut stream = event_bus.subscribe();
-    Some(tokio::spawn(async move {
-        while let Some(event) = stream.next().await {
-            if let DomainEventPayload::ToolCallDenied(payload) = &event.payload {
-                if payload.phase != "policy" {
-                    continue;
-                }
-                warn!(
-                    agent_id = event.meta.agent_id.as_deref().unwrap_or("n/a"),
-                    flow_key = event.meta.flow_key.as_deref().unwrap_or("n/a"),
-                    tool = %payload.tool_name,
-                    reason = %payload.reason,
-                    "Policy subscriber observed tool denial"
-                );
-            }
-        }
-    }))
-}
-
-/// Spawn periodic diagnostics reporter for event bus lag/saturation counters.
-fn spawn_event_bus_diagnostics_reporter(
-    event_bus: Arc<InProcessEventBus>,
-    interval_secs: u64,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let interval_secs = interval_secs.max(1);
-    Some(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        loop {
-            interval.tick().await;
-            let snapshot = event_bus.diagnostics_snapshot();
-            if snapshot.published_total == 0 {
-                continue;
-            }
-
-            info!(
-                capacity = snapshot.capacity,
-                policy = ?snapshot.policy,
-                active_subscribers = snapshot.active_subscribers,
-                published_total = snapshot.published_total,
-                dropped_newest_total = snapshot.dropped_newest_total,
-                lagged_events_total = snapshot.lagged_events_total,
-                send_errors_total = snapshot.send_errors_total,
-                "Event bus diagnostics snapshot"
-            );
-
-            if snapshot.dropped_newest_total > 0
-                || snapshot.lagged_events_total > 0
-                || snapshot.send_errors_total > 0
-            {
-                warn!(
-                    dropped_newest_total = snapshot.dropped_newest_total,
-                    lagged_events_total = snapshot.lagged_events_total,
-                    send_errors_total = snapshot.send_errors_total,
-                    "Event bus saturation or lag indicators detected"
-                );
-            }
-        }
-    }))
-}
-
-/// Resolve event-bus settings from runtime profile for backpressure behavior.
-///
-/// Strategy:
-/// - `Minimal`: `DropNewest` with small queue keeps single-core latency stable.
-/// - `Desktop`/`Cloud`: `DropOldest` retains freshest events for lagging subscribers.
-fn resolve_event_bus_runtime_config(profile: RuntimeProfile) -> EventBusRuntimeConfig {
-    match profile {
-        RuntimeProfile::Minimal => EventBusRuntimeConfig {
-            capacity: 64,
-            policy: EventBusOverflowPolicy::DropNewest,
-            metrics_log_every: 100,
-            diagnostics_interval_secs: 45,
-        },
-        RuntimeProfile::Desktop => EventBusRuntimeConfig {
-            capacity: 256,
-            policy: EventBusOverflowPolicy::DropOldest,
-            metrics_log_every: 75,
-            diagnostics_interval_secs: 30,
-        },
-        RuntimeProfile::Cloud => EventBusRuntimeConfig {
-            capacity: 1024,
-            policy: EventBusOverflowPolicy::DropOldest,
-            metrics_log_every: 200,
-            diagnostics_interval_secs: 15,
-        },
-    }
-}
-
-/// Convert emitted domain events into persisted tool audit records.
-fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Option<ToolAuditEvent> {
-    let flow_key = event.meta.flow_key.clone()?;
-    let agent_id = event.meta.agent_id.clone()?;
-    let ts_epoch_s = event.meta.ts_epoch_ms / 1000;
-
-    match &event.payload {
-        DomainEventPayload::ToolCallStarted(payload) => Some(ToolAuditEvent {
-            ts_epoch_s,
-            flow_key,
-            agent_id,
-            tool_call_id: payload.tool_call_id.clone(),
-            tool_name: payload.tool_name.clone(),
-            phase: "protocol".to_string(),
-            status: "started".to_string(),
-            reason: None,
-            arguments_preview: None,
-            result_preview: None,
-        }),
-        DomainEventPayload::ToolCallCompleted(payload) => Some(ToolAuditEvent {
-            ts_epoch_s,
-            flow_key,
-            agent_id,
-            tool_call_id: payload.tool_call_id.clone(),
-            tool_name: payload.tool_name.clone(),
-            phase: "execute".to_string(),
-            status: payload.status.clone(),
-            reason: payload.reason.clone(),
-            arguments_preview: None,
-            result_preview: None,
-        }),
-        DomainEventPayload::ToolCallDenied(payload) => Some(ToolAuditEvent {
-            ts_epoch_s,
-            flow_key,
-            agent_id,
-            tool_call_id: payload.tool_call_id.clone(),
-            tool_name: payload.tool_name.clone(),
-            phase: payload.phase.clone(),
-            status: "denied".to_string(),
-            reason: Some(payload.reason.clone()),
-            arguments_preview: None,
-            result_preview: None,
-        }),
-        _ => None,
-    }
-}
-
-/// Convert emitted domain events into persisted delegated assignment audit records.
-///
-/// Note:
-/// `Accepted` handoff results are treated as non-terminal queue acknowledgements
-/// and are intentionally not persisted as audit rows to keep replay semantics
-/// tied to approved/terminal lifecycle states.
-fn map_domain_event_to_control_plane_audit_event(
-    event: &DomainEvent,
-) -> Option<ControlPlaneAuditEvent> {
-    let ts_epoch_s = event.meta.ts_epoch_ms / 1000;
-
-    match &event.payload {
-        DomainEventPayload::HandoffTaskDispatched(payload) => Some(ControlPlaneAuditEvent {
-            ts_epoch_s,
-            flow_key: payload.envelope.flow_key.clone(),
-            handoff_id: payload.envelope.handoff_id.clone(),
-            orchestrator_agent_id: payload.envelope.from_agent_id.clone(),
-            dependent_agent_id: payload.envelope.to_agent_id.clone(),
-            status: "approved".to_string(),
-            reason: None,
-            requested_capabilities: payload.envelope.requested_capabilities.clone(),
-            objective: Some(payload.envelope.objective.clone()),
-        }),
-        DomainEventPayload::HandoffResultReceived(payload) => {
-            let status = match payload.envelope.status {
-                HandoffResultStatus::Denied => {
-                    let reason = payload.envelope.error_reason.as_deref().unwrap_or_default();
-                    if reason.contains("revoked by orchestrator") {
-                        "revoked".to_string()
-                    } else if reason.contains("expired by retention policy") {
-                        "expired".to_string()
-                    } else {
-                        "denied".to_string()
-                    }
-                }
-                HandoffResultStatus::Failed => "failed".to_string(),
-                HandoffResultStatus::Completed => "completed".to_string(),
-                HandoffResultStatus::Accepted => return None,
-            };
-            Some(ControlPlaneAuditEvent {
-                ts_epoch_s,
-                flow_key: payload.envelope.flow_key.clone(),
-                handoff_id: payload.envelope.handoff_id.clone(),
-                orchestrator_agent_id: payload.envelope.to_agent_id.clone(),
-                dependent_agent_id: payload.envelope.from_agent_id.clone(),
-                status,
-                reason: payload.envelope.error_reason.clone(),
-                requested_capabilities: Vec::new(),
-                objective: None,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Recover approved delegated assignments from persisted audit events.
-///
-/// Replay strategy:
-/// - keep only assignments initiated by current orchestrator agent
-/// - include only latest approved events not superseded by terminal statuses
-/// - skip approvals that are already expired by TTL policy
-/// - bound replay to recent `limit` rows for predictable startup latency
-fn load_persisted_capability_assignments(
-    store: Option<&ControlPlaneAuditStore>,
-    orchestrator_agent_id: &str,
-    limit: usize,
-    ttl_secs: u64,
-) -> Vec<CapabilityAssignmentRecord> {
-    let Some(store) = store else {
-        return Vec::new();
-    };
-    let Ok(events) = store.read_recent(limit) else {
-        return Vec::new();
-    };
-
-    let mut closed_handoffs = HashSet::<String>::new();
-    let mut recovered_rev = Vec::<CapabilityAssignmentRecord>::new();
-    let now_ms = now_epoch_ms();
-    let ttl_ms = ttl_secs.saturating_mul(1_000);
-
-    for event in events.into_iter().rev() {
-        let handoff_id = event.handoff_id.trim().to_string();
-        if handoff_id.is_empty() {
-            continue;
-        }
-        if event.status == "approved" {
-            if closed_handoffs.contains(&handoff_id) {
-                continue;
-            }
-            if event.orchestrator_agent_id.trim() != orchestrator_agent_id {
-                continue;
-            }
-            let issued_at_epoch_ms = event.ts_epoch_s.saturating_mul(1_000);
-            let expires_at_epoch_ms = issued_at_epoch_ms.saturating_add(ttl_ms);
-            if now_ms >= expires_at_epoch_ms {
-                closed_handoffs.insert(handoff_id);
-                continue;
-            }
-            recovered_rev.push(CapabilityAssignmentRecord {
-                handoff_id: handoff_id.clone(),
-                flow_key: event.flow_key,
-                orchestrator_agent_id: event.orchestrator_agent_id,
-                dependent_agent_id: event.dependent_agent_id,
-                requested_capabilities: event.requested_capabilities,
-                objective: event.objective.unwrap_or_else(|| "n/a".to_string()),
-                issued_at_epoch_ms,
-            });
-        } else {
-            closed_handoffs.insert(handoff_id);
-        }
-    }
-
-    recovered_rev.reverse();
-    recovered_rev
-}
-
 /// Emit one runtime domain event without affecting user-visible flow on failure.
-async fn emit_domain_event(
+pub(crate) async fn emit_domain_event(
     event_bus: &dyn EventBus,
     agent_id: Option<&str>,
     flow_key: Option<&str>,
@@ -2116,7 +842,7 @@ async fn emit_domain_event(
 }
 
 /// Convert usize counters to a saturating `u32` payload-safe value.
-fn as_u32_saturating(value: usize) -> u32 {
+pub(crate) fn as_u32_saturating(value: usize) -> u32 {
     value.min(u32::MAX as usize) as u32
 }
 
@@ -2130,7 +856,7 @@ fn format_recipient_identity(sender: &Recipient) -> String {
 }
 
 /// Return current unix epoch timestamp in milliseconds.
-fn now_epoch_ms() -> u64 {
+pub(crate) fn now_epoch_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     SystemTime::now()
@@ -2139,43 +865,11 @@ fn now_epoch_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Emit per-request prompt budget telemetry grouped by prompt assembly bucket.
-fn log_prompt_budget_report(
-    flow_key: &str,
-    lens: Lens,
-    context_window: usize,
-    report: &PromptAssemblyReport,
-    history_messages_selected: usize,
-    retrieval_candidates: usize,
-) {
-    info!(
-        flow_key = %flow_key,
-        lens = lens.as_str(),
-        context_window,
-        output_token_cap = report.output_token_cap,
-        total_input_budget = report.total_input_budget,
-        reserved_output_tokens = report.reserved_output_tokens,
-        flow_budget_remaining = report.flow_budget_remaining,
-        system_tokens = report.system_tokens,
-        history_tokens = report.history_tokens,
-        history_messages_selected,
-        dropped_history_messages = report.dropped_history_messages,
-        retrieval_tokens = report.retrieval_tokens,
-        retrieval_candidates,
-        retrieval_budget_requested = report.retrieval_budget_requested,
-        retrieval_budget_effective = report.retrieval_budget_effective,
-        dropped_retrieval_items = report.dropped_retrieval_items,
-        compaction_applied = report.compaction_applied,
-        compacted_messages = report.compacted_messages,
-        "Prompt budget report"
-    );
-}
-
 /// Keep the latest usage snapshot emitted during one model turn.
 ///
 /// Contract: providers should emit cumulative per-turn usage in `StreamEvent::Usage`.
 /// Runtime stores the latest snapshot and applies it once when the turn ends.
-fn absorb_turn_usage_snapshot(
+pub(crate) fn absorb_turn_usage_snapshot(
     snapshot: &mut Option<(u32, u32)>,
     input_tokens: u32,
     output_tokens: u32,
@@ -2195,7 +889,7 @@ fn absorb_turn_usage_snapshot(
 }
 
 /// Apply one finalized turn usage snapshot to session-level cumulative totals.
-fn apply_turn_usage_to_session_totals(
+pub(crate) fn apply_turn_usage_to_session_totals(
     total_input_tokens: &mut u32,
     total_output_tokens: &mut u32,
     turn_usage_snapshot: Option<(u32, u32)>,
@@ -2203,207 +897,6 @@ fn apply_turn_usage_to_session_totals(
     if let Some((input_tokens, output_tokens)) = turn_usage_snapshot {
         *total_input_tokens = total_input_tokens.saturating_add(input_tokens);
         *total_output_tokens = total_output_tokens.saturating_add(output_tokens);
-    }
-}
-
-/// Build bounded static system prompt from workspace identity/profile/context files.
-fn build_system_prompt(agent_config: &tengu_core::config::AgentConfig) -> Option<String> {
-    const MAX_FILE_TOKENS: usize = 1200;
-    const MAX_TOTAL_TOKENS: usize = 2400;
-
-    let workspace = agent_config.workspace.as_ref()?;
-    let mut parts = Vec::new();
-    let mut total_tokens = 0usize;
-
-    // Load workspace files in order: IDENTITY.md, PROFILE.md, CONTEXT.md
-    for filename in &["IDENTITY.md", "PROFILE.md", "CONTEXT.md"] {
-        let path = workspace.join(filename);
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if !content.trim().is_empty() {
-                let truncated = truncate_to_token_budget(&content, MAX_FILE_TOKENS);
-                let chunk = format!("# {}\n\n{}", filename, truncated);
-                let chunk_tokens = estimate_tokens_approx_min1(&chunk);
-                if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
-                    break;
-                }
-                total_tokens += chunk_tokens;
-                parts.push(chunk);
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n---\n\n"))
-    }
-}
-
-/// Assemble newest contiguous history suffix that fits the token budget.
-fn assemble_recent_history(messages: &[Message], history_budget: usize) -> HistoryAssembly {
-    const MAX_HISTORY_MESSAGES: usize = 120;
-
-    if history_budget == 0 || messages.is_empty() {
-        return HistoryAssembly::default();
-    }
-
-    let mut selected_rev: Vec<Message> = Vec::new();
-    let mut used = 0usize;
-    let start = messages.len().saturating_sub(MAX_HISTORY_MESSAGES);
-    let recent = &messages[start..];
-
-    for msg in recent.iter().rev() {
-        let msg_tokens = estimate_tokens_approx_min1(&msg.content);
-        if used + msg_tokens > history_budget {
-            break;
-        }
-        used += msg_tokens;
-        selected_rev.push(msg.clone());
-    }
-
-    selected_rev.reverse();
-    HistoryAssembly {
-        dropped_messages: recent.len().saturating_sub(selected_rev.len()),
-        messages: selected_rev,
-        used_tokens: used,
-    }
-}
-
-/// Truncate string content using the shared `~4 chars/token` approximation.
-fn truncate_to_token_budget(content: &str, max_tokens: usize) -> String {
-    let max_chars = max_tokens.saturating_mul(4);
-    if content.len() <= max_chars {
-        content.to_string()
-    } else {
-        let mut truncated = content.chars().take(max_chars).collect::<String>();
-        truncated.push_str("\n\n[truncated]");
-        truncated
-    }
-}
-
-/// Reserve output tokens from explicit engine output cap with safety headroom.
-///
-/// This avoids over-reserving on very large context windows while still keeping
-/// room for provider overhead and streamed terminal frames.
-fn reserved_output_tokens(context_window: usize, output_token_cap: usize) -> usize {
-    if context_window == 0 {
-        return 0;
-    }
-
-    let capped_output = output_token_cap.max(1).min(context_window);
-    let headroom = (capped_output / 4).max(64);
-    let adaptive_floor = (context_window / 50).clamp(64, 2_048);
-
-    capped_output
-        .saturating_add(headroom)
-        .max(adaptive_floor)
-        .min(context_window)
-}
-
-/// Compute input budget after output reserve and static system prompt footprint.
-fn compute_base_input_budget(
-    context_window: usize,
-    output_token_cap: usize,
-    system_prompt: Option<&str>,
-    remaining_flow_tokens: u64,
-) -> usize {
-    let total_budget =
-        compute_total_input_budget(context_window, output_token_cap, remaining_flow_tokens);
-    let system_tokens = system_prompt.map(estimate_tokens_approx_min1).unwrap_or(0);
-    total_budget.saturating_sub(system_tokens)
-}
-
-/// Compute maximum input budget before prompt-bucket allocation.
-///
-/// Output reserve is derived from effective output cap, not from context ratio.
-fn compute_total_input_budget(
-    context_window: usize,
-    output_token_cap: usize,
-    remaining_flow_tokens: u64,
-) -> usize {
-    let reserved_output = reserved_output_tokens(context_window, output_token_cap);
-    context_window
-        .saturating_sub(reserved_output)
-        .min(remaining_flow_tokens as usize)
-}
-
-/// Compute retrieval bucket budget from lens settings and overall input budget.
-fn compute_retrieval_bucket_budget(
-    lens: Lens,
-    lens_cfg: &tengu_core::config::LensConfig,
-    base_input_budget: usize,
-) -> usize {
-    if base_input_budget == 0 {
-        return 0;
-    }
-
-    let desired = match lens {
-        Lens::Eco => lens_cfg.eco_max_tokens as usize,
-        Lens::Standard => ((base_input_budget as f32) * 0.2) as usize,
-        Lens::Precise => ((base_input_budget as f32) * lens_cfg.precise_budget) as usize,
-    };
-    let hard_cap = (base_input_budget / 2).max(32).min(base_input_budget);
-    desired.min(hard_cap).max(32.min(hard_cap))
-}
-
-/// Build retrieval context block under a fixed token budget.
-fn build_retrieval_block(hits: &[RetrievedKnowledge], max_tokens: usize) -> RetrievalAssembly {
-    if hits.is_empty() || max_tokens == 0 {
-        return RetrievalAssembly::default();
-    }
-
-    let header_tokens = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER);
-    let separator_tokens = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_SEPARATOR);
-    if header_tokens >= max_tokens {
-        return RetrievalAssembly {
-            block: None,
-            used_tokens: 0,
-            dropped_items: hits.len(),
-        };
-    }
-
-    let mut chunks = Vec::new();
-    let mut used = 0usize;
-    let mut dropped = 0usize;
-
-    for (idx, hit) in hits.iter().enumerate() {
-        let section = format!(
-            "[{} | {} | score {:.2}]\n{}",
-            hit.source.display(),
-            if hit.is_summary { "summary" } else { "full" },
-            hit.score,
-            hit.content
-        );
-        let section_tokens = estimate_tokens_approx_min1(&section);
-        let additional_tokens = if chunks.is_empty() {
-            header_tokens.saturating_add(section_tokens)
-        } else {
-            separator_tokens.saturating_add(section_tokens)
-        };
-        if additional_tokens > max_tokens {
-            dropped += 1;
-            continue;
-        }
-        if used.saturating_add(additional_tokens) > max_tokens {
-            dropped += hits.len().saturating_sub(idx);
-            break;
-        }
-        used = used.saturating_add(additional_tokens);
-        chunks.push(section);
-    }
-
-    RetrievalAssembly {
-        block: if chunks.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "{}{}",
-                RETRIEVAL_CONTEXT_HEADER,
-                chunks.join(RETRIEVAL_CONTEXT_SEPARATOR)
-            ))
-        },
-        used_tokens: if chunks.is_empty() { 0 } else { used },
-        dropped_items: dropped,
     }
 }
 
@@ -2445,16 +938,6 @@ async fn run_engine_probe(diagnostics: &tengu_core::EngineDiagnostics) -> Option
     }
 }
 
-/// Merge static system prompt with dynamic per-turn retrieval context.
-fn merge_system_prompt(base: Option<String>, retrieval_block: Option<&str>) -> Option<String> {
-    match (base, retrieval_block) {
-        (None, None) => None,
-        (Some(b), None) => Some(b),
-        (None, Some(r)) => Some(r.to_string()),
-        (Some(b), Some(r)) => Some(format!("{b}\n\n---\n\n{r}")),
-    }
-}
-
 /// Initialize workspace knowledge store and run startup ingest patterns.
 async fn init_knowledge_store(
     agent_config: &tengu_core::config::AgentConfig,
@@ -2490,7 +973,7 @@ async fn init_knowledge_store(
 /// Shared per-agent limit overrides:
 /// - `agents.<id>.limits.context_window_override`
 /// - `agents.<id>.limits.max_output_tokens_per_turn`
-fn build_engine(
+pub(crate) fn build_engine(
     agent_id: &str,
     agent_config: &tengu_core::config::AgentConfig,
 ) -> Result<Box<dyn Engine>> {
@@ -2863,8 +1346,11 @@ fn resolve_flow_compaction_policy(
         .map(|v| v.max(1) as usize)
         .unwrap_or_else(|| default_compaction_keep_turns_for_scope(&flow.scope));
 
-    let max_input_budget =
-        compute_total_input_budget(context_window, output_token_cap, max_tokens_per_flow);
+    let max_input_budget = runtime_prompt::compute_total_input_budget(
+        context_window,
+        output_token_cap,
+        max_tokens_per_flow,
+    );
     let summary_max_tokens = flow
         .compaction_summary_max_tokens
         .unwrap_or_else(|| default_compaction_summary_max_tokens(max_input_budget));
@@ -2944,9 +1430,15 @@ async fn maybe_compact_flow(
         .await
     {
         Ok(text) if !text.trim().is_empty() => text,
-        _ => truncate_to_token_budget(&compaction_source, policy.summary_max_tokens as usize),
+        _ => runtime_prompt::truncate_to_token_budget(
+            &compaction_source,
+            policy.summary_max_tokens as usize,
+        ),
     };
-    let summary = truncate_to_token_budget(raw_summary.trim(), policy.summary_max_tokens as usize);
+    let summary = runtime_prompt::truncate_to_token_budget(
+        raw_summary.trim(),
+        policy.summary_max_tokens as usize,
+    );
 
     let compacted_messages = compacted_slice.len();
     let summary_message = Message {
@@ -3019,835 +1511,5 @@ fn role_label(role: &Role) -> &'static str {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::Tool => "tool",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures::StreamExt;
-    use std::path::PathBuf;
-
-    fn msg(content: &str) -> Message {
-        Message {
-            role: Role::User,
-            content: content.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }
-    }
-
-    fn assistant_msg(content: &str) -> Message {
-        Message {
-            role: Role::Assistant,
-            content: content.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }
-    }
-
-    /// Build a deterministic retrieval hit fixture for retrieval budget tests.
-    ///
-    /// The helper defaults to `is_summary = true` and `score = 1.0` so tests
-    /// can focus on token packing/drop behavior instead of ranking variance.
-    fn hit(source: &str, content: &str) -> RetrievedKnowledge {
-        RetrievedKnowledge {
-            source: PathBuf::from(source),
-            content: content.to_string(),
-            is_summary: true,
-            score: 1.0,
-        }
-    }
-
-    /// Build a deterministic domain event fixture for bus profile validation tests.
-    fn runtime_event(seq: &str) -> DomainEvent {
-        DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 1,
-                flow_key: Some(format!("flow-{seq}")),
-                agent_id: Some("main".to_string()),
-                correlation_id: Some(format!("corr-{seq}")),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::FlowResolved(FlowResolved {
-                flow_key: format!("flow-{seq}"),
-                reused_existing: false,
-            }),
-        }
-    }
-
-    #[test]
-    fn event_bus_profile_config_is_scope_appropriate() {
-        let minimal = resolve_event_bus_runtime_config(RuntimeProfile::Minimal);
-        let desktop = resolve_event_bus_runtime_config(RuntimeProfile::Desktop);
-        let cloud = resolve_event_bus_runtime_config(RuntimeProfile::Cloud);
-
-        assert_eq!(minimal.policy, EventBusOverflowPolicy::DropNewest);
-        assert_eq!(desktop.policy, EventBusOverflowPolicy::DropOldest);
-        assert_eq!(cloud.policy, EventBusOverflowPolicy::DropOldest);
-
-        assert!(minimal.capacity < desktop.capacity);
-        assert!(desktop.capacity < cloud.capacity);
-        assert!(cloud.diagnostics_interval_secs < desktop.diagnostics_interval_secs);
-    }
-
-    #[tokio::test]
-    async fn event_bus_profile_validation_minimal_tracks_drop_newest_under_pressure() {
-        let cfg = resolve_event_bus_runtime_config(RuntimeProfile::Minimal);
-        let bus = InProcessEventBus::new(1, cfg.policy);
-        let mut subscriber = bus.subscribe();
-
-        bus.publish(runtime_event("a")).await.expect("publish a");
-        bus.publish(runtime_event("b")).await.expect("publish b");
-
-        let _ = subscriber.next().await.expect("consume one");
-        let snapshot = bus.diagnostics_snapshot();
-        assert!(
-            snapshot.dropped_newest_total >= 1,
-            "minimal profile should drop newest under saturation"
-        );
-    }
-
-    #[tokio::test]
-    async fn event_bus_profile_validation_desktop_tracks_lag_for_drop_oldest() {
-        let cfg = resolve_event_bus_runtime_config(RuntimeProfile::Desktop);
-        let bus = InProcessEventBus::new(2, cfg.policy);
-        let mut subscriber = bus.subscribe();
-
-        bus.publish(runtime_event("1")).await.expect("publish 1");
-        bus.publish(runtime_event("2")).await.expect("publish 2");
-        bus.publish(runtime_event("3")).await.expect("publish 3");
-        bus.publish(runtime_event("4")).await.expect("publish 4");
-
-        let _ = subscriber.next().await.expect("receive latest");
-        let snapshot = bus.diagnostics_snapshot();
-        assert!(
-            snapshot.lagged_events_total >= 1,
-            "desktop profile should record lag when receivers fall behind"
-        );
-    }
-
-    #[test]
-    fn history_drop_policy_keeps_newest_contiguous_suffix() {
-        let messages = vec![
-            msg(&"a".repeat(40)),
-            msg(&"b".repeat(400)),
-            msg(&"c".repeat(40)),
-        ];
-        let assembled = assemble_recent_history(&messages, 25);
-
-        assert_eq!(assembled.messages.len(), 1);
-        assert_eq!(assembled.messages[0].content, "c".repeat(40));
-        assert_eq!(assembled.dropped_messages, 2);
-    }
-
-    #[test]
-    fn retrieval_drop_policy_drops_tail_after_first_overflow() {
-        let first = hit("a.md", &"alpha".repeat(24));
-        let second = hit("b.md", &"beta".repeat(24));
-        let first_section = format!(
-            "[{} | {} | score {:.2}]\n{}",
-            first.source.display(),
-            "summary",
-            first.score,
-            first.content
-        );
-        let budget = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER)
-            .saturating_add(estimate_tokens_approx_min1(&first_section))
-            .saturating_add(1);
-
-        let assembled = build_retrieval_block(&[first, second], budget);
-        let block = assembled.block.unwrap_or_default();
-
-        assert!(block.contains("a.md"));
-        assert!(!block.contains("b.md"));
-        assert_eq!(assembled.dropped_items, 1);
-        assert!(assembled.used_tokens <= budget);
-    }
-
-    #[test]
-    fn retrieval_drop_policy_skips_individually_oversized_entries() {
-        let huge = hit("huge.md", &"x".repeat(2_000));
-        let small = hit("small.md", &"y".repeat(160));
-        let small_section = format!(
-            "[{} | {} | score {:.2}]\n{}",
-            small.source.display(),
-            "summary",
-            small.score,
-            small.content
-        );
-        let budget = estimate_tokens_approx_min1(RETRIEVAL_CONTEXT_HEADER)
-            .saturating_add(estimate_tokens_approx_min1(&small_section))
-            .saturating_add(2);
-
-        let assembled = build_retrieval_block(&[huge, small], budget);
-        let block = assembled.block.unwrap_or_default();
-
-        assert!(block.contains("small.md"));
-        assert!(!block.contains("huge.md"));
-        assert_eq!(assembled.dropped_items, 1);
-        assert!(assembled.used_tokens <= budget);
-    }
-
-    #[test]
-    fn budget_overflow_small_context_window_preserves_output_reserve() {
-        // For tiny windows, capped output reserve can consume all available input.
-        let total_input_budget = compute_total_input_budget(128, 1_024, 10_000);
-        assert_eq!(total_input_budget, 0);
-    }
-
-    #[test]
-    fn usage_accounting_keeps_latest_turn_snapshot() {
-        let mut snapshot = None;
-        absorb_turn_usage_snapshot(&mut snapshot, 120, 20);
-        absorb_turn_usage_snapshot(&mut snapshot, 130, 30);
-
-        assert_eq!(snapshot, Some((130, 30)));
-    }
-
-    #[test]
-    fn usage_accounting_applies_turn_snapshot_once_to_session_totals() {
-        let mut total_in = 100u32;
-        let mut total_out = 40u32;
-        apply_turn_usage_to_session_totals(&mut total_in, &mut total_out, Some((50, 10)));
-        apply_turn_usage_to_session_totals(&mut total_in, &mut total_out, None);
-
-        assert_eq!(total_in, 150);
-        assert_eq!(total_out, 50);
-    }
-
-    #[test]
-    fn budget_overflow_remaining_flow_tokens_hard_caps_input_budget() {
-        let total_input_budget = compute_total_input_budget(8_192, 1_024, 500);
-        assert_eq!(total_input_budget, 500);
-    }
-
-    #[test]
-    fn budget_overflow_base_budget_saturates_when_system_prompt_is_too_large() {
-        let large_system = "x".repeat(4_096);
-        let base_input_budget = compute_base_input_budget(512, 1_024, Some(&large_system), 1_000);
-        assert_eq!(base_input_budget, 0);
-    }
-
-    #[test]
-    fn budget_overflow_large_context_uses_output_cap_aligned_reserve() {
-        let reserve = reserved_output_tokens(1_047_576, 8_192);
-        let total_input_budget = compute_total_input_budget(1_047_576, 8_192, 2_000_000);
-
-        assert!(reserve < 20_000);
-        assert!(total_input_budget > 1_000_000);
-    }
-
-    #[test]
-    fn budget_overflow_retrieval_bucket_respects_half_input_hard_cap() {
-        let lens_cfg = tengu_core::config::LensConfig {
-            eco_max_tokens: 10_000,
-            standard_threshold: 0.7,
-            precise_budget: 0.9,
-        };
-        let budget = compute_retrieval_bucket_budget(Lens::Eco, &lens_cfg, 100);
-        assert_eq!(budget, 50);
-    }
-
-    #[test]
-    fn history_overflow_applies_recent_window_cap_even_with_large_budget() {
-        let messages: Vec<Message> = (0..200).map(|i| msg(&format!("m{i}"))).collect();
-        let assembled = assemble_recent_history(&messages, 100_000);
-        assert_eq!(assembled.messages.len(), 120);
-        // `dropped_messages` is tracked within the 120-message recent window.
-        assert_eq!(assembled.dropped_messages, 0);
-        assert_eq!(assembled.messages[0].content, "m80");
-        assert_eq!(assembled.messages[119].content, "m199");
-    }
-
-    #[test]
-    fn history_turn_limit_keeps_latest_user_turn_suffix() {
-        let mut messages = vec![
-            msg("u1"),
-            assistant_msg("a1"),
-            msg("u2"),
-            assistant_msg("a2"),
-            msg("u3"),
-            assistant_msg("a3"),
-        ];
-
-        let dropped = enforce_history_turn_limit(&mut messages, 2);
-
-        assert_eq!(dropped, 2);
-        assert_eq!(messages.len(), 4);
-        assert_eq!(messages[0].content, "u2");
-        assert_eq!(messages[3].content, "a3");
-    }
-
-    #[test]
-    fn history_turn_limit_scope_defaults_are_stable() {
-        assert_eq!(default_history_turn_limit_for_scope("main"), 160);
-        assert_eq!(default_history_turn_limit_for_scope("per-group"), 120);
-        assert_eq!(default_history_turn_limit_for_scope("per-pipe-sender"), 100);
-        assert_eq!(default_history_turn_limit_for_scope("per-sender"), 80);
-    }
-
-    #[test]
-    fn flow_config_override_history_turn_limit_takes_precedence() {
-        let flow = tengu_core::config::FlowConfig {
-            scope: "per-sender".to_string(),
-            reset_mode: "idle".to_string(),
-            idle_timeout_minutes: 30,
-            max_history_turns: Some(42),
-            compaction_threshold_ratio: None,
-            compaction_keep_turns: None,
-            compaction_summary_max_tokens: None,
-        };
-
-        assert_eq!(resolve_history_turn_limit(&flow), 42);
-    }
-
-    #[test]
-    fn compaction_split_index_keeps_recent_turn_suffix() {
-        let messages = vec![
-            msg("u1"),
-            assistant_msg("a1"),
-            msg("u2"),
-            assistant_msg("a2"),
-            msg("u3"),
-            assistant_msg("a3"),
-        ];
-
-        assert_eq!(compaction_split_index(&messages, 2), Some(2));
-    }
-
-    #[test]
-    fn compaction_policy_defaults_are_scope_aware() {
-        assert_eq!(default_compaction_keep_turns_for_scope("main"), 60);
-        assert_eq!(default_compaction_keep_turns_for_scope("per-group"), 40);
-        assert_eq!(
-            default_compaction_keep_turns_for_scope("per-pipe-sender"),
-            32
-        );
-        assert_eq!(default_compaction_keep_turns_for_scope("per-sender"), 24);
-
-        assert!(default_compaction_threshold_ratio_for_scope("main") > 0.85);
-        assert!(default_compaction_threshold_ratio_for_scope("per-sender") < 0.85);
-    }
-
-    #[test]
-    fn resolve_compaction_policy_honors_overrides() {
-        let flow = tengu_core::config::FlowConfig {
-            scope: "per-sender".to_string(),
-            reset_mode: "idle".to_string(),
-            idle_timeout_minutes: 30,
-            max_history_turns: Some(50),
-            compaction_threshold_ratio: Some(0.9),
-            compaction_keep_turns: Some(12),
-            compaction_summary_max_tokens: Some(300),
-        };
-
-        let policy = resolve_flow_compaction_policy(&flow, 1_000, 8_192, 1_024);
-        assert_eq!(policy.threshold_tokens, 900);
-        assert_eq!(policy.keep_turns, 12);
-        assert_eq!(policy.summary_max_tokens, 300);
-    }
-
-    #[test]
-    fn compaction_summary_default_scales_with_context_budget() {
-        let flow = tengu_core::config::FlowConfig {
-            scope: "per-sender".to_string(),
-            reset_mode: "idle".to_string(),
-            idle_timeout_minutes: 30,
-            max_history_turns: None,
-            compaction_threshold_ratio: None,
-            compaction_keep_turns: None,
-            compaction_summary_max_tokens: None,
-        };
-
-        let small_ctx = resolve_flow_compaction_policy(&flow, 500_000, 8_192, 1_024);
-        let large_ctx = resolve_flow_compaction_policy(&flow, 500_000, 128_000, 8_192);
-
-        assert!(small_ctx.summary_max_tokens >= 128);
-        assert!(small_ctx.summary_max_tokens < 1_500);
-        assert!(large_ctx.summary_max_tokens > small_ctx.summary_max_tokens);
-        assert!(large_ctx.summary_max_tokens <= 4_096);
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_reports_unregistered_tool() {
-        let registry = ToolRegistry::with_defaults();
-        let config = tengu_core::config::Config::default();
-        let agent_config = config.agents.get("main").expect("main").clone();
-        let pending = PendingToolCall {
-            id: "tool-1".to_string(),
-            name: "shell".to_string(),
-            arguments_delta: "{\"command\":\"ls\"}".to_string(),
-        };
-
-        let outcome = execute_tool_call(
-            &pending,
-            &config,
-            &agent_config,
-            &registry,
-            Some(&PathBuf::from(".")),
-            "main",
-        )
-        .await;
-        assert_eq!(outcome.status, "not_registered");
-        assert!(outcome.user_message.contains("not registered"));
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_runs_read_file_tool() {
-        let workspace =
-            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace");
-        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
-
-        let registry = ToolRegistry::with_defaults();
-        let config = tengu_core::config::Config::default();
-        let mut agent_config = config.agents.get("main").expect("main").clone();
-        agent_config.kit.approved = vec!["read_file".to_string()];
-        let pending = PendingToolCall {
-            id: "tool-2".to_string(),
-            name: "read_file".to_string(),
-            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
-        };
-        let outcome = execute_tool_call(
-            &pending,
-            &config,
-            &agent_config,
-            &registry,
-            Some(&workspace),
-            "main",
-        )
-        .await;
-
-        assert_eq!(outcome.status, "ok");
-        assert!(outcome.user_message.contains("[tool:read_file ok]"));
-        assert!(outcome.user_message.contains("hello from tool"));
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_denies_when_approval_required_but_missing() {
-        let workspace =
-            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace");
-        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
-
-        let registry = ToolRegistry::with_defaults();
-        let config = tengu_core::config::Config::default();
-        let mut agent_config = config.agents.get("main").expect("main").clone();
-        agent_config.kit.approval_required = vec!["read_file".to_string()];
-        agent_config.kit.approved.clear();
-        let pending = PendingToolCall {
-            id: "tool-3".to_string(),
-            name: "read_file".to_string(),
-            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
-        };
-        let outcome = execute_tool_call(
-            &pending,
-            &config,
-            &agent_config,
-            &registry,
-            Some(&workspace),
-            "main",
-        )
-        .await;
-
-        assert_eq!(outcome.status, "denied_approval");
-        assert!(outcome.user_message.contains("requires approval"));
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_denies_when_policy_blocks_tool() {
-        let workspace =
-            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace");
-        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
-
-        let registry = ToolRegistry::with_defaults();
-        let config = tengu_core::config::Config::default();
-        let mut agent_config = config.agents.get("main").expect("main").clone();
-        agent_config.kit.deny = vec!["read_file".to_string()];
-        agent_config.kit.approval_required.clear();
-        agent_config.kit.approved = vec!["read_file".to_string()];
-        let pending = PendingToolCall {
-            id: "tool-4".to_string(),
-            name: "read_file".to_string(),
-            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
-        };
-        let outcome = execute_tool_call(
-            &pending,
-            &config,
-            &agent_config,
-            &registry,
-            Some(&workspace),
-            "main",
-        )
-        .await;
-
-        assert_eq!(outcome.status, "denied_policy");
-        assert!(outcome.user_message.contains("blocked by policy"));
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    #[tokio::test]
-    async fn execute_tool_call_denies_non_orchestrator_in_delegated_mode() {
-        let workspace =
-            std::env::temp_dir().join(format!("tengu-main-tool-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace");
-        std::fs::write(workspace.join("note.txt"), "hello from tool").expect("write fixture file");
-
-        let registry = ToolRegistry::with_defaults();
-        let mut config = tengu_core::config::Config::default();
-        config.capability_governance.mode = "delegated".to_string();
-        config.capability_governance.delegated_orchestrator_agent =
-            Some("orchestrator".to_string());
-
-        let mut agent_config = config.agents.get("main").expect("main").clone();
-        agent_config.kit.approved = vec!["read_file".to_string()];
-        let pending = PendingToolCall {
-            id: "tool-5".to_string(),
-            name: "read_file".to_string(),
-            arguments_delta: "{\"path\":\"note.txt\"}".to_string(),
-        };
-        let outcome = execute_tool_call(
-            &pending,
-            &config,
-            &agent_config,
-            &registry,
-            Some(&workspace),
-            "main",
-        )
-        .await;
-
-        assert_eq!(outcome.status, "denied_governance");
-        assert!(outcome
-            .user_message
-            .contains("Capability governance denied"));
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    #[test]
-    fn tool_policy_denies_blocked_tool_name() {
-        let mut config = tengu_core::config::Config::default();
-        let agent = config.agents.get_mut("main").expect("main");
-        agent.kit.allow.clear();
-        agent.kit.deny = vec!["shell".to_string()];
-
-        let decision = evaluate_tool_policy(agent, "shell");
-        assert!(!decision.is_allowed());
-    }
-
-    #[test]
-    fn control_plane_audit_map_captures_handoff_dispatch() {
-        let event = DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 1_000,
-                flow_key: Some("ignored-meta-flow".to_string()),
-                agent_id: Some("main".to_string()),
-                correlation_id: Some("corr-1".to_string()),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::HandoffTaskDispatched(HandoffTaskDispatched {
-                envelope: tengu_core::types::HandoffTaskEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: "handoff-1".to_string(),
-                    flow_key: "flow-1".to_string(),
-                    from_agent_id: "main".to_string(),
-                    to_agent_id: "worker".to_string(),
-                    objective: "Inspect one file".to_string(),
-                    constraints: vec!["bounded-by-user-policy".to_string()],
-                    requested_capabilities: vec!["tool:read_file".to_string()],
-                    context_summary: None,
-                    max_output_tokens: 256,
-                    ttl_seconds: Some(300),
-                    metadata: std::collections::HashMap::new(),
-                },
-            }),
-        };
-
-        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
-        assert_eq!(mapped.status, "approved");
-        assert_eq!(mapped.flow_key, "flow-1");
-        assert_eq!(mapped.orchestrator_agent_id, "main");
-        assert_eq!(mapped.dependent_agent_id, "worker");
-    }
-
-    #[test]
-    fn control_plane_audit_map_ignores_handoff_acceptance() {
-        let event = DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 1_500,
-                flow_key: Some("flow-1".to_string()),
-                agent_id: Some("worker".to_string()),
-                correlation_id: Some("corr-1b".to_string()),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                envelope: HandoffResultEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: "handoff-1".to_string(),
-                    flow_key: "flow-1".to_string(),
-                    from_agent_id: "worker".to_string(),
-                    to_agent_id: "main".to_string(),
-                    status: HandoffResultStatus::Accepted,
-                    summary: "accepted".to_string(),
-                    artifacts: Vec::new(),
-                    output_tokens: 0,
-                    error_reason: None,
-                    metadata: std::collections::HashMap::new(),
-                },
-            }),
-        };
-
-        assert!(map_domain_event_to_control_plane_audit_event(&event).is_none());
-    }
-
-    #[test]
-    fn control_plane_audit_map_captures_handoff_denial() {
-        let event = DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 2_000,
-                flow_key: Some("flow-1".to_string()),
-                agent_id: Some("main".to_string()),
-                correlation_id: Some("corr-2".to_string()),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                envelope: HandoffResultEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: "handoff-2".to_string(),
-                    flow_key: "flow-1".to_string(),
-                    from_agent_id: "worker".to_string(),
-                    to_agent_id: "main".to_string(),
-                    status: HandoffResultStatus::Denied,
-                    summary: String::new(),
-                    artifacts: Vec::new(),
-                    output_tokens: 0,
-                    error_reason: Some("policy denied".to_string()),
-                    metadata: std::collections::HashMap::new(),
-                },
-            }),
-        };
-
-        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
-        assert_eq!(mapped.status, "denied");
-        assert_eq!(mapped.reason.as_deref(), Some("policy denied"));
-        assert_eq!(mapped.orchestrator_agent_id, "main");
-        assert_eq!(mapped.dependent_agent_id, "worker");
-    }
-
-    #[test]
-    fn control_plane_audit_map_captures_handoff_revocation() {
-        let event = DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 3_000,
-                flow_key: Some("flow-1".to_string()),
-                agent_id: Some("main".to_string()),
-                correlation_id: Some("corr-3".to_string()),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                envelope: HandoffResultEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: "handoff-3".to_string(),
-                    flow_key: "flow-1".to_string(),
-                    from_agent_id: "worker".to_string(),
-                    to_agent_id: "main".to_string(),
-                    status: HandoffResultStatus::Denied,
-                    summary: String::new(),
-                    artifacts: Vec::new(),
-                    output_tokens: 0,
-                    error_reason: Some("revoked by orchestrator via /unassign".to_string()),
-                    metadata: std::collections::HashMap::new(),
-                },
-            }),
-        };
-
-        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
-        assert_eq!(mapped.status, "revoked");
-    }
-
-    #[test]
-    fn control_plane_audit_map_captures_handoff_expiry() {
-        let event = DomainEvent {
-            meta: DomainEventMeta {
-                ts_epoch_ms: 4_000,
-                flow_key: Some("flow-1".to_string()),
-                agent_id: Some("main".to_string()),
-                correlation_id: Some("corr-4".to_string()),
-                source: Some("test".to_string()),
-            },
-            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
-                envelope: HandoffResultEnvelope {
-                    schema_version: HANDOFF_SCHEMA_VERSION,
-                    handoff_id: "handoff-4".to_string(),
-                    flow_key: "flow-1".to_string(),
-                    from_agent_id: "worker".to_string(),
-                    to_agent_id: "main".to_string(),
-                    status: HandoffResultStatus::Denied,
-                    summary: String::new(),
-                    artifacts: Vec::new(),
-                    output_tokens: 0,
-                    error_reason: Some("expired by retention policy".to_string()),
-                    metadata: std::collections::HashMap::new(),
-                },
-            }),
-        };
-
-        let mapped = map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
-        assert_eq!(mapped.status, "expired");
-    }
-
-    #[test]
-    fn load_persisted_capability_assignments_replays_recent_approved_for_actor() {
-        let home = std::env::temp_dir().join(format!("tengu-replay-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&home).expect("home");
-        let store = ControlPlaneAuditStore::new(&home).expect("store");
-        let now_s = now_epoch_ms() / 1_000;
-
-        store
-            .append(&ControlPlaneAuditEvent {
-                ts_epoch_s: now_s.saturating_sub(4),
-                flow_key: "flow-1".to_string(),
-                handoff_id: "h-1".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker-a".to_string(),
-                status: "approved".to_string(),
-                reason: None,
-                requested_capabilities: vec!["tool:read_file".to_string()],
-                objective: Some("A".to_string()),
-            })
-            .expect("append 1");
-        store
-            .append(&ControlPlaneAuditEvent {
-                ts_epoch_s: now_s.saturating_sub(3),
-                flow_key: "flow-2".to_string(),
-                handoff_id: "h-2".to_string(),
-                orchestrator_agent_id: "other".to_string(),
-                dependent_agent_id: "worker-b".to_string(),
-                status: "approved".to_string(),
-                reason: None,
-                requested_capabilities: vec!["tool:search_content".to_string()],
-                objective: Some("B".to_string()),
-            })
-            .expect("append 2");
-        store
-            .append(&ControlPlaneAuditEvent {
-                ts_epoch_s: now_s.saturating_sub(2),
-                flow_key: "flow-3".to_string(),
-                handoff_id: "h-1".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker-a".to_string(),
-                status: "denied".to_string(),
-                reason: Some("closed".to_string()),
-                requested_capabilities: Vec::new(),
-                objective: None,
-            })
-            .expect("append 3");
-        store
-            .append(&ControlPlaneAuditEvent {
-                ts_epoch_s: now_s.saturating_sub(1),
-                flow_key: "flow-4".to_string(),
-                handoff_id: "h-4".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker-c".to_string(),
-                status: "approved".to_string(),
-                reason: None,
-                requested_capabilities: vec!["skill:analysis".to_string()],
-                objective: Some("C".to_string()),
-            })
-            .expect("append 4");
-
-        let recovered = load_persisted_capability_assignments(Some(&store), "main", 64, 86_400);
-        assert_eq!(recovered.len(), 1);
-        assert_eq!(recovered[0].handoff_id, "h-4");
-        assert_eq!(recovered[0].dependent_agent_id, "worker-c");
-
-        let _ = std::fs::remove_dir_all(home);
-    }
-
-    #[test]
-    fn load_persisted_capability_assignments_skips_expired_rows() {
-        let home =
-            std::env::temp_dir().join(format!("tengu-replay-expiry-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&home).expect("home");
-        let store = ControlPlaneAuditStore::new(&home).expect("store");
-
-        store
-            .append(&ControlPlaneAuditEvent {
-                ts_epoch_s: 1,
-                flow_key: "flow-old".to_string(),
-                handoff_id: "h-old".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker-a".to_string(),
-                status: "approved".to_string(),
-                reason: None,
-                requested_capabilities: vec!["tool:read_file".to_string()],
-                objective: Some("old".to_string()),
-            })
-            .expect("append old");
-
-        let recovered = load_persisted_capability_assignments(Some(&store), "main", 64, 1);
-        assert!(recovered.is_empty());
-
-        let _ = std::fs::remove_dir_all(home);
-    }
-
-    #[test]
-    fn build_handoff_accepted_result_is_valid_against_task() {
-        let task = HandoffTaskEnvelope {
-            schema_version: HANDOFF_SCHEMA_VERSION,
-            handoff_id: "h-accepted".to_string(),
-            flow_key: "flow-accepted".to_string(),
-            from_agent_id: "main".to_string(),
-            to_agent_id: "worker".to_string(),
-            objective: "check one file".to_string(),
-            constraints: vec!["bounded-by-user-policy".to_string()],
-            requested_capabilities: vec!["tool:read_file".to_string()],
-            context_summary: None,
-            max_output_tokens: 256,
-            ttl_seconds: Some(900),
-            metadata: std::collections::HashMap::new(),
-        };
-        let accepted = build_handoff_accepted_result(&task, "accepted");
-        accepted.validate_against(&task).expect("valid accepted");
-        assert_eq!(accepted.status, HandoffResultStatus::Accepted);
-        assert_eq!(
-            accepted.metadata.get("runtime").map(String::as_str),
-            Some("delegated-handoff-queue")
-        );
-    }
-
-    #[tokio::test]
-    async fn prune_expired_capability_assignments_removes_old_records() {
-        let event_bus = InProcessEventBus::new(32, EventBusOverflowPolicy::DropNewest);
-        let mut assignments = vec![
-            CapabilityAssignmentRecord {
-                handoff_id: "h-old".to_string(),
-                flow_key: "flow-1".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker".to_string(),
-                requested_capabilities: vec!["tool:read_file".to_string()],
-                objective: "old".to_string(),
-                issued_at_epoch_ms: now_epoch_ms().saturating_sub(2_000),
-            },
-            CapabilityAssignmentRecord {
-                handoff_id: "h-new".to_string(),
-                flow_key: "flow-1".to_string(),
-                orchestrator_agent_id: "main".to_string(),
-                dependent_agent_id: "worker".to_string(),
-                requested_capabilities: vec!["tool:search_content".to_string()],
-                objective: "new".to_string(),
-                issued_at_epoch_ms: now_epoch_ms(),
-            },
-        ];
-
-        let removed =
-            prune_expired_capability_assignments(&mut assignments, 1, &event_bus, "main", "corr-1")
-                .await;
-        assert_eq!(removed, 1);
-        assert_eq!(assignments.len(), 1);
-        assert_eq!(assignments[0].handoff_id, "h-new");
     }
 }

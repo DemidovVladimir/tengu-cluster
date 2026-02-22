@@ -34,7 +34,7 @@ Source: `EPICS_TASKS.md`
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
-| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements), persisted assignment audit JSONL (approved/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, and startup audit-log retention pruning; full multi-agent execution loop integration remains pending under `E6-T9` |
+| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit JSONL (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, and startup audit-log retention pruning; full multi-agent execution loop integration remains pending under `E6-T9` |
 | E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
 | E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
 | E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
@@ -47,7 +47,7 @@ Source: `EPICS_TASKS.md`
 | E11-T3 | Done | Chat runtime now emits `DomainEvent` lifecycle events for inbound/flow/prompt/engine/tool/compaction hotspots |
 | E11-T4 | Done | Tool audit persistence migrated to event subscriber fed by tool lifecycle `DomainEvent`s |
 | E11-T5 | Done | Added metrics + policy subscribers and periodic lag/saturation diagnostics from event bus counters |
-| E11-T6 | Done | Added profile-aware event-bus runtime tuning and validation tests for minimal (`DropNewest`) vs desktop/cloud (`DropOldest`) backpressure behavior |
+| E11-T6 | Done | Added profile-aware event-bus runtime tuning and validation tests for minimal (`DropNewest`) vs desktop/cloud (`DropOldest`) backpressure behavior; extracted runtime event/subscriber logic into `src/runtime_bus.rs`, engine/tool turn execution into `src/runtime_engine.rs`, slash-command handlers into `src/runtime_commands.rs`, and prompt budgeting/assembly into `src/runtime_prompt.rs` to reduce `main.rs` coupling |
 
 ## Completed Start Task (2026-02-20)
 
@@ -229,7 +229,7 @@ Source: `EPICS_TASKS.md`
 |---|---|---|---|---|---|
 | E11-T1 | Task | Define `DomainEvent` schema + `EventBus` trait for runtime lifecycle events | P0 | E5-T5,E10-T2 | Sprint 4 |
 | E11-T2 | Task | Implement bounded in-process event bus with explicit overflow policy | P0 | E11-T1 | Sprint 4 |
-| E11-T3 | Task | Emit domain events from chat runtime path (`src/main.rs`) without behavior regressions | P0 | E11-T2 | Sprint 4 |
+| E11-T3 | Task | Emit domain events from chat runtime path (`src/main.rs` + `src/runtime_engine.rs`) without behavior regressions | P0 | E11-T2 | Sprint 4 |
 | E11-T4 | Task | Migrate tool audit writes to subscriber handler (event-driven side-effect) | P0 | E11-T3,E8-T5 | Sprint 4 |
 | E11-T5 | Task | Add metrics/policy subscribers and lag/saturation diagnostics | P0 | E11-T3 | Sprint 5 |
 | E11-T6 | Task | Validate minimal single-core and multi-core profiles for queue/backpressure behavior | P0 | E11-T2,E11-T5 | Sprint 5 |

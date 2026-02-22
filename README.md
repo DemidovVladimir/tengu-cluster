@@ -7,7 +7,7 @@ Architecture style:
 - Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation implemented.
 
 Architecture guardrail:
-- New providers/channels/tools/refiners must be added via `tengu-core` adapter traits and must not introduce provider-specific orchestration coupling in `src/main.rs`.
+- New providers/channels/tools/refiners must be added via `tengu-core` adapter traits and must not introduce provider-specific orchestration coupling in runtime modules (`src/main.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/runtime_bus.rs`).
 - New runtime side-effects should be introduced as domain-event subscribers (or marked explicitly as temporary with linked follow-up tasks).
 
 ## What It Is
@@ -32,6 +32,8 @@ Current working baseline:
 - startup replay of non-expired approved delegated assignments from audit log (`/assignments` survives restarts)
 - delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry and startup audit-log pruning
 - event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
+- event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events
+- runtime internals are split by responsibility (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/main.rs`) for maintainability
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks

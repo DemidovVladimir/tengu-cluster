@@ -12,8 +12,9 @@ This document describes full target architecture. The currently running path in 
 - Engine: `OllamaEngine` + `AnthropicEngine` + `OpenAIEngine` + `ClaudeCodeEngine`
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
+- Runtime code decomposition: event-bus/subscriber orchestration in `src/runtime_bus.rs`, engine/tool turn execution in `src/runtime_engine.rs`, slash-command handlers in `src/runtime_commands.rs`, prompt budgeting/assembly in `src/runtime_prompt.rs`, and high-level chat orchestration in `src/main.rs`
 - Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + config-driven tool approvals + audit trail)
-- Delegated control plane: partial (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + event-driven handoff `Accepted` acknowledgements + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup)
+- Delegated control plane: partial (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + event-driven handoff `Accepted` acknowledgements + one-turn dependent execution baseline (`Completed`/`Failed`) + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
@@ -128,7 +129,11 @@ CLI stdin
 
 ```
 tengu-cluster/
-├── src/main.rs              # Binary entry point, event loop, CLI
+├── src/main.rs              # Binary entry point, runtime orchestration
+├── src/runtime_bus.rs       # Event-bus profile + subscribers + handoff workers
+├── src/runtime_engine.rs    # Engine turn + tool-call stream execution helpers
+├── src/runtime_commands.rs  # Slash command/control-plane handlers
+├── src/runtime_prompt.rs    # Prompt budgeting/retrieval packing helpers
 ├── src/control_plane.rs     # Delegated orchestrator assignment helpers
 ├── crates/
 │   ├── tengu-core/          # Traits, types, config, routing
@@ -178,7 +183,7 @@ tengu-cluster/
 ### Dependency Graph
 
 ```
-main.rs
+runtime orchestration (`src/main.rs` + `src/runtime_*.rs`)
   ├── tengu-core       (always)
   ├── tengu-backends   (feature-gated engines)
   ├── tengu-channels   (feature-gated pipes)

@@ -66,7 +66,8 @@ Pattern:
 - use `saturating_add`, `saturating_sub`, `min`, `max`
 
 Where:
-- `src/main.rs` (prompt/history/retrieval budget calculations)
+- `src/runtime_prompt.rs` (prompt/history/retrieval budget calculations)
+- `src/main.rs` (budget integration into chat loop)
 - `crates/tengu-memory/src/lib.rs` (`query_with_budget`)
 
 Why:
