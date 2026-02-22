@@ -56,12 +56,13 @@ Execution path:
 2. Runtime emits `DomainEvent::HandoffTaskDispatched`.
 3. Acceptance subscriber emits non-terminal `HandoffResultReceived(status=accepted)`.
 4. Execution subscriber runs one dependent-agent turn (`execute_delegated_handoff_task_once`).
-5. Execution subscriber emits terminal `HandoffResultReceived(status=completed|failed)`.
+5. Execution subscriber emits `HandoffResultReceived(status=review_required|failed)`.
 6. Control-plane audit subscriber persists lifecycle records to:
    - `~/.tengu/state/audit/capability_assignments.jsonl`
 
 Current limitation:
-- terminal handoff results are emitted and audited, but not yet auto-injected back into a synthesized orchestrator answer pipeline.
+- handoff results are emitted and audited, but not yet auto-injected back into a synthesized orchestrator answer pipeline.
+- validation decisions are manual today (`/handoff ...`), not yet policy-automated.
 
 Safety control:
 - if delegated retries/rework loops are active and you want to stop token spend immediately, use `/stopall`
@@ -153,20 +154,28 @@ Immediate runtime response (from command handler):
 Events emitted:
 1. `HandoffTaskDispatched`
 2. `HandoffResultReceived(status=accepted)` (queue acknowledgement)
-3. `HandoffResultReceived(status=completed|failed)` (terminal execution result)
+3. `HandoffResultReceived(status=review_required|failed)` (execution result)
 
 #### Step 3: How dependent output is produced today
 
 Current implementation detail:
 - each delegated task runs one dependent-agent model turn with a generated prompt
-- result is a typed handoff result summary (`Completed`/`Failed`)
+- result is a typed handoff result summary (`ReviewRequired`/`Failed`)
 - lifecycle is persisted in `~/.tengu/state/audit/capability_assignments.jsonl`
+
+Validation gate step (now):
+- orchestrator/user finalizes each handoff with:
+  - `/handoff pending`
+  - `/handoff accept <handoff-id> [note...]`
+  - `/handoff retry <handoff-id> [note...]`
+  - `/handoff rework <handoff-id> <new objective...>`
+  - `/handoff fail <handoff-id> [note...]`
 
 Important limitation (today):
 - delegated result summaries are not auto-merged into orchestrator chat response
 - delegated tasks are not auto-chained into other dependent tasks
 - delegated runs are processed one-by-one in current execution subscriber
-- there is no enforced quality gate yet to prevent invalid upstream outputs from cascading to downstream dependents
+- quality gate is enforced manually via `/handoff ...`; automated validator runner and dependency barriers are still pending
 
 ### How Other Agents Use Results (Today vs Target)
 

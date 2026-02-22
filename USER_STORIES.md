@@ -45,10 +45,11 @@ Acceptance targets:
 Current coverage:
 - `Partial`: multiple agents can be configured, but runtime path is still single-agent chat-first.
 - `Partial`: inter-agent handoff protocol is now defined as typed task/result envelopes, but explicit hierarchy/delegation execution loop is still missing.
-- `Missing`: orchestrator/validator quality gate for dependent results (accept/retry/rework/fail) and dependency barriers.
+- `Implemented baseline`: validation gate decisions exist for delegated handoffs (`/handoff pending`, `/handoff accept|retry|rework|fail ...`) and dependent one-turn execution now enters `review_required` before finalization.
+- `Missing`: automated validator runner and dependency barriers for chained downstream artifact release.
 
 Required tasks:
-- `E6-T1`, `E6-T2`, `E6-T9`, `E6-T11`, `E6-T12`, `E6-T13`
+- `E6-T1`, `E6-T2`, `E6-T9`, `E6-T12`, `E6-T13`
 - `E7-T1`, `E7-T5`
 - `E8-T1`, `E8-T2`
 
@@ -242,11 +243,12 @@ Current coverage:
   - in `mode=delegated`, only configured orchestrator can request direct capabilities in active runtime path
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
 - `Partial` delegated control-plane baseline:
-  - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall` for bounded delegated capability lifecycle
-  - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus terminal completed/failed/denied/revoked/expired states
+  - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/handoff ...`, `/stopall` for bounded delegated capability lifecycle
+  - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus `review_required` and terminal completed/failed/denied/revoked/expired states
   - assignment lifecycle outcomes are persisted as append-only JSONL audit records
   - non-expired approved assignments are replayed from audit log at startup for session continuity
   - delegated assignments are auto-expired by TTL, stale audit rows are pruned at startup, and closed assignments are reconciled out of active runtime state
+  - validation-gate decisions are explicit (`accept`/`retry`/`rework`/`fail`) before delegated output is marked final
   - `/stopall` provides emergency delegated worker termination and revokes active assignments to avoid continued background token spend
   - topology bounds are enforced for delegated handoffs (`topology.mode`, orchestrator/dependent limits, `max_handoff_depth`)
 - `Missing` skills loading/execution runtime path.
@@ -259,7 +261,9 @@ Current coverage:
   - runtime execution gap (multi-agent path not yet active): `src/main.rs` + `src/runtime_engine.rs` + `src/runtime_bus.rs`
 
 Required tasks:
-- `E6-T10` (continue: connect delegated execution path)
+- `E6-T9` (continue: full topology-aware orchestration loop)
+- `E6-T12` (automated validator runner)
+- `E6-T13` (dependency barriers and deterministic failure propagation)
 
 ---
 

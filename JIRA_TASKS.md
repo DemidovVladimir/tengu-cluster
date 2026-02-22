@@ -36,7 +36,8 @@ Source: `EPICS_TASKS.md`
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 | E6-T9 | In Progress | Added topology-aware delegated handoff baseline: runtime now validates/enforces `topology` policy (`flat` or `single-orchestrator`) with orchestrator/dependent bounds and max handoff depth checks, stamps handoff depth metadata on assignment envelopes, and re-validates topology/capability policy during dependent execution |
-| E6-T10 | Done | Delegated orchestrator control-plane baseline is implemented in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit JSONL (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal-status reconciliation that removes closed assignments from active runtime state; topology-aware multi-agent execution loop remains tracked under `E6-T9` |
+| E6-T10 | Done | Delegated orchestrator control-plane baseline is implemented in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (queue acknowledgement + dependent execution), persisted assignment audit JSONL (approved/review_required/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal-status reconciliation that removes closed assignments from active runtime state; topology-aware multi-agent execution loop remains tracked under `E6-T9` |
+| E6-T11 | Done | Delegated result validation gate baseline is implemented: one-turn dependent execution now emits `ReviewRequired`/`Failed`, runtime exposes `/handoff pending` + `/handoff <accept|retry|rework|fail> <handoff-id> [note...]`, `accept` finalizes to `Completed`, `retry/rework` redispatches dependent run, and `fail` finalizes to `Failed` with audit traceability |
 | E6-T14 | Done | Added `/stopall` emergency delegated execution stop in chat runtime: aborts delegated handoff worker subscribers, revokes active delegated assignments via terminal handoff events, and blocks new `/assign` until runtime restart |
 | E8-T1 | Done | Runtime consumes `ToolCallStart/Delta/End` events with pending-call assembly and protocol validation guards |
 | E8-T2 | Done | Runtime tool registry/executor wiring is active with built-in `read_file` and workspace path-safety checks |
@@ -73,6 +74,7 @@ Source: `EPICS_TASKS.md`
 - `E8-T6` — Define and implement inter-agent handoff contract (task/result envelopes).
 - `E8-T7` — Enforce capability policies for tools/skills/engine usage at runtime (user + delegated orchestrator modes).
 - `E6-T14` — Add `/stopall` emergency stop for delegated workers to prevent background token spend.
+- `E6-T11` — Implement delegated validation gate commands and review-required handoff lifecycle.
 
 ## Next Start (2026-02-22)
 

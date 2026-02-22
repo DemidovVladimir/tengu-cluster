@@ -183,7 +183,8 @@ pub(crate) fn spawn_delegated_handoff_acceptance_subscriber(
 /// Baseline behavior:
 /// - one model turn on dependent agent using envelope objective/context
 /// - re-validates handoff against topology/capability policy before execution
-/// - returns terminal `Completed` or `Failed` result envelope
+/// - returns `ReviewRequired` on success so orchestrator can validate outcome
+/// - returns terminal `Failed` envelope on execution/runtime errors
 /// - keeps output within envelope limits
 pub(crate) async fn execute_delegated_handoff_task_once(
     config: &Config,
@@ -283,14 +284,14 @@ pub(crate) async fn execute_delegated_handoff_task_once(
         output_tokens = estimate_tokens_approx_min1(&summary) as u32;
     }
 
-    let completed = build_handoff_completed_result(envelope, summary, output_tokens);
-    if let Err(err) = completed.validate_against(envelope) {
+    let review_required = build_handoff_review_required_result(envelope, summary, output_tokens);
+    if let Err(err) = review_required.validate_against(envelope) {
         return build_handoff_failed_result(
             envelope,
             &format!("dependent handoff result validation failed: {}", err),
         );
     }
-    completed
+    review_required
 }
 
 /// Convert handoff-policy decisions to concise reason text for runtime errors/audit.
@@ -327,7 +328,7 @@ fn describe_handoff_policy_decision(
 /// Current scope:
 /// - consumes `HandoffTaskDispatched` for configured orchestrator
 /// - executes one dependent-agent model turn
-/// - emits terminal `HandoffResultReceived` (`Completed`/`Failed`)
+/// - emits `HandoffResultReceived` (`ReviewRequired`/`Failed`)
 pub(crate) fn spawn_delegated_handoff_execution_subscriber(
     event_bus: Arc<InProcessEventBus>,
     config: Arc<Config>,
@@ -372,7 +373,7 @@ pub(crate) fn spawn_delegated_handoff_execution_subscriber(
                 handoff_id = %task.handoff_id,
                 dependent_agent_id = %task.to_agent_id,
                 status = ?status,
-                "Delegated handoff executed by dependent engine baseline"
+                "Delegated handoff execution emitted result"
             );
         }
     }))
@@ -544,7 +545,7 @@ pub(crate) fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Optio
 /// Note:
 /// `Accepted` handoff results are treated as non-terminal queue acknowledgements
 /// and are intentionally not persisted as audit rows to keep replay semantics
-/// tied to approved/terminal lifecycle states.
+/// tied to approved/review/terminal lifecycle states.
 pub(crate) fn map_domain_event_to_control_plane_audit_event(
     event: &DomainEvent,
 ) -> Option<ControlPlaneAuditEvent> {
@@ -574,6 +575,7 @@ pub(crate) fn map_domain_event_to_control_plane_audit_event(
                         "denied".to_string()
                     }
                 }
+                HandoffResultStatus::ReviewRequired => "review_required".to_string(),
                 HandoffResultStatus::Failed => "failed".to_string(),
                 HandoffResultStatus::Completed => "completed".to_string(),
                 HandoffResultStatus::Accepted => return None,
@@ -616,6 +618,7 @@ pub(crate) fn load_persisted_capability_assignments(
 
     let mut closed_handoffs = HashSet::<String>::new();
     let mut recovered_rev = Vec::<CapabilityAssignmentRecord>::new();
+    let mut seen_active = HashSet::<String>::new();
     let now_ms = now_epoch_ms();
     let ttl_ms = ttl_secs.saturating_mul(1_000);
 
@@ -624,30 +627,35 @@ pub(crate) fn load_persisted_capability_assignments(
         if handoff_id.is_empty() {
             continue;
         }
-        if event.status == "approved" {
-            if closed_handoffs.contains(&handoff_id) {
-                continue;
+        match event.status.as_str() {
+            "approved" => {
+                if closed_handoffs.contains(&handoff_id) || seen_active.contains(&handoff_id) {
+                    continue;
+                }
+                if event.orchestrator_agent_id.trim() != orchestrator_agent_id {
+                    continue;
+                }
+                let issued_at_epoch_ms = event.ts_epoch_s.saturating_mul(1_000);
+                let expires_at_epoch_ms = issued_at_epoch_ms.saturating_add(ttl_ms);
+                if now_ms >= expires_at_epoch_ms {
+                    closed_handoffs.insert(handoff_id);
+                    continue;
+                }
+                recovered_rev.push(CapabilityAssignmentRecord {
+                    handoff_id: handoff_id.clone(),
+                    flow_key: event.flow_key,
+                    orchestrator_agent_id: event.orchestrator_agent_id,
+                    dependent_agent_id: event.dependent_agent_id,
+                    requested_capabilities: event.requested_capabilities,
+                    objective: event.objective.unwrap_or_else(|| "n/a".to_string()),
+                    issued_at_epoch_ms,
+                });
+                seen_active.insert(handoff_id);
             }
-            if event.orchestrator_agent_id.trim() != orchestrator_agent_id {
-                continue;
-            }
-            let issued_at_epoch_ms = event.ts_epoch_s.saturating_mul(1_000);
-            let expires_at_epoch_ms = issued_at_epoch_ms.saturating_add(ttl_ms);
-            if now_ms >= expires_at_epoch_ms {
+            "completed" | "failed" | "denied" | "revoked" | "expired" => {
                 closed_handoffs.insert(handoff_id);
-                continue;
             }
-            recovered_rev.push(CapabilityAssignmentRecord {
-                handoff_id: handoff_id.clone(),
-                flow_key: event.flow_key,
-                orchestrator_agent_id: event.orchestrator_agent_id,
-                dependent_agent_id: event.dependent_agent_id,
-                requested_capabilities: event.requested_capabilities,
-                objective: event.objective.unwrap_or_else(|| "n/a".to_string()),
-                issued_at_epoch_ms,
-            });
-        } else {
-            closed_handoffs.insert(handoff_id);
+            _ => {}
         }
     }
 
@@ -701,8 +709,8 @@ pub(crate) fn build_handoff_failed_result(
     }
 }
 
-/// Build terminal completed handoff result envelope with bounded output tokens.
-pub(crate) fn build_handoff_completed_result(
+/// Build non-terminal handoff review envelope with bounded output tokens.
+pub(crate) fn build_handoff_review_required_result(
     envelope: &HandoffTaskEnvelope,
     summary: String,
     output_tokens: u32,
@@ -713,15 +721,18 @@ pub(crate) fn build_handoff_completed_result(
         flow_key: envelope.flow_key.clone(),
         from_agent_id: envelope.to_agent_id.clone(),
         to_agent_id: envelope.from_agent_id.clone(),
-        status: HandoffResultStatus::Completed,
+        status: HandoffResultStatus::ReviewRequired,
         summary,
         artifacts: Vec::new(),
         output_tokens: output_tokens.min(envelope.max_output_tokens),
         error_reason: None,
-        metadata: std::collections::HashMap::from([(
-            "runtime".to_string(),
-            "delegated-handoff-exec".to_string(),
-        )]),
+        metadata: std::collections::HashMap::from([
+            ("runtime".to_string(), "delegated-handoff-exec".to_string()),
+            (
+                "validation_state".to_string(),
+                "review_required".to_string(),
+            ),
+        ]),
     }
 }
 

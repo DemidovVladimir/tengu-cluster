@@ -88,6 +88,8 @@ impl HandoffTaskEnvelope {
 pub enum HandoffResultStatus {
     /// Receiver accepted but has not yet finished execution.
     Accepted,
+    /// Receiver completed one run and now waits for orchestrator validation.
+    ReviewRequired,
     /// Receiver completed successfully.
     Completed,
     /// Receiver failed while executing the task.
@@ -100,6 +102,48 @@ impl HandoffResultStatus {
     /// Whether status represents a terminal handoff state.
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Denied)
+    }
+}
+
+/// Validation decision emitted by orchestrator/validator for one dependent result.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum HandoffValidationDecision {
+    /// Accept dependent output as reusable downstream artifact.
+    Accept,
+    /// Request dependent to rerun same objective.
+    Retry,
+    /// Request dependent to rerun with objective adjustments.
+    Rework,
+    /// Reject dependent output and mark handoff failed.
+    Fail,
+}
+
+impl HandoffValidationDecision {
+    /// Parse command token into typed validation decision.
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.trim() {
+            "accept" => Some(Self::Accept),
+            "retry" => Some(Self::Retry),
+            "rework" => Some(Self::Rework),
+            "fail" => Some(Self::Fail),
+            _ => None,
+        }
+    }
+
+    /// Canonical kebab-case representation used in metadata/audit strings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "accept",
+            Self::Retry => "retry",
+            Self::Rework => "rework",
+            Self::Fail => "fail",
+        }
+    }
+
+    /// Whether this decision requests one more dependent execution cycle.
+    pub fn requires_redispatch(self) -> bool {
+        matches!(self, Self::Retry | Self::Rework)
     }
 }
 
@@ -177,9 +221,13 @@ impl HandoffResultEnvelope {
                 task.max_output_tokens
             ));
         }
-        if self.status == HandoffResultStatus::Completed && self.summary.trim().is_empty() {
+        if matches!(
+            self.status,
+            HandoffResultStatus::Completed | HandoffResultStatus::ReviewRequired
+        ) && self.summary.trim().is_empty()
+        {
             return Err(anyhow!(
-                "completed handoff result requires non-empty summary"
+                "completed/review-required handoff result requires non-empty summary"
             ));
         }
         if matches!(
@@ -275,6 +323,39 @@ mod tests {
             error_reason: None,
             metadata: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn validation_decision_parser_supports_all_actions() {
+        assert_eq!(
+            HandoffValidationDecision::parse("accept"),
+            Some(HandoffValidationDecision::Accept)
+        );
+        assert_eq!(
+            HandoffValidationDecision::parse("retry"),
+            Some(HandoffValidationDecision::Retry)
+        );
+        assert_eq!(
+            HandoffValidationDecision::parse("rework"),
+            Some(HandoffValidationDecision::Rework)
+        );
+        assert_eq!(
+            HandoffValidationDecision::parse("fail"),
+            Some(HandoffValidationDecision::Fail)
+        );
+        assert!(HandoffValidationDecision::parse("unknown").is_none());
+    }
+
+    #[test]
+    fn review_required_result_requires_summary() {
+        let task = task();
+        let mut result = completed_result();
+        result.status = HandoffResultStatus::ReviewRequired;
+        result.summary.clear();
+        let err = result
+            .validate_against(&task)
+            .expect_err("expected validation error");
+        assert!(err.to_string().contains("review-required"));
     }
 
     #[test]

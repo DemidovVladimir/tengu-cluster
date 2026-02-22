@@ -602,6 +602,42 @@ mod tests {
     }
 
     #[test]
+    fn control_plane_audit_map_captures_handoff_review_required() {
+        let event = DomainEvent {
+            meta: DomainEventMeta {
+                ts_epoch_ms: 1_700,
+                flow_key: Some("flow-1".to_string()),
+                agent_id: Some("worker".to_string()),
+                correlation_id: Some("corr-review".to_string()),
+                source: Some("test".to_string()),
+            },
+            payload: DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                envelope: HandoffResultEnvelope {
+                    schema_version: HANDOFF_SCHEMA_VERSION,
+                    handoff_id: "handoff-review".to_string(),
+                    flow_key: "flow-1".to_string(),
+                    from_agent_id: "worker".to_string(),
+                    to_agent_id: "main".to_string(),
+                    status: HandoffResultStatus::ReviewRequired,
+                    summary: "proposed implementation ready for review".to_string(),
+                    artifacts: Vec::new(),
+                    output_tokens: 42,
+                    error_reason: None,
+                    metadata: std::collections::HashMap::from([(
+                        "validation_state".to_string(),
+                        "review_required".to_string(),
+                    )]),
+                },
+            }),
+        };
+
+        let mapped =
+            runtime_bus::map_domain_event_to_control_plane_audit_event(&event).expect("mapped");
+        assert_eq!(mapped.status, "review_required");
+        assert!(mapped.reason.is_none());
+    }
+
+    #[test]
     fn control_plane_audit_map_captures_handoff_denial() {
         let event = DomainEvent {
             meta: DomainEventMeta {
@@ -798,6 +834,63 @@ mod tests {
     }
 
     #[test]
+    fn load_persisted_capability_assignments_keeps_latest_active_approval_after_review() {
+        let home =
+            std::env::temp_dir().join(format!("tengu-replay-review-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("home");
+        let store = ControlPlaneAuditStore::new(&home).expect("store");
+        let now_s = now_epoch_ms() / 1_000;
+
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(3),
+                flow_key: "flow-review".to_string(),
+                handoff_id: "h-review".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: Some("first objective".to_string()),
+            })
+            .expect("append approved 1");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(2),
+                flow_key: "flow-review".to_string(),
+                handoff_id: "h-review".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "review_required".to_string(),
+                reason: None,
+                requested_capabilities: Vec::new(),
+                objective: None,
+            })
+            .expect("append review");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(1),
+                flow_key: "flow-review".to_string(),
+                handoff_id: "h-review".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: Some("retry objective".to_string()),
+            })
+            .expect("append approved 2");
+
+        let recovered =
+            runtime_bus::load_persisted_capability_assignments(Some(&store), "main", 64, 86_400);
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].handoff_id, "h-review");
+        assert_eq!(recovered[0].objective, "retry objective");
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn prune_closed_capability_assignments_from_audit_removes_terminal_rows() {
         let home =
             std::env::temp_dir().join(format!("tengu-prune-closed-test-{}", uuid::Uuid::new_v4()));
@@ -907,6 +1000,35 @@ mod tests {
         failed.validate_against(&task).expect("valid failed");
         assert_eq!(failed.status, HandoffResultStatus::Failed);
         assert_eq!(failed.error_reason.as_deref(), Some("runtime failed"));
+    }
+
+    #[test]
+    fn build_handoff_review_required_result_is_valid_against_task() {
+        let task = HandoffTaskEnvelope {
+            schema_version: HANDOFF_SCHEMA_VERSION,
+            handoff_id: "h-review".to_string(),
+            flow_key: "flow-review".to_string(),
+            from_agent_id: "main".to_string(),
+            to_agent_id: "worker".to_string(),
+            objective: "check one file".to_string(),
+            constraints: vec!["bounded-by-user-policy".to_string()],
+            requested_capabilities: vec!["tool:read_file".to_string()],
+            context_summary: Some("ctx".to_string()),
+            max_output_tokens: 256,
+            ttl_seconds: Some(900),
+            metadata: std::collections::HashMap::new(),
+        };
+        let review = runtime_bus::build_handoff_review_required_result(
+            &task,
+            "ready for validator".to_string(),
+            33,
+        );
+        review.validate_against(&task).expect("valid review result");
+        assert_eq!(review.status, HandoffResultStatus::ReviewRequired);
+        assert_eq!(
+            review.metadata.get("validation_state").map(String::as_str),
+            Some("review_required")
+        );
     }
 
     #[test]

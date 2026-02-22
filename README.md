@@ -35,12 +35,13 @@ Current working baseline:
 - emergency delegated execution stop (`/stopall`) aborts delegated worker subscribers and revokes active delegated assignments to prevent background token spending
 - topology-aware delegated handoff bounds are enforced at runtime (`topology.mode`, orchestrator/dependent bounds, `max_handoff_depth`)
 - event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
-- event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events
+- event-driven delegated handoff execution baseline runs one dependent-agent turn and emits `ReviewRequired`/`Failed` result events
+- validation-gate control commands are implemented (`/handoff pending`, `/handoff <accept|retry|rework|fail> ...`) before delegated output is marked final
 - runtime internals are split by responsibility (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/main.rs`) for maintainability
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks
-- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall`) with user-boundary checks
+- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/handoff ...`, `/stopall`) with user-boundary checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
@@ -136,6 +137,8 @@ Useful commands inside chat:
 - `/assignments` (delegated mode)
 - `/unassign <handoff-id|dependent-agent-id>` (delegated mode)
 - `/assignments clear` (delegated mode)
+- `/handoff pending` (delegated mode)
+- `/handoff <accept|retry|rework|fail> <handoff-id> [note...]` (delegated mode)
 - `/stopall` (delegated mode, emergency stop for delegated workers)
 - `/eco`, `/standard`, `/precise`
 - `/reset`

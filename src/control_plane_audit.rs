@@ -2,7 +2,7 @@
 //!
 //! Potential use case:
 //! Keep an append-only JSONL trail for delegated capability assignment lifecycle
-//! events (approved/denied/revoked/expired), plus bounded replay/pruning support
+//! events (approved/review_required/denied/revoked/expired), plus bounded replay/pruning support
 //! for restart-safe runtime continuity.
 
 use anyhow::{Context, Result};
@@ -32,7 +32,7 @@ pub struct ControlPlaneAuditEvent {
     pub orchestrator_agent_id: String,
     /// Dependent agent id.
     pub dependent_agent_id: String,
-    /// Outcome status (`approved`, `revoked`, `expired`, `denied`, `completed`, `failed`).
+    /// Outcome status (`approved`, `review_required`, `revoked`, `expired`, `denied`, `completed`, `failed`).
     pub status: String,
     /// Optional denial/failure reason text.
     #[serde(skip_serializing_if = "Option::is_none")]
