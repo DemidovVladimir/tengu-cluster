@@ -28,6 +28,8 @@ model = "llama3.2"
 # model = "claude-3-5-sonnet-latest"
 # engine = "openai"
 # model = "gpt-4o-mini"
+# engine = "huggingface"
+# model = "THUDM/GLM-4.7:fastest" # planned Inference Providers selector syntax
 # engine = "claude-code"
 # model = "claude-sonnet-4-5-20250929"
 # workspace = "~/projects/my-app"
@@ -75,44 +77,20 @@ files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
 agent = "main"
 pipe = "cli"
 
-# Planned topology extension (target architecture, not yet enforced by runtime):
-# Guardrail: topology/provider/tool integrations are adapter-based; runtime policy/audit
-# transitions are being moved to internal domain-event subscribers (`E11`).
-# [topology]
-# mode = "single-orchestrator"
-# orchestrator_agent = "orchestrator"
+# Runtime topology policy:
+# - "flat": no topology-specific handoff restrictions
+# - "single-orchestrator": enforce one orchestrator dispatching to bounded dependents
+[topology]
+mode = "flat"
+# orchestrator_agent = "main"
 # dependent_agents = ["engineering", "marketing", "product"]
 # allow_direct_dependent_communication = false
-# max_handoff_depth = 2
-#
-# [topology.defaults]
-# engine = "openai"
-# model = "gpt-4o-mini"
-# inherit_to_dependents = true
-#
-# [topology.policy]
-# require_orchestrator_approval = true
-# tool_policy_source = "global"
-# adapter_policy_source = "global"
-#
-# [[topology.agent_overrides]]
-# agent = "engineering"
-# engine = "anthropic"
-# model = "claude-sonnet-4-5-20250929"
-#
-# [[topology.adapter_rules]]
-# from = "engineering"
-# to = "marketing"
-# adapter = "eng_to_mkt_summary"
-# direction = "one-way"
-# status = "allow"
-#
-# [[topology.adapter_rules]]
-# from = "marketing"
-# to = "engineering"
-# direction = "one-way"
-# status = "deny"
-# reason = "prevent engineering bias from marketing directives"
+max_handoff_depth = 2
+
+# Notes:
+# - in `single-orchestrator` mode, `topology.orchestrator_agent` is required
+# - if `capability_governance.mode = "delegated"`, delegated orchestrator must match topology orchestrator
+# - if `dependent_agents` is empty, any configured non-orchestrator agent is allowed as handoff receiver
 
 # Pipes
 [pipes.cli]

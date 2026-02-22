@@ -65,6 +65,8 @@ const RETRIEVAL_CONTEXT_SEPARATOR: &str = "\n\n---\n\n";
 const CONTROL_PLANE_AUDIT_MAX_ROWS_DEFAULT: usize = 20_000;
 /// Default recent rows scanned for startup assignment replay.
 const CONTROL_PLANE_AUDIT_REPLAY_LIMIT_DEFAULT: usize = 512;
+/// Default recent rows scanned for terminal delegated assignment reconciliation.
+const CONTROL_PLANE_AUDIT_CLOSED_SCAN_LIMIT_DEFAULT: usize = 512;
 /// Default delegated assignment lifetime before automatic runtime expiry cleanup.
 const DELEGATED_ASSIGNMENT_TTL_SECS_DEFAULT: u64 = 900;
 
@@ -347,6 +349,10 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         resolve_positive_usize_env("TENGU_CONTROL_PLANE_AUDIT_REPLAY_LIMIT")
             .unwrap_or(CONTROL_PLANE_AUDIT_REPLAY_LIMIT_DEFAULT)
             .min(control_plane_audit_max_rows);
+    let control_plane_closed_scan_limit =
+        resolve_positive_usize_env("TENGU_CONTROL_PLANE_AUDIT_CLOSED_SCAN_LIMIT")
+            .unwrap_or(CONTROL_PLANE_AUDIT_CLOSED_SCAN_LIMIT_DEFAULT)
+            .min(control_plane_audit_max_rows);
     let delegated_assignment_ttl_secs =
         resolve_positive_u64_env("TENGU_DELEGATED_ASSIGNMENT_TTL_SECS")
             .unwrap_or(DELEGATED_ASSIGNMENT_TTL_SECS_DEFAULT);
@@ -455,6 +461,18 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
 
     while let Some(inbound) = rx.recv().await {
         let turn_correlation_id = uuid::Uuid::new_v4().to_string();
+        let closed_assignments = prune_closed_capability_assignments_from_audit(
+            &mut state.capability_assignments,
+            control_plane_audit.as_ref(),
+            control_plane_closed_scan_limit,
+        );
+        if closed_assignments > 0 {
+            info!(
+                closed_assignments,
+                scan_limit = control_plane_closed_scan_limit,
+                "Removed terminal delegated assignments from active runtime state"
+            );
+        }
         let expired_assignments = runtime_commands::prune_expired_capability_assignments(
             &mut state.capability_assignments,
             delegated_assignment_ttl_secs,
@@ -816,6 +834,43 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         handle.abort();
     }
     Ok(())
+}
+
+/// Remove active assignments that already reached terminal audit state.
+///
+/// Terminal statuses: `completed`, `failed`, `denied`, `revoked`, `expired`.
+fn prune_closed_capability_assignments_from_audit(
+    assignments: &mut Vec<CapabilityAssignmentRecord>,
+    store: Option<&ControlPlaneAuditStore>,
+    scan_limit: usize,
+) -> usize {
+    if assignments.is_empty() || scan_limit == 0 {
+        return 0;
+    }
+    let Some(store) = store else {
+        return 0;
+    };
+    let Ok(events) = store.read_recent(scan_limit) else {
+        return 0;
+    };
+
+    let closed_handoffs = events
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.status.as_str(),
+                "completed" | "failed" | "denied" | "revoked" | "expired"
+            )
+        })
+        .map(|event| event.handoff_id)
+        .collect::<std::collections::HashSet<_>>();
+    if closed_handoffs.is_empty() {
+        return 0;
+    }
+
+    let before = assignments.len();
+    assignments.retain(|assignment| !closed_handoffs.contains(&assignment.handoff_id));
+    before.saturating_sub(assignments.len())
 }
 
 /// Emit one runtime domain event without affecting user-visible flow on failure.

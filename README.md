@@ -27,10 +27,11 @@ Current working baseline:
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
 - prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
 - in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
-- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events
+- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events, including compact argument/result previews
 - append-only delegated assignment audit trail (`~/.tengu/state/audit/capability_assignments.jsonl`) persisted by event subscriber from handoff lifecycle events
 - startup replay of non-expired approved delegated assignments from audit log (`/assignments` survives restarts)
-- delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry and startup audit-log pruning
+- delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry, startup audit-log pruning, and terminal-status reconciliation of active runtime assignments
+- topology-aware delegated handoff bounds are enforced at runtime (`topology.mode`, orchestrator/dependent bounds, `max_handoff_depth`)
 - event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
 - event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events
 - runtime internals are split by responsibility (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/main.rs`) for maintainability
@@ -67,6 +68,16 @@ Copy and edit config:
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
 ```
+
+Webstudio scenario template (orchestrator + dependent specialists):
+
+```bash
+cp config.webstudio.example.toml ~/.tengu/config.toml
+```
+
+Scenario note:
+- `config.webstudio.example.toml` includes `accountant` with `engine="huggingface"` and `model="THUDM/GLM-4.7"`.
+- Hugging Face backend is currently planned (tracked by `E4-T4`, `E4-T10`, `E4-T11`, `E4-T12`), so accountant handoffs require that backend implementation before they run successfully.
 
 Export environment variables as needed:
 

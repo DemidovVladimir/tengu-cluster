@@ -159,6 +159,12 @@ pub struct ToolCallCompleted {
     /// Optional reason for non-ok outcomes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Optional compact preview of parsed tool arguments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments_preview: Option<String>,
+    /// Optional compact preview of tool execution result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_preview: Option<String>,
 }
 
 /// Payload for `ToolCallDenied`.

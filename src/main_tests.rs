@@ -798,6 +798,71 @@ mod tests {
     }
 
     #[test]
+    fn prune_closed_capability_assignments_from_audit_removes_terminal_rows() {
+        let home =
+            std::env::temp_dir().join(format!("tengu-prune-closed-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("home");
+        let store = ControlPlaneAuditStore::new(&home).expect("store");
+        let now_s = now_epoch_ms() / 1_000;
+
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(2),
+                flow_key: "flow".to_string(),
+                handoff_id: "h-complete".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                status: "completed".to_string(),
+                reason: None,
+                requested_capabilities: Vec::new(),
+                objective: None,
+            })
+            .expect("append complete");
+        store
+            .append(&ControlPlaneAuditEvent {
+                ts_epoch_s: now_s.saturating_sub(1),
+                flow_key: "flow".to_string(),
+                handoff_id: "h-pending".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-b".to_string(),
+                status: "approved".to_string(),
+                reason: None,
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: Some("pending".to_string()),
+            })
+            .expect("append approved");
+
+        let mut assignments = vec![
+            CapabilityAssignmentRecord {
+                handoff_id: "h-complete".to_string(),
+                flow_key: "flow".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-a".to_string(),
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: "done".to_string(),
+                issued_at_epoch_ms: now_epoch_ms().saturating_sub(2_000),
+            },
+            CapabilityAssignmentRecord {
+                handoff_id: "h-pending".to_string(),
+                flow_key: "flow".to_string(),
+                orchestrator_agent_id: "main".to_string(),
+                dependent_agent_id: "worker-b".to_string(),
+                requested_capabilities: vec!["tool:read_file".to_string()],
+                objective: "pending".to_string(),
+                issued_at_epoch_ms: now_epoch_ms().saturating_sub(1_000),
+            },
+        ];
+
+        let removed =
+            prune_closed_capability_assignments_from_audit(&mut assignments, Some(&store), 64);
+        assert_eq!(removed, 1);
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].handoff_id, "h-pending");
+
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
     fn build_handoff_accepted_result_is_valid_against_task() {
         let task = HandoffTaskEnvelope {
             schema_version: HANDOFF_SCHEMA_VERSION,

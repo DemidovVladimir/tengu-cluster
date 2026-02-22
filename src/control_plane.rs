@@ -180,7 +180,16 @@ pub fn build_assignment_envelope(
         context_summary: None,
         max_output_tokens: 256,
         ttl_seconds: Some(900),
-        metadata: std::collections::HashMap::new(),
+        metadata: {
+            let mut metadata = std::collections::HashMap::new();
+            // Depth metadata is used by topology-aware handoff policy checks.
+            metadata.insert("handoff_depth".to_string(), "1".to_string());
+            metadata.insert(
+                "topology_mode".to_string(),
+                config.topology.mode.trim().to_string(),
+            );
+            metadata
+        },
     };
 
     match evaluate_handoff_capability_policy(config, &envelope) {
@@ -209,6 +218,9 @@ pub fn describe_handoff_policy_decision(decision: &HandoffCapabilityPolicyDecisi
             "sender '{}' is not delegated orchestrator '{}'",
             sender_agent_id, delegated_orchestrator_agent
         ),
+        HandoffCapabilityPolicyDecision::DeniedTopology { reason } => {
+            format!("topology policy denied: {}", reason)
+        }
         HandoffCapabilityPolicyDecision::DeniedCapability { capability, reason } => {
             format!("capability '{}' denied: {}", capability, reason)
         }

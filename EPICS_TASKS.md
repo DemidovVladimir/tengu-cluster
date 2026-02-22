@@ -66,9 +66,8 @@ Completed tasks:
 37. `E8-T7`
 
 Partially completed:
-1. `E6` control-plane baseline is live in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with bounded delegated checks plus assignment audit replay/cleanup; multi-agent execution/hub lifecycle remains pending.
-2. `E8` tool loop remains in progress (broader toolset and delegated multi-agent execution loop pending).
-3. Runtime orchestration internals were split into focused modules (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`) to reduce `src/main.rs` complexity.
+1. `E6` control-plane baseline is live in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with bounded delegated checks plus assignment audit replay/cleanup; topology-aware handoff bounds (`topology.mode`, orchestrator/dependent allow-list, `max_handoff_depth`) are now enforced at assignment and execution time; full multi-agent serve/hub lifecycle remains pending.
+2. Runtime orchestration internals were split into focused modules (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`) to reduce `src/main.rs` complexity.
 
 ## Epic Status Snapshot
 
@@ -77,11 +76,11 @@ Partially completed:
 | `E1` | Done | All P0 storage/session resilience tasks are complete. |
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete, including output-reserve alignment to engine output caps. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
-| `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google/HF and runtime switching are pending. |
+| `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google + Hugging Face Inference Providers and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit lifecycle events (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, and startup audit-log retention pruning; multi-pipe lifecycle and full multi-agent execution loop remain pending. |
+| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit lifecycle events (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal assignment reconciliation; topology-aware delegated handoff bounds are enforced (`topology` orchestrator/dependent/depth policy). Multi-pipe lifecycle and full multi-agent execution loop remain pending. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
-| `E8` | In Progress | Runtime now assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, persists tool audit JSONL events, defines typed inter-agent handoff task/result envelopes, and enforces capability governance in runtime (`user` vs `delegated` actor gate) plus tool/skill/engine handoff policy checks; delegated multi-agent execution flow remains pending. |
+| `E8` | Done | Runtime assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, persists tool audit JSONL events (with compact argument/result previews), defines typed inter-agent handoff task/result envelopes, and enforces capability governance in runtime (`user` vs `delegated` actor gate) plus tool/skill/engine handoff policy checks. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
 | `E10` | In Progress | Cross-field and governance-boundary validation are implemented; stream/schema migration and release gating remain. |
 | `E11` | Done | Adapter contracts, stream events, bounded bus, runtime emitters, audit/metrics/policy subscribers, and profile/backpressure validation are complete. |
@@ -173,12 +172,15 @@ Scope:
 1. Implement typed REST backend for Anthropic.
 2. Implement typed REST backend for OpenAI.
 3. Implement typed REST backend for Google Gemini.
-4. Implement Hugging Face backend (`hf-hub` + inference path).
+4. Implement Hugging Face backend via Inference Providers OpenAI-compatible API path (`/v1/chat/completions`) with `HF_TOKEN` auth.
 5. Add runtime engine selection/switching.
 6. Define feasibility/scope for optional `candle-local` backend.
 7. Add provider integration tests (mocked + smoke).
 8. Enforce model-aware context/output fallbacks plus config overrides on all provider backends.
 9. Implement Claude Code backend path via subprocess/auth profile.
+10. Add Hugging Face model selector policy support (`:fastest`, `:cheapest`, `:preferred`, explicit provider-id suffix such as `:sambanova`) and document runtime semantics.
+11. Add Hugging Face model discovery path (`GET /v1/models`) with fallback static list for offline/credential-missing scenarios.
+12. Add Hugging Face endpoint strategy support (router default + optional dedicated endpoint override).
 
 Primary files:
 `src/main.rs`, `crates/tengu-backends/src/lib.rs`, `crates/tengu-backends/src/ollama/mod.rs`

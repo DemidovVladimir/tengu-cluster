@@ -12,7 +12,7 @@ use crate::{build_engine, now_epoch_ms};
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tengu_core::config::{Config, RuntimeProfile};
+use tengu_core::config::{evaluate_handoff_capability_policy, Config, RuntimeProfile};
 use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EventBus, EventBusOverflowPolicy,
     HandoffResultReceived, InProcessEventBus,
@@ -182,6 +182,7 @@ pub(crate) fn spawn_delegated_handoff_acceptance_subscriber(
 ///
 /// Baseline behavior:
 /// - one model turn on dependent agent using envelope objective/context
+/// - re-validates handoff against topology/capability policy before execution
 /// - returns terminal `Completed` or `Failed` result envelope
 /// - keeps output within envelope limits
 pub(crate) async fn execute_delegated_handoff_task_once(
@@ -204,6 +205,16 @@ pub(crate) async fn execute_delegated_handoff_task_once(
             ),
         );
     };
+    let handoff_policy = evaluate_handoff_capability_policy(config, envelope);
+    if !handoff_policy.is_allowed() {
+        return build_handoff_failed_result(
+            envelope,
+            &format!(
+                "handoff denied by topology/capability governance policy at execution time: {}",
+                describe_handoff_policy_decision(&handoff_policy)
+            ),
+        );
+    }
 
     let engine = match build_engine(envelope.to_agent_id.trim(), dependent_cfg) {
         Ok(engine) => engine,
@@ -280,6 +291,35 @@ pub(crate) async fn execute_delegated_handoff_task_once(
         );
     }
     completed
+}
+
+/// Convert handoff-policy decisions to concise reason text for runtime errors/audit.
+fn describe_handoff_policy_decision(
+    decision: &tengu_core::config::HandoffCapabilityPolicyDecision,
+) -> String {
+    match decision {
+        tengu_core::config::HandoffCapabilityPolicyDecision::Allowed => "allowed".to_string(),
+        tengu_core::config::HandoffCapabilityPolicyDecision::DeniedInvalidTaskEnvelope {
+            reason,
+        } => format!("invalid task envelope: {}", reason),
+        tengu_core::config::HandoffCapabilityPolicyDecision::DeniedUnknownAgent { agent_id } => {
+            format!("unknown agent '{}'", agent_id)
+        }
+        tengu_core::config::HandoffCapabilityPolicyDecision::DeniedSenderNotDelegatedOrchestrator {
+            sender_agent_id,
+            delegated_orchestrator_agent,
+        } => format!(
+            "sender '{}' is not delegated orchestrator '{}'",
+            sender_agent_id, delegated_orchestrator_agent
+        ),
+        tengu_core::config::HandoffCapabilityPolicyDecision::DeniedTopology { reason } => {
+            format!("topology denied: {}", reason)
+        }
+        tengu_core::config::HandoffCapabilityPolicyDecision::DeniedCapability {
+            capability,
+            reason,
+        } => format!("capability '{}' denied: {}", capability, reason),
+    }
 }
 
 /// Spawn delegated handoff execution subscriber for one-turn dependent execution.
@@ -480,8 +520,8 @@ pub(crate) fn map_domain_event_to_tool_audit_event(event: &DomainEvent) -> Optio
             phase: "execute".to_string(),
             status: payload.status.clone(),
             reason: payload.reason.clone(),
-            arguments_preview: None,
-            result_preview: None,
+            arguments_preview: payload.arguments_preview.clone(),
+            result_preview: payload.result_preview.clone(),
         }),
         DomainEventPayload::ToolCallDenied(payload) => Some(ToolAuditEvent {
             ts_epoch_s,

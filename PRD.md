@@ -14,7 +14,7 @@ This document contains both current behavior and target-state requirements.
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
 | Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
-| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked tools via registry (`read_file` baseline), enforces config-driven approval gates (`kit.approval_required`/`kit.approved`), and persists append-only tool audit records via event subscriber; broader tool loop remains pending |
+| Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked tools via registry (`read_file` baseline), enforces config-driven approval gates (`kit.approval_required`/`kit.approved`), and persists append-only tool audit records via event subscriber with compact argument/result previews; broader toolset remains pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
 | Knowledge store | Partial | In-memory retrieval is wired to chat loop via budget-capped query |
 | Prompt budget telemetry | Implemented | Per-request bucket metrics are emitted in runtime logs and surfaced in `/context` |
@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks, and exposes delegated assignment lifecycle commands (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with persisted audit replay and runtime cleanup; delegated multi-agent runtime loop is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks with topology bounds (`topology` orchestrator/dependent/depth), and exposes delegated assignment lifecycle commands (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with persisted audit replay, terminal-status reconciliation, and runtime cleanup; delegated multi-agent runtime loop is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, and delegated assignment control-plane baseline is available in chat runtime; single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
@@ -327,7 +327,7 @@ trait Engine: Send + Sync {
 | `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
 | `anthropic` | Implemented | Typed REST `/v1/messages` path with text + usage + terminal done events |
 | `claude-code` | Implemented | Subprocess CLI backend (`claude --print --output-format json`) for subscription/auth-profile workflows |
-| `huggingface` | Planned | Feature scaffold only, `hf-hub` target |
+| `huggingface` | Planned | Feature scaffold only, target is Hugging Face Inference Providers via OpenAI-compatible router (`https://router.huggingface.co/v1`) |
 | `openai` | Implemented | Typed REST `/v1/chat/completions` path with text + usage + terminal done events |
 | `google` | Planned | Feature scaffold only, typed REST target |
 | `candle-local` | Planned | In-process local inference, CUDA/Metal preferred with CPU fallback |
@@ -360,6 +360,7 @@ trait ModelProvider: Send + Sync {
 ```
 
 Provider format: `provider/model` (e.g., `anthropic/claude-sonnet-4-5`, `ollama/deepseek-coder-v2`).
+For Hugging Face Inference Providers, model IDs can include selector suffixes (for example `huggingface/THUDM/GLM-4.7:fastest`).
 
 Dependency policy:
 - Prefer official provider SDKs when available and maintained.
@@ -795,7 +796,7 @@ list = [
     "anthropic/claude-sonnet-4-5-20250929",
     "openai/gpt-4o-mini",
     "google/gemini-2.0-flash",
-    "huggingface/meta-llama/Llama-3.3-70B-Instruct",
+    "huggingface/THUDM/GLM-4.7:fastest",
 ]
 
 [[routing]]
@@ -881,7 +882,8 @@ mode = "user" # user | delegated
 | `OPENAI_API_KEY` | OpenAI provider credential | Implemented backend |
 | `OPENAI_BASE_URL` | OpenAI API base URL override | Implemented backend |
 | `GOOGLE_API_KEY` | Google provider credential | Planned backend |
-| `HF_TOKEN` | Hugging Face credential | Planned backend |
+| `HF_TOKEN` | Hugging Face token with Inference Providers permission | Planned backend |
+| `HF_BASE_URL` | Hugging Face Inference Providers base URL override (`https://router.huggingface.co/v1` default target) | Planned backend |
 
 Reference file: `.env.example`
 

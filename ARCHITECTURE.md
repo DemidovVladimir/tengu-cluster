@@ -13,8 +13,8 @@ This document describes full target architecture. The currently running path in 
 - Refiner: `NoopRefiner` or `RuleRefiner`
 - Runtime: `chat`, `status`, `doctor` commands
 - Runtime code decomposition: event-bus/subscriber orchestration in `src/runtime_bus.rs`, engine/tool turn execution in `src/runtime_engine.rs`, slash-command handlers in `src/runtime_commands.rs`, prompt budgeting/assembly in `src/runtime_prompt.rs`, and high-level chat orchestration in `src/main.rs`
-- Tool loop: partial (`ToolCallStart/Delta/End` assembly + `read_file` execution + config-driven tool approvals + audit trail)
-- Delegated control plane: partial (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + event-driven handoff `Accepted` acknowledgements + one-turn dependent execution baseline (`Completed`/`Failed`) + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup)
+- Tool loop: implemented baseline (`ToolCallStart/Delta/End` assembly + registry execution for `read_file` + config-driven approvals + allow/deny checks + event-subscriber audit trail with compact argument/result previews)
+- Delegated control plane: implemented baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + topology-aware orchestrator/dependent/depth bounds + event-driven handoff `Accepted` acknowledgements + one-turn dependent execution baseline (`Completed`/`Failed`) + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup + terminal-status reconciliation of active assignments)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
@@ -321,7 +321,7 @@ pub enum StreamEvent {
 | `OpenAIEngine` | `tengu-backends` | ✅ Implemented | Typed REST to api.openai.com (`/v1/chat/completions`), non-streaming terminal events |
 | `ClaudeCodeEngine` | `tengu-backends` | ✅ Implemented | Subprocess CLI path (`claude --print`) with usage parsing and terminal events |
 | `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
-| `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | `hf-hub` + typed inference client |
+| `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | Hugging Face Inference Providers via OpenAI-compatible router (`/v1/chat/completions`) with optional dedicated endpoint override |
 | `CandleLocalEngine` | `tengu-backends` | 🔲 Planned | In-process local inference; prefer CUDA/Metal, CPU fallback |
 
 ### Engine Selection Flow
@@ -335,7 +335,7 @@ match agent_config.engine.as_str() {
     "anthropic" => Box::new(AnthropicEngine::new(base_url, model, api_key)),
     "openai"    => Box::new(OpenAIEngine::new(api_key, model)),
     "google"    => Box::new(GoogleEngine::new(api_key, model)),
-    "huggingface" => Box::new(HuggingFaceEngine::new(token, model)),
+    "huggingface" => Box::new(HuggingFaceEngine::new(base_url, token, model)),
     "candle-local" => Box::new(CandleLocalEngine::new(model)),
     // ...
 }
@@ -1255,7 +1255,7 @@ ollama    = ["tengu-backends/ollama"]       # Local models
 anthropic = ["tengu-backends/anthropic"]    # Claude API
 openai    = ["tengu-backends/openai"]       # OpenAI API
 google    = ["tengu-backends/google"]       # Gemini API
-huggingface = ["tengu-backends/huggingface"] # HF API
+huggingface = ["tengu-backends/huggingface"] # HF Inference Providers API
 
 # Pipes
 telegram = ["tengu-channels/telegram"]       # Telegram bot

@@ -1,0 +1,133 @@
+# Tengu Cluster — Webstudio Scenario Configuration
+#
+# Purpose:
+# - single orchestrator + bounded dependent specialists
+# - practical setup for "build a professional webstudio with portfolio"
+# - includes accountant agent configured for Hugging Face + GLM 4.7
+#
+# Important:
+# - `huggingface` backend is a planned provider path (see E4-T4).
+# - target API path for planned backend: `https://router.huggingface.co/v1/chat/completions` with `HF_TOKEN`.
+# - accountant handoffs will fail at runtime until HF backend is implemented.
+
+runtime_profile = "auto"
+
+[hub]
+bind = "127.0.0.1"
+port = 7070
+auth_mode = "token"
+
+[refiner]
+mode = "off"
+
+[agents.orchestrator]
+default = true
+engine = "openai"
+model = "gpt-4o-mini"
+default_lens = "standard"
+
+[agents.orchestrator.identity]
+name = "Webstudio Orchestrator"
+
+[agents.orchestrator.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.orchestrator.limits]
+max_tokens_per_flow = 500_000
+
+[agents.orchestrator.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content"]
+deny = ["shell"]
+approval_required = ["write_file", "edit_file"]
+approved = ["write_file", "edit_file"]
+
+[agents.orchestrator.skill_policy]
+allow = []
+deny = []
+
+[agents.orchestrator.store]
+files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
+
+[agents.frontend]
+engine = "anthropic"
+model = "claude-3-5-sonnet-latest"
+default_lens = "precise"
+
+[agents.frontend.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]
+deny = []
+approval_required = ["shell"]
+approved = []
+
+[agents.frontend.skill_policy]
+allow = []
+deny = []
+
+[agents.design]
+engine = "openai"
+model = "gpt-4o-mini"
+default_lens = "standard"
+
+[agents.design.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content"]
+deny = ["shell"]
+approval_required = ["write_file", "edit_file"]
+approved = ["write_file", "edit_file"]
+
+[agents.design.skill_policy]
+allow = []
+deny = []
+
+[agents.content]
+engine = "ollama"
+model = "llama3.2"
+default_lens = "eco"
+
+[agents.content.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content"]
+deny = ["shell"]
+approval_required = ["write_file", "edit_file"]
+approved = ["write_file", "edit_file"]
+
+[agents.content.skill_policy]
+allow = []
+deny = []
+
+[agents.accountant]
+engine = "huggingface"
+model = "THUDM/GLM-4.7"
+default_lens = "standard"
+
+[agents.accountant.kit]
+allow = ["read_file", "write_file", "edit_file", "find_files", "search_content"]
+deny = ["shell"]
+approval_required = ["write_file", "edit_file"]
+approved = ["write_file"]
+
+[agents.accountant.skill_policy]
+allow = []
+deny = []
+
+[[routing]]
+agent = "orchestrator"
+pipe = "cli"
+
+[topology]
+mode = "single-orchestrator"
+orchestrator_agent = "orchestrator"
+dependent_agents = ["frontend", "design", "content", "accountant"]
+allow_direct_dependent_communication = false
+max_handoff_depth = 2
+
+[pipes.cli]
+enabled = true
+
+[skills]
+watch = true
+extra_dirs = []
+
+[capability_governance]
+mode = "delegated"
+delegated_orchestrator_agent = "orchestrator"

@@ -63,9 +63,10 @@ Acceptance targets:
 
 Current coverage:
 - `Partial`: Anthropic/OpenAI/Ollama/Claude Code implemented; runtime switching and multi-agent orchestration are pending.
+- `Partial`: `config.webstudio.example.toml` includes a mixed-role topology template (including accountant with `huggingface` + `THUDM/GLM-4.7`), but Hugging Face backend runtime implementation is still pending.
 
 Required tasks:
-- `E4-T5`, `E4-T7`
+- `E4-T5`, `E4-T7`, `E4-T10`, `E4-T11`, `E4-T12`
 - `E4-T9` completed baseline
 - `E6-T1`, `E7-T1`
 - `E10-T1`
@@ -192,7 +193,7 @@ Current coverage:
 - `Partial`: Anthropic/OpenAI/Ollama/Claude Code are implemented; Google/HF coverage and provider integration tests are pending.
 
 Required tasks:
-- `E4-T3`, `E4-T4`, `E4-T7`
+- `E4-T3`, `E4-T4`, `E4-T7`, `E4-T10`, `E4-T11`, `E4-T12`
 - `E4-T9` completed baseline
 - `E5-T5` completed baseline
 
@@ -243,9 +244,12 @@ Current coverage:
   - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus terminal completed/failed/denied/revoked/expired states
   - assignment lifecycle outcomes are persisted as append-only JSONL audit records
   - non-expired approved assignments are replayed from audit log at startup for session continuity
-  - delegated assignments are auto-expired by TTL and stale audit rows are pruned at startup
+  - delegated assignments are auto-expired by TTL, stale audit rows are pruned at startup, and closed assignments are reconciled out of active runtime state
+  - topology bounds are enforced for delegated handoffs (`topology.mode`, orchestrator/dependent limits, `max_handoff_depth`)
 - `Missing` skills loading/execution runtime path.
-- `Missing` delegated orchestrator execution loop and audit pipeline.
+- `Partial` delegated orchestrator execution loop:
+  - one-turn dependent execution baseline is active via event-driven handoff workers
+  - full topology-aware multi-agent execution loop remains pending
   References:
   - schema fields: `crates/tengu-core/src/config/schema.rs`
   - policy helpers: `crates/tengu-core/src/config/policy.rs`

@@ -38,6 +38,8 @@ pub(crate) struct ToolExecutionOutcome {
     pub user_message: String,
     pub status: &'static str,
     pub reason: Option<String>,
+    pub arguments_preview: Option<String>,
+    pub result_preview: Option<String>,
 }
 
 /// Execute one engine call and collect text/usage events into session counters.
@@ -276,6 +278,8 @@ pub(crate) async fn collect_engine_response(
                                             tool_name: pending.name.clone(),
                                             status: outcome.status.to_string(),
                                             reason: outcome.reason.clone(),
+                                            arguments_preview: outcome.arguments_preview.clone(),
+                                            result_preview: outcome.result_preview.clone(),
                                         }),
                                     )
                                     .await;
@@ -388,6 +392,8 @@ pub(crate) async fn execute_tool_call(
             ),
             status: "denied_governance",
             reason: Some(err.to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(&err.to_string(), 200)),
         };
     }
 
@@ -404,6 +410,8 @@ pub(crate) async fn execute_tool_call(
                     ),
                     status: "parse_error",
                     reason: Some(err.to_string()),
+                    arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+                    result_preview: Some(truncate_preview(&err.to_string(), 200)),
                 };
             }
         }
@@ -414,6 +422,8 @@ pub(crate) async fn execute_tool_call(
             user_message: format!("[tool:{} error]\nTool is not registered.", pending.name),
             status: "not_registered",
             reason: Some("tool is not registered".to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some("tool is not registered".to_string()),
         };
     }
 
@@ -428,6 +438,8 @@ pub(crate) async fn execute_tool_call(
             ),
             status: "denied_policy",
             reason: Some(policy_decision.reason().to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(policy_decision.reason(), 200)),
         };
     }
 
@@ -447,6 +459,8 @@ pub(crate) async fn execute_tool_call(
             ),
             status: "denied_approval",
             reason: Some(approval_decision.reason().to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(approval_decision.reason(), 200)),
         };
     }
 
@@ -458,6 +472,8 @@ pub(crate) async fn execute_tool_call(
             ),
             status: "workspace_missing",
             reason: Some("workspace is not configured".to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some("workspace is not configured".to_string()),
         };
     };
 
@@ -473,16 +489,37 @@ pub(crate) async fn execute_tool_call(
             user_message: format!("[tool:{} error]\n{}", pending.name, output.content),
             status: "error",
             reason: Some("tool returned error output".to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(&output.content, 400)),
         },
         Ok(output) => ToolExecutionOutcome {
             user_message: format!("[tool:{} ok]\n{}", pending.name, output.content),
             status: "ok",
             reason: None,
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(&output.content, 400)),
         },
         Err(err) => ToolExecutionOutcome {
             user_message: format!("[tool:{} error]\n{}", pending.name, err),
             status: "exec_error",
             reason: Some(err.to_string()),
+            arguments_preview: Some(truncate_preview(&pending.arguments_delta, 200)),
+            result_preview: Some(truncate_preview(&err.to_string(), 400)),
         },
+    }
+}
+
+/// Build compact single-line preview for audit payload fields.
+fn truncate_preview(value: &str, max_chars: usize) -> String {
+    let compact = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.len() <= max_chars {
+        compact
+    } else {
+        format!("{}…", compact.chars().take(max_chars).collect::<String>())
     }
 }

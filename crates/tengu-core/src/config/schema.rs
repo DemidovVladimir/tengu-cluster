@@ -31,6 +31,8 @@ pub struct Config {
     #[serde(default)]
     pub skills: SkillsConfig,
     #[serde(default)]
+    pub topology: TopologyConfig,
+    #[serde(default)]
     pub capability_governance: CapabilityGovernanceConfig,
 }
 
@@ -427,6 +429,52 @@ pub struct SkillsConfig {
     pub extra_dirs: Vec<String>,
 }
 
+/// Runtime topology policy for orchestrator/dependent handoffs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopologyConfig {
+    /// Topology mode:
+    /// - `flat`: no topology-specific handoff restrictions.
+    /// - `single-orchestrator`: enforce one orchestrator dispatching to bounded dependents.
+    #[serde(default = "default_topology_mode")]
+    pub mode: String,
+    /// Optional orchestrator agent id used in `single-orchestrator` mode.
+    #[serde(default)]
+    pub orchestrator_agent: Option<String>,
+    /// Optional explicit dependent allow-list for handoff receivers.
+    ///
+    /// Empty means "any configured non-orchestrator agent can be targeted".
+    #[serde(default)]
+    pub dependent_agents: Vec<String>,
+    /// Whether direct dependent-to-dependent communication is allowed.
+    ///
+    /// Current runtime baseline keeps this disabled in `single-orchestrator`.
+    #[serde(default)]
+    pub allow_direct_dependent_communication: bool,
+    /// Maximum allowed handoff depth for delegated execution chains.
+    #[serde(default = "default_topology_max_handoff_depth")]
+    pub max_handoff_depth: u32,
+}
+
+impl Default for TopologyConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_topology_mode(),
+            orchestrator_agent: None,
+            dependent_agents: Vec::new(),
+            allow_direct_dependent_communication: false,
+            max_handoff_depth: default_topology_max_handoff_depth(),
+        }
+    }
+}
+
+fn default_topology_mode() -> String {
+    "flat".to_string()
+}
+
+fn default_topology_max_handoff_depth() -> u32 {
+    2
+}
+
 /// Global capability-governance mode for runtime policy decisions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityGovernanceConfig {
@@ -630,6 +678,56 @@ impl Config {
             &self.capability_governance.mode,
             &["user", "delegated"],
         );
+        errors.require_one_of(
+            "topology.mode",
+            &self.topology.mode,
+            &["flat", "single-orchestrator"],
+        );
+        errors.require(
+            self.topology.max_handoff_depth > 0,
+            "topology.max_handoff_depth must be greater than 0",
+        );
+        let normalized_dependents = validate_nonempty_unique_entries(
+            "topology.dependent_agents",
+            &self.topology.dependent_agents,
+            &mut errors,
+        );
+        if self.topology.mode.trim() == "single-orchestrator" {
+            match self.topology.orchestrator_agent.as_deref().map(str::trim) {
+                Some("") | None => errors.push(
+                    "topology.mode=single-orchestrator requires topology.orchestrator_agent"
+                        .to_string(),
+                ),
+                Some(orchestrator_id) => {
+                    if !self.agents.contains_key(orchestrator_id) {
+                        errors.push(format!(
+                            "topology.orchestrator_agent '{}' does not match configured agents",
+                            orchestrator_id
+                        ));
+                    }
+                    if normalized_dependents.contains(orchestrator_id) {
+                        errors.push(format!(
+                            "topology.dependent_agents cannot contain orchestrator '{}'",
+                            orchestrator_id
+                        ));
+                    }
+                    if self.capability_governance.mode.trim() == "delegated" {
+                        let delegated = self
+                            .capability_governance
+                            .delegated_orchestrator_agent
+                            .as_deref()
+                            .map(str::trim)
+                            .unwrap_or_default();
+                        if !delegated.is_empty() && delegated != orchestrator_id {
+                            errors.push(format!(
+                                "topology.orchestrator_agent '{}' must match capability_governance.delegated_orchestrator_agent '{}'",
+                                orchestrator_id, delegated
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         if self.capability_governance.mode.trim() == "delegated" {
             match self
                 .capability_governance
@@ -1057,6 +1155,7 @@ impl Default for Config {
                 webchat: None,
             },
             skills: SkillsConfig::default(),
+            topology: TopologyConfig::default(),
             capability_governance: CapabilityGovernanceConfig::default(),
         }
     }
@@ -1189,5 +1288,48 @@ mod tests {
         assert!(err.to_string().contains(
             "mode=delegated requires capability_governance.delegated_orchestrator_agent"
         ));
+    }
+
+    #[test]
+    fn validate_rejects_single_orchestrator_topology_without_orchestrator() {
+        let mut config = Config::default();
+        config.topology.mode = "single-orchestrator".to_string();
+        config.topology.orchestrator_agent = None;
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("topology.mode=single-orchestrator requires topology.orchestrator_agent"));
+    }
+
+    #[test]
+    fn validate_rejects_dependent_list_with_orchestrator() {
+        let mut config = Config::default();
+        config.topology.mode = "single-orchestrator".to_string();
+        config.topology.orchestrator_agent = Some("main".to_string());
+        config.topology.dependent_agents = vec!["main".to_string()];
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("topology.dependent_agents cannot contain orchestrator"));
+    }
+
+    #[test]
+    fn validate_rejects_topology_orchestrator_mismatch_with_delegated_mode() {
+        let mut config = Config::default();
+        config.topology.mode = "single-orchestrator".to_string();
+        config.topology.orchestrator_agent = Some("main".to_string());
+        config.capability_governance.mode = "delegated".to_string();
+        config.capability_governance.delegated_orchestrator_agent = Some("other".to_string());
+        config.agents.insert(
+            "other".to_string(),
+            config.agents.get("main").expect("main").clone(),
+        );
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("topology.orchestrator_agent 'main' must match"));
     }
 }

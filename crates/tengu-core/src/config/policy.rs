@@ -367,6 +367,8 @@ pub enum HandoffCapabilityPolicyDecision {
         sender_agent_id: String,
         delegated_orchestrator_agent: String,
     },
+    /// Handoff is denied by topology restrictions.
+    DeniedTopology { reason: String },
     /// Capability request is denied by target-agent policy bounds.
     DeniedCapability { capability: String, reason: String },
 }
@@ -384,6 +386,12 @@ impl HandoffCapabilityPolicyDecision {
 /// - `tool:<name>`
 /// - `skill:<name>`
 /// - `engine:<provider/model>`
+///
+/// Topology enforcement:
+/// - when `topology.mode=single-orchestrator`, sender must be topology orchestrator,
+///   receiver must be a non-orchestrator dependent (bounded by `dependent_agents`
+///   when configured), and optional `handoff_depth` metadata must not exceed
+///   `topology.max_handoff_depth`.
 pub fn evaluate_handoff_capability_policy(
     config: &Config,
     task: &HandoffTaskEnvelope,
@@ -419,6 +427,57 @@ pub fn evaluate_handoff_capability_policy(
                 sender_agent_id: sender_id.to_string(),
                 delegated_orchestrator_agent: delegated.to_string(),
             };
+        }
+    }
+
+    if config.topology.mode.trim() == "single-orchestrator" {
+        let orchestrator_id = config
+            .topology
+            .orchestrator_agent
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default();
+        if sender_id != orchestrator_id {
+            return HandoffCapabilityPolicyDecision::DeniedTopology {
+                reason: format!(
+                    "sender '{}' is not topology orchestrator '{}'",
+                    sender_id, orchestrator_id
+                ),
+            };
+        }
+        if receiver_id == orchestrator_id {
+            return HandoffCapabilityPolicyDecision::DeniedTopology {
+                reason: "topology denies orchestrator self-handoff".to_string(),
+            };
+        }
+        if !config.topology.dependent_agents.is_empty()
+            && !config
+                .topology
+                .dependent_agents
+                .iter()
+                .any(|value| value.trim() == receiver_id)
+        {
+            return HandoffCapabilityPolicyDecision::DeniedTopology {
+                reason: format!(
+                    "receiver '{}' is outside topology.dependent_agents allow-list",
+                    receiver_id
+                ),
+            };
+        }
+        if let Some(depth) = parse_handoff_depth(task) {
+            if depth == 0 {
+                return HandoffCapabilityPolicyDecision::DeniedTopology {
+                    reason: "handoff_depth metadata must be greater than 0".to_string(),
+                };
+            }
+            if depth > config.topology.max_handoff_depth {
+                return HandoffCapabilityPolicyDecision::DeniedTopology {
+                    reason: format!(
+                        "handoff_depth={} exceeds topology.max_handoff_depth={}",
+                        depth, config.topology.max_handoff_depth
+                    ),
+                };
+            }
         }
     }
 
@@ -488,6 +547,13 @@ pub fn evaluate_handoff_capability_policy(
     }
 
     HandoffCapabilityPolicyDecision::Allowed
+}
+
+/// Parse optional handoff depth metadata from task envelope.
+fn parse_handoff_depth(task: &HandoffTaskEnvelope) -> Option<u32> {
+    task.metadata
+        .get("handoff_depth")
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
 }
 
 /// Decision for evaluating one runtime engine override request.
@@ -760,6 +826,77 @@ mod tests {
         assert!(matches!(
             decision,
             HandoffCapabilityPolicyDecision::DeniedSenderNotDelegatedOrchestrator { .. }
+        ));
+    }
+
+    #[test]
+    fn handoff_capability_policy_denies_receiver_outside_topology_dependents() {
+        let mut config = Config::default();
+        config.topology.mode = "single-orchestrator".to_string();
+        config.topology.orchestrator_agent = Some("main".to_string());
+        config.topology.dependent_agents = vec!["worker-a".to_string()];
+        config.agents.insert(
+            "worker-b".to_string(),
+            AgentConfig {
+                default: false,
+                engine: "ollama".to_string(),
+                model: "llama3.2".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: Default::default(),
+                flow: Default::default(),
+                limits: Default::default(),
+                lens: Default::default(),
+                kit: Default::default(),
+                store: Default::default(),
+                allowed_engines: vec![],
+                sandbox: Default::default(),
+                skill_policy: Default::default(),
+            },
+        );
+
+        let mut task = handoff_task(vec!["tool:read_file".to_string()]);
+        task.to_agent_id = "worker-b".to_string();
+        let decision = evaluate_handoff_capability_policy(&config, &task);
+        assert!(matches!(
+            decision,
+            HandoffCapabilityPolicyDecision::DeniedTopology { .. }
+        ));
+    }
+
+    #[test]
+    fn handoff_capability_policy_denies_depth_above_topology_limit() {
+        let mut config = Config::default();
+        config.topology.mode = "single-orchestrator".to_string();
+        config.topology.orchestrator_agent = Some("main".to_string());
+        config.topology.max_handoff_depth = 1;
+        config.agents.insert(
+            "worker".to_string(),
+            AgentConfig {
+                default: false,
+                engine: "ollama".to_string(),
+                model: "llama3.2".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: Default::default(),
+                flow: Default::default(),
+                limits: Default::default(),
+                lens: Default::default(),
+                kit: Default::default(),
+                store: Default::default(),
+                allowed_engines: vec![],
+                sandbox: Default::default(),
+                skill_policy: Default::default(),
+            },
+        );
+
+        let mut task = handoff_task(vec!["tool:read_file".to_string()]);
+        task.metadata
+            .insert("handoff_depth".to_string(), "2".to_string());
+        let decision = evaluate_handoff_capability_policy(&config, &task);
+        assert!(matches!(
+            decision,
+            HandoffCapabilityPolicyDecision::DeniedTopology { .. }
         ));
     }
 

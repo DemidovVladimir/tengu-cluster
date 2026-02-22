@@ -34,13 +34,14 @@ Source: `EPICS_TASKS.md`
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
-| E6-T10 | In Progress | Added delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit JSONL (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, and startup audit-log retention pruning; full multi-agent execution loop integration remains pending under `E6-T9` |
-| E8-T1 | In Progress | Runtime now consumes `ToolCallStart/Delta/End` events with pending-call assembly and validation guards |
-| E8-T2 | In Progress | Added runtime tool registry/executor wiring with built-in `read_file` and workspace path-safety checks |
+| E6-T9 | In Progress | Added topology-aware delegated handoff baseline: runtime now validates/enforces `topology` policy (`flat` or `single-orchestrator`) with orchestrator/dependent bounds and max handoff depth checks, stamps handoff depth metadata on assignment envelopes, and re-validates topology/capability policy during dependent execution |
+| E6-T10 | Done | Delegated orchestrator control-plane baseline is implemented in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit JSONL (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal-status reconciliation that removes closed assignments from active runtime state; topology-aware multi-agent execution loop remains tracked under `E6-T9` |
+| E8-T1 | Done | Runtime consumes `ToolCallStart/Delta/End` events with pending-call assembly and protocol validation guards |
+| E8-T2 | Done | Runtime tool registry/executor wiring is active with built-in `read_file` and workspace path-safety checks |
 | E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
 | E8-T4 | Done | Enforced allow/deny policy before execution (defense-in-depth gate in `execute_tool_call`) with denial event path and regression tests |
 | E8-T6 | Done | Added typed inter-agent handoff task/result envelopes with schema validation and domain-event payload integration for auditable dispatch/result lifecycle |
-| E8-T5 | In Progress | Added append-only tool audit trail (`state/audit/tool_calls.jsonl`) persisted from tool lifecycle domain-event subscriber |
+| E8-T5 | Done | Append-only tool audit trail (`state/audit/tool_calls.jsonl`) is persisted from tool lifecycle domain-event subscriber and now captures compact tool argument/result previews from `ToolCallCompleted` payloads |
 | E8-T7 | Done | Runtime now enforces capability-governance actor gate (`user` vs `delegated`) for direct capability requests, plus existing engine/tool/skill/handoff policy checks; delegated multi-agent execution loop remains tracked under `E6-T10` |
 | E11-T1 | Done | `DomainEvent` v1 schema + `EventBus` trait added in `tengu-core::events` |
 | E11-T2 | Done | `InProcessEventBus` implemented with `DropNewest`/`DropOldest`/`BlockProducer` and overflow behavior tests |
@@ -70,9 +71,9 @@ Source: `EPICS_TASKS.md`
 - `E8-T6` — Define and implement inter-agent handoff contract (task/result envelopes).
 - `E8-T7` — Enforce capability policies for tools/skills/engine usage at runtime (user + delegated orchestrator modes).
 
-## Next Start (2026-02-21)
+## Next Start (2026-02-22)
 
-- `E6-T10` — Continue orchestrator control plane: connect delegated execution loop with `E6-T9`.
+- `E6-T9` — Continue topology-aware multi-agent execution loop (serve-mode orchestration + multi-dependent fanout beyond one-turn baseline).
 
 ## Epics
 
@@ -85,7 +86,7 @@ Source: `EPICS_TASKS.md`
 | E5 | Epic | Backend Capability, Streaming, and Usage Telemetry | P1 | Done |
 | E6 | Epic | Channels Runtime, Policies, and Hub Mode | P1 | In Progress |
 | E7 | Epic | Routing Operations and Diagnostics | P1 | Planned |
-| E8 | Epic | Tool Loop and Safety Controls | P1 | In Progress |
+| E8 | Epic | Tool Loop and Safety Controls | P1 | Done |
 | E9 | Epic | Refiner and Candle Acceleration | P1 | Planned |
 | E10 | Epic | Contracts, Config Validation, and Schema Evolution | P2 | In Progress |
 | E11 | Epic | Internal Event Bus and Runtime Decoupling | P0 | Done |
@@ -145,12 +146,15 @@ Source: `EPICS_TASKS.md`
 | E4-T1 | Task | Implement Anthropic backend via typed REST | P1 | E5-T1 | Sprint 3 |
 | E4-T2 | Task | Implement OpenAI backend via typed REST | P1 | E5-T1 | Sprint 3 |
 | E4-T3 | Task | Implement Google Gemini backend via typed REST | P1 | E5-T1 | Sprint 5 |
-| E4-T4 | Task | Implement Hugging Face backend (`hf-hub` + inference path) | P1 | E5-T1 | Sprint 5 |
+| E4-T4 | Task | Implement Hugging Face Inference Providers backend via OpenAI-compatible API (`https://router.huggingface.co/v1/chat/completions`) with `HF_TOKEN` auth | P1 | E5-T1 | Sprint 5 |
 | E4-T5 | Task | Add runtime engine selection/switching | P1 | E4-T1,E4-T2 | Sprint 3 |
 | E4-T6 | Task | Define feasibility/scope for `candle-local` backend | P1 | E9-T1 | Post-MVP |
 | E4-T7 | Task | Add provider integration tests (mocked + smoke) | P1 | E4-T1,E4-T2,E4-T3,E4-T4 | Sprint 5 |
 | E4-T8 | Task | Add model-aware context/output defaults + config overrides for all provider backends | P1 | E4-T1,E4-T2 | Sprint 3 |
 | E4-T9 | Task | Implement Claude Code backend via subprocess with profile-based auth | P1 | E5-T1 | Sprint 4 |
+| E4-T10 | Task | Add Hugging Face model selector policy support (`:fastest`, `:cheapest`, `:preferred`, explicit provider-id suffix such as `:sambanova`) and document runtime semantics | P1 | E4-T4,E10-T1 | Sprint 5 |
+| E4-T11 | Task | Add Hugging Face model discovery path (`GET /v1/models`) with fallback static list for offline/credential-missing scenarios | P1 | E4-T4,E5-T1 | Sprint 5 |
+| E4-T12 | Task | Add Hugging Face endpoint strategy support (router default + optional dedicated endpoint override) and document config/env mapping | P1 | E4-T4,E10-T1 | Sprint 5 |
 
 ## Epic E5 Tasks
 

@@ -28,7 +28,7 @@ For every new runtime-facing feature:
 ## Provider Decisions (as of 2026-02-17)
 
 - Ollama: direct REST (`reqwest`) to local API.
-- Hugging Face: use `hf-hub` for model/artifact access where possible.
+- Hugging Face: use Inference Providers OpenAI-compatible API for hosted inference; use `hf-hub` for model/artifact metadata paths where needed.
 - OpenAI: no official Rust SDK adopted here yet; use typed REST integration.
 - Anthropic: no official Rust SDK adopted here yet; use typed REST integration.
 - Google Gemini: no official Rust SDK adopted here yet; use typed REST integration.
