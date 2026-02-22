@@ -144,6 +144,13 @@ pub(crate) async fn handle_control_plane_command(
     }
 
     if command.trim_start().starts_with("/assign") {
+        if state.delegated_execution_paused {
+            println!(
+                "Delegated execution is force-stopped. Restart runtime to re-enable /assign.\n"
+            );
+            return true;
+        }
+
         let Some(parsed) = parse_assign_command(command) else {
             println!("Usage: /assign <dependent-agent-id> <cap1,cap2,...> [objective...]\n");
             return true;
@@ -204,7 +211,12 @@ pub(crate) async fn handle_control_plane_command(
 }
 
 /// Build terminal handoff-result envelope used for assignment cleanup/revocation.
-fn build_assignment_revocation_result(
+///
+/// This helper is shared by multiple cleanup paths:
+/// - manual revocation (`/unassign`, `/assignments clear`)
+/// - TTL expiry cleanup
+/// - emergency delegated worker stop (`/stopall`)
+pub(crate) fn build_assignment_revocation_result(
     assignment: &crate::CapabilityAssignmentRecord,
     reason: &str,
 ) -> HandoffResultEnvelope {
@@ -397,6 +409,7 @@ pub(crate) fn handle_chat_command(
             println!("  /assignments — List delegated assignments (session)");
             println!("  /assignments clear — Revoke and clear delegated assignments");
             println!("  /unassign  — Revoke by handoff id or dependent agent");
+            println!("  /stopall   — Force-stop delegated workers and revoke assignments");
             println!("  /reset     — Clear conversation");
             println!("  /help      — This help\n");
             true

@@ -1,9 +1,9 @@
 # Jira-Style Task Backlog
 
-Date: 2026-02-21
+Date: 2026-02-22
 Source: `EPICS_TASKS.md`
 
-## Status Snapshot (2026-02-21)
+## Status Snapshot (2026-02-22)
 
 | Key | Status | Comment |
 |---|---|---|
@@ -30,12 +30,14 @@ Source: `EPICS_TASKS.md`
 | E5-T5 | Done | Added stream ordering/terminal-state fixtures for success and parse-error paths in Ollama backend tests |
 | E4-T1 | Done | Anthropic backend implemented via typed REST and wired into runtime engine selection |
 | E4-T2 | Done | OpenAI backend implemented via typed REST and wired into runtime engine selection |
+| E4-T4 | Done | Hugging Face Inference Providers backend implemented via typed OpenAI-compatible REST and wired into runtime engine selection (`HF_TOKEN`, optional `HF_BASE_URL`) |
 | E4-T9 | Done | Claude Code backend implemented via subprocess (`claude --print`) and wired into runtime engine selection |
 | E4-T8 | Done | Added provider context/output fallback strategy + per-agent overrides (`context_window_override`, `max_output_tokens_per_turn`) for implemented backends |
 | E10-T1 | Done | Added cross-field config validation with actionable aggregated errors and fail-fast startup loading |
 | E10-T7 | Done | Added governance boundary validation for `kit`/`allowed_engines`/`skills`/sandbox + routing/pipe consistency |
 | E6-T9 | In Progress | Added topology-aware delegated handoff baseline: runtime now validates/enforces `topology` policy (`flat` or `single-orchestrator`) with orchestrator/dependent bounds and max handoff depth checks, stamps handoff depth metadata on assignment envelopes, and re-validates topology/capability policy during dependent execution |
 | E6-T10 | Done | Delegated orchestrator control-plane baseline is implemented in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff lifecycle events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit JSONL (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal-status reconciliation that removes closed assignments from active runtime state; topology-aware multi-agent execution loop remains tracked under `E6-T9` |
+| E6-T14 | Done | Added `/stopall` emergency delegated execution stop in chat runtime: aborts delegated handoff worker subscribers, revokes active delegated assignments via terminal handoff events, and blocks new `/assign` until runtime restart |
 | E8-T1 | Done | Runtime consumes `ToolCallStart/Delta/End` events with pending-call assembly and protocol validation guards |
 | E8-T2 | Done | Runtime tool registry/executor wiring is active with built-in `read_file` and workspace path-safety checks |
 | E8-T3 | Done | Added per-tool policy metadata (`risk_level`, `requires_approval`) and config-driven approval gates (`kit.approval_required`, `kit.approved`) before tool execution |
@@ -70,6 +72,7 @@ Source: `EPICS_TASKS.md`
 - `E8-T4` — Add allow/deny policy checks before tool execution.
 - `E8-T6` — Define and implement inter-agent handoff contract (task/result envelopes).
 - `E8-T7` — Enforce capability policies for tools/skills/engine usage at runtime (user + delegated orchestrator modes).
+- `E6-T14` — Add `/stopall` emergency stop for delegated workers to prevent background token spend.
 
 ## Next Start (2026-02-22)
 
@@ -180,6 +183,10 @@ Source: `EPICS_TASKS.md`
 | E6-T8 | Task | Add optional channel delivery ack contract | P1 | E6-T2 | Sprint 5 |
 | E6-T9 | Task | Implement topology-aware multi-agent execution loop (single-orchestrator with flexible dependents) | P1 | E6-T1,E7-T1,E8-T2 | Sprint 5 |
 | E6-T10 | Task | Add orchestrator control plane for dependent capability assignment with user-boundary checks | P1 | E6-T9,E8-T7,E10-T7 | Sprint 5 |
+| E6-T11 | Task | Add delegated-result validation gate contract (`accept`/`retry`/`rework`/`fail`) so each dependent turn is quality-checked before downstream use | P1 | E6-T9,E8-T6,E10-T2 | Sprint 5 |
+| E6-T12 | Task | Implement orchestrator validation policy runner (role-aware checks such as compile/test/lint/schema/tool checks) with bounded retries and fallback escalation | P1 | E6-T11,E8-T2,E8-T7 | Sprint 5 |
+| E6-T13 | Task | Add dependency-aware execution barriers so downstream dependent tasks wait for validated upstream artifacts and receive deterministic failure propagation | P1 | E6-T9,E6-T11 | Sprint 5 |
+| E6-T14 | Task | Add emergency delegated execution stop (`/stopall`) that cancels delegated worker subscribers and revokes active assignments to prevent background token spend | P1 | E6-T10,E11-T3 | Sprint 5 |
 
 ## Epic E7 Tasks
 

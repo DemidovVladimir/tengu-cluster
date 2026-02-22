@@ -22,6 +22,7 @@ Current working baseline:
 - Ollama backend (streaming)
 - Anthropic backend (typed REST, non-streaming)
 - OpenAI backend (typed REST, non-streaming)
+- Hugging Face backend (Inference Providers, non-streaming)
 - Claude Code backend (subprocess, non-streaming)
 - single-orchestrator-first topology direction with one central policy/audit control plane (dependent agents remain flexible)
 - backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
@@ -31,6 +32,7 @@ Current working baseline:
 - append-only delegated assignment audit trail (`~/.tengu/state/audit/capability_assignments.jsonl`) persisted by event subscriber from handoff lifecycle events
 - startup replay of non-expired approved delegated assignments from audit log (`/assignments` survives restarts)
 - delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry, startup audit-log pruning, and terminal-status reconciliation of active runtime assignments
+- emergency delegated execution stop (`/stopall`) aborts delegated worker subscribers and revokes active delegated assignments to prevent background token spending
 - topology-aware delegated handoff bounds are enforced at runtime (`topology.mode`, orchestrator/dependent bounds, `max_handoff_depth`)
 - event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
 - event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events
@@ -38,7 +40,7 @@ Current working baseline:
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
 - capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks
-- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks
+- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall`) with user-boundary checks
 - official-first dependency policy for providers/channels
 - Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
 
@@ -77,7 +79,8 @@ cp config.webstudio.example.toml ~/.tengu/config.toml
 
 Scenario note:
 - `config.webstudio.example.toml` includes `accountant` with `engine="huggingface"` and `model="THUDM/GLM-4.7"`.
-- Hugging Face backend is currently planned (tracked by `E4-T4`, `E4-T10`, `E4-T11`, `E4-T12`), so accountant handoffs require that backend implementation before they run successfully.
+- Hugging Face backend baseline is implemented (`E4-T4`); set `HF_TOKEN` (and optional `HF_BASE_URL`) before using accountant handoffs.
+- Follow-up HF capabilities are tracked by `E4-T10`, `E4-T11`, and `E4-T12`.
 
 Export environment variables as needed:
 
@@ -133,6 +136,7 @@ Useful commands inside chat:
 - `/assignments` (delegated mode)
 - `/unassign <handoff-id|dependent-agent-id>` (delegated mode)
 - `/assignments clear` (delegated mode)
+- `/stopall` (delegated mode, emergency stop for delegated workers)
 - `/eco`, `/standard`, `/precise`
 - `/reset`
 
@@ -188,6 +192,7 @@ git config core.hooksPath .githooks
 - `USER_STORIES.md`
 - `ARCHITECTURE.md`
 - `ROADMAP_MVP.md`
+- `WEBSTUDIO_EXECUTION_FLOW.md`
 - `EVENT_BUS_MIGRATION_PLAN.md`
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `DEPENDENCY_POLICY.md`

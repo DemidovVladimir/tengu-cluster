@@ -12,7 +12,7 @@ This document contains both current behavior and target-state requirements.
 |------|--------------|-------|
 | CLI chat loop | Implemented | `chat`, `status`, `doctor` are usable |
 | Hub daemon | Partial | `serve` command exists, daemon runtime is not implemented yet |
-| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `claude-code` (subprocess, non-streaming) |
+| Engines | Partial | `ollama` (streaming) + `anthropic` (typed REST, non-streaming) + `openai` (typed REST, non-streaming) + `huggingface` (Inference Providers, non-streaming) + `claude-code` (subprocess, non-streaming) |
 | Pipes | Partial | `cli` only |
 | Tools (Kit) | Partial | Runtime assembles tool-call events, executes policy-checked tools via registry (`read_file` baseline), enforces config-driven approval gates (`kit.approval_required`/`kit.approved`), and persists append-only tool audit records via event subscriber with compact argument/result previews; broader toolset remains pending |
 | Flows persistence | Partial | Flow index + JSONL transcripts are wired for CLI flows |
@@ -27,7 +27,7 @@ This document contains both current behavior and target-state requirements.
 | Stream ordering fixtures | Implemented | Ollama backend tests assert success ordering (`TextDelta* -> Usage -> Done`) and parse-error terminal behavior |
 | User-story coverage matrix | Implemented artifact | `USER_STORIES.md` maps scenario requirements to epics/tasks and acceptance gaps |
 | Config validation contract | Implemented | Cross-field validation with aggregated actionable errors now runs at config load/startup |
-| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks with topology bounds (`topology` orchestrator/dependent/depth), and exposes delegated assignment lifecycle commands (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with persisted audit replay, terminal-status reconciliation, and runtime cleanup; delegated multi-agent runtime loop is pending |
+| Capability governance control plane | Partial | Config + governance-boundary validation exists; runtime enforces engine allowlist and `kit` policy checks for tool-call events, applies direct actor governance gate (`user` vs `delegated`) for capability requests, supports typed handoff capability policy checks with topology bounds (`topology` orchestrator/dependent/depth), and exposes delegated assignment lifecycle commands (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall`) with persisted audit replay, terminal-status reconciliation, runtime cleanup, and emergency delegated worker stop; delegated multi-agent runtime loop is pending |
 | Architecture style | Implemented baseline | Adapter boundaries are implemented (`Engine`/`Pipe`/`Refiner`/`Tool`), runtime consumes stream events, and `DomainEvent`/`EventBus` + bounded bus + runtime emitters + audit/metrics/policy subscribers + profile/backpressure validation are implemented |
 | Coordination topology model | Partial | Ingress routing exists; typed inter-agent handoff task/result envelopes are implemented, and delegated assignment control-plane baseline is available in chat runtime; single-orchestrator execution loop with flexible dependents is still pending |
 | Skills | Planned | Config schema exists, loader/runtime not implemented |
@@ -155,6 +155,7 @@ Execution requirements:
 3. Direct dependent-to-dependent communication is blocked unless adapter rules allow it.
 4. Capability approvals must remain inside user-defined hard boundaries.
 5. Directional adapter policy must support explicit bias guards (for example block `marketing -> engineering` while allowing `engineering -> marketing`).
+6. Dependent outputs must pass an orchestrator/validator quality gate (`accept`/`retry`/`rework`/`fail`) before downstream dependent tasks can consume them.
 
 ---
 
@@ -327,7 +328,7 @@ trait Engine: Send + Sync {
 | `ollama` | Implemented | Streaming NDJSON via `/api/chat` with `TextDelta` + terminal usage |
 | `anthropic` | Implemented | Typed REST `/v1/messages` path with text + usage + terminal done events |
 | `claude-code` | Implemented | Subprocess CLI backend (`claude --print --output-format json`) for subscription/auth-profile workflows |
-| `huggingface` | Planned | Feature scaffold only, target is Hugging Face Inference Providers via OpenAI-compatible router (`https://router.huggingface.co/v1`) |
+| `huggingface` | Implemented | Typed REST `/chat/completions` path against Hugging Face Inference Providers router |
 | `openai` | Implemented | Typed REST `/v1/chat/completions` path with text + usage + terminal done events |
 | `google` | Planned | Feature scaffold only, typed REST target |
 | `candle-local` | Planned | In-process local inference, CUDA/Metal preferred with CPU fallback |
@@ -416,9 +417,11 @@ Planned built-in tools:
 - Append-only delegated assignment audit log at `~/.tengu/state/audit/capability_assignments.jsonl` (handoff dispatch/result lifecycle via event subscriber, including revoked/expired outcomes)
 - Startup replay of non-expired approved delegated assignments from audit log for control-plane continuity.
 - Delegated assignment cleanup controls (`/unassign`, `/assignments clear`) with automatic TTL expiry in runtime.
+- Emergency delegated execution stop (`/stopall`) aborts delegated worker subscribers and revokes active delegated assignments to prevent background token spend.
 - Startup audit-log retention pruning for delegated assignments (`TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS`).
 - Event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs.
 - Event-driven delegated handoff execution baseline runs one dependent-agent turn and emits terminal `Completed`/`Failed` result events.
+- Planned multi-agent safety gate: orchestrator/validator checks each dependent result before reuse (for example compile/test/lint/schema/tool checks), with bounded retry/fallback policy and auditable decision outcome.
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries
@@ -882,8 +885,8 @@ mode = "user" # user | delegated
 | `OPENAI_API_KEY` | OpenAI provider credential | Implemented backend |
 | `OPENAI_BASE_URL` | OpenAI API base URL override | Implemented backend |
 | `GOOGLE_API_KEY` | Google provider credential | Planned backend |
-| `HF_TOKEN` | Hugging Face token with Inference Providers permission | Planned backend |
-| `HF_BASE_URL` | Hugging Face Inference Providers base URL override (`https://router.huggingface.co/v1` default target) | Planned backend |
+| `HF_TOKEN` | Hugging Face token with Inference Providers permission | Implemented backend |
+| `HF_BASE_URL` | Hugging Face Inference Providers base URL override (`https://router.huggingface.co/v1` default target) | Implemented backend |
 
 Reference file: `.env.example`
 
@@ -911,8 +914,8 @@ cargo build --release
 cargo build --release --no-default-features \
   --features "ollama"
 
-# Optional compile-time scaffolds (not fully implemented yet)
-# telegram, discord, webchat, anthropic, openai, google, huggingface, candle
+# Optional compile-time scaffolds (some still not fully implemented yet)
+# telegram, discord, webchat, anthropic, openai, google, candle
 ```
 
 ### Remote Refinement
@@ -943,6 +946,7 @@ Implemented now:
 | `/assignments` | List approved delegated assignments in current session |
 | `/unassign` | Revoke delegated assignment by handoff id or dependent id |
 | `/assignments clear` | Revoke and clear all delegated assignments in session |
+| `/stopall` | Emergency stop delegated workers and revoke active delegated assignments |
 | `/reset` | Clear current in-memory flow |
 | `/help` | List chat commands |
 

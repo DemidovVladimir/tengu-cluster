@@ -40,7 +40,9 @@ use control_plane::{
 };
 use control_plane_audit::ControlPlaneAuditStore;
 use flow_store::{FlowStore, FlowStoreIntegrityReport};
-use tengu_backends::{AnthropicEngine, ClaudeCodeEngine, OllamaEngine, OpenAIEngine};
+use tengu_backends::{
+    AnthropicEngine, ClaudeCodeEngine, HuggingFaceEngine, OllamaEngine, OpenAIEngine,
+};
 use tengu_channels::CliPipe;
 use tengu_core::config::{
     ensure_capability_governance_actor_allowed, ensure_engine_allowed, Config, RuntimeProfile,
@@ -187,6 +189,8 @@ struct ChatLoopState {
     tokens_saved: u32,
     /// Approved delegated capability assignments for current runtime session.
     capability_assignments: Vec<CapabilityAssignmentRecord>,
+    /// Emergency-stop flag toggled by `/stopall` to prevent new delegated work.
+    delegated_execution_paused: bool,
     /// Last prompt assembly report surfaced by `/context`.
     last_prompt_report: Option<PromptAssemblyReport>,
 }
@@ -451,6 +455,7 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         total_output_tokens: 0,
         tokens_saved: 0,
         capability_assignments: persisted_capability_assignments,
+        delegated_execution_paused: false,
         last_prompt_report: None,
     };
 
@@ -502,6 +507,31 @@ async fn run_chat(config: Config, profile: RuntimeProfile) -> Result<()> {
         .await;
 
         let original_len = inbound.content.len();
+
+        if inbound.content.trim() == "/stopall" {
+            if let Err(err) = ensure_delegated_orchestrator(&config, &agent_id) {
+                println!("Delegated execution stop denied: {}\n", err);
+                continue;
+            }
+            let (aborted_subscribers, revoked_assignments) = force_stop_delegated_execution(
+                &agent_id,
+                &turn_correlation_id,
+                &mut state,
+                event_bus.as_ref(),
+                &mut delegated_handoff_acceptance_subscriber,
+                &mut delegated_handoff_execution_subscriber,
+            )
+            .await;
+            if aborted_subscribers == 0 && revoked_assignments == 0 {
+                println!("Delegated execution already stopped. No active assignments.\n");
+            } else {
+                println!(
+                    "Delegated execution force-stopped: aborted {} worker subscriber(s), revoked {} assignment(s).\n",
+                    aborted_subscribers, revoked_assignments
+                );
+            }
+            continue;
+        }
 
         // Handle orchestrator control-plane commands before generic chat commands.
         if inbound.content.starts_with('/') {
@@ -873,6 +903,50 @@ fn prune_closed_capability_assignments_from_audit(
     before.saturating_sub(assignments.len())
 }
 
+/// Abort delegated handoff workers and revoke all active delegated assignments.
+///
+/// This is the emergency-stop path used by `/stopall` to prevent further
+/// background token spending in delegated execution mode.
+async fn force_stop_delegated_execution(
+    agent_id: &str,
+    correlation_id: &str,
+    state: &mut ChatLoopState,
+    event_bus: &dyn EventBus,
+    delegated_handoff_acceptance_subscriber: &mut Option<tokio::task::JoinHandle<()>>,
+    delegated_handoff_execution_subscriber: &mut Option<tokio::task::JoinHandle<()>>,
+) -> (usize, usize) {
+    let mut aborted_subscribers = 0usize;
+    if let Some(handle) = delegated_handoff_acceptance_subscriber.take() {
+        handle.abort();
+        aborted_subscribers = aborted_subscribers.saturating_add(1);
+    }
+    if let Some(handle) = delegated_handoff_execution_subscriber.take() {
+        handle.abort();
+        aborted_subscribers = aborted_subscribers.saturating_add(1);
+    }
+
+    let revoked_assignments = state.capability_assignments.len();
+    let revoked = state.capability_assignments.drain(..).collect::<Vec<_>>();
+    for assignment in revoked {
+        emit_domain_event(
+            event_bus,
+            Some(agent_id),
+            Some(&assignment.flow_key),
+            Some(correlation_id),
+            DomainEventPayload::HandoffResultReceived(tengu_core::events::HandoffResultReceived {
+                envelope: runtime_commands::build_assignment_revocation_result(
+                    &assignment,
+                    "revoked by orchestrator via /stopall",
+                ),
+            }),
+        )
+        .await;
+    }
+
+    state.delegated_execution_paused = true;
+    (aborted_subscribers, revoked_assignments)
+}
+
 /// Emit one runtime domain event without affecting user-visible flow on failure.
 pub(crate) async fn emit_domain_event(
     event_bus: &dyn EventBus,
@@ -1023,6 +1097,7 @@ async fn init_knowledge_store(
 /// - `ollama`: optional `OLLAMA_HOST` (defaults to local Ollama endpoint)
 /// - `anthropic`: `ANTHROPIC_API_KEY`, optional `ANTHROPIC_BASE_URL`
 /// - `openai`: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`
+/// - `huggingface`: `HF_TOKEN`, optional `HF_BASE_URL`
 /// - `claude-code`: optional `CLAUDE_CODE_BIN` (defaults to `claude`)
 ///
 /// Shared per-agent limit overrides:
@@ -1083,14 +1158,27 @@ pub(crate) fn build_engine(
                 max_output_tokens_override,
             )))
         }
+        "huggingface" => {
+            let api_token = std::env::var("HF_TOKEN")
+                .map_err(|_| anyhow::anyhow!("HF_TOKEN is required for huggingface engine"))?;
+            let base_url = std::env::var("HF_BASE_URL")
+                .unwrap_or_else(|_| "https://router.huggingface.co/v1".to_string());
+            Ok(Box::new(HuggingFaceEngine::new(
+                &base_url,
+                &agent_config.model,
+                &api_token,
+                context_window_override,
+                max_output_tokens_override,
+            )))
+        }
         "claude-code" => Ok(Box::new(ClaudeCodeEngine::new(
             &agent_config.model,
             context_window_override,
             max_output_tokens_override,
         ))),
         other => {
-            // TODO(epic-multi-engine): Add Google/HuggingFace backends and
-            // runtime model switching with capability checks.
+            // TODO(epic-multi-engine): Add Google backend and runtime model
+            // switching with capability checks.
             error!(engine = %other, "Engine not yet implemented");
             Err(anyhow::anyhow!("Engine '{}' not yet implemented", other))
         }

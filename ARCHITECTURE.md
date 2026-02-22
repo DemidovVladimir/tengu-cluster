@@ -4,7 +4,7 @@
 
 ---
 
-## Current Implementation Snapshot (2026-02-21)
+## Current Implementation Snapshot (2026-02-22)
 
 This document describes full target architecture. The currently running path in code is narrower:
 
@@ -14,7 +14,7 @@ This document describes full target architecture. The currently running path in 
 - Runtime: `chat`, `status`, `doctor` commands
 - Runtime code decomposition: event-bus/subscriber orchestration in `src/runtime_bus.rs`, engine/tool turn execution in `src/runtime_engine.rs`, slash-command handlers in `src/runtime_commands.rs`, prompt budgeting/assembly in `src/runtime_prompt.rs`, and high-level chat orchestration in `src/main.rs`
 - Tool loop: implemented baseline (`ToolCallStart/Delta/End` assembly + registry execution for `read_file` + config-driven approvals + allow/deny checks + event-subscriber audit trail with compact argument/result previews)
-- Delegated control plane: implemented baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear` in chat runtime with bounded handoff capability checks + topology-aware orchestrator/dependent/depth bounds + event-driven handoff `Accepted` acknowledgements + one-turn dependent execution baseline (`Completed`/`Failed`) + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup + terminal-status reconciliation of active assignments)
+- Delegated control plane: implemented baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall` in chat runtime with bounded handoff capability checks + topology-aware orchestrator/dependent/depth bounds + event-driven handoff `Accepted` acknowledgements + one-turn dependent execution baseline (`Completed`/`Failed`) + persisted assignment audit trail + startup replay of non-expired approvals + TTL/pruning cleanup + terminal-status reconciliation of active assignments + emergency delegated worker stop to prevent background token spend)
 - Not implemented yet: daemonized hub, external pipes, skill loader
 
 ---
@@ -321,7 +321,7 @@ pub enum StreamEvent {
 | `OpenAIEngine` | `tengu-backends` | ✅ Implemented | Typed REST to api.openai.com (`/v1/chat/completions`), non-streaming terminal events |
 | `ClaudeCodeEngine` | `tengu-backends` | ✅ Implemented | Subprocess CLI path (`claude --print`) with usage parsing and terminal events |
 | `GoogleEngine` | `tengu-backends` | 🔲 Planned | Typed REST to Gemini API |
-| `HuggingFaceEngine` | `tengu-backends` | 🔲 Planned | Hugging Face Inference Providers via OpenAI-compatible router (`/v1/chat/completions`) with optional dedicated endpoint override |
+| `HuggingFaceEngine` | `tengu-backends` | ✅ Implemented (baseline) | Hugging Face Inference Providers via OpenAI-compatible router (`/v1/chat/completions`) with optional dedicated endpoint override |
 | `CandleLocalEngine` | `tengu-backends` | 🔲 Planned | In-process local inference; prefer CUDA/Metal, CPU fallback |
 
 ### Engine Selection Flow
@@ -619,11 +619,13 @@ Cross-agent collaboration policy (target):
 3. Cross-domain exchange must pass through declared communication adapters.
 4. Directional policies are enforceable (example: allow `engineering -> marketing`, block `marketing -> engineering`).
 5. Direct workspace access across agents remains forbidden.
+6. Dependent outputs must pass orchestrator/validator quality gates (`accept`/`retry`/`rework`/`fail`) before downstream agents can consume them.
 
 Current baseline:
 1. Typed task/result envelopes are implemented in `crates/tengu-core/src/types/handoff.rs`.
 2. Domain-event payloads include handoff dispatch/result events for auditable wiring.
 3. Multi-agent execution loop that uses these envelopes is still pending.
+4. Result-validation barriers between dependent turns are not implemented yet.
 
 ### Config Structure per Agent (`config/schema.rs`)
 

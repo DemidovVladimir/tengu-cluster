@@ -6,9 +6,10 @@
 # - includes accountant agent configured for Hugging Face + GLM 4.7
 #
 # Important:
-# - `huggingface` backend is a planned provider path (see E4-T4).
-# - target API path for planned backend: `https://router.huggingface.co/v1/chat/completions` with `HF_TOKEN`.
-# - accountant handoffs will fail at runtime until HF backend is implemented.
+# - `huggingface` backend uses Inference Providers OpenAI-compatible path:
+#   `https://router.huggingface.co/v1/chat/completions` with `HF_TOKEN`.
+# - optional endpoint override is available via `HF_BASE_URL`.
+# - execution details for this scenario are documented in `WEBSTUDIO_EXECUTION_FLOW.md`.
 
 runtime_profile = "auto"
 

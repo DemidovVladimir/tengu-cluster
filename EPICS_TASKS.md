@@ -7,7 +7,7 @@ This backlog is derived from:
 - `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
 - `USER_STORIES.md`
 
-Date: 2026-02-21
+Date: 2026-02-22
 
 ## Priority Waves
 
@@ -50,23 +50,25 @@ Completed tasks:
 21. `E5-T5`
 22. `E4-T1`
 23. `E4-T2`
-24. `E4-T8`
-25. `E4-T9`
-26. `E10-T1`
-27. `E10-T7`
-28. `E11-T1`
-29. `E11-T2`
-30. `E11-T3`
-31. `E11-T4`
-32. `E11-T5`
-33. `E11-T6`
-34. `E8-T3`
-35. `E8-T4`
-36. `E8-T6`
-37. `E8-T7`
+24. `E4-T4`
+25. `E4-T8`
+26. `E4-T9`
+27. `E10-T1`
+28. `E10-T7`
+29. `E11-T1`
+30. `E11-T2`
+31. `E11-T3`
+32. `E11-T4`
+33. `E11-T5`
+34. `E11-T6`
+35. `E8-T3`
+36. `E8-T4`
+37. `E8-T6`
+38. `E8-T7`
+39. `E6-T14`
 
 Partially completed:
-1. `E6` control-plane baseline is live in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with bounded delegated checks plus assignment audit replay/cleanup; topology-aware handoff bounds (`topology.mode`, orchestrator/dependent allow-list, `max_handoff_depth`) are now enforced at assignment and execution time; full multi-agent serve/hub lifecycle remains pending.
+1. `E6` control-plane baseline is live in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall`) with bounded delegated checks plus assignment audit replay/cleanup, emergency worker-stop semantics, and topology-aware handoff bounds (`topology.mode`, orchestrator/dependent allow-list, `max_handoff_depth`) enforced at assignment and execution time; full multi-agent serve/hub lifecycle remains pending.
 2. Runtime orchestration internals were split into focused modules (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`) to reduce `src/main.rs` complexity.
 
 ## Epic Status Snapshot
@@ -76,9 +78,9 @@ Partially completed:
 | `E1` | Done | All P0 storage/session resilience tasks are complete. |
 | `E2` | Done | Prompt budgeting + retrieval wiring + regressions are complete, including output-reserve alignment to engine output caps. |
 | `E3` | Planned | Retrieval persistence/ranking/telemetry backlog. |
-| `E4` | In Progress | Anthropic + OpenAI + Claude Code backends are implemented with overrideable context/output defaults; Google + Hugging Face Inference Providers and runtime switching are pending. |
+| `E4` | In Progress | Anthropic + OpenAI + Claude Code + Hugging Face backends are implemented with overrideable context/output defaults; Google backend and runtime switching are pending. |
 | `E5` | Done | Capability contract, Ollama streaming, usage accounting, backend diagnostics, and stream fixtures are complete. |
-| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear`) with user-boundary checks, handoff events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit lifecycle events (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, and terminal assignment reconciliation; topology-aware delegated handoff bounds are enforced (`topology` orchestrator/dependent/depth policy). Multi-pipe lifecycle and full multi-agent execution loop remain pending. |
+| `E6` | In Progress | Chat runtime now has delegated orchestrator control-plane baseline (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall`) with user-boundary checks, handoff events (including queue-level `Accepted` acknowledgements plus one-turn dependent `Completed`/`Failed` execution results), persisted assignment audit lifecycle events (approved/completed/failed/denied/revoked/expired), startup replay of non-expired approved assignments, runtime TTL cleanup, startup audit-log retention pruning, terminal assignment reconciliation, and emergency delegated worker-stop behavior. Topology-aware delegated handoff bounds are enforced (`topology` orchestrator/dependent/depth policy). Multi-pipe lifecycle and full multi-agent execution loop remain pending. |
 | `E7` | Planned | Routing reload/diagnostics pending, including role/capability-aware agent graph routing. |
 | `E8` | Done | Runtime assembles tool-call events, executes registry tools (`read_file`) with policy/path guards, enforces config-driven approvals, applies pre-execution allow/deny gates, persists tool audit JSONL events (with compact argument/result previews), defines typed inter-agent handoff task/result envelopes, and enforces capability governance in runtime (`user` vs `delegated` actor gate) plus tool/skill/engine handoff policy checks. |
 | `E9` | Planned | Candle/refiner acceleration backlog pending. |
@@ -216,6 +218,10 @@ Scope:
 8. Add optional delivery ack contract where supported.
 9. Implement topology-aware multi-agent execution loop (single-orchestrator with flexible dependents).
 10. Add orchestrator control plane for dependent capability assignment within user-defined hard boundaries.
+11. Add delegated-result validation gate contract (`accept`/`retry`/`rework`/`fail`) before dependent outputs can be reused.
+12. Implement orchestrator validation policy runner (role-aware checks: compile/test/lint/schema/tool checks) with bounded retries/fallback.
+13. Add dependency-aware execution barriers so dependent tasks consume only validated upstream artifacts and receive deterministic failure propagation.
+14. Add emergency delegated execution stop (`/stopall`) to cancel delegated workers and revoke active assignments when user needs immediate token-spend cutoff.
 
 Primary files:
 `src/main.rs`, `crates/tengu-channels/src/lib.rs`, `crates/tengu-channels/src/cli/mod.rs`, `crates/tengu-core/src/lib.rs`

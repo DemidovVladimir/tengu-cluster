@@ -40,13 +40,15 @@ Acceptance targets:
 1. Multi-agent runtime supports one orchestrator with flexible dependents in one workflow.
 2. One orchestrator can govern/approve dependent-agent interactions and collect specialist outputs.
 3. User receives one synthesized output with traceable sub-results from dependents.
+4. Each dependent result is validated before downstream usage so invalid artifacts cannot silently cascade.
 
 Current coverage:
 - `Partial`: multiple agents can be configured, but runtime path is still single-agent chat-first.
 - `Partial`: inter-agent handoff protocol is now defined as typed task/result envelopes, but explicit hierarchy/delegation execution loop is still missing.
+- `Missing`: orchestrator/validator quality gate for dependent results (accept/retry/rework/fail) and dependency barriers.
 
 Required tasks:
-- `E6-T1`, `E6-T2`, `E6-T9`
+- `E6-T1`, `E6-T2`, `E6-T9`, `E6-T11`, `E6-T12`, `E6-T13`
 - `E7-T1`, `E7-T5`
 - `E8-T1`, `E8-T2`
 
@@ -63,7 +65,7 @@ Acceptance targets:
 
 Current coverage:
 - `Partial`: Anthropic/OpenAI/Ollama/Claude Code implemented; runtime switching and multi-agent orchestration are pending.
-- `Partial`: `config.webstudio.example.toml` includes a mixed-role topology template (including accountant with `huggingface` + `THUDM/GLM-4.7`), but Hugging Face backend runtime implementation is still pending.
+- `Partial`: `config.webstudio.example.toml` includes a mixed-role topology template (including accountant with `huggingface` + `THUDM/GLM-4.7`), and Hugging Face backend baseline is implemented; selector/discovery/endpoint strategy follow-ups remain.
 
 Required tasks:
 - `E4-T5`, `E4-T7`, `E4-T10`, `E4-T11`, `E4-T12`
@@ -190,10 +192,10 @@ Acceptance targets:
 3. Integration tests cover provider contracts and terminal stream guarantees.
 
 Current coverage:
-- `Partial`: Anthropic/OpenAI/Ollama/Claude Code are implemented; Google/HF coverage and provider integration tests are pending.
+- `Partial`: Anthropic/OpenAI/Ollama/Claude Code/HuggingFace are implemented; Google coverage and provider integration tests are pending.
 
 Required tasks:
-- `E4-T3`, `E4-T4`, `E4-T7`, `E4-T10`, `E4-T11`, `E4-T12`
+- `E4-T3`, `E4-T7`, `E4-T10`, `E4-T11`, `E4-T12`
 - `E4-T9` completed baseline
 - `E5-T5` completed baseline
 
@@ -240,11 +242,12 @@ Current coverage:
   - in `mode=delegated`, only configured orchestrator can request direct capabilities in active runtime path
 - `Implemented` capability-governance evaluator for handoff envelopes (`user` vs `delegated`) with bounded tool/skill/engine checks.
 - `Partial` delegated control-plane baseline:
-  - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear` for bounded delegated capability lifecycle
+  - chat runtime supports `/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/stopall` for bounded delegated capability lifecycle
   - emitted handoff lifecycle events capture approved and queue-level accepted acknowledgements, plus terminal completed/failed/denied/revoked/expired states
   - assignment lifecycle outcomes are persisted as append-only JSONL audit records
   - non-expired approved assignments are replayed from audit log at startup for session continuity
   - delegated assignments are auto-expired by TTL, stale audit rows are pruned at startup, and closed assignments are reconciled out of active runtime state
+  - `/stopall` provides emergency delegated worker termination and revokes active assignments to avoid continued background token spend
   - topology bounds are enforced for delegated handoffs (`topology.mode`, orchestrator/dependent limits, `max_handoff_depth`)
 - `Missing` skills loading/execution runtime path.
 - `Partial` delegated orchestrator execution loop:
