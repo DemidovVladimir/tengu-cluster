@@ -934,6 +934,7 @@ mod tests {
                 requested_capabilities: vec!["tool:read_file".to_string()],
                 objective: "done".to_string(),
                 issued_at_epoch_ms: now_epoch_ms().saturating_sub(2_000),
+                validation_attempts: 0,
             },
             CapabilityAssignmentRecord {
                 handoff_id: "h-pending".to_string(),
@@ -943,6 +944,7 @@ mod tests {
                 requested_capabilities: vec!["tool:read_file".to_string()],
                 objective: "pending".to_string(),
                 issued_at_epoch_ms: now_epoch_ms().saturating_sub(1_000),
+                validation_attempts: 0,
             },
         ];
 
@@ -1096,6 +1098,7 @@ mod tests {
                 requested_capabilities: vec!["tool:read_file".to_string()],
                 objective: "old".to_string(),
                 issued_at_epoch_ms: now_epoch_ms().saturating_sub(2_000),
+                validation_attempts: 0,
             },
             CapabilityAssignmentRecord {
                 handoff_id: "h-new".to_string(),
@@ -1105,6 +1108,7 @@ mod tests {
                 requested_capabilities: vec!["tool:search_content".to_string()],
                 objective: "new".to_string(),
                 issued_at_epoch_ms: now_epoch_ms(),
+                validation_attempts: 0,
             },
         ];
 

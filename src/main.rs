@@ -25,6 +25,7 @@ use tracing::{debug, error, info, warn};
 mod control_plane;
 mod control_plane_audit;
 mod flow_store;
+mod handoff_validator;
 #[cfg(test)]
 mod main_tests;
 mod runtime_bus;

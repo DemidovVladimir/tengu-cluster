@@ -45,8 +45,8 @@ Acceptance targets:
 Current coverage:
 - `Partial`: multiple agents can be configured, but runtime path is still single-agent chat-first.
 - `Partial`: inter-agent handoff protocol is now defined as typed task/result envelopes, but explicit hierarchy/delegation execution loop is still missing.
-- `Implemented baseline`: validation gate decisions exist for delegated handoffs (`/handoff pending`, `/handoff accept|retry|rework|fail ...`) and dependent one-turn execution now enters `review_required` before finalization.
-- `Missing`: automated validator runner and dependency barriers for chained downstream artifact release.
+- `Implemented baseline`: validation gate decisions exist for delegated handoffs (`/handoff pending`, `/handoff auto ...`, `/handoff accept|retry|rework|fail ...`) and dependent one-turn execution enters `review_required` before finalization.
+- `Partial`: automated validator runner baseline is implemented (`/handoff auto` policy recheck + bounded Rust workspace checks), but check-suite breadth and dependency barriers for chained downstream artifact release are still pending.
 
 Required tasks:
 - `E6-T1`, `E6-T2`, `E6-T9`, `E6-T12`, `E6-T13`
@@ -249,6 +249,7 @@ Current coverage:
   - non-expired approved assignments are replayed from audit log at startup for session continuity
   - delegated assignments are auto-expired by TTL, stale audit rows are pruned at startup, and closed assignments are reconciled out of active runtime state
   - validation-gate decisions are explicit (`accept`/`retry`/`rework`/`fail`) before delegated output is marked final
+  - automated validation path exists via `/handoff auto` with bounded retry/fail outcomes and auditable report text
   - `/stopall` provides emergency delegated worker termination and revokes active assignments to avoid continued background token spend
   - topology bounds are enforced for delegated handoffs (`topology.mode`, orchestrator/dependent limits, `max_handoff_depth`)
 - `Missing` skills loading/execution runtime path.
@@ -262,7 +263,7 @@ Current coverage:
 
 Required tasks:
 - `E6-T9` (continue: full topology-aware orchestration loop)
-- `E6-T12` (automated validator runner)
+- `E6-T12` (expand automated validator runner coverage beyond baseline checks)
 - `E6-T13` (dependency barriers and deterministic failure propagation)
 
 ---

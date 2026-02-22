@@ -38,6 +38,8 @@ pub struct CapabilityAssignmentRecord {
     pub objective: String,
     /// Issued timestamp (epoch milliseconds).
     pub issued_at_epoch_ms: u64,
+    /// Number of automated validation attempts executed for this handoff.
+    pub validation_attempts: u32,
 }
 
 impl CapabilityAssignmentRecord {
@@ -51,6 +53,7 @@ impl CapabilityAssignmentRecord {
             requested_capabilities: envelope.requested_capabilities.clone(),
             objective: envelope.objective.clone(),
             issued_at_epoch_ms,
+            validation_attempts: 0,
         }
     }
 }

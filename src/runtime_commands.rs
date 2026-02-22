@@ -4,6 +4,7 @@
 //! Keep `main.rs` focused on orchestration while command parsing/mutation logic
 //! lives in one place that is easier to test and evolve.
 
+use crate::handoff_validator::{run_auto_validation_for_assignment, AutoValidationAction};
 use crate::{
     build_assignment_envelope, emit_domain_event, ensure_delegated_orchestrator, now_epoch_ms,
     parse_assign_command, parse_unassign_command, ChatLoopState, FlowCompactionPolicy,
@@ -27,6 +28,10 @@ const REDISPATCH_TTL_SECS: u32 = 900;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ParsedHandoffCommand {
     Pending,
+    Auto {
+        handoff_id: String,
+        note: Option<String>,
+    },
     Decide {
         decision: HandoffValidationDecision,
         handoff_id: String,
@@ -42,6 +47,7 @@ enum ParsedHandoffCommand {
 /// - `/unassign <handoff-id|dependent-agent-id>`
 /// - `/assignments clear`
 /// - `/handoff pending`
+/// - `/handoff auto <handoff-id> [note...]`
 /// - `/handoff <accept|retry|rework|fail> <handoff-id> [note...]`
 ///
 /// Assignment commands are available only when `capability_governance.mode=delegated`
@@ -171,7 +177,7 @@ pub(crate) async fn handle_control_plane_command(
 
         let Some(parsed) = parse_handoff_command(command) else {
             println!(
-                "Usage: /handoff pending | /handoff <accept|retry|rework|fail> <handoff-id> [note...]\n"
+                "Usage: /handoff pending | /handoff auto <handoff-id> [note...] | /handoff <accept|retry|rework|fail> <handoff-id> [note...]\n"
             );
             return true;
         };
@@ -186,14 +192,122 @@ pub(crate) async fn handle_control_plane_command(
                 println!("─────────────────────────────");
                 for (idx, assignment) in state.capability_assignments.iter().enumerate() {
                     println!(
-                        " {}. handoff_id={} dependent={}",
+                        " {}. handoff_id={} dependent={} attempts={}",
                         idx + 1,
                         assignment.handoff_id,
-                        assignment.dependent_agent_id
+                        assignment.dependent_agent_id,
+                        assignment.validation_attempts
                     );
                     println!("    objective: {}", assignment.objective);
                 }
                 println!();
+                return true;
+            }
+            ParsedHandoffCommand::Auto { handoff_id, note } => {
+                let Some(assignment_idx) = state
+                    .capability_assignments
+                    .iter()
+                    .position(|assignment| assignment.handoff_id == handoff_id)
+                else {
+                    println!(
+                        "Unknown handoff '{}' in active delegated assignments.\n",
+                        handoff_id
+                    );
+                    return true;
+                };
+
+                let mut evaluation_input = state.capability_assignments[assignment_idx].clone();
+                evaluation_input.validation_attempts =
+                    evaluation_input.validation_attempts.saturating_add(1);
+                state.capability_assignments[assignment_idx].validation_attempts =
+                    evaluation_input.validation_attempts;
+
+                match run_auto_validation_for_assignment(config, &evaluation_input).await {
+                    AutoValidationAction::Accept { report } => {
+                        let assignment = state.capability_assignments.remove(assignment_idx);
+                        let summary = compose_handoff_note(note.as_deref(), &report);
+                        let result = build_handoff_validation_result(
+                            &assignment,
+                            HandoffValidationDecision::Accept,
+                            Some(&summary),
+                            agent_id,
+                        );
+                        emit_domain_event(
+                            event_bus,
+                            Some(agent_id),
+                            Some(&assignment.flow_key),
+                            Some(turn_correlation_id),
+                            DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                                envelope: result,
+                            }),
+                        )
+                        .await;
+                        println!(
+                            "Handoff '{}' accepted by auto validation.\n{}\n",
+                            assignment.handoff_id, report
+                        );
+                    }
+                    AutoValidationAction::Retry { report } => {
+                        if state.delegated_execution_paused {
+                            println!(
+                                "Auto validation suggested retry, but delegated execution is force-stopped.\n{}\n",
+                                report
+                            );
+                            return true;
+                        }
+
+                        let assignment = &mut state.capability_assignments[assignment_idx];
+                        assignment.issued_at_epoch_ms = now_epoch_ms();
+                        let guidance = compose_handoff_note(note.as_deref(), &report);
+                        let objective = format!(
+                            "{}\n\nRetry guidance from orchestrator:\n{}",
+                            assignment.objective, guidance
+                        );
+                        let envelope = build_assignment_redispatch_task(
+                            assignment,
+                            objective,
+                            HandoffValidationDecision::Retry,
+                        );
+                        emit_domain_event(
+                            event_bus,
+                            Some(agent_id),
+                            Some(&assignment.flow_key),
+                            Some(turn_correlation_id),
+                            DomainEventPayload::HandoffTaskDispatched(HandoffTaskDispatched {
+                                envelope,
+                            }),
+                        )
+                        .await;
+                        println!(
+                            "Handoff '{}' queued for retry by auto validation.\n{}\n",
+                            assignment.handoff_id, report
+                        );
+                    }
+                    AutoValidationAction::Fail { report } => {
+                        let assignment = state.capability_assignments.remove(assignment_idx);
+                        let reason = compose_handoff_note(note.as_deref(), &report);
+                        let result = build_handoff_validation_result(
+                            &assignment,
+                            HandoffValidationDecision::Fail,
+                            Some(&reason),
+                            agent_id,
+                        );
+                        emit_domain_event(
+                            event_bus,
+                            Some(agent_id),
+                            Some(&assignment.flow_key),
+                            Some(turn_correlation_id),
+                            DomainEventPayload::HandoffResultReceived(HandoffResultReceived {
+                                envelope: result,
+                            }),
+                        )
+                        .await;
+                        println!(
+                            "Handoff '{}' failed by auto validation.\n{}\n",
+                            assignment.handoff_id, report
+                        );
+                    }
+                }
                 return true;
             }
             ParsedHandoffCommand::Decide {
@@ -400,6 +514,7 @@ pub(crate) async fn handle_control_plane_command(
 ///
 /// Expected shapes:
 /// - `/handoff pending`
+/// - `/handoff auto <handoff-id> [note...]`
 /// - `/handoff <accept|retry|rework|fail> <handoff-id> [note...]`
 fn parse_handoff_command(input: &str) -> Option<ParsedHandoffCommand> {
     let mut parts = input.split_whitespace();
@@ -414,6 +529,19 @@ fn parse_handoff_command(input: &str) -> Option<ParsedHandoffCommand> {
         } else {
             None
         };
+    }
+    if action == "auto" {
+        let handoff_id = parts.next()?.trim().to_string();
+        if handoff_id.is_empty() {
+            return None;
+        }
+        let note = parts.collect::<Vec<_>>().join(" ");
+        let note = if note.trim().is_empty() {
+            None
+        } else {
+            Some(note)
+        };
+        return Some(ParsedHandoffCommand::Auto { handoff_id, note });
     }
 
     let decision = HandoffValidationDecision::parse(action)?;
@@ -432,6 +560,18 @@ fn parse_handoff_command(input: &str) -> Option<ParsedHandoffCommand> {
         handoff_id,
         note,
     })
+}
+
+/// Combine optional operator note with automated validation report output.
+fn compose_handoff_note(note: Option<&str>, report: &str) -> String {
+    let note = note.map(str::trim).filter(|entry| !entry.is_empty());
+    if report.trim().is_empty() {
+        return note.unwrap_or_default().to_string();
+    }
+    match note {
+        Some(note) => format!("{}\n\n{}", note, report),
+        None => report.to_string(),
+    }
 }
 
 /// Build terminal handoff-result envelope used for assignment cleanup/revocation.
@@ -725,6 +865,7 @@ pub(crate) fn handle_chat_command(
             println!("  /assignments — List delegated assignments (session)");
             println!("  /assignments clear — Revoke and clear delegated assignments");
             println!("  /handoff pending — List delegated handoffs awaiting validation");
+            println!("  /handoff auto <handoff-id> [note...]");
             println!("  /handoff <accept|retry|rework|fail> <handoff-id> [note...]");
             println!("  /unassign  — Revoke by handoff id or dependent agent");
             println!("  /stopall   — Force-stop delegated workers and revoke assignments");
@@ -752,6 +893,7 @@ mod tests {
             requested_capabilities: vec!["tool:read_file".to_string()],
             objective: "inspect files".to_string(),
             issued_at_epoch_ms: 1_000,
+            validation_attempts: 0,
         }
     }
 
@@ -775,6 +917,13 @@ mod tests {
                 decision: HandoffValidationDecision::Retry,
                 handoff_id: "h-1".to_string(),
                 note: None,
+            })
+        );
+        assert_eq!(
+            parse_handoff_command("/handoff auto h-1 run checks"),
+            Some(ParsedHandoffCommand::Auto {
+                handoff_id: "h-1".to_string(),
+                note: Some("run checks".to_string()),
             })
         );
         assert!(parse_handoff_command("/handoff").is_none());

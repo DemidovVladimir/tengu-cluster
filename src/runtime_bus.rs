@@ -649,6 +649,7 @@ pub(crate) fn load_persisted_capability_assignments(
                     requested_capabilities: event.requested_capabilities,
                     objective: event.objective.unwrap_or_else(|| "n/a".to_string()),
                     issued_at_epoch_ms,
+                    validation_attempts: 0,
                 });
                 seen_active.insert(handoff_id);
             }

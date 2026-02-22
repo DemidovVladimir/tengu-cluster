@@ -62,7 +62,7 @@ Execution path:
 
 Current limitation:
 - handoff results are emitted and audited, but not yet auto-injected back into a synthesized orchestrator answer pipeline.
-- validation decisions are manual today (`/handoff ...`), not yet policy-automated.
+- validation decisions can be manual (`/handoff accept|retry|rework|fail ...`) or automated baseline via `/handoff auto ...`.
 
 Safety control:
 - if delegated retries/rework loops are active and you want to stop token spend immediately, use `/stopall`
@@ -166,6 +166,7 @@ Current implementation detail:
 Validation gate step (now):
 - orchestrator/user finalizes each handoff with:
   - `/handoff pending`
+  - `/handoff auto <handoff-id> [note...]`
   - `/handoff accept <handoff-id> [note...]`
   - `/handoff retry <handoff-id> [note...]`
   - `/handoff rework <handoff-id> <new objective...>`
@@ -175,7 +176,8 @@ Important limitation (today):
 - delegated result summaries are not auto-merged into orchestrator chat response
 - delegated tasks are not auto-chained into other dependent tasks
 - delegated runs are processed one-by-one in current execution subscriber
-- quality gate is enforced manually via `/handoff ...`; automated validator runner and dependency barriers are still pending
+- quality gate includes automated baseline via `/handoff auto ...` (policy recheck + bounded Rust workspace checks)
+- dependency barriers and orchestrator auto-chaining are still pending
 
 ### How Other Agents Use Results (Today vs Target)
 

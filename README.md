@@ -36,7 +36,8 @@ Current working baseline:
 - topology-aware delegated handoff bounds are enforced at runtime (`topology.mode`, orchestrator/dependent bounds, `max_handoff_depth`)
 - event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
 - event-driven delegated handoff execution baseline runs one dependent-agent turn and emits `ReviewRequired`/`Failed` result events
-- validation-gate control commands are implemented (`/handoff pending`, `/handoff <accept|retry|rework|fail> ...`) before delegated output is marked final
+- validation-gate control commands are implemented (`/handoff pending`, `/handoff auto ...`, `/handoff <accept|retry|rework|fail> ...`) before delegated output is marked final
+- automated validator baseline is implemented for delegated review gates (`/handoff auto`): policy recheck + role/capability-aware Rust workspace checks (`cargo fmt --check`, `cargo test -q`) with bounded retry/fail outcomes
 - runtime internals are split by responsibility (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/main.rs`) for maintainability
 - config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
 - typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
@@ -138,6 +139,7 @@ Useful commands inside chat:
 - `/unassign <handoff-id|dependent-agent-id>` (delegated mode)
 - `/assignments clear` (delegated mode)
 - `/handoff pending` (delegated mode)
+- `/handoff auto <handoff-id> [note...]` (delegated mode)
 - `/handoff <accept|retry|rework|fail> <handoff-id> [note...]` (delegated mode)
 - `/stopall` (delegated mode, emergency stop for delegated workers)
 - `/eco`, `/standard`, `/precise`

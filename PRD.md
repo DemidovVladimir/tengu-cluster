@@ -421,8 +421,9 @@ Planned built-in tools:
 - Startup audit-log retention pruning for delegated assignments (`TENGU_CONTROL_PLANE_AUDIT_MAX_ROWS`).
 - Event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs.
 - Event-driven delegated handoff execution baseline runs one dependent-agent turn and emits `ReviewRequired`/`Failed` result events.
-- Validation-gate baseline is implemented via `/handoff pending` and `/handoff <accept|retry|rework|fail> ...`; accepted outputs become terminal `Completed`, retry/rework redispatch dependent execution, and fail marks terminal `Failed`.
-- Planned safety extension: orchestrator policy runner for automated checks (for example compile/test/lint/schema/tool checks), with bounded retry/fallback policy and auditable decision outcome.
+- Validation-gate baseline is implemented via `/handoff pending`, `/handoff auto ...`, and `/handoff <accept|retry|rework|fail> ...`; accepted outputs become terminal `Completed`, retry/rework redispatch dependent execution, and fail marks terminal `Failed`.
+- Automated validator baseline is now available via `/handoff auto`: policy recheck plus role/capability-aware Rust workspace checks (`cargo fmt --all --check`, `cargo test -q`) with bounded retry/fail outcome.
+- Planned safety extension: broaden auto-validator check suite (schema/tool-domain checks), richer escalation policies, and dependency barriers for downstream release.
 - Capability governance modes:
   - direct user control of tools/skills/engine/sandbox policies
   - delegated orchestrator control constrained by user-defined hard boundaries
@@ -948,6 +949,7 @@ Implemented now:
 | `/unassign` | Revoke delegated assignment by handoff id or dependent id |
 | `/assignments clear` | Revoke and clear all delegated assignments in session |
 | `/handoff pending` | List delegated handoffs awaiting validation |
+| `/handoff auto <handoff-id> [note...]` | Run automated validation policy/checks and auto-apply `accept`/`retry`/`fail` |
 | `/handoff <accept\|retry\|rework\|fail>` | Apply validation-gate decision to delegated handoff |
 | `/stopall` | Emergency stop delegated workers and revoke active delegated assignments |
 | `/reset` | Clear current in-memory flow |
