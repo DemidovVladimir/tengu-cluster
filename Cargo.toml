@@ -4,7 +4,6 @@ members = [
     "crates/tengu-backends",
     "crates/tengu-channels",
     "crates/tengu-optimizer",
-    "crates/tengu-memory",
 ]
 resolver = "2"
 
@@ -33,7 +32,6 @@ tengu-core = { path = "crates/tengu-core" }
 tengu-backends = { path = "crates/tengu-backends" }
 tengu-channels = { path = "crates/tengu-channels" }
 tengu-optimizer = { path = "crates/tengu-optimizer" }
-tengu-memory = { path = "crates/tengu-memory" }
 
 [package]
 name = "tengu-cluster"
@@ -45,7 +43,6 @@ tengu-core.workspace = true
 tengu-backends.workspace = true
 tengu-channels.workspace = true
 tengu-optimizer.workspace = true
-tengu-memory.workspace = true
 tokio.workspace = true
 clap.workspace = true
 tracing.workspace = true
@@ -58,17 +55,23 @@ futures.workspace = true
 reqwest.workspace = true
 uuid.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 dirs-next = "2.0"
+bincode = "1"
+dotenvy = "0.15"
+cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
+pdf-extract = "0.10"
+regex = "1"
 
 [features]
-default = ["ollama", "anthropic", "openai", "claude-code", "google", "webchat"]
-candle = ["tengu-optimizer/candle"]
+default = ["ollama", "anthropic", "openai", "openrouter", "claude-code"]
 telegram = ["tengu-channels/telegram"]
-discord = ["tengu-channels/discord"]
-webchat = ["tengu-channels/webchat"]
 ollama = ["tengu-backends/ollama"]
 anthropic = ["tengu-backends/anthropic"]
 openai = ["tengu-backends/openai"]
 claude-code = ["tengu-backends/claude-code"]
-google = ["tengu-backends/google"]
+openrouter = ["tengu-backends/openrouter"]
 huggingface = ["tengu-backends/huggingface"]
+
+[dev-dependencies]
+tempfile = "3"

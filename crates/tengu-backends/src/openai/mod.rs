@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use tracing::{debug, error};
 
-use tengu_core::types::message::Role;
+use crate::tooling::{
+    append_tool_call_events, convert_messages_openai_compatible, map_function_tools,
+};
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
 use tengu_core::{Engine, EngineContext, EngineDiagnostics};
 
@@ -24,64 +26,79 @@ pub struct OpenAIEngine {
     client: reqwest::Client,
 }
 
+// ── Request types ──────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize)]
 struct OpenAIChatRequest {
-    /// OpenAI model identifier (for example: `gpt-4o-mini`).
     model: String,
-    /// Typed conversation history.
-    messages: Vec<OpenAIInputMessage>,
-    /// Disable streaming for deterministic terminal event handling.
+    messages: Vec<serde_json::Value>,
     stream: bool,
-    /// Max generated tokens for this turn.
     max_tokens: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAIToolDef>,
 }
 
 #[derive(Debug, Serialize)]
-struct OpenAIInputMessage {
-    /// OpenAI message role (`system`/`user`/`assistant`).
-    role: String,
-    /// Message text payload.
-    content: String,
+struct OpenAIToolDef {
+    #[serde(rename = "type")]
+    kind: String,
+    function: OpenAIFunction,
 }
+
+#[derive(Debug, Serialize)]
+struct OpenAIFunction {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+// ── Response types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct OpenAIChatResponse {
-    /// Generated response candidates.
     #[serde(default)]
     choices: Vec<OpenAIChoice>,
-    /// Usage counters for this completion.
     #[serde(default)]
     usage: Option<OpenAIUsage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAIChoice {
-    /// Choice message payload.
     message: OpenAIOutputMessage,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAIOutputMessage {
-    /// Optional response text.
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAIResponseToolCall>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenAIResponseToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    function: OpenAIResponseFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenAIResponseFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAIUsage {
-    /// Prompt token count.
     #[serde(default)]
     prompt_tokens: u32,
-    /// Completion token count.
     #[serde(default)]
     completion_tokens: u32,
 }
 
 impl OpenAIEngine {
     /// Create a new OpenAI engine using API endpoint, model, and API key.
-    ///
-    /// `context_window_override` and `max_output_tokens_override` are optional
-    /// per-agent hard overrides. When absent, model-aware defaults are used.
     pub fn new(
         base_url: &str,
         model: &str,
@@ -103,21 +120,18 @@ impl OpenAIEngine {
         }
     }
 
-    /// Resolve context window using optional override then model-aware defaults.
     fn resolve_context_window_tokens(model: &str, override_value: Option<usize>) -> usize {
         override_value
             .filter(|value| *value > 0)
             .unwrap_or_else(|| Self::default_context_window_tokens(model))
     }
 
-    /// Resolve per-turn output cap using optional override then context-derived fallback.
     fn resolve_max_output_tokens(context_window_tokens: usize, override_value: Option<u32>) -> u32 {
         override_value
             .filter(|value| *value > 0)
             .unwrap_or_else(|| Self::default_max_output_tokens(context_window_tokens))
     }
 
-    /// Default context-window mapping for known OpenAI model families.
     fn default_context_window_tokens(model: &str) -> usize {
         let model = model.to_ascii_lowercase();
         if model.starts_with("gpt-4.1") {
@@ -131,44 +145,33 @@ impl OpenAIEngine {
         }
     }
 
-    /// Default per-turn output cap derived from context size.
-    ///
-    /// This avoids tiny static caps while remaining conservative by default.
     fn default_max_output_tokens(context_window_tokens: usize) -> u32 {
         ((context_window_tokens / 8).clamp(512, 8_192)) as u32
     }
 
-    /// Convert core message roles into OpenAI chat request shape.
+    /// Convert tengu ToolDef array to OpenAI function-calling format.
+    fn convert_tools(tools: &[ToolDef]) -> Vec<OpenAIToolDef> {
+        map_function_tools(tools, |t| OpenAIToolDef {
+            kind: "function".to_string(),
+            function: OpenAIFunction {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+            },
+        })
+    }
+
+    /// Convert core messages to OpenAI JSON format.
     ///
-    /// If provided, `system_prompt` is prepended as a `system` message.
+    /// Handles regular messages, tool result messages, and assistant messages
+    /// that contain tool_calls (needed for the multi-turn tool loop).
     fn convert_messages(
         messages: &[Message],
         system_prompt: Option<&str>,
-    ) -> Vec<OpenAIInputMessage> {
-        let system = system_prompt
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| OpenAIInputMessage {
-                role: "system".to_string(),
-                content: value.to_string(),
-            });
-
-        system
-            .into_iter()
-            .chain(messages.iter().map(|m| {
-                OpenAIInputMessage {
-                    role: match m.role {
-                        Role::System => "system",
-                        Role::Assistant => "assistant",
-                        Role::User | Role::Tool => "user",
-                    }
-                    .to_string(),
-                    content: m.content.clone(),
-                }
-            }))
-            .collect()
+    ) -> Vec<serde_json::Value> {
+        convert_messages_openai_compatible(messages, system_prompt)
     }
 
-    /// Extract first choice text from OpenAI response.
     fn extract_text(response: &OpenAIChatResponse) -> String {
         response
             .choices
@@ -179,13 +182,32 @@ impl OpenAIEngine {
             .to_string()
     }
 
-    /// Build terminal success events in deterministic order.
+    /// Build stream events from the response, including tool calls if present.
     fn success_events(response: &OpenAIChatResponse) -> Vec<StreamEvent> {
         let mut events = Vec::new();
         let text = Self::extract_text(response);
         if !text.is_empty() {
             events.push(StreamEvent::TextDelta { text });
         }
+
+        // Emit tool call events if the model requested tool use
+        if let Some(tool_calls) = response
+            .choices
+            .first()
+            .and_then(|c| c.message.tool_calls.as_ref())
+        {
+            append_tool_call_events(
+                &mut events,
+                tool_calls.iter().map(|tc| {
+                    (
+                        tc.id.clone(),
+                        tc.function.name.clone(),
+                        tc.function.arguments.clone(),
+                    )
+                }),
+            );
+        }
+
         if let Some(usage) = &response.usage {
             events.push(StreamEvent::Usage {
                 input_tokens: usage.prompt_tokens,
@@ -212,7 +234,7 @@ impl Engine for OpenAIEngine {
     }
 
     fn supports_tool_use(&self) -> bool {
-        false
+        true
     }
 
     fn manages_own_workspace(&self) -> bool {
@@ -247,7 +269,7 @@ impl Engine for OpenAIEngine {
     async fn run(
         &self,
         messages: &[Message],
-        _tools: &[ToolDef],
+        tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
         let request = OpenAIChatRequest {
@@ -255,6 +277,7 @@ impl Engine for OpenAIEngine {
             messages: Self::convert_messages(messages, context.system_prompt.as_deref()),
             stream: false,
             max_tokens: self.max_output_tokens,
+            tools: Self::convert_tools(tools),
         };
 
         if request.messages.is_empty() {
@@ -263,7 +286,7 @@ impl Engine for OpenAIEngine {
             }])));
         }
 
-        debug!(model = %self.model, "Sending request to OpenAI");
+        debug!(model = %self.model, tools = tools.len(), "Sending request to OpenAI");
 
         let response = self
             .client
@@ -290,6 +313,8 @@ impl Engine for OpenAIEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tengu_core::types::message::Role;
+    use tengu_core::types::ToolCall;
 
     fn msg(role: Role, content: &str) -> Message {
         Message {
@@ -307,16 +332,14 @@ mod tests {
                 msg(Role::System, "sys"),
                 msg(Role::User, "u"),
                 msg(Role::Assistant, "a"),
-                msg(Role::Tool, "t"),
             ],
             None,
         );
 
-        assert_eq!(converted.len(), 4);
-        assert_eq!(converted[0].role, "system");
-        assert_eq!(converted[1].role, "user");
-        assert_eq!(converted[2].role, "assistant");
-        assert_eq!(converted[3].role, "user");
+        assert_eq!(converted.len(), 3);
+        assert_eq!(converted[0]["role"], "system");
+        assert_eq!(converted[1]["role"], "user");
+        assert_eq!(converted[2]["role"], "assistant");
     }
 
     #[test]
@@ -327,10 +350,81 @@ mod tests {
         );
 
         assert_eq!(converted.len(), 3);
-        assert_eq!(converted[0].role, "system");
-        assert_eq!(converted[0].content, "runtime system");
-        assert_eq!(converted[1].role, "user");
-        assert_eq!(converted[2].role, "assistant");
+        assert_eq!(converted[0]["role"], "system");
+        assert_eq!(converted[0]["content"], "runtime system");
+    }
+
+    #[test]
+    fn convert_messages_handles_tool_results() {
+        let tool_msg = Message {
+            role: Role::Tool,
+            content: "tool output".to_string(),
+            tool_call_id: Some("call_123".to_string()),
+            tool_calls: None,
+        };
+        let converted = OpenAIEngine::convert_messages(&[tool_msg], None);
+
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "tool");
+        assert_eq!(converted[0]["content"], "tool output");
+        assert_eq!(converted[0]["tool_call_id"], "call_123");
+    }
+
+    #[test]
+    fn convert_messages_handles_assistant_with_tool_calls() {
+        let assistant_msg = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_abc".to_string(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "test.txt"}),
+            }]),
+        };
+        let converted = OpenAIEngine::convert_messages(&[assistant_msg], None);
+
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "assistant");
+        assert!(converted[0]["tool_calls"].is_array());
+        assert_eq!(
+            converted[0]["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
+    }
+
+    #[test]
+    fn success_events_with_tool_calls() {
+        let response = OpenAIChatResponse {
+            choices: vec![OpenAIChoice {
+                message: OpenAIOutputMessage {
+                    content: None,
+                    tool_calls: Some(vec![OpenAIResponseToolCall {
+                        id: "call_1".to_string(),
+                        kind: Some("function".to_string()),
+                        function: OpenAIResponseFunction {
+                            name: "read_file".to_string(),
+                            arguments: r#"{"path":"test.txt"}"#.to_string(),
+                        },
+                    }]),
+                },
+            }],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 50,
+                completion_tokens: 10,
+            }),
+        };
+
+        let events = OpenAIEngine::success_events(&response);
+        // Should have: ToolCallStart, ToolCallDelta, ToolCallEnd, Usage, Done
+        assert_eq!(events.len(), 5);
+        assert!(
+            matches!(events[0], StreamEvent::ToolCallStart { ref name, .. } if name == "read_file")
+        );
+        assert!(matches!(events[1], StreamEvent::ToolCallDelta { .. }));
+        assert!(matches!(events[2], StreamEvent::ToolCallEnd { .. }));
+        assert!(matches!(events[3], StreamEvent::Usage { .. }));
+        assert!(matches!(events[4], StreamEvent::Done));
     }
 
     #[test]
@@ -339,6 +433,7 @@ mod tests {
             choices: vec![OpenAIChoice {
                 message: OpenAIOutputMessage {
                     content: Some("hello".to_string()),
+                    tool_calls: None,
                 },
             }],
             usage: Some(OpenAIUsage {
@@ -358,6 +453,20 @@ mod tests {
             }
         ));
         assert!(matches!(events[2], StreamEvent::Done));
+    }
+
+    #[test]
+    fn convert_tools_maps_correctly() {
+        let tools = vec![ToolDef {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            parameters: serde_json::json!({"type": "object"}),
+            policy: None,
+        }];
+        let converted = OpenAIEngine::convert_tools(&tools);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].kind, "function");
+        assert_eq!(converted[0].function.name, "read_file");
     }
 
     #[test]

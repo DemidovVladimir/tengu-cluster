@@ -7,9 +7,11 @@ use async_trait::async_trait;
 use futures::stream;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::pin::Pin;
 use tracing::{debug, error};
 
+use crate::tooling::map_function_tools;
 use tengu_core::types::message::Role;
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
 use tengu_core::{Engine, EngineContext, EngineDiagnostics};
@@ -37,6 +39,9 @@ struct AnthropicMessagesRequest {
     /// Optional system prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<String>,
+    /// Optional tool definitions.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<AnthropicToolDef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,16 +49,15 @@ struct AnthropicInputMessage {
     /// Anthropic role label (`user` or `assistant`).
     role: String,
     /// Message content blocks.
-    content: Vec<AnthropicTextBlock>,
+    content: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct AnthropicTextBlock {
-    /// Anthropic content block type (we currently use `text` only).
-    #[serde(rename = "type")]
-    kind: String,
-    /// Text content payload.
-    text: String,
+#[derive(Debug, Serialize)]
+struct AnthropicToolDef {
+    name: String,
+    description: String,
+    #[serde(rename = "input_schema")]
+    input_schema: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +78,15 @@ struct AnthropicOutputBlock {
     /// Optional text value for text blocks.
     #[serde(default)]
     text: Option<String>,
+    /// Optional tool-use identifier.
+    #[serde(default)]
+    id: Option<String>,
+    /// Optional tool name for tool-use blocks.
+    #[serde(default)]
+    name: Option<String>,
+    /// Optional input payload for tool-use blocks.
+    #[serde(default)]
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -143,23 +156,69 @@ impl AnthropicEngine {
         ((context_window_tokens / 8).clamp(512, 8_192)) as u32
     }
 
+    /// Convert tengu ToolDef array to Anthropic tool format.
+    fn convert_tools(tools: &[ToolDef]) -> Vec<AnthropicToolDef> {
+        map_function_tools(tools, |t| AnthropicToolDef {
+            name: t.name,
+            description: t.description,
+            input_schema: t.parameters,
+        })
+    }
+
     /// Convert core messages into Anthropic `user`/`assistant` chat turns.
     fn convert_messages(messages: &[Message]) -> Vec<AnthropicInputMessage> {
         messages
             .iter()
             .filter(|m| !matches!(m.role, Role::System))
-            .map(|m| {
-                let role = match m.role {
-                    Role::Assistant => "assistant",
-                    Role::User | Role::Tool | Role::System => "user",
-                };
-                AnthropicInputMessage {
-                    role: role.to_string(),
-                    content: vec![AnthropicTextBlock {
-                        kind: "text".to_string(),
-                        text: m.content.clone(),
-                    }],
+            .map(|m| match m.role {
+                Role::Assistant => {
+                    let mut content = Vec::new();
+                    if !m.content.is_empty() {
+                        content.push(json!({
+                            "type": "text",
+                            "text": m.content
+                        }));
+                    }
+                    if let Some(tool_calls) = &m.tool_calls {
+                        for tc in tool_calls {
+                            content.push(json!({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.arguments
+                            }));
+                        }
+                    }
+                    AnthropicInputMessage {
+                        role: "assistant".to_string(),
+                        content,
+                    }
                 }
+                Role::Tool => {
+                    let content = if let Some(tool_call_id) = &m.tool_call_id {
+                        vec![json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": m.content
+                        })]
+                    } else {
+                        vec![json!({
+                            "type": "text",
+                            "text": m.content
+                        })]
+                    };
+                    AnthropicInputMessage {
+                        role: "user".to_string(),
+                        content,
+                    }
+                }
+                Role::User | Role::System => AnthropicInputMessage {
+                    role: "user".to_string(),
+                    content: vec![json!({
+                        "type": "text",
+                        "text": m.content
+                    })],
+                },
             })
             .collect()
     }
@@ -181,6 +240,25 @@ impl AnthropicEngine {
         let text = Self::extract_text(response);
         if !text.is_empty() {
             events.push(StreamEvent::TextDelta { text });
+        }
+        for block in &response.content {
+            if block.kind != "tool_use" {
+                continue;
+            }
+            let (Some(id), Some(name), Some(input)) =
+                (block.id.clone(), block.name.clone(), block.input.clone())
+            else {
+                continue;
+            };
+            events.push(StreamEvent::ToolCallStart {
+                id: id.clone(),
+                name,
+            });
+            events.push(StreamEvent::ToolCallDelta {
+                id: id.clone(),
+                arguments_delta: input.to_string(),
+            });
+            events.push(StreamEvent::ToolCallEnd { id });
         }
         if let Some(usage) = &response.usage {
             events.push(StreamEvent::Usage {
@@ -208,7 +286,7 @@ impl Engine for AnthropicEngine {
     }
 
     fn supports_tool_use(&self) -> bool {
-        false
+        true
     }
 
     fn manages_own_workspace(&self) -> bool {
@@ -243,7 +321,7 @@ impl Engine for AnthropicEngine {
     async fn run(
         &self,
         messages: &[Message],
-        _tools: &[ToolDef],
+        tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
         let request = AnthropicMessagesRequest {
@@ -252,6 +330,7 @@ impl Engine for AnthropicEngine {
             messages: Self::convert_messages(messages),
             stream: false,
             system: context.system_prompt.clone(),
+            tools: Self::convert_tools(tools),
         };
 
         if request.messages.is_empty() {
@@ -260,7 +339,7 @@ impl Engine for AnthropicEngine {
             }])));
         }
 
-        debug!(model = %self.model, "Sending request to Anthropic");
+        debug!(model = %self.model, tools = tools.len(), "Sending request to Anthropic");
 
         let response = self
             .client
@@ -288,6 +367,7 @@ impl Engine for AnthropicEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tengu_core::types::ToolCall;
 
     fn msg(role: Role, content: &str) -> Message {
         Message {
@@ -300,17 +380,45 @@ mod tests {
 
     #[test]
     fn convert_messages_skips_system_and_maps_roles() {
+        let tool_result = Message {
+            role: Role::Tool,
+            content: "tool output".to_string(),
+            tool_call_id: Some("toolu_1".to_string()),
+            tool_calls: None,
+        };
         let converted = AnthropicEngine::convert_messages(&[
             msg(Role::System, "sys"),
             msg(Role::User, "u"),
             msg(Role::Assistant, "a"),
-            msg(Role::Tool, "t"),
+            tool_result,
         ]);
 
         assert_eq!(converted.len(), 3);
         assert_eq!(converted[0].role, "user");
         assert_eq!(converted[1].role, "assistant");
         assert_eq!(converted[2].role, "user");
+        assert_eq!(converted[2].content[0]["type"], "tool_result");
+        assert_eq!(converted[2].content[0]["tool_use_id"], "toolu_1");
+    }
+
+    #[test]
+    fn convert_messages_handles_assistant_tool_calls() {
+        let assistant_msg = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_abc".to_string(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path": "README.md"}),
+            }]),
+        };
+
+        let converted = AnthropicEngine::convert_messages(&[assistant_msg]);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "assistant");
+        assert_eq!(converted[0].content[0]["type"], "tool_use");
+        assert_eq!(converted[0].content[0]["name"], "read_file");
     }
 
     #[test]
@@ -319,6 +427,9 @@ mod tests {
             content: vec![AnthropicOutputBlock {
                 kind: "text".to_string(),
                 text: Some("hello".to_string()),
+                id: None,
+                name: None,
+                input: None,
             }],
             usage: Some(AnthropicUsage {
                 input_tokens: 12,
@@ -337,6 +448,29 @@ mod tests {
             }
         ));
         assert!(matches!(events[2], StreamEvent::Done));
+    }
+
+    #[test]
+    fn success_events_with_tool_calls() {
+        let response = AnthropicMessagesResponse {
+            content: vec![AnthropicOutputBlock {
+                kind: "tool_use".to_string(),
+                text: None,
+                id: Some("toolu_1".to_string()),
+                name: Some("read_file".to_string()),
+                input: Some(serde_json::json!({"path":"README.md"})),
+            }],
+            usage: None,
+        };
+
+        let events = AnthropicEngine::success_events(&response);
+        assert_eq!(events.len(), 4);
+        assert!(
+            matches!(events[0], StreamEvent::ToolCallStart { ref name, .. } if name == "read_file")
+        );
+        assert!(matches!(events[1], StreamEvent::ToolCallDelta { .. }));
+        assert!(matches!(events[2], StreamEvent::ToolCallEnd { .. }));
+        assert!(matches!(events[3], StreamEvent::Done));
     }
 
     #[test]

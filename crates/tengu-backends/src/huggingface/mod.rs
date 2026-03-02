@@ -12,7 +12,9 @@ use serde_json::Value;
 use std::pin::Pin;
 use tracing::{debug, error};
 
-use tengu_core::types::message::Role;
+use crate::tooling::{
+    append_tool_call_events, convert_messages_openai_compatible, map_function_tools,
+};
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
 use tengu_core::{Engine, EngineContext, EngineDiagnostics};
 
@@ -31,19 +33,28 @@ struct HuggingFaceChatRequest {
     /// HF model identifier (for example: `THUDM/GLM-4.7:fastest`).
     model: String,
     /// Typed conversation history.
-    messages: Vec<HuggingFaceInputMessage>,
+    messages: Vec<serde_json::Value>,
     /// Disable streaming for deterministic terminal event handling.
     stream: bool,
     /// Max generated tokens for this turn.
     max_tokens: u32,
+    /// Optional function tools using OpenAI-compatible shape.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<HuggingFaceToolDef>,
 }
 
 #[derive(Debug, Serialize)]
-struct HuggingFaceInputMessage {
-    /// Message role (`system`/`user`/`assistant`).
-    role: String,
-    /// Message text payload.
-    content: String,
+struct HuggingFaceToolDef {
+    #[serde(rename = "type")]
+    kind: String,
+    function: HuggingFaceFunction,
+}
+
+#[derive(Debug, Serialize)]
+struct HuggingFaceFunction {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +78,21 @@ struct HuggingFaceOutputMessage {
     /// Optional response text or structured content payload.
     #[serde(default)]
     content: Option<Value>,
+    /// Optional tool calls requested by the model.
+    #[serde(default)]
+    tool_calls: Option<Vec<HuggingFaceResponseToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HuggingFaceResponseToolCall {
+    id: String,
+    function: HuggingFaceResponseFunction,
+}
+
+#[derive(Debug, Deserialize)]
+struct HuggingFaceResponseFunction {
+    name: String,
+    arguments: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,31 +165,22 @@ impl HuggingFaceEngine {
     /// Convert core message roles into OpenAI-compatible request shape.
     ///
     /// If provided, `system_prompt` is prepended as a `system` message.
+    fn convert_tools(tools: &[ToolDef]) -> Vec<HuggingFaceToolDef> {
+        map_function_tools(tools, |t| HuggingFaceToolDef {
+            kind: "function".to_string(),
+            function: HuggingFaceFunction {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+            },
+        })
+    }
+
     fn convert_messages(
         messages: &[Message],
         system_prompt: Option<&str>,
-    ) -> Vec<HuggingFaceInputMessage> {
-        let system = system_prompt
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| HuggingFaceInputMessage {
-                role: "system".to_string(),
-                content: value.to_string(),
-            });
-
-        system
-            .into_iter()
-            .chain(messages.iter().map(|message| {
-                HuggingFaceInputMessage {
-                    role: match message.role {
-                        Role::System => "system",
-                        Role::Assistant => "assistant",
-                        Role::User | Role::Tool => "user",
-                    }
-                    .to_string(),
-                    content: message.content.clone(),
-                }
-            }))
-            .collect()
+    ) -> Vec<serde_json::Value> {
+        convert_messages_openai_compatible(messages, system_prompt)
     }
 
     /// Convert OpenAI-compatible message content payload into plain text.
@@ -203,6 +220,22 @@ impl HuggingFaceEngine {
         if !text.is_empty() {
             events.push(StreamEvent::TextDelta { text });
         }
+        if let Some(tool_calls) = response
+            .choices
+            .first()
+            .and_then(|c| c.message.tool_calls.as_ref())
+        {
+            append_tool_call_events(
+                &mut events,
+                tool_calls.iter().map(|tc| {
+                    (
+                        tc.id.clone(),
+                        tc.function.name.clone(),
+                        tc.function.arguments.clone(),
+                    )
+                }),
+            );
+        }
         if let Some(usage) = &response.usage {
             events.push(StreamEvent::Usage {
                 input_tokens: usage.prompt_tokens,
@@ -229,7 +262,7 @@ impl Engine for HuggingFaceEngine {
     }
 
     fn supports_tool_use(&self) -> bool {
-        false
+        true
     }
 
     fn manages_own_workspace(&self) -> bool {
@@ -264,7 +297,7 @@ impl Engine for HuggingFaceEngine {
     async fn run(
         &self,
         messages: &[Message],
-        _tools: &[ToolDef],
+        tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
         let request = HuggingFaceChatRequest {
@@ -272,6 +305,7 @@ impl Engine for HuggingFaceEngine {
             messages: Self::convert_messages(messages, context.system_prompt.as_deref()),
             stream: false,
             max_tokens: self.max_output_tokens,
+            tools: Self::convert_tools(tools),
         };
 
         if request.messages.is_empty() {
@@ -280,7 +314,7 @@ impl Engine for HuggingFaceEngine {
             }])));
         }
 
-        debug!(model = %self.model, "Sending request to Hugging Face Inference Providers");
+        debug!(model = %self.model, tools = tools.len(), "Sending request to Hugging Face Inference Providers");
 
         let response = self
             .client
@@ -307,6 +341,8 @@ impl Engine for HuggingFaceEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tengu_core::types::message::Role;
+    use tengu_core::types::ToolCall;
 
     fn msg(role: Role, content: &str) -> Message {
         Message {
@@ -319,21 +355,35 @@ mod tests {
 
     #[test]
     fn convert_messages_maps_roles() {
+        let assistant_with_tool = Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path":"README.md"}),
+            }]),
+        };
+
         let converted = HuggingFaceEngine::convert_messages(
             &[
                 msg(Role::System, "sys"),
                 msg(Role::User, "u"),
                 msg(Role::Assistant, "a"),
-                msg(Role::Tool, "t"),
+                assistant_with_tool,
             ],
             None,
         );
 
         assert_eq!(converted.len(), 4);
-        assert_eq!(converted[0].role, "system");
-        assert_eq!(converted[1].role, "user");
-        assert_eq!(converted[2].role, "assistant");
-        assert_eq!(converted[3].role, "user");
+        assert_eq!(converted[0]["role"], "system");
+        assert_eq!(converted[1]["role"], "user");
+        assert_eq!(converted[2]["role"], "assistant");
+        assert_eq!(
+            converted[3]["tool_calls"][0]["function"]["name"],
+            "read_file"
+        );
     }
 
     #[test]
@@ -352,5 +402,51 @@ mod tests {
             HuggingFaceEngine::extract_content_text(&structured).as_deref(),
             Some("part-onepart-two")
         );
+    }
+
+    #[test]
+    fn success_events_with_tool_calls() {
+        let response = HuggingFaceChatResponse {
+            choices: vec![HuggingFaceChoice {
+                message: HuggingFaceOutputMessage {
+                    content: None,
+                    tool_calls: Some(vec![HuggingFaceResponseToolCall {
+                        id: "call_1".to_string(),
+                        function: HuggingFaceResponseFunction {
+                            name: "read_file".to_string(),
+                            arguments: r#"{"path":"README.md"}"#.to_string(),
+                        },
+                    }]),
+                },
+            }],
+            usage: Some(HuggingFaceUsage {
+                prompt_tokens: 10,
+                completion_tokens: 3,
+            }),
+        };
+
+        let events = HuggingFaceEngine::success_events(&response);
+        assert_eq!(events.len(), 5);
+        assert!(
+            matches!(events[0], StreamEvent::ToolCallStart { ref name, .. } if name == "read_file")
+        );
+        assert!(matches!(events[1], StreamEvent::ToolCallDelta { .. }));
+        assert!(matches!(events[2], StreamEvent::ToolCallEnd { .. }));
+        assert!(matches!(events[3], StreamEvent::Usage { .. }));
+        assert!(matches!(events[4], StreamEvent::Done));
+    }
+
+    #[test]
+    fn convert_tools_maps_correctly() {
+        let tools = vec![ToolDef {
+            name: "read_file".to_string(),
+            description: "Read file".to_string(),
+            parameters: serde_json::json!({"type":"object"}),
+            policy: None,
+        }];
+        let converted = HuggingFaceEngine::convert_tools(&tools);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].kind, "function");
+        assert_eq!(converted[0].function.name, "read_file");
     }
 }

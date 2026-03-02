@@ -1,0 +1,122 @@
+//! System prompt builder — always produces a prompt from identity + role + workspace files.
+
+use crate::application::prompt_budget::truncate_to_token_budget;
+use crate::domain::agent_role::AgentRole;
+use tengu_core::token::estimate_tokens_approx_min1;
+
+/// Build bounded system prompt from config identity, role, custom instructions, workspace files,
+/// and optional skill context fragments (API docs from frontmatter skills).
+///
+/// Always returns a non-empty prompt. At minimum this includes the default preamble
+/// (`"You are {name}, an AI assistant."`), guaranteeing the model never runs without identity.
+pub(crate) fn build_system_prompt(
+    agent_config: &tengu_core::config::AgentConfig,
+    advertise_workspace_tools: bool,
+    skill_contexts: &[String],
+) -> String {
+    const MAX_FILE_TOKENS: usize = 1200;
+    const MAX_SKILL_CONTEXT_TOKENS: usize = 2400;
+    const MAX_TOTAL_TOKENS: usize = 6000;
+
+    let name = agent_config.identity.name.as_deref().unwrap_or("Tengu");
+    let mut parts = Vec::new();
+    let mut total_tokens = 0usize;
+
+    // 1. Default preamble — always present.
+    let preamble = format!("You are {name}, an AI assistant.");
+    total_tokens += estimate_tokens_approx_min1(&preamble);
+    parts.push(preamble);
+
+    // 2. Role fragment — if agent has an orchestration role.
+    if let Some(ref role_str) = agent_config.role {
+        if let Ok(role) = role_str.parse::<AgentRole>() {
+            let fragment = role.system_prompt_fragment().to_string();
+            total_tokens += estimate_tokens_approx_min1(&fragment);
+            parts.push(fragment);
+        }
+    }
+
+    // 3. Custom instructions — verbatim from config identity.instructions.
+    if let Some(ref instructions) = agent_config.identity.instructions {
+        if !instructions.trim().is_empty() {
+            let truncated = truncate_to_token_budget(instructions, MAX_FILE_TOKENS);
+            total_tokens += estimate_tokens_approx_min1(&truncated);
+            parts.push(truncated);
+        }
+    }
+
+    // 4. Workspace files — IDENTITY.md, PROFILE.md, CONTEXT.md.
+    if let Some(ref workspace) = agent_config.workspace {
+        for filename in &["IDENTITY.md", "PROFILE.md", "CONTEXT.md"] {
+            let path = workspace.join(filename);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if !content.trim().is_empty() {
+                    let truncated = truncate_to_token_budget(&content, MAX_FILE_TOKENS);
+                    let chunk = format!("# {filename}\n\n{truncated}");
+                    let chunk_tokens = estimate_tokens_approx_min1(&chunk);
+                    if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
+                        break;
+                    }
+                    total_tokens += chunk_tokens;
+                    parts.push(chunk);
+                }
+            }
+        }
+    }
+
+    // 5. Skill context fragments — API docs from frontmatter skills.
+    for ctx in skill_contexts {
+        if ctx.trim().is_empty() {
+            continue;
+        }
+        let truncated = truncate_to_token_budget(ctx, MAX_SKILL_CONTEXT_TOKENS);
+        let chunk_tokens = estimate_tokens_approx_min1(&truncated);
+        if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
+            break;
+        }
+        total_tokens += chunk_tokens;
+        parts.push(truncated);
+    }
+
+    // 5b. Skill tool usage instructions — tell the model to use skill tools directly.
+    if !skill_contexts.is_empty() {
+        let instruction = "\
+            # Tool usage policy\n\n\
+            When the user asks you to interact with an external service for which you have \
+            a registered tool (e.g. beach_science), you MUST call that tool directly with \
+            the appropriate method, path, and body parameters. \
+            Do NOT write scripts, generate curl commands, or suggest manual steps. \
+            Always use the tool.";
+        let inst_tokens = estimate_tokens_approx_min1(instruction);
+        if total_tokens + inst_tokens <= MAX_TOTAL_TOKENS + 200 {
+            total_tokens += inst_tokens;
+            parts.push(instruction.to_string());
+        }
+    }
+
+    // 6. Workspace tools description — only when backend supports runtime tool use.
+    if advertise_workspace_tools {
+        if agent_config.workspace.is_some() {
+            let tools_note = "\
+                # Workspace\n\n\
+                 You have access to a local workspace.\n\
+                 Available tools:\n\
+                 - read_file(path): Read file contents from the workspace (supports text files and PDFs)\n\
+                 - list_directory(path): List files and directories (use \".\" for root)\n\
+                 - write_file(path, content): Write content to a file (requires user approval)\n\
+                 \n\
+                 All paths are relative to the workspace root. You can use these tools to help the user with file operations.\n\
+                 \n\
+                 Tool-use policy:\n\
+                 - If asked about file contents, call read_file before answering.\n\
+                 - Do not claim file contents you have not read via tools in this turn."
+                .to_string();
+            let tools_tokens = estimate_tokens_approx_min1(&tools_note);
+            if total_tokens + tools_tokens <= MAX_TOTAL_TOKENS + 400 {
+                parts.push(tools_note);
+            }
+        }
+    }
+
+    parts.join("\n\n---\n\n")
+}

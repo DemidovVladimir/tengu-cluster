@@ -1,0 +1,544 @@
+//! Full-screen TUI runtime for interactive chat using cursive.
+
+pub mod app;
+pub mod view;
+
+use anyhow::Result;
+use cursive::backends::crossterm::crossterm::{event::DisableMouseCapture, execute};
+use cursive::Cursive;
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
+
+use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
+use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
+use crate::adapters::engine_factory::build_engine;
+use crate::adapters::flow_store::FlowStore;
+use crate::adapters::memory_store::DiskVectorMemoryStore;
+use crate::adapters::memory_tool_executor::{MemoryServiceHandle, MemoryToolExecutionAdapter};
+use crate::adapters::shell_executor::LocalShellExecutor;
+use crate::adapters::skill_source::FileSystemSkillSource;
+use crate::adapters::skill_tool_executor::SkillToolExecutionAdapter;
+use crate::adapters::system_prompt;
+use crate::adapters::workspace_tools;
+use crate::application::chat_commands::{self, CommandResult, EngineInfo};
+use crate::application::chat_runtime::{ChatRuntimeService, ChatTurnResult};
+use crate::application::engine_runtime::ToolExecutor;
+use crate::application::flow_policy::resolve_flow_compaction_policy;
+use crate::application::memory_service::MemoryService;
+use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
+use crate::application::skill_registry::SkillRegistry;
+use crate::application::tool_use_service::ToolUseService;
+use crate::application::workspace_tools_catalog::{build_memory_tools, build_workspace_tools};
+use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
+use crate::domain::skill::SkillStatus;
+use crate::domain::tool_policy::ToolPolicyCatalog;
+use crate::resolve_tengu_home;
+use app::{BubbleRole, ChatRequest, SkillCommand};
+use tengu_core::config::{Config, RuntimeProfile};
+use tengu_core::types::{ToolCall, ToolDef};
+use tengu_core::{Lens, Refiner};
+use tengu_optimizer::{NoopRefiner, RuleRefiner};
+
+fn disable_terminal_mouse_capture() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut tty = std::fs::OpenOptions::new().write(true).open("/dev/tty")?;
+        execute!(tty, DisableMouseCapture)?;
+    }
+
+    #[cfg(windows)]
+    {
+        let mut out = std::io::stdout();
+        execute!(out, DisableMouseCapture)?;
+    }
+
+    Ok(())
+}
+
+/// Wrapper to send `Box<dyn Engine>` to the engine thread.
+/// Safe because the engine is only ever accessed from the single engine thread.
+struct SendEngine(Box<dyn tengu_core::Engine>);
+unsafe impl Send for SendEngine {}
+
+/// Wrapper to send `Box<dyn Refiner>` to the engine thread.
+struct SendRefiner(Box<dyn Refiner>);
+unsafe impl Send for SendRefiner {}
+
+/// Tool executor adapter for application engine runtime.
+struct TuiToolExecutor {
+    service: ToolUseService,
+}
+
+/// TUI adapter for publishing tool activity lines.
+struct CursiveToolActivityAdapter {
+    cb_sink: cursive::CbSink,
+}
+
+impl ToolActivityPort for CursiveToolActivityAdapter {
+    fn publish_tool_activity(&self, call: &ToolCall) {
+        let tool_name = call.name.clone();
+        let detail = call
+            .arguments
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let cb = self.cb_sink.clone();
+        let tn = tool_name;
+        let dt = detail;
+        let _ = cb.send(Box::new(move |siv: &mut Cursive| {
+            view::push_tool_activity(siv, &tn, &dt);
+        }));
+    }
+}
+
+/// TUI adapter for interactive tool approval prompts.
+struct CursiveToolApprovalAdapter {
+    cb_sink: cursive::CbSink,
+}
+
+impl ToolApprovalPort for CursiveToolApprovalAdapter {
+    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
+        let content_preview = call
+            .arguments
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let path_display = call
+            .arguments
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let (confirm_tx, confirm_rx) = mpsc::channel::<bool>();
+        let cb = self.cb_sink.clone();
+        let _ = cb.send(Box::new(move |siv: &mut Cursive| {
+            view::show_write_confirmation(siv, &path_display, &content_preview, confirm_tx);
+        }));
+
+        // Block the engine thread until the user responds.
+        Ok(confirm_rx.recv().unwrap_or(false))
+    }
+}
+
+impl ToolExecutor for TuiToolExecutor {
+    fn execute(&self, call: &ToolCall) -> Result<String> {
+        self.service.execute(call)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: rebuild tools, executor, and system prompt from registry state.
+// ---------------------------------------------------------------------------
+
+fn rebuild_tools(base_tools: &[ToolDef], skill_registry: &SkillRegistry) -> Vec<ToolDef> {
+    let mut tools = base_tools.to_vec();
+    tools.extend(skill_registry.active_tool_defs());
+    tools
+}
+
+fn rebuild_executor(
+    workspace: &std::path::Path,
+    tools: &[ToolDef],
+    skill_registry: &SkillRegistry,
+    memory_handle: &Option<Arc<MemoryServiceHandle>>,
+    cb_sink: &cursive::CbSink,
+) -> Option<TuiToolExecutor> {
+    if tools.is_empty() {
+        return None;
+    }
+
+    let workspace_exec = Arc::new(workspace_tools::WorkspaceToolExecutionAdapter::new(
+        workspace.to_path_buf(),
+    ));
+
+    let skill_defs = skill_registry.active_skill_definitions();
+    let skill_names: std::collections::HashSet<String> =
+        skill_defs.iter().map(|s| s.name.clone()).collect();
+
+    let skill_exec: Option<Arc<dyn crate::application::ports::ToolExecutionPort>> =
+        if skill_defs.is_empty() {
+            None
+        } else {
+            let shell: Arc<dyn crate::application::ports::ShellExecutionPort> =
+                Arc::new(LocalShellExecutor);
+            Some(Arc::new(SkillToolExecutionAdapter::new(
+                skill_defs,
+                shell,
+                workspace.to_path_buf(),
+            )))
+        };
+
+    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec, skill_exec, skill_names);
+
+    // Attach memory executor if available.
+    if let Some(ref handle) = memory_handle {
+        if let Ok(mem_exec) = MemoryToolExecutionAdapter::new(Arc::clone(handle)) {
+            let mem_names: std::collections::HashSet<String> =
+                build_memory_tools().iter().map(|t| t.name.clone()).collect();
+            composite = composite.with_memory_executor(Arc::new(mem_exec), mem_names);
+        }
+    }
+
+    let composite = Arc::new(composite);
+
+    let service = ToolUseService::new(
+        ToolPolicyCatalog::from_tools(tools),
+        Arc::new(CursiveToolActivityAdapter {
+            cb_sink: cb_sink.clone(),
+        }),
+        Arc::new(CursiveToolApprovalAdapter {
+            cb_sink: cb_sink.clone(),
+        }),
+        composite,
+    );
+    Some(TuiToolExecutor { service })
+}
+
+fn rebuild_system_prompt(
+    agent_config: &tengu_core::config::AgentConfig,
+    advertise_workspace_tools: bool,
+    skill_registry: &SkillRegistry,
+) -> String {
+    let skill_context_strings: Vec<String> = skill_registry
+        .active_context_fragments()
+        .into_iter()
+        .map(|(_, body)| body)
+        .collect();
+    system_prompt::build_system_prompt(agent_config, advertise_workspace_tools, &skill_context_strings)
+}
+
+fn format_skill_list(skills: Vec<(String, SkillStatus)>) -> String {
+    if skills.is_empty() {
+        return "No skills discovered.".to_string();
+    }
+    let mut lines = vec!["Skills:".to_string()];
+    for (name, status) in skills {
+        let tag = match status {
+            SkillStatus::Active => "active",
+            SkillStatus::Inactive => "disabled",
+        };
+        lines.push(format!("  {} ({})", name, tag));
+    }
+    lines.join("\n")
+}
+
+/// Run the full-screen TUI chat (blocking — call from `block_in_place`).
+pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
+    // Resolve agent config
+    let (agent_id, agent_config) = config
+        .agents
+        .iter()
+        .find(|(_, ac)| ac.default)
+        .or_else(|| config.agents.iter().next())
+        .map(|(id, ac)| (id.clone(), ac.clone()))
+        .ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
+
+    let refiner: Box<dyn Refiner> = match config.refiner.mode.as_str() {
+        "rules" => Box::new(RuleRefiner::new()),
+        _ => Box::new(NoopRefiner),
+    };
+
+    let engine = build_engine(&agent_id, &agent_config)?;
+
+    // Capture engine metadata for slash commands (before moving engine to thread)
+    let engine_info = EngineInfo {
+        context_window: engine.context_window(),
+        diagnostics: engine.diagnostics(),
+    };
+
+    let _flow_store = FlowStore::new(&resolve_tengu_home())?;
+    let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
+    let compaction_policy = resolve_flow_compaction_policy(
+        &agent_config.flow,
+        agent_config.limits.max_tokens_per_flow,
+        engine.context_window(),
+        engine.max_output_tokens_per_turn() as usize,
+    );
+    let advertise_workspace_tools = engine.supports_tool_use() && !engine.manages_own_workspace();
+
+    // Build initial system prompt without skill contexts — the engine thread will rebuild
+    // with actual skills on the first turn (tools_dirty = true).
+    let system_prompt = system_prompt::build_system_prompt(
+        &agent_config,
+        advertise_workspace_tools,
+        &[],
+    );
+
+    // Channel: UI → Engine thread
+    let (request_tx, request_rx) = mpsc::channel::<ChatRequest>();
+
+    // Build cursive
+    let mut siv = cursive::default();
+
+    // Build UI
+    view::build_ui(&mut siv, request_tx);
+
+    // Set header
+    let identity = agent_config.identity.name.as_deref().unwrap_or("Tengu");
+    let engine_label = format!("{}/{}", agent_config.engine, agent_config.model);
+    let default_lens = agent_config.default_lens.clone();
+    view::update_header(&mut siv, identity, &engine_label, &default_lens);
+    view::push_welcome(&mut siv);
+
+    let memory_config = config.memory.clone();
+
+    // Spawn engine thread
+    let cb_sink = siv.cb_sink().clone();
+    let send_engine = SendEngine(engine);
+    let send_refiner = SendRefiner(refiner);
+    let engine_agent_id = agent_id.clone();
+    let engine_agent_config = agent_config.clone();
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime for engine thread");
+
+        let engine = send_engine.0;
+        let refiner = send_refiner.0;
+        let flow_store = match FlowStore::new(&resolve_tengu_home()) {
+            Ok(fs) => fs,
+            Err(e) => {
+                let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
+                    view::hide_thinking(siv);
+                    view::push_bubble(siv, BubbleRole::System, &format!("Flow store error: {}", e));
+                }));
+                return;
+            }
+        };
+
+        // Resolve workspace path (expand tilde)
+        let workspace: Option<PathBuf> = engine_agent_config
+            .workspace
+            .as_ref()
+            .map(|p| workspace_tools::expand_tilde(p));
+
+        // Build memory subsystem if enabled.
+        let memory_handle: Option<Arc<MemoryServiceHandle>> = if memory_config.enabled {
+            match std::env::var("OPENROUTER_API_KEY") {
+                Ok(api_key) => {
+                    let store_path_str = memory_config.store_path.replace(
+                        "~",
+                        &dirs_next::home_dir()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                    );
+                    match DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str)) {
+                        Ok(store) => {
+                            let embedding = OpenRouterEmbeddingAdapter::new(
+                                api_key,
+                                memory_config.embedding_model.clone(),
+                            );
+                            Some(Arc::new(MemoryServiceHandle {
+                                embedding: Arc::new(embedding),
+                                store: Arc::new(store),
+                            }))
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to init memory store, memory disabled");
+                            None
+                        }
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!("OPENROUTER_API_KEY not set, memory disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Base workspace tools (built-in + memory, without skills).
+        let uses_tools =
+            engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
+        let base_tools: Vec<ToolDef> = if !uses_tools {
+            vec![]
+        } else {
+            let mut all_tools = build_workspace_tools();
+            if memory_handle.is_some() {
+                all_tools.extend(build_memory_tools());
+            }
+            all_tools
+        };
+
+        // Skill registry — initialized and loaded once, hot-reloaded each turn.
+        let skill_source: Option<FileSystemSkillSource> =
+            workspace.as_ref().map(|ws| FileSystemSkillSource::new(ws.clone()));
+
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
+        let mut skill_registry = SkillRegistry::new(base_reserved);
+
+        if let Some(ref src) = skill_source {
+            skill_registry.reload(src);
+        }
+
+        let mut tools_dirty = true;
+        let mut current_tools: Vec<ToolDef> = vec![];
+        let mut current_executor: Option<TuiToolExecutor> = None;
+        let mut current_system_prompt = system_prompt;
+
+        let mut runtime_state = ChatLoopState {
+            messages: Vec::new(),
+            active_flow_key: None,
+            manual_session_id: None,
+            flow_token_usage: 0,
+            active_lens: engine_agent_config
+                .default_lens
+                .parse()
+                .unwrap_or(Lens::Eco),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            tokens_saved: 0,
+            last_prompt_report: None,
+        };
+
+        // Create MemoryService from handle if available.
+        let memory_service_instance = memory_handle.as_ref().map(|h| {
+            MemoryService::new(h.embedding.as_ref(), h.store.as_ref())
+        });
+
+        while let Ok(request) = request_rx.recv() {
+            match request {
+                ChatRequest::SkillCommand {
+                    command,
+                    response_tx,
+                } => {
+                    let response = match command {
+                        SkillCommand::List => format_skill_list(skill_registry.list_all()),
+                        SkillCommand::Enable(ref name) => match skill_registry.enable(name) {
+                            Ok(true) => {
+                                tools_dirty = true;
+                                format!("Enabled skill '{}'.", name)
+                            }
+                            Ok(false) => format!("Skill '{}' is already active.", name),
+                            Err(e) => e,
+                        },
+                        SkillCommand::Disable(ref name) => match skill_registry.disable(name) {
+                            Ok(true) => {
+                                tools_dirty = true;
+                                format!("Disabled skill '{}'.", name)
+                            }
+                            Ok(false) => format!("Skill '{}' is already disabled.", name),
+                            Err(e) => e,
+                        },
+                    };
+                    let _ = response_tx.send(response);
+                    continue; // don't process as chat turn
+                }
+
+                ChatRequest::SlashCommand { text, response_tx } => {
+                    let result = chat_commands::handle_chat_command(
+                        &text,
+                        &mut runtime_state,
+                        &engine_info,
+                        &engine_agent_config,
+                        history_turn_limit,
+                        compaction_policy,
+                    );
+                    let response = match result {
+                        CommandResult::Handled(output) => output.lines.join("\n"),
+                        CommandResult::NotHandled => {
+                            "Unknown command. Type /help for available commands.".to_string()
+                        }
+                    };
+                    let _ = response_tx.send(response);
+                    continue;
+                }
+
+                ChatRequest::UserMessage { user_text } => {
+                    // Hot-reload: re-scan skill files before each turn.
+                    if let Some(ref src) = skill_source {
+                        if skill_registry.reload(src) {
+                            tools_dirty = true;
+                        }
+                    }
+
+                    // Rebuild tools/executor/prompt when dirty.
+                    if tools_dirty {
+                        if let Some(ref ws) = workspace {
+                            current_tools = rebuild_tools(&base_tools, &skill_registry);
+                            current_executor = rebuild_executor(
+                                ws,
+                                &current_tools,
+                                &skill_registry,
+                                &memory_handle,
+                                &cb_sink,
+                            );
+                            current_system_prompt = rebuild_system_prompt(
+                                &engine_agent_config,
+                                advertise_workspace_tools,
+                                &skill_registry,
+                            );
+                        }
+                        tools_dirty = false;
+                    }
+
+                    let text = user_text;
+
+                    rt.block_on(async {
+                        let chat_runtime = ChatRuntimeService {
+                            engine: engine.as_ref(),
+                            refiner: refiner.as_ref(),
+                            flow_store: &flow_store,
+                            agent_id: &engine_agent_id,
+                            agent_config: &engine_agent_config,
+                            history_turn_limit,
+                            compaction_policy,
+                            system_prompt: current_system_prompt.clone(),
+                            tools: &current_tools,
+                            tool_executor: current_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+                            memory_service: memory_service_instance.as_ref(),
+                            max_recall_entries: memory_config.max_recall_entries,
+                            max_recall_tokens: memory_config.max_recall_tokens,
+                        };
+
+                        match chat_runtime
+                            .process_user_text(&mut runtime_state, &text)
+                            .await
+                        {
+                            Ok(ChatTurnResult {
+                                assistant_text,
+                                system_notice,
+                                total_input_tokens,
+                                total_output_tokens,
+                            }) => {
+                                let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
+                                    view::hide_thinking(siv);
+                                    if let Some(notice) = system_notice {
+                                        view::push_bubble(siv, BubbleRole::System, &notice);
+                                    }
+                                    if let Some(text) = assistant_text {
+                                        view::push_bubble(siv, BubbleRole::Assistant, &text);
+                                    }
+                                    view::update_status(siv, total_input_tokens, total_output_tokens);
+                                }));
+                            }
+                            Err(e) => {
+                                let err_msg = format!("Engine error: {}", e);
+                                let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
+                                    view::hide_thinking(siv);
+                                    view::push_bubble(siv, BubbleRole::System, &err_msg);
+                                }));
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    });
+
+    // Run cursive via explicit runner so we can disable mouse capture.
+    let mut runner = siv
+        .try_runner()
+        .map_err(|e| anyhow::Error::msg(e.to_string()))?;
+    disable_terminal_mouse_capture()?;
+    runner.run();
+
+    Ok(())
+}

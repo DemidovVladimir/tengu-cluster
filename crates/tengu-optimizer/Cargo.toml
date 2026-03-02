@@ -14,4 +14,3 @@ tracing.workspace = true
 
 [features]
 default = []
-candle = []

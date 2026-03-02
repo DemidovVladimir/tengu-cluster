@@ -1,204 +1,181 @@
 # Tengu Cluster
 
-Fast, low-cost Rust agent hub for business workflows across chat channels.
+Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
 
-Architecture style:
-- Adapter-first runtime boundaries (`Engine`, `Pipe`, `Refiner`, `Tool`) for plug-and-play providers/channels/tools.
-- Event-driven runtime processing (stream events + channel message queues), with `DomainEvent`/`EventBus` contracts, bounded in-process bus, runtime emitters, audit/metrics/policy subscribers, and profile-aware backpressure validation implemented.
+## What It Does
 
-Architecture guardrail:
-- New providers/channels/tools/refiners must be added via `tengu-core` adapter traits and must not introduce provider-specific orchestration coupling in runtime modules (`src/main.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/runtime_bus.rs`).
-- New runtime side-effects should be introduced as domain-event subscribers (or marked explicitly as temporary with linked follow-up tasks).
+- **Single-agent chat** — talk to any AI model from your terminal with persistent history
+- **Multi-agent fleet** — run specialized agents (QA, backend, integration) as a coordinated team
+- **Any model, one key** — use [OpenRouter](https://openrouter.ai) to access Claude, GPT, Gemini, Llama, Mistral, DeepSeek and hundreds more behind one API key
+- **Custom skills** — define tools as markdown files, agents execute them during conversation
+- **Telegram channel** — chat with your agent from your phone
 
-## What It Is
-
-Tengu Cluster is a single Rust application that routes messages to AI models and keeps strict control over:
-- token usage
-- storage/retrieval behavior
-- operational cost
-
-Current working baseline:
-- CLI chat runtime
-- Ollama backend (streaming)
-- Anthropic backend (typed REST, non-streaming)
-- OpenAI backend (typed REST, non-streaming)
-- Hugging Face backend (Inference Providers, non-streaming)
-- Claude Code backend (subprocess, non-streaming)
-- single-orchestrator-first topology direction with one central policy/audit control plane (dependent agents remain flexible)
-- backend diagnostics metadata surfaced in `status`, `doctor`, and `/engine`
-- prompt reserve aligned to engine output caps (avoids over-reserve on large-context models)
-- in-memory knowledge retrieval with budget-capped query API (`query_with_budget`)
-- append-only tool audit trail (`~/.tengu/state/audit/tool_calls.jsonl`) persisted by event subscriber from runtime tool lifecycle events, including compact argument/result previews
-- append-only delegated assignment audit trail (`~/.tengu/state/audit/capability_assignments.jsonl`) persisted by event subscriber from handoff lifecycle events
-- startup replay of non-expired approved delegated assignments from audit log (`/assignments` survives restarts)
-- delegated assignment cleanup controls (`/unassign`, `/assignments clear`) plus automatic TTL expiry, startup audit-log pruning, and terminal-status reconciliation of active runtime assignments
-- emergency delegated execution stop (`/stopall`) aborts delegated worker subscribers and revokes active delegated assignments to prevent background token spending
-- topology-aware delegated handoff bounds are enforced at runtime (`topology.mode`, orchestrator/dependent bounds, `max_handoff_depth`)
-- event-driven delegated handoff queue baseline emits non-terminal `Accepted` acknowledgements for dispatched handoffs
-- event-driven delegated handoff execution baseline runs one dependent-agent turn and emits `ReviewRequired`/`Failed` result events
-- validation-gate control commands are implemented (`/handoff pending`, `/handoff auto ...`, `/handoff <accept|retry|rework|fail> ...`) before delegated output is marked final
-- automated validator baseline is implemented for delegated review gates (`/handoff auto`): policy recheck + role/capability-aware Rust workspace checks (`cargo fmt --check`, `cargo test -q`) with bounded retry/fail outcomes
-- runtime internals are split by responsibility (`src/runtime_bus.rs`, `src/runtime_engine.rs`, `src/runtime_commands.rs`, `src/runtime_prompt.rs`, `src/main.rs`) for maintainability
-- config-driven tool approval gates (`kit.approval_required` + `kit.approved`) plus pre-execution allow/deny policy re-checks
-- typed inter-agent handoff task/result envelopes in `tengu-core` for orchestrator/dependent workflows
-- capability governance enforcement in runtime (`user` vs `delegated` actor gate) plus handoff policy evaluator with bounded tool/skill/engine checks
-- delegated orchestrator control-plane baseline in chat runtime (`/assign`, `/assignments`, `/unassign`, `/assignments clear`, `/handoff ...`, `/stopall`) with user-boundary checks
-- official-first dependency policy for providers/channels
-- Candle as planned local acceleration path (CUDA/Metal when available, CPU fallback)
-
-## Why Use It
-
-- Lower running cost through explicit token budgeting
-- Predictable behavior for long-running business chats
-- Rust-first architecture for speed and deploy simplicity
-- Adapter + event-driven design keeps integrations modular and auditable
-- Runtime is designed to run both on minimal single-core devices and higher-core machines
-- Single configuration surface keeps orchestration/policy/model defaults simple for users
-- Clear path to durable flows, compaction, and retrieval guard rails
-
-## How To Use
-
-### 1. Build
+## Quickstart
 
 ```bash
+# Build
 cargo build
-```
 
-### 2. Configure
-
-Copy and edit config:
-
-```bash
+# Configure
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
-```
+export OPENROUTER_API_KEY=sk-or-...
 
-Webstudio scenario template (orchestrator + dependent specialists):
-
-```bash
-cp config.webstudio.example.toml ~/.tengu/config.toml
-```
-
-Scenario note:
-- `config.webstudio.example.toml` includes `accountant` with `engine="huggingface"` and `model="THUDM/GLM-4.7"`.
-- Hugging Face backend baseline is implemented (`E4-T4`); set `HF_TOKEN` (and optional `HF_BASE_URL`) before using accountant handoffs.
-- Follow-up HF capabilities are tracked by `E4-T10`, `E4-T11`, and `E4-T12`.
-
-Export environment variables as needed:
-
-```bash
-cp .env.example .env
-# then export variables from .env using your shell tool of choice
-# (or export directly, e.g. `export OLLAMA_HOST=http://localhost:11434`)
-# for Anthropic/OpenAI engines set provider API keys
-```
-
-To run with OpenAI, set your agent config to:
-
-```toml
-[agents.main]
-engine = "openai"
-model = "gpt-4o-mini"
-```
-
-To run with Claude Code CLI, set your agent config to:
-
-```toml
-[agents.main]
-engine = "claude-code"
-model = "claude-sonnet-4-5-20250929"
-```
-
-Claude Code backend notes:
-- ensure `claude` is installed and authenticated in your shell profile
-- optional binary override via `CLAUDE_CODE_BIN`
-
-Optional per-agent provider tuning:
-
-```toml
-[agents.main.limits]
-context_window_override = 128000
-max_output_tokens_per_turn = 4096
-```
-
-Environment variable details:
-- `.env.example`
-
-### 3. Run
-
-```bash
+# Chat
 cargo run -- chat
 ```
 
-Useful commands inside chat:
-- `/help`
-- `/cost`
-- `/context`
-- `/assign <dependent> <cap1,cap2,...> [objective...]` (delegated mode)
-- `/assignments` (delegated mode)
-- `/unassign <handoff-id|dependent-agent-id>` (delegated mode)
-- `/assignments clear` (delegated mode)
-- `/handoff pending` (delegated mode)
-- `/handoff auto <handoff-id> [note...]` (delegated mode)
-- `/handoff <accept|retry|rework|fail> <handoff-id> [note...]` (delegated mode)
-- `/stopall` (delegated mode, emergency stop for delegated workers)
-- `/eco`, `/standard`, `/precise`
-- `/reset`
+The default config uses `anthropic/claude-sonnet-4` via OpenRouter. Change the model with one line:
 
-## Manual Smoke Test
-
-Preconditions before chat testing:
-- `~/.tengu/` is writable (or `TENGU_HOME` points to a writable directory)
-- Ollama is running at `OLLAMA_HOST`
-- the configured model is available locally (for example `llama3.2`)
-
-Suggested check sequence:
-
-```bash
-mkdir -p ~/.tengu
-cp config.example.toml ~/.tengu/config.toml
-
-# Ensure model is available in local Ollama registry
-ollama pull llama3.2
-
-# Optional: load env vars
-set -a
-source .env
-set +a
-
-cargo run -- status
-cargo run -- doctor
-cargo run -- chat
+```toml
+[agents.main]
+default = true
+engine = "openrouter"
+model = "openai/gpt-4o"    # or google/gemini-2.5-pro, meta-llama/llama-4-maverick, etc.
 ```
 
-If `doctor` prints:
-- `probe /api/tags... Unreachable`: start Ollama or fix `OLLAMA_HOST`
-- `Flow store ... Error`: ensure `TENGU_HOME` parent is writable
+See the [Quickstart Guide](docs/QUICKSTART.md) for the full walkthrough.
 
-## Development Checks
+## Supported Backends
 
-Run local quality checks:
+| Engine | API Key | Model Format |
+|--------|---------|-------------|
+| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `provider/model` (e.g. `anthropic/claude-sonnet-4`) |
+| **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o` |
+| **Ollama** | (none, local) | `llama3.2` |
+| **Hugging Face** | `HF_TOKEN` | `org/model:variant` |
+| **Claude Code** | (subprocess) | `claude-sonnet-4-5-20250929` |
+
+## Commands
 
 ```bash
-scripts/check_rust_file_descriptions.sh
+cargo run -- chat         # Interactive chat (default)
+cargo run -- orchestrate  # Multi-agent fleet
+cargo run -- status       # Show config summary
+cargo run -- doctor       # Check backend connectivity
+```
+
+### Chat Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | List commands |
+| `/cost` | Token usage |
+| `/context` | Context window info |
+| `/engine` | Current engine details |
+| `/eco` / `/standard` / `/precise` | Switch lens mode |
+| `/reset` | Clear conversation |
+
+## Multi-Agent Fleet
+
+Run specialized agents as a team:
+
+```toml
+[orchestrator]
+enabled = true
+
+[agents.qa]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4"
+role = "qa"
+skills = ["search", "test_runner"]
+
+[agents.backend]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4"
+role = "backend_engineer"
+```
+
+```bash
+cargo run -- orchestrate
+```
+
+Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure).
+
+See the [Fleet Orchestration Guide](docs/FLEET.md) for the full setup.
+
+## Custom Skills
+
+Define tools as `skills/*.md` files. Two formats are supported:
+
+**Classic skills** — shell command tools with parameters:
+
+```markdown
+# test_runner
+
+Run the project test suite.
+
+## Parameters
+- `filter` (string, optional): test name filter
+
+## Execution
+```bash
+cargo test {{filter}} 2>&1
+```
+```
+
+**API skills** — YAML frontmatter wrapping API docs, auto-generates a curl-based tool:
+
+```markdown
+---
+name: my-api
+description: My external API
+homepage: https://api.example.com
+---
+
+# API Documentation
+
+Full API reference here — injected into the agent's system prompt.
+```
+
+Agents call these tools during conversation. Restrict skills per agent with `skills = ["tool1", "tool2"]`.
+
+See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
+
+## Documentation
+
+| Guide | What It Covers |
+|-------|---------------|
+| [Quickstart](docs/QUICKSTART.md) | Installation, first config, first chat, next steps |
+| [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
+| [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
+| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, heartbeat, events |
+| [Architecture](ARCHITECTURE.md) | Hexagonal architecture rules and project structure |
+
+## Feature Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `openrouter` | on | OpenRouter unified API |
+| `anthropic` | on | Anthropic/Claude |
+| `openai` | on | OpenAI |
+| `ollama` | on | Ollama local models |
+| `claude-code` | on | Claude Code subprocess |
+| `huggingface` | off | Hugging Face Inference Providers |
+| `telegram` | off | Telegram bot channel |
+
+```bash
+# Build with Telegram support
+cargo build --features telegram
+
+# Build with all features
+cargo build --all-features
+```
+
+## Architecture
+
+This project uses **hexagonal architecture** as a **mandatory** requirement. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full rules.
+
+- `src/domain/` — pure business rules, no I/O
+- `src/application/` — use-case orchestration via ports
+- `src/adapters/` — infrastructure implementations
+
+## Development
+
+```bash
 cargo fmt --all
 cargo test --workspace
 ```
 
-Enable the pre-commit hook:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-## Key Docs
-
-- `PRD.md`
-- `USER_STORIES.md`
-- `ARCHITECTURE.md`
-- `ROADMAP_MVP.md`
-- `WEBSTUDIO_EXECUTION_FLOW.md`
-- `EVENT_BUS_MIGRATION_PLAN.md`
-- `STORAGE_RETRIEVAL_GAP_ANALYSIS.md`
-- `DEPENDENCY_POLICY.md`
-- `RUST_PATTERNS_PLAYBOOK.md`
+Architecture guardrails are enforced by `tests/hex_architecture_enforcement.rs`.
