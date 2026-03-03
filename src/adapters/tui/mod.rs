@@ -344,6 +344,9 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
     // Build cursive
     let mut siv = cursive::default();
 
+    // Apply dark theme by default
+    view::apply_theme(&mut siv, app::ThemeMode::Dark);
+
     // Build UI
     view::build_ui(&mut siv, request_tx);
 
@@ -446,6 +449,49 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
 
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
+        }
+
+        // Transpile scan: detect foreign runtime deps, auto-prefer Rust variants,
+        // generate scaffolds for skills that need transpilation.
+        {
+            let scan = skill_registry.transpile_scan();
+
+            // Generate Rust scaffolds for skills without Rust variants.
+            if let Some(ref ws) = workspace {
+                let transpile_dir = ws.join(".tengu").join("transpiled");
+                for report in &scan.needs_transpile {
+                    let content =
+                        crate::adapters::scaffold_writer::build_scaffold_content(report);
+                    match crate::adapters::scaffold_writer::write_scaffold(
+                        &content,
+                        &transpile_dir,
+                    ) {
+                        Ok(path) => {
+                            tracing::info!(
+                                "Generated Rust scaffold for '{}' at {}",
+                                report.skill_name,
+                                path.display()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to generate scaffold for '{}': {}",
+                                report.skill_name,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
+            if let Some(summary) =
+                crate::application::skill_transpile::format_scan_summary(&scan)
+            {
+                let cb = cb_sink.clone();
+                let _ = cb.send(Box::new(move |siv: &mut Cursive| {
+                    view::push_bubble(siv, BubbleRole::System, &summary);
+                }));
+            }
         }
 
         let mut tools_dirty = true;

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::application::ports::SkillSourcePort;
+use crate::application::skill_transpile::{self, TranspileScanResult};
 use crate::domain::skill::{
     api_skill_preamble, diff_skill_sets, parse_skill_file, skill_to_tool_def, validate_skill,
     ParsedSkill, SkillDefinition, SkillDiff, SkillEntry, SkillStatus,
@@ -185,6 +186,45 @@ impl SkillRegistry {
             }
             None => Err(format!("Skill '{}' not found", name)),
         }
+    }
+
+    /// Scan all loaded skills for foreign (non-Rust) runtime dependencies.
+    ///
+    /// Auto-disables foreign skills that have a Rust variant available.
+    /// Returns a scan result for reporting to the user.
+    pub(crate) fn transpile_scan(&mut self) -> TranspileScanResult {
+        let skills: Vec<(String, String, Option<String>)> = self
+            .entries
+            .iter()
+            .map(|(name, entry)| {
+                let content = entry.context_body.clone().unwrap_or_default();
+                let exec_tmpl = if entry.definition.execution_template.is_empty() {
+                    None
+                } else {
+                    Some(entry.definition.execution_template.clone())
+                };
+                (name.clone(), content, exec_tmpl)
+            })
+            .collect();
+
+        let result = skill_transpile::scan_skills_for_foreign_deps(&skills);
+
+        // Auto-disable foreign skills that have Rust variants.
+        for ap in &result.auto_preferred {
+            if let Some(entry) = self.entries.get_mut(&ap.foreign_skill) {
+                if entry.status == SkillStatus::Active {
+                    entry.status = SkillStatus::Inactive;
+                    tracing::info!(
+                        "Auto-disabled '{}' ({}), using Rust variant '{}'",
+                        ap.foreign_skill,
+                        ap.runtimes.join(", "),
+                        ap.rust_variant,
+                    );
+                }
+            }
+        }
+
+        result
     }
 }
 

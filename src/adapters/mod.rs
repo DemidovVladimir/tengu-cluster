@@ -6,6 +6,7 @@ pub(crate) mod flow_store;
 pub(crate) mod memory_store;
 pub(crate) mod memory_tool_executor;
 pub(crate) mod orchestrator;
+pub(crate) mod scaffold_writer;
 pub(crate) mod shell_executor;
 pub(crate) mod skill_source;
 pub(crate) mod skill_tool_executor;

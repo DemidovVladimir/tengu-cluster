@@ -8,7 +8,7 @@ homepage: https://testnet.molecule.xyz/ipnfts
 
 Aura is a server-side orchestrator LLM that reads a **Blueprint JSON** and dispatches workflow steps against the Molecule DeSci infrastructure. This skill covers four canonical workflows:
 
-1. **IPNFT Mint** — reserve token on-chain, prepare metadata via GraphQL, mint on-chain
+1. **IPNFT Mint** — register POI, prepare metadata via GraphQL, mint on-chain
 2. **Project Creation** — create a data room linked to a minted IP-NFT via GraphQL
 3. **File Upload** — three-phase presigned upload via GraphQL
 4. **Announcement Creation** — publish updates with file attachments via GraphQL
@@ -40,7 +40,7 @@ Before executing any workflow, verify **all** required credentials and configura
 | **Chain ID** | `11155111` |
 | **IPNFT Contract** | `0x152B444e60C526fe4434C721561a077269FcF61a` |
 | **Mint Fee** | `0.001 ETH` |
-| **IPNFT ABI** | `reserve() returns (uint256)` and `mintReservation(address to, uint256 reservationId, string tokenURI, string symbol, bytes authorization) payable returns (uint256)` |
+| **IPNFT ABI** | `mintReservation(address to, uint256 reservationId, string tokenURI, string symbol, bytes authorization) payable returns (uint256)` |
 
 ### Prerequisite Checklist
 

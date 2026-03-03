@@ -32,3 +32,10 @@ pub enum SkillCommand {
     Disable(String),
 }
 
+/// Theme mode for the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+

@@ -140,6 +140,7 @@ fn domain_layer_is_infrastructure_free() {
         "src/domain/task.rs",
         "src/domain/skill.rs",
         "src/domain/memory.rs",
+        "src/domain/skill_transpile.rs",
     ] {
         let src = read(file);
         assert!(
@@ -169,6 +170,7 @@ fn application_layer_is_infrastructure_free() {
         "src/application/skill_catalog.rs",
         "src/application/memory_service.rs",
         "src/application/skill_registry.rs",
+        "src/application/skill_transpile.rs",
     ] {
         let src = read(file);
         assert!(
