@@ -6,7 +6,7 @@ use cursive::theme::{BaseColor, Color, Effect, Style};
 use cursive::traits::*;
 use cursive::utils::markup::StyledString;
 use cursive::view::ScrollStrategy;
-use cursive::views::{Dialog, EditView, LinearLayout, ScrollView, TextView};
+use cursive::views::{Dialog, EditView, LinearLayout, NamedView, ScrollView, TextView};
 use cursive::Cursive;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -50,7 +50,7 @@ fn build_input(tx: mpsc::Sender<ChatRequest>) -> impl cursive::View {
 }
 
 fn build_status() -> impl cursive::View {
-    TextView::new(" 0 in / 0 out  |  /help  |  Ctrl+Q quit")
+    TextView::new(" 0 in / 0 out  |  mem: --  |  /help  |  Ctrl+Q quit")
         .with_name("status")
         .full_width()
 }
@@ -144,12 +144,23 @@ pub fn update_header(siv: &mut Cursive, agent_name: &str, engine_label: &str, le
     let _ = text;
 }
 
+/// Re-engage auto-scroll so new content is always visible.
+fn scroll_chat_to_bottom(siv: &mut Cursive) {
+    siv.call_on_name(
+        "chat_scroll",
+        |sv: &mut ScrollView<NamedView<LinearLayout>>| {
+            sv.set_scroll_strategy(ScrollStrategy::StickToBottom);
+        },
+    );
+}
+
 /// Append a chat bubble to the chat area.
 pub fn push_bubble(siv: &mut Cursive, role: BubbleRole, text: &str) {
     siv.call_on_name("chat_content", |layout: &mut LinearLayout| {
         let styled = format_bubble(role, text);
         layout.add_child(TextView::new(styled));
     });
+    scroll_chat_to_bottom(siv);
 }
 
 /// Show the thinking indicator at the bottom of chat.
@@ -162,6 +173,7 @@ pub fn show_thinking(siv: &mut Cursive) {
         );
         layout.add_child(TextView::new(styled).with_name("thinking_indicator"));
     });
+    scroll_chat_to_bottom(siv);
     siv.set_autorefresh(true);
 }
 
@@ -180,11 +192,24 @@ pub fn hide_thinking(siv: &mut Cursive) {
     siv.set_autorefresh(false);
 }
 
-/// Update the status bar with token counts.
-pub fn update_status(siv: &mut Cursive, input_tokens: u32, output_tokens: u32) {
+/// Update the status bar with token counts and optional memory stats.
+pub fn update_status(
+    siv: &mut Cursive,
+    input_tokens: u32,
+    output_tokens: u32,
+    memory_stats: Option<(usize, u64)>,
+) {
+    let mem_part = match memory_stats {
+        Some((0, _)) => "mem: empty".to_string(),
+        Some((count, bytes)) => {
+            let kb = bytes / 1024;
+            format!("mem: {} / {} KB", count, kb)
+        }
+        None => "mem: off".to_string(),
+    };
     let text = format!(
-        " {} in / {} out  |  /help  |  Ctrl+Q quit",
-        input_tokens, output_tokens
+        " {} in / {} out  |  {}  |  /help  |  Ctrl+Q quit",
+        input_tokens, output_tokens, mem_part
     );
     siv.call_on_name("status", |view: &mut TextView| {
         view.set_content(text);
@@ -246,42 +271,47 @@ pub fn push_tool_activity(siv: &mut Cursive, tool_name: &str, detail: &str) {
         styled.append_plain("\n");
         layout.add_child(TextView::new(styled));
     });
+    scroll_chat_to_bottom(siv);
 }
 
-/// Show a write confirmation dialog. Sends `true` (allow) or `false` (deny)
+/// Show a tool confirmation dialog. Sends `true` (allow) or `false` (deny)
 /// back through the provided sender.
-pub fn show_write_confirmation(
+pub fn show_tool_confirmation(
     siv: &mut Cursive,
-    path: &str,
-    content_preview: &str,
+    title: &str,
+    description: &str,
+    preview: &str,
     response_tx: mpsc::Sender<bool>,
 ) {
-    let preview = if content_preview.len() > 200 {
+    let preview_text = if preview.len() > 200 {
         let mut end = 200;
-        while end > 0 && !content_preview.is_char_boundary(end) {
+        while end > 0 && !preview.is_char_boundary(end) {
             end -= 1;
         }
-        format!("{}...", &content_preview[..end])
+        format!("{}...", &preview[..end])
     } else {
-        content_preview.to_string()
+        preview.to_string()
+    };
+
+    let body = if preview_text.is_empty() {
+        description.to_string()
+    } else {
+        format!("{}\n\n{}", description, preview_text)
     };
 
     let tx_allow = response_tx.clone();
     let tx_deny = response_tx;
 
-    let dialog = Dialog::text(format!(
-        "Allow write to '{}'?\n\nPreview:\n{}",
-        path, preview
-    ))
-    .title("Write Confirmation")
-    .button("Allow", move |s| {
-        let _ = tx_allow.send(true);
-        s.pop_layer();
-    })
-    .button("Deny", move |s| {
-        let _ = tx_deny.send(false);
-        s.pop_layer();
-    });
+    let dialog = Dialog::text(body)
+        .title(title)
+        .button("Allow", move |s| {
+            let _ = tx_allow.send(true);
+            s.pop_layer();
+        })
+        .button("Deny", move |s| {
+            let _ = tx_deny.send(false);
+            s.pop_layer();
+        });
 
     siv.add_layer(dialog);
 }

@@ -56,13 +56,13 @@ name = "Tengu"
 scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
-# max_history_turns = 80
+# max_history_turns = 20
 # compaction_threshold_ratio = 0.82
 # compaction_keep_turns = 24
 # compaction_summary_max_tokens = 320
 
 [agents.main.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 # context_window_override = 200000
 # max_output_tokens_per_turn = 4096
 
@@ -100,7 +100,7 @@ max_tokens_per_flow = 500_000
 # reset_mode = "idle"
 #
 # [agents.qa.limits]
-# max_tokens_per_flow = 500_000
+# max_tokens_per_flow = 100_000
 
 # [agents.backend]
 # engine = "openrouter"
@@ -115,7 +115,7 @@ max_tokens_per_flow = 500_000
 # reset_mode = "idle"
 #
 # [agents.backend.limits]
-# max_tokens_per_flow = 500_000
+# max_tokens_per_flow = 100_000
 
 # [agents.integrator]
 # engine = "openrouter"
@@ -130,4 +130,4 @@ max_tokens_per_flow = 500_000
 # reset_mode = "idle"
 #
 # [agents.integrator.limits]
-# max_tokens_per_flow = 500_000
+# max_tokens_per_flow = 100_000

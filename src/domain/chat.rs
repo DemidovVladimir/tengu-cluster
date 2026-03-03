@@ -63,10 +63,10 @@ pub(crate) fn resolve_history_turn_limit(flow: &tengu_core::config::FlowConfig) 
 
 pub(crate) fn default_history_turn_limit_for_scope(scope: &str) -> usize {
     match scope {
-        "main" => 160,
-        "per-group" => 120,
-        "per-pipe-sender" => 100,
-        _ => 80,
+        "main" => 40,
+        "per-group" => 30,
+        "per-pipe-sender" => 25,
+        _ => 20,
     }
 }
 

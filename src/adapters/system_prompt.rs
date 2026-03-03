@@ -14,16 +14,26 @@ pub(crate) fn build_system_prompt(
     advertise_workspace_tools: bool,
     skill_contexts: &[String],
 ) -> String {
-    const MAX_FILE_TOKENS: usize = 1200;
-    const MAX_SKILL_CONTEXT_TOKENS: usize = 2400;
-    const MAX_TOTAL_TOKENS: usize = 6000;
+    const MAX_FILE_TOKENS: usize = 600;
+    const MAX_SKILL_CONTEXT_TOKENS: usize = 1200;
+    const MAX_TOTAL_TOKENS: usize = 3000;
 
     let name = agent_config.identity.name.as_deref().unwrap_or("Tengu");
     let mut parts = Vec::new();
     let mut total_tokens = 0usize;
 
     // 1. Default preamble — always present.
-    let preamble = format!("You are {name}, an AI assistant.");
+    let preamble = format!(
+        "You are {name}, an AI assistant.\n\n\
+         CRITICAL RULES:\n\
+         - NEVER fabricate data. Do not invent transaction hashes, URLs, IDs, addresses, \
+         block numbers, or any other identifiers. If you do not have real data from a tool \
+         call result, say so.\n\
+         - NEVER present fictional output as if a command succeeded. If you did not execute \
+         an action via a tool, do not claim it happened.\n\
+         - When asked to perform an action, use the available tools (run_command, API tools) \
+         to actually execute it. Report only real results from tool output."
+    );
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
@@ -104,12 +114,20 @@ pub(crate) fn build_system_prompt(
                  - read_file(path): Read file contents from the workspace (supports text files and PDFs)\n\
                  - list_directory(path): List files and directories (use \".\" for root)\n\
                  - write_file(path, content): Write content to a file (requires user approval)\n\
+                 - run_command(command): Execute a shell command in the workspace (requires user approval)\n\
                  \n\
-                 All paths are relative to the workspace root. You can use these tools to help the user with file operations.\n\
+                 All paths are relative to the workspace root.\n\
                  \n\
                  Tool-use policy:\n\
                  - If asked about file contents, call read_file before answering.\n\
-                 - Do not claim file contents you have not read via tools in this turn."
+                 - Do not claim file contents you have not read via tools in this turn.\n\
+                 - When the user asks you to perform an action (install packages, run scripts, call APIs, compile code, \
+                 execute commands), use run_command to execute it directly. Do NOT create script files for the user to \
+                 run manually — always execute actions yourself using run_command.\n\
+                 - When an action needs time to propagate (e.g. blockchain indexing, deployment, CI), \
+                 use run_command with a polling loop to check results automatically. Example: \
+                 for i in $(seq 1 10); do sleep 30; curl -s <check_url> && exit 0; done. \
+                 Do NOT tell the user to wait and check manually — poll for them."
                 .to_string();
             let tools_tokens = estimate_tokens_approx_min1(&tools_note);
             if total_tokens + tools_tokens <= MAX_TOTAL_TOKENS + 400 {

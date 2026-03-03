@@ -140,6 +140,10 @@ mod tests {
         fn entry_count(&self) -> usize {
             self.entries.lock().unwrap().len()
         }
+
+        fn storage_bytes(&self) -> u64 {
+            0
+        }
     }
 
     #[tokio::test]

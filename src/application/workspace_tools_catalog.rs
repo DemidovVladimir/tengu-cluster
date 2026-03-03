@@ -69,6 +69,22 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
             ToolRiskLevel::Medium,
             true,
         ),
+        tool_def(
+            "run_command",
+            "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files. Requires user approval.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute (runs via sh -c)"
+                    }
+                },
+                "required": ["command"]
+            }),
+            ToolRiskLevel::High,
+            true,
+        ),
     ]
 }
 
@@ -97,11 +113,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_workspace_tools_returns_three() {
+    fn build_workspace_tools_returns_four() {
         let tools = build_workspace_tools();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         assert_eq!(tools[0].name, "read_file");
         assert_eq!(tools[1].name, "list_directory");
         assert_eq!(tools[2].name, "write_file");
+        assert_eq!(tools[3].name, "run_command");
+        assert!(tools[3].policy.as_ref().unwrap().requires_approval);
     }
 }

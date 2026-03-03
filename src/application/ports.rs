@@ -56,6 +56,7 @@ pub(crate) trait MemoryStorePort: Send + Sync {
     ) -> Result<Vec<MemorySearchResult>>;
     fn delete(&self, id: &str) -> Result<bool>;
     fn entry_count(&self) -> usize;
+    fn storage_bytes(&self) -> u64;
 }
 
 /// Port for task persistence in orchestration.

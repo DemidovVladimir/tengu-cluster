@@ -77,20 +77,53 @@ struct CursiveToolActivityAdapter {
 impl ToolActivityPort for CursiveToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
         let tool_name = call.name.clone();
-        let detail = call
-            .arguments
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let detail = summarize_tool_args(&call.name, &call.arguments);
 
         let cb = self.cb_sink.clone();
-        let tn = tool_name;
-        let dt = detail;
         let _ = cb.send(Box::new(move |siv: &mut Cursive| {
-            view::push_tool_activity(siv, &tn, &dt);
+            view::push_tool_activity(siv, &tool_name, &detail);
         }));
     }
+}
+
+/// Build a short human-readable summary of tool arguments for the activity line.
+fn summarize_tool_args(tool_name: &str, args: &serde_json::Value) -> String {
+    // Try well-known keys in priority order per tool type.
+    let key = match tool_name {
+        "run_command" => "cmd",
+        "search_files" | "search" => "query",
+        _ => "path",
+    };
+
+    if let Some(val) = args.get(key).and_then(|v| v.as_str()) {
+        return truncate_detail(val, 120);
+    }
+
+    // Fallback: show all string arguments as key=value pairs.
+    let obj = match args.as_object() {
+        Some(m) if !m.is_empty() => m,
+        _ => return String::new(),
+    };
+
+    let parts: Vec<String> = obj
+        .iter()
+        .filter_map(|(k, v)| {
+            v.as_str().map(|s| format!("{}={}", k, truncate_detail(s, 60)))
+        })
+        .collect();
+    parts.join(" ")
+}
+
+/// Truncate a display string, appending "…" if it exceeds the limit.
+fn truncate_detail(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 
 /// TUI adapter for interactive tool approval prompts.
@@ -100,27 +133,62 @@ struct CursiveToolApprovalAdapter {
 
 impl ToolApprovalPort for CursiveToolApprovalAdapter {
     fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        let content_preview = call
-            .arguments
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let path_display = call
-            .arguments
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let (title, description, preview) = build_approval_dialog_content(call);
 
         let (confirm_tx, confirm_rx) = mpsc::channel::<bool>();
         let cb = self.cb_sink.clone();
         let _ = cb.send(Box::new(move |siv: &mut Cursive| {
-            view::show_write_confirmation(siv, &path_display, &content_preview, confirm_tx);
+            view::show_tool_confirmation(siv, &title, &description, &preview, confirm_tx);
         }));
 
         // Block the engine thread until the user responds.
         Ok(confirm_rx.recv().unwrap_or(false))
+    }
+}
+
+/// Build title, description, and preview text for the tool approval dialog.
+fn build_approval_dialog_content(call: &ToolCall) -> (String, String, String) {
+    match call.name.as_str() {
+        "run_command" => {
+            let cmd = call
+                .arguments
+                .get("command")
+                // Also check "cmd" — XML-parsed calls may use the shorter key.
+                .or_else(|| call.arguments.get("cmd"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            (
+                "Run Command".to_string(),
+                "Allow this command to execute?".to_string(),
+                cmd.to_string(),
+            )
+        }
+        "write_file" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            let content = call
+                .arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (
+                "Write Confirmation".to_string(),
+                format!("Allow write to '{}'?", path),
+                content.to_string(),
+            )
+        }
+        _ => {
+            // Generic fallback: show tool name and all arguments.
+            let summary = summarize_tool_args(&call.name, &call.arguments);
+            (
+                "Tool Confirmation".to_string(),
+                format!("Allow '{}' to run?", call.name),
+                summary,
+            )
+        }
     }
 }
 
@@ -151,9 +219,13 @@ fn rebuild_executor(
         return None;
     }
 
-    let workspace_exec = Arc::new(workspace_tools::WorkspaceToolExecutionAdapter::new(
-        workspace.to_path_buf(),
-    ));
+    let shell: Arc<dyn crate::application::ports::ShellExecutionPort> =
+        Arc::new(LocalShellExecutor);
+
+    let workspace_exec = Arc::new(
+        workspace_tools::WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
+            .with_shell(Arc::clone(&shell)),
+    );
 
     let skill_defs = skill_registry.active_skill_definitions();
     let skill_names: std::collections::HashSet<String> =
@@ -163,11 +235,9 @@ fn rebuild_executor(
         if skill_defs.is_empty() {
             None
         } else {
-            let shell: Arc<dyn crate::application::ports::ShellExecutionPort> =
-                Arc::new(LocalShellExecutor);
             Some(Arc::new(SkillToolExecutionAdapter::new(
                 skill_defs,
-                shell,
+                Arc::clone(&shell),
                 workspace.to_path_buf(),
             )))
         };
@@ -508,6 +578,9 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                 total_input_tokens,
                                 total_output_tokens,
                             }) => {
+                                let memory_stats = memory_handle.as_ref().map(|h| {
+                                    (h.store.entry_count(), h.store.storage_bytes())
+                                });
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {
@@ -516,7 +589,7 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                     if let Some(text) = assistant_text {
                                         view::push_bubble(siv, BubbleRole::Assistant, &text);
                                     }
-                                    view::update_status(siv, total_input_tokens, total_output_tokens);
+                                    view::update_status(siv, total_input_tokens, total_output_tokens, memory_stats);
                                 }));
                             }
                             Err(e) => {

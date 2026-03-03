@@ -1,8 +1,9 @@
 //! Filesystem adapter for workspace tool execution.
 
-use crate::application::ports::ToolExecutionPort;
+use crate::application::ports::{ShellExecutionPort, ToolExecutionPort};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tengu_core::types::ToolCall;
 
 const MAX_READ_SIZE: u64 = 100 * 1024;
@@ -200,16 +201,43 @@ pub fn execute_tool(workspace: &Path, call: &ToolCall) -> Result<String> {
 
 pub(crate) struct WorkspaceToolExecutionAdapter {
     workspace: PathBuf,
+    shell: Option<Arc<dyn ShellExecutionPort>>,
 }
 
 impl WorkspaceToolExecutionAdapter {
     pub(crate) fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+        Self {
+            workspace,
+            shell: None,
+        }
+    }
+
+    pub(crate) fn with_shell(mut self, shell: Arc<dyn ShellExecutionPort>) -> Self {
+        self.shell = Some(shell);
+        self
+    }
+
+    fn execute_run_command(&self, call: &ToolCall) -> Result<String> {
+        let command = call
+            .arguments
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("run_command: missing 'command' argument"))?;
+
+        let shell = self
+            .shell
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Shell execution is not available"))?;
+
+        shell.execute_shell(command, &self.workspace)
     }
 }
 
 impl ToolExecutionPort for WorkspaceToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
+        if call.name == "run_command" {
+            return self.execute_run_command(call);
+        }
         execute_tool(&self.workspace, call)
     }
 }

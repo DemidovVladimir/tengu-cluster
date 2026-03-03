@@ -98,6 +98,10 @@ impl MemoryStorePort for DiskVectorMemoryStore {
     fn entry_count(&self) -> usize {
         self.entries.read().map(|e| e.len()).unwrap_or(0)
     }
+
+    fn storage_bytes(&self) -> u64 {
+        std::fs::metadata(&self.store_path).map(|m| m.len()).unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

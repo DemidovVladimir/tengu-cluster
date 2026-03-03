@@ -227,7 +227,7 @@ impl Default for LimitsConfig {
 }
 
 fn default_max_tokens() -> u64 {
-    500_000
+    100_000
 }
 
 /// Orchestrator configuration for fleet management.
@@ -274,6 +274,8 @@ pub struct MemoryConfig {
     pub max_recall_tokens: usize,
     #[serde(default = "default_store_path")]
     pub store_path: String,
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
 }
 
 impl Default for MemoryConfig {
@@ -284,6 +286,7 @@ impl Default for MemoryConfig {
             max_recall_entries: default_max_recall_entries(),
             max_recall_tokens: default_max_recall_tokens(),
             store_path: default_store_path(),
+            embedding_provider: default_embedding_provider(),
         }
     }
 }
@@ -299,6 +302,9 @@ fn default_max_recall_tokens() -> usize {
 }
 fn default_store_path() -> String {
     "~/.tengu/memory/".to_string()
+}
+fn default_embedding_provider() -> String {
+    "openrouter".to_string()
 }
 
 /// Lens-specific retrieval and budgeting parameters.

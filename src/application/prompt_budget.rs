@@ -11,7 +11,7 @@ pub(crate) fn assemble_recent_history(
     messages: &[Message],
     history_budget: usize,
 ) -> HistoryAssembly {
-    const MAX_HISTORY_MESSAGES: usize = 120;
+    const MAX_HISTORY_MESSAGES: usize = 40;
 
     if history_budget == 0 || messages.is_empty() {
         return HistoryAssembly::default();

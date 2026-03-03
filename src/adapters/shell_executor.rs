@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
+const SHELL_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MB
 
 pub(crate) struct LocalShellExecutor;
