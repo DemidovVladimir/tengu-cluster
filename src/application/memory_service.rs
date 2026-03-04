@@ -1,10 +1,26 @@
 //! Application service for persistent vector memory operations.
+//!
+//! Orchestrates the embedding → store → recall pipeline:
+//!
+//! **Remember**: text → `EmbeddingPort::embed()` → `Vec<f32>` →
+//! `MemoryStorePort::store(MemoryEntry)` (disk or Qdrant).
+//!
+//! **Recall**: query text → `EmbeddingPort::embed()` → `Vec<f32>` →
+//! `MemoryStorePort::search_by_vector()` → cosine-ranked results →
+//! `budget_memories()` (greedy token-budget trimming).
+//!
+//! Both paths use the same `EmbeddingPort` instance, guaranteeing that queries
+//! and stored entries share the same embedding space.
 
 use crate::application::ports::{EmbeddingPort, MemoryStorePort};
 use crate::domain::memory::{budget_memories, MemoryEntry, MemorySearchResult};
 use anyhow::Result;
 
 /// Application service orchestrating memory operations (embed, store, recall, forget).
+///
+/// This is a thin use-case layer that wires `EmbeddingPort` to
+/// `MemoryStorePort`. It does not depend on any concrete adapter — both
+/// ports are injected as trait references.
 pub(crate) struct MemoryService<'a> {
     embedding: &'a dyn EmbeddingPort,
     store: &'a dyn MemoryStorePort,
@@ -37,7 +53,7 @@ impl<'a> MemoryService<'a> {
             created_at_epoch_s: now,
         };
 
-        self.store.store(&entry)?;
+        self.store.store(&entry).await?;
         Ok(id)
     }
 
@@ -54,21 +70,21 @@ impl<'a> MemoryService<'a> {
             .next()
             .ok_or_else(|| anyhow::anyhow!("embedding returned no vectors"))?;
 
-        let results = self.store.search_by_vector(&embedding, top_k)?;
+        let results = self.store.search_by_vector(&embedding, top_k).await?;
         let budgeted = budget_memories(&results, max_tokens);
         Ok(budgeted.into_iter().cloned().collect())
     }
 
     /// Delete a memory entry by ID.
     #[allow(dead_code)]
-    pub(crate) fn forget(&self, id: &str) -> Result<bool> {
-        self.store.delete(id)
+    pub(crate) async fn forget(&self, id: &str) -> Result<bool> {
+        self.store.delete(id).await
     }
 
     /// Return total number of stored memories.
     #[allow(dead_code)]
-    pub(crate) fn entry_count(&self) -> usize {
-        self.store.entry_count()
+    pub(crate) async fn entry_count(&self) -> usize {
+        self.store.entry_count().await
     }
 }
 
@@ -108,41 +124,51 @@ mod tests {
     }
 
     impl MemoryStorePort for MockStore {
-        fn store(&self, entry: &MemoryEntry) -> Result<()> {
-            self.entries.lock().unwrap().push(entry.clone());
-            Ok(())
+        fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            let entry = entry.clone();
+            Box::pin(async move {
+                self.entries.lock().unwrap().push(entry);
+                Ok(())
+            })
         }
 
         fn search_by_vector(
             &self,
             _embedding: &[f32],
             top_k: usize,
-        ) -> Result<Vec<MemorySearchResult>> {
-            let entries = self.entries.lock().unwrap();
-            let results: Vec<MemorySearchResult> = entries
-                .iter()
-                .take(top_k)
-                .map(|e| MemorySearchResult {
-                    entry: e.clone(),
-                    score: 0.9,
-                })
-                .collect();
-            Ok(results)
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>> {
+            Box::pin(async move {
+                let entries = self.entries.lock().unwrap();
+                let results: Vec<MemorySearchResult> = entries
+                    .iter()
+                    .take(top_k)
+                    .map(|e| MemorySearchResult {
+                        entry: e.clone(),
+                        score: 0.9,
+                    })
+                    .collect();
+                Ok(results)
+            })
         }
 
-        fn delete(&self, id: &str) -> Result<bool> {
-            let mut entries = self.entries.lock().unwrap();
-            let before = entries.len();
-            entries.retain(|e| e.id != id);
-            Ok(entries.len() < before)
+        fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+            let id = id.to_string();
+            Box::pin(async move {
+                let mut entries = self.entries.lock().unwrap();
+                let before = entries.len();
+                entries.retain(|e| e.id != id);
+                Ok(entries.len() < before)
+            })
         }
 
-        fn entry_count(&self) -> usize {
-            self.entries.lock().unwrap().len()
+        fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
+            Box::pin(async move {
+                self.entries.lock().unwrap().len()
+            })
         }
 
-        fn storage_bytes(&self) -> u64 {
-            0
+        fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
+            Box::pin(async move { 0 })
         }
     }
 
@@ -156,7 +182,7 @@ mod tests {
 
         let id = service.remember("test memory", "agent1").await.unwrap();
         assert!(!id.is_empty());
-        assert_eq!(service.entry_count(), 1);
+        assert_eq!(service.entry_count().await, 1);
     }
 
     #[tokio::test]
@@ -183,10 +209,10 @@ mod tests {
         let service = MemoryService::new(&embedding, &store);
 
         let id = service.remember("to forget", "agent1").await.unwrap();
-        assert_eq!(service.entry_count(), 1);
+        assert_eq!(service.entry_count().await, 1);
 
-        let deleted = service.forget(&id).unwrap();
+        let deleted = service.forget(&id).await.unwrap();
         assert!(deleted);
-        assert_eq!(service.entry_count(), 0);
+        assert_eq!(service.entry_count().await, 0);
     }
 }

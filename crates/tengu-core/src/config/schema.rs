@@ -276,6 +276,21 @@ pub struct MemoryConfig {
     pub store_path: String,
     #[serde(default = "default_embedding_provider")]
     pub embedding_provider: String,
+    /// Storage backend: "disk" (default) or "qdrant".
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    /// Qdrant gRPC endpoint URL.
+    #[serde(default = "default_qdrant_url")]
+    pub qdrant_url: String,
+    /// Optional API key for Qdrant Cloud.
+    #[serde(default)]
+    pub qdrant_api_key: Option<String>,
+    /// Qdrant collection name.
+    #[serde(default = "default_qdrant_collection")]
+    pub qdrant_collection: String,
+    /// Embedding vector dimensionality (must match embedding model output).
+    #[serde(default = "default_vector_size")]
+    pub vector_size: u64,
 }
 
 impl Default for MemoryConfig {
@@ -287,6 +302,11 @@ impl Default for MemoryConfig {
             max_recall_tokens: default_max_recall_tokens(),
             store_path: default_store_path(),
             embedding_provider: default_embedding_provider(),
+            backend: default_memory_backend(),
+            qdrant_url: default_qdrant_url(),
+            qdrant_api_key: None,
+            qdrant_collection: default_qdrant_collection(),
+            vector_size: default_vector_size(),
         }
     }
 }
@@ -305,6 +325,22 @@ fn default_store_path() -> String {
 }
 fn default_embedding_provider() -> String {
     "openrouter".to_string()
+}
+
+fn default_memory_backend() -> String {
+    "disk".to_string()
+}
+
+fn default_qdrant_url() -> String {
+    "http://localhost:6334".to_string()
+}
+
+fn default_qdrant_collection() -> String {
+    "tengu-memory".to_string()
+}
+
+fn default_vector_size() -> u64 {
+    1536
 }
 
 /// Lens-specific retrieval and budgeting parameters.

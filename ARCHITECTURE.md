@@ -65,12 +65,13 @@ Forbidden:
 | `agent_role.rs` | Fleet agent roles (QA, BackendEngineer, IntegrationMaster) | New |
 | `task.rs` | Task lifecycle model (status machine, retry logic) | New |
 | `memory.rs` | Memory entry types, cosine similarity, token budgeting | New |
+| `evm.rs` | EVM transaction request/receipt types (pure, no alloy) | New |
 
 ### Application Layer (`src/application/`)
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `ports.rs` | Port traits (FlowStore, ToolActivity/Approval/Execution, SkillSource, Shell, TaskStore, Embedding, MemoryStore) | Stable |
+| `ports.rs` | Port traits (FlowStore, ToolActivity/Approval/Execution, SkillSource, Shell, TaskStore, EmbeddingPort, MemoryStorePort, EvmPort) | Stable |
 | `chat_commands.rs` | Slash command handler | Stable |
 | `chat_runtime.rs` | Per-turn chat orchestration service | Stable |
 | `engine_runtime.rs` | Engine turn loop with tool-call chaining | Stable |
@@ -83,7 +84,7 @@ Forbidden:
 | `task_orchestrator.rs` | Task lifecycle service (create/assign/complete/retry) | Stable |
 | `fleet_runtime.rs` | In-memory fleet agent registry, scheduling, per-agent prompt + tools | Stable |
 | `heartbeat.rs` | Periodic heartbeat loop for stall detection | Stable |
-| `memory_service.rs` | Memory application service (remember/recall/forget) | New |
+| `memory_service.rs` | Memory application service (embed→store, embed→search→budget recall, forget) | Stable |
 
 ### Adapter Layer (`src/adapters/`)
 
@@ -101,9 +102,12 @@ Forbidden:
 | `shell_executor.rs` | Local shell command execution | Stable |
 | `task_store.rs` | In-memory task store implementing TaskStorePort | Stable |
 | `orchestrator.rs` | Fleet orchestrator bootstrap wiring | Stable |
-| `embedding.rs` | OpenRouter embedding API adapter (EmbeddingPort) | New |
-| `memory_store.rs` | Disk-backed vector store with bincode persistence (MemoryStorePort) | New |
-| `memory_tool_executor.rs` | Memory tool execution bridge (sync→async via dedicated runtime) | New |
+| `embedding.rs` | OpenRouter embedding API adapter (EmbeddingPort) — produces `Vec<f32>` vectors for storage and query | Stable |
+| `memory_store.rs` | Disk-backed vector store with brute-force cosine similarity and bincode persistence (MemoryStorePort) | Stable |
+| `qdrant_memory_store.rs` | Qdrant-backed vector store via gRPC, ANN cosine search (MemoryStorePort, `--features qdrant`) | Stable |
+| `memory_tool_executor.rs` | Memory tool execution bridge (sync→async via dedicated runtime) | Stable |
+| `evm_signer.rs` | Alloy-based EVM signer adapter (EvmPort, `--features evm`) | New |
+| `evm_tool_executor.rs` | EVM tool execution bridge (sync→async via dedicated runtime, `--features evm`) | New |
 
 ### Channel Adapters (`crates/tengu-channels/`)
 
@@ -132,7 +136,7 @@ Forbidden:
 ## Enforcement
 
 Automated checks exist in:
-- `tests/hex_architecture_enforcement.rs` (15 tests)
+- `tests/hex_architecture_enforcement.rs` (22 tests)
 
 Enforced invariants:
 - Domain files contain no `reqwest`, `cursive`, `std::fs`, `tokio::process`
@@ -143,7 +147,13 @@ Enforced invariants:
 - `InMemoryTaskStore` implements `TaskStorePort`
 - Legacy flat modules (`runtime_*.rs`, `flow_store.rs` at root) do not exist
 - `DiskVectorMemoryStore` implements `MemoryStorePort`
+- `QdrantMemoryStore` adapter exists and implements `MemoryStorePort`
 - `OpenRouterEmbeddingAdapter` implements `EmbeddingPort`
 - Memory modules exist at correct layer boundaries
+- Qdrant does not leak into domain or application layers
+- `AlloySigner` adapter exists and implements `EvmPort`
+- `EvmToolExecutionAdapter` exists and implements `ToolExecutionPort`
+- Alloy does not leak into domain or application layers
+- EVM domain types are infrastructure-free
 
 CI/local tests must stay green for architecture guardrails.

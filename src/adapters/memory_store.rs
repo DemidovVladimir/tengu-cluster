@@ -1,12 +1,24 @@
 //! Disk-backed vector memory store implementing MemoryStorePort.
+//!
+//! Zero-config default backend. Holds all entries in memory behind an `RwLock`
+//! and persists to a bincode file via atomic temp+rename. Search is brute-force
+//! cosine similarity over all entries — sufficient for hundreds to low thousands
+//! of memories. For larger-scale workloads, use the Qdrant backend
+//! (`--features qdrant`).
 
 use crate::application::ports::MemoryStorePort;
 use crate::domain::memory::{cosine_similarity, MemoryEntry, MemorySearchResult};
 use anyhow::{Context, Result};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::RwLock;
 
 /// In-memory vector store with bincode persistence to disk.
+///
+/// Data file: `{store_dir}/vectors.bin` (bincode-serialized `Vec<MemoryEntry>`).
+/// Each entry contains the full embedding vector so that cosine similarity
+/// can be computed locally without an external service.
 pub(crate) struct DiskVectorMemoryStore {
     entries: RwLock<Vec<MemoryEntry>>,
     store_path: PathBuf,
@@ -55,52 +67,65 @@ impl DiskVectorMemoryStore {
 }
 
 impl MemoryStorePort for DiskVectorMemoryStore {
-    fn store(&self, entry: &MemoryEntry) -> Result<()> {
-        let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-        entries.push(entry.clone());
-        self.flush(&entries)
+    fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let entry = entry.clone();
+        Box::pin(async move {
+            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            entries.push(entry);
+            self.flush(&entries)
+        })
     }
 
     fn search_by_vector(
         &self,
         embedding: &[f32],
         top_k: usize,
-    ) -> Result<Vec<MemorySearchResult>> {
-        let entries = self.entries.read().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>> {
+        let embedding = embedding.to_vec();
+        Box::pin(async move {
+            let entries = self.entries.read().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
 
-        let mut scored: Vec<MemorySearchResult> = entries
-            .iter()
-            .map(|entry| {
-                let score = cosine_similarity(&entry.embedding, embedding);
-                MemorySearchResult {
-                    entry: entry.clone(),
-                    score,
-                }
-            })
-            .collect();
+            let mut scored: Vec<MemorySearchResult> = entries
+                .iter()
+                .map(|entry| {
+                    let score = cosine_similarity(&entry.embedding, &embedding);
+                    MemorySearchResult {
+                        entry: entry.clone(),
+                        score,
+                    }
+                })
+                .collect();
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(top_k);
-        Ok(scored)
+            scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(top_k);
+            Ok(scored)
+        })
     }
 
-    fn delete(&self, id: &str) -> Result<bool> {
-        let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-        let before = entries.len();
-        entries.retain(|e| e.id != id);
-        let deleted = entries.len() < before;
-        if deleted {
-            self.flush(&entries)?;
-        }
-        Ok(deleted)
+    fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            let before = entries.len();
+            entries.retain(|e| e.id != id);
+            let deleted = entries.len() < before;
+            if deleted {
+                self.flush(&entries)?;
+            }
+            Ok(deleted)
+        })
     }
 
-    fn entry_count(&self) -> usize {
-        self.entries.read().map(|e| e.len()).unwrap_or(0)
+    fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
+        Box::pin(async move {
+            self.entries.read().map(|e| e.len()).unwrap_or(0)
+        })
     }
 
-    fn storage_bytes(&self) -> u64 {
-        std::fs::metadata(&self.store_path).map(|m| m.len()).unwrap_or(0)
+    fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
+        Box::pin(async move {
+            std::fs::metadata(&self.store_path).map(|m| m.len()).unwrap_or(0)
+        })
     }
 }
 
@@ -119,73 +144,73 @@ mod tests {
         }
     }
 
-    #[test]
-    fn round_trip_persistence() {
+    #[tokio::test]
+    async fn round_trip_persistence() {
         let tmp = TempDir::new().unwrap();
         let entry = make_entry("1", vec![1.0, 0.0, 0.0]);
 
         // Store and drop
         {
             let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
-            store.store(&entry).unwrap();
-            assert_eq!(store.entry_count(), 1);
+            store.store(&entry).await.unwrap();
+            assert_eq!(store.entry_count().await, 1);
         }
 
         // Reload and verify
         {
             let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
-            assert_eq!(store.entry_count(), 1);
+            assert_eq!(store.entry_count().await, 1);
         }
     }
 
-    #[test]
-    fn search_ordering() {
+    #[tokio::test]
+    async fn search_ordering() {
         let tmp = TempDir::new().unwrap();
         let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
 
         // Store entries with different embeddings
-        store.store(&make_entry("close", vec![0.9, 0.1, 0.0])).unwrap();
-        store.store(&make_entry("far", vec![0.0, 0.0, 1.0])).unwrap();
-        store.store(&make_entry("mid", vec![0.5, 0.5, 0.0])).unwrap();
+        store.store(&make_entry("close", vec![0.9, 0.1, 0.0])).await.unwrap();
+        store.store(&make_entry("far", vec![0.0, 0.0, 1.0])).await.unwrap();
+        store.store(&make_entry("mid", vec![0.5, 0.5, 0.0])).await.unwrap();
 
         // Search with query similar to "close"
-        let results = store.search_by_vector(&[1.0, 0.0, 0.0], 3).unwrap();
+        let results = store.search_by_vector(&[1.0, 0.0, 0.0], 3).await.unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].entry.id, "close");
         assert!(results[0].score > results[1].score);
     }
 
-    #[test]
-    fn delete_removes_and_persists() {
+    #[tokio::test]
+    async fn delete_removes_and_persists() {
         let tmp = TempDir::new().unwrap();
         let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
 
-        store.store(&make_entry("a", vec![1.0])).unwrap();
-        store.store(&make_entry("b", vec![0.0])).unwrap();
-        assert_eq!(store.entry_count(), 2);
+        store.store(&make_entry("a", vec![1.0])).await.unwrap();
+        store.store(&make_entry("b", vec![0.0])).await.unwrap();
+        assert_eq!(store.entry_count().await, 2);
 
-        let deleted = store.delete("a").unwrap();
+        let deleted = store.delete("a").await.unwrap();
         assert!(deleted);
-        assert_eq!(store.entry_count(), 1);
+        assert_eq!(store.entry_count().await, 1);
 
         // Verify persistence after delete
         let store2 = DiskVectorMemoryStore::new(tmp.path()).unwrap();
-        assert_eq!(store2.entry_count(), 1);
+        assert_eq!(store2.entry_count().await, 1);
     }
 
-    #[test]
-    fn delete_nonexistent_returns_false() {
+    #[tokio::test]
+    async fn delete_nonexistent_returns_false() {
         let tmp = TempDir::new().unwrap();
         let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
-        let deleted = store.delete("nonexistent").unwrap();
+        let deleted = store.delete("nonexistent").await.unwrap();
         assert!(!deleted);
     }
 
-    #[test]
-    fn empty_store_search() {
+    #[tokio::test]
+    async fn empty_store_search() {
         let tmp = TempDir::new().unwrap();
         let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
-        let results = store.search_by_vector(&[1.0, 0.0], 5).unwrap();
+        let results = store.search_by_vector(&[1.0, 0.0], 5).await.unwrap();
         assert!(results.is_empty());
     }
 }

@@ -3,6 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use tengu_core::types::{Message, ToolCall};
 
+use crate::domain::evm::{EvmTransactionReceipt, EvmTransactionRequest};
 use crate::domain::memory::{MemoryEntry, MemorySearchResult};
 
 /// Port for persistence of flow transcript messages.
@@ -38,6 +39,12 @@ pub(crate) trait ShellExecutionPort: Send + Sync {
 }
 
 /// Port for generating text embeddings via an external model.
+///
+/// Accepts one or more text strings and returns a vector of f32 embeddings,
+/// one per input text. The embedding dimensionality depends on the model
+/// (e.g. 1536 for `text-embedding-3-small`). Both `remember` and `recall`
+/// operations use the same port instance so query and stored vectors always
+/// share the same embedding space.
 pub(crate) trait EmbeddingPort: Send + Sync {
     fn embed(
         &self,
@@ -46,17 +53,57 @@ pub(crate) trait EmbeddingPort: Send + Sync {
 }
 
 /// Port for persistent vector memory storage and retrieval.
+///
+/// Two adapters implement this trait:
+/// - `DiskVectorMemoryStore` — in-process brute-force cosine similarity with
+///   bincode persistence (zero-config default).
+/// - `QdrantMemoryStore` — delegates to a Qdrant instance via gRPC for ANN
+///   (approximate nearest-neighbor) search (opt-in via `--features qdrant`).
+///
+/// The `store` method persists a pre-embedded `MemoryEntry` (embedding vector
+/// already attached). The `search_by_vector` method accepts a query embedding
+/// and returns the top-k closest entries scored by cosine similarity.
 #[allow(dead_code)]
 pub(crate) trait MemoryStorePort: Send + Sync {
-    fn store(&self, entry: &MemoryEntry) -> Result<()>;
+    /// Persist a memory entry (content + pre-computed embedding vector).
+    fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    /// Find the `top_k` entries closest to `embedding` by cosine similarity.
     fn search_by_vector(
         &self,
         embedding: &[f32],
         top_k: usize,
-    ) -> Result<Vec<MemorySearchResult>>;
-    fn delete(&self, id: &str) -> Result<bool>;
-    fn entry_count(&self) -> usize;
-    fn storage_bytes(&self) -> u64;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>>;
+
+    /// Delete a memory entry by its UUID. Returns `true` if it existed.
+    fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+
+    /// Total number of stored entries.
+    fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>>;
+
+    /// Approximate storage size in bytes (meaningful for disk, returns 0 for remote stores).
+    fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>>;
+}
+
+/// Port for EVM wallet signing and transaction submission.
+///
+/// Implemented by `AlloySigner` (adapter layer, `--features evm`). The port
+/// uses only domain types from `crate::domain::evm`, keeping the application
+/// layer free from alloy/provider imports.
+#[allow(dead_code)]
+pub(crate) trait EvmPort: Send + Sync {
+    /// Return the wallet's checksummed hex address (sync — pure key derivation).
+    fn get_address(&self) -> Result<String>;
+
+    /// Sign an arbitrary message and return the hex-encoded signature.
+    fn sign_message(&self, message: &str)
+        -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
+
+    /// Build, sign, send a transaction and wait for the receipt.
+    fn send_transaction(
+        &self,
+        tx: &EvmTransactionRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<EvmTransactionReceipt>> + Send + '_>>;
 }
 
 /// Port for task persistence in orchestration.

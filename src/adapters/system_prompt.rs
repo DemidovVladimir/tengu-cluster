@@ -13,6 +13,7 @@ pub(crate) fn build_system_prompt(
     agent_config: &tengu_core::config::AgentConfig,
     advertise_workspace_tools: bool,
     skill_contexts: &[String],
+    #[allow(unused_variables)] evm_tools_available: bool,
 ) -> String {
     const MAX_FILE_TOKENS: usize = 600;
     const MAX_SKILL_CONTEXT_TOKENS: usize = 1200;
@@ -133,6 +134,35 @@ pub(crate) fn build_system_prompt(
             if total_tokens + tools_tokens <= MAX_TOTAL_TOKENS + 400 {
                 parts.push(tools_note);
             }
+        }
+    }
+
+    // 7. EVM tools description — when native signing is available.
+    #[cfg(feature = "evm")]
+    if evm_tools_available {
+        let evm_note = "\
+            # EVM Wallet (Native Signing)\n\n\
+             You have a live Ethereum wallet connected. Use these native tools for ALL \
+             on-chain operations — do NOT use JavaScript/viem/ethers code from skill docs.\n\n\
+             Available EVM tools:\n\
+             - evm_get_address(): Get your wallet's Ethereum address\n\
+             - evm_sign_message(message): Sign a message with your private key (EIP-191 personal_sign)\n\
+             - evm_send_transaction(to, data, value, chain_id): Build, sign, and submit a transaction. \
+             Returns the mined receipt with transaction hash, block number, success status, and gas used.\n\
+             \n\
+             IMPORTANT:\n\
+             - When a skill workflow includes JavaScript/viem/ethers code for signing or \
+             sending transactions, translate those into evm_sign_message or evm_send_transaction \
+             calls instead. The native tools handle key management and signing internally.\n\
+             - For contract calls, encode the calldata yourself (ABI-encode the function selector + args) \
+             and pass it as the `data` parameter to evm_send_transaction.\n\
+             - For message signing (e.g. EIP-191 terms acceptance), use evm_sign_message.\n\
+             - The `value` parameter is in wei (decimal string). For example, 0.001 ETH = \"1000000000000000\".\n\
+             - All EVM tools require user approval before execution."
+            .to_string();
+        let evm_tokens = estimate_tokens_approx_min1(&evm_note);
+        if total_tokens + evm_tokens <= MAX_TOTAL_TOKENS + 600 {
+            parts.push(evm_note);
         }
     }
 

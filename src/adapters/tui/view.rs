@@ -296,6 +296,7 @@ pub fn update_status(
 ) {
     let mem_part = match memory_stats {
         Some((0, _)) => "mem: empty".to_string(),
+        Some((count, 0)) => format!("mem: {} entries", count),
         Some((count, bytes)) => {
             let kb = bytes / 1024;
             format!("mem: {} / {} KB", count, kb)

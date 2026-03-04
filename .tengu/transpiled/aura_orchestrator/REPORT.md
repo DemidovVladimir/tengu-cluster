@@ -6,9 +6,9 @@
 
 ## Foreign Code Blocks Found
 
-- `javascript` block at line 159
-- `javascript` block at line 362
-- `javascript` block at line 416
+- `javascript` block at line 235
+- `javascript` block at line 432
+- `javascript` block at line 486
 
 ## Next Steps
 

@@ -104,11 +104,12 @@ pub(crate) async fn boot_orchestrator(
                                 agent_config,
                                 true,
                                 &skill_contexts,
+                                false,
                             );
                             (prompt, all_tools)
                         } else {
                             let prompt =
-                                system_prompt::build_system_prompt(agent_config, false, &[]);
+                                system_prompt::build_system_prompt(agent_config, false, &[], false);
                             (prompt, vec![])
                         };
 

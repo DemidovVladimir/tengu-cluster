@@ -1,21 +1,41 @@
 //! Domain types and pure functions for persistent vector memory.
+//!
+//! This module contains the core data structures and similarity math shared by
+//! all memory store backends (disk and Qdrant). It has no infrastructure
+//! dependencies — pure business logic only.
 
 use serde::{Deserialize, Serialize};
 
 /// A single memory entry stored in the vector store.
+///
+/// The `embedding` field holds the pre-computed vector representation of
+/// `content`, produced by the configured embedding model (e.g.
+/// `text-embedding-3-small` → 1536-dimensional `Vec<f32>`). Both the original
+/// text and its embedding are persisted so that the disk store can perform
+/// brute-force cosine search locally. The Qdrant store sends the embedding as
+/// the point vector and the remaining fields as payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MemoryEntry {
+    /// Unique UUID v4 identifier.
     pub id: String,
+    /// Original human-readable text stored as a memory.
     pub content: String,
+    /// Embedding vector produced by the embedding model.
     pub embedding: Vec<f32>,
+    /// The agent that created this memory.
     pub agent_id: String,
+    /// Unix epoch seconds when the memory was created.
     pub created_at_epoch_s: u64,
 }
 
-/// A search result pairing a memory entry with its similarity score.
+/// A search result pairing a memory entry with its cosine similarity score.
+///
+/// Score ranges from -1.0 (opposite) through 0.0 (orthogonal) to 1.0
+/// (identical). Results are returned sorted by score descending.
 #[derive(Debug, Clone)]
 pub(crate) struct MemorySearchResult {
     pub entry: MemoryEntry,
+    /// Cosine similarity between the query embedding and this entry's embedding.
     pub score: f32,
 }
 

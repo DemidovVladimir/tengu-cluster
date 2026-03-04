@@ -1,4 +1,12 @@
 //! OpenRouter embedding adapter implementing EmbeddingPort.
+//!
+//! Calls `POST https://openrouter.ai/api/v1/embeddings` (OpenAI-compatible)
+//! with the configured model (default: `text-embedding-3-small`, 1536 dims).
+//! Returns `Vec<Vec<f32>>` — one embedding per input text.
+//!
+//! This adapter is used by both `remember` (embed content before storage) and
+//! `recall` (embed query before similarity search), ensuring that stored
+//! vectors and query vectors always share the same embedding space.
 
 use crate::application::ports::EmbeddingPort;
 use anyhow::{Context, Result};
@@ -6,6 +14,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 /// Adapter that calls the OpenRouter embeddings API.
+///
+/// Requires `OPENROUTER_API_KEY` environment variable.
 pub(crate) struct OpenRouterEmbeddingAdapter {
     client: reqwest::Client,
     api_key: String,

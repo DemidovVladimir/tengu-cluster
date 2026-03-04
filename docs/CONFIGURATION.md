@@ -16,6 +16,9 @@ All configuration lives in a single TOML file at `~/.tengu/config.toml`. Copy `c
   - [Lens](#lens)
   - [Role and Skills](#role-and-skills)
 - [Orchestrator](#orchestrator)
+- [Memory](#memory)
+  - [Disk Backend (default)](#disk-backend-default)
+  - [Qdrant Backend](#qdrant-backend)
 - [Environment Variables](#environment-variables)
 - [Config Validation Rules](#config-validation-rules)
 
@@ -332,6 +335,77 @@ max_retries = 3
 
 ---
 
+## Memory
+
+Persistent vector memory enables cross-session knowledge retrieval. When enabled, agents can store facts/insights via the `remember` tool and relevant memories are automatically recalled before each engine turn.
+
+**How it works:**
+
+1. **Remember**: user text → `EmbeddingPort::embed()` → `Vec<f32>` embedding → `MemoryStorePort::store()` (persisted with content, agent ID, timestamp)
+2. **Recall**: each turn, the user's message is embedded → `MemoryStorePort::search_by_vector()` finds the top-k closest memories by cosine similarity → results are budget-trimmed to fit token limits → injected as a `[Relevant memories]` system message before chat history
+
+Both operations use the same embedding model, guaranteeing that stored vectors and query vectors share the same embedding space.
+
+```toml
+[memory]
+enabled = true
+embedding_model = "text-embedding-3-small"
+max_recall_entries = 5
+max_recall_tokens = 600
+store_path = "~/.tengu/memory/"
+```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `enabled` | bool | `false` | Enable the memory subsystem |
+| `embedding_model` | string | `"text-embedding-3-small"` | OpenRouter embedding model ID |
+| `embedding_provider` | string | `"openrouter"` | Embedding API provider |
+| `max_recall_entries` | usize | `5` | Max memories to retrieve per turn |
+| `max_recall_tokens` | usize | `600` | Token budget for recalled memories |
+| `store_path` | string | `"~/.tengu/memory/"` | Disk backend storage directory |
+| `backend` | string | `"disk"` | `"disk"` or `"qdrant"` |
+| `qdrant_url` | string | `"http://localhost:6334"` | Qdrant gRPC endpoint |
+| `qdrant_api_key` | string? | none | API key for Qdrant Cloud |
+| `qdrant_collection` | string | `"tengu-memory"` | Qdrant collection name |
+| `vector_size` | u64 | `1536` | Embedding dimensionality (must match model) |
+
+Requires `OPENROUTER_API_KEY` for embedding generation.
+
+### Disk Backend (default)
+
+Zero-config. Stores all entries in memory with bincode persistence to `{store_path}/vectors.bin`. Search is brute-force cosine similarity — sufficient for hundreds to low thousands of memories.
+
+### Qdrant Backend
+
+Requires `cargo build --features qdrant` and a running Qdrant instance.
+
+```bash
+# Start Qdrant
+docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+```toml
+[memory]
+enabled = true
+backend = "qdrant"
+qdrant_url = "http://localhost:6334"
+qdrant_collection = "tengu-memory"
+vector_size = 1536
+# qdrant_api_key = "${QDRANT_API_KEY}"  # for Qdrant Cloud
+```
+
+The collection is auto-created with cosine distance on first connect. If the `qdrant` feature is not compiled in but `backend = "qdrant"` is set, the system logs a warning and falls back to the disk backend.
+
+**Common embedding models and their vector sizes:**
+
+| Model | Dimensions | Notes |
+|-------|-----------|-------|
+| `text-embedding-3-small` | 1536 | Default, good cost/quality balance |
+| `text-embedding-3-large` | 3072 | Higher quality, 2x storage |
+| `text-embedding-ada-002` | 1536 | Legacy OpenAI model |
+
+---
+
 ## Environment Variables
 
 All environment variables. The binary does not auto-load `.env` files — export them in your shell, `direnv`, or process manager.
@@ -340,7 +414,7 @@ All environment variables. The binary does not auto-load `.env` files — export
 
 | Variable | Required When | Example |
 |----------|--------------|---------|
-| `OPENROUTER_API_KEY` | `engine = "openrouter"` | `sk-or-v1-abc...` |
+| `OPENROUTER_API_KEY` | `engine = "openrouter"` or `memory.enabled = true` | `sk-or-v1-abc...` |
 | `ANTHROPIC_API_KEY` | `engine = "anthropic"` | `sk-ant-api03-abc...` |
 | `OPENAI_API_KEY` | `engine = "openai"` | `sk-abc...` |
 | `HF_TOKEN` | `engine = "huggingface"` | `hf_abc...` |
@@ -360,6 +434,7 @@ All environment variables. The binary does not auto-load `.env` files — export
 | `OPENROUTER_TITLE` | none | App name for OpenRouter leaderboard |
 | `CLAUDE_CODE_BIN` | `claude` | Path to Claude Code CLI binary |
 | `CLAUDE_CODE_PERMISSION_MODE` | `dontAsk` | Claude Code permission mode |
+| `QDRANT_API_KEY` | none | Qdrant Cloud API key (when `backend = "qdrant"`) |
 | `TENGU_GPU_HINT` | none | Force GPU detection: `"gpu"`, `"cuda"`, `"metal"`, `"none"`, `"cpu"` |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
 
@@ -403,6 +478,7 @@ The config is validated at startup. Invalid configs produce clear error messages
 | `~/.tengu/config.toml` | Main configuration file |
 | `~/.tengu/state/flows/` | Conversation history persistence |
 | `~/.tengu/state/flows/index.json` | Flow metadata index |
+| `~/.tengu/memory/vectors.bin` | Disk memory store (bincode, when `backend = "disk"`) |
 | `~/.tengu/logs/tengu.log` | Runtime log file (in chat mode) |
 | `skills/*.md` | Skill definitions (project root) |
 | `{workspace}/IDENTITY.md` | Agent identity system prompt |

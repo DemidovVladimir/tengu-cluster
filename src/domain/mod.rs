@@ -1,5 +1,6 @@
 pub(crate) mod agent_role;
 pub(crate) mod chat;
+pub(crate) mod evm;
 pub(crate) mod memory;
 pub(crate) mod skill;
 pub(crate) mod skill_transpile;

@@ -76,6 +76,31 @@ max_tokens_per_flow = 100_000
 # max_recall_entries = 5
 # max_recall_tokens = 600
 # store_path = "~/.tengu/memory/"
+#
+# --- Qdrant vector store backend (optional) ---
+# Requires: cargo build --features qdrant
+# Start Qdrant: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+#
+# backend = "qdrant"                          # "disk" (default) or "qdrant"
+# qdrant_url = "http://localhost:6334"        # gRPC endpoint
+# qdrant_collection = "tengu-memory"          # collection name
+# vector_size = 1536                          # must match embedding model output dim
+# qdrant_api_key = "${QDRANT_API_KEY}"        # for Qdrant Cloud (optional)
+
+# --- EVM Signing (optional) ---
+# Native Ethereum wallet signing and transaction submission.
+# Requires: cargo build --features evm
+#
+# Set env vars (do NOT put private keys in config files):
+#   export EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+#   export EVM_RPC_URL=https://eth.llamarpc.com
+#
+# When both vars are set, the agent gains three tools:
+#   evm_get_address      — derive wallet address
+#   evm_sign_message     — sign arbitrary messages (EIP-191)
+#   evm_send_transaction — build, sign, submit tx and wait for receipt
+#
+# All EVM tools require user approval before execution.
 
 # --- Fleet Orchestration ---
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.

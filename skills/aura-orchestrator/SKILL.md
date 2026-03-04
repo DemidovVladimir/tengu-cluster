@@ -8,7 +8,7 @@ homepage: https://testnet.molecule.xyz/ipnfts
 
 Aura is a server-side orchestrator LLM that reads a **Blueprint JSON** and dispatches workflow steps against the Molecule DeSci infrastructure. This skill covers four canonical workflows:
 
-1. **IPNFT Mint** — register POI, prepare metadata via GraphQL, mint on-chain
+1. **IPNFT Mint** — submit POI, prepare metadata via GraphQL, mint on-chain
 2. **Project Creation** — create a data room linked to a minted IP-NFT via GraphQL
 3. **File Upload** — three-phase presigned upload via GraphQL
 4. **Announcement Creation** — publish updates with file attachments via GraphQL
@@ -31,6 +31,7 @@ Before executing any workflow, verify **all** required credentials and configura
 | `MOLECULE_CLIENT_URL` | Link construction | Client URL (e.g. `https://testnet.molecule.xyz`). For user-facing links only. |
 | `EVM_PRIVATE_KEY` | On-chain signing | Wallet private key (hex). **Never sent to any API.** Local signing only. |
 | `EVM_RPC_URL` | On-chain transactions | Sepolia RPC endpoint (e.g. Alchemy, Infura). May contain provider credentials. |
+| `POI_API_KEY` | POI regestration call | API key. Sent as Authorization: Bearer $POI_API_KEY. |
 
 ### On-Chain Configuration (Hardcoded Constants)
 
@@ -47,6 +48,7 @@ Before executing any workflow, verify **all** required credentials and configura
 Before starting any blueprint execution, Aura **must** confirm:
 
 - [ ] `MOLECULE_API_KEY` is set and non-empty
+- [ ] `POI_API_KEY` is set and non-empty
 - [ ] `MOLECULE_LABS_URL` is set and starts with `https://`
 - [ ] `MOLECULE_CLIENT_URL` is set
 - [ ] `MOLECULE_SERVICE_TOKEN` is set (required for workflows 2–4)
@@ -154,21 +156,88 @@ A 9-step process combining on-chain transactions with GraphQL API calls. This is
 
 **Auth required:** `x-api-key` only (no service token needed for minting).
 
-### Step 1: Reserve Token ID (On-Chain)
+### Step 1: Register POI
 
-Call `reserve()` on the IPNFT contract. Returns a `reservationId` via the `Reserved` event.
+```bash
+curl -X POST \
+  https://testnet.molecule.xyz/api/v1/inventions \
+  -H 'Authorization: Bearer POI_API_KEY' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'files=@document1.pdf' \
+  -F 'files=@document2.pdf'
+```
+
+### Response Format
+
+**Success:**
+```json
+{
+  "success": true,
+  "data": {
+    "proof": {
+      "format": "simple-v1",
+      "tree": [
+        "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        "0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba"
+      ],
+      "values": [
+        {
+          "value": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+          "treeIndex": 1
+        },
+        {
+          "value": "0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba",
+          "treeIndex": 2
+        }
+      ]
+    },
+    "transaction": {
+      "data": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "to": "0x1DEA29b04a59000b877979339a457d5aBE315b52"
+    }
+  },
+  "metadata": {
+    "supportedEvmChainIds": [1, 8453],
+    "apiVersion": "1.0",
+    "timestamp": "2025-05-22T15:30:45.123Z"
+  }
+}
+```
+
+**Failure:**
+```json
+{
+  "success": false,
+  "error": {
+    "message": "Error message describing what went wrong",
+    "code": 400
+  },
+  "metadata": {
+    "supportedEvmChainIds": [1, 8453],
+    "apiVersion": "1.0",
+    "timestamp": "2025-05-22T15:31:12.456Z"
+  }
+}
+```
+
+Always check `isSuccess` before proceeding to the next step.
+
+Next Steps After API Response
+After receiving a successful response from the API, you'll need to submit the transaction to the blockchain to store your proof on-chain:
+
+Use the transaction object from the API response
+
+Submit a transaction to the selected EVM blockchain (Sepolia)
+
+Use the payload as transaction data and recipient as the recipient address
+
+Example (using viem)
 
 ```javascript
 import { createWalletClient, createPublicClient, http, parseAbi } from "viem";
 import { sepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
-
-const IPNFT_ADDRESS = "0x152B444e60C526fe4434C721561a077269FcF61a";
-const IPNFT_ABI = parseAbi([
-  "function reserve() external returns (uint256)",
-  "function mintReservation(address to, uint256 reservationId, string tokenURI, string symbol, bytes authorization) external payable returns (uint256)",
-  "event Reserved(address indexed reserver, uint256 indexed reservationId)"
-]);
 
 const account = privateKeyToAccount(process.env.EVM_PRIVATE_KEY);
 const walletClient = createWalletClient({
@@ -181,16 +250,17 @@ const publicClient = createPublicClient({
   transport: http(process.env.EVM_RPC_URL),
 });
 
-// Send reserve transaction
-const hash = await walletClient.writeContract({
-  address: IPNFT_ADDRESS,
-  abi: IPNFT_ABI,
-  functionName: "reserve",
-});
 
-// Wait for confirmation and extract reservationId
-const receipt = await publicClient.waitForTransactionReceipt({ hash });
-// Parse Reserved event from receipt.logs to get reservationId
+const tx = await walletClient.sendTransaction({
+  data: result.transaction.data,  // Merkle root from API response
+  to: result.transaction.to,  // Contract address from API response
+  from: yourWalletAddress,
+  ...
+})
+
+// Wait for transaction confirmation
+const receipt = await waitForTransactionReceipt(walletClient, { hash: tx })
+// Cast input Data to uint256 to get reservationId
 ```
 
 **State to persist:** `reservationId`, `transactionHash`

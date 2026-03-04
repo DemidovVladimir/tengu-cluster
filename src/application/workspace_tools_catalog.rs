@@ -108,6 +108,68 @@ pub(crate) fn build_memory_tools() -> Vec<ToolDef> {
     )]
 }
 
+/// Build EVM tool definitions for the on-chain signing subsystem.
+#[cfg(feature = "evm")]
+pub(crate) fn build_evm_tools() -> Vec<ToolDef> {
+    vec![
+        tool_def(
+            "evm_get_address",
+            "Return the wallet's checksummed Ethereum address derived from the configured private key.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            ToolRiskLevel::High,
+            true,
+        ),
+        tool_def(
+            "evm_sign_message",
+            "Sign an arbitrary message with the wallet's private key and return the hex-encoded signature (EIP-191 personal_sign).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to sign"
+                    }
+                },
+                "required": ["message"]
+            }),
+            ToolRiskLevel::High,
+            true,
+        ),
+        tool_def(
+            "evm_send_transaction",
+            "Build, sign, and submit an Ethereum transaction. Returns the transaction receipt once mined. Requires user approval.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Recipient address (hex, 0x-prefixed)"
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "Calldata (hex, 0x-prefixed). Omit for plain ETH transfers."
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Value in wei as a decimal string (e.g. '1000000000000000000' for 1 ETH)"
+                    },
+                    "chain_id": {
+                        "type": "integer",
+                        "description": "Chain ID (default: 1 for mainnet)"
+                    }
+                },
+                "required": ["to"]
+            }),
+            ToolRiskLevel::High,
+            true,
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

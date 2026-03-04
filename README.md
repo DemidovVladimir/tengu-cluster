@@ -154,10 +154,18 @@ See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 | `claude-code` | on | Claude Code subprocess |
 | `huggingface` | off | Hugging Face Inference Providers |
 | `telegram` | off | Telegram bot channel |
+| `qdrant` | off | Qdrant vector store for RAG memory |
+| `evm` | off | EVM wallet signing and transaction submission (alloy) |
 
 ```bash
 # Build with Telegram support
 cargo build --features telegram
+
+# Build with Qdrant vector store
+cargo build --features qdrant
+
+# Build with EVM signing
+cargo build --features evm
 
 # Build with all features
 cargo build --all-features

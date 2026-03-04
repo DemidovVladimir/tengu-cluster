@@ -140,6 +140,7 @@ fn domain_layer_is_infrastructure_free() {
         "src/domain/task.rs",
         "src/domain/skill.rs",
         "src/domain/memory.rs",
+        "src/domain/evm.rs",
         "src/domain/skill_transpile.rs",
     ] {
         let src = read(file);
@@ -199,6 +200,36 @@ fn memory_store_adapter_implements_port() {
         src.contains("impl MemoryStorePort for DiskVectorMemoryStore"),
         "memory_store adapter must implement MemoryStorePort"
     );
+}
+
+#[test]
+fn qdrant_memory_store_adapter_exists_and_implements_port() {
+    let path = Path::new("src/adapters/qdrant_memory_store.rs");
+    assert!(
+        path.exists(),
+        "qdrant_memory_store adapter must exist"
+    );
+    let src = read("src/adapters/qdrant_memory_store.rs");
+    assert!(
+        src.contains("impl MemoryStorePort for QdrantMemoryStore"),
+        "qdrant_memory_store must implement MemoryStorePort"
+    );
+}
+
+#[test]
+fn qdrant_does_not_leak_into_domain_or_application() {
+    for file in [
+        "src/domain/memory.rs",
+        "src/application/memory_service.rs",
+        "src/application/ports.rs",
+    ] {
+        let src = read(file);
+        // Check for actual code imports, not documentation references.
+        assert!(
+            !src.contains("use qdrant") && !src.contains("qdrant_client::"),
+            "{file} must not import qdrant (hexagonal boundary violation)"
+        );
+    }
 }
 
 #[test]
@@ -267,5 +298,47 @@ fn orchestrator_modules_exist() {
     assert!(
         Path::new("src/adapters/task_store.rs").exists(),
         "task_store adapter must exist"
+    );
+}
+
+#[test]
+fn evm_domain_types_exist_and_are_infrastructure_free() {
+    let path = Path::new("src/domain/evm.rs");
+    assert!(path.exists(), "evm domain types file must exist");
+    let src = read("src/domain/evm.rs");
+    assert!(
+        !src.contains("alloy") && !src.contains("reqwest") && !src.contains("std::fs"),
+        "evm domain file must not depend on infrastructure (alloy, reqwest, std::fs)"
+    );
+}
+
+#[test]
+fn evm_does_not_leak_into_application() {
+    let src = read("src/application/ports.rs");
+    assert!(
+        !src.contains("use alloy") && !src.contains("alloy::"),
+        "ports.rs must not import alloy (hexagonal boundary violation)"
+    );
+}
+
+#[test]
+fn evm_signer_adapter_exists_and_implements_port() {
+    let path = Path::new("src/adapters/evm_signer.rs");
+    assert!(path.exists(), "evm_signer adapter must exist");
+    let src = read("src/adapters/evm_signer.rs");
+    assert!(
+        src.contains("impl EvmPort for AlloySigner"),
+        "evm_signer must implement EvmPort"
+    );
+}
+
+#[test]
+fn evm_tool_executor_adapter_exists_and_implements_port() {
+    let path = Path::new("src/adapters/evm_tool_executor.rs");
+    assert!(path.exists(), "evm_tool_executor adapter must exist");
+    let src = read("src/adapters/evm_tool_executor.rs");
+    assert!(
+        src.contains("impl ToolExecutionPort for EvmToolExecutionAdapter"),
+        "evm_tool_executor must implement ToolExecutionPort"
     );
 }

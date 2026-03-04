@@ -12,6 +12,8 @@ pub(crate) struct CompositeToolExecutionAdapter {
     skill_names: HashSet<String>,
     memory_executor: Option<Arc<dyn ToolExecutionPort>>,
     memory_names: HashSet<String>,
+    evm_executor: Option<Arc<dyn ToolExecutionPort>>,
+    evm_names: HashSet<String>,
 }
 
 impl CompositeToolExecutionAdapter {
@@ -26,6 +28,8 @@ impl CompositeToolExecutionAdapter {
             skill_names,
             memory_executor: None,
             memory_names: HashSet::new(),
+            evm_executor: None,
+            evm_names: HashSet::new(),
         }
     }
 
@@ -38,10 +42,26 @@ impl CompositeToolExecutionAdapter {
         self.memory_names = names;
         self
     }
+
+    #[allow(dead_code)]
+    pub(crate) fn with_evm_executor(
+        mut self,
+        executor: Arc<dyn ToolExecutionPort>,
+        names: HashSet<String>,
+    ) -> Self {
+        self.evm_executor = Some(executor);
+        self.evm_names = names;
+        self
+    }
 }
 
 impl ToolExecutionPort for CompositeToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
+        if self.evm_names.contains(&call.name) {
+            if let Some(ref executor) = self.evm_executor {
+                return executor.execute_tool(call);
+            }
+        }
         if self.memory_names.contains(&call.name) {
             if let Some(ref executor) = self.memory_executor {
                 return executor.execute_tool(call);

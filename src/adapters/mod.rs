@@ -2,9 +2,15 @@ pub(crate) mod composite_tool_executor;
 pub(crate) mod doctor_probe;
 pub(crate) mod embedding;
 pub(crate) mod engine_factory;
+#[cfg(feature = "evm")]
+pub(crate) mod evm_signer;
+#[cfg(feature = "evm")]
+pub(crate) mod evm_tool_executor;
 pub(crate) mod flow_store;
 pub(crate) mod memory_store;
 pub(crate) mod memory_tool_executor;
+#[cfg(feature = "qdrant")]
+pub(crate) mod qdrant_memory_store;
 pub(crate) mod orchestrator;
 pub(crate) mod scaffold_writer;
 pub(crate) mod shell_executor;

@@ -28,6 +28,8 @@ sysinfo = "0.33"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+qdrant-client = "1.14"
+alloy = { version = "1", features = ["signer-local", "transport-http", "providers", "network", "rpc-types"] }
 tengu-core = { path = "crates/tengu-core" }
 tengu-backends = { path = "crates/tengu-backends" }
 tengu-channels = { path = "crates/tengu-channels" }
@@ -62,6 +64,8 @@ dotenvy = "0.15"
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 pdf-extract = "0.10"
 regex = "1"
+qdrant-client = { workspace = true, optional = true }
+alloy = { workspace = true, optional = true }
 
 [features]
 default = ["ollama", "anthropic", "openai", "openrouter", "claude-code"]
@@ -72,6 +76,8 @@ openai = ["tengu-backends/openai"]
 claude-code = ["tengu-backends/claude-code"]
 openrouter = ["tengu-backends/openrouter"]
 huggingface = ["tengu-backends/huggingface"]
+qdrant = ["qdrant-client"]
+evm = ["alloy"]
 
 [dev-dependencies]
 tempfile = "3"

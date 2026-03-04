@@ -28,7 +28,10 @@ use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::{build_memory_tools, build_workspace_tools};
+use crate::application::workspace_tools_catalog::build_workspace_tools;
+use crate::application::workspace_tools_catalog::build_memory_tools;
+#[cfg(feature = "evm")]
+use crate::application::workspace_tools_catalog::build_evm_tools;
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::skill::SkillStatus;
 use crate::domain::tool_policy::ToolPolicyCatalog;
@@ -253,6 +256,27 @@ fn rebuild_executor(
         }
     }
 
+    // Attach EVM executor if env vars are set and feature is enabled.
+    #[cfg(feature = "evm")]
+    {
+        if let (Ok(key), Ok(url)) = (std::env::var("EVM_PRIVATE_KEY"), std::env::var("EVM_RPC_URL"))
+        {
+            use crate::adapters::evm_signer::AlloySigner;
+            use crate::adapters::evm_tool_executor::EvmToolExecutionAdapter;
+            match AlloySigner::new(&key, url) {
+                Ok(signer) => {
+                    let port: Arc<dyn crate::application::ports::EvmPort> = Arc::new(signer);
+                    if let Ok(evm_exec) = EvmToolExecutionAdapter::new(port) {
+                        let evm_names: std::collections::HashSet<String> =
+                            build_evm_tools().iter().map(|t| t.name.clone()).collect();
+                        composite = composite.with_evm_executor(Arc::new(evm_exec), evm_names);
+                    }
+                }
+                Err(e) => tracing::warn!("EVM signer init failed: {e}"),
+            }
+        }
+    }
+
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
@@ -272,13 +296,19 @@ fn rebuild_system_prompt(
     agent_config: &tengu_core::config::AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
+    evm_tools_available: bool,
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
         .into_iter()
         .map(|(_, body)| body)
         .collect();
-    system_prompt::build_system_prompt(agent_config, advertise_workspace_tools, &skill_context_strings)
+    system_prompt::build_system_prompt(
+        agent_config,
+        advertise_workspace_tools,
+        &skill_context_strings,
+        evm_tools_available,
+    )
 }
 
 fn format_skill_list(skills: Vec<(String, SkillStatus)>) -> String {
@@ -336,6 +366,7 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
         &agent_config,
         advertise_workspace_tools,
         &[],
+        false, // EVM tools not yet resolved — rebuilt on first turn
     );
 
     // Channel: UI → Engine thread
@@ -395,28 +426,59 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
         let memory_handle: Option<Arc<MemoryServiceHandle>> = if memory_config.enabled {
             match std::env::var("OPENROUTER_API_KEY") {
                 Ok(api_key) => {
-                    let store_path_str = memory_config.store_path.replace(
-                        "~",
-                        &dirs_next::home_dir()
-                            .unwrap_or_default()
-                            .to_string_lossy(),
-                    );
-                    match DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str)) {
-                        Ok(store) => {
-                            let embedding = OpenRouterEmbeddingAdapter::new(
-                                api_key,
-                                memory_config.embedding_model.clone(),
-                            );
-                            Some(Arc::new(MemoryServiceHandle {
-                                embedding: Arc::new(embedding),
-                                store: Arc::new(store),
-                            }))
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to init memory store, memory disabled");
-                            None
-                        }
-                    }
+                    let store: Option<Arc<dyn crate::application::ports::MemoryStorePort>> =
+                        match memory_config.backend.as_str() {
+                            #[cfg(feature = "qdrant")]
+                            "qdrant" => {
+                                use crate::adapters::qdrant_memory_store::QdrantMemoryStore;
+                                match rt.block_on(QdrantMemoryStore::new(
+                                    &memory_config.qdrant_url,
+                                    memory_config.qdrant_api_key.as_deref(),
+                                    &memory_config.qdrant_collection,
+                                    memory_config.vector_size,
+                                )) {
+                                    Ok(s) => Some(Arc::new(s)),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "Failed to init Qdrant memory store, memory disabled");
+                                        None
+                                    }
+                                }
+                            }
+                            #[cfg(not(feature = "qdrant"))]
+                            "qdrant" => {
+                                tracing::warn!("Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk");
+                                let store_path_str = memory_config.store_path.replace(
+                                    "~",
+                                    &dirs_next::home_dir()
+                                        .unwrap_or_default()
+                                        .to_string_lossy(),
+                                );
+                                DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
+                                    .ok()
+                                    .map(|s| Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>)
+                            }
+                            _ => {
+                                let store_path_str = memory_config.store_path.replace(
+                                    "~",
+                                    &dirs_next::home_dir()
+                                        .unwrap_or_default()
+                                        .to_string_lossy(),
+                                );
+                                DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
+                                    .ok()
+                                    .map(|s| Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>)
+                            }
+                        };
+                    store.map(|s| {
+                        let embedding = OpenRouterEmbeddingAdapter::new(
+                            api_key,
+                            memory_config.embedding_model.clone(),
+                        );
+                        Arc::new(MemoryServiceHandle {
+                            embedding: Arc::new(embedding),
+                            store: s,
+                        })
+                    })
                 }
                 Err(_) => {
                     tracing::warn!("OPENROUTER_API_KEY not set, memory disabled");
@@ -437,7 +499,24 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
             if memory_handle.is_some() {
                 all_tools.extend(build_memory_tools());
             }
+            #[cfg(feature = "evm")]
+            if std::env::var("EVM_PRIVATE_KEY").is_ok() && std::env::var("EVM_RPC_URL").is_ok() {
+                all_tools.extend(build_evm_tools());
+            }
             all_tools
+        };
+
+        // Determine if native EVM tools are available for system prompt guidance.
+        let evm_tools_available: bool = {
+            #[cfg(feature = "evm")]
+            {
+                std::env::var("EVM_PRIVATE_KEY").is_ok()
+                    && std::env::var("EVM_RPC_URL").is_ok()
+            }
+            #[cfg(not(feature = "evm"))]
+            {
+                false
+            }
         };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
@@ -590,6 +669,7 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                 &engine_agent_config,
                                 advertise_workspace_tools,
                                 &skill_registry,
+                                evm_tools_available,
                             );
                         }
                         tools_dirty = false;
@@ -624,9 +704,13 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                 total_input_tokens,
                                 total_output_tokens,
                             }) => {
-                                let memory_stats = memory_handle.as_ref().map(|h| {
-                                    (h.store.entry_count(), h.store.storage_bytes())
-                                });
+                                let memory_stats = if let Some(ref h) = memory_handle {
+                                    let count = h.store.entry_count().await;
+                                    let bytes = h.store.storage_bytes().await;
+                                    Some((count, bytes))
+                                } else {
+                                    None
+                                };
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {
