@@ -116,6 +116,14 @@ impl MemoryStorePort for DiskVectorMemoryStore {
         })
     }
 
+    fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            entries.clear();
+            self.flush(&entries)
+        })
+    }
+
     fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
         Box::pin(async move {
             self.entries.read().map(|e| e.len()).unwrap_or(0)

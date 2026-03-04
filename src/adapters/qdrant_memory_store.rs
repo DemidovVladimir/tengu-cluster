@@ -200,6 +200,22 @@ impl MemoryStorePort for QdrantMemoryStore {
         })
     }
 
+    fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let collection = self.collection.clone();
+        Box::pin(async move {
+            // Delete all points by matching everything.
+            self.client
+                .delete_points(
+                    DeletePointsBuilder::new(&collection)
+                        .points(qdrant_client::qdrant::Filter::default())
+                        .wait(true),
+                )
+                .await
+                .context("Qdrant clear_all failed")?;
+            Ok(())
+        })
+    }
+
     fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
         let collection = self.collection.clone();
         Box::pin(async move {

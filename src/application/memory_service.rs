@@ -161,6 +161,13 @@ mod tests {
             })
         }
 
+        fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async move {
+                self.entries.lock().unwrap().clear();
+                Ok(())
+            })
+        }
+
         fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
             Box::pin(async move {
                 self.entries.lock().unwrap().len()

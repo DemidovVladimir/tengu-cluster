@@ -492,32 +492,36 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
-        let base_tools: Vec<ToolDef> = if !uses_tools {
-            vec![]
-        } else {
+        let has_memory = memory_handle.is_some();
+
+        // Build base tool list + EVM availability from current env vars.
+        // Extracted so `/reload` can recompute when env vars change at runtime.
+        fn compute_base_tools(uses_tools: bool, has_memory: bool) -> (Vec<ToolDef>, bool) {
+            if !uses_tools {
+                return (vec![], false);
+            }
             let mut all_tools = build_workspace_tools();
-            if memory_handle.is_some() {
+            if has_memory {
                 all_tools.extend(build_memory_tools());
             }
-            #[cfg(feature = "evm")]
-            if std::env::var("EVM_PRIVATE_KEY").is_ok() && std::env::var("EVM_RPC_URL").is_ok() {
-                all_tools.extend(build_evm_tools());
-            }
-            all_tools
-        };
-
-        // Determine if native EVM tools are available for system prompt guidance.
-        let evm_tools_available: bool = {
+            let evm_available;
             #[cfg(feature = "evm")]
             {
-                std::env::var("EVM_PRIVATE_KEY").is_ok()
-                    && std::env::var("EVM_RPC_URL").is_ok()
+                evm_available = std::env::var("EVM_PRIVATE_KEY").is_ok()
+                    && std::env::var("EVM_RPC_URL").is_ok();
+                if evm_available {
+                    all_tools.extend(build_evm_tools());
+                }
             }
             #[cfg(not(feature = "evm"))]
             {
-                false
+                evm_available = false;
             }
-        };
+            (all_tools, evm_available)
+        }
+
+        let (mut base_tools, mut evm_tools_available) =
+            compute_base_tools(uses_tools, has_memory);
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> =
@@ -628,6 +632,91 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                 }
 
                 ChatRequest::SlashCommand { text, response_tx } => {
+                    // /purge — reset conversation + clear persistent memory.
+                    // Handled here (not in chat_commands) because it needs
+                    // async access to the memory store via the engine thread's
+                    // tokio runtime.
+                    if text == "/purge" {
+                        runtime_state.reset_for_new_session();
+                        let mut lines = vec!["Conversation cleared.".to_string()];
+                        if let Some(ref handle) = memory_handle {
+                            match rt.block_on(handle.store.clear_all()) {
+                                Ok(()) => lines.push("Persistent memory purged.".to_string()),
+                                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+                            }
+                        } else {
+                            lines.push("No persistent memory active.".to_string());
+                        }
+                        let _ = response_tx.send(lines.join("\n"));
+                        continue;
+                    }
+
+                    // /reload — re-read env vars, re-scan skill files, and
+                    // rebuild tools + executor + system prompt immediately.
+                    if text == "/reload" {
+                        let mut lines = Vec::new();
+
+                        // Re-read env vars and rebuild base tool set.
+                        let (new_base, new_evm) =
+                            compute_base_tools(uses_tools, has_memory);
+                        let env_changed = new_evm != evm_tools_available
+                            || new_base.len() != base_tools.len();
+                        base_tools = new_base;
+                        evm_tools_available = new_evm;
+                        if env_changed {
+                            lines.push("Environment refreshed.".to_string());
+                        }
+
+                        if evm_tools_available {
+                            lines.push("EVM tools: active".to_string());
+                        }
+
+                        // Re-scan skill files.
+                        if let Some(ref src) = skill_source {
+                            let changed = skill_registry.reload(src);
+                            if changed {
+                                tools_dirty = true;
+                                lines.push("Skills reloaded (changes detected).".to_string());
+                            } else {
+                                lines.push("Skills reloaded (no changes).".to_string());
+                            }
+                        } else {
+                            lines.push("No workspace — skills unavailable.".to_string());
+                        }
+
+                        // Always force a full rebuild to pick up env + skill changes.
+                        if let Some(ref ws) = workspace {
+                            current_tools = rebuild_tools(&base_tools, &skill_registry);
+                            current_executor = rebuild_executor(
+                                ws,
+                                &current_tools,
+                                &skill_registry,
+                                &memory_handle,
+                                &cb_sink,
+                            );
+                            current_system_prompt = rebuild_system_prompt(
+                                &engine_agent_config,
+                                advertise_workspace_tools,
+                                &skill_registry,
+                                evm_tools_available,
+                            );
+                            tools_dirty = false;
+                        }
+
+                        let skill_list = skill_registry.list_all();
+                        lines.push(format!("{} skill(s) registered.", skill_list.len()));
+                        for (name, status) in &skill_list {
+                            let tag = match status {
+                                SkillStatus::Active => "active",
+                                SkillStatus::Inactive => "disabled",
+                            };
+                            lines.push(format!("  {} ({})", name, tag));
+                        }
+                        lines.push(format!("{} tool(s) active.", current_tools.len()));
+                        let _ = response_tx.send(lines.join("\n"));
+                        continue;
+                    }
+
                     let result = chat_commands::handle_chat_command(
                         &text,
                         &mut runtime_state,

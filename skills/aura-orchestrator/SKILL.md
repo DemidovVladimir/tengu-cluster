@@ -286,7 +286,7 @@ mutation GenerateAssignmentAgreement($projectData: AWSJSON!) {
 
 ```json
 {
-  "projectData": "{\"project\":{\"name\":\"Research Title\",\"description\":\"Description of the research.\",\"initialSymbol\":\"SYM1\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"},\"connectedWalletAddress\":\"0xYourWalletAddress\",\"chainId\":11155111,\"ipnftId\":\"RESERVATION_ID_FROM_STEP_1\"}"
+  "projectData": "{\"project\":{\"name\":\"Research Title\",\"description\":\"Description of the research.\",\"initialSymbol\":\"SYM1\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"},\"connectedWalletAddress\":\"0xYourWalletAddress\", \"agreementType\":\"POI_ASSIGNMENT\", \"chainId\":11155111,\"ipnftId\":\"RESERVATION_ID_FROM_STEP_1\"}"
 }
 ```
 
@@ -301,6 +301,7 @@ mutation GenerateAssignmentAgreement($projectData: AWSJSON!) {
 | `organization` | string | min 1, max 120 chars |
 | `research_lead` | object | `name` (min 3 chars) + `email` (valid email) |
 | `topic` | string | min 3, max 80 chars |
+| `agreementType` | string | `POI_ASSIGNMENT`
 
 **Optional:** `industry` (max 80 chars)
 
@@ -373,7 +374,7 @@ mutation UploadMetadataWithImageKey(
 
 ```json
 {
-  "metadata": "{\"name\":\"Research Title\",\"description\":\"Description (min 10 chars)\",\"external_url\":\"https://project.example.com\",\"terms_signature\":\"placeholder\",\"properties\":{\"agreements\":[{\"content_hash\":\"AGREEMENT_CONTENT_HASH_FROM_STEP_2\",\"mime_type\":\"application/json\",\"type\":\"RESEARCH_ASSIGNMENT\",\"url\":\"ipfs://AGREEMENT_CID_FROM_STEP_2\"}],\"initial_symbol\":\"SYM1\",\"project_details\":{\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"}}}",
+  "metadata": "{\"name\":\"Research Title\",\"description\":\"Description (min 10 chars)\",\"external_url\":\"https://project.example.com\",\"terms_signature\":\"placeholder\",\"properties\":{\"agreements\":[{\"content_hash\":\"AGREEMENT_CONTENT_HASH_FROM_STEP_2\",\"mime_type\":\"application/json\",\"type\":\"POI_ASSIGNMENT\",\"url\":\"ipfs://AGREEMENT_CID_FROM_STEP_2\"}],\"initial_symbol\":\"SYM1\",\"project_details\":{\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"}}}",
   "imageKey": "IMAGE_KEY_FROM_STEP_3",
   "ipnftId": "RESERVATION_ID_FROM_STEP_1"
 }

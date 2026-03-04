@@ -78,6 +78,9 @@ pub(crate) trait MemoryStorePort: Send + Sync {
     /// Delete a memory entry by its UUID. Returns `true` if it existed.
     fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
 
+    /// Delete all stored entries, resetting the store to empty.
+    fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
     /// Total number of stored entries.
     fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>>;
 
