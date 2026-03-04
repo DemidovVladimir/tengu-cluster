@@ -78,6 +78,8 @@ enum SecretAction {
     Remove { key: String },
     /// List secret key names (values hidden)
     List,
+    /// Change the vault master password
+    ChangePassword,
     /// Show the secrets file path
     Path,
 }
@@ -189,7 +191,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Orchestrate => {
-            let event_bus = tengu_core::events::InProcessEventBus::default();
+            let event_bus = adapters::event_bus::InProcessEventBus::default();
             adapters::orchestrator::boot_orchestrator(&config, &event_bus).await
         }
         #[cfg(feature = "telegram")]
@@ -216,6 +218,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                SecretAction::ChangePassword => secret_store::change_password(&path)?,
                 SecretAction::Path => println!("{}", path.display()),
             }
             Ok(())

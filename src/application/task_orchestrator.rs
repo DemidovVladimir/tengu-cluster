@@ -136,7 +136,7 @@ mod tests {
     use crate::domain::task::Task;
     use std::collections::HashMap;
     use std::sync::RwLock;
-    use tengu_core::events::InProcessEventBus;
+    use crate::adapters::event_bus::InProcessEventBus;
 
     struct MockTaskStore {
         tasks: RwLock<HashMap<String, Task>>,

@@ -66,6 +66,8 @@ Forbidden:
 | `task.rs` | Task lifecycle model (status machine, retry logic) | New |
 | `memory.rs` | Memory entry types, cosine similarity, token budgeting | New |
 | `evm.rs` | EVM transaction request/receipt types (pure, no alloy) | New |
+| `secret_registry.rs` | Secret value registry for output redaction (pure, no I/O) | Stable |
+| `skill_transpile.rs` | Foreign runtime detection in skills (Node/Python/Deno/Ruby) | Stable |
 
 ### Application Layer (`src/application/`)
 
@@ -85,6 +87,8 @@ Forbidden:
 | `fleet_runtime.rs` | In-memory fleet agent registry, scheduling, per-agent prompt + tools | Stable |
 | `heartbeat.rs` | Periodic heartbeat loop for stall detection | Stable |
 | `memory_service.rs` | Memory application service (embed→store, embed→search→budget recall, forget) | Stable |
+| `skill_registry.rs` | Mutable skill registry with hot-reload, enable/disable, transpile scan | Stable |
+| `skill_transpile.rs` | Application service for foreign dep scanning and auto-prefer logic | Stable |
 
 ### Adapter Layer (`src/adapters/`)
 
@@ -96,7 +100,7 @@ Forbidden:
 | `engine_factory.rs` | Engine construction from config (routes to OpenRouter, Anthropic, OpenAI, Ollama, HuggingFace, Claude Code) | Stable |
 | `doctor_probe.rs` | Provider connectivity diagnostics | Stable |
 | `system_prompt.rs` | Workspace system prompt file loading + skill context injection | Stable |
-| `composite_tool_executor.rs` | Composite executor routing (workspace + skill tools) | Stable |
+| `composite_tool_executor.rs` | Vec-based composite executor routing (open for arbitrary tool executors) | Stable |
 | `skill_source.rs` | Filesystem skill.md discovery | Stable |
 | `skill_tool_executor.rs` | Skill execution via shell | Stable |
 | `shell_executor.rs` | Local shell command execution | Stable |
@@ -110,6 +114,9 @@ Forbidden:
 | `evm_signer.rs` | Alloy-based EVM signer adapter (EvmPort, `--features evm`) | New |
 | `evm_tool_executor.rs` | EVM tool execution bridge (sync→async via dedicated runtime, `--features evm`) | New |
 | `telegram_runtime.rs` | Headless Telegram bot adapter wiring TelegramPipe → ChatRuntimeService (`--features telegram`) | New |
+| `scaffold_writer.rs` | Transpile scaffold project generator for foreign-runtime skills | Stable |
+| `event_bus.rs` | In-process EventBus implementation (tokio channels) | Stable |
+| `tool_bridge.rs` | Bridges core `Tool` trait to `ToolExecutionPort` for pluggable tools | New |
 
 ### Channel Adapters (`crates/tengu-channels/`)
 
@@ -138,7 +145,7 @@ Forbidden:
 ## Enforcement
 
 Automated checks exist in:
-- `tests/hex_architecture_enforcement.rs` (23 tests, including feature-gated)
+- `tests/hex_architecture_enforcement.rs` (24 tests, including feature-gated)
 
 Enforced invariants:
 - Domain files contain no `reqwest`, `cursive`, `std::fs`, `tokio::process`
@@ -158,5 +165,8 @@ Enforced invariants:
 - Alloy does not leak into domain or application layers
 - EVM domain types are infrastructure-free
 - Telegram runtime adapter delegates to `ChatRuntimeService` (no direct engine calls, `--features telegram`)
+- Skill registry exists at application boundary
+- Skill transpile service exists at application boundary
+- Scaffold writer exists at adapter boundary
 
 CI/local tests must stay green for architecture guardrails.

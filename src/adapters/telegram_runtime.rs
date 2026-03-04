@@ -149,18 +149,17 @@ fn rebuild_executor(
     let skill_defs = skill_registry.active_skill_definitions();
     let skill_names: HashSet<String> = skill_defs.iter().map(|s| s.name.clone()).collect();
 
-    let skill_exec: Option<Arc<dyn crate::application::ports::ToolExecutionPort>> =
-        if skill_defs.is_empty() {
-            None
-        } else {
-            Some(Arc::new(SkillToolExecutionAdapter::new(
-                skill_defs,
-                Arc::clone(&shell),
-                workspace.to_path_buf(),
-            )))
-        };
+    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
 
-    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec, skill_exec, skill_names);
+    // Attach skill executor if any skills are active.
+    if !skill_defs.is_empty() {
+        let skill_exec = Arc::new(SkillToolExecutionAdapter::new(
+            skill_defs,
+            Arc::clone(&shell),
+            workspace.to_path_buf(),
+        ));
+        composite = composite.with_executor(skill_exec, skill_names);
+    }
 
     if let Some(ref handle) = memory_handle {
         if let Ok(mem_exec) =
@@ -168,7 +167,7 @@ fn rebuild_executor(
         {
             let mem_names: HashSet<String> =
                 build_memory_tools().iter().map(|t| t.name.clone()).collect();
-            composite = composite.with_memory_executor(Arc::new(mem_exec), mem_names);
+            composite = composite.with_executor(Arc::new(mem_exec), mem_names);
         }
     }
 
@@ -184,7 +183,7 @@ fn rebuild_executor(
                     if let Ok(evm_exec) = EvmToolExecutionAdapter::new(port) {
                         let evm_names: HashSet<String> =
                             build_evm_tools().iter().map(|t| t.name.clone()).collect();
-                        composite = composite.with_evm_executor(Arc::new(evm_exec), evm_names);
+                        composite = composite.with_executor(Arc::new(evm_exec), evm_names);
                     }
                 }
                 Err(e) => warn!("EVM signer init failed: {e}"),

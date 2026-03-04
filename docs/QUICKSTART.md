@@ -25,7 +25,7 @@ cargo build
 Use the encrypted secrets vault (AES-256-GCM, master-password protected):
 
 ```bash
-# Create the vault — prompts for a master password
+# Create the vault — prompts for a master password (12+ chars recommended)
 cargo run -- secret init
 
 # Store your API key (prompts for master password)
@@ -40,7 +40,7 @@ cargo run -- secret set OPENAI_API_KEY sk-...
 cargo run -- secret set HF_TOKEN hf_...
 ```
 
-The vault is stored at `~/.tengu/secrets.vault` with `chmod 600`. At startup, Tengu prompts for your master password to decrypt the vault and load secrets into the environment. Set `TENGU_MASTER_PASSWORD` env var to skip the interactive prompt.
+The vault is stored at `~/.tengu/secrets.vault` with `chmod 600`. At startup, Tengu prompts for your master password to decrypt the vault and load secrets into the environment. Set `TENGU_MASTER_PASSWORD` env var to skip the interactive prompt. To change your password later: `cargo run -- secret change-password`.
 
 Alternatively, you can still use plain environment variables:
 

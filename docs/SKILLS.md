@@ -330,3 +330,21 @@ sqlx migrate {{direction}} {{steps}}
 - risk_level: high
 - requires_approval: true
 ```
+
+## Skill Transpilation
+
+Skills written for foreign runtimes (Node.js, Python, Deno, Ruby) can be automatically detected and transpiled to Rust at scan time. When a skill's execution template references a non-Rust runtime, the skill registry:
+
+1. Detects the foreign runtime from the execution command (`node`, `python`, `deno`, `ruby`).
+2. Checks for a `_rust` variant of the skill (e.g., `deploy_service_rust.md` alongside `deploy_service.md`).
+3. If a Rust variant exists and is valid, it is **auto-preferred** — the foreign skill is disabled and the Rust variant takes its place.
+4. If no Rust variant exists, a scaffold project can be generated via `cargo run -- skill scaffold <skill_name>`. This creates a Cargo project under `skills/<skill_name>_rust/` with a `main.rs` stub that matches the original skill's parameter schema.
+
+The transpile scan runs during skill registry initialization and on hot-reload cycles.
+
+## Hot-Reload and Enable/Disable
+
+The skill registry supports live updates without restarting the agent:
+
+- **Content-hash hot-reload**: Each skill file is tracked by a SHA-256 content hash. On periodic rescan, changed files are re-parsed and swapped in automatically. Unchanged files are skipped.
+- **Per-skill enable/disable**: Individual skills can be disabled via `cargo run -- skill disable <name>` and re-enabled with `cargo run -- skill enable <name>`. Disabled skills are excluded from the active tool set but remain in the registry for re-enabling.

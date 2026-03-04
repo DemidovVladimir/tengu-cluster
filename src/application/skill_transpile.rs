@@ -12,6 +12,7 @@ pub(crate) struct TranspileScanResult {
     /// Skills with foreign dependencies and no Rust equivalent — need scaffolding.
     pub needs_transpile: Vec<TranspileReport>,
     /// Skills that are clean (no foreign deps).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub clean_count: usize,
 }
 

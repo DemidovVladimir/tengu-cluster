@@ -92,15 +92,25 @@ fn prompt_new_password() -> Result<String> {
             return Ok(pw);
         }
     }
+    println!();
+    println!("  Choose a strong master password:");
+    println!("    - At least 12 characters");
+    println!("    - Mix of upper/lowercase, numbers, symbols");
+    println!("    - Do NOT reuse a password from another service");
+    println!("    - Store it in a password manager if possible");
+    println!();
     let p1 = rpassword::prompt_password("New master password: ")
         .context("failed to read password")?;
+    if p1.is_empty() {
+        bail!("password must not be empty");
+    }
+    if p1.len() < 8 {
+        bail!("password too short — use at least 8 characters (12+ recommended)");
+    }
     let p2 = rpassword::prompt_password("Confirm master password: ")
         .context("failed to read password")?;
     if p1 != p2 {
         bail!("passwords do not match");
-    }
-    if p1.is_empty() {
-        bail!("password must not be empty");
     }
     Ok(p1)
 }
@@ -230,6 +240,28 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(secret_values)
+}
+
+/// Change the master password on an existing vault.
+pub(crate) fn change_password(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("No secrets vault found at {}. Run `tengu secret init` first.", path.display());
+    }
+
+    println!("  Enter your current master password to unlock the vault.");
+    let old_password = prompt_password()?;
+    let lines = decrypt_and_parse(path, &old_password)?;
+
+    println!("  Vault unlocked. Now choose a new master password.");
+    let new_password = prompt_new_password()?;
+
+    let plaintext = serialize_lines(&lines);
+    let encrypted = encrypt_vault(plaintext.as_bytes(), &new_password)?;
+    write_atomic(path, &encrypted)?;
+    enforce_permissions(path)?;
+
+    println!("  Master password changed successfully.");
+    Ok(())
 }
 
 /// Enforce `chmod 600` on Unix.

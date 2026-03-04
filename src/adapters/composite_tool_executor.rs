@@ -7,71 +7,35 @@ use std::sync::Arc;
 use tengu_core::types::ToolCall;
 
 pub(crate) struct CompositeToolExecutionAdapter {
-    workspace_executor: Arc<dyn ToolExecutionPort>,
-    skill_executor: Option<Arc<dyn ToolExecutionPort>>,
-    skill_names: HashSet<String>,
-    memory_executor: Option<Arc<dyn ToolExecutionPort>>,
-    memory_names: HashSet<String>,
-    evm_executor: Option<Arc<dyn ToolExecutionPort>>,
-    evm_names: HashSet<String>,
+    executors: Vec<(Arc<dyn ToolExecutionPort>, HashSet<String>)>,
+    default_executor: Arc<dyn ToolExecutionPort>,
 }
 
 impl CompositeToolExecutionAdapter {
-    pub(crate) fn new(
-        workspace_executor: Arc<dyn ToolExecutionPort>,
-        skill_executor: Option<Arc<dyn ToolExecutionPort>>,
-        skill_names: HashSet<String>,
-    ) -> Self {
+    pub(crate) fn new(default_executor: Arc<dyn ToolExecutionPort>) -> Self {
         Self {
-            workspace_executor,
-            skill_executor,
-            skill_names,
-            memory_executor: None,
-            memory_names: HashSet::new(),
-            evm_executor: None,
-            evm_names: HashSet::new(),
+            executors: Vec::new(),
+            default_executor,
         }
     }
 
-    pub(crate) fn with_memory_executor(
+    pub(crate) fn with_executor(
         mut self,
         executor: Arc<dyn ToolExecutionPort>,
         names: HashSet<String>,
     ) -> Self {
-        self.memory_executor = Some(executor);
-        self.memory_names = names;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_evm_executor(
-        mut self,
-        executor: Arc<dyn ToolExecutionPort>,
-        names: HashSet<String>,
-    ) -> Self {
-        self.evm_executor = Some(executor);
-        self.evm_names = names;
+        self.executors.push((executor, names));
         self
     }
 }
 
 impl ToolExecutionPort for CompositeToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        if self.evm_names.contains(&call.name) {
-            if let Some(ref executor) = self.evm_executor {
+        for (executor, names) in &self.executors {
+            if names.contains(&call.name) {
                 return executor.execute_tool(call);
             }
         }
-        if self.memory_names.contains(&call.name) {
-            if let Some(ref executor) = self.memory_executor {
-                return executor.execute_tool(call);
-            }
-        }
-        if self.skill_names.contains(&call.name) {
-            if let Some(ref executor) = self.skill_executor {
-                return executor.execute_tool(call);
-            }
-        }
-        self.workspace_executor.execute_tool(call)
+        self.default_executor.execute_tool(call)
     }
 }

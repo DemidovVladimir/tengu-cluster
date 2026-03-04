@@ -241,7 +241,7 @@ compaction_summary_max_tokens = 320
 
 ```toml
 [agents.main.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 context_window_override = 200000
 max_output_tokens_per_turn = 4096
 max_cost_per_flow = 5.0
@@ -250,7 +250,7 @@ warn_at_cost = 4.0
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `max_tokens_per_flow` | u64 | `500_000` | Hard token limit for entire conversation flow |
+| `max_tokens_per_flow` | u64 | `100_000` | Hard token limit for entire conversation flow |
 | `context_window_override` | u32? | none | Override engine-reported context window size |
 | `max_output_tokens_per_turn` | u32? | none | Cap output tokens per engine turn |
 | `max_cost_per_flow` | f64? | none | USD cost limit for the flow |
@@ -448,7 +448,26 @@ cargo run -- secret init                              # create vault, prompts fo
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for password
 cargo run -- secret list                              # prompts for password, shows key names
 cargo run -- secret remove OPENROUTER_API_KEY         # prompts for password
+cargo run -- secret change-password                   # change the vault master password
 cargo run -- secret path                              # prints vault file path
+```
+
+### Choosing a Master Password
+
+The master password protects all your secrets (API keys, tokens, etc.) with a single encryption key. Choose it carefully:
+
+- **At least 12 characters** (8 minimum enforced, 12+ strongly recommended)
+- **Mix character types**: uppercase, lowercase, numbers, symbols
+- **Do NOT reuse** a password from another service
+- **Use a password manager** (1Password, Bitwarden, KeePass) to generate and store it
+- **Avoid** dictionary words, personal info, or common patterns like `Password123!`
+
+**Good examples:** `kT9#mPx$vR2nLq7!`, a random passphrase like `correct-horse-battery-staple`
+
+You can change the master password at any time without losing your secrets:
+
+```bash
+cargo run -- secret change-password
 ```
 
 ### Startup Behavior
@@ -460,6 +479,8 @@ Set the `TENGU_MASTER_PASSWORD` env var to skip the interactive prompt (useful f
 ```bash
 TENGU_MASTER_PASSWORD=mypass cargo run -- doctor
 ```
+
+**Warning:** Setting `TENGU_MASTER_PASSWORD` in your shell profile or `.env` file reduces security — anyone with access to those files can decrypt your vault. Prefer the interactive prompt for local use and reserve the env var for CI/automation where the value is injected securely (e.g., from a CI secrets manager).
 
 ### Vault File Format
 
