@@ -19,7 +19,10 @@ cargo build
 # Configure
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
-export OPENROUTER_API_KEY=sk-or-...
+
+# Store your API key in the encrypted vault
+cargo run -- secret init                              # prompts for master password
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for master password
 
 # Chat
 cargo run -- chat
@@ -50,10 +53,15 @@ See the [Quickstart Guide](docs/QUICKSTART.md) for the full walkthrough.
 ## Commands
 
 ```bash
-cargo run -- chat         # Interactive chat (default)
-cargo run -- orchestrate  # Multi-agent fleet
-cargo run -- status       # Show config summary
-cargo run -- doctor       # Check backend connectivity
+cargo run -- chat             # Interactive chat (default)
+cargo run -- telegram         # Telegram bot
+cargo run -- orchestrate      # Multi-agent fleet
+cargo run -- status           # Show config summary
+cargo run -- doctor           # Check backend connectivity
+cargo run -- secret init      # Create encrypted secrets vault
+cargo run -- secret set K V   # Store a secret
+cargo run -- secret list      # List stored secret keys
+cargo run -- secret remove K  # Remove a secret
 ```
 
 ### Chat Commands
@@ -153,14 +161,11 @@ See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 | `ollama` | on | Ollama local models |
 | `claude-code` | on | Claude Code subprocess |
 | `huggingface` | off | Hugging Face Inference Providers |
-| `telegram` | off | Telegram bot channel |
+| `telegram` | on | Telegram bot channel |
 | `qdrant` | off | Qdrant vector store for RAG memory |
 | `evm` | off | EVM wallet signing and transaction submission (alloy) |
 
 ```bash
-# Build with Telegram support
-cargo build --features telegram
-
 # Build with Qdrant vector store
 cargo build --features qdrant
 

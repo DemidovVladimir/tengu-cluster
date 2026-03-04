@@ -1,6 +1,12 @@
 # Tengu Cluster — Example Configuration
 # Copy to ~/.tengu/config.toml and customize
 
+# --- Secrets ---
+# Store API keys in ~/.tengu/secrets.vault (AES-256-GCM encrypted, chmod 600).
+# Run: tengu secret init          (creates vault, prompts for master password)
+# Then: tengu secret set OPENROUTER_API_KEY sk-or-...
+# Or set TENGU_MASTER_PASSWORD env var to skip interactive prompts.
+
 # Runtime profile: "auto" | "cloud" | "desktop" | "minimal"
 runtime_profile = "auto"
 
@@ -101,6 +107,16 @@ max_tokens_per_flow = 100_000
 #   evm_send_transaction — build, sign, submit tx and wait for receipt
 #
 # All EVM tools require user approval before execution.
+
+# --- Telegram Bot ---
+# Run with: tengu telegram
+# Set TELEGRAM_BOT_TOKEN in secrets vault or env.
+# Get a token from @BotFather on Telegram.
+# Get your user ID from @userinfobot on Telegram.
+
+# [telegram]
+# enabled = true
+# allowed_users = ["123456789"]
 
 # --- Fleet Orchestration ---
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.

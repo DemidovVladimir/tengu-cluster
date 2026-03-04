@@ -34,6 +34,31 @@ pub(crate) trait ToolExecutor {
     fn execute(&self, call: &ToolCall) -> Result<String>;
 }
 
+/// Decorator that redacts registered secret values from all tool output.
+///
+/// Wraps any `ToolExecutor` and runs the result through `SecretRegistry::redact`
+/// before returning, preventing secrets from entering conversation messages.
+pub(crate) struct SanitizedToolExecutor<'a> {
+    inner: &'a dyn ToolExecutor,
+    registry: &'a crate::domain::secret_registry::SecretRegistry,
+}
+
+impl<'a> SanitizedToolExecutor<'a> {
+    pub fn new(
+        inner: &'a dyn ToolExecutor,
+        registry: &'a crate::domain::secret_registry::SecretRegistry,
+    ) -> Self {
+        Self { inner, registry }
+    }
+}
+
+impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
+    fn execute(&self, call: &ToolCall) -> Result<String> {
+        let result = self.inner.execute(call)?;
+        Ok(self.registry.redact(&result))
+    }
+}
+
 /// Execute one or more engine rounds, handling tool calls automatically.
 ///
 /// If `tool_executor` is None or `tools` is empty, behaves like a single

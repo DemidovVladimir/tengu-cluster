@@ -34,6 +34,8 @@ pub(crate) use domain::chat::{
 pub(crate) use domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 
 use adapters::engine_factory::build_engine;
+use adapters::secret_store;
+use domain::secret_registry::SecretRegistry;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -57,11 +59,71 @@ enum Commands {
     Doctor,
     /// Run multi-agent fleet orchestrator.
     Orchestrate,
+    /// Run Telegram bot adapter.
+    Telegram,
+    /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Create encrypted secrets vault with master password
+    Init,
+    /// Set a secret (KEY VALUE)
+    Set { key: String, value: String },
+    /// Remove a secret by key
+    Remove { key: String },
+    /// List secret key names (values hidden)
+    List,
+    /// Show the secrets file path
+    Path,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load .env file if present (non-fatal if missing).
+    // Load encrypted secrets vault first (higher priority), then .env.
+    // Shell env vars always win (load_secrets_into_env won't overwrite existing vars).
+    let tengu_home = resolve_tengu_home();
+    let secrets_path = tengu_home.join("secrets.vault");
+    let mut secret_registry = SecretRegistry::new();
+    if secrets_path.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&secrets_path) {
+                let mode = meta.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    eprintln!(
+                        "WARNING: {} has permissions {:o} — should be 600. \
+                         Run: chmod 600 {}",
+                        secrets_path.display(),
+                        mode,
+                        secrets_path.display()
+                    );
+                }
+            }
+        }
+        match secret_store::load_secrets_into_env(&secrets_path) {
+            Ok(secret_values) => {
+                for v in secret_values {
+                    secret_registry.register(v);
+                }
+            }
+            Err(e) => {
+                eprintln!("WARNING: Failed to load secrets vault: {}", e);
+            }
+        }
+    }
+    // Also register the master password itself if set via env.
+    if let Ok(pw) = std::env::var("TENGU_MASTER_PASSWORD") {
+        if !pw.is_empty() {
+            secret_registry.register(pw);
+        }
+    }
+    let secret_registry = std::sync::Arc::new(secret_registry);
     dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
@@ -115,7 +177,9 @@ async fn main() -> Result<()> {
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
     match cli.command.unwrap_or(Commands::Chat) {
-        Commands::Chat => tokio::task::block_in_place(|| adapters::tui::run_tui(config, profile)),
+        Commands::Chat => tokio::task::block_in_place(|| {
+            adapters::tui::run_tui(config, profile, secret_registry)
+        }),
         Commands::Status => {
             print_status(&config, profile);
             Ok(())
@@ -127,6 +191,34 @@ async fn main() -> Result<()> {
         Commands::Orchestrate => {
             let event_bus = tengu_core::events::InProcessEventBus::default();
             adapters::orchestrator::boot_orchestrator(&config, &event_bus).await
+        }
+        #[cfg(feature = "telegram")]
+        Commands::Telegram => tokio::task::block_in_place(|| {
+            adapters::telegram_runtime::run_telegram(config, secret_registry)
+        }),
+        #[cfg(not(feature = "telegram"))]
+        Commands::Telegram => {
+            anyhow::bail!("Telegram support requires: cargo build --features telegram")
+        }
+        Commands::Secret { action } => {
+            let path = secret_store::secrets_file_path(&resolve_tengu_home());
+            match action {
+                SecretAction::Init => secret_store::init_secrets_file(&path)?,
+                SecretAction::Set { key, value } => secret_store::set_secret(&path, &key, &value)?,
+                SecretAction::Remove { key } => secret_store::remove_secret(&path, &key)?,
+                SecretAction::List => {
+                    let keys = secret_store::list_secret_keys(&path)?;
+                    if keys.is_empty() {
+                        println!("  (no secrets)");
+                    } else {
+                        for k in &keys {
+                            println!("  {}", k);
+                        }
+                    }
+                }
+                SecretAction::Path => println!("{}", path.display()),
+            }
+            Ok(())
         }
     }
 }

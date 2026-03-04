@@ -50,14 +50,22 @@ impl Pipe for TelegramPipe {
 
     async fn connect(&self, ctx: PipeContext) -> anyhow::Result<()> {
         use teloxide::prelude::*;
+        use teloxide::requests::Requester;
+
+        let bot = Bot::new(&self.token);
+
+        // Validate the token before starting the dispatcher — teloxide panics
+        // inside dispatch() if the token is invalid, so we catch it early.
+        let me = bot
+            .get_me()
+            .await
+            .map_err(|e| anyhow::anyhow!("Invalid Telegram bot token: {}", e))?;
+        info!(bot = %me.username(), "Telegram bot authenticated");
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         *self.shutdown.lock().await = Some(shutdown_tx);
 
-        let bot = Bot::new(&self.token);
         let inbound_tx = ctx.inbound_tx.clone();
-
-        info!("Telegram pipe connecting...");
 
         tokio::spawn(async move {
             let handler = Update::filter_message().endpoint(

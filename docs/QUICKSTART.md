@@ -22,18 +22,30 @@ cargo build
 
 ## Step 2: Set Your API Key
 
-Pick one provider and export its key:
+Use the encrypted secrets vault (AES-256-GCM, master-password protected):
 
 ```bash
+# Create the vault — prompts for a master password
+cargo run -- secret init
+
+# Store your API key (prompts for master password)
 # Option A: OpenRouter (recommended — access Claude, GPT, Gemini, Llama, etc.)
-export OPENROUTER_API_KEY=sk-or-...
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 
 # Option B: Direct provider
-export ANTHROPIC_API_KEY=sk-ant-...
+cargo run -- secret set ANTHROPIC_API_KEY sk-ant-...
 # or
-export OPENAI_API_KEY=sk-...
+cargo run -- secret set OPENAI_API_KEY sk-...
 # or
-export HF_TOKEN=hf_...
+cargo run -- secret set HF_TOKEN hf_...
+```
+
+The vault is stored at `~/.tengu/secrets.vault` with `chmod 600`. At startup, Tengu prompts for your master password to decrypt the vault and load secrets into the environment. Set `TENGU_MASTER_PASSWORD` env var to skip the interactive prompt.
+
+Alternatively, you can still use plain environment variables:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
 ```
 
 ## Step 3: Create Config
@@ -168,6 +180,26 @@ cargo run -- orchestrate
 ```
 
 See [Fleet Orchestration Guide](FLEET.md) for the full setup.
+
+## Telegram Bot
+
+Chat with your agent from Telegram instead of the terminal:
+
+```bash
+# Store your bot token (get one from @BotFather on Telegram)
+cargo run -- secret set TELEGRAM_BOT_TOKEN 123456:ABC-DEF...
+
+# Add your Telegram user ID to config (get it from @userinfobot)
+# In ~/.tengu/config.toml:
+# [telegram]
+# enabled = true
+# allowed_users = ["YOUR_USER_ID"]
+
+# Run the bot
+cargo run -- telegram
+```
+
+Send a message to your bot in Telegram and it responds with full agent capabilities. See [Configuration Reference](CONFIGURATION.md#telegram) for details.
 
 ## Next Steps
 

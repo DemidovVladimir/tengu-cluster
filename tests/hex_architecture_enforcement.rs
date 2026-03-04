@@ -142,6 +142,7 @@ fn domain_layer_is_infrastructure_free() {
         "src/domain/memory.rs",
         "src/domain/evm.rs",
         "src/domain/skill_transpile.rs",
+        "src/domain/secret_registry.rs",
     ] {
         let src = read(file);
         assert!(
@@ -329,6 +330,25 @@ fn evm_signer_adapter_exists_and_implements_port() {
     assert!(
         src.contains("impl EvmPort for AlloySigner"),
         "evm_signer must implement EvmPort"
+    );
+}
+
+#[test]
+#[test]
+#[cfg(feature = "telegram")]
+fn telegram_runtime_adapter_exists() {
+    assert!(
+        Path::new("src/adapters/telegram_runtime.rs").exists(),
+        "telegram_runtime adapter must exist when telegram feature is enabled"
+    );
+    let src = read("src/adapters/telegram_runtime.rs");
+    assert!(
+        src.contains("ChatRuntimeService") && src.contains("process_user_text"),
+        "telegram_runtime must delegate to ChatRuntimeService"
+    );
+    assert!(
+        !src.contains("collect_engine_response("),
+        "telegram_runtime must not orchestrate engine turn loop directly"
     );
 }
 

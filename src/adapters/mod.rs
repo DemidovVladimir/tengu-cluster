@@ -13,10 +13,13 @@ pub(crate) mod memory_tool_executor;
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod orchestrator;
 pub(crate) mod scaffold_writer;
+pub(crate) mod secret_store;
 pub(crate) mod shell_executor;
 pub(crate) mod skill_source;
 pub(crate) mod skill_tool_executor;
 pub(crate) mod system_prompt;
 pub(crate) mod task_store;
+#[cfg(feature = "telegram")]
+pub(crate) mod telegram_runtime;
 pub(crate) mod tui;
 pub(crate) mod workspace_tools;

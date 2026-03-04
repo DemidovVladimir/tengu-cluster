@@ -24,6 +24,9 @@ pub struct Config {
 
     #[serde(default)]
     pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub telegram: TelegramConfig,
 }
 
 fn default_profile() -> String {
@@ -259,6 +262,16 @@ fn default_heartbeat_interval() -> u64 {
 }
 fn default_max_retries() -> u32 {
     3
+}
+
+/// Telegram bot adapter configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Telegram user IDs allowed to interact with the bot.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
 }
 
 /// Persistent vector memory configuration.
@@ -666,6 +679,7 @@ impl Default for Config {
             agents,
             orchestrator: None,
             memory: MemoryConfig::default(),
+            telegram: TelegramConfig::default(),
         }
     }
 }

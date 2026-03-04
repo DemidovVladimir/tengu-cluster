@@ -22,7 +22,7 @@ use crate::adapters::system_prompt;
 use crate::adapters::workspace_tools;
 use crate::application::chat_commands::{self, CommandResult, EngineInfo};
 use crate::application::chat_runtime::{ChatRuntimeService, ChatTurnResult};
-use crate::application::engine_runtime::ToolExecutor;
+use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
@@ -33,6 +33,7 @@ use crate::application::workspace_tools_catalog::build_memory_tools;
 #[cfg(feature = "evm")]
 use crate::application::workspace_tools_catalog::build_evm_tools;
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
+use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::skill::SkillStatus;
 use crate::domain::tool_policy::ToolPolicyCatalog;
 use crate::resolve_tengu_home;
@@ -216,6 +217,7 @@ fn rebuild_executor(
     tools: &[ToolDef],
     skill_registry: &SkillRegistry,
     memory_handle: &Option<Arc<MemoryServiceHandle>>,
+    secret_registry: &Arc<SecretRegistry>,
     cb_sink: &cursive::CbSink,
 ) -> Option<TuiToolExecutor> {
     if tools.is_empty() {
@@ -249,7 +251,9 @@ fn rebuild_executor(
 
     // Attach memory executor if available.
     if let Some(ref handle) = memory_handle {
-        if let Ok(mem_exec) = MemoryToolExecutionAdapter::new(Arc::clone(handle)) {
+        if let Ok(mem_exec) =
+            MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
+        {
             let mem_names: std::collections::HashSet<String> =
                 build_memory_tools().iter().map(|t| t.name.clone()).collect();
             composite = composite.with_memory_executor(Arc::new(mem_exec), mem_names);
@@ -327,7 +331,11 @@ fn format_skill_list(skills: Vec<(String, SkillStatus)>) -> String {
 }
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
-pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
+pub fn run_tui(
+    config: Config,
+    _profile: RuntimeProfile,
+    secret_registry: Arc<SecretRegistry>,
+) -> Result<()> {
     // Resolve agent config
     let (agent_id, agent_config) = config
         .agents
@@ -396,8 +404,10 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
     let send_refiner = SendRefiner(refiner);
     let engine_agent_id = agent_id.clone();
     let engine_agent_config = agent_config.clone();
+    let secret_registry_clone = Arc::clone(&secret_registry);
 
     std::thread::spawn(move || {
+        let secret_registry = secret_registry_clone;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -692,6 +702,7 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                 &current_tools,
                                 &skill_registry,
                                 &memory_handle,
+                                &secret_registry,
                                 &cb_sink,
                             );
                             current_system_prompt = rebuild_system_prompt(
@@ -752,6 +763,7 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                                 &current_tools,
                                 &skill_registry,
                                 &memory_handle,
+                                &secret_registry,
                                 &cb_sink,
                             );
                             current_system_prompt = rebuild_system_prompt(
@@ -767,6 +779,11 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                     let text = user_text;
 
                     rt.block_on(async {
+                        // Wrap tool executor with secret redaction decorator.
+                        let sanitized_executor = current_executor.as_ref().map(|e| {
+                            SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                        });
+
                         let chat_runtime = ChatRuntimeService {
                             engine: engine.as_ref(),
                             refiner: refiner.as_ref(),
@@ -777,7 +794,9 @@ pub fn run_tui(config: Config, _profile: RuntimeProfile) -> Result<()> {
                             compaction_policy,
                             system_prompt: current_system_prompt.clone(),
                             tools: &current_tools,
-                            tool_executor: current_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+                            tool_executor: sanitized_executor
+                                .as_ref()
+                                .map(|e| e as &dyn ToolExecutor),
                             memory_service: memory_service_instance.as_ref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,

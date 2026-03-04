@@ -106,8 +106,10 @@ Forbidden:
 | `memory_store.rs` | Disk-backed vector store with brute-force cosine similarity and bincode persistence (MemoryStorePort) | Stable |
 | `qdrant_memory_store.rs` | Qdrant-backed vector store via gRPC, ANN cosine search (MemoryStorePort, `--features qdrant`) | Stable |
 | `memory_tool_executor.rs` | Memory tool execution bridge (sync→async via dedicated runtime) | Stable |
+| `secret_store.rs` | AES-256-GCM encrypted secrets vault (PBKDF2 key derivation, rpassword prompting) | Stable |
 | `evm_signer.rs` | Alloy-based EVM signer adapter (EvmPort, `--features evm`) | New |
 | `evm_tool_executor.rs` | EVM tool execution bridge (sync→async via dedicated runtime, `--features evm`) | New |
+| `telegram_runtime.rs` | Headless Telegram bot adapter wiring TelegramPipe → ChatRuntimeService (`--features telegram`) | New |
 
 ### Channel Adapters (`crates/tengu-channels/`)
 
@@ -136,7 +138,7 @@ Forbidden:
 ## Enforcement
 
 Automated checks exist in:
-- `tests/hex_architecture_enforcement.rs` (22 tests)
+- `tests/hex_architecture_enforcement.rs` (23 tests, including feature-gated)
 
 Enforced invariants:
 - Domain files contain no `reqwest`, `cursive`, `std::fs`, `tokio::process`
@@ -155,5 +157,6 @@ Enforced invariants:
 - `EvmToolExecutionAdapter` exists and implements `ToolExecutionPort`
 - Alloy does not leak into domain or application layers
 - EVM domain types are infrastructure-free
+- Telegram runtime adapter delegates to `ChatRuntimeService` (no direct engine calls, `--features telegram`)
 
 CI/local tests must stay green for architecture guardrails.

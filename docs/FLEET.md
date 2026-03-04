@@ -391,7 +391,8 @@ max_tokens_per_flow = 500_000
 ```
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...
+# Store your key in the encrypted vault (or export OPENROUTER_API_KEY)
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 cargo run -- orchestrate
 ```
 

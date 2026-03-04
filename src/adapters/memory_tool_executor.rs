@@ -6,6 +6,7 @@
 
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
+use crate::domain::secret_registry::SecretRegistry;
 use anyhow::Result;
 use std::sync::Arc;
 use tengu_core::types::ToolCall;
@@ -24,15 +25,23 @@ pub(crate) struct MemoryServiceHandle {
 /// through a dedicated tokio runtime (to bridge sync → async).
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
+    secret_registry: Arc<SecretRegistry>,
     runtime: tokio::runtime::Runtime,
 }
 
 impl MemoryToolExecutionAdapter {
-    pub(crate) fn new(handle: Arc<MemoryServiceHandle>) -> Result<Self> {
+    pub(crate) fn new(
+        handle: Arc<MemoryServiceHandle>,
+        secret_registry: Arc<SecretRegistry>,
+    ) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        Ok(Self { handle, runtime })
+        Ok(Self {
+            handle,
+            secret_registry,
+            runtime,
+        })
     }
 }
 
@@ -40,11 +49,14 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
         match call.name.as_str() {
             "remember" => {
-                let content = call
+                let raw_content = call
                     .arguments
                     .get("content")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("remember: missing 'content' argument"))?;
+                // Redact secrets before persisting to memory store.
+                let content = self.secret_registry.redact(raw_content);
+                let content = content.as_str();
 
                 let agent_id = call
                     .arguments

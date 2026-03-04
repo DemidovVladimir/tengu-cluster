@@ -61,6 +61,10 @@ chrono.workspace = true
 dirs-next = "2.0"
 bincode = "1"
 dotenvy = "0.15"
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+sha2 = "0.10"
+rpassword = "7"
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 pdf-extract = "0.10"
 regex = "1"
@@ -68,7 +72,7 @@ qdrant-client = { workspace = true, optional = true }
 alloy = { workspace = true, optional = true }
 
 [features]
-default = ["ollama", "anthropic", "openai", "openrouter", "claude-code"]
+default = ["ollama", "anthropic", "openai", "openrouter", "claude-code", "telegram"]
 telegram = ["tengu-channels/telegram"]
 ollama = ["tengu-backends/ollama"]
 anthropic = ["tengu-backends/anthropic"]

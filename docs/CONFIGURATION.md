@@ -19,6 +19,7 @@ All configuration lives in a single TOML file at `~/.tengu/config.toml`. Copy `c
 - [Memory](#memory)
   - [Disk Backend (default)](#disk-backend-default)
   - [Qdrant Backend](#qdrant-backend)
+- [Telegram](#telegram)
 - [Environment Variables](#environment-variables)
 - [Config Validation Rules](#config-validation-rules)
 
@@ -406,9 +407,69 @@ The collection is auto-created with cosine distance on first connect. If the `qd
 
 ---
 
+## Telegram
+
+Run the agent as a headless Telegram bot. Users chat with the bot in Telegram and get full agent capabilities: tools, skills, memory, secret redaction.
+
+```toml
+[telegram]
+enabled = true
+allowed_users = ["123456789", "987654321"]
+```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `enabled` | bool | `false` | Enable Telegram bot mode |
+| `allowed_users` | string[] | `[]` | Telegram user IDs allowed to interact with the bot |
+
+**Setup:**
+1. Create a bot via [@BotFather](https://t.me/BotFather) on Telegram to get a bot token
+2. Store the token: `tengu secret set TELEGRAM_BOT_TOKEN 123456:ABC-DEF...`
+3. Get your Telegram user ID from [@userinfobot](https://t.me/userinfobot)
+4. Add your user ID to `allowed_users` in config (or set `TENGU_TELEGRAM_ALLOWED_USERS` env var, comma-separated)
+5. Run: `cargo run -- telegram`
+
+**Access control:** If `allowed_users` is empty and `TENGU_TELEGRAM_ALLOWED_USERS` is not set, all messages are rejected. Both sources are merged into a single allowlist.
+
+**Message chunking:** Telegram has a 4096-character message limit. Long responses are automatically split at paragraph (`\n\n`) boundaries into chunks of at most 4000 characters.
+
+**Per-user conversations:** Each Telegram user gets their own `ChatLoopState` (keyed by sender user ID), following the agent's configured `flow.scope` setting.
+
+---
+
+## Secrets Vault
+
+API keys and other secrets are stored in an **AES-256-GCM encrypted vault** at `~/.tengu/secrets.vault`, protected by a master password (PBKDF2-HMAC-SHA256, 600,000 iterations).
+
+### Setup
+
+```bash
+cargo run -- secret init                              # create vault, prompts for password twice
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for password
+cargo run -- secret list                              # prompts for password, shows key names
+cargo run -- secret remove OPENROUTER_API_KEY         # prompts for password
+cargo run -- secret path                              # prints vault file path
+```
+
+### Startup Behavior
+
+At startup, if `~/.tengu/secrets.vault` exists, Tengu prompts for the master password and injects all stored key-value pairs into the process environment. Existing env vars are not overwritten (shell env > vault > `.env`).
+
+Set the `TENGU_MASTER_PASSWORD` env var to skip the interactive prompt (useful for CI/scripts):
+
+```bash
+TENGU_MASTER_PASSWORD=mypass cargo run -- doctor
+```
+
+### Vault File Format
+
+Binary format: `TENGU_VAULT\x01` magic header (12 bytes) + 32-byte PBKDF2 salt + 12-byte AES-GCM nonce + ciphertext with 16-byte GCM authentication tag. The decrypted plaintext is simple `KEY=VALUE\n` pairs.
+
+---
+
 ## Environment Variables
 
-All environment variables. The binary does not auto-load `.env` files — export them in your shell, `direnv`, or process manager.
+All environment variables. Export them in your shell, `direnv`, process manager, or store them in the encrypted secrets vault.
 
 ### Required (by engine)
 
@@ -418,12 +479,13 @@ All environment variables. The binary does not auto-load `.env` files — export
 | `ANTHROPIC_API_KEY` | `engine = "anthropic"` | `sk-ant-api03-abc...` |
 | `OPENAI_API_KEY` | `engine = "openai"` | `sk-abc...` |
 | `HF_TOKEN` | `engine = "huggingface"` | `hf_abc...` |
-| `TELEGRAM_BOT_TOKEN` | Telegram channel | `123456:ABC-DEF...` |
+| `TELEGRAM_BOT_TOKEN` | `tengu telegram` command | `123456:ABC-DEF...` |
 
 ### Optional
 
 | Variable | Default | Notes |
 |----------|---------|-------|
+| `TENGU_MASTER_PASSWORD` | none | Master password for secrets vault (skips interactive prompt) |
 | `TENGU_HOME` | `~/.tengu` | Base config/state directory |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic endpoint override |
@@ -435,6 +497,7 @@ All environment variables. The binary does not auto-load `.env` files — export
 | `CLAUDE_CODE_BIN` | `claude` | Path to Claude Code CLI binary |
 | `CLAUDE_CODE_PERMISSION_MODE` | `dontAsk` | Claude Code permission mode |
 | `QDRANT_API_KEY` | none | Qdrant Cloud API key (when `backend = "qdrant"`) |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | none | Comma-separated Telegram user IDs (merged with config `allowed_users`) |
 | `TENGU_GPU_HINT` | none | Force GPU detection: `"gpu"`, `"cuda"`, `"metal"`, `"none"`, `"cpu"` |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
 
@@ -476,6 +539,7 @@ The config is validated at startup. Invalid configs produce clear error messages
 | Path | Purpose |
 |------|---------|
 | `~/.tengu/config.toml` | Main configuration file |
+| `~/.tengu/secrets.vault` | AES-256-GCM encrypted secrets vault |
 | `~/.tengu/state/flows/` | Conversation history persistence |
 | `~/.tengu/state/flows/index.json` | Flow metadata index |
 | `~/.tengu/memory/vectors.bin` | Disk memory store (bincode, when `backend = "disk"`) |
