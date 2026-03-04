@@ -296,6 +296,27 @@ precise_budget = 0.5
 
 Switch lens during chat with `/eco`, `/standard`, or `/precise`.
 
+### Prompt Budget
+
+Control how much of the system prompt token budget is allocated to workspace files, skill context fragments, and the total prompt.
+
+```toml
+[agents.main.prompt_budget]
+max_file_tokens = 2000
+max_skill_context_tokens = 8000
+max_total_tokens = 16000
+```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `max_file_tokens` | usize | `2000` | Max tokens per workspace file (IDENTITY.md, PROFILE.md, CONTEXT.md) and instructions |
+| `max_skill_context_tokens` | usize | `8000` | Max tokens per skill context fragment (API docs from frontmatter skills) |
+| `max_total_tokens` | usize | `16000` | Max total tokens for the assembled system prompt |
+
+**Constraints:** all values must be > 0, and both `max_file_tokens` and `max_skill_context_tokens` must be <= `max_total_tokens`.
+
+For agents with large API skill docs, increase `max_skill_context_tokens` and `max_total_tokens` to ensure the full context reaches the model.
+
 ### Role and Skills
 
 For fleet orchestration agents:
@@ -552,6 +573,11 @@ The config is validated at startup. Invalid configs produce clear error messages
 - `lens.eco_max_tokens` must be > 0
 - `lens.standard_threshold` must be in [0.0, 1.0]
 - `lens.precise_budget` must be in [0.0, 1.0]
+- `prompt_budget.max_file_tokens` must be > 0
+- `prompt_budget.max_skill_context_tokens` must be > 0
+- `prompt_budget.max_total_tokens` must be > 0
+- `prompt_budget.max_file_tokens` must be <= `max_total_tokens`
+- `prompt_budget.max_skill_context_tokens` must be <= `max_total_tokens`
 
 ---
 

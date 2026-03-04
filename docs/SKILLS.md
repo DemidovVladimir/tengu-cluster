@@ -167,6 +167,7 @@ GET /api/v1/post — list posts
 | `description` | No | Short description shown to the model in the tool definition. |
 | `homepage` / `base_url` | Yes | Base URL for API calls. Used in the generated curl template. |
 | `auth_env` | No | Environment variable holding the API key. Defaults to `<NAME>_API_KEY` (e.g., `BEACH_SCIENCE_API_KEY`). |
+| `headers` | No | Custom HTTP headers (indented key-value pairs). When set, replaces the default `Authorization: Bearer` header. Values may reference env vars with `$VAR`. |
 
 ### Generated Tool
 
@@ -184,9 +185,26 @@ The execution template is:
 curl -s -X {{method}} 'BASE_URL{{path}}' -H 'Content-Type: application/json' -H 'Authorization: Bearer $AUTH_ENV' -d '{{body}}'
 ```
 
+### Custom Headers
+
+By default, API skills generate an `Authorization: Bearer $AUTH_ENV` header. To use different headers (e.g., API keys, service tokens), add a `headers` block:
+
+```markdown
+---
+name: molecule-api
+description: DeSci GraphQL API
+homepage: https://staging.graphql.api.molecule.xyz/graphql
+headers:
+  x-api-key: $MOLECULE_API_KEY
+  x-service-token: $MOLECULE_SERVICE_TOKEN
+---
+```
+
+When `headers` is present, the default `Authorization: Bearer` header is replaced entirely. `Content-Type: application/json` is always included.
+
 ### Context Injection
 
-The markdown body (everything after the closing `---`) is injected into the agent's system prompt. This gives the model full API documentation so it can construct correct requests. Each context fragment is capped at 1600 tokens.
+The markdown body (everything after the closing `---`) is injected into the agent's system prompt. This gives the model full API documentation so it can construct correct requests. Each context fragment is capped at `prompt_budget.max_skill_context_tokens` (default: 8000 tokens, configurable per-agent).
 
 ### Example
 

@@ -22,6 +22,25 @@ impl TelegramPipe {
             shutdown: Arc::new(Mutex::new(None)),
         }
     }
+
+    /// Send a "typing..." chat action to the given recipient.
+    pub async fn send_chat_action(&self, target: &Recipient) -> anyhow::Result<()> {
+        use teloxide::prelude::*;
+        use teloxide::types::{ChatAction, ChatId};
+
+        let bot = Bot::new(&self.token);
+        let chat_id: i64 = target
+            .thread_id
+            .as_deref()
+            .or(Some(&target.peer_id))
+            .unwrap()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid chat_id"))?;
+        bot.send_chat_action(ChatId(chat_id), ChatAction::Typing)
+            .await
+            .map_err(|e| anyhow::anyhow!("send_chat_action failed: {}", e))?;
+        Ok(())
+    }
 }
 
 #[async_trait]

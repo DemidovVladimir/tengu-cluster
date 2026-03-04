@@ -1,7 +1,10 @@
 ---
 name: aura-orchestrator
 description: Server-side orchestrator skill for the Aura agent. Automates end-to-end DeSci lab workflows — IPNFT minting, project creation, file uploads, and announcements — via Molecule DeSci GraphQL API and on-chain transactions. No UI assumptions; fully programmatic execution.
-homepage: https://testnet.molecule.xyz/ipnfts
+homepage: https://staging.graphql.api.molecule.xyz/graphql
+headers:
+  x-api-key: $MOLECULE_API_KEY
+  x-service-token: $MOLECULE_SERVICE_TOKEN
 ---
 
 # Aura Orchestrator Skill: DeSci Lab Automation
@@ -14,6 +17,20 @@ Aura is a server-side orchestrator LLM that reads a **Blueprint JSON** and dispa
 4. **Announcement Creation** — publish updates with file attachments via GraphQL
 
 Each workflow section clearly separates **GraphQL operations** from **on-chain transaction responsibilities**.
+
+---
+
+## IMPORTANT: Allowed Endpoints
+
+**Only the following hosts are valid.** Never invent, guess, or use any other URLs.
+
+| Purpose | URL |
+|---------|-----|
+| GraphQL API | `${MOLECULE_LABS_URL}` (default: `https://staging.graphql.api.molecule.xyz/graphql`) |
+| POI Registration | `https://testnet.molecule.xyz/api/v1/inventions` |
+| Client links (display only) | `${MOLECULE_CLIENT_URL}` (default: `https://testnet.molecule.xyz`) |
+
+All API calls go to these endpoints only. If a URL is not listed here, do **not** use it.
 
 ---
 
@@ -161,7 +178,7 @@ A 9-step process combining on-chain transactions with GraphQL API calls. This is
 ```bash
 curl -X POST \
   https://testnet.molecule.xyz/api/v1/inventions \
-  -H 'Authorization: Bearer POI_API_KEY' \
+  -H 'Authorization: Bearer $POI_API_KEY' \
   -H 'Content-Type: multipart/form-data' \
   -F 'files=@document1.pdf' \
   -F 'files=@document2.pdf'

@@ -49,7 +49,12 @@ impl ShellExecutionPort for LocalShellExecutor {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stdout = if stdout.len() > MAX_OUTPUT_BYTES {
-            format!("{}...[truncated]", &stdout[..MAX_OUTPUT_BYTES])
+            // Find a valid UTF-8 char boundary at or before MAX_OUTPUT_BYTES.
+            let mut boundary = MAX_OUTPUT_BYTES;
+            while boundary > 0 && !stdout.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            format!("{}...[truncated]", &stdout[..boundary])
         } else {
             stdout.to_string()
         };

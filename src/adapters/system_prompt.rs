@@ -15,9 +15,10 @@ pub(crate) fn build_system_prompt(
     skill_contexts: &[String],
     #[allow(unused_variables)] evm_tools_available: bool,
 ) -> String {
-    const MAX_FILE_TOKENS: usize = 600;
-    const MAX_SKILL_CONTEXT_TOKENS: usize = 1200;
-    const MAX_TOTAL_TOKENS: usize = 3000;
+    let budget = &agent_config.prompt_budget;
+    let max_file_tokens = budget.max_file_tokens;
+    let max_skill_context_tokens = budget.max_skill_context_tokens;
+    let max_total_tokens = budget.max_total_tokens;
 
     let name = agent_config.identity.name.as_deref().unwrap_or("Tengu");
     let mut parts = Vec::new();
@@ -50,7 +51,7 @@ pub(crate) fn build_system_prompt(
     // 3. Custom instructions — verbatim from config identity.instructions.
     if let Some(ref instructions) = agent_config.identity.instructions {
         if !instructions.trim().is_empty() {
-            let truncated = truncate_to_token_budget(instructions, MAX_FILE_TOKENS);
+            let truncated = truncate_to_token_budget(instructions, max_file_tokens);
             total_tokens += estimate_tokens_approx_min1(&truncated);
             parts.push(truncated);
         }
@@ -62,10 +63,10 @@ pub(crate) fn build_system_prompt(
             let path = workspace.join(filename);
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if !content.trim().is_empty() {
-                    let truncated = truncate_to_token_budget(&content, MAX_FILE_TOKENS);
+                    let truncated = truncate_to_token_budget(&content, max_file_tokens);
                     let chunk = format!("# {filename}\n\n{truncated}");
                     let chunk_tokens = estimate_tokens_approx_min1(&chunk);
-                    if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
+                    if total_tokens + chunk_tokens > max_total_tokens {
                         break;
                     }
                     total_tokens += chunk_tokens;
@@ -80,9 +81,9 @@ pub(crate) fn build_system_prompt(
         if ctx.trim().is_empty() {
             continue;
         }
-        let truncated = truncate_to_token_budget(ctx, MAX_SKILL_CONTEXT_TOKENS);
+        let truncated = truncate_to_token_budget(ctx, max_skill_context_tokens);
         let chunk_tokens = estimate_tokens_approx_min1(&truncated);
-        if total_tokens + chunk_tokens > MAX_TOTAL_TOKENS {
+        if total_tokens + chunk_tokens > max_total_tokens {
             break;
         }
         total_tokens += chunk_tokens;
@@ -99,7 +100,7 @@ pub(crate) fn build_system_prompt(
             Do NOT write scripts, generate curl commands, or suggest manual steps. \
             Always use the tool.";
         let inst_tokens = estimate_tokens_approx_min1(instruction);
-        if total_tokens + inst_tokens <= MAX_TOTAL_TOKENS + 200 {
+        if total_tokens + inst_tokens <= max_total_tokens + max_total_tokens / 20 {
             total_tokens += inst_tokens;
             parts.push(instruction.to_string());
         }
@@ -131,7 +132,7 @@ pub(crate) fn build_system_prompt(
                  Do NOT tell the user to wait and check manually — poll for them."
                 .to_string();
             let tools_tokens = estimate_tokens_approx_min1(&tools_note);
-            if total_tokens + tools_tokens <= MAX_TOTAL_TOKENS + 400 {
+            if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
                 parts.push(tools_note);
             }
         }
@@ -161,7 +162,7 @@ pub(crate) fn build_system_prompt(
              - All EVM tools require user approval before execution."
             .to_string();
         let evm_tokens = estimate_tokens_approx_min1(&evm_note);
-        if total_tokens + evm_tokens <= MAX_TOTAL_TOKENS + 600 {
+        if total_tokens + evm_tokens <= max_total_tokens + max_total_tokens * 3 / 20 {
             parts.push(evm_note);
         }
     }

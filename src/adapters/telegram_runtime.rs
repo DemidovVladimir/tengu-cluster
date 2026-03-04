@@ -103,8 +103,11 @@ fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
             boundary -= 1;
         }
 
-        // Try to split at \n\n within the last quarter of the chunk.
-        let search_start = start + (boundary - start) / 2;
+        // Try to split at \n\n within the last half of the chunk.
+        let mut search_start = start + (boundary - start) / 2;
+        while search_start < boundary && !text.is_char_boundary(search_start) {
+            search_start += 1;
+        }
         let split = text[search_start..boundary]
             .rfind("\n\n")
             .map(|pos| search_start + pos + 2) // after the \n\n
@@ -549,7 +552,25 @@ pub(crate) fn run_telegram(
                 max_recall_tokens: memory_config.max_recall_tokens,
             };
 
-            match chat_runtime.process_user_text(state, &msg.content).await {
+            // Send initial typing indicator, then keep refreshing every 4s
+            // while process_user_text runs. The typing_loop future is dropped
+            // as soon as the response arrives — no cleanup needed.
+            let _ = pipe.send_chat_action(&msg.sender).await;
+
+            let result = {
+                let typing_loop = async {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                        let _ = pipe.send_chat_action(&msg.sender).await;
+                    }
+                };
+                tokio::select! {
+                    res = chat_runtime.process_user_text(state, &msg.content) => res,
+                    _ = typing_loop => unreachable!(),
+                }
+            };
+
+            match result {
                 Ok(result) => {
                     if let Some(notice) = result.system_notice {
                         let _ = pipe.send_text(&msg.sender, &notice, &delivery_opts).await;

@@ -143,6 +143,8 @@ pub struct AgentConfig {
     /// Skill allowlist — `None` means all skills, `Some(names)` restricts.
     #[serde(default)]
     pub skills: Option<Vec<String>>,
+    #[serde(default)]
+    pub prompt_budget: PromptBudgetConfig,
 }
 
 fn default_lens() -> String {
@@ -354,6 +356,40 @@ fn default_qdrant_collection() -> String {
 
 fn default_vector_size() -> u64 {
     1536
+}
+
+/// System prompt token budget configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptBudgetConfig {
+    /// Max tokens for individual workspace files (IDENTITY.md, PROFILE.md, etc.) and instructions.
+    #[serde(default = "default_max_file_tokens")]
+    pub max_file_tokens: usize,
+    /// Max tokens for each skill context fragment (API docs from frontmatter skills).
+    #[serde(default = "default_max_skill_context_tokens")]
+    pub max_skill_context_tokens: usize,
+    /// Max total tokens for the entire assembled system prompt.
+    #[serde(default = "default_max_total_tokens")]
+    pub max_total_tokens: usize,
+}
+
+impl Default for PromptBudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_file_tokens: default_max_file_tokens(),
+            max_skill_context_tokens: default_max_skill_context_tokens(),
+            max_total_tokens: default_max_total_tokens(),
+        }
+    }
+}
+
+fn default_max_file_tokens() -> usize {
+    2000
+}
+fn default_max_skill_context_tokens() -> usize {
+    8000
+}
+fn default_max_total_tokens() -> usize {
+    16000
 }
 
 /// Lens-specific retrieval and budgeting parameters.
@@ -627,6 +663,29 @@ impl Config {
                 agent_id
             ));
         }
+
+        let pb = &agent.prompt_budget;
+        let pb_prefix = format!("agents.{agent_id}.prompt_budget");
+        errors.require(
+            pb.max_file_tokens > 0,
+            format!("{pb_prefix}.max_file_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_skill_context_tokens > 0,
+            format!("{pb_prefix}.max_skill_context_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_total_tokens > 0,
+            format!("{pb_prefix}.max_total_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_file_tokens <= pb.max_total_tokens,
+            format!("{pb_prefix}.max_file_tokens cannot exceed max_total_tokens"),
+        );
+        errors.require(
+            pb.max_skill_context_tokens <= pb.max_total_tokens,
+            format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
+        );
     }
 
     pub fn load_or_default(path: &std::path::Path) -> Self {
@@ -669,6 +728,7 @@ impl Default for Config {
                 lens: LensConfig::default(),
                 role: None,
                 skills: None,
+                prompt_budget: PromptBudgetConfig::default(),
             },
         );
 

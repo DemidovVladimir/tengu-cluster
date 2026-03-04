@@ -415,6 +415,8 @@ pub(crate) struct SkillFrontmatter {
     pub description: String,
     pub base_url: String,
     pub auth_env: String,
+    /// Custom headers override the default `Authorization: Bearer $AUTH_ENV`.
+    pub headers: Vec<(String, String)>,
 }
 
 /// Result of parsing a skill file — either classic `# name` format or frontmatter API skill.
@@ -448,6 +450,14 @@ pub(crate) fn api_skill_preamble(name: &str) -> String {
     )
 }
 
+/// Validate that a header value contains no dangerous shell metacharacters.
+/// Allows `$` for env var expansion but rejects `;`, `|`, `&`, `` ` ``, `(`, `)`, newlines.
+fn validate_header_value(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|c| matches!(c, ';' | '|' | '&' | '`' | '(' | ')' | '\n' | '\r'))
+}
+
 /// Try to extract YAML frontmatter delimited by `---` fences.
 ///
 /// Returns `Some((frontmatter, body))` if the content starts with `---`.
@@ -470,12 +480,36 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     let mut description = None;
     let mut base_url = None;
     let mut auth_env = None;
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let mut in_headers = false;
 
-    for line in yaml_block.lines() {
-        let line = line.trim();
+    for raw_line in yaml_block.lines() {
+        let line = raw_line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+
+        // Check if this is an indented sub-key (part of headers block).
+        let is_indented = raw_line.starts_with("  ") || raw_line.starts_with('\t');
+
+        if in_headers && is_indented {
+            // Parse header key-value pair.
+            if let Some((hk, hv)) = line.split_once(':') {
+                let hk = hk.trim().to_string();
+                let hv = hv.trim().to_string();
+                if !hk.is_empty() && validate_header_value(&hv) {
+                    headers.push((hk, hv));
+                } else {
+                    // Reject frontmatter with dangerous header values.
+                    return None;
+                }
+            }
+            continue;
+        }
+
+        // Non-indented line exits header-parsing mode.
+        in_headers = false;
+
         if let Some((key, value)) = line.split_once(':') {
             let k = key.trim();
             let v = value.trim();
@@ -484,6 +518,11 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                 "description" => description = Some(v.to_string()),
                 "base_url" | "homepage" => base_url = Some(v.to_string()),
                 "auth_env" => auth_env = Some(v.to_string()),
+                "headers" => {
+                    if v.is_empty() {
+                        in_headers = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -511,6 +550,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             description: description.unwrap_or_default(),
             base_url,
             auth_env,
+            headers,
         },
         body.to_string(),
     ))
@@ -525,10 +565,22 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
 /// - The URL is formed by concatenating the literal base_url with the shell-escaped path;
 ///   in shell, `https://example.com'/api/v1/foo'` correctly concatenates into one word.
 fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
+    let header_flags = if fm.headers.is_empty() {
+        // Default: Authorization: Bearer $AUTH_ENV
+        format!(r#"-H "Authorization: Bearer ${auth_env}""#, auth_env = fm.auth_env)
+    } else {
+        // Custom headers replace the default auth header.
+        fm.headers
+            .iter()
+            .map(|(k, v)| format!(r#"-H "{k}: {v}""#))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
     let template = format!(
-        r#"curl -s -X {{{{method}}}} {base_url}{{{{path}}}} -H "Content-Type: application/json" -H "Authorization: Bearer ${auth_env}" -d {{{{body}}}}"#,
+        r#"curl -s -X {{{{method}}}} {base_url}{{{{path}}}} -H "Content-Type: application/json" {header_flags} -d {{{{body}}}}"#,
         base_url = fm.base_url,
-        auth_env = fm.auth_env,
+        header_flags = header_flags,
     );
 
     SkillDefinition {
@@ -1026,6 +1078,99 @@ POST /api/v1/post — create a post.
         let fresh = vec![make_fresh("skill_a", 42)];
         let diff = diff_skill_sets(&current, &fresh);
         assert!(diff.is_empty());
+    }
+
+    // --- Custom headers tests ---
+
+    const CUSTOM_HEADERS_SKILL: &str = r#"---
+name: molecule-api
+description: Molecule DeSci API
+homepage: https://staging.graphql.api.molecule.xyz/graphql
+headers:
+  x-api-key: $MOLECULE_API_KEY
+  x-service-token: $MOLECULE_SERVICE_TOKEN
+---
+
+# Molecule API
+
+GraphQL API for DeSci workflows.
+"#;
+
+    #[test]
+    fn frontmatter_custom_headers_parsed() {
+        let (fm, _) = try_parse_frontmatter(CUSTOM_HEADERS_SKILL).unwrap();
+        assert_eq!(fm.headers.len(), 2);
+        assert_eq!(fm.headers[0], ("x-api-key".to_string(), "$MOLECULE_API_KEY".to_string()));
+        assert_eq!(fm.headers[1], ("x-service-token".to_string(), "$MOLECULE_SERVICE_TOKEN".to_string()));
+    }
+
+    #[test]
+    fn frontmatter_custom_headers_curl_template() {
+        let (fm, _) = try_parse_frontmatter(CUSTOM_HEADERS_SKILL).unwrap();
+        let def = frontmatter_to_skill_definition(&fm);
+
+        // Must contain custom headers, NOT default Authorization.
+        assert!(
+            def.execution_template.contains(r#"-H "x-api-key: $MOLECULE_API_KEY""#),
+            "expected x-api-key header, got: {}",
+            def.execution_template,
+        );
+        assert!(
+            def.execution_template.contains(r#"-H "x-service-token: $MOLECULE_SERVICE_TOKEN""#),
+            "expected x-service-token header, got: {}",
+            def.execution_template,
+        );
+        assert!(
+            !def.execution_template.contains("Authorization: Bearer"),
+            "custom headers should replace default auth, got: {}",
+            def.execution_template,
+        );
+        assert!(
+            def.execution_template.contains(r#"-H "Content-Type: application/json""#),
+            "Content-Type must always be present, got: {}",
+            def.execution_template,
+        );
+    }
+
+    #[test]
+    fn frontmatter_no_headers_falls_back_to_default_auth() {
+        let (fm, _) = try_parse_frontmatter(FRONTMATTER_SKILL).unwrap();
+        assert!(fm.headers.is_empty());
+        let def = frontmatter_to_skill_definition(&fm);
+        assert!(
+            def.execution_template.contains("Authorization: Bearer $BEACH_SCIENCE_API_KEY"),
+            "absent headers should fall back to default auth, got: {}",
+            def.execution_template,
+        );
+    }
+
+    #[test]
+    fn frontmatter_rejects_dangerous_header_values() {
+        for bad_value in &[
+            "$KEY; rm -rf /",
+            "$KEY | cat",
+            "$KEY & bg",
+            "$KEY`whoami`",
+            "$KEY$(evil)",
+        ] {
+            let content = format!(
+                "---\nname: evil\nhomepage: https://example.com\nheaders:\n  x-api-key: {}\n---\nbody\n",
+                bad_value
+            );
+            assert!(
+                try_parse_frontmatter(&content).is_none(),
+                "should reject header value: {}",
+                bad_value,
+            );
+        }
+    }
+
+    #[test]
+    fn frontmatter_allows_dollar_in_header_values() {
+        let content = "---\nname: test\nhomepage: https://example.com\nheaders:\n  x-token: $MY_SECRET\n---\nbody\n";
+        let (fm, _) = try_parse_frontmatter(content).unwrap();
+        assert_eq!(fm.headers.len(), 1);
+        assert_eq!(fm.headers[0].1, "$MY_SECRET");
     }
 
     #[test]
