@@ -10,7 +10,6 @@ pub(crate) struct TaskId(pub String);
 
 /// Lifecycle status of a task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TaskStatus {
     Pending,
     InProgress,
@@ -20,7 +19,6 @@ pub(crate) enum TaskStatus {
 
 /// Result of a completed task execution.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct TaskResult {
     pub success: bool,
     pub output: String,
@@ -29,7 +27,6 @@ pub(crate) struct TaskResult {
 
 /// A unit of work assigned to a fleet agent.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct Task {
     pub id: TaskId,
     pub description: String,
@@ -43,7 +40,6 @@ pub(crate) struct Task {
     pub updated_at: u64,
 }
 
-#[allow(dead_code)]
 impl Task {
     /// Create a new pending task.
     pub fn new(id: String, description: String, role: AgentRole, max_retries: u32) -> Self {
@@ -94,7 +90,6 @@ impl Task {
     }
 }
 
-#[allow(dead_code)]
 fn now_epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

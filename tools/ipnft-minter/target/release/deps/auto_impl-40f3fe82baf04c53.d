@@ -1,0 +1,9 @@
+/Users/vladimirdemidov/development/tengu-cluster/tools/ipnft-minter/target/release/deps/auto_impl-40f3fe82baf04c53.d: /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/lib.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/analyze.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/attr.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/gen.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/proxy.rs
+
+/Users/vladimirdemidov/development/tengu-cluster/tools/ipnft-minter/target/release/deps/libauto_impl-40f3fe82baf04c53.dylib: /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/lib.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/analyze.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/attr.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/gen.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/proxy.rs
+
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/lib.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/analyze.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/attr.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/gen.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/auto_impl-1.3.0/src/proxy.rs:

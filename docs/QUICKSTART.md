@@ -199,7 +199,7 @@ cargo run -- secret set TELEGRAM_BOT_TOKEN 123456:ABC-DEF...
 cargo run -- telegram
 ```
 
-Send a message to your bot in Telegram and it responds with full agent capabilities. See [Configuration Reference](CONFIGURATION.md#telegram) for details.
+Send a message to your bot in Telegram and it responds with full agent capabilities including tools, skills, memory, and file attachments. Dangerous tools (`write_file`, `run_command`) prompt you with inline keyboard Approve/Deny buttons before execution. See [Configuration Reference](CONFIGURATION.md#telegram) for details.
 
 ## Next Steps
 

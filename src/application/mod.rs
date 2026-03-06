@@ -10,7 +10,6 @@ pub(crate) mod ports;
 pub(crate) mod prompt_budget;
 pub(crate) mod skill_catalog;
 pub(crate) mod skill_registry;
-pub(crate) mod skill_transpile;
 pub(crate) mod task_orchestrator;
 pub(crate) mod tool_use_service;
 pub(crate) mod workspace_tools_catalog;

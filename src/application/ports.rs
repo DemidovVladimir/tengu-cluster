@@ -1,9 +1,17 @@
+//! Application-layer port traits (hexagonal architecture boundaries).
+//!
+//! Every external dependency is accessed through a port defined here.
+//! Adapters in `src/adapters/` provide the concrete implementations.
+//!
+//! Sync ports: `FlowStorePort`, `ToolActivityPort`, `ToolApprovalPort`,
+//!   `ToolExecutionPort`, `SkillSourcePort`, `ShellExecutionPort`.
+//! Async ports (Pin<Box<Future>>): `EmbeddingPort`, `MemoryStorePort`.
+
 use anyhow::Result;
 use std::future::Future;
 use std::pin::Pin;
 use tengu_core::types::{Message, ToolCall};
 
-use crate::domain::evm::{EvmTransactionReceipt, EvmTransactionRequest};
 use crate::domain::memory::{MemoryEntry, MemorySearchResult};
 
 /// Port for persistence of flow transcript messages.
@@ -88,29 +96,7 @@ pub(crate) trait MemoryStorePort: Send + Sync {
     fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>>;
 }
 
-/// Port for EVM wallet signing and transaction submission.
-///
-/// Implemented by `AlloySigner` (adapter layer, `--features evm`). The port
-/// uses only domain types from `crate::domain::evm`, keeping the application
-/// layer free from alloy/provider imports.
-#[allow(dead_code)]
-pub(crate) trait EvmPort: Send + Sync {
-    /// Return the wallet's checksummed hex address (sync — pure key derivation).
-    fn get_address(&self) -> Result<String>;
-
-    /// Sign an arbitrary message and return the hex-encoded signature.
-    fn sign_message(&self, message: &str)
-        -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
-
-    /// Build, sign, send a transaction and wait for the receipt.
-    fn send_transaction(
-        &self,
-        tx: &EvmTransactionRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<EvmTransactionReceipt>> + Send + '_>>;
-}
-
 /// Port for task persistence in orchestration.
-#[allow(dead_code)]
 pub(crate) trait TaskStorePort: Send + Sync {
     fn save_task(&self, task: &crate::domain::task::Task) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<Option<crate::domain::task::Task>>;

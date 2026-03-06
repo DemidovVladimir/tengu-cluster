@@ -30,8 +30,6 @@ use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
 use crate::application::workspace_tools_catalog::build_workspace_tools;
 use crate::application::workspace_tools_catalog::build_memory_tools;
-#[cfg(feature = "evm")]
-use crate::application::workspace_tools_catalog::build_evm_tools;
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::skill::SkillStatus;
@@ -259,27 +257,6 @@ fn rebuild_executor(
         }
     }
 
-    // Attach EVM executor if env vars are set and feature is enabled.
-    #[cfg(feature = "evm")]
-    {
-        if let (Ok(key), Ok(url)) = (std::env::var("EVM_PRIVATE_KEY"), std::env::var("EVM_RPC_URL"))
-        {
-            use crate::adapters::evm_signer::AlloySigner;
-            use crate::adapters::evm_tool_executor::EvmToolExecutionAdapter;
-            match AlloySigner::new(&key, url) {
-                Ok(signer) => {
-                    let port: Arc<dyn crate::application::ports::EvmPort> = Arc::new(signer);
-                    if let Ok(evm_exec) = EvmToolExecutionAdapter::new(port) {
-                        let evm_names: std::collections::HashSet<String> =
-                            build_evm_tools().iter().map(|t| t.name.clone()).collect();
-                        composite = composite.with_executor(Arc::new(evm_exec), evm_names);
-                    }
-                }
-                Err(e) => tracing::warn!("EVM signer init failed: {e}"),
-            }
-        }
-    }
-
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
@@ -299,7 +276,6 @@ fn rebuild_system_prompt(
     agent_config: &tengu_core::config::AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    evm_tools_available: bool,
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
@@ -310,7 +286,6 @@ fn rebuild_system_prompt(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
-        evm_tools_available,
     )
 }
 
@@ -373,7 +348,6 @@ pub fn run_tui(
         &agent_config,
         advertise_workspace_tools,
         &[],
-        false, // EVM tools not yet resolved — rebuilt on first turn
     );
 
     // Channel: UI → Engine thread
@@ -503,34 +477,20 @@ pub fn run_tui(
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_handle.is_some();
 
-        // Build base tool list + EVM availability from current env vars.
+        // Build base tool list from current env vars.
         // Extracted so `/reload` can recompute when env vars change at runtime.
-        fn compute_base_tools(uses_tools: bool, has_memory: bool) -> (Vec<ToolDef>, bool) {
+        fn compute_base_tools(uses_tools: bool, has_memory: bool) -> Vec<ToolDef> {
             if !uses_tools {
-                return (vec![], false);
+                return vec![];
             }
             let mut all_tools = build_workspace_tools();
             if has_memory {
                 all_tools.extend(build_memory_tools());
             }
-            let evm_available;
-            #[cfg(feature = "evm")]
-            {
-                evm_available = std::env::var("EVM_PRIVATE_KEY").is_ok()
-                    && std::env::var("EVM_RPC_URL").is_ok();
-                if evm_available {
-                    all_tools.extend(build_evm_tools());
-                }
-            }
-            #[cfg(not(feature = "evm"))]
-            {
-                evm_available = false;
-            }
-            (all_tools, evm_available)
+            all_tools
         }
 
-        let (mut base_tools, mut evm_tools_available) =
-            compute_base_tools(uses_tools, has_memory);
+        let mut base_tools = compute_base_tools(uses_tools, has_memory);
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> =
@@ -541,49 +501,6 @@ pub fn run_tui(
 
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
-        }
-
-        // Transpile scan: detect foreign runtime deps, auto-prefer Rust variants,
-        // generate scaffolds for skills that need transpilation.
-        {
-            let scan = skill_registry.transpile_scan();
-
-            // Generate Rust scaffolds for skills without Rust variants.
-            if let Some(ref ws) = workspace {
-                let transpile_dir = ws.join(".tengu").join("transpiled");
-                for report in &scan.needs_transpile {
-                    let content =
-                        crate::adapters::scaffold_writer::build_scaffold_content(report);
-                    match crate::adapters::scaffold_writer::write_scaffold(
-                        &content,
-                        &transpile_dir,
-                    ) {
-                        Ok(path) => {
-                            tracing::info!(
-                                "Generated Rust scaffold for '{}' at {}",
-                                report.skill_name,
-                                path.display()
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to generate scaffold for '{}': {}",
-                                report.skill_name,
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-
-            if let Some(summary) =
-                crate::application::skill_transpile::format_scan_summary(&scan)
-            {
-                let cb = cb_sink.clone();
-                let _ = cb.send(Box::new(move |siv: &mut Cursive| {
-                    view::push_bubble(siv, BubbleRole::System, &summary);
-                }));
-            }
         }
 
         let mut tools_dirty = true;
@@ -666,18 +583,11 @@ pub fn run_tui(
                         let mut lines = Vec::new();
 
                         // Re-read env vars and rebuild base tool set.
-                        let (new_base, new_evm) =
-                            compute_base_tools(uses_tools, has_memory);
-                        let env_changed = new_evm != evm_tools_available
-                            || new_base.len() != base_tools.len();
+                        let new_base = compute_base_tools(uses_tools, has_memory);
+                        let env_changed = new_base.len() != base_tools.len();
                         base_tools = new_base;
-                        evm_tools_available = new_evm;
                         if env_changed {
                             lines.push("Environment refreshed.".to_string());
-                        }
-
-                        if evm_tools_available {
-                            lines.push("EVM tools: active".to_string());
                         }
 
                         // Re-scan skill files.
@@ -708,7 +618,6 @@ pub fn run_tui(
                                 &engine_agent_config,
                                 advertise_workspace_tools,
                                 &skill_registry,
-                                evm_tools_available,
                             );
                             tools_dirty = false;
                         }
@@ -769,7 +678,6 @@ pub fn run_tui(
                                 &engine_agent_config,
                                 advertise_workspace_tools,
                                 &skill_registry,
-                                evm_tools_available,
                             );
                         }
                         tools_dirty = false;
@@ -799,6 +707,7 @@ pub fn run_tui(
                             memory_service: memory_service_instance.as_ref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
+                            tool_observer: None,
                         };
 
                         match chat_runtime

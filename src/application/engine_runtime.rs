@@ -13,7 +13,7 @@ use tracing::debug;
 
 /// Maximum number of tool-call round-trips before forcing a text response.
 /// Kept low to avoid re-sending the entire conversation on each round.
-const MAX_TOOL_ROUNDS: usize = 3;
+const MAX_TOOL_ROUNDS: usize = 15;
 
 /// Maximum characters kept per tool result to prevent context explosion.
 /// Tool results exceeding this limit are truncated with a suffix note.
@@ -59,16 +59,25 @@ impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
     }
 }
 
+/// Optional callback invoked after each tool execution, before feeding the
+/// result back to the engine. Callers (e.g. Telegram) use this to show
+/// tool results to the user for debugging.
+pub(crate) type ToolResultObserver<'a> = &'a dyn Fn(&ToolCall, &str);
+
 /// Execute one or more engine rounds, handling tool calls automatically.
 ///
 /// If `tool_executor` is None or `tools` is empty, behaves like a single
 /// engine call with no tool support.
+///
+/// `tool_observer` is called after each tool execution with the call and
+/// its result string. Pass `None` to skip observation.
 pub(crate) async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
     tools: &[ToolDef],
     context: &EngineContext,
     tool_executor: Option<&dyn ToolExecutor>,
+    tool_observer: Option<ToolResultObserver<'_>>,
 ) -> Result<EngineResponse> {
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
@@ -107,6 +116,9 @@ pub(crate) async fn collect_engine_response(
                 Ok(output) => output,
                 Err(e) => format!("Error: {}", e),
             };
+            if let Some(observer) = &tool_observer {
+                observer(tc, &result);
+            }
             let content = truncate_tool_result(&result);
             messages.push(Message {
                 role: Role::Tool,

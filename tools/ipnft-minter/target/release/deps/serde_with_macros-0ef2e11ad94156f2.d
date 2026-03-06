@@ -1,0 +1,8 @@
+/Users/vladimirdemidov/development/tengu-cluster/tools/ipnft-minter/target/release/deps/serde_with_macros-0ef2e11ad94156f2.d: /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lib.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/apply.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lazy_bool.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/utils.rs
+
+/Users/vladimirdemidov/development/tengu-cluster/tools/ipnft-minter/target/release/deps/libserde_with_macros-0ef2e11ad94156f2.dylib: /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lib.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/apply.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lazy_bool.rs /Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/utils.rs
+
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lib.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/apply.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/lazy_bool.rs:
+/Users/vladimirdemidov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_with_macros-3.17.0/src/utils.rs:

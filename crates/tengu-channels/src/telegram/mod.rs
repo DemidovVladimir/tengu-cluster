@@ -1,6 +1,15 @@
 //! Telegram channel adapter via teloxide.
+//!
+//! Provides the `TelegramPipe` which implements the core `Pipe` trait for
+//! receiving and sending messages through a Telegram bot. Supports:
+//!
+//! - Text messages and media (documents, photos) with automatic download
+//! - Inline keyboard callbacks for tool approval (Approve/Deny buttons)
+//! - Typing indicator chat actions
+//! - Message captions for media messages (photos/documents with text)
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -8,10 +17,17 @@ use tracing::{debug, error, info};
 use tengu_core::types::{DeliveryOptions, InboundMessage, MediaPayload, Recipient};
 use tengu_core::{AccessPolicy, Pipe, PipeCapabilities, PipeContext};
 
+/// A callback query response: (callback_data, chat_id).
+pub type CallbackEvent = (String, i64);
+
+/// Map of approval_id → oneshot sender for resolving inline keyboard responses.
+pub type PendingApprovals = Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+
 /// Telegram bot pipe backed by teloxide.
 pub struct TelegramPipe {
     token: String,
     shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    pending_approvals: Option<PendingApprovals>,
 }
 
 impl TelegramPipe {
@@ -20,6 +36,16 @@ impl TelegramPipe {
         Self {
             token,
             shutdown: Arc::new(Mutex::new(None)),
+            pending_approvals: None,
+        }
+    }
+
+    /// Create a new Telegram pipe with inline keyboard approval support.
+    pub fn with_approvals(token: String, pending: PendingApprovals) -> Self {
+        Self {
+            token,
+            shutdown: Arc::new(Mutex::new(None)),
+            pending_approvals: Some(pending),
         }
     }
 
@@ -40,6 +66,52 @@ impl TelegramPipe {
             .await
             .map_err(|e| anyhow::anyhow!("send_chat_action failed: {}", e))?;
         Ok(())
+    }
+
+    /// Send an inline keyboard approval request and return a oneshot receiver
+    /// that resolves to `true` (approved) or `false` (denied).
+    ///
+    /// The `approval_id` is used as callback_data prefix to match responses.
+    pub async fn send_inline_approval(
+        &self,
+        target: &Recipient,
+        approval_id: &str,
+        text: &str,
+    ) -> anyhow::Result<tokio::sync::oneshot::Receiver<bool>> {
+        use teloxide::prelude::*;
+        use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
+
+        let pending = self
+            .pending_approvals
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Approval support not configured"))?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert(approval_id.to_string(), tx);
+
+        let bot = Bot::new(&self.token);
+        let chat_id: i64 = target
+            .thread_id
+            .as_deref()
+            .or(Some(&target.peer_id))
+            .unwrap()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid chat_id"))?;
+
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("✅ Approve", format!("approve:{}", approval_id)),
+            InlineKeyboardButton::callback("❌ Deny", format!("deny:{}", approval_id)),
+        ]]);
+
+        bot.send_message(ChatId(chat_id), text)
+            .reply_markup(keyboard)
+            .await
+            .map_err(|e| anyhow::anyhow!("send_inline_approval failed: {}", e))?;
+
+        Ok(rx)
     }
 }
 
@@ -85,14 +157,56 @@ impl Pipe for TelegramPipe {
         *self.shutdown.lock().await = Some(shutdown_tx);
 
         let inbound_tx = ctx.inbound_tx.clone();
+        let pending_approvals = self.pending_approvals.clone();
 
         tokio::spawn(async move {
-            let handler = Update::filter_message().endpoint(
-                move |msg: Message, _bot: Bot| {
+            // Branch 1: handle normal messages.
+            let msg_handler = Update::filter_message().endpoint(
+                move |msg: Message, bot: Bot| {
                     let tx = inbound_tx.clone();
                     async move {
-                        let text = msg.text().unwrap_or_default().to_string();
-                        if text.is_empty() {
+                        // Text comes from text() for plain messages, caption() for media messages.
+                        let text = msg
+                            .text()
+                            .or(msg.caption())
+                            .unwrap_or_default()
+                            .to_string();
+
+                        // Download attached documents and photos.
+                        let mut media_payloads: Vec<MediaPayload> = Vec::new();
+
+                        if let Some(doc) = msg.document() {
+                            match download_telegram_file(
+                                &bot,
+                                &doc.file.id,
+                                doc.mime_type.as_ref().map(|m| m.to_string()),
+                                doc.file_name.clone(),
+                            )
+                            .await
+                            {
+                                Ok(payload) => media_payloads.push(payload),
+                                Err(e) => error!("Failed to download Telegram document: {}", e),
+                            }
+                        }
+
+                        if let Some(photos) = msg.photo() {
+                            // Take the largest available resolution (last in array).
+                            if let Some(photo) = photos.last() {
+                                match download_telegram_file(
+                                    &bot,
+                                    &photo.file.id,
+                                    Some("image/jpeg".to_string()),
+                                    Some("photo.jpg".to_string()),
+                                )
+                                .await
+                                {
+                                    Ok(payload) => media_payloads.push(payload),
+                                    Err(e) => error!("Failed to download Telegram photo: {}", e),
+                                }
+                            }
+                        }
+
+                        if text.is_empty() && media_payloads.is_empty() {
                             return Ok::<(), teloxide::RequestError>(());
                         }
 
@@ -103,7 +217,12 @@ impl Pipe for TelegramPipe {
                             .map(|u| u.id.0.to_string())
                             .unwrap_or_else(|| chat_id.clone());
 
-                        debug!(chat_id = %chat_id, sender = %sender_id, "Telegram message received");
+                        debug!(
+                            chat_id = %chat_id,
+                            sender = %sender_id,
+                            attachments = media_payloads.len(),
+                            "Telegram message received"
+                        );
 
                         let inbound = InboundMessage {
                             sender: Recipient {
@@ -114,7 +233,11 @@ impl Pipe for TelegramPipe {
                             },
                             content: text,
                             timestamp: chrono::Utc::now(),
-                            media: None,
+                            media: if media_payloads.is_empty() {
+                                None
+                            } else {
+                                Some(media_payloads)
+                            },
                         };
 
                         if tx.send(inbound).await.is_err() {
@@ -124,6 +247,51 @@ impl Pipe for TelegramPipe {
                     }
                 },
             );
+
+            // Branch 2: handle inline keyboard callback queries.
+            let callback_handler = Update::filter_callback_query().endpoint(
+                move |q: teloxide::types::CallbackQuery, bot: Bot| {
+                    let pending = pending_approvals.clone();
+                    async move {
+                        if let Some(data) = q.data {
+                            // Parse "approve:<id>" or "deny:<id>".
+                            let (approved, approval_id) = if let Some(id) = data.strip_prefix("approve:") {
+                                (true, id.to_string())
+                            } else if let Some(id) = data.strip_prefix("deny:") {
+                                (false, id.to_string())
+                            } else {
+                                return Ok::<(), teloxide::RequestError>(());
+                            };
+
+                            // Answer the callback to dismiss the spinner.
+                            let answer_text = if approved { "Approved" } else { "Denied" };
+                            let _ = bot.answer_callback_query(&q.id).text(answer_text).await;
+
+                            // Edit the original message to remove the keyboard.
+                            if let Some(msg) = q.message {
+                                if let Some(text) = msg.regular_message().and_then(|m| m.text()) {
+                                    let status = if approved { "✅ Approved" } else { "❌ Denied" };
+                                    let _ = bot
+                                        .edit_message_text(msg.chat().id, msg.id(), format!("{}\n\n{}", text, status))
+                                        .await;
+                                }
+                            }
+
+                            // Resolve the pending approval.
+                            if let Some(ref p) = pending {
+                                if let Some(tx) = p.lock().unwrap().remove(&approval_id) {
+                                    let _ = tx.send(approved);
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                },
+            );
+
+            let handler = dptree::entry()
+                .branch(msg_handler)
+                .branch(callback_handler);
 
             let mut dispatcher = Dispatcher::builder(bot, handler)
                 .enable_ctrlc_handler()
@@ -205,4 +373,39 @@ impl Pipe for TelegramPipe {
 
         Ok(())
     }
+}
+
+/// Download a file from Telegram servers given its file_id.
+#[cfg(feature = "telegram")]
+async fn download_telegram_file(
+    bot: &teloxide::Bot,
+    file_id: &str,
+    mime_type: Option<String>,
+    filename: Option<String>,
+) -> Result<MediaPayload, Box<dyn std::error::Error + Send + Sync>> {
+    use futures::TryStreamExt;
+    use teloxide::net::Download;
+    use teloxide::requests::Requester;
+
+    let tf = bot.get_file(file_id).await?;
+    let bytes: Vec<u8> = bot
+        .download_file_stream(&tf.path)
+        .try_fold(Vec::new(), |mut acc, chunk| async move {
+            acc.extend_from_slice(&chunk);
+            Ok(acc)
+        })
+        .await?;
+
+    debug!(
+        file_id = %file_id,
+        size = bytes.len(),
+        filename = ?filename,
+        "Downloaded Telegram file"
+    );
+
+    Ok(MediaPayload {
+        mime_type: mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+        data: bytes,
+        filename,
+    })
 }

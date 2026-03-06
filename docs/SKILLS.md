@@ -202,6 +202,10 @@ headers:
 
 When `headers` is present, the default `Authorization: Bearer` header is replaced entirely. `Content-Type: application/json` is always included.
 
+### GraphQL APIs
+
+For GraphQL APIs where all requests go to the same endpoint, set `homepage` to the full GraphQL URL. The agent should use `path: ""` (empty string) since the base URL already includes the endpoint. Document this in the skill body to prevent the model from guessing paths like `/graphql` or `/api/v1/graphql`.
+
 ### Context Injection
 
 The markdown body (everything after the closing `---`) is injected into the agent's system prompt. This gives the model full API documentation so it can construct correct requests. Each context fragment is capped at `prompt_budget.max_skill_context_tokens` (default: 8000 tokens, configurable per-agent).
@@ -249,9 +253,18 @@ When an agent has `workspace` configured, these tools are available automaticall
 
 | Tool | Parameters | Risk | Approval | Description |
 |------|-----------|------|----------|-------------|
-| `read_file` | `path` (string) | Low | No | Read file contents relative to workspace |
+| `read_file` | `path` (string) | Low | No | Read file contents (text and PDF with auto-extraction) |
 | `list_directory` | `path` (string) | Low | No | List files and directories (`"."` for root) |
 | `write_file` | `path` (string), `content` (string) | Medium | Yes | Write content to file, creates parent dirs |
+| `run_command` | `command` (string) | High | Yes | Execute a shell command in the workspace directory (via `sh -c`) |
+
+When memory is enabled, an additional tool is available:
+
+| Tool | Parameters | Risk | Approval | Description |
+|------|-----------|------|----------|-------------|
+| `remember` | `content` (string) | Low | No | Store a fact or insight in long-term memory |
+
+Tools with "Yes" approval require user confirmation — via dialog in TUI mode, or inline keyboard buttons in Telegram mode.
 
 These tools operate strictly within the workspace boundary.
 
@@ -348,17 +361,6 @@ sqlx migrate {{direction}} {{steps}}
 - risk_level: high
 - requires_approval: true
 ```
-
-## Skill Transpilation
-
-Skills written for foreign runtimes (Node.js, Python, Deno, Ruby) can be automatically detected and transpiled to Rust at scan time. When a skill's execution template references a non-Rust runtime, the skill registry:
-
-1. Detects the foreign runtime from the execution command (`node`, `python`, `deno`, `ruby`).
-2. Checks for a `_rust` variant of the skill (e.g., `deploy_service_rust.md` alongside `deploy_service.md`).
-3. If a Rust variant exists and is valid, it is **auto-preferred** — the foreign skill is disabled and the Rust variant takes its place.
-4. If no Rust variant exists, a scaffold project can be generated via `cargo run -- skill scaffold <skill_name>`. This creates a Cargo project under `skills/<skill_name>_rust/` with a `main.rs` stub that matches the original skill's parameter schema.
-
-The transpile scan runs during skill registry initialization and on hot-reload cycles.
 
 ## Hot-Reload and Enable/Disable
 

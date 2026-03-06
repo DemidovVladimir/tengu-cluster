@@ -8,7 +8,9 @@ Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
 - **Multi-agent fleet** — run specialized agents (QA, backend, integration) as a coordinated team
 - **Any model, one key** — use [OpenRouter](https://openrouter.ai) to access Claude, GPT, Gemini, Llama, Mistral, DeepSeek and hundreds more behind one API key
 - **Custom skills** — define tools as markdown files, agents execute them during conversation
-- **Telegram channel** — chat with your agent from your phone
+- **Telegram channel** — chat with your agent from your phone, with inline keyboard approval for dangerous tools
+- **Persistent memory** — cross-session vector memory with automatic recall (disk or Qdrant)
+- **Token budget gates** — per-flow token limits with 80% warning threshold and hard cutoff
 
 ## Quickstart
 
@@ -74,6 +76,24 @@ cargo run -- secret remove K  # Remove a secret
 | `/engine` | Current engine details |
 | `/eco` / `/standard` / `/precise` | Switch lens mode |
 | `/reset` | Clear conversation |
+| `/purge` | Clear conversation + wipe persistent memory |
+| `/reload` | Re-read env vars + re-scan skills |
+| `/skills` | List discovered skills |
+| `/enable N` / `/disable N` | Enable/disable a skill |
+
+## Built-In Workspace Tools
+
+When an agent has `workspace` configured, these tools are available automatically:
+
+| Tool | Risk | Approval | Description |
+|------|------|----------|-------------|
+| `read_file` | Low | No | Read file contents (text and PDF) |
+| `list_directory` | Low | No | List files and directories |
+| `write_file` | Medium | Yes | Write content to file |
+| `run_command` | High | Yes | Execute shell command in workspace |
+| `remember` | Low | No | Store fact in long-term memory (when memory enabled) |
+
+Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode.
 
 ## Multi-Agent Fleet
 
@@ -141,6 +161,54 @@ Agents call these tools during conversation. Restrict skills per agent with `ski
 
 See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 
+## Standalone Tools
+
+The `tools/` directory contains standalone CLI binaries that agents invoke via `run_command`:
+
+| Tool | Description |
+|------|-------------|
+| `tools/ipnft-minter` | IP-NFT minting CLI for Molecule DeSci Labs (agreement, metadata, terms, on-chain mint) |
+
+These are separate Cargo packages — not part of the main workspace. Build them independently:
+
+```bash
+cd tools/ipnft-minter && cargo build --release
+```
+
+### ipnft-minter
+
+Handles steps 2-9 of the IPNFT minting flow (agreement, image, metadata, terms, sign, mint). The POI registration and on-chain submission (step 1) must be done separately — see `skills/aura-orchestrator/SKILL.md`.
+
+```bash
+ipnft-minter \
+  --reservation-id "TOKEN_ID_FROM_POI" \
+  --poi-tx-hash "0xPOI_TX_HASH" \
+  --merkle-root "MERKLE_ROOT_HASH" \
+  --name "Project" --description "Desc" --symbol SYM \
+  --organization "Org" --lead-name "Name" --lead-email "email" --topic "Topic"
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--reservation-id` | Recommended | Token ID from POI on-chain transaction. If omitted, falls back to `reserve()` (sequential ID, not POI-linked). |
+| `--poi-tx-hash` | With `--reservation-id` | Transaction hash of the POI on-chain submission. Required for POI-based assignments. |
+| `--merkle-root` | With `--reservation-id` | Merkle root hash from POI response (`data.proof.tree[0]`). Required for POI-based assignments. |
+| `--name` | Yes | Project name |
+| `--symbol` | Yes | Token symbol |
+| `--image` | No | Path to cover image (uses 1x1 placeholder if omitted) |
+
+## Token Budget Gates
+
+Each conversation flow has a configurable token limit (`max_tokens_per_flow`, default: 100,000). The system enforces two thresholds:
+
+- **80% warning**: a notice is sent to the user showing current usage and remaining budget
+- **100% hard limit**: further requests are blocked with a message to use `/reset`
+
+```toml
+[agents.main.limits]
+max_tokens_per_flow = 100_000
+```
+
 ## Documentation
 
 | Guide | What It Covers |
@@ -163,14 +231,10 @@ See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 | `huggingface` | off | Hugging Face Inference Providers |
 | `telegram` | on | Telegram bot channel |
 | `qdrant` | off | Qdrant vector store for RAG memory |
-| `evm` | off | EVM wallet signing and transaction submission (alloy) |
 
 ```bash
 # Build with Qdrant vector store
 cargo build --features qdrant
-
-# Build with EVM signing
-cargo build --features evm
 
 # Build with all features
 cargo build --all-features

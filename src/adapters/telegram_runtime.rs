@@ -1,4 +1,19 @@
 //! Headless Telegram bot adapter that wires TelegramPipe → ChatRuntimeService.
+//!
+//! This adapter provides the full Telegram integration:
+//!
+//! - **Inline keyboard approval** — dangerous tools (write_file, run_command)
+//!   prompt the user with Approve/Deny
+//!   buttons via `TelegramInlineApprovalAdapter`. 60-second timeout auto-denies.
+//! - **Typing indicator** — runs as an independent `tokio::spawn` task so it
+//!   stays alive during synchronous tool execution.
+//! - **File attachments** — documents and photos are downloaded and saved to
+//!   `{workspace}/.tengu-attachments/`, paths prepended to message content.
+//! - **Message chunking** — long responses split at `\n\n` boundaries, max 4000
+//!   chars per chunk (Telegram's 4096 limit with safety margin).
+//! - **Per-user state** — each Telegram user gets their own `ChatLoopState`.
+//! - **Secret redaction** — all outbound text passes through `SecretRegistry::redact`.
+//! - **Hot-reload** — skills are re-scanned on each message if files changed.
 
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +31,7 @@ use crate::adapters::skill_source::FileSystemSkillSource;
 use crate::adapters::skill_tool_executor::SkillToolExecutionAdapter;
 use crate::adapters::system_prompt;
 use crate::adapters::workspace_tools;
+use crate::application::chat_commands::{self, CommandResult, EngineInfo};
 use crate::application::chat_runtime::ChatRuntimeService;
 use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
@@ -24,8 +40,6 @@ use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
 use crate::application::workspace_tools_catalog::{build_memory_tools, build_workspace_tools};
-#[cfg(feature = "evm")]
-use crate::application::workspace_tools_catalog::build_evm_tools;
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::tool_policy::ToolPolicyCatalog;
@@ -51,17 +65,126 @@ impl ToolActivityPort for TelegramToolActivityAdapter {
     }
 }
 
-/// Auto-approve all tools in headless Telegram mode.
-///
-/// Telegram inline-keyboard approval could be added later, but for the
-/// initial implementation we auto-approve to keep things simple and avoid
-/// blocking the async message loop.
-struct TelegramToolApprovalAdapter;
+/// Shared state for the current recipient — updated before each engine turn.
+type CurrentRecipient = Arc<std::sync::Mutex<Option<tengu_core::types::Recipient>>>;
 
-impl ToolApprovalPort for TelegramToolApprovalAdapter {
+/// Telegram inline keyboard approval adapter.
+///
+/// Sends an inline keyboard with Approve/Deny buttons and blocks the
+/// current thread (via `block_in_place`) until the user responds or
+/// the timeout expires (default: 60 seconds).
+struct TelegramInlineApprovalAdapter {
+    pipe: Arc<tengu_channels::telegram::TelegramPipe>,
+    current_recipient: CurrentRecipient,
+}
+
+/// Timeout for waiting on user approval via inline keyboard.
+const APPROVAL_TIMEOUT_SECS: u64 = 60;
+
+impl ToolApprovalPort for TelegramInlineApprovalAdapter {
     fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        info!(tool = %call.name, "Auto-approving tool in Telegram mode");
-        Ok(true)
+        let recipient = self
+            .current_recipient
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No recipient set for approval"))?;
+
+        let (title, description, preview) = build_approval_text(call);
+        let approval_id = format!("tool_{}", uuid::Uuid::new_v4().simple());
+        let mut text = format!("🔐 *{}*\n{}", title, description);
+        if !preview.is_empty() {
+            // Truncate preview for Telegram message limits.
+            let truncated = if preview.len() > 500 {
+                format!("{}…", &preview[..500])
+            } else {
+                preview
+            };
+            text.push_str(&format!("\n```\n{}\n```", truncated));
+        }
+
+        let pipe = Arc::clone(&self.pipe);
+        let aid = approval_id.clone();
+
+        // Bridge async → sync: block_in_place lets us await inside a sync fn
+        // on a multi-thread tokio runtime.
+        tokio::task::block_in_place(move || {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                match pipe.send_inline_approval(&recipient, &aid, &text).await {
+                    Ok(rx) => {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
+                            rx,
+                        )
+                        .await
+                        {
+                            Ok(Ok(approved)) => {
+                                info!(tool = %call.name, approved, "Inline keyboard approval response");
+                                Ok(approved)
+                            }
+                            Ok(Err(_)) => {
+                                warn!(tool = %call.name, "Approval channel closed — denying");
+                                Ok(false)
+                            }
+                            Err(_) => {
+                                warn!(tool = %call.name, "Approval timed out — denying");
+                                Ok(false)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!(tool = %call.name, error = %e, "Failed to send approval request — denying");
+                        Ok(false)
+                    }
+                }
+            })
+        })
+    }
+}
+
+/// Build title, description, and preview text for an approval prompt.
+fn build_approval_text(call: &ToolCall) -> (String, String, String) {
+    match call.name.as_str() {
+        "run_command" => {
+            let cmd = call
+                .arguments
+                .get("command")
+                .or_else(|| call.arguments.get("cmd"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            (
+                "Run Command".to_string(),
+                "Allow this command to execute?".to_string(),
+                cmd.to_string(),
+            )
+        }
+        "write_file" => {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unknown>");
+            let content = call
+                .arguments
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            (
+                "Write File".to_string(),
+                format!("Allow write to '{}'?", path),
+                content.to_string(),
+            )
+        }
+        _ => {
+            let args_str = serde_json::to_string_pretty(&call.arguments)
+                .unwrap_or_else(|_| format!("{:?}", call.arguments));
+            (
+                "Tool Confirmation".to_string(),
+                format!("Allow '{}' to run?", call.name),
+                args_str,
+            )
+        }
     }
 }
 
@@ -136,6 +259,7 @@ fn rebuild_executor(
     skill_registry: &SkillRegistry,
     memory_handle: &Option<Arc<MemoryServiceHandle>>,
     secret_registry: &Arc<SecretRegistry>,
+    approval: Arc<dyn ToolApprovalPort>,
 ) -> Option<TelegramToolExecutor> {
     if tools.is_empty() {
         return None;
@@ -174,32 +298,12 @@ fn rebuild_executor(
         }
     }
 
-    #[cfg(feature = "evm")]
-    {
-        if let (Ok(key), Ok(url)) = (std::env::var("EVM_PRIVATE_KEY"), std::env::var("EVM_RPC_URL"))
-        {
-            use crate::adapters::evm_signer::AlloySigner;
-            use crate::adapters::evm_tool_executor::EvmToolExecutionAdapter;
-            match AlloySigner::new(&key, url) {
-                Ok(signer) => {
-                    let port: Arc<dyn crate::application::ports::EvmPort> = Arc::new(signer);
-                    if let Ok(evm_exec) = EvmToolExecutionAdapter::new(port) {
-                        let evm_names: HashSet<String> =
-                            build_evm_tools().iter().map(|t| t.name.clone()).collect();
-                        composite = composite.with_executor(Arc::new(evm_exec), evm_names);
-                    }
-                }
-                Err(e) => warn!("EVM signer init failed: {e}"),
-            }
-        }
-    }
-
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
         ToolPolicyCatalog::from_tools(tools),
         Arc::new(TelegramToolActivityAdapter),
-        Arc::new(TelegramToolApprovalAdapter),
+        approval,
         composite,
     );
     Some(TelegramToolExecutor { service })
@@ -209,7 +313,6 @@ fn rebuild_system_prompt(
     agent_config: &tengu_core::config::AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    evm_tools_available: bool,
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
@@ -220,7 +323,6 @@ fn rebuild_system_prompt(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
-        evm_tools_available,
     )
 }
 
@@ -262,7 +364,7 @@ pub(crate) fn run_telegram(
     config: Config,
     secret_registry: Arc<SecretRegistry>,
 ) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("Failed to create Telegram runtime");
@@ -277,6 +379,12 @@ pub(crate) fn run_telegram(
         .ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
 
     let engine = build_engine(&agent_id, &agent_config)?;
+
+    // Capture engine metadata for slash commands.
+    let engine_info = EngineInfo {
+        context_window: engine.context_window(),
+        diagnostics: engine.diagnostics(),
+    };
 
     let refiner: Box<dyn Refiner> = match config.refiner.mode.as_str() {
         "rules" => Box::new(RuleRefiner::new()),
@@ -390,29 +498,14 @@ pub(crate) fn run_telegram(
         engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
     let has_memory = memory_handle.is_some();
 
-    let (base_tools, evm_tools_available) = {
-        if !uses_tools {
-            (vec![], false)
-        } else {
-            let mut all_tools = build_workspace_tools();
-            if has_memory {
-                all_tools.extend(build_memory_tools());
-            }
-            let evm;
-            #[cfg(feature = "evm")]
-            {
-                evm = std::env::var("EVM_PRIVATE_KEY").is_ok()
-                    && std::env::var("EVM_RPC_URL").is_ok();
-                if evm {
-                    all_tools.extend(build_evm_tools());
-                }
-            }
-            #[cfg(not(feature = "evm"))]
-            {
-                evm = false;
-            }
-            (all_tools, evm)
+    let base_tools = if !uses_tools {
+        vec![]
+    } else {
+        let mut all_tools = build_workspace_tools();
+        if has_memory {
+            all_tools.extend(build_memory_tools());
         }
+        all_tools
     };
 
     // Skill registry.
@@ -426,16 +519,35 @@ pub(crate) fn run_telegram(
         skill_registry.reload(src);
     }
 
+    // Pending approvals map shared between the pipe's callback handler and the approval adapter.
+    let pending_approvals: tengu_channels::telegram::PendingApprovals =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+    // Connect Telegram pipe (async). Wrapped in Arc so the typing indicator
+    // can run as an independent task even when tool execution blocks.
+    let pipe = Arc::new(tengu_channels::telegram::TelegramPipe::with_approvals(
+        bot_token,
+        Arc::clone(&pending_approvals),
+    ));
+    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(256);
+    rt.block_on(pipe.connect(PipeContext { inbound_tx }))?;
+
+    // Inline keyboard approval adapter.
+    let current_recipient: CurrentRecipient = Arc::new(std::sync::Mutex::new(None));
+    let approval_adapter: Arc<dyn ToolApprovalPort> = Arc::new(TelegramInlineApprovalAdapter {
+        pipe: Arc::clone(&pipe),
+        current_recipient: Arc::clone(&current_recipient),
+    });
+
     // Build initial tools & system prompt.
     let mut current_tools = rebuild_tools(&base_tools, &skill_registry);
     let mut current_executor: Option<TelegramToolExecutor> = workspace.as_ref().and_then(|ws| {
-        rebuild_executor(ws, &current_tools, &skill_registry, &memory_handle, &secret_registry)
+        rebuild_executor(ws, &current_tools, &skill_registry, &memory_handle, &secret_registry, Arc::clone(&approval_adapter))
     });
     let mut current_system_prompt = rebuild_system_prompt(
         &agent_config,
         advertise_workspace_tools,
         &skill_registry,
-        evm_tools_available,
     );
 
     let memory_service_instance = memory_handle
@@ -444,11 +556,6 @@ pub(crate) fn run_telegram(
 
     // Per-user conversation states.
     let mut user_states: HashMap<String, ChatLoopState> = HashMap::new();
-
-    // Connect Telegram pipe (async).
-    let pipe = tengu_channels::telegram::TelegramPipe::new(bot_token);
-    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(256);
-    rt.block_on(pipe.connect(PipeContext { inbound_tx }))?;
 
     info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
 
@@ -501,12 +608,12 @@ pub(crate) fn run_telegram(
                         &skill_registry,
                         &memory_handle,
                         &secret_registry,
+                        Arc::clone(&approval_adapter),
                     );
                     current_system_prompt = rebuild_system_prompt(
                         &agent_config,
                         advertise_workspace_tools,
                         &skill_registry,
-                        evm_tools_available,
                     );
                 }
             }
@@ -529,10 +636,162 @@ pub(crate) fn run_telegram(
                 }
             });
 
+            // Handle slash commands locally (don't send to engine).
+            if msg.content.starts_with('/') {
+                // /purge — reset conversation + clear persistent memory.
+                if msg.content == "/purge" {
+                    state.reset_for_new_session();
+                    let mut lines = vec!["Conversation cleared.".to_string()];
+                    if let Some(ref handle) = memory_handle {
+                        match handle.store.clear_all().await {
+                            Ok(()) => lines.push("Persistent memory purged.".to_string()),
+                            Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+                        }
+                    } else {
+                        lines.push("No persistent memory active.".to_string());
+                    }
+                    let _ = pipe
+                        .send_text(&msg.sender, &lines.join("\n"), &delivery_opts)
+                        .await;
+                    continue;
+                }
+
+                // /reload — re-scan skills and rebuild tools.
+                if msg.content == "/reload" {
+                    let mut lines = Vec::new();
+                    if let Some(ref src) = skill_source {
+                        if skill_registry.reload(src) {
+                            lines.push("Skills reloaded (changes detected).".to_string());
+                        } else {
+                            lines.push("Skills reloaded (no changes).".to_string());
+                        }
+                    } else {
+                        lines.push("No workspace — skills unavailable.".to_string());
+                    }
+                    if let Some(ref ws) = workspace {
+                        current_tools = rebuild_tools(&base_tools, &skill_registry);
+                        current_executor = rebuild_executor(
+                            ws,
+                            &current_tools,
+                            &skill_registry,
+                            &memory_handle,
+                            &secret_registry,
+                            Arc::clone(&approval_adapter),
+                        );
+                        current_system_prompt = rebuild_system_prompt(
+                            &agent_config,
+                            advertise_workspace_tools,
+                            &skill_registry,
+                        );
+                    }
+                    lines.push(format!("{} tool(s) active.", current_tools.len()));
+                    let _ = pipe
+                        .send_text(&msg.sender, &lines.join("\n"), &delivery_opts)
+                        .await;
+                    continue;
+                }
+
+                let cmd_result = chat_commands::handle_chat_command(
+                    &msg.content,
+                    state,
+                    &engine_info,
+                    &agent_config,
+                    history_turn_limit,
+                    compaction_policy,
+                );
+                match cmd_result {
+                    CommandResult::Handled(output) => {
+                        let reply = output.lines.join("\n");
+                        let _ = pipe
+                            .send_text(&msg.sender, &reply, &delivery_opts)
+                            .await;
+                        continue;
+                    }
+                    CommandResult::NotHandled => {
+                        let _ = pipe
+                            .send_text(
+                                &msg.sender,
+                                "Unknown command. Type /help for available commands.",
+                                &delivery_opts,
+                            )
+                            .await;
+                        continue;
+                    }
+                }
+            }
+
+            // Save attached files to workspace and build augmented content.
+            let user_content = if let (Some(ref ws), Some(ref media)) =
+                (&workspace, &msg.media)
+            {
+                let attachments_dir = ws.join(".tengu-attachments");
+                std::fs::create_dir_all(&attachments_dir).ok();
+
+                let mut file_notes = Vec::new();
+                for m in media {
+                    let fname = m
+                        .filename
+                        .as_deref()
+                        .unwrap_or("attachment");
+                    let path = attachments_dir.join(fname);
+                    match std::fs::write(&path, &m.data) {
+                        Ok(()) => {
+                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
+                            file_notes.push(format!(
+                                "[Attached file: {} ({}, {} bytes)]",
+                                path.display(),
+                                m.mime_type,
+                                m.data.len()
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to save Telegram attachment");
+                        }
+                    }
+                }
+
+                if file_notes.is_empty() {
+                    msg.content.clone()
+                } else {
+                    format!("{}\n{}", file_notes.join("\n"), msg.content)
+                }
+            } else {
+                msg.content.clone()
+            };
+
+            // Set the current recipient so inline approval messages go to the right chat.
+            *current_recipient.lock().unwrap() = Some(msg.sender.clone());
+
             // Wrap tool executor with secret redaction.
             let sanitized_executor = current_executor.as_ref().map(|e| {
                 SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
             });
+
+            // Debug tool observer — sends tool results to Telegram.
+            let observer_pipe = Arc::clone(&pipe);
+            let observer_sender = msg.sender.clone();
+            let observer_secrets = Arc::clone(&secret_registry);
+            let tool_result_observer = move |call: &ToolCall, result: &str| {
+                let redacted = observer_secrets.redact(result);
+                let mut end = redacted.len().min(1500);
+                while end < redacted.len() && !redacted.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let truncated = if redacted.len() > 1500 {
+                    format!("{}…", &redacted[..end])
+                } else {
+                    redacted
+                };
+                let text = format!("🔧 `{}` →\n```\n{}\n```", call.name, truncated);
+                let p = Arc::clone(&observer_pipe);
+                let r = observer_sender.clone();
+                tokio::task::block_in_place(move || {
+                    let handle = tokio::runtime::Handle::current();
+                    handle.block_on(async {
+                        let _ = p.send_text(&r, &text, &DeliveryOptions::default()).await;
+                    });
+                });
+            };
 
             let chat_runtime = ChatRuntimeService {
                 engine: engine.as_ref(),
@@ -550,25 +809,25 @@ pub(crate) fn run_telegram(
                 memory_service: memory_service_instance.as_ref(),
                 max_recall_entries: memory_config.max_recall_entries,
                 max_recall_tokens: memory_config.max_recall_tokens,
+                tool_observer: Some(&tool_result_observer),
             };
 
-            // Send initial typing indicator, then keep refreshing every 4s
-            // while process_user_text runs. The typing_loop future is dropped
-            // as soon as the response arrives — no cleanup needed.
+            // Spawn typing indicator as an independent task so it keeps running
+            // even when tool execution (e.g. run_command) blocks synchronously.
+            // The previous tokio::select! approach failed because both branches
+            // ran on the same task — sync blocking in one killed the other.
             let _ = pipe.send_chat_action(&msg.sender).await;
-
-            let result = {
-                let typing_loop = async {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-                        let _ = pipe.send_chat_action(&msg.sender).await;
-                    }
-                };
-                tokio::select! {
-                    res = chat_runtime.process_user_text(state, &msg.content) => res,
-                    _ = typing_loop => unreachable!(),
+            let typing_pipe = Arc::clone(&pipe);
+            let typing_sender = msg.sender.clone();
+            let typing_handle = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    let _ = typing_pipe.send_chat_action(&typing_sender).await;
                 }
-            };
+            });
+
+            let result = chat_runtime.process_user_text(state, &user_content).await;
+            typing_handle.abort();
 
             match result {
                 Ok(result) => {

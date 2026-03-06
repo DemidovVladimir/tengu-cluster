@@ -5,7 +5,6 @@ use tengu_core::types::ToolDef;
 
 /// Runtime status of an agent in the fleet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum FleetAgentStatus {
     Idle,
     Busy,
@@ -14,7 +13,6 @@ pub(crate) enum FleetAgentStatus {
 
 /// A registered fleet agent with its runtime state.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct FleetAgent {
     pub agent_id: String,
     pub role: AgentRole,
@@ -26,12 +24,10 @@ pub(crate) struct FleetAgent {
 }
 
 /// Pure in-memory fleet state management — no I/O.
-#[allow(dead_code)]
 pub(crate) struct FleetRuntimeService {
     agents: Vec<FleetAgent>,
 }
 
-#[allow(dead_code)]
 impl FleetRuntimeService {
     pub fn new() -> Self {
         Self { agents: Vec::new() }

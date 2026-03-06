@@ -140,8 +140,6 @@ fn domain_layer_is_infrastructure_free() {
         "src/domain/task.rs",
         "src/domain/skill.rs",
         "src/domain/memory.rs",
-        "src/domain/evm.rs",
-        "src/domain/skill_transpile.rs",
         "src/domain/secret_registry.rs",
     ] {
         let src = read(file);
@@ -172,7 +170,6 @@ fn application_layer_is_infrastructure_free() {
         "src/application/skill_catalog.rs",
         "src/application/memory_service.rs",
         "src/application/skill_registry.rs",
-        "src/application/skill_transpile.rs",
     ] {
         let src = read(file);
         assert!(
@@ -303,38 +300,6 @@ fn orchestrator_modules_exist() {
 }
 
 #[test]
-fn evm_domain_types_exist_and_are_infrastructure_free() {
-    let path = Path::new("src/domain/evm.rs");
-    assert!(path.exists(), "evm domain types file must exist");
-    let src = read("src/domain/evm.rs");
-    assert!(
-        !src.contains("alloy") && !src.contains("reqwest") && !src.contains("std::fs"),
-        "evm domain file must not depend on infrastructure (alloy, reqwest, std::fs)"
-    );
-}
-
-#[test]
-fn evm_does_not_leak_into_application() {
-    let src = read("src/application/ports.rs");
-    assert!(
-        !src.contains("use alloy") && !src.contains("alloy::"),
-        "ports.rs must not import alloy (hexagonal boundary violation)"
-    );
-}
-
-#[test]
-fn evm_signer_adapter_exists_and_implements_port() {
-    let path = Path::new("src/adapters/evm_signer.rs");
-    assert!(path.exists(), "evm_signer adapter must exist");
-    let src = read("src/adapters/evm_signer.rs");
-    assert!(
-        src.contains("impl EvmPort for AlloySigner"),
-        "evm_signer must implement EvmPort"
-    );
-}
-
-#[test]
-#[test]
 #[cfg(feature = "telegram")]
 fn telegram_runtime_adapter_exists() {
     assert!(
@@ -349,16 +314,5 @@ fn telegram_runtime_adapter_exists() {
     assert!(
         !src.contains("collect_engine_response("),
         "telegram_runtime must not orchestrate engine turn loop directly"
-    );
-}
-
-#[test]
-fn evm_tool_executor_adapter_exists_and_implements_port() {
-    let path = Path::new("src/adapters/evm_tool_executor.rs");
-    assert!(path.exists(), "evm_tool_executor adapter must exist");
-    let src = read("src/adapters/evm_tool_executor.rs");
-    assert!(
-        src.contains("impl ToolExecutionPort for EvmToolExecutionAdapter"),
-        "evm_tool_executor must implement ToolExecutionPort"
     );
 }

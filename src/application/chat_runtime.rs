@@ -1,4 +1,15 @@
-use crate::application::engine_runtime::{collect_engine_response, ToolExecutor};
+//! Per-turn chat orchestration service.
+//!
+//! `ChatRuntimeService` is the central application service for processing a
+//! single user message through the full pipeline: flow resolution, memory
+//! recall, prompt budget assembly, engine call (with multi-round tool
+//! chaining), flow persistence, compaction, and token budget enforcement.
+//!
+//! Token budget gates:
+//! - **80% warning**: returns a `system_notice` alerting the user.
+//! - **100% hard limit**: blocks further requests until `/reset`.
+
+use crate::application::engine_runtime::{collect_engine_response, ToolExecutor, ToolResultObserver};
 use crate::application::flow_compaction::maybe_compact_flow;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::FlowStorePort;
@@ -13,6 +24,10 @@ use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::{Message, Recipient, Role, ToolDef};
 use tengu_core::{Engine, EngineContext, Refiner};
 
+/// Result of processing a single user message through the chat pipeline.
+///
+/// `assistant_text` contains the model's response (if any).
+/// `system_notice` contains budget warnings or limit-reached messages.
 pub(crate) struct ChatTurnResult {
     pub assistant_text: Option<String>,
     pub system_notice: Option<String>,
@@ -20,6 +35,12 @@ pub(crate) struct ChatTurnResult {
     pub total_output_tokens: u32,
 }
 
+/// Central chat orchestration service.
+///
+/// Wired with references to the engine, refiner, flow store, memory service,
+/// and tool executor. Call `process_user_text()` to run one full user→assistant
+/// turn including memory recall, prompt budgeting, engine invocation, and
+/// flow persistence.
 pub(crate) struct ChatRuntimeService<'a> {
     pub engine: &'a dyn Engine,
     pub refiner: &'a dyn Refiner,
@@ -34,6 +55,7 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub memory_service: Option<&'a MemoryService<'a>>,
     pub max_recall_entries: usize,
     pub max_recall_tokens: usize,
+    pub tool_observer: Option<ToolResultObserver<'a>>,
 }
 
 impl<'a> ChatRuntimeService<'a> {
@@ -190,6 +212,7 @@ impl<'a> ChatRuntimeService<'a> {
             self.tools,
             &context,
             self.tool_executor,
+            self.tool_observer,
         )
         .await?;
 
@@ -225,13 +248,30 @@ impl<'a> ChatRuntimeService<'a> {
             .await;
         }
 
+        // Warn when approaching the token limit (80% threshold).
+        let max_tokens = self.agent_config.limits.max_tokens_per_flow;
+        let usage_pct = if max_tokens > 0 {
+            (state.flow_token_usage as f64 / max_tokens as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        let budget_notice = if usage_pct >= 80 {
+            let remaining = max_tokens.saturating_sub(state.flow_token_usage);
+            Some(format!(
+                "⚠️ Token budget: {}% used ({}/{} tokens, ~{} remaining). Use /reset to start fresh.",
+                usage_pct, state.flow_token_usage, max_tokens, remaining
+            ))
+        } else {
+            None
+        };
+
         Ok(ChatTurnResult {
             assistant_text: if response_text.is_empty() {
                 None
             } else {
                 Some(response_text)
             },
-            system_notice: None,
+            system_notice: budget_notice,
             total_input_tokens: state.total_input_tokens,
             total_output_tokens: state.total_output_tokens,
         })

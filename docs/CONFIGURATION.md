@@ -250,11 +250,16 @@ warn_at_cost = 4.0
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `max_tokens_per_flow` | u64 | `100_000` | Hard token limit for entire conversation flow |
+| `max_tokens_per_flow` | u64 | `100_000` | Hard token limit for entire conversation flow. A warning is sent at 80% usage. |
 | `context_window_override` | u32? | none | Override engine-reported context window size |
 | `max_output_tokens_per_turn` | u32? | none | Cap output tokens per engine turn |
 | `max_cost_per_flow` | f64? | none | USD cost limit for the flow |
 | `warn_at_cost` | f64? | none | USD threshold for cost warning (must be <= `max_cost_per_flow`) |
+
+**Token budget behavior:**
+- At **80% usage**: the system sends a warning notice showing current token consumption and remaining budget.
+- At **100% usage**: further requests are blocked with a message to use `/reset` to start a new session.
+- Token usage is tracked per-flow (cumulative across all turns in the conversation).
 
 **Context window defaults by model** (when no override):
 
@@ -430,7 +435,7 @@ The collection is auto-created with cosine distance on first connect. If the `qd
 
 ## Telegram
 
-Run the agent as a headless Telegram bot. Users chat with the bot in Telegram and get full agent capabilities: tools, skills, memory, secret redaction.
+Run the agent as a headless Telegram bot. Users chat with the bot in Telegram and get full agent capabilities: tools, skills, memory, secret redaction, file attachments, and inline keyboard tool approval.
 
 ```toml
 [telegram]
@@ -455,6 +460,16 @@ allowed_users = ["123456789", "987654321"]
 **Message chunking:** Telegram has a 4096-character message limit. Long responses are automatically split at paragraph (`\n\n`) boundaries into chunks of at most 4000 characters.
 
 **Per-user conversations:** Each Telegram user gets their own `ChatLoopState` (keyed by sender user ID), following the agent's configured `flow.scope` setting.
+
+**File attachments:** Documents and photos sent to the bot are downloaded and saved to `{workspace}/.tengu-attachments/`. File paths are prepended to the message content so the agent can reference them. Text for media messages comes from the caption field.
+
+**Typing indicator:** A "typing..." chat action is sent every 4 seconds during processing, running as an independent task so it stays alive during long synchronous tool execution.
+
+**Tool approval:** Tools with `requires_approval: true` (e.g., `write_file`, `run_command`) trigger an inline keyboard message with Approve / Deny buttons. The agent blocks until the user responds or the 60-second timeout expires (auto-deny on timeout).
+
+**Token budget warnings:** When a conversation reaches 80% of `max_tokens_per_flow`, a warning message is sent showing current usage and remaining budget. At 100%, further requests are blocked until `/reset`.
+
+**Slash commands in Telegram:** The bot supports the same slash commands as TUI mode (`/help`, `/cost`, `/reset`, `/purge`, `/reload`, `/skills`, etc.) plus Telegram-specific behavior for `/purge` (also clears persistent memory) and `/reload` (hot-reloads skills).
 
 ---
 
@@ -542,6 +557,18 @@ All environment variables. Export them in your shell, `direnv`, process manager,
 | `TENGU_TELEGRAM_ALLOWED_USERS` | none | Comma-separated Telegram user IDs (merged with config `allowed_users`) |
 | `TENGU_GPU_HINT` | none | Force GPU detection: `"gpu"`, `"cuda"`, `"metal"`, `"none"`, `"cpu"` |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
+
+### Skill and Tool-Specific
+
+| Variable | Required When | Notes |
+|----------|--------------|-------|
+| `MOLECULE_API_KEY` | aura-orchestrator skill | Molecule DeSci Labs API key (sent as `x-api-key` header) |
+| `MOLECULE_SERVICE_TOKEN` | aura-orchestrator workflows 2-4 | Service token JWT (sent as `x-service-token` header) |
+| `MOLECULE_LABS_URL` | aura-orchestrator skill | GraphQL endpoint (e.g., `https://staging.graphql.api.molecule.xyz/graphql`) |
+| `MOLECULE_CLIENT_URL` | ipnft-minter | Client URL for project links (e.g., `https://testnet.molecule.xyz`) |
+| `POI_API_KEY` | POI registration (Workflow 1) | Bearer token for `testnet.molecule.xyz/api/v1/inventions` |
+| `EVM_PRIVATE_KEY` | ipnft-minter, POI on-chain | Hex-encoded wallet private key (never sent to any API) |
+| `EVM_RPC_URL` | ipnft-minter, POI on-chain | Sepolia RPC endpoint |
 
 ---
 

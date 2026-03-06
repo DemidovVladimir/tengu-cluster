@@ -1,8 +1,8 @@
 //! Adapter bridging memory tool calls to the MemoryService.
 //!
 //! The tool execution port is synchronous (called from the engine's tool loop),
-//! but both the embedding and memory store ports are async. This adapter owns a
-//! dedicated single-threaded tokio runtime to bridge the gap via `block_on()`.
+//! but both the embedding and memory store ports are async. Uses `block_in_place`
+//! when inside a multi-thread runtime (Telegram), or a fallback runtime (TUI).
 
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
@@ -22,11 +22,11 @@ pub(crate) struct MemoryServiceHandle {
 }
 
 /// Adapter implementing ToolExecutionPort by routing memory tool calls
-/// through a dedicated tokio runtime (to bridge sync → async).
+/// via `block_in_place` (multi-thread runtime) or a fallback runtime (TUI).
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
     secret_registry: Arc<SecretRegistry>,
-    runtime: tokio::runtime::Runtime,
+    fallback_runtime: tokio::runtime::Runtime,
 }
 
 impl MemoryToolExecutionAdapter {
@@ -34,14 +34,25 @@ impl MemoryToolExecutionAdapter {
         handle: Arc<MemoryServiceHandle>,
         secret_registry: Arc<SecretRegistry>,
     ) -> Result<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let fallback_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
         Ok(Self {
             handle,
             secret_registry,
-            runtime,
+            fallback_runtime,
         })
+    }
+
+    fn run_async<F, T>(&self, future: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(future))
+        } else {
+            self.fallback_runtime.block_on(future)
+        }
     }
 }
 
@@ -70,8 +81,7 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
                 );
 
                 let id = self
-                    .runtime
-                    .block_on(service.remember(content, agent_id))?;
+                    .run_async(service.remember(content, agent_id))?;
 
                 Ok(format!("Stored memory with id: {}", id))
             }

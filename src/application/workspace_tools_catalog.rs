@@ -1,3 +1,9 @@
+//! Built-in tool definitions for the workspace and memory subsystems.
+//!
+//! Each function returns a `Vec<ToolDef>` describing the tools an agent can
+//! call. The definitions include JSON Schema parameters, risk levels, and
+//! approval requirements used by `ToolPolicyCatalog` and `ToolUseService`.
+
 use serde_json::json;
 use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
 
@@ -51,7 +57,7 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
         ),
         tool_def(
             "write_file",
-            "Write content to a file in the workspace. Creates parent directories if needed. Requires user approval.",
+            "Write content to a file in the workspace. Creates parent directories if needed.",
             json!({
                 "type": "object",
                 "properties": {
@@ -71,7 +77,7 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
         ),
         tool_def(
             "run_command",
-            "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files. Requires user approval.",
+            "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files.",
             json!({
                 "type": "object",
                 "properties": {
@@ -106,68 +112,6 @@ pub(crate) fn build_memory_tools() -> Vec<ToolDef> {
         ToolRiskLevel::Low,
         false,
     )]
-}
-
-/// Build EVM tool definitions for the on-chain signing subsystem.
-#[cfg(feature = "evm")]
-pub(crate) fn build_evm_tools() -> Vec<ToolDef> {
-    vec![
-        tool_def(
-            "evm_get_address",
-            "Return the wallet's checksummed Ethereum address derived from the configured private key.",
-            json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-            ToolRiskLevel::High,
-            true,
-        ),
-        tool_def(
-            "evm_sign_message",
-            "Sign an arbitrary message with the wallet's private key and return the hex-encoded signature (EIP-191 personal_sign).",
-            json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "The message to sign"
-                    }
-                },
-                "required": ["message"]
-            }),
-            ToolRiskLevel::High,
-            true,
-        ),
-        tool_def(
-            "evm_send_transaction",
-            "Build, sign, and submit an Ethereum transaction. Returns the transaction receipt once mined. Requires user approval.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "Recipient address (hex, 0x-prefixed)"
-                    },
-                    "data": {
-                        "type": "string",
-                        "description": "Calldata (hex, 0x-prefixed). Omit for plain ETH transfers."
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Value in wei as a decimal string (e.g. '1000000000000000000' for 1 ETH)"
-                    },
-                    "chain_id": {
-                        "type": "integer",
-                        "description": "Chain ID (default: 1 for mainnet)"
-                    }
-                },
-                "required": ["to"]
-            }),
-            ToolRiskLevel::High,
-            true,
-        ),
-    ]
 }
 
 #[cfg(test)]

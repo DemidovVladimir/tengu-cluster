@@ -8,14 +8,12 @@ use tengu_core::events::{
     DomainEvent, DomainEventMeta, DomainEventPayload, EventBus, TaskAssigned, TaskCompleted,
 };
 
-#[allow(dead_code)]
 pub(crate) struct TaskOrchestratorService<'a> {
     pub store: &'a dyn TaskStorePort,
     pub event_bus: &'a dyn EventBus,
     pub max_retries: u32,
 }
 
-#[allow(dead_code)]
 impl<'a> TaskOrchestratorService<'a> {
     /// Create a new pending task and persist it.
     pub fn create_task(
@@ -116,7 +114,6 @@ impl<'a> TaskOrchestratorService<'a> {
     }
 }
 
-#[allow(dead_code)]
 fn event_meta(task_id: Option<&str>, agent_id: Option<&str>) -> DomainEventMeta {
     DomainEventMeta {
         ts_epoch_ms: std::time::SystemTime::now()

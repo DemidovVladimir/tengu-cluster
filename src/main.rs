@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
         }
         Commands::Orchestrate => {
             let event_bus = adapters::event_bus::InProcessEventBus::default();
-            adapters::orchestrator::boot_orchestrator(&config, &event_bus).await
+            adapters::orchestrator::boot_orchestrator(&config, &event_bus, secret_registry).await
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram => tokio::task::block_in_place(|| {

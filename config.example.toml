@@ -68,9 +68,11 @@ idle_timeout_minutes = 30
 # compaction_summary_max_tokens = 320
 
 [agents.main.limits]
-max_tokens_per_flow = 100_000
+max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
 # context_window_override = 200000
 # max_output_tokens_per_turn = 4096
+# max_cost_per_flow = 5.0           # USD cost limit (optional)
+# warn_at_cost = 4.0                # USD cost warning threshold (must be <= max_cost_per_flow)
 
 # --- Persistent Vector Memory ---
 # Shared across agents. Stores facts/insights for cross-session retrieval.
@@ -92,21 +94,6 @@ max_tokens_per_flow = 100_000
 # qdrant_collection = "tengu-memory"          # collection name
 # vector_size = 1536                          # must match embedding model output dim
 # qdrant_api_key = "${QDRANT_API_KEY}"        # for Qdrant Cloud (optional)
-
-# --- EVM Signing (optional) ---
-# Native Ethereum wallet signing and transaction submission.
-# Requires: cargo build --features evm
-#
-# Set env vars (do NOT put private keys in config files):
-#   export EVM_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-#   export EVM_RPC_URL=https://eth.llamarpc.com
-#
-# When both vars are set, the agent gains three tools:
-#   evm_get_address      — derive wallet address
-#   evm_sign_message     — sign arbitrary messages (EIP-191)
-#   evm_send_transaction — build, sign, submit tx and wait for receipt
-#
-# All EVM tools require user approval before execution.
 
 # --- Telegram Bot ---
 # Run with: tengu telegram
