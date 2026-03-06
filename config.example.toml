@@ -1,6 +1,12 @@
 # Tengu Cluster — Example Configuration
 # Copy to ~/.tengu/config.toml and customize
 
+# --- Secrets ---
+# Store API keys in ~/.tengu/secrets.vault (AES-256-GCM encrypted, chmod 600).
+# Run: tengu secret init          (creates vault, prompts for master password)
+# Then: tengu secret set OPENROUTER_API_KEY sk-or-...
+# Or set TENGU_MASTER_PASSWORD env var to skip interactive prompts.
+
 # Runtime profile: "auto" | "cloud" | "desktop" | "minimal"
 runtime_profile = "auto"
 
@@ -8,7 +14,6 @@ runtime_profile = "auto"
 bind = "127.0.0.1"
 port = 7070
 auth_mode = "token"
-# auth_token = "${TENGU_TOKEN}"
 
 [hub.reload]
 mode = "hybrid"
@@ -16,111 +21,141 @@ mode = "hybrid"
 # Refiner: "off" | "rules" | "local" | "remote"
 [refiner]
 mode = "off"
-# model = "SmolLM2-360M"          # for mode = "local"
-# url = "http://192.168.1.100:7070" # for mode = "remote"
+
+# --- Default Agent ---
+# OpenRouter is recommended: one API key for all providers, one bill.
+# Set OPENROUTER_API_KEY in your environment.
+# Browse models at https://openrouter.ai/models
 
 [agents.main]
 default = true
-engine = "ollama"
-model = "llama3.2"
-# Example hosted provider setup:
-# engine = "anthropic"
-# model = "claude-3-5-sonnet-latest"
-# engine = "openai"
-# model = "gpt-4o-mini"
-# engine = "huggingface"
-# model = "THUDM/GLM-4.7:fastest" # Inference Providers selector syntax
-# engine = "claude-code"
-# model = "claude-sonnet-4-5-20250929"
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 
+# OpenRouter model examples (just change the model line):
+# model = "anthropic/claude-sonnet-4"        # Claude Sonnet 4
+# model = "openai/gpt-4o"                    # GPT-4o
+# model = "google/gemini-2.5-pro"            # Gemini 2.5 Pro
+# model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
+# model = "mistralai/mistral-large"          # Mistral Large
+# model = "deepseek/deepseek-chat-v3"        # DeepSeek V3
+
+# Alternative: direct provider engines (requires provider-specific API key)
+# engine = "anthropic"
+# model = "claude-sonnet-4-20250514"
+# engine = "openai"
+# model = "gpt-4o-mini"
+# engine = "ollama"
+# model = "llama3.2"
+# engine = "huggingface"
+# model = "THUDM/GLM-4.7:fastest"
+# engine = "claude-code"
+# model = "claude-sonnet-4-5-20250929"
+
 [agents.main.identity]
 name = "Tengu"
+# instructions = "You are a Rust programming assistant. Be concise."
 
 [agents.main.flow]
 scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
-# max_history_turns = 80
-# Defaults are derived from model context/input budget if omitted.
+# max_history_turns = 20
 # compaction_threshold_ratio = 0.82
 # compaction_keep_turns = 24
 # compaction_summary_max_tokens = 320
 
 [agents.main.limits]
-max_tokens_per_flow = 500_000
-# max_cost_per_flow = 5.00
-# warn_at_cost = 2.00
-# Optional per-model override when provider default context mapping is not accurate.
-# context_window_override = 128000
-# Optional per-turn provider output cap (replaces backend fallback defaults).
+max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
+# context_window_override = 200000
 # max_output_tokens_per_turn = 4096
+# max_cost_per_flow = 5.0           # USD cost limit (optional)
+# warn_at_cost = 4.0                # USD cost warning threshold (must be <= max_cost_per_flow)
 
-[agents.main.kit]
-allow = ["read_file", "write_file", "edit_file", "find_files", "search_content", "shell"]
-deny = []
-# Optional explicit approval gates:
-# approval_required = ["write_file", "edit_file", "shell"]
-# approved = ["write_file"]
+# --- Persistent Vector Memory ---
+# Shared across agents. Stores facts/insights for cross-session retrieval.
+# Requires OPENROUTER_API_KEY for embedding generation.
 
-[agents.main.skill_policy]
-# Optional skill allow/deny policy for runtime capability checks.
-allow = []
-deny = []
-
-[agents.main.store]
-files = ["CONTEXT.md", "IDENTITY.md", "PROFILE.md", "NOTES.md", "notes/*.md"]
-
-# Routing: which pipe sends to which agent
-[[routing]]
-agent = "main"
-pipe = "cli"
-
-# Runtime topology policy:
-# - "flat": no topology-specific handoff restrictions
-# - "single-orchestrator": enforce one orchestrator dispatching to bounded dependents
-[topology]
-mode = "flat"
-# orchestrator_agent = "main"
-# dependent_agents = ["engineering", "marketing", "product"]
-# allow_direct_dependent_communication = false
-max_handoff_depth = 2
-
-# Notes:
-# - in `single-orchestrator` mode, `topology.orchestrator_agent` is required
-# - if `capability_governance.mode = "delegated"`, delegated orchestrator must match topology orchestrator
-# - if `dependent_agents` is empty, any configured non-orchestrator agent is allowed as handoff receiver
-
-# Pipes
-[pipes.cli]
-enabled = true
-
-# [pipes.telegram]
+# [memory]
 # enabled = true
-# token = "${TELEGRAM_BOT_TOKEN}"
-# access_policy = "approval"
+# embedding_model = "text-embedding-3-small"
+# max_recall_entries = 5
+# max_recall_tokens = 600
+# store_path = "~/.tengu/memory/"
+#
+# --- Qdrant vector store backend (optional) ---
+# Requires: cargo build --features qdrant
+# Start Qdrant: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+#
+# backend = "qdrant"                          # "disk" (default) or "qdrant"
+# qdrant_url = "http://localhost:6334"        # gRPC endpoint
+# qdrant_collection = "tengu-memory"          # collection name
+# vector_size = 1536                          # must match embedding model output dim
+# qdrant_api_key = "${QDRANT_API_KEY}"        # for Qdrant Cloud (optional)
 
-# [pipes.discord]
-# enabled = false
-# token = "${DISCORD_BOT_TOKEN}"
+# --- Telegram Bot ---
+# Run with: tengu telegram
+# Set TELEGRAM_BOT_TOKEN in secrets vault or env.
+# Get a token from @BotFather on Telegram.
+# Get your user ID from @userinfobot on Telegram.
 
-# [pipes.webchat]
-# enabled = false
-# bind = "127.0.0.1:7071"
+# [telegram]
+# enabled = true
+# allowed_users = ["123456789"]
 
-[skills]
-watch = true
-extra_dirs = []
+# --- Fleet Orchestration ---
+# Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
+# Run with: tengu orchestrate
 
-[capability_governance]
-# "user" keeps capability usage strictly within user-defined static policy.
-# "delegated" lets one orchestrator request bounded capabilities via handoff envelopes.
-# In delegated mode, chat runtime exposes `/assign`, `/assignments`, `/unassign`,
-# and `/assignments clear` commands for bounded dependent capability assignment lifecycle.
-# Assignment lifecycle events are persisted to `~/.tengu/state/audit/capability_assignments.jsonl`.
-# Approved assignments are replayed from this audit log at startup.
-# Runtime also auto-expires stale delegated assignments by TTL policy
-# (`TENGU_DELEGATED_ASSIGNMENT_TTL_SECS` env override).
-mode = "user"
-# delegated_orchestrator_agent = "orchestrator"
+# [orchestrator]
+# enabled = true
+# heartbeat_interval_s = 30
+# max_retries = 3
+
+# [agents.qa]
+# engine = "openrouter"
+# model = "anthropic/claude-sonnet-4"
+# role = "qa"
+# skills = ["search", "test_runner"]
+#
+# [agents.qa.identity]
+# name = "QA Agent"
+#
+# [agents.qa.flow]
+# scope = "per-sender"
+# reset_mode = "idle"
+#
+# [agents.qa.limits]
+# max_tokens_per_flow = 100_000
+
+# [agents.backend]
+# engine = "openrouter"
+# model = "anthropic/claude-sonnet-4"
+# role = "backend_engineer"
+#
+# [agents.backend.identity]
+# name = "Backend Engineer"
+#
+# [agents.backend.flow]
+# scope = "per-sender"
+# reset_mode = "idle"
+#
+# [agents.backend.limits]
+# max_tokens_per_flow = 100_000
+
+# [agents.integrator]
+# engine = "openrouter"
+# model = "openai/gpt-4o"
+# role = "integration_master"
+#
+# [agents.integrator.identity]
+# name = "Integration Master"
+#
+# [agents.integrator.flow]
+# scope = "per-sender"
+# reset_mode = "idle"
+#
+# [agents.integrator.limits]
+# max_tokens_per_flow = 100_000

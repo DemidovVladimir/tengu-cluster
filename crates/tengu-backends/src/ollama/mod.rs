@@ -7,10 +7,12 @@ use async_trait::async_trait;
 use futures::stream;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error};
 
+use crate::tooling::map_function_tools;
 use tengu_core::types::{Message, ModelInfo, StreamEvent, ToolDef};
 use tengu_core::{Engine, EngineContext, EngineDiagnostics};
 
@@ -34,6 +36,9 @@ struct OllamaChatRequest {
     /// Optional provider-specific generation options.
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<OllamaChatOptions>,
+    /// Optional function tools.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OllamaToolDef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,7 +52,44 @@ struct OllamaMessage {
     /// Ollama role label (`system`/`user`/`assistant`/`tool`).
     role: String,
     /// Message text payload.
+    #[serde(default)]
     content: String,
+    /// Optional assistant tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+    /// Optional tool result linkage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct OllamaToolCall {
+    /// Optional call id.
+    #[serde(default)]
+    id: Option<String>,
+    /// Function invocation payload.
+    function: OllamaToolFunction,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct OllamaToolFunction {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaToolDef {
+    #[serde(rename = "type")]
+    kind: String,
+    function: OllamaFunctionDef,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaFunctionDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +111,11 @@ struct OllamaChatResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaResponseMessage {
     /// Incremental text chunk emitted by the model.
+    #[serde(default)]
     content: String,
+    /// Optional tool calls emitted by the model.
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCall>>,
 }
 
 /// Rolling stream state accumulated while consuming Ollama NDJSON frames.
@@ -121,19 +167,62 @@ impl OllamaEngine {
         }
     }
 
+    /// Convert runtime tools to Ollama function-tool format.
+    fn convert_tools(tools: &[ToolDef]) -> Vec<OllamaToolDef> {
+        map_function_tools(tools, |t| OllamaToolDef {
+            kind: "function".to_string(),
+            function: OllamaFunctionDef {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+            },
+        })
+    }
+
     /// Convert core `Message` values into Ollama request message format.
     fn convert_messages(messages: &[Message]) -> Vec<OllamaMessage> {
         messages
             .iter()
-            .map(|m| OllamaMessage {
-                role: match m.role {
-                    tengu_core::types::message::Role::System => "system",
-                    tengu_core::types::message::Role::User => "user",
-                    tengu_core::types::message::Role::Assistant => "assistant",
-                    tengu_core::types::message::Role::Tool => "tool",
+            .map(|m| match m.role {
+                tengu_core::types::message::Role::Assistant if m.tool_calls.is_some() => {
+                    let tool_calls = m
+                        .tool_calls
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(|tc| OllamaToolCall {
+                            id: Some(tc.id.clone()),
+                            function: OllamaToolFunction {
+                                name: tc.name.clone(),
+                                arguments: tc.arguments.clone(),
+                            },
+                        })
+                        .collect();
+                    OllamaMessage {
+                        role: "assistant".to_string(),
+                        content: m.content.clone(),
+                        tool_calls: Some(tool_calls),
+                        tool_call_id: None,
+                    }
                 }
-                .to_string(),
-                content: m.content.clone(),
+                tengu_core::types::message::Role::Tool => OllamaMessage {
+                    role: "tool".to_string(),
+                    content: m.content.clone(),
+                    tool_calls: None,
+                    tool_call_id: m.tool_call_id.clone(),
+                },
+                _ => OllamaMessage {
+                    role: match m.role {
+                        tengu_core::types::message::Role::System => "system",
+                        tengu_core::types::message::Role::User => "user",
+                        tengu_core::types::message::Role::Assistant => "assistant",
+                        tengu_core::types::message::Role::Tool => unreachable!(),
+                    }
+                    .to_string(),
+                    content: m.content.clone(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             })
             .collect()
     }
@@ -148,9 +237,39 @@ impl OllamaEngine {
             .map(|system| OllamaMessage {
                 role: "system".to_string(),
                 content: (*system).to_string(),
+                tool_calls: None,
+                tool_call_id: None,
             })
             .chain(Self::convert_messages(messages))
             .collect()
+    }
+
+    fn tool_arguments_to_json(arguments: &Value) -> String {
+        match arguments {
+            Value::String(raw) => serde_json::from_str::<Value>(raw)
+                .map(|_| raw.clone())
+                .unwrap_or_else(|_| json!({"value": raw}).to_string()),
+            _ => arguments.to_string(),
+        }
+    }
+
+    fn emit_tool_call_events(tx: &UnboundedSender<StreamEvent>, tool_calls: &[OllamaToolCall]) {
+        for (idx, tc) in tool_calls.iter().enumerate() {
+            let id = tc
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("ollama-tool-call-{}", idx + 1));
+            let arguments_delta = Self::tool_arguments_to_json(&tc.function.arguments);
+            let _ = tx.send(StreamEvent::ToolCallStart {
+                id: id.clone(),
+                name: tc.function.name.clone(),
+            });
+            let _ = tx.send(StreamEvent::ToolCallDelta {
+                id: id.clone(),
+                arguments_delta,
+            });
+            let _ = tx.send(StreamEvent::ToolCallEnd { id });
+        }
     }
 
     /// Normalize one Ollama stream line into JSON payload text.
@@ -197,17 +316,16 @@ impl OllamaEngine {
             return Err(());
         };
 
-        parsed
-            .message
-            .as_ref()
-            .map(|message| message.content.as_str())
-            .filter(|content| !content.is_empty())
-            .into_iter()
-            .for_each(|text| {
+        if let Some(message) = parsed.message.as_ref() {
+            if !message.content.is_empty() {
                 let _ = tx.send(StreamEvent::TextDelta {
-                    text: text.to_string(),
+                    text: message.content.clone(),
                 });
-            });
+            }
+            if let Some(tool_calls) = message.tool_calls.as_ref() {
+                Self::emit_tool_call_events(tx, tool_calls);
+            }
+        }
 
         state.absorb(&parsed);
         Ok(())
@@ -261,7 +379,7 @@ impl Engine for OllamaEngine {
     }
 
     fn supports_tool_use(&self) -> bool {
-        false // Depends on specific model; conservative default
+        true
     }
 
     fn manages_own_workspace(&self) -> bool {
@@ -288,7 +406,7 @@ impl Engine for OllamaEngine {
             provider: "ollama".to_string(),
             display_name: self.model.clone(),
             context_window: self.context_window(),
-            supports_tools: false,
+            supports_tools: self.supports_tool_use(),
             supports_streaming: true,
         }]
     }
@@ -296,7 +414,7 @@ impl Engine for OllamaEngine {
     async fn run(
         &self,
         messages: &[Message],
-        _tools: &[ToolDef],
+        tools: &[ToolDef],
         context: &EngineContext,
     ) -> anyhow::Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
         // 1) Build one `/api/chat` request with system prompt + turn history.
@@ -307,9 +425,10 @@ impl Engine for OllamaEngine {
             options: Some(OllamaChatOptions {
                 num_predict: self.max_output_tokens,
             }),
+            tools: Self::convert_tools(tools),
         };
 
-        debug!(model = %self.model, "Sending request to Ollama");
+        debug!(model = %self.model, tools = tools.len(), "Sending request to Ollama");
 
         let response = self
             .client
@@ -377,6 +496,7 @@ impl Engine for OllamaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tengu_core::types::{message::Role, ToolCall};
     use tokio::sync::mpsc::UnboundedReceiver;
 
     /// Drain currently buffered stream events from a test receiver.
@@ -447,6 +567,43 @@ mod tests {
     }
 
     #[test]
+    fn convert_messages_handles_assistant_tool_calls() {
+        let messages = vec![Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "read_file".to_string(),
+                arguments: serde_json::json!({"path":"README.md"}),
+            }]),
+        }];
+
+        let converted = OllamaEngine::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "assistant");
+        assert!(converted[0].tool_calls.is_some());
+        assert_eq!(
+            converted[0].tool_calls.as_ref().unwrap()[0].function.name,
+            "read_file"
+        );
+    }
+
+    #[test]
+    fn convert_tools_maps_correctly() {
+        let tools = vec![ToolDef {
+            name: "read_file".to_string(),
+            description: "Read file".to_string(),
+            parameters: serde_json::json!({"type":"object"}),
+            policy: None,
+        }];
+        let converted = OllamaEngine::convert_tools(&tools);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].kind, "function");
+        assert_eq!(converted[0].function.name, "read_file");
+    }
+
+    #[test]
     fn stream_fixture_orders_text_then_usage_then_done_on_success() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut state = OllamaStreamState::default();
@@ -492,5 +649,28 @@ mod tests {
 
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], StreamEvent::Error { .. }));
+    }
+
+    #[test]
+    fn stream_fixture_tool_calls_emit_lifecycle_events() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = OllamaStreamState::default();
+
+        assert!(OllamaEngine::process_payload_frame(
+            r#"{"message":{"content":"","tool_calls":[{"id":"call_1","function":{"name":"read_file","arguments":{"path":"README.md"}}}]},"done":false}"#,
+            &tx,
+            &mut state
+        )
+        .is_ok());
+
+        drop(tx);
+        let events = drain_events(&mut rx);
+
+        assert_eq!(events.len(), 3);
+        assert!(
+            matches!(events[0], StreamEvent::ToolCallStart { ref name, .. } if name == "read_file")
+        );
+        assert!(matches!(events[1], StreamEvent::ToolCallDelta { .. }));
+        assert!(matches!(events[2], StreamEvent::ToolCallEnd { .. }));
     }
 }

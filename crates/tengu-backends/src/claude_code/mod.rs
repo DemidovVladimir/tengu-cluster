@@ -23,6 +23,8 @@ pub struct ClaudeCodeEngine {
     model: String,
     context_window_tokens: usize,
     max_output_tokens: u32,
+    permission_mode: Option<String>,
+    dangerously_skip_permissions: bool,
 }
 
 impl ClaudeCodeEngine {
@@ -30,6 +32,11 @@ impl ClaudeCodeEngine {
     ///
     /// Runtime env knobs:
     /// - `CLAUDE_CODE_BIN`: optional CLI binary path (default: `claude`)
+    /// - `CLAUDE_CODE_PERMISSION_MODE`: optional permission mode passed to
+    ///   `--permission-mode` (for example `default`, `acceptEdits`,
+    ///   `dontAsk`, `bypassPermissions`)
+    /// - `CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS`: optional boolean
+    ///   (`1/true/yes/on`) to add `--dangerously-skip-permissions`
     pub fn new(
         model: &str,
         context_window_override: Option<usize>,
@@ -40,11 +47,27 @@ impl ClaudeCodeEngine {
         let max_output_tokens =
             Self::resolve_max_output_tokens(context_window_tokens, max_output_tokens_override);
         let binary = std::env::var("CLAUDE_CODE_BIN").unwrap_or_else(|_| "claude".to_string());
+        let permission_mode = std::env::var("CLAUDE_CODE_PERMISSION_MODE")
+            .ok()
+            .map(|raw| raw.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let dangerously_skip_permissions =
+            std::env::var("CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS")
+                .ok()
+                .map(|raw| {
+                    matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+                .unwrap_or(false);
         Self {
             binary,
             model: model.to_string(),
             context_window_tokens,
             max_output_tokens,
+            permission_mode,
+            dangerously_skip_permissions,
         }
     }
 
@@ -211,6 +234,13 @@ impl Engine for ClaudeCodeEngine {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+
+        if let Some(mode) = self.permission_mode.as_ref() {
+            command.arg("--permission-mode").arg(mode);
+        }
+        if self.dangerously_skip_permissions {
+            command.arg("--dangerously-skip-permissions");
+        }
 
         if let Some(workspace) = context.workspace.as_ref() {
             command.arg("--add-dir").arg(workspace);

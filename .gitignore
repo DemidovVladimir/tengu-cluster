@@ -3,3 +3,7 @@
 *.swo
 .DS_Store
 .env
+secrets.env
+*.vault
+.tengu-attachments
+/hypothesis

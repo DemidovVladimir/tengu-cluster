@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "flows": {
+    "main:local": {
+      "flow_key": "main:local",
+      "agent_id": "main",
+      "transcript_relpath": "main_local-f197829a2d060c91/transcript.jsonl",
+      "message_count": 1,
+      "token_estimate": 19,
+      "updated_at_epoch_s": 1772374731
+    }
+  }
+}

@@ -13,9 +13,8 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+teloxide = { version = "0.13", features = ["macros"], optional = true }
 
 [features]
 default = []
-telegram = []
-discord = []
-webchat = []
+telegram = ["teloxide"]
