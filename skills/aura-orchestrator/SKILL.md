@@ -57,36 +57,48 @@ All GraphQL requests go to `${MOLECULE_LABS_URL}` via the `aura_orchestrator` to
 
 ## Workflow 1: Mint an IP-NFT
 
-Three mandatory stages: POI registration, POI on-chain submission, and CLI minting. Every stage depends on the previous one's output — do NOT skip any.
+Three mandatory stages: POI registration, POI on-chain submission, and CLI minting. Every stage depends on the previous one's output — do NOT skip any. **If any step fails, STOP and report the error. Do NOT fall back to the CLI minter without `--reservation-id`, `--poi-tx-hash`, and `--merkle-root` — that produces a wrong sequential ID.**
 
 ### Step 1: Register POI
 
-Use `run_command` to call the POI API:
+Use `run_command` to call the POI API. **The `-F` flag MUST use `=@` (equals-at) syntax — `files=@path`. Missing `=` causes a curl error.**
 
 ```bash
 curl -X POST https://testnet.molecule.xyz/api/v1/inventions \
   -H "Authorization: Bearer $POI_API_KEY" \
   -H "Content-Type: multipart/form-data" \
-  -F "files=@document.pdf"
+  -F "files=@/absolute/path/to/document.pdf"
 ```
 
-Save the entire JSON response — you need `data.transaction.to` and `data.transaction.data` for Step 2, and `data.proof.tree[0]` (the merkle root hash) for Step 3.
+Use the absolute path to the file. Do NOT omit the `=` sign before `@`.
+
+Save the entire JSON response. Key values:
+- `data.transaction.to` — POI contract address (for Step 2 `cast send`)
+- `data.transaction.data` — merkle root hash (for Step 2 `cast send` AND used as reservation ID when cast to decimal uint256)
+- `data.proof.tree[0]` — same merkle root hash (passed as `--merkle-root` in Step 3)
 
 ### Step 2: Submit POI on-chain
 
-Submit the POI transaction on-chain and capture the receipt:
+Submit the POI transaction on-chain using `data.transaction.to` and `data.transaction.data` from Step 1:
 
 ```bash
 cast send <transaction.to> <transaction.data> --private-key $EVM_PRIVATE_KEY --rpc-url $EVM_RPC_URL --chain 11155111 --json
 ```
 
-**Extract the reservation ID from the receipt logs.** The reservation ID is the third topic (`topics[2]`) of the first log entry with 3+ topics. It is a large uint256 value. Use this command to extract it:
+Save the `TX_HASH` from the receipt (`transactionHash` field).
+
+**The reservation ID is the `transaction.data` from Step 1 cast to a decimal uint256** — it does NOT come from receipt logs (the POI contract emits no events). Compute it:
 
 ```bash
-cast receipt <TX_HASH> --json --rpc-url $EVM_RPC_URL | jq -r '.logs[0].topics[2]' | xargs cast to-dec
+cast to-dec <transaction.data>
 ```
 
-Save the decimal `RESERVATION_ID` and the `TX_HASH` — both are needed for Step 3. Also save `MERKLE_ROOT` from Step 1 (`data.proof.tree[0]`).
+Where `<transaction.data>` is the hex value from the POI API response (`data.transaction.data`), which is the same as `data.proof.tree[0]` (the merkle root).
+
+Save three values for Step 3:
+- `RESERVATION_ID` — the decimal uint256 from `cast to-dec`
+- `TX_HASH` — the transaction hash from the `cast send` receipt
+- `MERKLE_ROOT` — `data.proof.tree[0]` from Step 1 (same hex as `data.transaction.data`)
 
 ### Step 3: Run the CLI minter
 
@@ -108,7 +120,7 @@ Pass the reservation ID and POI transaction hash from Step 2:
 
 Optional: `--image /path/to/cover.png` (uses a placeholder if omitted).
 
-If `--reservation-id` is omitted the tool falls back to calling `reserve()` on-chain, which creates a sequential ID unrelated to POI. **Always provide both `--reservation-id` and `--poi-tx-hash` when minting after POI.**
+**All three POI flags are required:** `--reservation-id`, `--poi-tx-hash`, and `--merkle-root`. If any is omitted, the mint will fail or produce a wrong sequential token ID. Do NOT run this step without completing Steps 1 and 2 first.
 
 Output on success:
 ```json

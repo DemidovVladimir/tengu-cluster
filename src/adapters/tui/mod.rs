@@ -708,6 +708,7 @@ pub fn run_tui(
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
+                            cancel: None,
                         };
 
                         match chat_runtime

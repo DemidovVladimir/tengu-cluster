@@ -162,6 +162,7 @@ pub(crate) fn handle_chat_command(
                 "  /engine    — Show current engine".into(),
                 "  /cost      — Token usage stats".into(),
                 "  /context   — Context window usage".into(),
+                "  /stop      — Cancel the current operation (Telegram)".into(),
                 "  /reset     — Clear conversation".into(),
                 "  /purge     — Clear conversation + wipe persistent memory".into(),
                 "  /reload    — Re-read env vars + re-scan skills from disk".into(),

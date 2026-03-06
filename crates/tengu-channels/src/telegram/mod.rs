@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
@@ -28,6 +29,7 @@ pub struct TelegramPipe {
     token: String,
     shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     pending_approvals: Option<PendingApprovals>,
+    turn_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl TelegramPipe {
@@ -37,15 +39,22 @@ impl TelegramPipe {
             token,
             shutdown: Arc::new(Mutex::new(None)),
             pending_approvals: None,
+            turn_cancel: None,
         }
     }
 
-    /// Create a new Telegram pipe with inline keyboard approval support.
-    pub fn with_approvals(token: String, pending: PendingApprovals) -> Self {
+    /// Create a new Telegram pipe with inline keyboard approval support
+    /// and an optional turn-cancellation flag.
+    pub fn with_approvals(
+        token: String,
+        pending: PendingApprovals,
+        cancel: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             token,
             shutdown: Arc::new(Mutex::new(None)),
             pending_approvals: Some(pending),
+            turn_cancel: Some(cancel),
         }
     }
 
@@ -158,12 +167,15 @@ impl Pipe for TelegramPipe {
 
         let inbound_tx = ctx.inbound_tx.clone();
         let pending_approvals = self.pending_approvals.clone();
+        let turn_cancel = self.turn_cancel.clone();
 
         tokio::spawn(async move {
             // Branch 1: handle normal messages.
+            let cancel_for_handler = turn_cancel.clone();
             let msg_handler = Update::filter_message().endpoint(
                 move |msg: Message, bot: Bot| {
                     let tx = inbound_tx.clone();
+                    let cancel = cancel_for_handler.clone();
                     async move {
                         // Text comes from text() for plain messages, caption() for media messages.
                         let text = msg
@@ -171,6 +183,22 @@ impl Pipe for TelegramPipe {
                             .or(msg.caption())
                             .unwrap_or_default()
                             .to_string();
+
+                        // Intercept /stop — set the cancel flag and don't forward.
+                        // Use starts_with to handle Telegram's @botname suffix.
+                        if text == "/stop" || text.starts_with("/stop@") {
+                            if let Some(ref flag) = cancel {
+                                flag.store(true, Ordering::Relaxed);
+                            }
+                            let chat_id = msg.chat.id.0;
+                            let _ = bot
+                                .send_message(
+                                    teloxide::types::ChatId(chat_id),
+                                    "⏹ Stopping current operation...",
+                                )
+                                .await;
+                            return Ok(());
+                        }
 
                         // Download attached documents and photos.
                         let mut media_payloads: Vec<MediaPayload> = Vec::new();

@@ -56,6 +56,7 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub max_recall_entries: usize,
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 impl<'a> ChatRuntimeService<'a> {
@@ -213,6 +214,7 @@ impl<'a> ChatRuntimeService<'a> {
             &context,
             self.tool_executor,
             self.tool_observer,
+            self.cancel,
         )
         .await?;
 

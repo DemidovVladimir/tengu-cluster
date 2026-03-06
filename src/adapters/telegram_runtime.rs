@@ -523,11 +523,16 @@ pub(crate) fn run_telegram(
     let pending_approvals: tengu_channels::telegram::PendingApprovals =
         Arc::new(std::sync::Mutex::new(HashMap::new()));
 
+    // Turn-cancellation flag: set by the pipe when /stop is received,
+    // checked by the engine runtime between tool rounds.
+    let turn_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Connect Telegram pipe (async). Wrapped in Arc so the typing indicator
     // can run as an independent task even when tool execution blocks.
     let pipe = Arc::new(tengu_channels::telegram::TelegramPipe::with_approvals(
         bot_token,
         Arc::clone(&pending_approvals),
+        Arc::clone(&turn_cancel),
     ));
     let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(256);
     rt.block_on(pipe.connect(PipeContext { inbound_tx }))?;
@@ -638,6 +643,15 @@ pub(crate) fn run_telegram(
 
             // Handle slash commands locally (don't send to engine).
             if msg.content.starts_with('/') {
+                // /stop — handled by the pipe handler (sets cancel flag).
+                // If it reaches here (e.g. no active turn), just acknowledge.
+                if msg.content == "/stop" || msg.content.starts_with("/stop@") {
+                    let _ = pipe
+                        .send_text(&msg.sender, "No active operation to stop.", &delivery_opts)
+                        .await;
+                    continue;
+                }
+
                 // /purge — reset conversation + clear persistent memory.
                 if msg.content == "/purge" {
                     state.reset_for_new_session();
@@ -793,6 +807,9 @@ pub(crate) fn run_telegram(
                 });
             };
 
+            // Reset the cancel flag before each turn.
+            turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+
             let chat_runtime = ChatRuntimeService {
                 engine: engine.as_ref(),
                 refiner: refiner.as_ref(),
@@ -810,6 +827,7 @@ pub(crate) fn run_telegram(
                 max_recall_entries: memory_config.max_recall_entries,
                 max_recall_tokens: memory_config.max_recall_tokens,
                 tool_observer: Some(&tool_result_observer),
+                cancel: Some(&turn_cancel),
             };
 
             // Spawn typing indicator as an independent task so it keeps running

@@ -71,6 +71,10 @@ pub(crate) type ToolResultObserver<'a> = &'a dyn Fn(&ToolCall, &str);
 ///
 /// `tool_observer` is called after each tool execution with the call and
 /// its result string. Pass `None` to skip observation.
+///
+/// `cancel` is checked between tool rounds and between individual tool
+/// executions. When set, processing stops and returns whatever text has
+/// been collected so far.
 pub(crate) async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
@@ -78,12 +82,26 @@ pub(crate) async fn collect_engine_response(
     context: &EngineContext,
     tool_executor: Option<&dyn ToolExecutor>,
     tool_observer: Option<ToolResultObserver<'_>>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<EngineResponse> {
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
 
+    let is_cancelled = || {
+        cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))
+    };
+
     for round in 0..MAX_TOOL_ROUNDS {
+        if is_cancelled() {
+            debug!("Turn cancelled before round {}", round);
+            return Ok(EngineResponse {
+                text: String::new(),
+                input_tokens_delta: total_input_delta,
+                output_tokens_delta: total_output_delta,
+            });
+        }
+
         let (response_text, tool_calls, input_delta, output_delta) =
             run_single_engine_turn(engine, &messages, tools, context).await?;
 
@@ -112,6 +130,14 @@ pub(crate) async fn collect_engine_response(
 
         // Execute each tool and append results (truncated to cap context growth).
         for tc in &tool_calls {
+            if is_cancelled() {
+                debug!("Turn cancelled before executing tool {}", tc.name);
+                return Ok(EngineResponse {
+                    text: String::new(),
+                    input_tokens_delta: total_input_delta,
+                    output_tokens_delta: total_output_delta,
+                });
+            }
             let result = match executor.execute(tc) {
                 Ok(output) => output,
                 Err(e) => format!("Error: {}", e),

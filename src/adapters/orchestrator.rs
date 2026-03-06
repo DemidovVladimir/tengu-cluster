@@ -433,6 +433,7 @@ async fn execute_agent_task(
         &context,
         Some(&sanitized),
         None,
+        None,
     )
     .await?;
 
