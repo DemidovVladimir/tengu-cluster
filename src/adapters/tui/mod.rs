@@ -28,8 +28,9 @@ use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::build_workspace_tools;
-use crate::application::workspace_tools_catalog::build_memory_tools;
+use crate::application::workspace_tools_catalog::{
+    build_memory_tools, build_workspace_tools, filter_tools_by_allowlist,
+};
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::skill::SkillStatus;
@@ -479,18 +480,27 @@ pub fn run_tui(
 
         // Build base tool list from current env vars.
         // Extracted so `/reload` can recompute when env vars change at runtime.
-        fn compute_base_tools(uses_tools: bool, has_memory: bool) -> Vec<ToolDef> {
+        fn compute_base_tools(
+            uses_tools: bool,
+            has_memory: bool,
+            allowed_tools: Option<&[String]>,
+        ) -> Vec<ToolDef> {
             if !uses_tools {
                 return vec![];
             }
-            let mut all_tools = build_workspace_tools();
+            let mut all_tools =
+                filter_tools_by_allowlist(build_workspace_tools(), allowed_tools);
             if has_memory {
                 all_tools.extend(build_memory_tools());
             }
             all_tools
         }
 
-        let mut base_tools = compute_base_tools(uses_tools, has_memory);
+        let mut base_tools = compute_base_tools(
+            uses_tools,
+            has_memory,
+            engine_agent_config.allowed_tools.as_deref(),
+        );
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> =
@@ -583,7 +593,11 @@ pub fn run_tui(
                         let mut lines = Vec::new();
 
                         // Re-read env vars and rebuild base tool set.
-                        let new_base = compute_base_tools(uses_tools, has_memory);
+                        let new_base = compute_base_tools(
+                            uses_tools,
+                            has_memory,
+                            engine_agent_config.allowed_tools.as_deref(),
+                        );
                         let env_changed = new_base.len() != base_tools.len();
                         base_tools = new_base;
                         if env_changed {

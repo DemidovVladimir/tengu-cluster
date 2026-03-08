@@ -184,7 +184,7 @@ mod tests {
         };
 
         let task = svc
-            .create_task("t-1".into(), "test".into(), AgentRole::QA)
+            .create_task("t-1".into(), "test".into(), "qa".parse::<AgentRole>().unwrap())
             .unwrap();
         assert_eq!(task.status, TaskStatus::Pending);
 
@@ -204,7 +204,7 @@ mod tests {
             max_retries: 2,
         };
 
-        svc.create_task("t-2".into(), "test".into(), AgentRole::BackendEngineer)
+        svc.create_task("t-2".into(), "test".into(), "backend_engineer".parse::<AgentRole>().unwrap())
             .unwrap();
         svc.assign_task("t-2", "agent-b").await.unwrap();
         svc.complete_task(

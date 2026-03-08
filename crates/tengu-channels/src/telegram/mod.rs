@@ -170,12 +170,28 @@ impl Pipe for TelegramPipe {
         let turn_cancel = self.turn_cancel.clone();
 
         tokio::spawn(async move {
+            // Media-group accumulator: Telegram sends multi-file uploads as
+            // separate Message objects sharing the same `media_group_id`.
+            // We buffer them for a short window and merge into one InboundMessage.
+            type MediaGroupBuffer = Arc<Mutex<HashMap<String, MediaGroupState>>>;
+
+            struct MediaGroupState {
+                text: String,
+                media: Vec<MediaPayload>,
+                chat_id: String,
+                sender_id: String,
+            }
+
+            let media_groups: MediaGroupBuffer = Arc::new(Mutex::new(HashMap::new()));
+
             // Branch 1: handle normal messages.
             let cancel_for_handler = turn_cancel.clone();
+            let groups_ref = Arc::clone(&media_groups);
             let msg_handler = Update::filter_message().endpoint(
                 move |msg: Message, bot: Bot| {
                     let tx = inbound_tx.clone();
                     let cancel = cancel_for_handler.clone();
+                    let groups = Arc::clone(&groups_ref);
                     async move {
                         // Text comes from text() for plain messages, caption() for media messages.
                         let text = msg
@@ -244,6 +260,66 @@ impl Pipe for TelegramPipe {
                             .as_ref()
                             .map(|u| u.id.0.to_string())
                             .unwrap_or_else(|| chat_id.clone());
+
+                        // If this message belongs to a media group, buffer it
+                        // and wait for the rest of the group.
+                        if let Some(group_id) = msg.media_group_id() {
+                            let group_id = group_id.to_string();
+                            let is_first = {
+                                let mut map = groups.lock().await;
+                                let entry = map.entry(group_id.clone()).or_insert_with(|| {
+                                    MediaGroupState {
+                                        text: String::new(),
+                                        media: Vec::new(),
+                                        chat_id: chat_id.clone(),
+                                        sender_id: sender_id.clone(),
+                                    }
+                                });
+                                if !text.is_empty() && entry.text.is_empty() {
+                                    entry.text = text;
+                                }
+                                entry.media.extend(media_payloads);
+                                entry.media.len() == 1 // first file in group
+                            };
+
+                            // Only the first message in the group spawns the flush task.
+                            if is_first {
+                                let flush_tx = tx.clone();
+                                let flush_groups = Arc::clone(&groups);
+                                let flush_group_id = group_id;
+                                tokio::spawn(async move {
+                                    // Wait for remaining group members to arrive.
+                                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                    let state = flush_groups.lock().await.remove(&flush_group_id);
+                                    if let Some(state) = state {
+                                        debug!(
+                                            group_id = %flush_group_id,
+                                            attachments = state.media.len(),
+                                            "Flushing media group"
+                                        );
+                                        let inbound = InboundMessage {
+                                            sender: Recipient {
+                                                pipe_id: "telegram".to_string(),
+                                                peer_id: state.sender_id,
+                                                account_id: None,
+                                                thread_id: Some(state.chat_id),
+                                            },
+                                            content: state.text,
+                                            timestamp: chrono::Utc::now(),
+                                            media: if state.media.is_empty() {
+                                                None
+                                            } else {
+                                                Some(state.media)
+                                            },
+                                        };
+                                        if flush_tx.send(inbound).await.is_err() {
+                                            error!("Failed to forward media group to inbound channel");
+                                        }
+                                    }
+                                });
+                            }
+                            return Ok(());
+                        }
 
                         debug!(
                             chat_id = %chat_id,

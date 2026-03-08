@@ -9,6 +9,7 @@ pub(crate) mod memory_tool_executor;
 #[cfg(feature = "qdrant")]
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod orchestrator;
+pub(crate) mod scaffold;
 pub(crate) mod secret_store;
 pub(crate) mod shell_executor;
 pub(crate) mod skill_source;

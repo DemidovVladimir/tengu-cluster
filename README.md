@@ -80,6 +80,9 @@ cargo run -- secret remove K  # Remove a secret
 | `/reload` | Re-read env vars + re-scan skills |
 | `/skills` | List discovered skills |
 | `/enable N` / `/disable N` | Enable/disable a skill |
+| `/team <goal>` | Plan & execute goal across multiple agents (Telegram) |
+| `/project <name>` | Create new project subfolder in workspace (Telegram) |
+| `/agents` | List available agents and roles (Telegram) |
 
 ## Built-In Workspace Tools
 
@@ -97,7 +100,7 @@ Tools marked "Yes" for approval require user confirmation before execution — v
 
 ## Multi-Agent Fleet
 
-Run specialized agents as a team:
+Run specialized agents as a coordinated team. Roles are fully dynamic — any string works:
 
 ```toml
 [orchestrator]
@@ -107,21 +110,37 @@ enabled = true
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "qa"
-skills = ["search", "test_runner"]
+allowed_tools = ["read_file", "list_directory", "run_command"]
+
+[agents.qa.identity]
+name = "QA Agent"
+instructions = "You review code, run tests, and verify correctness."
 
 [agents.backend]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "backend_engineer"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+
+[agents.backend.identity]
+name = "Backend Engineer"
+instructions = "You write server code, design APIs, and manage databases."
 ```
 
 ```bash
 cargo run -- orchestrate
+
+# Or use a sandbox config for domain-specific teams:
+cargo run -- orchestrate --sandbox webstudio
+cargo run -- telegram --sandbox webstudio
+cargo run -- telegram --sandbox desci
 ```
 
-Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure).
+Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `allowed_tools` to restrict which workspace tools each agent can access.
 
-See the [Fleet Orchestration Guide](docs/FLEET.md) for the full setup.
+In Telegram, use `/team <goal>` to decompose a goal into tasks with dependency tracking. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+
+See the [Fleet Orchestration Guide](docs/FLEET.md), [Sandboxes Guide](docs/SANDBOXES.md) for full setup.
 
 ## Custom Skills
 
@@ -217,6 +236,7 @@ max_tokens_per_flow = 100_000
 | [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
 | [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
 | [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, heartbeat, events |
+| [Sandboxes](docs/SANDBOXES.md) | Domain-specific multi-agent teams, per-agent tool restrictions |
 | [Architecture](ARCHITECTURE.md) | Hexagonal architecture rules and project structure |
 
 ## Feature Flags

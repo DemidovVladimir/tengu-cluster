@@ -96,29 +96,29 @@ mod tests {
     #[test]
     fn register_and_find_idle_agent() {
         let mut fleet = FleetRuntimeService::new();
-        fleet.register_agent("a-1".into(), AgentRole::QA, "ollama".into(), String::new(), vec![]);
-        fleet.register_agent("a-2".into(), AgentRole::BackendEngineer, "anthropic".into(), String::new(), vec![]);
+        fleet.register_agent("a-1".into(), "qa".parse::<AgentRole>().unwrap(), "ollama".into(), String::new(), vec![]);
+        fleet.register_agent("a-2".into(), "backend_engineer".parse::<AgentRole>().unwrap(), "anthropic".into(), String::new(), vec![]);
 
-        let found = fleet.find_idle_agent_for_role(AgentRole::QA);
+        let found = fleet.find_idle_agent_for_role("qa".parse::<AgentRole>().unwrap());
         assert_eq!(found.unwrap().agent_id, "a-1");
     }
 
     #[test]
     fn busy_agent_not_found_as_idle() {
         let mut fleet = FleetRuntimeService::new();
-        fleet.register_agent("a-1".into(), AgentRole::QA, "ollama".into(), String::new(), vec![]);
+        fleet.register_agent("a-1".into(), "qa".parse::<AgentRole>().unwrap(), "ollama".into(), String::new(), vec![]);
         fleet.mark_busy("a-1", "t-1");
-        assert!(fleet.find_idle_agent_for_role(AgentRole::QA).is_none());
+        assert!(fleet.find_idle_agent_for_role("qa".parse::<AgentRole>().unwrap()).is_none());
     }
 
     #[test]
     fn mark_idle_resets_agent() {
         let mut fleet = FleetRuntimeService::new();
-        fleet.register_agent("a-1".into(), AgentRole::QA, "ollama".into(), String::new(), vec![]);
+        fleet.register_agent("a-1".into(), "qa".parse::<AgentRole>().unwrap(), "ollama".into(), String::new(), vec![]);
         fleet.mark_busy("a-1", "t-1");
         fleet.mark_idle("a-1");
 
-        let agent = fleet.find_idle_agent_for_role(AgentRole::QA);
+        let agent = fleet.find_idle_agent_for_role("qa".parse::<AgentRole>().unwrap());
         assert!(agent.is_some());
         assert!(agent.unwrap().current_task_id.is_none());
     }
@@ -126,8 +126,8 @@ mod tests {
     #[test]
     fn agents_list_reflects_registrations() {
         let mut fleet = FleetRuntimeService::new();
-        fleet.register_agent("a-1".into(), AgentRole::QA, "ollama".into(), String::new(), vec![]);
-        fleet.register_agent("a-2".into(), AgentRole::IntegrationMaster, "openai".into(), String::new(), vec![]);
+        fleet.register_agent("a-1".into(), "qa".parse::<AgentRole>().unwrap(), "ollama".into(), String::new(), vec![]);
+        fleet.register_agent("a-2".into(), "integration_master".parse::<AgentRole>().unwrap(), "openai".into(), String::new(), vec![]);
         assert_eq!(fleet.agents().len(), 2);
     }
 }

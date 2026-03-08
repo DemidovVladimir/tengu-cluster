@@ -11,5 +11,6 @@ pub(crate) mod prompt_budget;
 pub(crate) mod skill_catalog;
 pub(crate) mod skill_registry;
 pub(crate) mod task_orchestrator;
+pub(crate) mod task_planner;
 pub(crate) mod tool_use_service;
 pub(crate) mod workspace_tools_catalog;

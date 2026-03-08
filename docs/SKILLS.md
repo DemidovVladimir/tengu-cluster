@@ -270,15 +270,24 @@ These tools operate strictly within the workspace boundary.
 
 ## Skill Discovery
 
-At startup, Tengu:
+At startup (and on hot-reload), Tengu scans three locations in priority order:
 
-1. Scans `skills/` directory for `*.md` files
-2. Tries frontmatter parsing first; falls back to classic format
-3. Validates: name format, required sections, parameter types
-4. Filters by agent's `skills` allowlist (if set)
-5. Classic skills produce a `ToolDef` + `SkillDefinition` for execution
-6. API skills produce a `ToolDef` + `SkillDefinition` + context fragment for the system prompt
-7. Names that conflict with built-in tools (`read_file`, `list_directory`, `write_file`) are rejected
+| Priority | Path | Use Case |
+|----------|------|----------|
+| 1 | `{workspace}/.tengu/skills/` | Agent-specific overrides |
+| 2 | `{workspace}/skills/` | Workspace-local skills |
+| 3 | `{cwd}/skills/` | Global/repo-wide skills (shared across sandboxes) |
+
+Higher-priority paths win on name collisions (dedup by skill name). The CWD path allows sandboxes with external workspaces (e.g., `~/desci-workspace`) to use skills from the tengu-cluster repo (`skills/aura-orchestrator/`, `skills/beach-science/`).
+
+For each discovered skill file, Tengu:
+
+1. Tries frontmatter parsing first; falls back to classic format
+2. Validates: name format, required sections, parameter types
+3. Filters by agent's `skills` allowlist (if set)
+4. Classic skills produce a `ToolDef` + `SkillDefinition` for execution
+5. API skills produce a `ToolDef` + `SkillDefinition` + context fragment for the system prompt
+6. Names that conflict with built-in tools (`read_file`, `list_directory`, `write_file`) are rejected
 
 ## Examples
 

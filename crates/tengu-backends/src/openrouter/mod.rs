@@ -143,7 +143,11 @@ impl OpenRouterEngine {
             max_output_tokens,
             referer: std::env::var("OPENROUTER_REFERER").ok(),
             title: std::env::var("OPENROUTER_TITLE").ok(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
         }
     }
 

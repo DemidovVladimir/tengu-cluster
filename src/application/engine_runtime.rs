@@ -19,6 +19,10 @@ const MAX_TOOL_ROUNDS: usize = 15;
 /// Tool results exceeding this limit are truncated with a suffix note.
 const MAX_TOOL_RESULT_CHARS: usize = 4_000;
 
+/// Maximum seconds to wait for a single stream event before treating the stream as dead.
+/// If no event arrives within this window, the engine turn is aborted with an error.
+const STREAM_EVENT_TIMEOUT_SECS: u64 = 120;
+
 /// Result of a single engine call including response text and token usage delta.
 pub(crate) struct EngineResponse {
     pub text: String,
@@ -103,7 +107,7 @@ pub(crate) async fn collect_engine_response(
         }
 
         let (response_text, tool_calls, input_delta, output_delta) =
-            run_single_engine_turn(engine, &messages, tools, context).await?;
+            run_single_engine_turn(engine, &messages, tools, context, cancel).await?;
 
         total_input_delta += input_delta;
         total_output_delta += output_delta;
@@ -157,7 +161,7 @@ pub(crate) async fn collect_engine_response(
 
     // If we exhaust all rounds, return whatever text we have from the last round.
     let (response_text, _, input_delta, output_delta) =
-        run_single_engine_turn(engine, &messages, &[], context).await?;
+        run_single_engine_turn(engine, &messages, &[], context, cancel).await?;
     total_input_delta += input_delta;
     total_output_delta += output_delta;
 
@@ -174,6 +178,7 @@ async fn run_single_engine_turn(
     messages: &[Message],
     tools: &[ToolDef],
     context: &EngineContext,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(String, Vec<ToolCall>, u32, u32)> {
     let mut stream = engine.run(messages, tools, context).await?;
 
@@ -185,7 +190,30 @@ async fn run_single_engine_turn(
     let mut pending_tool_name: Option<String> = None;
     let mut pending_tool_args = String::new();
 
-    while let Some(event) = stream.next().await {
+    let is_cancelled = || {
+        cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))
+    };
+
+    loop {
+        if is_cancelled() {
+            debug!("Stream cancelled by user");
+            break;
+        }
+        let event = match tokio::time::timeout(
+            std::time::Duration::from_secs(STREAM_EVENT_TIMEOUT_SECS),
+            stream.next(),
+        )
+        .await
+        {
+            Ok(Some(event)) => event,
+            Ok(None) => break,
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "Engine stream timed out — no data for {}s",
+                    STREAM_EVENT_TIMEOUT_SECS
+                ));
+            }
+        };
         match event {
             StreamEvent::TextDelta { text } => {
                 response_text.push_str(&text);

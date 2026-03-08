@@ -105,7 +105,7 @@ mod tests {
         Task::new(
             "t-1".to_string(),
             "test task".to_string(),
-            AgentRole::QA,
+            "qa".parse::<AgentRole>().unwrap(),
             2,
         )
     }
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn retry_exhaustion() {
-        let mut task = Task::new("t-2".to_string(), "test".to_string(), AgentRole::QA, 1);
+        let mut task = Task::new("t-2".to_string(), "test".to_string(), "qa".parse::<AgentRole>().unwrap(), 1);
         task.transition_to(TaskStatus::InProgress).unwrap();
         task.transition_to(TaskStatus::Failed).unwrap();
         // First retry allowed

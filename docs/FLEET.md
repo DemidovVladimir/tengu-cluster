@@ -14,9 +14,8 @@ Run multiple AI agents as a coordinated fleet. Each agent has a role, tasks are 
               ┌──────────────────┼──────────────────┐
               │                  │                   │
      ┌────────▼───────┐ ┌───────▼────────┐ ┌───────▼────────┐
-     │   QA Agent     │ │ Backend Agent  │ │ Integrator     │
-     │ (testing,      │ │ (code,         │ │ (APIs,         │
-     │  validation)   │ │  architecture) │ │  data flow)    │
+     │   Agent A      │ │   Agent B      │ │   Agent C      │
+     │ (role: qa)     │ │ (role: backend)│ │ (role: devops) │
      └────────────────┘ └────────────────┘ └────────────────┘
 ```
 
@@ -31,6 +30,8 @@ The orchestrator:
 
 ### 1. Configure Agents with Roles
 
+Roles are fully dynamic — any non-empty string works. Define agent behavior through `identity.instructions` and restrict tools with `allowed_tools`.
+
 ```toml
 [orchestrator]
 enabled = true
@@ -41,54 +42,46 @@ max_retries = 3
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "qa"
-skills = ["search", "test_runner", "lint"]
+workspace = "~/my-project"
+allowed_tools = ["read_file", "list_directory", "run_command"]
 
 [agents.qa.identity]
 name = "QA Agent"
+instructions = "You review code, run tests, and verify correctness."
 
 [agents.qa.flow]
 scope = "per-sender"
 reset_mode = "idle"
 
 [agents.qa.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 
 [agents.backend]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "backend_engineer"
-skills = ["read_file", "write_file", "search"]
+workspace = "~/my-project"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 
 [agents.backend.identity]
 name = "Backend Engineer"
+instructions = "You write server code, design APIs, and manage databases."
 
 [agents.backend.flow]
 scope = "per-sender"
 reset_mode = "idle"
 
 [agents.backend.limits]
-max_tokens_per_flow = 500_000
-
-[agents.integrator]
-engine = "openrouter"
-model = "openai/gpt-4o"
-role = "integration_master"
-
-[agents.integrator.identity]
-name = "Integration Master"
-
-[agents.integrator.flow]
-scope = "per-sender"
-reset_mode = "idle"
-
-[agents.integrator.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 ```
 
 ### 2. Start the Orchestrator
 
 ```bash
 cargo run -- orchestrate
+
+# Or with a sandbox config:
+cargo run -- orchestrate --sandbox webstudio
 ```
 
 The orchestrator:
@@ -108,55 +101,46 @@ Confirms all configured agents can reach their backend endpoints.
 
 ## Agent Roles
 
-Each agent has a role that determines its system prompt focus and task affinity.
+Roles are dynamic strings — any non-empty value works. The orchestrator routes tasks by matching the role in user input to agents with that role. Define what each role does through `identity.instructions`.
 
-| Role | Config Value | System Prompt Focus | Best For |
-|------|-------------|-------------------|----------|
-| QA | `qa` | Testing, validation, edge cases, correctness verification | Running tests, reviewing for bugs, checking edge cases |
-| Backend Engineer | `backend_engineer` | Implementation, architecture, code quality, performance | Writing code, fixing bugs, refactoring, optimization |
-| Integration Master | `integration_master` | Connecting systems, APIs, data flow, end-to-end coherence | API integration, cross-service issues, data pipelines |
+### Tool Restrictions
 
-### Role System Prompts
+Use `allowed_tools` to restrict which workspace tools an agent can access:
 
-Each role injects a focused fragment into the agent's system prompt:
+| Tool | Risk Level | Description |
+|------|-----------|-------------|
+| `read_file` | Low | Read file contents |
+| `list_directory` | Low | List files and directories |
+| `write_file` | Medium | Write/create files (requires approval) |
+| `run_command` | High | Execute shell commands (requires approval) |
 
-- **QA**: Emphasizes testing methodology, edge case analysis, correctness verification
-- **Backend Engineer**: Emphasizes clean architecture, code quality, performance optimization
-- **Integration Master**: Emphasizes system connectivity, data flow coherence, API design
+```toml
+# Read-only advisor
+allowed_tools = ["read_file", "list_directory"]
+
+# Full access (or omit allowed_tools entirely)
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+```
 
 ### Mixing Models Per Role
 
 Use different models for different roles — all on one OpenRouter bill:
 
 ```toml
-[agents.qa]
+[agents.reviewer]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"    # Claude for careful analysis
-role = "qa"
+role = "code_reviewer"
 
-[agents.backend]
+[agents.coder]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"    # Claude for code generation
-role = "backend_engineer"
+role = "developer"
 
-[agents.integrator]
+[agents.planner]
 engine = "openrouter"
-model = "openai/gpt-4o"               # GPT for integration reasoning
-role = "integration_master"
-```
-
-Or use direct providers:
-
-```toml
-[agents.qa]
-engine = "anthropic"
-model = "claude-sonnet-4-20250514"
-role = "qa"
-
-[agents.backend]
-engine = "ollama"
-model = "codellama:34b"
-role = "backend_engineer"
+model = "openai/gpt-4o"               # GPT for planning
+role = "project_manager"
 ```
 
 ## Task Lifecycle
@@ -298,28 +282,71 @@ tokio::spawn(async move {
 });
 ```
 
-## Per-Agent Skill Filtering
+## Per-Agent Restrictions
 
-Restrict tool access per agent role. This enforces separation of concerns:
+Enforce separation of concerns with two independent allowlists:
+
+- **`allowed_tools`** — restricts workspace tools (read_file, write_file, etc.)
+- **`skills`** — restricts frontmatter skills (from workspace `skills/`, or global `skills/` in CWD)
 
 ```toml
-# QA agent: only testing and search tools
-[agents.qa]
-role = "qa"
-skills = ["search", "test_runner", "lint"]
+# Read-only advisor — no write or execute
+[agents.reviewer]
+role = "code_reviewer"
+allowed_tools = ["read_file", "list_directory"]
+skills = ["search", "lint"]
 
-# Backend agent: code manipulation tools
-[agents.backend]
-role = "backend_engineer"
-skills = ["read_file", "write_file", "search", "build"]
-
-# Integration agent: all tools (no restriction)
-[agents.integrator]
-role = "integration_master"
-# No skills field = all skills available
+# Full-access developer
+[agents.developer]
+role = "developer"
+# No allowed_tools = all workspace tools available
+# No skills = all skills available
 ```
 
-See [Skills Guide](SKILLS.md) for how to define custom skills.
+See [Skills Guide](SKILLS.md) for custom skills and [Sandboxes Guide](SANDBOXES.md) for domain-specific team setups.
+
+## Telegram Team Orchestration (`/team`)
+
+In Telegram mode, use `/team <goal>` to decompose a goal into tasks with dependency tracking and parallel execution:
+
+```
+/team Build a REST API with auth, write tests, and deploy docs
+```
+
+The orchestrator:
+1. Analyzes the goal and available agents
+2. Creates tasks with unique IDs, assigns each to an agent role
+3. Resolves dependencies — independent tasks are grouped into parallel batches
+4. Executes batches: all tasks in a batch run (dependent tasks wait for prerequisites)
+5. Agents communicate via outcome files in `.tengu-tasks/` — each agent writes its results, dependent agents read them
+
+Example plan output:
+```
+Plan (3 tasks, 2 batches):
+Batch 1 [parallel]:
+  - [backend_engineer] Implement REST API with authentication
+  - [qa] Write integration tests for auth endpoints
+Batch 2:
+  - [tech_writer] Document the API (after: implement_api, write_tests)
+```
+
+Use `/stop` to cancel mid-execution. Agents can also send multiple files (PDF + images) with the `/team` message — they're saved to `.tengu-attachments/` and included in the goal context.
+
+## Sandboxes
+
+Sandboxes let you define domain-specific multi-agent teams in isolated config files.
+
+```bash
+# Create a sandbox
+mkdir -p sandboxes/webstudio
+# Edit sandboxes/webstudio/config.toml with your agents...
+
+# Run with sandbox
+cargo run -- orchestrate --sandbox webstudio
+cargo run -- telegram --sandbox webstudio
+```
+
+See [Sandboxes Guide](SANDBOXES.md) for full details and examples.
 
 ## Complete Example Config
 
@@ -329,65 +356,50 @@ runtime_profile = "auto"
 [hub]
 bind = "127.0.0.1"
 port = 7070
-auth_mode = "token"
 
 [refiner]
-mode = "rules"
+mode = "off"
 
 [orchestrator]
 enabled = true
 heartbeat_interval_s = 30
-max_retries = 3
-
-# --- Fleet Agents ---
+max_retries = 2
 
 [agents.qa]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "qa"
-skills = ["search", "test_runner"]
+workspace = "~/my-project"
+allowed_tools = ["read_file", "list_directory", "run_command"]
 
 [agents.qa.identity]
 name = "QA Agent"
+instructions = "You review code, run tests, and verify correctness."
 
 [agents.qa.flow]
 scope = "per-sender"
 reset_mode = "idle"
-idle_timeout_minutes = 30
 
 [agents.qa.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 
 [agents.backend]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "backend_engineer"
-skills = ["read_file", "write_file", "search"]
+workspace = "~/my-project"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 
 [agents.backend.identity]
 name = "Backend Engineer"
+instructions = "You write server code, design APIs, and manage databases."
 
 [agents.backend.flow]
 scope = "per-sender"
 reset_mode = "idle"
 
 [agents.backend.limits]
-max_tokens_per_flow = 500_000
-
-[agents.integrator]
-engine = "openrouter"
-model = "openai/gpt-4o"
-role = "integration_master"
-
-[agents.integrator.identity]
-name = "Integration Master"
-
-[agents.integrator.flow]
-scope = "per-sender"
-reset_mode = "idle"
-
-[agents.integrator.limits]
-max_tokens_per_flow = 500_000
+max_tokens_per_flow = 100_000
 ```
 
 ```bash

@@ -25,7 +25,11 @@ pub(crate) struct OpenRouterEmbeddingAdapter {
 impl OpenRouterEmbeddingAdapter {
     pub(crate) fn new(api_key: String, model: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             api_key,
             model,
         }

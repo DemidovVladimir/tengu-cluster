@@ -38,10 +38,11 @@ pub(crate) fn build_system_prompt(
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
-    // 2. Role fragment — if agent has an orchestration role.
+    // 2. Role label — if agent has a role, note it in the prompt.
+    // Detailed role instructions come from identity.instructions in config.
     if let Some(ref role_str) = agent_config.role {
         if let Ok(role) = role_str.parse::<AgentRole>() {
-            let fragment = role.system_prompt_fragment().to_string();
+            let fragment = format!("Your role: {}.", role.label());
             total_tokens += estimate_tokens_approx_min1(&fragment);
             parts.push(fragment);
         }

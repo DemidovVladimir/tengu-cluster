@@ -23,10 +23,15 @@ pub(crate) struct MemoryServiceHandle {
 
 /// Adapter implementing ToolExecutionPort by routing memory tool calls
 /// via `block_in_place` (multi-thread runtime) or a fallback runtime (TUI).
+///
+/// The fallback runtime is only created when no tokio runtime is active at
+/// construction time (TUI case). When running inside an existing runtime
+/// (Telegram/Orchestrator), it is `None` — avoiding the "Cannot drop a
+/// runtime in a context where blocking is not allowed" panic.
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
     secret_registry: Arc<SecretRegistry>,
-    fallback_runtime: tokio::runtime::Runtime,
+    fallback_runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl MemoryToolExecutionAdapter {
@@ -34,9 +39,16 @@ impl MemoryToolExecutionAdapter {
         handle: Arc<MemoryServiceHandle>,
         secret_registry: Arc<SecretRegistry>,
     ) -> Result<Self> {
-        let fallback_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let fallback_runtime = if tokio::runtime::Handle::try_current().is_ok() {
+            // Already inside a runtime — use block_in_place at call time.
+            None
+        } else {
+            Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?,
+            )
+        };
         Ok(Self {
             handle,
             secret_registry,
@@ -51,7 +63,10 @@ impl MemoryToolExecutionAdapter {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             tokio::task::block_in_place(|| handle.block_on(future))
         } else {
-            self.fallback_runtime.block_on(future)
+            self.fallback_runtime
+                .as_ref()
+                .expect("no tokio runtime available")
+                .block_on(future)
         }
     }
 }

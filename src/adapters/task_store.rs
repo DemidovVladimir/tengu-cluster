@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn save_and_load_task() {
         let store = InMemoryTaskStore::new();
-        let task = Task::new("t-1".into(), "test".into(), AgentRole::QA, 2);
+        let task = Task::new("t-1".into(), "test".into(), "qa".parse::<AgentRole>().unwrap(), 2);
         store.save_task(&task).unwrap();
 
         let loaded = store.load_task("t-1").unwrap();
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn load_by_status_filters() {
         let store = InMemoryTaskStore::new();
-        let mut task = Task::new("t-1".into(), "test".into(), AgentRole::QA, 2);
+        let mut task = Task::new("t-1".into(), "test".into(), "qa".parse::<AgentRole>().unwrap(), 2);
         store.save_task(&task).unwrap();
 
         task.transition_to(TaskStatus::InProgress).unwrap();
@@ -101,13 +101,13 @@ mod tests {
     fn load_all_returns_everything() {
         let store = InMemoryTaskStore::new();
         store
-            .save_task(&Task::new("t-1".into(), "a".into(), AgentRole::QA, 1))
+            .save_task(&Task::new("t-1".into(), "a".into(), "qa".parse::<AgentRole>().unwrap(), 1))
             .unwrap();
         store
             .save_task(&Task::new(
                 "t-2".into(),
                 "b".into(),
-                AgentRole::BackendEngineer,
+                "backend_engineer".parse::<AgentRole>().unwrap(),
                 1,
             ))
             .unwrap();

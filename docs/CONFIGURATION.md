@@ -322,7 +322,7 @@ max_total_tokens = 16000
 
 For agents with large API skill docs, increase `max_skill_context_tokens` and `max_total_tokens` to ensure the full context reaches the model.
 
-### Role and Skills
+### Role, Tools, and Skills
 
 For fleet orchestration agents:
 
@@ -331,15 +331,19 @@ For fleet orchestration agents:
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "qa"
+allowed_tools = ["read_file", "list_directory", "run_command"]
 skills = ["search", "test_runner"]
 ```
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `role` | string? | none | `"qa"`, `"backend_engineer"`, `"integration_master"` |
+| `role` | string? | none | Any non-empty string (e.g., `"qa"`, `"frontend_engineer"`, `"warehouse_manager"`). Used for task routing in orchestrator. |
+| `allowed_tools` | string[]? | none | Allowlist of workspace tools. Omit to grant all tools. Options: `read_file`, `list_directory`, `write_file`, `run_command`. |
 | `skills` | string[]? | none | Allowlist of skill names. Omit for all skills. |
 
-See [Fleet Orchestration Guide](FLEET.md) for role details.
+Roles are fully dynamic — any non-empty string is valid. Define role-specific behavior through `identity.instructions`.
+
+See [Fleet Orchestration Guide](FLEET.md) and [Sandboxes Guide](SANDBOXES.md) for details.
 
 ---
 
@@ -459,9 +463,11 @@ allowed_users = ["123456789", "987654321"]
 
 **Message chunking:** Telegram has a 4096-character message limit. Long responses are automatically split at paragraph (`\n\n`) boundaries into chunks of at most 4000 characters.
 
-**Per-user conversations:** Each Telegram user gets their own `ChatLoopState` (keyed by sender user ID), following the agent's configured `flow.scope` setting.
+**Multi-agent routing:** All configured agents are loaded at startup. Route messages to specific agents with `@role: message` (e.g., `@backend_engineer: add rate limiting`). Unrouted messages go to the default agent or the last agent the user talked to. Use `/agents` to list available agents. When using sandboxes (`tengu telegram --sandbox webstudio`), all sandbox agents are available.
 
-**File attachments:** Documents and photos sent to the bot are downloaded and saved to `{workspace}/.tengu-attachments/`. File paths are prepended to the message content so the agent can reference them. Text for media messages comes from the caption field.
+**Per-user conversations:** Each Telegram user gets their own `ChatLoopState` per agent (keyed by sender + agent ID), following the agent's configured `flow.scope` setting.
+
+**File attachments:** Documents and photos sent to the bot are downloaded and saved to `{workspace}/.tengu-attachments/`. File paths are prepended to the message content so the agent can reference them. Text for media messages comes from the caption field. Multiple files sent as a media group (e.g., PDF + image together) are automatically buffered and merged into a single message.
 
 **Typing indicator:** A "typing..." chat action is sent every 4 seconds during processing, running as an independent task so it stays alive during long synchronous tool execution.
 
@@ -469,7 +475,14 @@ allowed_users = ["123456789", "987654321"]
 
 **Token budget warnings:** When a conversation reaches 80% of `max_tokens_per_flow`, a warning message is sent showing current usage and remaining budget. At 100%, further requests are blocked until `/reset`.
 
-**Slash commands in Telegram:** The bot supports the same slash commands as TUI mode (`/help`, `/cost`, `/reset`, `/purge`, `/reload`, `/skills`, etc.) plus Telegram-specific behavior for `/purge` (also clears persistent memory) and `/reload` (hot-reloads skills).
+**Slash commands in Telegram:** The bot supports the same slash commands as TUI mode (`/help`, `/cost`, `/reset`, `/purge`, `/reload`, `/skills`, etc.) plus these Telegram-specific commands:
+
+| Command | Description |
+|---------|-------------|
+| `/team <goal>` | Decompose goal into tasks with dependencies, execute in parallel batches |
+| `/project <name>` | Create a new project subfolder, switch all agents to it |
+| `/agents` | List available agents and their roles |
+| `/stop` | Cancel the current operation (works during `/team` orchestration) |
 
 ---
 
@@ -596,7 +609,7 @@ The config is validated at startup. Invalid configs produce clear error messages
 - `limits.warn_at_cost` must be > 0.0 and <= `max_cost_per_flow` if set
 - `limits.context_window_override` must be > 0 if set
 - `limits.max_output_tokens_per_turn` must be > 0 and <= `context_window_override` if set
-- `role` must be one of: `qa`, `backend_engineer`, `integration_master` if set
+- `role` must be a non-empty string if set (any role name is valid)
 - `lens.eco_max_tokens` must be > 0
 - `lens.standard_threshold` must be in [0.0, 1.0]
 - `lens.precise_budget` must be in [0.0, 1.0]

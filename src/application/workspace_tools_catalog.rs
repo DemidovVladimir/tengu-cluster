@@ -94,6 +94,23 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
     ]
 }
 
+/// Filter workspace tools by an allowlist.
+///
+/// If `allowed` is `None`, all tools pass through. If `Some(names)`, only
+/// tools whose name appears in the list are kept.
+pub(crate) fn filter_tools_by_allowlist(
+    tools: Vec<ToolDef>,
+    allowed: Option<&[String]>,
+) -> Vec<ToolDef> {
+    match allowed {
+        None => tools,
+        Some(names) => tools
+            .into_iter()
+            .filter(|t| names.iter().any(|n| n == &t.name))
+            .collect(),
+    }
+}
+
 /// Build memory tool definitions for the vector memory subsystem.
 pub(crate) fn build_memory_tools() -> Vec<ToolDef> {
     vec![tool_def(

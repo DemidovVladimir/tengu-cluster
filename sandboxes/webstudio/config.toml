@@ -1,0 +1,174 @@
+# Tengu Cluster — Web Studio Sandbox
+# Multi-agent team for web development projects.
+# Run with: tengu orchestrate --sandbox webstudio
+# Or Telegram: tengu telegram --sandbox webstudio
+
+runtime_profile = "cloud"
+
+[hub]
+bind = "127.0.0.1"
+port = 7070
+
+[memory]
+enabled = true
+
+[refiner]
+mode = "off"
+
+[orchestrator]
+enabled = true
+heartbeat_interval_s = 30
+max_retries = 2
+
+# --- Scaffold ---
+# Auto-create workspace directory and seed files before agents start.
+# Files are never overwritten if they already exist.
+
+[scaffold]
+root = "~/webstudio-project"
+directories = ["src", "src/components", "src/pages", "src/api", "public", "public/assets", "docs", "config"]
+
+[[scaffold.files]]
+path = "README.md"
+content = """# Web Studio Project
+
+A multi-agent api workspace managed by Tengu.
+
+## Structure
+
+- `src/` — Source code (components, pages, API routes)
+- `public/` — Static assets
+- `docs/` — Documentation and design specs
+- `config/` — Configuration files
+"""
+
+[[scaffold.files]]
+path = "src/main.rs"
+content = """// Entry point
+fn main() {
+    println!("Web Studio API Project initialized");
+}
+"""
+[[scaffold.files]]
+path = "Cargo.toml"
+content = """[package]
+name = "webstudio-project"
+version = "0.1.0"
+description = "Multi-agent web development workspace"
+
+[dependencies]
+axum = "0.6"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+"""
+# --- Agents ---
+# Each agent has a role, restricted tools, and custom instructions.
+# All agents use OpenRouter (one API key, one bill).
+
+[agents.system_designer]
+engine = "openrouter"
+model = "openai/gpt-5.3-codex"
+role = "system_designer"
+default = true
+workspace = "~/webstudio-project"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+
+[agents.system_designer.identity]
+name = "System Designer"
+instructions = """You are a senior system designer.
+IMPORTANT: Always use the provided tools (read_file, list_directory, write_file, run_command) with paths relative to the workspace root. Start by calling list_directory(".") to see what exists. NEVER invent or guess file paths — always verify with list_directory first.
+Your responsibilities:
+- Design scalable system architectures
+- Define API contracts and data models
+- Ensure system security and compliance
+- Optimize performance and resource utilization
+Focus on the system design and architecture. Do not modify frontend or backend code."""
+
+[agents.system_designer.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.frontend.limits]
+max_tokens_per_flow = 100_000
+
+[agents.designer]
+engine = "openrouter"
+model = "z-ai/glm-5"
+role = "designer"
+workspace = "~/webstudio-project"
+allowed_tools = ["read_file", "list_directory", "write_file"]
+
+[agents.designer.identity]
+name = "Designer"
+instructions = """You are a UI/UX designer.
+IMPORTANT: Always use the provided tools (read_file, list_directory, write_file) with paths relative to the workspace root. Start by calling list_directory(".") to see what exists. NEVER invent or guess file paths — always verify with list_directory first.
+Your responsibilities:
+- Create design tokens (colors, spacing, typography scales)
+- Define component design specs in markdown
+- Review UI for consistency, spacing, and visual hierarchy
+- Suggest improvements to user flows and interactions
+- Write CSS custom properties and design system documentation
+You work with design files and docs. You do not run shell commands."""
+
+[agents.designer.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.designer.limits]
+max_tokens_per_flow = 80_000
+
+[agents.backend]
+engine = "openrouter"
+model = "z-ai/glm-5"
+role = "backend_engineer"
+workspace = "~/webstudio-project"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+
+[agents.backend.identity]
+name = "Backend Engineer"
+instructions = """You are a senior backend engineer.
+IMPORTANT: Always use the provided tools (read_file, list_directory, write_file, run_command) with paths relative to the workspace root. Start by calling list_directory(".") to see what exists. NEVER invent or guess file paths — always verify with list_directory first.
+Your responsibilities:
+- Design and implement REST/GraphQL APIs
+- Write database migrations and queries
+- Implement authentication, authorization, and security
+- Set up server infrastructure and deployment configs
+- Write integration tests
+Focus on server-side code. Do not modify frontend components or stylesheets."""
+
+[agents.backend.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.backend.limits]
+max_tokens_per_flow = 100_000
+
+[agents.tech_writer]
+engine = "openrouter"
+model = "z-ai/glm-5"
+role = "tech_writer"
+workspace = "~/webstudio-project"
+allowed_tools = ["read_file", "list_directory", "write_file"]
+
+[agents.tech_writer.identity]
+name = "Tech Writer"
+instructions = """You are a technical writer.
+IMPORTANT: Always use the provided tools (read_file, list_directory, write_file) with paths relative to the workspace root. Start by calling list_directory(".") to see what exists. NEVER invent or guess file paths — always verify with list_directory first.
+Your responsibilities:
+- Write technical documentation and API references
+- Create user guides and tutorials
+- Review and edit content for clarity and accuracy
+- Ensure consistency in terminology and style
+You can read project files and write technical content. You do not run commands."""
+
+[agents.tech_writer.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.tech_writer.limits]
+max_tokens_per_flow = 60_000

@@ -12,7 +12,7 @@ use tengu_core::{Tool, ToolContext};
 
 pub(crate) struct ToolBridgeAdapter {
     tools: HashMap<String, Box<dyn Tool>>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     ctx: ToolContext,
 }
 
@@ -21,9 +21,15 @@ impl ToolBridgeAdapter {
         tools: Vec<Box<dyn Tool>>,
         ctx: ToolContext,
     ) -> Result<Self> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let runtime = if tokio::runtime::Handle::try_current().is_ok() {
+            None
+        } else {
+            Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?,
+            )
+        };
         let map = tools
             .into_iter()
             .map(|t| (t.name().to_string(), t))
@@ -46,9 +52,16 @@ impl ToolExecutionPort for ToolBridgeAdapter {
             .tools
             .get(&call.name)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", call.name))?;
-        let output = self
-            .runtime
-            .block_on(tool.execute(call.arguments.clone(), &self.ctx))?;
+        let output = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| {
+                handle.block_on(tool.execute(call.arguments.clone(), &self.ctx))
+            })?
+        } else {
+            self.runtime
+                .as_ref()
+                .expect("no tokio runtime available")
+                .block_on(tool.execute(call.arguments.clone(), &self.ctx))?
+        };
         if output.is_error {
             bail!("{}", output.content);
         }

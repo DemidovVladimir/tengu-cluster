@@ -108,20 +108,28 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- Fleet Orchestration ---
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
 # Run with: tengu orchestrate
+# Use sandboxes for domain-specific teams: tengu orchestrate --sandbox webstudio
+# See docs/SANDBOXES.md for details.
 
 # [orchestrator]
 # enabled = true
 # heartbeat_interval_s = 30
 # max_retries = 3
 
+# Roles are dynamic — any non-empty string works.
+# Define role behavior in identity.instructions.
+# Use allowed_tools to restrict workspace tools per agent.
+
 # [agents.qa]
 # engine = "openrouter"
 # model = "anthropic/claude-sonnet-4"
 # role = "qa"
+# allowed_tools = ["read_file", "list_directory", "run_command"]
 # skills = ["search", "test_runner"]
 #
 # [agents.qa.identity]
 # name = "QA Agent"
+# instructions = "You review code quality, run tests, and report issues."
 #
 # [agents.qa.flow]
 # scope = "per-sender"
@@ -134,28 +142,15 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "anthropic/claude-sonnet-4"
 # role = "backend_engineer"
+# allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 #
 # [agents.backend.identity]
 # name = "Backend Engineer"
+# instructions = "You design APIs, write server code, and manage databases."
 #
 # [agents.backend.flow]
 # scope = "per-sender"
 # reset_mode = "idle"
 #
 # [agents.backend.limits]
-# max_tokens_per_flow = 100_000
-
-# [agents.integrator]
-# engine = "openrouter"
-# model = "openai/gpt-4o"
-# role = "integration_master"
-#
-# [agents.integrator.identity]
-# name = "Integration Master"
-#
-# [agents.integrator.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-#
-# [agents.integrator.limits]
 # max_tokens_per_flow = 100_000

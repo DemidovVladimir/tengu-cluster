@@ -14,12 +14,14 @@ use crate::adapters::workspace_tools::{self, WorkspaceToolExecutionAdapter};
 use crate::application::engine_runtime::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
-use crate::application::fleet_runtime::{FleetAgentStatus, FleetRuntimeService};
+use crate::application::fleet_runtime::{FleetAgent, FleetAgentStatus, FleetRuntimeService};
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort, ToolExecutionPort};
 use crate::application::skill_catalog;
 use crate::application::task_orchestrator::TaskOrchestratorService;
 use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::{build_memory_tools, build_workspace_tools};
+use crate::application::workspace_tools_catalog::{
+    build_memory_tools, build_workspace_tools, filter_tools_by_allowlist,
+};
 use crate::domain::agent_role::AgentRole;
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::task::TaskResult;
@@ -60,6 +62,23 @@ struct AgentRuntime {
     workspace: Option<std::path::PathBuf>,
 }
 
+/// A single step in a coordinated execution plan.
+struct PlanStep {
+    role: String,
+    task: String,
+}
+
+/// Result of a completed plan step, fed as context to subsequent steps.
+struct StepResult {
+    role: String,
+    task: String,
+    output: String,
+    success: bool,
+}
+
+/// Max chars of each previous step's output to include in context for the next step.
+const MAX_STEP_CONTEXT_CHARS: usize = 3000;
+
 /// Boot the orchestrator: register fleet agents, run interactive task dispatch.
 ///
 /// Builds per-agent engines, tool executors with shared memory, and an interactive
@@ -75,6 +94,9 @@ pub(crate) async fn boot_orchestrator(
         info!("Orchestrator disabled in config, skipping boot");
         return Ok(());
     }
+
+    // Apply workspace scaffold if configured.
+    crate::adapters::scaffold::maybe_apply_scaffold(config);
 
     // Build shared memory handle for all fleet agents.
     let memory_handle: Option<Arc<MemoryServiceHandle>> = if config.memory.enabled {
@@ -116,6 +138,8 @@ pub(crate) async fn boot_orchestrator(
     let task_store = InMemoryTaskStore::new();
     let mut fleet = FleetRuntimeService::new();
     let mut agent_runtimes: HashMap<String, AgentRuntime> = HashMap::new();
+    let mut agent_descriptions: HashMap<String, String> = HashMap::new();
+    let mut planner_agent_id: Option<String> = None;
 
     let shell: Arc<dyn crate::application::ports::ShellExecutionPort> =
         Arc::new(LocalShellExecutor);
@@ -153,7 +177,10 @@ pub(crate) async fn boot_orchestrator(
 
         let (system_prompt_str, tools, tool_executor) = if let Some(ref ws) = workspace {
             let skill_source = FileSystemSkillSource::new(ws.clone());
-            let mut all_tools = build_workspace_tools();
+            let mut all_tools = filter_tools_by_allowlist(
+                build_workspace_tools(),
+                agent_config.allowed_tools.as_deref(),
+            );
             if memory_handle.is_some() {
                 all_tools.extend(build_memory_tools());
             }
@@ -219,7 +246,7 @@ pub(crate) async fn boot_orchestrator(
         let tool_count = tools.len();
         fleet.register_agent(
             agent_id.clone(),
-            role,
+            role.clone(),
             agent_config.engine.clone(),
             system_prompt_str.clone(),
             tools.clone(),
@@ -244,6 +271,23 @@ pub(crate) async fn boot_orchestrator(
             memory = memory_handle.is_some(),
             "Registered fleet agent"
         );
+
+        // Collect role descriptions for the planner.
+        let identity_name = agent_config
+            .identity
+            .name
+            .as_deref()
+            .unwrap_or(agent_id.as_str());
+        let brief = agent_config
+            .identity
+            .instructions
+            .as_deref()
+            .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
+            .unwrap_or("AI assistant");
+        agent_descriptions.insert(role_str.clone(), format!("{} — {}", identity_name, brief));
+        if planner_agent_id.is_none() {
+            planner_agent_id = Some(agent_id.clone());
+        }
     }
 
     let agent_count = fleet.agents().len();
@@ -275,7 +319,8 @@ pub(crate) async fn boot_orchestrator(
     println!("  ─────────────────────────────────────");
     println!();
     println!("  Commands:");
-    println!("    <role>: <task>   — Submit task (e.g. \"qa: review auth code\")");
+    println!("    <role>: <task>   — Direct dispatch (e.g. \"backend_engineer: add caching\")");
+    println!("    <goal>           — Plan & execute across agents");
     println!("    /fleet           — Show agent status");
     println!("    /tasks           — Show task history");
     println!("    /quit            — Exit");
@@ -336,68 +381,202 @@ pub(crate) async fn boot_orchestrator(
             _ => {}
         }
 
-        // Parse "role: task description" format.
-        let (role, description) = match parse_task_input(&input) {
-            Some(parsed) => parsed,
-            None => {
-                println!("  Format: <role>: <task description>");
-                println!("  Roles: qa, backend_engineer, integration_master");
-                continue;
+        // Try "role: task" for direct dispatch, otherwise plan-and-execute.
+        if let Some((role, description)) = parse_task_input(&input) {
+            // ── Direct dispatch to a specific role ──
+            let agent_id = match fleet.find_idle_agent_for_role(role.clone()) {
+                Some(agent) => agent.agent_id.clone(),
+                None => {
+                    println!("  No idle agent available for role: {}", role.label());
+                    continue;
+                }
+            };
+
+            task_counter += 1;
+            let task_id = format!("task-{}", task_counter);
+            let task =
+                orchestrator.create_task(task_id.clone(), description.clone(), role.clone())?;
+            orchestrator.assign_task(&task.id.0, &agent_id).await?;
+            fleet.mark_busy(&agent_id, &task.id.0);
+
+            println!(
+                "  Task {} assigned to {} ({})",
+                task_id,
+                agent_id,
+                role.label()
+            );
+            println!("  Executing...");
+
+            let runtime = agent_runtimes.get(&agent_id).unwrap();
+            let result = execute_agent_task(runtime, &description, &secret_registry).await;
+
+            match result {
+                Ok(output) => {
+                    println!();
+                    println!("  ── {} ({}) ──", agent_id, role.label());
+                    println!("{}", output);
+                    println!("  ── end ──");
+                    println!();
+
+                    orchestrator
+                        .complete_task(
+                            &task_id,
+                            TaskResult {
+                                success: true,
+                                output,
+                                validation_notes: None,
+                            },
+                        )
+                        .await?;
+                    fleet.mark_idle(&agent_id);
+                }
+                Err(e) => {
+                    println!("  Task failed: {}", e);
+                    fleet.mark_failed(&agent_id);
+                }
             }
-        };
+        } else {
+            // ── Plan-and-execute: decompose goal into multi-agent steps ──
+            let pid = match planner_agent_id {
+                Some(ref id) => id.clone(),
+                None => {
+                    println!("  No agents available for planning.");
+                    continue;
+                }
+            };
+            let planner_engine = match agent_runtimes.get(&pid) {
+                Some(rt) => rt.engine.as_ref(),
+                None => {
+                    println!("  Planner agent not found.");
+                    continue;
+                }
+            };
 
-        // Find an idle agent for the role.
-        let agent_id = match fleet.find_idle_agent_for_role(role) {
-            Some(agent) => agent.agent_id.clone(),
-            None => {
-                println!("  No idle agent available for role: {}", role.label());
-                continue;
+            println!("  Planning...");
+
+            let steps = match generate_plan(
+                planner_engine,
+                &input,
+                fleet.agents(),
+                &agent_descriptions,
+            )
+            .await
+            {
+                Ok(steps) => steps,
+                Err(e) => {
+                    println!("  Failed to generate plan: {}", e);
+                    continue;
+                }
+            };
+
+            println!();
+            println!("  Execution Plan ({} steps):", steps.len());
+            for (i, step) in steps.iter().enumerate() {
+                println!("    {}. [{}] {}", i + 1, step.role, step.task);
             }
-        };
+            println!();
 
-        // Create and assign the task.
-        task_counter += 1;
-        let task_id = format!("task-{}", task_counter);
-        let task = orchestrator.create_task(task_id.clone(), description.clone(), role)?;
-        orchestrator.assign_task(&task.id.0, &agent_id).await?;
-        fleet.mark_busy(&agent_id, &task.id.0);
+            let mut step_results: Vec<StepResult> = Vec::new();
+            for (i, step) in steps.iter().enumerate() {
+                let role: AgentRole = match step.role.parse() {
+                    Ok(r) => r,
+                    Err(_) => {
+                        println!("  Step {}: invalid role '{}', skipping", i + 1, step.role);
+                        step_results.push(StepResult {
+                            role: step.role.clone(),
+                            task: step.task.clone(),
+                            output: "Skipped — invalid role".into(),
+                            success: false,
+                        });
+                        continue;
+                    }
+                };
 
-        println!(
-            "  Task {} assigned to {} ({})",
-            task_id,
-            agent_id,
-            role.label()
-        );
-        println!("  Executing...");
+                let agent_id = match fleet.find_idle_agent_for_role(role.clone()) {
+                    Some(a) => a.agent_id.clone(),
+                    None => {
+                        println!(
+                            "  Step {}: no idle agent for role '{}', skipping",
+                            i + 1,
+                            step.role
+                        );
+                        step_results.push(StepResult {
+                            role: step.role.clone(),
+                            task: step.task.clone(),
+                            output: "Skipped — no idle agent".into(),
+                            success: false,
+                        });
+                        continue;
+                    }
+                };
 
-        // Execute the task via collect_engine_response.
-        let runtime = agent_runtimes.get(&agent_id).unwrap();
-        let result = execute_agent_task(runtime, &description, &secret_registry).await;
+                task_counter += 1;
+                let task_id = format!("task-{}", task_counter);
+                orchestrator.create_task(task_id.clone(), step.task.clone(), role.clone())?;
+                orchestrator.assign_task(&task_id, &agent_id).await?;
+                fleet.mark_busy(&agent_id, &task_id);
 
-        match result {
-            Ok(output) => {
-                println!();
-                println!("  ── {} ({}) ──", agent_id, role.label());
-                println!("{}", output);
-                println!("  ── end ──");
-                println!();
+                println!("  Executing step {}/{}...", i + 1, steps.len());
 
-                orchestrator
-                    .complete_task(
-                        &task_id,
-                        TaskResult {
-                            success: true,
+                let enriched_prompt =
+                    build_step_context(&input, i, steps.len(), &step.task, &step_results);
+                let runtime = agent_runtimes.get(&agent_id).unwrap();
+                let result =
+                    execute_agent_task(runtime, &enriched_prompt, &secret_registry).await;
+
+                match result {
+                    Ok(output) => {
+                        println!();
+                        println!(
+                            "  ── {} ({}) — step {}/{} ──",
+                            agent_id,
+                            step.role,
+                            i + 1,
+                            steps.len()
+                        );
+                        println!("{}", output);
+                        println!("  ── end ──");
+                        println!();
+
+                        orchestrator
+                            .complete_task(
+                                &task_id,
+                                TaskResult {
+                                    success: true,
+                                    output: output.clone(),
+                                    validation_notes: None,
+                                },
+                            )
+                            .await?;
+                        fleet.mark_idle(&agent_id);
+
+                        step_results.push(StepResult {
+                            role: step.role.clone(),
+                            task: step.task.clone(),
                             output,
-                            validation_notes: None,
-                        },
-                    )
-                    .await?;
-                fleet.mark_idle(&agent_id);
+                            success: true,
+                        });
+                    }
+                    Err(e) => {
+                        println!("  Step {} failed: {}", i + 1, e);
+                        fleet.mark_idle(&agent_id);
+
+                        step_results.push(StepResult {
+                            role: step.role.clone(),
+                            task: step.task.clone(),
+                            output: format!("Failed: {}", e),
+                            success: false,
+                        });
+                    }
+                }
             }
-            Err(e) => {
-                println!("  Task failed: {}", e);
-                fleet.mark_failed(&agent_id);
-            }
+
+            let succeeded = step_results.iter().filter(|r| r.success).count();
+            println!(
+                "  Plan completed: {}/{} steps successful",
+                succeeded,
+                step_results.len()
+            );
         }
     }
 
@@ -438,6 +617,159 @@ async fn execute_agent_task(
     .await?;
 
     Ok(response.text)
+}
+
+/// Generate an execution plan by asking an LLM to decompose a goal into steps.
+async fn generate_plan(
+    engine: &dyn Engine,
+    goal: &str,
+    agents: &[FleetAgent],
+    descriptions: &HashMap<String, String>,
+) -> Result<Vec<PlanStep>> {
+    let mut team_lines = String::new();
+    for agent in agents {
+        let key = agent.role.key();
+        let desc = descriptions
+            .get(key)
+            .map(|s| s.as_str())
+            .unwrap_or("AI assistant");
+        team_lines.push_str(&format!("- {} : {}\n", key, desc));
+    }
+
+    let system = format!(
+        "You are a project coordinator. Break down a goal into sequential tasks \
+         for the available team members.\n\n\
+         Team members:\n{}\n\
+         Respond with ONLY valid JSON, no markdown fences, no extra text:\n\
+         {{\"steps\":[{{\"role\":\"exact_role_key\",\"task\":\"specific actionable task\"}}]}}\n\n\
+         Rules:\n\
+         - Order steps logically (design before implementation, backend before frontend if APIs needed, etc.)\n\
+         - Each task must be specific and actionable\n\
+         - When a step depends on a prior step, mention it (e.g. \"using the design tokens from step 1\")\n\
+         - Use ONLY the exact role keys listed above\n\
+         - Keep to 2-6 steps",
+        team_lines
+    );
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: format!("Goal: {}", goal),
+        tool_call_id: None,
+        tool_calls: None,
+    }];
+
+    let context = EngineContext {
+        workspace: None,
+        system_prompt: Some(system),
+    };
+
+    let response =
+        collect_engine_response(engine, &messages, &[], &context, None, None, None).await?;
+
+    parse_plan_json(&response.text)
+}
+
+/// Parse a JSON execution plan from LLM output.
+fn parse_plan_json(text: &str) -> Result<Vec<PlanStep>> {
+    let json_str =
+        extract_json(text).ok_or_else(|| anyhow::anyhow!("No JSON found in planner response"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&json_str).map_err(|e| anyhow::anyhow!("Invalid JSON: {}", e))?;
+    let steps = value
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Plan missing 'steps' array"))?;
+
+    let mut result = Vec::new();
+    for step in steps {
+        let role = step
+            .get("role")
+            .and_then(|r| r.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Plan step missing 'role'"))?;
+        let task = step
+            .get("task")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Plan step missing 'task'"))?;
+        result.push(PlanStep {
+            role: role.to_string(),
+            task: task.to_string(),
+        });
+    }
+
+    if result.is_empty() {
+        anyhow::bail!("Plan has no steps");
+    }
+    Ok(result)
+}
+
+/// Extract a JSON object from text that may contain markdown fences or prose.
+fn extract_json(text: &str) -> Option<String> {
+    // Try ```json ... ``` blocks first.
+    if let Some(start) = text.find("```json") {
+        let inner_start = start + 7;
+        if let Some(end) = text[inner_start..].find("```") {
+            return Some(text[inner_start..inner_start + end].trim().to_string());
+        }
+    }
+    // Try ``` ... ``` blocks.
+    if let Some(start) = text.find("```") {
+        let inner_start = start + 3;
+        if let Some(end) = text[inner_start..].find("```") {
+            let inner = text[inner_start..inner_start + end].trim();
+            if inner.starts_with('{') {
+                return Some(inner.to_string());
+            }
+        }
+    }
+    // Try raw JSON.
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    if start <= end {
+        Some(text[start..=end].to_string())
+    } else {
+        None
+    }
+}
+
+/// Build an enriched prompt for a plan step with context from previous steps.
+fn build_step_context(
+    goal: &str,
+    step_idx: usize,
+    total_steps: usize,
+    current_task: &str,
+    previous_results: &[StepResult],
+) -> String {
+    let mut ctx = format!(
+        "## Overall Goal\n{}\n\n## Your Task (Step {}/{})\n{}\n",
+        goal,
+        step_idx + 1,
+        total_steps,
+        current_task
+    );
+
+    if !previous_results.is_empty() {
+        ctx.push_str("\n## Results from Previous Steps\n\n");
+        for (i, r) in previous_results.iter().enumerate() {
+            ctx.push_str(&format!("### Step {}: {} — {}\n", i + 1, r.role, r.task));
+            if r.success {
+                let mut end = r.output.len().min(MAX_STEP_CONTEXT_CHARS);
+                while end < r.output.len() && !r.output.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if r.output.len() > MAX_STEP_CONTEXT_CHARS {
+                    ctx.push_str(&r.output[..end]);
+                    ctx.push_str("\n...(truncated)\n\n");
+                } else {
+                    ctx.push_str(&r.output);
+                    ctx.push('\n');
+                }
+            } else {
+                ctx.push_str(&format!("(failed: {})\n\n", r.output));
+            }
+        }
+    }
+
+    ctx
 }
 
 /// Bridge from ToolUseService (application layer) to ToolExecutor trait (engine_runtime).
@@ -550,21 +882,21 @@ mod tests {
     #[test]
     fn parse_task_input_valid() {
         let (role, desc) = parse_task_input("qa: review the auth module").unwrap();
-        assert_eq!(role, AgentRole::QA);
+        assert_eq!(role.key(), "qa");
         assert_eq!(desc, "review the auth module");
     }
 
     #[test]
     fn parse_task_input_backend() {
         let (role, desc) = parse_task_input("backend_engineer: implement caching").unwrap();
-        assert_eq!(role, AgentRole::BackendEngineer);
+        assert_eq!(role.key(), "backend_engineer");
         assert_eq!(desc, "implement caching");
     }
 
     #[test]
     fn parse_task_input_hyphenated() {
         let (role, _) = parse_task_input("integration-master: wire up API").unwrap();
-        assert_eq!(role, AgentRole::IntegrationMaster);
+        assert_eq!(role.key(), "integration_master");
     }
 
     #[test]
@@ -579,7 +911,109 @@ mod tests {
     }
 
     #[test]
-    fn parse_task_input_invalid_role() {
-        assert!(parse_task_input("unknown_role: do something").is_none());
+    fn parse_task_input_any_role_is_valid() {
+        // With dynamic roles, any non-empty string is a valid role.
+        let (role, desc) = parse_task_input("unknown_role: do something").unwrap();
+        assert_eq!(role.key(), "unknown_role");
+        assert_eq!(desc, "do something");
+    }
+
+    #[test]
+    fn parse_task_input_empty_role_part() {
+        assert!(parse_task_input(" : do something").is_none());
+    }
+
+    #[test]
+    fn extract_json_raw() {
+        let text = r#"{"steps":[{"role":"qa","task":"review"}]}"#;
+        let json = extract_json(text).unwrap();
+        assert!(json.contains("steps"));
+    }
+
+    #[test]
+    fn extract_json_from_markdown_fence() {
+        let text = "Here is the plan:\n```json\n{\"steps\":[{\"role\":\"qa\",\"task\":\"test\"}]}\n```\nDone.";
+        let json = extract_json(text).unwrap();
+        assert!(json.starts_with('{'));
+        assert!(json.contains("steps"));
+    }
+
+    #[test]
+    fn extract_json_from_plain_fence() {
+        let text = "```\n{\"steps\":[]}\n```";
+        let json = extract_json(text).unwrap();
+        assert_eq!(json, "{\"steps\":[]}");
+    }
+
+    #[test]
+    fn extract_json_with_surrounding_prose() {
+        let text = "Sure! Here is the plan: {\"steps\":[{\"role\":\"dev\",\"task\":\"code\"}]} Hope this helps.";
+        let json = extract_json(text).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("steps").unwrap().is_array());
+    }
+
+    #[test]
+    fn extract_json_no_json() {
+        assert!(extract_json("no json here").is_none());
+    }
+
+    #[test]
+    fn parse_plan_json_valid() {
+        let text = r#"{"steps":[{"role":"designer","task":"create mockups"},{"role":"frontend_engineer","task":"implement UI"}]}"#;
+        let steps = parse_plan_json(text).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].role, "designer");
+        assert_eq!(steps[1].role, "frontend_engineer");
+    }
+
+    #[test]
+    fn parse_plan_json_empty_steps() {
+        let text = r#"{"steps":[]}"#;
+        assert!(parse_plan_json(text).is_err());
+    }
+
+    #[test]
+    fn parse_plan_json_missing_field() {
+        let text = r#"{"steps":[{"role":"qa"}]}"#;
+        assert!(parse_plan_json(text).is_err());
+    }
+
+    #[test]
+    fn build_step_context_first_step() {
+        let ctx = build_step_context("build a site", 0, 3, "design the layout", &[]);
+        assert!(ctx.contains("Overall Goal"));
+        assert!(ctx.contains("build a site"));
+        assert!(ctx.contains("Step 1/3"));
+        assert!(ctx.contains("design the layout"));
+        assert!(!ctx.contains("Previous Steps"));
+    }
+
+    #[test]
+    fn build_step_context_with_prior_results() {
+        let prior = vec![StepResult {
+            role: "designer".into(),
+            task: "create tokens".into(),
+            output: "Primary: #2563eb, font: Inter".into(),
+            success: true,
+        }];
+        let ctx = build_step_context("build a site", 1, 3, "implement UI", &prior);
+        assert!(ctx.contains("Step 2/3"));
+        assert!(ctx.contains("Results from Previous Steps"));
+        assert!(ctx.contains("Primary: #2563eb"));
+    }
+
+    #[test]
+    fn build_step_context_truncates_long_output() {
+        let long_output = "x".repeat(MAX_STEP_CONTEXT_CHARS + 500);
+        let prior = vec![StepResult {
+            role: "backend".into(),
+            task: "build API".into(),
+            output: long_output,
+            success: true,
+        }];
+        let ctx = build_step_context("goal", 1, 2, "next task", &prior);
+        assert!(ctx.contains("(truncated)"));
+        assert!(ctx.len() < MAX_STEP_CONTEXT_CHARS + 1000);
     }
 }
