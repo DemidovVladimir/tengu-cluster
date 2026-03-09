@@ -621,6 +621,43 @@ The config is validated at startup. Invalid configs produce clear error messages
 
 ---
 
+## Docker Configuration
+
+When running in Docker (via `docker-compose.yml` or `make up`), paths differ from native:
+
+| Native Path | Docker Path | Notes |
+|-------------|-------------|-------|
+| `~/.tengu/config.toml` | `/opt/tengu/config.toml` | Mounted from `./config.toml` (read-only) |
+| `~/.tengu/` | `/opt/tengu/data` | Persistent volume `tengu-data` |
+
+**Environment variables** are loaded from `.env` in the project root. Set API keys there instead of the secrets vault when using Docker.
+
+**Ollama connection** — when Ollama runs as a compose service, Tengu connects via Docker networking:
+
+```toml
+# config.toml — no changes needed, compose handles networking
+[agents.local]
+engine = "ollama"
+model = "llama3.2"
+```
+
+The `OLLAMA_HOST` is set automatically by the compose network. When using native Ollama on macOS (for Metal GPU), set in `.env`:
+
+```bash
+OLLAMA_HOST=http://host.docker.internal:11434
+```
+
+**Hub bind address** — for external access (cloud deployment), change in `config.toml`:
+
+```toml
+[hub]
+bind = "0.0.0.0"    # default: 127.0.0.1
+```
+
+See the [Deployment Guide](DEPLOYMENT.md) for Docker Compose profiles, GPU setup, and cloud provisioning.
+
+---
+
 ## File Locations
 
 | Path | Purpose |

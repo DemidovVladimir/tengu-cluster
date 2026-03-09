@@ -2,7 +2,47 @@
 
 Get Tengu Cluster running in under 5 minutes.
 
-## Prerequisites
+## Choose Your Path
+
+- **Docker** (recommended) — no Rust toolchain needed, works on any OS
+- **Native** — build from source, best for development and macOS Metal GPU
+
+---
+
+## Docker Quickstart
+
+**Prerequisites:** [Docker](https://docker.com) installed.
+
+```bash
+git clone https://github.com/user/tengu-cluster.git
+cd tengu-cluster
+make setup                    # creates .env and config.toml
+nano .env                     # set OPENROUTER_API_KEY (or other API keys)
+make up                       # build & start tengu
+```
+
+Verify it's running:
+
+```bash
+make status                   # show running services
+make doctor                   # run diagnostics
+```
+
+Interact with the agent:
+
+```bash
+docker compose exec -it tengu tengu chat          # interactive chat
+# or configure Telegram bot (see below) and run:
+# make down && make up        # restarts with telegram as default
+```
+
+For GPU acceleration, Qdrant memory, or cloud deployment, see the [Deployment Guide](DEPLOYMENT.md).
+
+---
+
+## Native Quickstart
+
+### Prerequisites
 
 - **Rust toolchain** (1.75+): <https://rustup.rs>
 - **An API key** from one of:
@@ -12,15 +52,15 @@ Get Tengu Cluster running in under 5 minutes.
   - [Hugging Face](https://huggingface.co/settings/tokens)
   - Or a local [Ollama](https://ollama.com) instance (no key needed)
 
-## Step 1: Build
+### Step 1: Build
 
 ```bash
-git clone https://github.com/anthropics/tengu-cluster.git
+git clone https://github.com/user/tengu-cluster.git
 cd tengu-cluster
 cargo build
 ```
 
-## Step 2: Set Your API Key
+### Step 2: Set Your API Key
 
 Use the encrypted secrets vault (AES-256-GCM, master-password protected):
 
@@ -48,7 +88,7 @@ Alternatively, you can still use plain environment variables:
 export OPENROUTER_API_KEY=sk-or-...
 ```
 
-## Step 3: Create Config
+### Step 3: Create Config
 
 ```bash
 mkdir -p ~/.tengu
@@ -66,7 +106,7 @@ engine = "anthropic"             # or "openai", "ollama", "huggingface", "claude
 model = "claude-sonnet-4-20250514"
 ```
 
-## Step 4: Chat
+### Step 4: Chat
 
 ```bash
 cargo run -- chat
@@ -91,7 +131,7 @@ Once inside the chat, type these commands:
 | `/precise` | Switch to precise lens (full fidelity) |
 | `/reset` | Clear conversation and start fresh |
 
-## Step 5: Verify Setup
+### Step 5: Verify Setup
 
 Check that your backend is reachable:
 
@@ -203,6 +243,7 @@ Send a message to your bot in Telegram and it responds with full agent capabilit
 
 ## Next Steps
 
+- [Deployment Guide](DEPLOYMENT.md) — Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning
 - [Configuration Reference](CONFIGURATION.md) — every config field, env var, and default value
 - [Skills Guide](SKILLS.md) — define custom tools for your agent
 - [Fleet Orchestration Guide](FLEET.md) — multi-agent setup, roles, task lifecycle

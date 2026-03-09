@@ -14,20 +14,30 @@ Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
 
 ## Quickstart
 
-```bash
-# Build
-cargo build
+### Docker (recommended)
 
-# Configure
+```bash
+git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
+make setup          # creates .env and config.toml from templates
+nano .env           # set OPENROUTER_API_KEY (or other API keys)
+make up             # start tengu
+```
+
+### Native
+
+```bash
+cargo build
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
-
-# Store your API key in the encrypted vault
 cargo run -- secret init                              # prompts for master password
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for master password
-
-# Chat
 cargo run -- chat
+```
+
+### One-liner (cloud/VPS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
 ```
 
 The default config uses `anthropic/claude-sonnet-4` via OpenRouter. Change the model with one line:
@@ -216,6 +226,33 @@ ipnft-minter \
 | `--symbol` | Yes | Token symbol |
 | `--image` | No | Path to cover image (uses 1x1 placeholder if omitted) |
 
+## Deployment
+
+Deploy anywhere with Docker Compose. GPU acceleration is supported via Ollama.
+
+```bash
+make up              # API backends only (OpenRouter, Anthropic, etc.)
+make up-gpu          # + Ollama with NVIDIA GPU (CUDA)
+make up-full         # + Ollama GPU + Qdrant vector memory
+make up-cpu          # + Ollama (CPU only)
+make down            # stop everything
+make logs            # tail logs
+make doctor          # run diagnostics
+```
+
+**GPU support:**
+- **NVIDIA CUDA** — `docker compose --profile ollama-gpu up -d` passes GPU to Ollama via `nvidia-container-toolkit`
+- **Apple Metal** — install Ollama natively (`brew install ollama`), set `OLLAMA_HOST=http://host.docker.internal:11434`
+
+**Cloud provisioning** — use `deploy/cloud-init.yml` with Hetzner, AWS, DigitalOcean, or any cloud-init provider:
+
+```bash
+hcloud server create --name tengu --type cx22 --image ubuntu-24.04 \
+  --user-data-from-file deploy/cloud-init.yml --ssh-key my-key
+```
+
+See the [Deployment Guide](docs/DEPLOYMENT.md) for full setup, GPU configuration, cloud provisioning, and production checklist.
+
 ## Token Budget Gates
 
 Each conversation flow has a configurable token limit (`max_tokens_per_flow`, default: 100,000). The system enforces two thresholds:
@@ -233,6 +270,7 @@ max_tokens_per_flow = 100_000
 | Guide | What It Covers |
 |-------|---------------|
 | [Quickstart](docs/QUICKSTART.md) | Installation, first config, first chat, next steps |
+| [Deployment](docs/DEPLOYMENT.md) | Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning, production checklist |
 | [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
 | [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
 | [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, heartbeat, events |
