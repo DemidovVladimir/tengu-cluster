@@ -53,14 +53,14 @@ max_tokens_per_flow = 80_000
 | Field | Description |
 |-------|-------------|
 | `role` | Any non-empty string. Used for task routing in orchestrator (`role: task description`). |
-| `allowed_tools` | Optional allowlist of workspace tools. Omit to grant all tools. Available: `read_file`, `list_directory`, `write_file`, `run_command`. |
+| `allowed_tools` | Optional allowlist of workspace primitives. Omit to grant all. Available: `read_file`, `list_directory`, `write_file`, `run_command`. Subsystem tools (e.g., `remember`) are not affected. |
 | `workspace` | Shared or per-agent workspace directory. Tilde expansion supported. |
 | `identity.instructions` | Role-specific system prompt. This is where you define what the agent does. |
 | `skills` | Optional skill allowlist (frontmatter skills in workspace `skills/` directory). |
 
-### Tool Restrictions
+### Primitive Restrictions
 
-The `allowed_tools` field restricts which workspace tools an agent can use:
+The `allowed_tools` field restricts which workspace primitives an agent can use:
 
 ```toml
 # Read-only advisor — cannot write files or run commands
@@ -70,7 +70,7 @@ allowed_tools = ["read_file", "list_directory"]
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 ```
 
-The `remember` memory tool is always available when memory is enabled — it is not affected by `allowed_tools`.
+Subsystem tools (e.g., `remember` from the memory subsystem) are not affected by `allowed_tools` — they are always available when their subsystem is enabled.
 
 ## Using the Orchestrator
 

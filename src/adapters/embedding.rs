@@ -61,14 +61,13 @@ impl EmbeddingPort for OpenRouterEmbeddingAdapter {
             let status = resp.status();
             if !status.is_success() {
                 let error_body = resp.text().await.unwrap_or_default();
-                anyhow::bail!(
-                    "embedding API returned {}: {}",
-                    status,
-                    error_body
-                );
+                anyhow::bail!("embedding API returned {}: {}", status, error_body);
             }
 
-            let json: serde_json::Value = resp.json().await.context("failed to parse embedding response")?;
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .context("failed to parse embedding response")?;
             let data = json["data"]
                 .as_array()
                 .ok_or_else(|| anyhow::anyhow!("missing 'data' array in embedding response"))?;

@@ -180,7 +180,7 @@ A system prompt is **always** sent to the model, even with no workspace or ident
 2. **Role fragment**: if `role` is set, role-specific guidance is appended
 3. **Custom instructions**: the `instructions` field verbatim
 4. **Workspace files**: `IDENTITY.md`, `PROFILE.md`, `CONTEXT.md` from the workspace directory
-5. **Workspace tools**: tool descriptions when the backend supports runtime tool use
+5. **Available tools**: tool descriptions generated dynamically from `ToolDef` metadata (workspace primitives + subsystem tools + skills)
 
 ### Flow (Session Behavior)
 
@@ -338,7 +338,7 @@ skills = ["search", "test_runner"]
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `role` | string? | none | Any non-empty string (e.g., `"qa"`, `"frontend_engineer"`, `"warehouse_manager"`). Used for task routing in orchestrator. |
-| `allowed_tools` | string[]? | none | Allowlist of workspace tools. Omit to grant all tools. Options: `read_file`, `list_directory`, `write_file`, `run_command`. |
+| `allowed_tools` | string[]? | none | Allowlist of workspace primitives. Omit to grant all. Options: `read_file`, `list_directory`, `write_file`, `run_command`. Subsystem tools (e.g., `remember`) are not affected by this filter. |
 | `skills` | string[]? | none | Allowlist of skill names. Omit for all skills. |
 
 Roles are fully dynamic — any non-empty string is valid. Define role-specific behavior through `identity.instructions`.
@@ -354,21 +354,19 @@ Fleet management configuration. Only needed for multi-agent mode.
 ```toml
 [orchestrator]
 enabled = true
-heartbeat_interval_s = 30
 max_retries = 3
 ```
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `enabled` | bool | `false` | Enable fleet orchestration |
-| `heartbeat_interval_s` | u64 | `30` | Seconds between heartbeat checks |
 | `max_retries` | u32 | `3` | Max retry attempts for failed tasks |
 
 ---
 
 ## Memory
 
-Persistent vector memory enables cross-session knowledge retrieval. When enabled, agents can store facts/insights via the `remember` tool and relevant memories are automatically recalled before each engine turn.
+Persistent vector memory enables cross-session knowledge retrieval. When enabled, the memory subsystem registers its own tools (e.g., `remember`) and relevant memories are automatically recalled before each engine turn.
 
 **How it works:**
 
@@ -471,7 +469,7 @@ allowed_users = ["123456789", "987654321"]
 
 **Typing indicator:** A "typing..." chat action is sent every 4 seconds during processing, running as an independent task so it stays alive during long synchronous tool execution.
 
-**Tool approval:** Tools with `requires_approval: true` (e.g., `write_file`, `run_command`) trigger an inline keyboard message with Approve / Deny buttons. The agent blocks until the user responds or the 60-second timeout expires (auto-deny on timeout).
+**Tool approval:** Tools with `requires_approval: true` in their policy metadata trigger an inline keyboard message with Approve / Deny buttons. The agent blocks until the user responds or the 60-second timeout expires (auto-deny on timeout). Approval dialogs are generated generically from tool metadata (risk level, description), not hardcoded per tool name.
 
 **Token budget warnings:** When a conversation reaches 80% of `max_tokens_per_flow`, a warning message is sent showing current usage and remaining budget. At 100%, further requests are blocked until `/reset`.
 
@@ -483,6 +481,23 @@ allowed_users = ["123456789", "987654321"]
 | `/project <name>` | Create a new project subfolder, switch all agents to it |
 | `/agents` | List available agents and their roles |
 | `/stop` | Cancel the current operation (works during `/team` orchestration) |
+| `/wallet` | Show Privy wallet address and balance |
+| `/wallet status` | Show wallet ID, address, balance, and policy |
+
+#### Wallet (Privy Agentic Wallets)
+
+On-chain operations (IP-NFT minting, POI submission, terms signing) use a **Privy agentic wallet** — a server-side wallet controlled by the agent with policy-based guardrails.
+
+**Setup:**
+1. Create a Privy app at [dashboard.privy.io](https://dashboard.privy.io)
+2. Store credentials: `cargo run -- secret set PRIVY_APP_ID ...` and `cargo run -- secret set PRIVY_APP_SECRET ...`
+3. Create a wallet with a policy (the agent can do this via the `privy` skill)
+4. Store the wallet ID: `cargo run -- secret set PRIVY_WALLET_ID ...`
+5. Fund the wallet with Sepolia ETH (0.002+ ETH for minting)
+
+The agent signs transactions and messages autonomously — no user approval needed per transaction. Security is enforced by Privy policies (spending limits, chain restrictions, contract allowlists).
+
+**Prerequisites:** Set `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, and `PRIVY_WALLET_ID` environment variables.
 
 ---
 
@@ -569,19 +584,20 @@ All environment variables. Export them in your shell, `direnv`, process manager,
 | `QDRANT_API_KEY` | none | Qdrant Cloud API key (when `backend = "qdrant"`) |
 | `TENGU_TELEGRAM_ALLOWED_USERS` | none | Comma-separated Telegram user IDs (merged with config `allowed_users`) |
 | `TENGU_GPU_HINT` | none | Force GPU detection: `"gpu"`, `"cuda"`, `"metal"`, `"none"`, `"cpu"` |
+| `TENGU_RELAY_URL` | none | Cloudflare Worker relay URL (planned — will inject API keys server-side) |
 | `RUST_LOG` | `info` | Log level (trace, debug, info, warn, error) |
 
 ### Skill and Tool-Specific
 
 | Variable | Required When | Notes |
 |----------|--------------|-------|
+| `PRIVY_APP_ID` | privy / aura-orchestrator skills | Privy app identifier from dashboard.privy.io |
+| `PRIVY_APP_SECRET` | privy / aura-orchestrator skills | Privy secret key for API auth |
+| `PRIVY_WALLET_ID` | aura-orchestrator skill | Privy agentic wallet ID for on-chain operations |
 | `MOLECULE_API_KEY` | aura-orchestrator skill | Molecule DeSci Labs API key (sent as `x-api-key` header) |
-| `MOLECULE_SERVICE_TOKEN` | aura-orchestrator workflows 2-4 | Service token JWT (sent as `x-service-token` header) |
 | `MOLECULE_LABS_URL` | aura-orchestrator skill | GraphQL endpoint (e.g., `https://staging.graphql.api.molecule.xyz/graphql`) |
-| `MOLECULE_CLIENT_URL` | ipnft-minter | Client URL for project links (e.g., `https://testnet.molecule.xyz`) |
+| `MOLECULE_CLIENT_URL` | aura-orchestrator | Client URL for project links (e.g., `https://testnet.molecule.xyz`) |
 | `POI_API_KEY` | POI registration (Workflow 1) | Bearer token for `testnet.molecule.xyz/api/v1/inventions` |
-| `EVM_PRIVATE_KEY` | ipnft-minter, POI on-chain | Hex-encoded wallet private key (never sent to any API) |
-| `EVM_RPC_URL` | ipnft-minter, POI on-chain | Sepolia RPC endpoint |
 
 ---
 

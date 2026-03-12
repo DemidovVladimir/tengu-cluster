@@ -1,8 +1,11 @@
-//! Built-in tool definitions for the workspace and memory subsystems.
+//! Built-in workspace primitive definitions (read_file, list_directory, write_file, run_command).
 //!
-//! Each function returns a `Vec<ToolDef>` describing the tools an agent can
+//! Each function returns a `Vec<ToolDef>` describing the primitives an agent can
 //! call. The definitions include JSON Schema parameters, risk levels, and
 //! approval requirements used by `ToolPolicyCatalog` and `ToolUseService`.
+//!
+//! Subsystem tools (e.g., `remember` from memory) are owned by their respective
+//! adapter modules, not this catalog.
 
 use serde_json::json;
 use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
@@ -111,25 +114,6 @@ pub(crate) fn filter_tools_by_allowlist(
     }
 }
 
-/// Build memory tool definitions for the vector memory subsystem.
-pub(crate) fn build_memory_tools() -> Vec<ToolDef> {
-    vec![tool_def(
-        "remember",
-        "Store a fact or insight in long-term memory for future retrieval across sessions.",
-        json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact, insight, or information to remember"
-                }
-            },
-            "required": ["content"]
-        }),
-        ToolRiskLevel::Low,
-        false,
-    )]
-}
 
 #[cfg(test)]
 mod tests {

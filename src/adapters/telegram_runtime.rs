@@ -2,9 +2,9 @@
 //!
 //! This adapter provides the full Telegram integration:
 //!
-//! - **Inline keyboard approval** — dangerous tools (write_file, run_command)
-//!   prompt the user with Approve/Deny
-//!   buttons via `TelegramInlineApprovalAdapter`. 60-second timeout auto-denies.
+//! - **Inline keyboard approval** — tools with `requires_approval: true` prompt
+//!   the user with Approve/Deny buttons via `TelegramInlineApprovalAdapter`.
+//!   60-second timeout auto-denies.
 //! - **Typing indicator** — runs as an independent `tokio::spawn` task so it
 //!   stays alive during synchronous tool execution.
 //! - **File attachments** — documents and photos are downloaded and saved to
@@ -20,35 +20,25 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
-use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
+use crate::adapters::channel_runtime;
 use crate::adapters::engine_factory::build_engine;
 use crate::adapters::flow_store::FlowStore;
-use crate::adapters::memory_store::DiskVectorMemoryStore;
-use crate::adapters::memory_tool_executor::{MemoryServiceHandle, MemoryToolExecutionAdapter};
-use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_source::FileSystemSkillSource;
-use crate::adapters::skill_tool_executor::SkillToolExecutionAdapter;
-use crate::adapters::system_prompt;
 use crate::adapters::workspace_tools;
 use crate::application::chat_commands::{self, CommandResult, EngineInfo};
 use crate::application::chat_runtime::ChatRuntimeService;
+use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
-use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::{
-    build_memory_tools, build_workspace_tools, filter_tools_by_allowlist,
-};
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::secret_registry::SecretRegistry;
-use crate::domain::tool_policy::ToolPolicyCatalog;
 use crate::resolve_tengu_home;
 use tengu_core::config::Config;
 use tengu_core::types::{DeliveryOptions, ToolCall, ToolDef};
-use tengu_core::{Engine, Lens, Pipe, PipeContext, Refiner};
+use tengu_core::{Engine, Pipe, PipeContext, Refiner};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
 /// Maximum characters per Telegram message (with safety margin).
@@ -92,7 +82,7 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
             .clone()
             .ok_or_else(|| anyhow::anyhow!("No recipient set for approval"))?;
 
-        let (title, description, preview) = build_approval_text(call);
+        let (title, description, preview) = crate::adapters::tool_ui::build_approval_text(call);
         let approval_id = format!("tool_{}", uuid::Uuid::new_v4().simple());
         let mut text = format!("🔐 *{}*\n{}", title, description);
         if !preview.is_empty() {
@@ -149,61 +139,6 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
     }
 }
 
-/// Build title, description, and preview text for an approval prompt.
-fn build_approval_text(call: &ToolCall) -> (String, String, String) {
-    match call.name.as_str() {
-        "run_command" => {
-            let cmd = call
-                .arguments
-                .get("command")
-                .or_else(|| call.arguments.get("cmd"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("<unknown>");
-            (
-                "Run Command".to_string(),
-                "Allow this command to execute?".to_string(),
-                cmd.to_string(),
-            )
-        }
-        "write_file" => {
-            let path = call
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("<unknown>");
-            let content = call
-                .arguments
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            (
-                "Write File".to_string(),
-                format!("Allow write to '{}'?", path),
-                content.to_string(),
-            )
-        }
-        _ => {
-            let args_str = serde_json::to_string_pretty(&call.arguments)
-                .unwrap_or_else(|_| format!("{:?}", call.arguments));
-            (
-                "Tool Confirmation".to_string(),
-                format!("Allow '{}' to run?", call.name),
-                args_str,
-            )
-        }
-    }
-}
-
-/// Tool executor wrapping `ToolUseService`.
-struct TelegramToolExecutor {
-    service: ToolUseService,
-}
-
-impl ToolExecutor for TelegramToolExecutor {
-    fn execute(&self, call: &ToolCall) -> Result<String> {
-        self.service.execute(call)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Cross-agent activity log
@@ -224,37 +159,30 @@ struct ActivityEntry {
 }
 
 /// Format a tool call for the activity log.
-/// Read-only tools are skipped — only mutations are interesting for other agents.
-fn format_tool_for_activity(call: &ToolCall) -> Option<String> {
-    match call.name.as_str() {
-        "write_file" => {
-            let path = call
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            Some(format!("wrote `{}`", path))
-        }
-        "run_command" => {
-            let cmd = call
-                .arguments
-                .get("command")
-                .or_else(|| call.arguments.get("cmd"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("?");
-            let truncated = if cmd.len() > 80 {
-                let mut end = 80;
-                while end > 0 && !cmd.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}…", &cmd[..end])
-            } else {
-                cmd.to_string()
-            };
-            Some(format!("ran `{}`", truncated))
-        }
-        _ => None,
+/// Only tools that require approval (mutations) are interesting for other agents.
+fn format_tool_for_activity(call: &ToolCall, tools: &[tengu_core::types::ToolDef]) -> Option<String> {
+    // Find the tool definition to check if it requires approval.
+    let tool_def = tools.iter().find(|t| t.name == call.name);
+    let requires_approval = tool_def
+        .and_then(|t| t.policy.as_ref())
+        .map(|p| p.requires_approval)
+        .unwrap_or(false);
+
+    if !requires_approval {
+        return None;
     }
+
+    let summary = crate::adapters::tool_ui::summarize_tool_args(&call.arguments);
+    let truncated = if summary.len() > 80 {
+        let mut end = 80;
+        while end > 0 && !summary.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &summary[..end])
+    } else {
+        summary
+    };
+    Some(format!("{}: {}", call.name, truncated))
 }
 
 /// Build a context block summarising what OTHER agents have done recently.
@@ -270,7 +198,7 @@ fn build_activity_context(activity_log: &[ActivityEntry], current_agent_id: &str
     let mut ctx = String::from("\n\n## Recent Team Activity\n");
     ctx.push_str(
         "Other team members have been working on this project. Build on their work.\n\
-         IMPORTANT: Use read_file / list_directory to check files they created before making changes.\n\n",
+         IMPORTANT: Use your available tools to check files they created before making changes.\n\n",
     );
 
     for entry in other.iter().rev().take(5) {
@@ -309,16 +237,25 @@ fn truncate_summary(text: &str, max: usize) -> String {
 const TASK_OUTCOMES_DIR: &str = ".tengu-tasks";
 
 /// Build the prompt for a task, including outcomes of dependency tasks.
-fn build_task_prompt(goal: &str, task_description: &str, dep_outcomes: &[(String, String)]) -> String {
+fn build_task_prompt(
+    goal: &str,
+    task_description: &str,
+    dep_outcomes: &[(String, String)],
+) -> String {
     let mut prompt = format!("## Goal\n{}\n\n## Your Task\n{}\n", goal, task_description);
 
     if !dep_outcomes.is_empty() {
         prompt.push_str("\n## Completed dependency tasks — READ BEFORE STARTING\n");
         prompt.push_str("The following tasks were completed before yours. Read the outcome files for full details.\n\n");
         for (task_id, outcome_path) in dep_outcomes {
-            prompt.push_str(&format!("- **{}** → outcome at `{}`\n", task_id, outcome_path));
+            prompt.push_str(&format!(
+                "- **{}** → outcome at `{}`\n",
+                task_id, outcome_path
+            ));
         }
-        prompt.push_str("\nUse read_file on these outcome files to see what was done and build on it.\n");
+        prompt.push_str(
+            "\nUse read_file on these outcome files to see what was done and build on it.\n",
+        );
     }
 
     prompt.push_str("\n## IMPORTANT\n\
@@ -329,143 +266,11 @@ fn build_task_prompt(goal: &str, task_description: &str, dep_outcomes: &[(String
 }
 
 // ---------------------------------------------------------------------------
-// Message chunking
-// ---------------------------------------------------------------------------
-
-/// Split text into chunks of at most `max_len` characters.
-/// Prefers splitting at `\n\n` boundaries; falls back to char boundary.
-fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
-    if text.len() <= max_len {
-        return vec![text];
-    }
-
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < text.len() {
-        if text.len() - start <= max_len {
-            chunks.push(&text[start..]);
-            break;
-        }
-
-        let end = start + max_len;
-        // Find a safe char boundary at or before `end`.
-        let mut boundary = end;
-        while boundary > start && !text.is_char_boundary(boundary) {
-            boundary -= 1;
-        }
-
-        // Try to split at \n\n within the last half of the chunk.
-        let mut search_start = start + (boundary - start) / 2;
-        while search_start < boundary && !text.is_char_boundary(search_start) {
-            search_start += 1;
-        }
-        let split = text[search_start..boundary]
-            .rfind("\n\n")
-            .map(|pos| search_start + pos + 2) // after the \n\n
-            .unwrap_or(boundary);
-
-        chunks.push(&text[start..split]);
-        start = split;
-    }
-
-    chunks
-}
-
-// ---------------------------------------------------------------------------
-// Helpers: build tools / executor / system prompt
-// ---------------------------------------------------------------------------
-
-fn rebuild_tools(base_tools: &[ToolDef], skill_registry: &SkillRegistry) -> Vec<ToolDef> {
-    let mut tools = base_tools.to_vec();
-    tools.extend(skill_registry.active_tool_defs());
-    tools
-}
-
-fn rebuild_executor(
-    workspace: &std::path::Path,
-    tools: &[ToolDef],
-    skill_registry: &SkillRegistry,
-    memory_handle: &Option<Arc<MemoryServiceHandle>>,
-    secret_registry: &Arc<SecretRegistry>,
-    approval: Arc<dyn ToolApprovalPort>,
-) -> Option<TelegramToolExecutor> {
-    if tools.is_empty() {
-        return None;
-    }
-
-    let shell: Arc<dyn crate::application::ports::ShellExecutionPort> =
-        Arc::new(LocalShellExecutor);
-
-    let workspace_exec = Arc::new(
-        workspace_tools::WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
-            .with_shell(Arc::clone(&shell)),
-    );
-
-    let skill_defs = skill_registry.active_skill_definitions();
-    let skill_names: HashSet<String> = skill_defs.iter().map(|s| s.name.clone()).collect();
-
-    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
-
-    // Attach skill executor if any skills are active.
-    if !skill_defs.is_empty() {
-        let skill_exec = Arc::new(SkillToolExecutionAdapter::new(
-            skill_defs,
-            Arc::clone(&shell),
-            workspace.to_path_buf(),
-        ));
-        composite = composite.with_executor(skill_exec, skill_names);
-    }
-
-    if let Some(ref handle) = memory_handle {
-        if let Ok(mem_exec) =
-            MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
-        {
-            let mem_names: HashSet<String> =
-                build_memory_tools().iter().map(|t| t.name.clone()).collect();
-            composite = composite.with_executor(Arc::new(mem_exec), mem_names);
-        }
-    }
-
-    let composite = Arc::new(composite);
-
-    let service = ToolUseService::new(
-        ToolPolicyCatalog::from_tools(tools),
-        Arc::new(TelegramToolActivityAdapter),
-        approval,
-        composite,
-    );
-    Some(TelegramToolExecutor { service })
-}
-
-fn rebuild_system_prompt(
-    agent_config: &tengu_core::config::AgentConfig,
-    advertise_workspace_tools: bool,
-    skill_registry: &SkillRegistry,
-) -> String {
-    let skill_context_strings: Vec<String> = skill_registry
-        .active_context_fragments()
-        .into_iter()
-        .map(|(_, body)| body)
-        .collect();
-    system_prompt::build_system_prompt(
-        agent_config,
-        advertise_workspace_tools,
-        &skill_context_strings,
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Build the allowed-users set from config + env
 // ---------------------------------------------------------------------------
 
 fn build_allowed_users(config: &Config) -> HashSet<String> {
-    let mut allowed: HashSet<String> = config
-        .telegram
-        .allowed_users
-        .iter()
-        .cloned()
-        .collect();
+    let mut allowed: HashSet<String> = config.telegram.allowed_users.iter().cloned().collect();
 
     if let Ok(env_users) = std::env::var("TENGU_TELEGRAM_ALLOWED_USERS") {
         for uid in env_users.split(',') {
@@ -501,69 +306,6 @@ struct TelegramAgentState {
     role: Option<String>,
 }
 
-/// Parse agent routing from message text.
-///
-/// Supports two formats:
-/// 1. `@role: message` — explicit routing (always accepted, even unknown roles)
-/// 2. `role: message`  — implicit routing (only when `role` matches a known agent)
-///
-/// Returns `(Some(role_key), message)` if found, `(None, original)` otherwise.
-fn parse_agent_routing(
-    text: &str,
-    known_roles: Option<&HashMap<String, String>>,
-) -> (Option<String>, String) {
-    let trimmed = text.trim();
-
-    // 1. @role: message — always works, even for unknown roles.
-    if let Some(rest) = trimmed.strip_prefix('@') {
-        if let Some(colon_pos) = rest.find(':') {
-            let role = rest[..colon_pos].trim().to_lowercase().replace('-', "_");
-            let message = rest[colon_pos + 1..].trim().to_string();
-            if !role.is_empty() && !message.is_empty() {
-                return (Some(role), message);
-            }
-        }
-    }
-
-    // 2. role: message — only when the part before ":" matches a known agent.
-    if let Some(roles) = known_roles {
-        if let Some(colon_pos) = trimmed.find(':') {
-            let candidate = trimmed[..colon_pos].trim().to_lowercase().replace('-', "_");
-            let message = trimmed[colon_pos + 1..].trim().to_string();
-            if !candidate.is_empty() && !message.is_empty() && roles.contains_key(&candidate) {
-                return (Some(candidate), message);
-            }
-        }
-    }
-
-    (None, trimmed.to_string())
-}
-
-/// Infer the target agent by matching whole words against known role keys / agent IDs.
-///
-/// Returns `Some(agent_id)` when exactly one agent is matched. Returns `None` when
-/// zero or multiple different agents match (ambiguous).
-fn infer_agent_from_keywords(
-    text: &str,
-    role_to_agent: &HashMap<String, String>,
-) -> Option<String> {
-    let mut matched: Option<String> = None;
-    for word in text.split_whitespace() {
-        let normalized = word
-            .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-            .to_lowercase()
-            .replace('-', "_");
-        if let Some(agent_id) = role_to_agent.get(&normalized) {
-            match matched {
-                None => matched = Some(agent_id.clone()),
-                Some(ref prev) if prev == agent_id => {} // same agent, ok
-                Some(_) => return None,                  // ambiguous
-            }
-        }
-    }
-    matched
-}
-
 /// Run the headless Telegram bot adapter (sync — call from `block_in_place`).
 ///
 /// Creates its own tokio runtime internally so that state containing nested
@@ -574,10 +316,7 @@ fn infer_agent_from_keywords(
 /// Supports multi-agent routing: prefix messages with `@role: message` to
 /// target a specific agent. Unrouted messages go to the default agent.
 /// Use `/agents` to list available agents and their roles.
-pub(crate) fn run_telegram(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-) -> Result<()> {
+pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -603,77 +342,7 @@ pub(crate) fn run_telegram(
     let memory_config = config.memory.clone();
 
     // Build shared memory handle.
-    let memory_handle: Option<Arc<MemoryServiceHandle>> = if memory_config.enabled {
-        match std::env::var("OPENROUTER_API_KEY") {
-            Ok(api_key) => {
-                let store: Option<Arc<dyn crate::application::ports::MemoryStorePort>> =
-                    match memory_config.backend.as_str() {
-                        #[cfg(feature = "qdrant")]
-                        "qdrant" => {
-                            use crate::adapters::qdrant_memory_store::QdrantMemoryStore;
-                            match rt.block_on(QdrantMemoryStore::new(
-                                &memory_config.qdrant_url,
-                                memory_config.qdrant_api_key.as_deref(),
-                                &memory_config.qdrant_collection,
-                                memory_config.vector_size,
-                            )) {
-                                Ok(s) => Some(Arc::new(s)),
-                                Err(e) => {
-                                    warn!(error = %e, "Failed to init Qdrant memory store, memory disabled");
-                                    None
-                                }
-                            }
-                        }
-                        #[cfg(not(feature = "qdrant"))]
-                        "qdrant" => {
-                            warn!("Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk");
-                            let store_path_str = memory_config.store_path.replace(
-                                "~",
-                                &dirs_next::home_dir()
-                                    .unwrap_or_default()
-                                    .to_string_lossy(),
-                            );
-                            DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
-                                .ok()
-                                .map(|s| {
-                                    Arc::new(s)
-                                        as Arc<dyn crate::application::ports::MemoryStorePort>
-                                })
-                        }
-                        _ => {
-                            let store_path_str = memory_config.store_path.replace(
-                                "~",
-                                &dirs_next::home_dir()
-                                    .unwrap_or_default()
-                                    .to_string_lossy(),
-                            );
-                            DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
-                                .ok()
-                                .map(|s| {
-                                    Arc::new(s)
-                                        as Arc<dyn crate::application::ports::MemoryStorePort>
-                                })
-                        }
-                    };
-                store.map(|s| {
-                    let embedding = OpenRouterEmbeddingAdapter::new(
-                        api_key,
-                        memory_config.embedding_model.clone(),
-                    );
-                    Arc::new(MemoryServiceHandle {
-                        embedding: Arc::new(embedding),
-                        store: s,
-                    })
-                })
-            }
-            Err(_) => {
-                warn!("OPENROUTER_API_KEY not set, memory disabled");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt);
 
     let has_memory = memory_handle.is_some();
 
@@ -711,21 +380,15 @@ pub(crate) fn run_telegram(
             engine.supports_tool_use() && !engine.manages_own_workspace();
         let uses_tools = advertise_workspace_tools && workspace.is_some();
 
-        let base_tools = if !uses_tools {
-            vec![]
-        } else {
-            let mut all_tools = filter_tools_by_allowlist(
-                build_workspace_tools(),
-                agent_config.allowed_tools.as_deref(),
-            );
-            if has_memory {
-                all_tools.extend(build_memory_tools());
-            }
-            all_tools
-        };
+        let base_tools = channel_runtime::compute_base_tools(
+            uses_tools,
+            has_memory,
+            agent_config.allowed_tools.as_deref(),
+        );
 
-        let skill_source: Option<FileSystemSkillSource> =
-            workspace.as_ref().map(|ws| FileSystemSkillSource::new(ws.clone()));
+        let skill_source: Option<FileSystemSkillSource> = workspace
+            .as_ref()
+            .map(|ws| FileSystemSkillSource::new(ws.clone()));
 
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
         let mut skill_registry = SkillRegistry::new(base_reserved);
@@ -733,12 +396,9 @@ pub(crate) fn run_telegram(
             skill_registry.reload(src);
         }
 
-        let current_tools = rebuild_tools(&base_tools, &skill_registry);
-        let current_system_prompt = rebuild_system_prompt(
-            agent_config,
-            advertise_workspace_tools,
-            &skill_registry,
-        );
+        let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+        let current_system_prompt =
+            channel_runtime::rebuild_system_prompt(agent_config, advertise_workspace_tools, &skill_registry, &current_tools);
 
         let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
         let compaction_policy = resolve_flow_compaction_policy(
@@ -795,8 +455,8 @@ pub(crate) fn run_telegram(
         );
     }
 
-    let default_agent_id = default_agent_id
-        .ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
+    let default_agent_id =
+        default_agent_id.ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
 
     // Remember each agent's base workspace so /project can create subdirs.
     let base_workspaces: HashMap<String, std::path::PathBuf> = agent_states
@@ -833,12 +493,7 @@ pub(crate) fn run_telegram(
         .iter()
         .map(|(aid, astate)| {
             let role_key = astate.role.as_deref().unwrap_or(aid).to_string();
-            let name = astate
-                .agent_config
-                .identity
-                .name
-                .as_deref()
-                .unwrap_or(aid);
+            let name = astate.agent_config.identity.name.as_deref().unwrap_or(aid);
             let brief = astate
                 .agent_config
                 .identity
@@ -876,6 +531,7 @@ pub(crate) fn run_telegram(
         pipe: Arc::clone(&pipe),
         current_recipient: Arc::clone(&current_recipient),
     });
+    let activity_adapter: Arc<dyn ToolActivityPort> = Arc::new(TelegramToolActivityAdapter);
 
     let memory_service_instance = memory_handle
         .as_ref()
@@ -886,6 +542,17 @@ pub(crate) fn run_telegram(
 
     // Track which agent each user last talked to (for showing in prompts).
     let mut user_active_agent: HashMap<String, String> = HashMap::new();
+
+    // Build skill command router from all agents' registries.
+    let mut skill_command_router = {
+        // Use the default agent's skill registry to build the initial router.
+        let default_agent = agent_states.get(&default_agent_id);
+        default_agent
+            .map(|a| SkillCommandRouter::from_registry(&a.skill_registry))
+            .unwrap_or_else(|| SkillCommandRouter::from_registry(
+                &SkillRegistry::new(vec![]),
+            ))
+    };
 
     // Cross-agent activity log — lets each agent see what others have done.
     let mut activity_log: Vec<ActivityEntry> = Vec::new();
@@ -960,8 +627,8 @@ pub(crate) fn run_telegram(
                             std::fs::create_dir_all(&attachments_dir).ok();
                             for m in media {
                                 let fname =
-                                    m.filename.as_deref().unwrap_or("attachment");
-                                let path = attachments_dir.join(fname);
+                                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
+                                let path = attachments_dir.join(&fname);
                                 match std::fs::write(&path, &m.data) {
                                     Ok(()) => {
                                         info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for /team");
@@ -1146,25 +813,27 @@ pub(crate) fn run_telegram(
                             if let Some(ref src) = agent.skill_source {
                                 if agent.skill_registry.reload(src) {
                                     agent.current_tools =
-                                        rebuild_tools(&agent.base_tools, &agent.skill_registry);
-                                    agent.current_system_prompt = rebuild_system_prompt(
+                                        channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                                         &agent.agent_config,
                                         agent.advertise_workspace_tools,
                                         &agent.skill_registry,
+                                        &agent.current_tools,
                                     );
                                 }
                             }
 
                             // Build executor.
-                            let task_executor: Option<TelegramToolExecutor> =
+                            let task_executor =
                                 agent.workspace.as_ref().and_then(|ws| {
-                                    rebuild_executor(
+                                    channel_runtime::build_tool_executor(
                                         ws,
                                         &agent.current_tools,
                                         &agent.skill_registry,
                                         &memory_handle,
                                         &secret_registry,
                                         Arc::clone(&approval_adapter),
+                                        Arc::clone(&activity_adapter),
                                     )
                                 });
                             let task_sanitized = task_executor.as_ref().map(|e| {
@@ -1209,21 +878,7 @@ pub(crate) fn run_telegram(
                             let state_key = format!("{}:{}", sender_id, task_agent_id);
                             let state = user_states
                                 .entry(state_key)
-                                .or_insert_with(|| ChatLoopState {
-                                    messages: Vec::new(),
-                                    active_flow_key: None,
-                                    manual_session_id: None,
-                                    flow_token_usage: 0,
-                                    active_lens: agent
-                                        .agent_config
-                                        .default_lens
-                                        .parse()
-                                        .unwrap_or(Lens::Eco),
-                                    total_input_tokens: 0,
-                                    total_output_tokens: 0,
-                                    tokens_saved: 0,
-                                    last_prompt_report: None,
-                                });
+                                .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
 
                             // Typing indicator.
                             let _ = pipe.send_chat_action(&msg.sender).await;
@@ -1264,7 +919,7 @@ pub(crate) fn run_telegram(
                                     let output = res.assistant_text.unwrap_or_default();
                                     if !output.is_empty() {
                                         let reply = secret_registry.redact(&output);
-                                        for chunk in chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
                                             let _ = pipe
                                                 .send_text(&msg.sender, chunk, &delivery_opts)
                                                 .await;
@@ -1383,7 +1038,7 @@ pub(crate) fn run_telegram(
                             if let Some(ref src) = agent.skill_source {
                                 agent.skill_registry.reload(src);
                             }
-                            agent.current_tools = rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                            agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
 
                             created = true;
                         }
@@ -1511,12 +1166,15 @@ pub(crate) fn run_telegram(
                     } else {
                         lines.push("No workspace — skills unavailable.".to_string());
                     }
-                    agent.current_tools = rebuild_tools(&agent.base_tools, &agent.skill_registry);
-                    agent.current_system_prompt = rebuild_system_prompt(
+                    agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                         &agent.agent_config,
                         agent.advertise_workspace_tools,
                         &agent.skill_registry,
+                        &agent.current_tools,
                     );
+                    // Rebuild the skill command router after reload.
+                    skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
                     lines.push(format!("{} tool(s) active.", agent.current_tools.len()));
                     let _ = pipe
                         .send_text(&msg.sender, &lines.join("\n"), &delivery_opts)
@@ -1524,24 +1182,130 @@ pub(crate) fn run_telegram(
                     continue;
                 }
 
+                // Check skill-declared commands before built-in commands.
+                if let SkillCommandMatch::Matched {
+                    skill_name,
+                    command: cmd_name,
+                    args,
+                } = skill_command_router.route(&msg.content)
+                {
+                    // Delegate to the agent — inject a system message so
+                    // the agent follows the skill's ## Commands section.
+                    let injected = format!(
+                        "[System: User invoked /{cmd} {args}. Follow the instructions in the ## Commands section of the {skill} skill.]",
+                        cmd = cmd_name,
+                        args = args,
+                        skill = skill_name,
+                    );
+                    // Fall through to normal message processing with the injected prompt.
+                    // We break out of the slash-command block and let the message-routing
+                    // code below handle it as a regular user message.
+
+                    // Use the active (or default) agent.
+                    user_active_agent.insert(sender_id.clone(), active_aid.clone());
+
+                    // Hot-reload skills.
+                    if let Some(ref src) = agent.skill_source {
+                        if agent.skill_registry.reload(src) {
+                            agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                            agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                                &agent.agent_config,
+                                agent.advertise_workspace_tools,
+                                &agent.skill_registry,
+                                &agent.current_tools,
+                            );
+                            skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
+                        }
+                    }
+
+                    // Set recipient for inline approvals.
+                    *current_recipient.lock().unwrap() = Some(msg.sender.clone());
+
+                    // Build executor.
+                    let current_executor =
+                        agent.workspace.as_ref().and_then(|ws| {
+                            channel_runtime::build_tool_executor(
+                                ws,
+                                &agent.current_tools,
+                                &agent.skill_registry,
+                                &memory_handle,
+                                &secret_registry,
+                                Arc::clone(&approval_adapter),
+                                Arc::clone(&activity_adapter),
+                            )
+                        });
+                    let sanitized_executor = current_executor.as_ref().map(|e| {
+                        SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                    });
+
+                    turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+
+                    let state_key = format!("{}:{}", sender_id, active_aid);
+                    let state = user_states.entry(state_key).or_insert_with(|| {
+                        channel_runtime::create_chat_loop_state(&agent.agent_config)
+                    });
+
+                    // Typing indicator.
+                    let _ = pipe.send_chat_action(&msg.sender).await;
+                    let t_pipe = Arc::clone(&pipe);
+                    let t_sender = msg.sender.clone();
+                    let typing_handle = tokio::spawn(async move {
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                            let _ = t_pipe.send_chat_action(&t_sender).await;
+                        }
+                    });
+
+                    let chat_runtime = ChatRuntimeService {
+                        engine: agent.engine.as_ref(),
+                        refiner: refiner.as_ref(),
+                        flow_store: &flow_store,
+                        agent_id: &agent.agent_id,
+                        agent_config: &agent.agent_config,
+                        history_turn_limit: agent.history_turn_limit,
+                        compaction_policy: agent.compaction_policy,
+                        system_prompt: agent.current_system_prompt.clone(),
+                        tools: &agent.current_tools,
+                        tool_executor: sanitized_executor
+                            .as_ref()
+                            .map(|e| e as &dyn ToolExecutor),
+                        memory_service: memory_service_instance.as_ref(),
+                        max_recall_entries: memory_config.max_recall_entries,
+                        max_recall_tokens: memory_config.max_recall_tokens,
+                        tool_observer: None,
+                        cancel: Some(&turn_cancel),
+                    };
+
+                    let result = chat_runtime.process_user_text(state, &injected).await;
+                    typing_handle.abort();
+
+                    match result {
+                        Ok(res) => {
+                            if let Some(notice) = res.system_notice {
+                                let _ = pipe.send_text(&msg.sender, &notice, &delivery_opts).await;
+                            }
+                            if let Some(ref text) = res.assistant_text {
+                                let reply = secret_registry.redact(text);
+                                for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                                    let _ = pipe.send_text(&msg.sender, chunk, &delivery_opts).await;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = pipe
+                                .send_text(&msg.sender, &format!("Error: {}", e), &delivery_opts)
+                                .await;
+                        }
+                    }
+                    continue;
+                }
+
                 let state_key = format!("{}:{}", sender_id, active_aid);
                 let state = user_states.entry(state_key).or_insert_with(|| {
-                    ChatLoopState {
-                        messages: Vec::new(),
-                        active_flow_key: None,
-                        manual_session_id: None,
-                        flow_token_usage: 0,
-                        active_lens: agent.agent_config
-                            .default_lens
-                            .parse()
-                            .unwrap_or(Lens::Eco),
-                        total_input_tokens: 0,
-                        total_output_tokens: 0,
-                        tokens_saved: 0,
-                        last_prompt_report: None,
-                    }
+                    channel_runtime::create_chat_loop_state(&agent.agent_config)
                 });
 
+                let skill_cmds = skill_command_router.list();
                 let cmd_result = chat_commands::handle_chat_command(
                     &msg.content,
                     state,
@@ -1549,6 +1313,7 @@ pub(crate) fn run_telegram(
                     &agent.agent_config,
                     agent.history_turn_limit,
                     agent.compaction_policy,
+                    &skill_cmds,
                 );
                 match cmd_result {
                     CommandResult::Handled(output) => {
@@ -1575,7 +1340,7 @@ pub(crate) fn run_telegram(
             // Route message to an agent.
             // ---------------------------------------------------------------
             let (routed_role, user_text) =
-                parse_agent_routing(&msg.content, Some(&role_to_agent));
+                channel_runtime::parse_agent_routing(&msg.content, Some(&role_to_agent));
 
             let target_agent_id = if let Some(ref role_key) = routed_role {
                 match role_to_agent.get(role_key) {
@@ -1600,7 +1365,7 @@ pub(crate) fn run_telegram(
                 }
             } else if is_multi_agent {
                 // Try keyword-based auto-routing before falling back to sticky/default.
-                infer_agent_from_keywords(&user_text, &role_to_agent)
+                channel_runtime::infer_agent_from_keywords(&user_text, &role_to_agent)
                     .unwrap_or_else(|| {
                         user_active_agent
                             .get(sender_id)
@@ -1622,11 +1387,12 @@ pub(crate) fn run_telegram(
             // Hot-reload skills for this agent.
             if let Some(ref src) = agent.skill_source {
                 if agent.skill_registry.reload(src) {
-                    agent.current_tools = rebuild_tools(&agent.base_tools, &agent.skill_registry);
-                    agent.current_system_prompt = rebuild_system_prompt(
+                    agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                         &agent.agent_config,
                         agent.advertise_workspace_tools,
                         &agent.skill_registry,
+                        &agent.current_tools,
                     );
                 }
             }
@@ -1640,11 +1406,10 @@ pub(crate) fn run_telegram(
 
                 let mut file_notes = Vec::new();
                 for m in media {
-                    let fname = m
-                        .filename
-                        .as_deref()
-                        .unwrap_or("attachment");
-                    let path = attachments_dir.join(fname);
+                    let fname = sanitize_attachment_filename(
+                        m.filename.as_deref().unwrap_or("attachment"),
+                    );
+                    let path = attachments_dir.join(&fname);
                     match std::fs::write(&path, &m.data) {
                         Ok(()) => {
                             info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
@@ -1674,15 +1439,16 @@ pub(crate) fn run_telegram(
             *current_recipient.lock().unwrap() = Some(msg.sender.clone());
 
             // Build executor for this agent.
-            let current_executor: Option<TelegramToolExecutor> =
+            let current_executor =
                 agent.workspace.as_ref().and_then(|ws| {
-                    rebuild_executor(
+                    channel_runtime::build_tool_executor(
                         ws,
                         &agent.current_tools,
                         &agent.skill_registry,
                         &memory_handle,
                         &secret_registry,
                         Arc::clone(&approval_adapter),
+                        Arc::clone(&activity_adapter),
                     )
                 });
 
@@ -1706,9 +1472,10 @@ pub(crate) fn run_telegram(
                 .clone()
                 .unwrap_or_else(|| agent.agent_id.clone());
             let turn_tool_log_ref = Arc::clone(&turn_tool_log);
+            let observer_tools = agent.current_tools.clone();
             let tool_result_observer = move |call: &ToolCall, result: &str| {
                 // Record mutation-type tool calls for activity log.
-                if let Some(entry) = format_tool_for_activity(call) {
+                if let Some(entry) = format_tool_for_activity(call, &observer_tools) {
                     turn_tool_log_ref.lock().unwrap().push(entry);
                 }
 
@@ -1742,20 +1509,7 @@ pub(crate) fn run_telegram(
             // Get or create per-user-per-agent state.
             let state_key = format!("{}:{}", sender_id, target_agent_id);
             let state = user_states.entry(state_key).or_insert_with(|| {
-                ChatLoopState {
-                    messages: Vec::new(),
-                    active_flow_key: None,
-                    manual_session_id: None,
-                    flow_token_usage: 0,
-                    active_lens: agent.agent_config
-                        .default_lens
-                        .parse()
-                        .unwrap_or(Lens::Eco),
-                    total_input_tokens: 0,
-                    total_output_tokens: 0,
-                    tokens_saved: 0,
-                    last_prompt_report: None,
-                }
+                channel_runtime::create_chat_loop_state(&agent.agent_config)
             });
 
             // Show which agent is responding (always in multi-agent setups).
@@ -1780,6 +1534,9 @@ pub(crate) fn run_telegram(
                     turn_system_prompt.push_str(&activity_ctx);
                 }
             }
+
+            // No per-user env var injection needed — Privy credentials are global env vars
+            // and the agent obtains Molecule service tokens autonomously via the skill.
 
             let chat_runtime = ChatRuntimeService {
                 engine: agent.engine.as_ref(),
@@ -1815,6 +1572,8 @@ pub(crate) fn run_telegram(
             let result = chat_runtime.process_user_text(state, &user_content).await;
             typing_handle.abort();
 
+            // (No per-user env vars to clean up — Privy creds are global.)
+
             match result {
                 Ok(result) => {
                     if let Some(notice) = result.system_notice {
@@ -1822,7 +1581,7 @@ pub(crate) fn run_telegram(
                     }
                     if let Some(ref text) = result.assistant_text {
                         let reply = secret_registry.redact(text);
-                        for chunk in chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
                             if let Err(e) =
                                 pipe.send_text(&msg.sender, chunk, &delivery_opts).await
                             {
@@ -1882,35 +1641,18 @@ pub(crate) fn run_telegram(
     Ok(())
 }
 
+/// Replace spaces, commas, and other shell-unsafe characters in attachment
+/// filenames with underscores so agents can reference them in shell commands
+/// without quoting issues.
+fn sanitize_attachment_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn chunk_message_short() {
-        let chunks = chunk_message("hello", 4096);
-        assert_eq!(chunks, vec!["hello"]);
-    }
-
-    #[test]
-    fn chunk_message_splits_at_paragraph_boundary() {
-        let text = format!("{}\n\n{}", "a".repeat(2000), "b".repeat(2000));
-        let chunks = chunk_message(&text, 3000);
-        assert!(chunks.len() >= 2);
-        for c in &chunks {
-            assert!(c.len() <= 3000);
-        }
-    }
-
-    #[test]
-    fn chunk_message_splits_long_single_paragraph() {
-        let text = "x".repeat(5000);
-        let chunks = chunk_message(&text, 2000);
-        assert!(chunks.len() >= 3);
-        for c in &chunks {
-            assert!(c.len() <= 2000);
-        }
-    }
 
     #[test]
     fn build_allowed_users_from_config() {
@@ -1920,104 +1662,6 @@ mod tests {
         assert!(users.contains("111"));
         assert!(users.contains("222"));
         assert_eq!(users.len(), 2);
-    }
-
-    #[test]
-    fn parse_agent_routing_with_role() {
-        let (role, msg) = parse_agent_routing("@backend_engineer: add rate limiting", None);
-        assert_eq!(role.as_deref(), Some("backend_engineer"));
-        assert_eq!(msg, "add rate limiting");
-    }
-
-    #[test]
-    fn parse_agent_routing_hyphenated() {
-        let (role, msg) = parse_agent_routing("@cms-guide: review content models", None);
-        assert_eq!(role.as_deref(), Some("cms_guide"));
-        assert_eq!(msg, "review content models");
-    }
-
-    #[test]
-    fn parse_agent_routing_no_prefix() {
-        let (role, msg) = parse_agent_routing("just a normal message", None);
-        assert!(role.is_none());
-        assert_eq!(msg, "just a normal message");
-    }
-
-    #[test]
-    fn parse_agent_routing_empty_message() {
-        let (role, _) = parse_agent_routing("@qa:", None);
-        assert!(role.is_none());
-    }
-
-    #[test]
-    fn parse_agent_routing_empty_role() {
-        let (role, _) = parse_agent_routing("@: something", None);
-        assert!(role.is_none());
-    }
-
-    #[test]
-    fn parse_agent_routing_without_at_known_role() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        let (role, msg) = parse_agent_routing("backend: add API endpoint", Some(&roles));
-        assert_eq!(role.as_deref(), Some("backend"));
-        assert_eq!(msg, "add API endpoint");
-    }
-
-    #[test]
-    fn parse_agent_routing_without_at_unknown_role_ignored() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        // "hello" is not a known role, so colon is treated as regular text.
-        let (role, msg) = parse_agent_routing("hello: world", Some(&roles));
-        assert!(role.is_none());
-        assert_eq!(msg, "hello: world");
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_single_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        assert_eq!(
-            infer_agent_from_keywords("add backend feature", &roles),
-            Some("backend".into())
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_no_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        assert_eq!(
-            infer_agent_from_keywords("fix the button style", &roles),
-            None
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_ambiguous() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        // Both agents mentioned — ambiguous, returns None.
-        assert_eq!(
-            infer_agent_from_keywords("connect frontend to backend", &roles),
-            None
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_role_key_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend_engineer".into(), "backend".into());
-        roles.insert("backend".into(), "backend".into());
-        // "backend_engineer" is not a single word in the message, but "backend" is.
-        assert_eq!(
-            infer_agent_from_keywords("add backend", &roles),
-            Some("backend".into())
-        );
     }
 
     #[test]
@@ -2053,29 +1697,65 @@ mod tests {
         assert!(ctx.contains("wrote `src/app.js`"));
         assert!(ctx.contains("Backend Engineer"));
         assert!(ctx.contains("wrote `src/api/server.js`"));
-        assert!(ctx.contains("read_file"));
+        assert!(ctx.contains("available tools"));
+    }
+
+    fn test_tool_defs() -> Vec<tengu_core::types::ToolDef> {
+        use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
+        vec![
+            ToolDef {
+                name: "write_file".into(),
+                description: "Write a file".into(),
+                parameters: serde_json::json!({}),
+                policy: Some(ToolPolicyMetadata { risk_level: ToolRiskLevel::Medium, requires_approval: true }),
+            },
+            ToolDef {
+                name: "read_file".into(),
+                description: "Read a file".into(),
+                parameters: serde_json::json!({}),
+                policy: Some(ToolPolicyMetadata { risk_level: ToolRiskLevel::Low, requires_approval: false }),
+            },
+        ]
     }
 
     #[test]
     fn format_tool_for_activity_write_file() {
+        let tools = test_tool_defs();
         let call = ToolCall {
             id: "1".into(),
             name: "write_file".into(),
             arguments: serde_json::json!({"path": "src/main.js", "content": "..."}),
         };
-        assert_eq!(
-            format_tool_for_activity(&call),
-            Some("wrote `src/main.js`".into())
-        );
+        let result = format_tool_for_activity(&call, &tools);
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("write_file"), "should contain the tool name: {}", text);
     }
 
     #[test]
     fn format_tool_for_activity_read_file_skipped() {
+        let tools = test_tool_defs();
         let call = ToolCall {
             id: "1".into(),
             name: "read_file".into(),
             arguments: serde_json::json!({"path": "src/main.js"}),
         };
-        assert!(format_tool_for_activity(&call).is_none());
+        assert!(format_tool_for_activity(&call, &tools).is_none());
+    }
+
+    #[test]
+    fn sanitize_filename_replaces_spaces_and_commas() {
+        assert_eq!(
+            sanitize_attachment_filename("ChatGPT Image Mar 12, 2026, 10_53_35 AM.png"),
+            "ChatGPT_Image_Mar_12__2026__10_53_35_AM.png"
+        );
+    }
+
+    #[test]
+    fn sanitize_filename_preserves_safe_names() {
+        assert_eq!(
+            sanitize_attachment_filename("photo-2026.jpg"),
+            "photo-2026.jpg"
+        );
     }
 }

@@ -25,6 +25,8 @@ pub(crate) struct CommandOutput {
 }
 
 /// Process one slash command.
+///
+/// `skill_commands` is an optional list of `(command_name, skill_name)` for dynamic `/help` output.
 pub(crate) fn handle_chat_command(
     command: &str,
     state: &mut ChatLoopState,
@@ -32,6 +34,7 @@ pub(crate) fn handle_chat_command(
     agent_config: &tengu_core::config::AgentConfig,
     history_turn_limit: usize,
     compaction_policy: FlowCompactionPolicy,
+    skill_commands: &[(String, String)],
 ) -> CommandResult {
     match command {
         "/eco" => {
@@ -153,8 +156,8 @@ pub(crate) fn handle_chat_command(
             ];
             CommandResult::Handled(CommandOutput { lines })
         }
-        "/help" => CommandResult::Handled(CommandOutput {
-            lines: vec![
+        "/help" => {
+            let mut lines = vec![
                 "Commands:".into(),
                 "  /eco       — Eco lens (summaries)".into(),
                 "  /standard  — Standard lens (auto-expand)".into(),
@@ -174,8 +177,16 @@ pub(crate) fn handle_chat_command(
                 "  /enable N  — Enable a skill".into(),
                 "  /disable N — Disable a skill".into(),
                 "  /help      — This help".into(),
-            ],
-        }),
+            ];
+            if !skill_commands.is_empty() {
+                lines.push(String::new());
+                lines.push("Skill commands:".into());
+                for (cmd, skill) in skill_commands {
+                    lines.push(format!("  /{:<10} — from skill '{}'", cmd, skill));
+                }
+            }
+            CommandResult::Handled(CommandOutput { lines })
+        }
         _ => CommandResult::NotHandled,
     }
 }

@@ -45,6 +45,7 @@ pub(crate) fn load_skills(
             Ok(ParsedSkill::Api {
                 definition,
                 context_body,
+                ..
             }) => {
                 if let Err(e) = validate_skill(&definition, reserved_tool_names) {
                     tracing::warn!("Skipping invalid API skill '{}': {}", filename, e);

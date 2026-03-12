@@ -93,20 +93,23 @@ cargo run -- secret remove K  # Remove a secret
 | `/team <goal>` | Plan & execute goal across multiple agents (Telegram) |
 | `/project <name>` | Create new project subfolder in workspace (Telegram) |
 | `/agents` | List available agents and roles (Telegram) |
+| `/wallet` | Show Privy wallet address and balance (Telegram) |
+| `/wallet status` | Show wallet ID, address, balance, and policy (Telegram) |
 
-## Built-In Workspace Tools
+## Built-In Workspace Primitives
 
-When an agent has `workspace` configured, these tools are available automatically:
+When an agent has `workspace` configured, four built-in primitives are available automatically:
 
-| Tool | Risk | Approval | Description |
-|------|------|----------|-------------|
+| Primitive | Risk | Approval | Description |
+|-----------|------|----------|-------------|
 | `read_file` | Low | No | Read file contents (text and PDF) |
 | `list_directory` | Low | No | List files and directories |
 | `write_file` | Medium | Yes | Write content to file |
 | `run_command` | High | Yes | Execute shell command in workspace |
-| `remember` | Low | No | Store fact in long-term memory (when memory enabled) |
 
-Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode.
+These are the stable foundation — all skills and external tools interact with the workspace through these primitives. When memory is enabled, the memory subsystem registers its own `remember` tool automatically.
+
+Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode. Approval dialogs are generated generically from tool metadata (risk level, description), not hardcoded per tool name.
 
 ## Multi-Agent Fleet
 
@@ -192,39 +195,13 @@ See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 
 ## Standalone Tools
 
-The `tools/` directory contains standalone CLI binaries that agents invoke via `run_command`:
+The `tools/` directory contains standalone infrastructure that agents use via skills and primitives — no code changes to tengu-cluster required:
 
 | Tool | Description |
 |------|-------------|
-| `tools/ipnft-minter` | IP-NFT minting CLI for Molecule DeSci Labs (agreement, metadata, terms, on-chain mint) |
+| `tools/tengu-relay` | Cloudflare Worker — API key injection proxy for Molecule/POI/Beach Science (planned rewrite, currently legacy KV bridge) |
 
-These are separate Cargo packages — not part of the main workspace. Build them independently:
-
-```bash
-cd tools/ipnft-minter && cargo build --release
-```
-
-### ipnft-minter
-
-Handles steps 2-9 of the IPNFT minting flow (agreement, image, metadata, terms, sign, mint). The POI registration and on-chain submission (step 1) must be done separately — see `skills/aura-orchestrator/SKILL.md`.
-
-```bash
-ipnft-minter \
-  --reservation-id "TOKEN_ID_FROM_POI" \
-  --poi-tx-hash "0xPOI_TX_HASH" \
-  --merkle-root "MERKLE_ROOT_HASH" \
-  --name "Project" --description "Desc" --symbol SYM \
-  --organization "Org" --lead-name "Name" --lead-email "email" --topic "Topic"
-```
-
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--reservation-id` | Recommended | Token ID from POI on-chain transaction. If omitted, falls back to `reserve()` (sequential ID, not POI-linked). |
-| `--poi-tx-hash` | With `--reservation-id` | Transaction hash of the POI on-chain submission. Required for POI-based assignments. |
-| `--merkle-root` | With `--reservation-id` | Merkle root hash from POI response (`data.proof.tree[0]`). Required for POI-based assignments. |
-| `--name` | Yes | Project name |
-| `--symbol` | Yes | Token symbol |
-| `--image` | No | Path to cover image (uses 1x1 placeholder if omitted) |
+On-chain operations use **Privy agentic wallets** — server-side wallets controlled by the agent with policy-based guardrails. No wallet page or relay needed for signing.
 
 ## Deployment
 
@@ -273,8 +250,10 @@ max_tokens_per_flow = 100_000
 | [Deployment](docs/DEPLOYMENT.md) | Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning, production checklist |
 | [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
 | [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
-| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, heartbeat, events |
+| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, parallel execution |
 | [Sandboxes](docs/SANDBOXES.md) | Domain-specific multi-agent teams, per-agent tool restrictions |
+| [Wallet & Signing](docs/WALLET.md) | Privy agentic wallets, policy setup, on-chain transaction signing |
+| [DeSci Guide](docs/GUIDE_DESCI.md) | End-to-end IP-NFT minting with aura-orchestrator and Privy wallets |
 | [Architecture](ARCHITECTURE.md) | Hexagonal architecture rules and project structure |
 
 ## Feature Flags

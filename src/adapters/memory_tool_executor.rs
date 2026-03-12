@@ -1,5 +1,6 @@
 //! Adapter bridging memory tool calls to the MemoryService.
 //!
+//! Owns the memory subsystem's `ToolDef` definitions via `memory_tool_defs()`.
 //! The tool execution port is synchronous (called from the engine's tool loop),
 //! but both the embedding and memory store ports are async. Uses `block_in_place`
 //! when inside a multi-thread runtime (Telegram), or a fallback runtime (TUI).
@@ -8,8 +9,9 @@ use crate::application::memory_service::MemoryService;
 use crate::application::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
 use crate::domain::secret_registry::SecretRegistry;
 use anyhow::Result;
+use serde_json::json;
 use std::sync::Arc;
-use tengu_core::types::ToolCall;
+use tengu_core::types::{ToolCall, ToolDef, ToolPolicyMetadata, ToolRiskLevel};
 
 /// Shared handle owning the embedding + store ports for Arc-based sharing.
 ///
@@ -71,6 +73,28 @@ impl MemoryToolExecutionAdapter {
     }
 }
 
+/// Return tool definitions owned by the memory subsystem.
+pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
+    vec![ToolDef {
+        name: "remember".into(),
+        description: "Store a fact or insight in long-term memory for future retrieval across sessions.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact, insight, or information to remember"
+                }
+            },
+            "required": ["content"]
+        }),
+        policy: Some(ToolPolicyMetadata {
+            risk_level: ToolRiskLevel::Low,
+            requires_approval: false,
+        }),
+    }]
+}
+
 impl ToolExecutionPort for MemoryToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
         match call.name.as_str() {
@@ -90,13 +114,10 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
 
-                let service = MemoryService::new(
-                    self.handle.embedding.as_ref(),
-                    self.handle.store.as_ref(),
-                );
+                let service =
+                    MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
 
-                let id = self
-                    .run_async(service.remember(content, agent_id))?;
+                let id = self.run_async(service.remember(content, agent_id))?;
 
                 Ok(format!("Stored memory with id: {}", id))
             }

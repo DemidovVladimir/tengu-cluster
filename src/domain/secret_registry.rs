@@ -105,6 +105,9 @@ mod tests {
     fn redacts_multiple_occurrences() {
         let mut reg = SecretRegistry::new();
         reg.register("tok".to_string());
-        assert_eq!(reg.redact("tok tok tok"), "[REDACTED] [REDACTED] [REDACTED]");
+        assert_eq!(
+            reg.redact("tok tok tok"),
+            "[REDACTED] [REDACTED] [REDACTED]"
+        );
     }
 }

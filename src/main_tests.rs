@@ -123,10 +123,10 @@ mod tests {
     fn history_overflow_applies_recent_window_cap_even_with_large_budget() {
         let messages: Vec<Message> = (0..200).map(|i| msg(&format!("m{i}"))).collect();
         let assembled = assemble_recent_history(&messages, 100_000);
-        assert_eq!(assembled.messages.len(), 40);
+        assert_eq!(assembled.messages.len(), 20);
         assert_eq!(assembled.dropped_messages, 0);
-        assert_eq!(assembled.messages[0].content, "m160");
-        assert_eq!(assembled.messages[39].content, "m199");
+        assert_eq!(assembled.messages[0].content, "m180");
+        assert_eq!(assembled.messages[19].content, "m199");
     }
 
     #[test]

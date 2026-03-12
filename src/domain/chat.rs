@@ -15,10 +15,11 @@ pub(crate) struct PromptAssemblyReport {
 }
 
 #[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
 pub(crate) struct HistoryAssembly {
     pub messages: Vec<Message>,
+    #[allow(dead_code)] // read in tests only
     pub used_tokens: usize,
+    #[allow(dead_code)] // read in tests only
     pub dropped_messages: usize,
 }
 

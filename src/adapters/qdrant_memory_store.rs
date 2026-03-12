@@ -155,14 +155,15 @@ impl MemoryStorePort for QdrantMemoryStore {
                         })
                         .unwrap_or(0);
 
-                    let id = scored.id.as_ref().and_then(|pid| {
-                        match &pid.point_id_options {
+                    let id = scored
+                        .id
+                        .as_ref()
+                        .and_then(|pid| match &pid.point_id_options {
                             Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)) => {
                                 Some(uuid.clone())
                             }
                             _ => None,
-                        }
-                    })?;
+                        })?;
 
                     Some(MemorySearchResult {
                         entry: MemoryEntry {
@@ -250,14 +251,9 @@ mod tests {
     #[ignore]
     async fn qdrant_integration_round_trip() {
         let collection = format!("test-tengu-{}", uuid::Uuid::new_v4());
-        let store = QdrantMemoryStore::new(
-            "http://localhost:6334",
-            None,
-            &collection,
-            3,
-        )
-        .await
-        .expect("connect to Qdrant");
+        let store = QdrantMemoryStore::new("http://localhost:6334", None, &collection, 3)
+            .await
+            .expect("connect to Qdrant");
 
         let entry = MemoryEntry {
             id: uuid::Uuid::new_v4().to_string(),

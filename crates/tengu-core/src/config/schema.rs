@@ -247,8 +247,6 @@ fn default_max_tokens() -> u64 {
 pub struct OrchestratorConfig {
     #[serde(default = "default_orchestrator_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_heartbeat_interval")]
-    pub heartbeat_interval_s: u64,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 }
@@ -257,7 +255,6 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             enabled: default_orchestrator_enabled(),
-            heartbeat_interval_s: default_heartbeat_interval(),
             max_retries: default_max_retries(),
         }
     }
@@ -265,9 +262,6 @@ impl Default for OrchestratorConfig {
 
 fn default_orchestrator_enabled() -> bool {
     false
-}
-fn default_heartbeat_interval() -> u64 {
-    30
 }
 fn default_max_retries() -> u32 {
     3
@@ -430,10 +424,10 @@ fn default_max_file_tokens() -> usize {
     2000
 }
 fn default_max_skill_context_tokens() -> usize {
-    8000
+    4000
 }
 fn default_max_total_tokens() -> usize {
-    16000
+    8000
 }
 
 /// Lens-specific retrieval and budgeting parameters.
@@ -823,5 +817,4 @@ mod tests {
             .to_string()
             .contains("cannot exceed context_window_override"));
     }
-
 }

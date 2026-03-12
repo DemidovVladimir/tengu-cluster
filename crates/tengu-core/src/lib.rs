@@ -2,11 +2,9 @@
 //!
 //! This crate defines the runtime-neutral traits (`Engine`, `Pipe`, `Refiner`, `Tool`),
 //! common configuration models, and shared transport types.
-//! `types::StreamEvent` provides model-stream lifecycle events, and `events`
-//! defines internal runtime domain events for event-bus-driven side-effects.
+//! `types::StreamEvent` provides model-stream lifecycle events.
 
 pub mod config;
-pub mod events;
 pub mod token;
 pub mod types;
 

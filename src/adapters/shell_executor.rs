@@ -32,10 +32,7 @@ impl ShellExecutionPort for LocalShellExecutor {
                     if start.elapsed() >= SHELL_TIMEOUT {
                         let _ = child.kill();
                         let _ = child.wait();
-                        anyhow::bail!(
-                            "Command timed out after {}s",
-                            SHELL_TIMEOUT.as_secs()
-                        );
+                        anyhow::bail!("Command timed out after {}s", SHELL_TIMEOUT.as_secs());
                     }
                     std::thread::sleep(Duration::from_millis(50));
                 }

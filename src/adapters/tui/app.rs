@@ -38,4 +38,3 @@ pub enum ThemeMode {
     Dark,
     Light,
 }
-

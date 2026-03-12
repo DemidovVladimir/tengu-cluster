@@ -27,8 +27,9 @@ pub(crate) struct DiskVectorMemoryStore {
 impl DiskVectorMemoryStore {
     /// Load existing store from disk, or create empty if no file exists.
     pub(crate) fn new(store_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(store_dir)
-            .with_context(|| format!("failed to create memory store dir: {}", store_dir.display()))?;
+        std::fs::create_dir_all(store_dir).with_context(|| {
+            format!("failed to create memory store dir: {}", store_dir.display())
+        })?;
 
         let store_path = store_dir.join("vectors.bin");
         let entries = if store_path.exists() {
@@ -70,7 +71,10 @@ impl MemoryStorePort for DiskVectorMemoryStore {
     fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         let entry = entry.clone();
         Box::pin(async move {
-            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            let mut entries = self
+                .entries
+                .write()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
             entries.push(entry);
             self.flush(&entries)
         })
@@ -83,7 +87,10 @@ impl MemoryStorePort for DiskVectorMemoryStore {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>> {
         let embedding = embedding.to_vec();
         Box::pin(async move {
-            let entries = self.entries.read().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            let entries = self
+                .entries
+                .read()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
 
             let mut scored: Vec<MemorySearchResult> = entries
                 .iter()
@@ -96,7 +103,11 @@ impl MemoryStorePort for DiskVectorMemoryStore {
                 })
                 .collect();
 
-            scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            scored.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             scored.truncate(top_k);
             Ok(scored)
         })
@@ -105,7 +116,10 @@ impl MemoryStorePort for DiskVectorMemoryStore {
     fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
         let id = id.to_string();
         Box::pin(async move {
-            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            let mut entries = self
+                .entries
+                .write()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
             let before = entries.len();
             entries.retain(|e| e.id != id);
             let deleted = entries.len() < before;
@@ -118,21 +132,24 @@ impl MemoryStorePort for DiskVectorMemoryStore {
 
     fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let mut entries = self.entries.write().map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+            let mut entries = self
+                .entries
+                .write()
+                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
             entries.clear();
             self.flush(&entries)
         })
     }
 
     fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
-        Box::pin(async move {
-            self.entries.read().map(|e| e.len()).unwrap_or(0)
-        })
+        Box::pin(async move { self.entries.read().map(|e| e.len()).unwrap_or(0) })
     }
 
     fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
         Box::pin(async move {
-            std::fs::metadata(&self.store_path).map(|m| m.len()).unwrap_or(0)
+            std::fs::metadata(&self.store_path)
+                .map(|m| m.len())
+                .unwrap_or(0)
         })
     }
 }
@@ -177,9 +194,18 @@ mod tests {
         let store = DiskVectorMemoryStore::new(tmp.path()).unwrap();
 
         // Store entries with different embeddings
-        store.store(&make_entry("close", vec![0.9, 0.1, 0.0])).await.unwrap();
-        store.store(&make_entry("far", vec![0.0, 0.0, 1.0])).await.unwrap();
-        store.store(&make_entry("mid", vec![0.5, 0.5, 0.0])).await.unwrap();
+        store
+            .store(&make_entry("close", vec![0.9, 0.1, 0.0]))
+            .await
+            .unwrap();
+        store
+            .store(&make_entry("far", vec![0.0, 0.0, 1.0]))
+            .await
+            .unwrap();
+        store
+            .store(&make_entry("mid", vec![0.5, 0.5, 0.0]))
+            .await
+            .unwrap();
 
         // Search with query similar to "close"
         let results = store.search_by_vector(&[1.0, 0.0, 0.0], 3).await.unwrap();

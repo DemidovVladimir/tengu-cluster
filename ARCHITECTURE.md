@@ -51,7 +51,7 @@ Forbidden:
 - `src/domain`: runtime domain policies/state.
 - `src/application`: runtime use-case orchestration.
 - `src/adapters`: runtime infrastructure adapters (engine factory, probes, flow-store, workspace tools, task-store, Telegram, TUI, memory).
-- `tools/`: standalone CLI binaries invoked by agents via `run_command` (not workspace members).
+- `tools/`: standalone infrastructure (services, CLIs) used by agents via skills and workspace primitives (not workspace members, no code changes to tengu-cluster required).
 
 ## Current Applied Runtime Slices
 
@@ -79,12 +79,10 @@ Forbidden:
 | `prompt_budget.rs` | Context window budgeting and history assembly |
 | `flow_compaction.rs` | Flow compaction orchestration |
 | `flow_policy.rs` | Compaction policy resolution from config |
-| `workspace_tools_catalog.rs` | Built-in tool definitions: read_file, list_directory, write_file, run_command, remember |
+| `workspace_tools_catalog.rs` | Built-in workspace primitive definitions: read_file, list_directory, write_file, run_command |
 | `tool_use_service.rs` | Tool execution with policy check, activity publishing, and approval gate |
 | `skill_catalog.rs` | Skill loading (`LoadedSkillSet`), validation, per-agent filtering, context fragment collection |
 | `task_orchestrator.rs` | Task lifecycle service (create/assign/complete/retry) |
-| `fleet_runtime.rs` | In-memory fleet agent registry, scheduling, per-agent prompt + tools |
-| `heartbeat.rs` | Periodic heartbeat loop for stall detection |
 | `memory_service.rs` | Memory application service (embed→store, embed→search→budget recall, forget) |
 | `skill_registry.rs` | Mutable skill registry with hot-reload, enable/disable |
 
@@ -92,26 +90,26 @@ Forbidden:
 
 | File | Purpose |
 |------|---------|
-| `tui/mod.rs` | Full-screen TUI with cursive, interactive tool approval dialog, delegates to application services |
+| `channel_runtime.rs` | Shared channel runtime helpers: tool/executor/prompt rebuilding, memory init, agent routing, message chunking, state factories — all channel adapters delegate here |
+| `tui/mod.rs` | Full-screen TUI with cursive, interactive tool approval dialog, delegates to channel_runtime + application services |
 | `workspace_tools.rs` | Filesystem tool execution adapter (read_file, list_directory, write_file, run_command) |
 | `flow_store.rs` | JSON-based flow persistence |
 | `engine_factory.rs` | Engine construction from config (routes to OpenRouter, Anthropic, OpenAI, Ollama, HuggingFace, Claude Code) |
 | `doctor_probe.rs` | Provider connectivity diagnostics |
-| `system_prompt.rs` | Workspace system prompt file loading + skill context injection |
+| `system_prompt.rs` | System prompt builder — generates tool listing dynamically from ToolDef metadata |
 | `composite_tool_executor.rs` | Vec-based composite executor routing (open for arbitrary tool executors) |
 | `skill_source.rs` | Filesystem skill.md discovery |
 | `skill_tool_executor.rs` | Skill execution via shell |
 | `shell_executor.rs` | Local shell command execution |
 | `task_store.rs` | In-memory task store implementing TaskStorePort |
-| `orchestrator.rs` | Fleet orchestrator: per-agent engine/tools wiring, interactive stdin task dispatch, role-based routing, shared memory |
+| `orchestrator.rs` | Fleet orchestrator: per-agent engine/tools wiring, interactive stdin task dispatch, role-based routing, shared memory, JoinSet parallel batch execution |
 | `embedding.rs` | OpenRouter embedding API adapter (EmbeddingPort) — produces `Vec<f32>` vectors |
 | `memory_store.rs` | Disk-backed vector store with brute-force cosine similarity and bincode persistence (MemoryStorePort) |
 | `qdrant_memory_store.rs` | Qdrant-backed vector store via gRPC, ANN cosine search (MemoryStorePort, `--features qdrant`) |
-| `memory_tool_executor.rs` | Memory tool execution bridge (sync→async via dedicated runtime) |
+| `memory_tool_executor.rs` | Memory tool definitions + execution bridge (owns `remember` ToolDef, sync→async via dedicated runtime) |
+| `tool_ui.rs` | Shared generic UI helpers for tool approval dialogs and activity summaries (no tool name matching) |
 | `secret_store.rs` | AES-256-GCM encrypted secrets vault (PBKDF2 key derivation, rpassword prompting) |
-| `telegram_runtime.rs` | Headless Telegram bot adapter: TelegramPipe → ChatRuntimeService, inline keyboard approval, typing indicator, file attachments, message chunking, tool result observer |
-| `event_bus.rs` | In-process EventBus implementation (tokio channels) |
-| `tool_bridge.rs` | Bridges core `Tool` trait to `ToolExecutionPort` for pluggable tools |
+| `telegram_runtime.rs` | Headless Telegram bot adapter: TelegramPipe → ChatRuntimeService, inline keyboard approval, typing indicator, file attachments, delegates to channel_runtime for shared logic |
 
 ### Channel Adapters (`crates/tengu-channels/`)
 
@@ -137,6 +135,17 @@ Forbidden:
 | `HeartbeatTick` | Periodic heartbeat tick |
 | `AgentStatusReport` | Agent status broadcast |
 
+## Composability Principles
+
+The system is designed for maximum composability — adding new capabilities should never require code changes to tengu-cluster:
+
+- **Skills** (knowledge/instructions) — drop a `SKILL.md` file into `skills/`, it's immediately available. No code changes.
+- **Tools** (infrastructure/capability) — standalone services, CLIs, or libraries in `tools/`. Agents interact with them via skills and workspace primitives. No code changes.
+- **Channels** (communication) — telegram, TUI, future slack/discord/email. Isolated via port traits. Application and domain layers are channel-agnostic.
+- **4 Workspace Primitives** — `read_file`, `list_directory`, `write_file`, `run_command`. These are the stable "syscall" layer through which agents interact with all external tools.
+
+Each subsystem (memory, skills, etc.) owns its own tool definitions. The system prompt tool listing is generated dynamically from `ToolDef` metadata. Approval dialogs work generically from risk level and description, not hardcoded tool names.
+
 ## Tool Approval Flow
 
 Tools with `requires_approval: true` go through the `ToolApprovalPort` before execution:
@@ -158,21 +167,12 @@ Configured via `agents.<id>.limits.max_tokens_per_flow` (default: 100,000).
 ## Enforcement
 
 Automated checks exist in:
-- `tests/hex_architecture_enforcement.rs` (18 tests, including feature-gated)
+- `tests/hex_architecture_enforcement.rs` (5 tests)
 
 Enforced invariants:
 - Domain files contain no `reqwest`, `cursive`, `std::fs`, `tokio::process`
 - Application files contain no `reqwest`, `cursive`, `std::fs`, `tokio::process`
-- TUI delegates to `ChatRuntimeService` / `ToolUseService` (no direct engine/tool calls)
 - `main.rs` uses hexagonal modules, no direct HTTP/process probing
-- Orchestrator modules exist at correct layer boundaries
-- `InMemoryTaskStore` implements `TaskStorePort`
-- `DiskVectorMemoryStore` implements `MemoryStorePort`
-- `QdrantMemoryStore` adapter exists and implements `MemoryStorePort`
-- `OpenRouterEmbeddingAdapter` implements `EmbeddingPort`
-- Memory modules exist at correct layer boundaries
-- Qdrant does not leak into domain or application layers
-- Telegram runtime adapter delegates to `ChatRuntimeService` (no direct engine calls)
-- Skill registry exists at application boundary
+- Module layout exists (`domain/`, `application/`, `adapters/`)
 
 CI/local tests must stay green for architecture guardrails.

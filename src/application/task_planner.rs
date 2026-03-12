@@ -107,9 +107,7 @@ pub(crate) fn resolve_execution_order(tasks: &[PlanTask]) -> Result<Vec<Vec<usiz
             }
         }
         if batch.is_empty() {
-            anyhow::bail!(
-                "Circular dependency detected — some tasks can never execute"
-            );
+            anyhow::bail!("Circular dependency detected — some tasks can never execute");
         }
         for &idx in &batch {
             completed[idx] = true;

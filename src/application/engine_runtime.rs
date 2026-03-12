@@ -17,7 +17,7 @@ const MAX_TOOL_ROUNDS: usize = 15;
 
 /// Maximum characters kept per tool result to prevent context explosion.
 /// Tool results exceeding this limit are truncated with a suffix note.
-const MAX_TOOL_RESULT_CHARS: usize = 4_000;
+const MAX_TOOL_RESULT_CHARS: usize = 2_000;
 
 /// Maximum seconds to wait for a single stream event before treating the stream as dead.
 /// If no event arrives within this window, the engine turn is aborted with an error.
@@ -32,7 +32,7 @@ pub(crate) struct EngineResponse {
 
 /// Trait for executing tool calls. Implementations decide how to handle
 /// each tool (immediate execution, user confirmation, etc.).
-pub(crate) trait ToolExecutor {
+pub(crate) trait ToolExecutor: Send + Sync {
     /// Execute a tool call and return the result string.
     /// Returns Err if the tool call cannot be executed.
     fn execute(&self, call: &ToolCall) -> Result<String>;
@@ -66,7 +66,7 @@ impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
 /// Optional callback invoked after each tool execution, before feeding the
 /// result back to the engine. Callers (e.g. Telegram) use this to show
 /// tool results to the user for debugging.
-pub(crate) type ToolResultObserver<'a> = &'a dyn Fn(&ToolCall, &str);
+pub(crate) type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 
 /// Execute one or more engine rounds, handling tool calls automatically.
 ///
@@ -92,9 +92,7 @@ pub(crate) async fn collect_engine_response(
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
 
-    let is_cancelled = || {
-        cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
     for round in 0..MAX_TOOL_ROUNDS {
         if is_cancelled() {
@@ -190,9 +188,7 @@ async fn run_single_engine_turn(
     let mut pending_tool_name: Option<String> = None;
     let mut pending_tool_args = String::new();
 
-    let is_cancelled = || {
-        cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
     loop {
         if is_cancelled() {
@@ -381,7 +377,10 @@ fn extract_xml_tool_calls(text: &str) -> Vec<ToolCall> {
             };
             let value = &args_section[v_inner..v_inner + v_end];
 
-            args.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            args.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
             arg_cursor = v_inner + v_end + ARG_VAL_CLOSE.len();
         }
 
@@ -465,7 +464,8 @@ mod tests {
 
     #[test]
     fn test_strip_xml_tool_calls() {
-        let text = "Before\n<tool_call>foo<arg_key>a</arg_key><arg_value>1</arg_value></tool_call>\nAfter";
+        let text =
+            "Before\n<tool_call>foo<arg_key>a</arg_key><arg_value>1</arg_value></tool_call>\nAfter";
         let stripped = strip_xml_tool_calls(text);
         assert_eq!(stripped, "Before\n\nAfter");
     }

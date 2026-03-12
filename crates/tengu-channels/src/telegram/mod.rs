@@ -22,7 +22,8 @@ use tengu_core::{AccessPolicy, Pipe, PipeCapabilities, PipeContext};
 pub type CallbackEvent = (String, i64);
 
 /// Map of approval_id → oneshot sender for resolving inline keyboard responses.
-pub type PendingApprovals = Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+pub type PendingApprovals =
+    Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
 
 /// Telegram bot pipe backed by teloxide.
 pub struct TelegramPipe {
@@ -96,10 +97,7 @@ impl TelegramPipe {
             .ok_or_else(|| anyhow::anyhow!("Approval support not configured"))?;
 
         let (tx, rx) = tokio::sync::oneshot::channel();
-        pending
-            .lock()
-            .unwrap()
-            .insert(approval_id.to_string(), tx);
+        pending.lock().unwrap().insert(approval_id.to_string(), tx);
 
         let bot = Bot::new(&self.token);
         let chat_id: i64 = target
@@ -187,170 +185,164 @@ impl Pipe for TelegramPipe {
             // Branch 1: handle normal messages.
             let cancel_for_handler = turn_cancel.clone();
             let groups_ref = Arc::clone(&media_groups);
-            let msg_handler = Update::filter_message().endpoint(
-                move |msg: Message, bot: Bot| {
-                    let tx = inbound_tx.clone();
-                    let cancel = cancel_for_handler.clone();
-                    let groups = Arc::clone(&groups_ref);
-                    async move {
-                        // Text comes from text() for plain messages, caption() for media messages.
-                        let text = msg
-                            .text()
-                            .or(msg.caption())
-                            .unwrap_or_default()
-                            .to_string();
+            let msg_handler = Update::filter_message().endpoint(move |msg: Message, bot: Bot| {
+                let tx = inbound_tx.clone();
+                let cancel = cancel_for_handler.clone();
+                let groups = Arc::clone(&groups_ref);
+                async move {
+                    // Text comes from text() for plain messages, caption() for media messages.
+                    let text = msg.text().or(msg.caption()).unwrap_or_default().to_string();
 
-                        // Intercept /stop — set the cancel flag and don't forward.
-                        // Use starts_with to handle Telegram's @botname suffix.
-                        if text == "/stop" || text.starts_with("/stop@") {
-                            if let Some(ref flag) = cancel {
-                                flag.store(true, Ordering::Relaxed);
-                            }
-                            let chat_id = msg.chat.id.0;
-                            let _ = bot
-                                .send_message(
-                                    teloxide::types::ChatId(chat_id),
-                                    "⏹ Stopping current operation...",
-                                )
-                                .await;
-                            return Ok(());
+                    // Intercept /stop — set the cancel flag and don't forward.
+                    // Use starts_with to handle Telegram's @botname suffix.
+                    if text == "/stop" || text.starts_with("/stop@") {
+                        if let Some(ref flag) = cancel {
+                            flag.store(true, Ordering::Relaxed);
                         }
+                        let chat_id = msg.chat.id.0;
+                        let _ = bot
+                            .send_message(
+                                teloxide::types::ChatId(chat_id),
+                                "⏹ Stopping current operation...",
+                            )
+                            .await;
+                        return Ok(());
+                    }
 
-                        // Download attached documents and photos.
-                        let mut media_payloads: Vec<MediaPayload> = Vec::new();
+                    // Download attached documents and photos.
+                    let mut media_payloads: Vec<MediaPayload> = Vec::new();
 
-                        if let Some(doc) = msg.document() {
+                    if let Some(doc) = msg.document() {
+                        match download_telegram_file(
+                            &bot,
+                            &doc.file.id,
+                            doc.mime_type.as_ref().map(|m| m.to_string()),
+                            doc.file_name.clone(),
+                        )
+                        .await
+                        {
+                            Ok(payload) => media_payloads.push(payload),
+                            Err(e) => error!("Failed to download Telegram document: {}", e),
+                        }
+                    }
+
+                    if let Some(photos) = msg.photo() {
+                        // Take the largest available resolution (last in array).
+                        if let Some(photo) = photos.last() {
                             match download_telegram_file(
                                 &bot,
-                                &doc.file.id,
-                                doc.mime_type.as_ref().map(|m| m.to_string()),
-                                doc.file_name.clone(),
+                                &photo.file.id,
+                                Some("image/jpeg".to_string()),
+                                Some("photo.jpg".to_string()),
                             )
                             .await
                             {
                                 Ok(payload) => media_payloads.push(payload),
-                                Err(e) => error!("Failed to download Telegram document: {}", e),
+                                Err(e) => error!("Failed to download Telegram photo: {}", e),
                             }
                         }
+                    }
 
-                        if let Some(photos) = msg.photo() {
-                            // Take the largest available resolution (last in array).
-                            if let Some(photo) = photos.last() {
-                                match download_telegram_file(
-                                    &bot,
-                                    &photo.file.id,
-                                    Some("image/jpeg".to_string()),
-                                    Some("photo.jpg".to_string()),
-                                )
-                                .await
-                                {
-                                    Ok(payload) => media_payloads.push(payload),
-                                    Err(e) => error!("Failed to download Telegram photo: {}", e),
-                                }
-                            }
-                        }
+                    if text.is_empty() && media_payloads.is_empty() {
+                        return Ok::<(), teloxide::RequestError>(());
+                    }
 
-                        if text.is_empty() && media_payloads.is_empty() {
-                            return Ok::<(), teloxide::RequestError>(());
-                        }
+                    let chat_id = msg.chat.id.0.to_string();
+                    let sender_id = msg
+                        .from
+                        .as_ref()
+                        .map(|u| u.id.0.to_string())
+                        .unwrap_or_else(|| chat_id.clone());
 
-                        let chat_id = msg.chat.id.0.to_string();
-                        let sender_id = msg
-                            .from
-                            .as_ref()
-                            .map(|u| u.id.0.to_string())
-                            .unwrap_or_else(|| chat_id.clone());
-
-                        // If this message belongs to a media group, buffer it
-                        // and wait for the rest of the group.
-                        if let Some(group_id) = msg.media_group_id() {
-                            let group_id = group_id.to_string();
-                            let is_first = {
-                                let mut map = groups.lock().await;
-                                let entry = map.entry(group_id.clone()).or_insert_with(|| {
-                                    MediaGroupState {
+                    // If this message belongs to a media group, buffer it
+                    // and wait for the rest of the group.
+                    if let Some(group_id) = msg.media_group_id() {
+                        let group_id = group_id.to_string();
+                        let is_first = {
+                            let mut map = groups.lock().await;
+                            let entry =
+                                map.entry(group_id.clone())
+                                    .or_insert_with(|| MediaGroupState {
                                         text: String::new(),
                                         media: Vec::new(),
                                         chat_id: chat_id.clone(),
                                         sender_id: sender_id.clone(),
-                                    }
-                                });
-                                if !text.is_empty() && entry.text.is_empty() {
-                                    entry.text = text;
-                                }
-                                entry.media.extend(media_payloads);
-                                entry.media.len() == 1 // first file in group
-                            };
-
-                            // Only the first message in the group spawns the flush task.
-                            if is_first {
-                                let flush_tx = tx.clone();
-                                let flush_groups = Arc::clone(&groups);
-                                let flush_group_id = group_id;
-                                tokio::spawn(async move {
-                                    // Wait for remaining group members to arrive.
-                                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                                    let state = flush_groups.lock().await.remove(&flush_group_id);
-                                    if let Some(state) = state {
-                                        debug!(
-                                            group_id = %flush_group_id,
-                                            attachments = state.media.len(),
-                                            "Flushing media group"
-                                        );
-                                        let inbound = InboundMessage {
-                                            sender: Recipient {
-                                                pipe_id: "telegram".to_string(),
-                                                peer_id: state.sender_id,
-                                                account_id: None,
-                                                thread_id: Some(state.chat_id),
-                                            },
-                                            content: state.text,
-                                            timestamp: chrono::Utc::now(),
-                                            media: if state.media.is_empty() {
-                                                None
-                                            } else {
-                                                Some(state.media)
-                                            },
-                                        };
-                                        if flush_tx.send(inbound).await.is_err() {
-                                            error!("Failed to forward media group to inbound channel");
-                                        }
-                                    }
-                                });
+                                    });
+                            if !text.is_empty() && entry.text.is_empty() {
+                                entry.text = text;
                             }
-                            return Ok(());
-                        }
-
-                        debug!(
-                            chat_id = %chat_id,
-                            sender = %sender_id,
-                            attachments = media_payloads.len(),
-                            "Telegram message received"
-                        );
-
-                        let inbound = InboundMessage {
-                            sender: Recipient {
-                                pipe_id: "telegram".to_string(),
-                                peer_id: sender_id,
-                                account_id: None,
-                                thread_id: Some(chat_id),
-                            },
-                            content: text,
-                            timestamp: chrono::Utc::now(),
-                            media: if media_payloads.is_empty() {
-                                None
-                            } else {
-                                Some(media_payloads)
-                            },
+                            entry.media.extend(media_payloads);
+                            entry.media.len() == 1 // first file in group
                         };
 
-                        if tx.send(inbound).await.is_err() {
-                            error!("Failed to forward Telegram message to inbound channel");
+                        // Only the first message in the group spawns the flush task.
+                        if is_first {
+                            let flush_tx = tx.clone();
+                            let flush_groups = Arc::clone(&groups);
+                            let flush_group_id = group_id;
+                            tokio::spawn(async move {
+                                // Wait for remaining group members to arrive.
+                                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                let state = flush_groups.lock().await.remove(&flush_group_id);
+                                if let Some(state) = state {
+                                    debug!(
+                                        group_id = %flush_group_id,
+                                        attachments = state.media.len(),
+                                        "Flushing media group"
+                                    );
+                                    let inbound = InboundMessage {
+                                        sender: Recipient {
+                                            pipe_id: "telegram".to_string(),
+                                            peer_id: state.sender_id,
+                                            account_id: None,
+                                            thread_id: Some(state.chat_id),
+                                        },
+                                        content: state.text,
+                                        timestamp: chrono::Utc::now(),
+                                        media: if state.media.is_empty() {
+                                            None
+                                        } else {
+                                            Some(state.media)
+                                        },
+                                    };
+                                    if flush_tx.send(inbound).await.is_err() {
+                                        error!("Failed to forward media group to inbound channel");
+                                    }
+                                }
+                            });
                         }
-                        Ok(())
+                        return Ok(());
                     }
-                },
-            );
+
+                    debug!(
+                        chat_id = %chat_id,
+                        sender = %sender_id,
+                        attachments = media_payloads.len(),
+                        "Telegram message received"
+                    );
+
+                    let inbound = InboundMessage {
+                        sender: Recipient {
+                            pipe_id: "telegram".to_string(),
+                            peer_id: sender_id,
+                            account_id: None,
+                            thread_id: Some(chat_id),
+                        },
+                        content: text,
+                        timestamp: chrono::Utc::now(),
+                        media: if media_payloads.is_empty() {
+                            None
+                        } else {
+                            Some(media_payloads)
+                        },
+                    };
+
+                    if tx.send(inbound).await.is_err() {
+                        error!("Failed to forward Telegram message to inbound channel");
+                    }
+                    Ok(())
+                }
+            });
 
             // Branch 2: handle inline keyboard callback queries.
             let callback_handler = Update::filter_callback_query().endpoint(
@@ -359,13 +351,14 @@ impl Pipe for TelegramPipe {
                     async move {
                         if let Some(data) = q.data {
                             // Parse "approve:<id>" or "deny:<id>".
-                            let (approved, approval_id) = if let Some(id) = data.strip_prefix("approve:") {
-                                (true, id.to_string())
-                            } else if let Some(id) = data.strip_prefix("deny:") {
-                                (false, id.to_string())
-                            } else {
-                                return Ok::<(), teloxide::RequestError>(());
-                            };
+                            let (approved, approval_id) =
+                                if let Some(id) = data.strip_prefix("approve:") {
+                                    (true, id.to_string())
+                                } else if let Some(id) = data.strip_prefix("deny:") {
+                                    (false, id.to_string())
+                                } else {
+                                    return Ok::<(), teloxide::RequestError>(());
+                                };
 
                             // Answer the callback to dismiss the spinner.
                             let answer_text = if approved { "Approved" } else { "Denied" };
@@ -374,9 +367,17 @@ impl Pipe for TelegramPipe {
                             // Edit the original message to remove the keyboard.
                             if let Some(msg) = q.message {
                                 if let Some(text) = msg.regular_message().and_then(|m| m.text()) {
-                                    let status = if approved { "✅ Approved" } else { "❌ Denied" };
+                                    let status = if approved {
+                                        "✅ Approved"
+                                    } else {
+                                        "❌ Denied"
+                                    };
                                     let _ = bot
-                                        .edit_message_text(msg.chat().id, msg.id(), format!("{}\n\n{}", text, status))
+                                        .edit_message_text(
+                                            msg.chat().id,
+                                            msg.id(),
+                                            format!("{}\n\n{}", text, status),
+                                        )
                                         .await;
                                 }
                             }
@@ -393,9 +394,7 @@ impl Pipe for TelegramPipe {
                 },
             );
 
-            let handler = dptree::entry()
-                .branch(msg_handler)
-                .branch(callback_handler);
+            let handler = dptree::entry().branch(msg_handler).branch(callback_handler);
 
             let mut dispatcher = Dispatcher::builder(bot, handler)
                 .enable_ctrlc_handler()
@@ -444,11 +443,7 @@ impl Pipe for TelegramPipe {
         Ok(())
     }
 
-    async fn send_media(
-        &self,
-        target: &Recipient,
-        media: &MediaPayload,
-    ) -> anyhow::Result<()> {
+    async fn send_media(&self, target: &Recipient, media: &MediaPayload) -> anyhow::Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::{ChatId, InputFile};
 

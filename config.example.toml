@@ -30,17 +30,17 @@ mode = "off"
 [agents.main]
 default = true
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 
 # OpenRouter model examples (just change the model line):
-# model = "anthropic/claude-sonnet-4"        # Claude Sonnet 4
+# model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
+# model = "nvidia/nemotron-3-super-120b-a12b:free"        # Claude Sonnet 4 (premium)
 # model = "openai/gpt-4o"                    # GPT-4o
 # model = "google/gemini-2.5-pro"            # Gemini 2.5 Pro
 # model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
-# model = "mistralai/mistral-large"          # Mistral Large
-# model = "deepseek/deepseek-chat-v3"        # DeepSeek V3
+# model = "deepseek/deepseek-chat-v3"        # DeepSeek V3 (cheapest)
 
 # Alternative: direct provider engines (requires provider-specific API key)
 # engine = "anthropic"
@@ -113,7 +113,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [orchestrator]
 # enabled = true
-# heartbeat_interval_s = 30
 # max_retries = 3
 
 # Roles are dynamic — any non-empty string works.
@@ -122,7 +121,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [agents.qa]
 # engine = "openrouter"
-# model = "anthropic/claude-sonnet-4"
+# model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "qa"
 # allowed_tools = ["read_file", "list_directory", "run_command"]
 # skills = ["search", "test_runner"]
@@ -140,7 +139,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [agents.backend]
 # engine = "openrouter"
-# model = "anthropic/claude-sonnet-4"
+# model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "backend_engineer"
 # allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 #

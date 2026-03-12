@@ -1,6 +1,6 @@
 //! Workspace scaffold — creates directories and seed files before agents start.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tengu_core::config::ScaffoldConfig;
 use tracing::info;
 
@@ -31,7 +31,10 @@ pub(crate) fn apply_scaffold(scaffold: &ScaffoldConfig) -> anyhow::Result<PathBu
         std::fs::create_dir_all(&full)?;
     }
     if !scaffold.directories.is_empty() {
-        info!(count = scaffold.directories.len(), "Scaffold: directories created");
+        info!(
+            count = scaffold.directories.len(),
+            "Scaffold: directories created"
+        );
     }
 
     // Seed files (skip if already exists).
@@ -49,7 +52,11 @@ pub(crate) fn apply_scaffold(scaffold: &ScaffoldConfig) -> anyhow::Result<PathBu
         created += 1;
     }
     if created > 0 {
-        info!(created, total = scaffold.files.len(), "Scaffold: seed files written");
+        info!(
+            created,
+            total = scaffold.files.len(),
+            "Scaffold: seed files written"
+        );
     }
 
     Ok(root)

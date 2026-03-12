@@ -17,7 +17,6 @@ mode = "off"
 
 [orchestrator]
 enabled = true
-heartbeat_interval_s = 30
 max_retries = 2
 
 # --- Scaffold ---
@@ -68,7 +67,7 @@ serde_json = "1.0"
 
 [agents.system_designer]
 engine = "openrouter"
-model = "openai/gpt-5.3-codex"
+model = "openai/gpt-4o"
 role = "system_designer"
 default = true
 workspace = "~/webstudio-project"
@@ -90,12 +89,12 @@ scope = "per-sender"
 reset_mode = "idle"
 idle_timeout_minutes = 30
 
-[agents.frontend.limits]
+[agents.system_designer.limits]
 max_tokens_per_flow = 100_000
 
 [agents.designer]
 engine = "openrouter"
-model = "z-ai/glm-5"
+model = "anthropic/claude-sonnet-4"
 role = "designer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file"]
@@ -122,7 +121,7 @@ max_tokens_per_flow = 80_000
 
 [agents.backend]
 engine = "openrouter"
-model = "z-ai/glm-5"
+model = "anthropic/claude-sonnet-4"
 role = "backend_engineer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
@@ -149,7 +148,7 @@ max_tokens_per_flow = 100_000
 
 [agents.tech_writer]
 engine = "openrouter"
-model = "z-ai/glm-5"
+model = "anthropic/claude-sonnet-4"
 role = "tech_writer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file"]

@@ -247,3 +247,5 @@ Send a message to your bot in Telegram and it responds with full agent capabilit
 - [Configuration Reference](CONFIGURATION.md) — every config field, env var, and default value
 - [Skills Guide](SKILLS.md) — define custom tools for your agent
 - [Fleet Orchestration Guide](FLEET.md) — multi-agent setup, roles, task lifecycle
+- [DeSci Guide](GUIDE_DESCI.md) — IP-NFT minting with Privy agentic wallets and aura-orchestrator
+- [Wallet & Signing](WALLET.md) — Privy agentic wallets, policy setup, on-chain transaction signing

@@ -20,9 +20,8 @@ pub(crate) enum TaskStatus {
 /// Result of a completed task execution.
 #[derive(Debug, Clone)]
 pub(crate) struct TaskResult {
-    pub success: bool,
+    #[allow(dead_code)] // stored for debugging/display, read via load_all_tasks
     pub output: String,
-    pub validation_notes: Option<String>,
 }
 
 /// A unit of work assigned to a fleet agent.
@@ -36,14 +35,12 @@ pub(crate) struct Task {
     pub retry_count: u32,
     pub max_retries: u32,
     pub result: Option<TaskResult>,
-    pub created_at: u64,
     pub updated_at: u64,
 }
 
 impl Task {
     /// Create a new pending task.
     pub fn new(id: String, description: String, role: AgentRole, max_retries: u32) -> Self {
-        let now = now_epoch_ms();
         Self {
             id: TaskId(id),
             description,
@@ -53,8 +50,7 @@ impl Task {
             retry_count: 0,
             max_retries,
             result: None,
-            created_at: now,
-            updated_at: now,
+            updated_at: now_epoch_ms(),
         }
     }
 
@@ -153,7 +149,12 @@ mod tests {
 
     #[test]
     fn retry_exhaustion() {
-        let mut task = Task::new("t-2".to_string(), "test".to_string(), "qa".parse::<AgentRole>().unwrap(), 1);
+        let mut task = Task::new(
+            "t-2".to_string(),
+            "test".to_string(),
+            "qa".parse::<AgentRole>().unwrap(),
+            1,
+        );
         task.transition_to(TaskStatus::InProgress).unwrap();
         task.transition_to(TaskStatus::Failed).unwrap();
         // First retry allowed

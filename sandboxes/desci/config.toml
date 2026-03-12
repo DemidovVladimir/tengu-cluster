@@ -18,7 +18,6 @@ mode = "off"
 
 [orchestrator]
 enabled = true
-heartbeat_interval_s = 30
 max_retries = 2
 
 # --- Scaffold ---
@@ -44,7 +43,7 @@ content = """# DeSci Project
 
 [agents.hypothesis_researcher]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "hypothesis_researcher"
 default = true
 workspace = "~/desci-workspace"
@@ -73,10 +72,10 @@ max_tokens_per_flow = 120_000
 
 [agents.onchain_minter]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "onchain_minter"
 workspace = "~/desci-workspace"
-skills = ["aura-orchestrator"]
+skills = ["aura-orchestrator", "privy"]
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command", "remember"]
 
 [agents.onchain_minter.identity]
@@ -84,11 +83,12 @@ name = "On-Chain Minter"
 instructions = """You are a DeSci on-chain operations specialist for IPNFT minting.
 Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
 
-You have the aura-orchestrator skill with full minting documentation.
-Follow Workflow 1 (Mint an IP-NFT) from the aura-orchestrator skill exactly — all three stages:
-1. Register POI (using run_command with curl)
-2. Submit POI on-chain (using run_command with cast)
-3. Run ipnft-minter CLI (using run_command)
+You have the aura-orchestrator and privy skills with full documentation.
+Follow the aura-orchestrator skill exactly — all stages:
+1. Resolve wallet address (Privy)
+2. Register POI (using run_command with curl)
+3. Submit POI on-chain (Privy eth_sendTransaction)
+4. Mint IP-NFT (GraphQL + Privy signing)
 
 Find the PDF and image in .tengu-attachments/ via list_directory.
 Save minting output (project_url, mint_tx, reservation_id, token_id) to mint/metadata/mint_result.md.
@@ -104,7 +104,7 @@ max_tokens_per_flow = 100_000
 
 [agents.mol_labs]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "mol_labs"
 workspace = "~/desci-workspace"
 skills = ["aura-orchestrator"]
@@ -138,7 +138,7 @@ max_tokens_per_flow = 100_000
 
 [agents.beach_scientist]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "beach_scientist"
 workspace = "~/desci-workspace"
 skills = ["beach-science"]
