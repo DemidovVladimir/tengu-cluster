@@ -1,7 +1,9 @@
 //! Filesystem adapter for discovering skill files from the workspace.
 //!
-//! Scans `<dir>/<name>/SKILL.md` subdirectories. Priority: `.tengu/skills/` wins
-//! over `skills/` via `seen_names` dedup.
+//! Scans `<dir>/<name>/SKILL.md` subdirectories. Priority order:
+//! 1. `{workspace}/.tengu/skills/`
+//! 2. `{workspace}/skills/`
+//! 3. `{cwd}/skills/` (global — shared across sandboxes)
 
 use crate::application::ports::SkillSourcePort;
 use std::path::PathBuf;
@@ -16,10 +18,19 @@ impl FileSystemSkillSource {
     }
 
     fn skill_directories(&self) -> Vec<PathBuf> {
-        vec![
+        let mut dirs = vec![
             self.workspace.join(".tengu/skills"),
             self.workspace.join("skills"),
-        ]
+        ];
+        // Also search skills/ relative to CWD (the tengu-cluster repo root).
+        // This allows sandboxes with external workspaces to use shared skills.
+        if let Ok(cwd) = std::env::current_dir() {
+            let global = cwd.join("skills");
+            if global != self.workspace.join("skills") {
+                dirs.push(global);
+            }
+        }
+        dirs
     }
 }
 

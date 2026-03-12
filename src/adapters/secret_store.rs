@@ -82,8 +82,7 @@ fn prompt_password() -> Result<String> {
             return Ok(pw);
         }
     }
-    rpassword::prompt_password("Master password: ")
-        .context("failed to read password from terminal")
+    rpassword::prompt_password("Master password: ").context("failed to read password from terminal")
 }
 
 fn prompt_new_password() -> Result<String> {
@@ -99,8 +98,8 @@ fn prompt_new_password() -> Result<String> {
     println!("    - Do NOT reuse a password from another service");
     println!("    - Store it in a password manager if possible");
     println!();
-    let p1 = rpassword::prompt_password("New master password: ")
-        .context("failed to read password")?;
+    let p1 =
+        rpassword::prompt_password("New master password: ").context("failed to read password")?;
     if p1.is_empty() {
         bail!("password must not be empty");
     }
@@ -245,7 +244,10 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
 /// Change the master password on an existing vault.
 pub(crate) fn change_password(path: &Path) -> Result<()> {
     if !path.exists() {
-        bail!("No secrets vault found at {}. Run `tengu secret init` first.", path.display());
+        bail!(
+            "No secrets vault found at {}. Run `tengu secret init` first.",
+            path.display()
+        );
     }
 
     println!("  Enter your current master password to unlock the vault.");
@@ -314,14 +316,12 @@ fn decrypt_and_parse(path: &Path, password: &str) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let data = std::fs::read(path)
-        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let data = std::fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let plaintext = decrypt_vault(&data, password)?;
     if plaintext.is_empty() {
         return Ok(vec![]);
     }
-    let content = String::from_utf8(plaintext)
-        .context("vault plaintext is not valid UTF-8")?;
+    let content = String::from_utf8(plaintext).context("vault plaintext is not valid UTF-8")?;
     Ok(content.lines().map(|l| l.to_string()).collect())
 }
 

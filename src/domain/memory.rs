@@ -95,7 +95,10 @@ mod tests {
     fn cosine_identical_vectors() {
         let v = vec![1.0, 2.0, 3.0];
         let score = cosine_similarity(&v, &v);
-        assert!((score - 1.0).abs() < 1e-6, "identical vectors should have similarity 1.0");
+        assert!(
+            (score - 1.0).abs() < 1e-6,
+            "identical vectors should have similarity 1.0"
+        );
     }
 
     #[test]
@@ -103,7 +106,10 @@ mod tests {
         let a = vec![1.0, 0.0];
         let b = vec![0.0, 1.0];
         let score = cosine_similarity(&a, &b);
-        assert!(score.abs() < 1e-6, "orthogonal vectors should have similarity ~0.0");
+        assert!(
+            score.abs() < 1e-6,
+            "orthogonal vectors should have similarity ~0.0"
+        );
     }
 
     #[test]
@@ -111,7 +117,10 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0];
         let b = vec![-1.0, -2.0, -3.0];
         let score = cosine_similarity(&a, &b);
-        assert!((score + 1.0).abs() < 1e-6, "opposite vectors should have similarity -1.0");
+        assert!(
+            (score + 1.0).abs() < 1e-6,
+            "opposite vectors should have similarity -1.0"
+        );
     }
 
     #[test]

@@ -1,0 +1,116 @@
+#cloud-config
+# Tengu Cluster — Cloud-Init for VPS provisioning
+#
+# Works with: Hetzner Cloud, DigitalOcean, AWS EC2, GCP, Vultr, etc.
+#
+# Usage (Hetzner CLI):
+#   hcloud server create \
+#     --name tengu \
+#     --type cx22 \
+#     --image ubuntu-24.04 \
+#     --user-data-from-file deploy/cloud-init.yml \
+#     --ssh-key my-key
+#
+# Usage (Hetzner GPU):
+#   hcloud server create \
+#     --name tengu-gpu \
+#     --type gx11 \
+#     --image ubuntu-24.04 \
+#     --user-data-from-file deploy/cloud-init.yml \
+#     --ssh-key my-key
+#
+# After provisioning:
+#   ssh root@<ip>
+#   cd /opt/tengu-cluster
+#   nano .env                # set API keys
+#   nano config.toml         # customize agents
+#   make up                  # or: make up-gpu
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - curl
+  - make
+  - jq
+  - htop
+  - unattended-upgrades
+
+# Install Docker + clone repo + configure
+runcmd:
+  # Docker
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+
+  # NVIDIA GPU support (auto-detect)
+  - |
+    if lspci | grep -qi nvidia; then
+      echo "NVIDIA GPU detected — installing container toolkit"
+      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+      curl -s -L "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+      apt-get update -qq
+      apt-get install -y -qq nvidia-container-toolkit
+      nvidia-ctk runtime configure --runtime=docker
+      systemctl restart docker
+      echo "TENGU_GPU_HINT=cuda" >> /opt/tengu-cluster/.env
+    fi
+
+  # Clone tengu-cluster
+  - git clone --depth 1 https://github.com/user/tengu-cluster.git /opt/tengu-cluster
+
+  # Configure
+  - cd /opt/tengu-cluster && cp .env.example .env && cp config.example.toml config.toml
+
+  # Set hub to bind 0.0.0.0 for external access
+  - sed -i 's/bind = "127.0.0.1"/bind = "0.0.0.0"/' /opt/tengu-cluster/config.toml
+
+  # Build image (so it's ready when user SSH's in)
+  - cd /opt/tengu-cluster && docker compose build
+
+  # Create systemd service for auto-start on reboot
+  - |
+    cat > /etc/systemd/system/tengu.service << 'UNIT'
+    [Unit]
+    Description=Tengu Cluster
+    After=docker.service
+    Requires=docker.service
+
+    [Service]
+    Type=oneshot
+    RemainAfterExit=yes
+    WorkingDirectory=/opt/tengu-cluster
+    ExecStart=/usr/bin/docker compose up -d
+    ExecStop=/usr/bin/docker compose down
+    TimeoutStartSec=120
+
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+  - systemctl daemon-reload
+  - systemctl enable tengu.service
+
+  # Firewall: allow SSH + Tengu hub port
+  - ufw allow 22/tcp
+  - ufw allow 7070/tcp
+  - ufw --force enable
+
+write_files:
+  - path: /etc/motd
+    content: |
+      ╔══════════════════════════════════════════════════╗
+      ║  Tengu Cluster                                   ║
+      ║                                                  ║
+      ║  Config:  /opt/tengu-cluster/.env                ║
+      ║           /opt/tengu-cluster/config.toml         ║
+      ║                                                  ║
+      ║  Start:   cd /opt/tengu-cluster && make up       ║
+      ║  GPU:     cd /opt/tengu-cluster && make up-gpu   ║
+      ║  Logs:    make logs                              ║
+      ║  Status:  make status                            ║
+      ╚══════════════════════════════════════════════════╝
+
+final_message: "Tengu Cluster provisioned in $UPTIME seconds. SSH in and run: cd /opt/tengu-cluster && nano .env && make up"

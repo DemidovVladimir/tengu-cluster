@@ -9,7 +9,9 @@
 //! - **80% warning**: returns a `system_notice` alerting the user.
 //! - **100% hard limit**: blocks further requests until `/reset`.
 
-use crate::application::engine_runtime::{collect_engine_response, ToolExecutor, ToolResultObserver};
+use crate::application::engine_runtime::{
+    collect_engine_response, ToolExecutor, ToolResultObserver,
+};
 use crate::application::flow_compaction::maybe_compact_flow;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::FlowStorePort;
@@ -56,6 +58,7 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub max_recall_entries: usize,
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 impl<'a> ChatRuntimeService<'a> {
@@ -140,7 +143,11 @@ impl<'a> ChatRuntimeService<'a> {
         let memory_block = if let Some(mem) = self.memory_service {
             match mem
                 .recall(
-                    &state.messages.last().map(|m| m.content.as_str()).unwrap_or(""),
+                    &state
+                        .messages
+                        .last()
+                        .map(|m| m.content.as_str())
+                        .unwrap_or(""),
                     self.max_recall_entries,
                     self.max_recall_tokens,
                 )
@@ -213,6 +220,7 @@ impl<'a> ChatRuntimeService<'a> {
             &context,
             self.tool_executor,
             self.tool_observer,
+            self.cancel,
         )
         .await?;
 

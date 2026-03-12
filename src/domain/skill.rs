@@ -184,12 +184,8 @@ fn parse_parameters(lines: &[&str]) -> Result<Vec<SkillParameter>> {
                 _ => SkillParamType::String,
             };
 
-            let req = parts
-                .iter()
-                .any(|s| s.to_lowercase().contains("required"));
-            let opt = parts
-                .iter()
-                .any(|s| s.to_lowercase().contains("optional"));
+            let req = parts.iter().any(|s| s.to_lowercase().contains("required"));
+            let opt = parts.iter().any(|s| s.to_lowercase().contains("optional"));
             let is_required = req || !opt;
 
             let desc = rest[paren_end + 1..]
@@ -273,21 +269,14 @@ pub(crate) fn validate_skill(skill: &SkillDefinition, reserved: &[&str]) -> Resu
     if skill.name.is_empty() {
         bail!("Skill name must not be empty");
     }
-    if !skill
-        .name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_')
-    {
+    if !skill.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
         bail!(
             "Skill name '{}' must be alphanumeric or underscores only",
             skill.name
         );
     }
     if reserved.contains(&skill.name.as_str()) {
-        bail!(
-            "Skill name '{}' conflicts with a built-in tool",
-            skill.name
-        );
+        bail!("Skill name '{}' conflicts with a built-in tool", skill.name);
     }
     if skill.execution_template.is_empty() {
         bail!("Skill must have a non-empty execution template");
@@ -362,10 +351,7 @@ pub(crate) fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
 // ---------------------------------------------------------------------------
 
 /// Substitute `{{param}}` placeholders with shell-escaped argument values.
-pub(crate) fn render_command(
-    template: &str,
-    arguments: &serde_json::Value,
-) -> Result<String> {
+pub(crate) fn render_command(template: &str, arguments: &serde_json::Value) -> Result<String> {
     let mut result = template.to_string();
     let mut pos = 0;
 
@@ -417,6 +403,10 @@ pub(crate) struct SkillFrontmatter {
     pub auth_env: String,
     /// Custom headers override the default `Authorization: Bearer $AUTH_ENV`.
     pub headers: Vec<(String, String)>,
+    /// Environment variables declared by this skill.
+    pub env_vars: Vec<SkillEnvVar>,
+    /// Slash commands declared by this skill.
+    pub commands: Vec<SkillCommand>,
 }
 
 /// Result of parsing a skill file — either classic `# name` format or frontmatter API skill.
@@ -428,6 +418,8 @@ pub(crate) enum ParsedSkill {
     Api {
         definition: SkillDefinition,
         context_body: String,
+        env_vars: Vec<SkillEnvVar>,
+        commands: Vec<SkillCommand>,
     },
 }
 
@@ -443,9 +435,11 @@ fn validate_base_url(url: &str) -> bool {
 pub(crate) fn api_skill_preamble(name: &str) -> String {
     format!(
         "# {} — API skill\n\n\
-         Use the `{}` tool to interact with this service. \
-         Call it with method, path, and body parameters. \
-         Never write scripts or curl commands instead.\n\n",
+         Use the `{}` tool for requests to this service's primary API \
+         (method, path, body parameters). \
+         Use `run_command` with curl when the skill instructions explicitly \
+         require it — e.g., for external services with different base URLs \
+         or headers the tool does not provide.\n\n",
         name, name,
     )
 }
@@ -481,7 +475,17 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     let mut base_url = None;
     let mut auth_env = None;
     let mut headers: Vec<(String, String)> = Vec::new();
-    let mut in_headers = false;
+    let mut env_vars: Vec<SkillEnvVar> = Vec::new();
+    let mut commands: Vec<SkillCommand> = Vec::new();
+
+    /// Which indented-list block we are currently inside.
+    #[derive(PartialEq)]
+    enum ListBlock {
+        Headers,
+        EnvVars,
+        Commands,
+    }
+    let mut current_block: Option<ListBlock> = None;
 
     for raw_line in yaml_block.lines() {
         let line = raw_line.trim();
@@ -489,26 +493,47 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             continue;
         }
 
-        // Check if this is an indented sub-key (part of headers block).
+        // Check if this is an indented sub-item (part of a list block).
         let is_indented = raw_line.starts_with("  ") || raw_line.starts_with('\t');
 
-        if in_headers && is_indented {
-            // Parse header key-value pair.
-            if let Some((hk, hv)) = line.split_once(':') {
-                let hk = hk.trim().to_string();
-                let hv = hv.trim().to_string();
-                if !hk.is_empty() && validate_header_value(&hv) {
-                    headers.push((hk, hv));
-                } else {
-                    // Reject frontmatter with dangerous header values.
-                    return None;
+        if is_indented {
+            if let Some(ref block) = current_block {
+                match block {
+                    ListBlock::Headers => {
+                        if let Some((hk, hv)) = line.split_once(':') {
+                            let hk = hk.trim().to_string();
+                            let hv = hv.trim().to_string();
+                            if !hk.is_empty() && validate_header_value(&hv) {
+                                headers.push((hk, hv));
+                            } else {
+                                return None;
+                            }
+                        }
+                    }
+                    ListBlock::EnvVars => {
+                        let item = line.trim_start_matches('-').trim();
+                        if !item.is_empty() {
+                            let (var_name, required) = if let Some(stripped) = item.strip_suffix('?') {
+                                (stripped.to_string(), false)
+                            } else {
+                                (item.to_string(), true)
+                            };
+                            env_vars.push(SkillEnvVar { name: var_name, required });
+                        }
+                    }
+                    ListBlock::Commands => {
+                        let item = line.trim_start_matches('-').trim();
+                        if !item.is_empty() {
+                            commands.push(SkillCommand { name: item.to_string() });
+                        }
+                    }
                 }
+                continue;
             }
-            continue;
         }
 
-        // Non-indented line exits header-parsing mode.
-        in_headers = false;
+        // Non-indented line exits any list-parsing mode.
+        current_block = None;
 
         if let Some((key, value)) = line.split_once(':') {
             let k = key.trim();
@@ -520,7 +545,17 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                 "auth_env" => auth_env = Some(v.to_string()),
                 "headers" => {
                     if v.is_empty() {
-                        in_headers = true;
+                        current_block = Some(ListBlock::Headers);
+                    }
+                }
+                "env_vars" => {
+                    if v.is_empty() {
+                        current_block = Some(ListBlock::EnvVars);
+                    }
+                }
+                "commands" => {
+                    if v.is_empty() {
+                        current_block = Some(ListBlock::Commands);
                     }
                 }
                 _ => {}
@@ -551,6 +586,8 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             base_url,
             auth_env,
             headers,
+            env_vars,
+            commands,
         },
         body.to_string(),
     ))
@@ -567,7 +604,10 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
 fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
     let header_flags = if fm.headers.is_empty() {
         // Default: Authorization: Bearer $AUTH_ENV
-        format!(r#"-H "Authorization: Bearer ${auth_env}""#, auth_env = fm.auth_env)
+        format!(
+            r#"-H "Authorization: Bearer ${auth_env}""#,
+            auth_env = fm.auth_env
+        )
     } else {
         // Custom headers replace the default auth header.
         fm.headers
@@ -619,6 +659,8 @@ pub(crate) fn parse_skill_file(content: &str) -> Result<ParsedSkill> {
         Ok(ParsedSkill::Api {
             definition,
             context_body: body,
+            env_vars: fm.env_vars,
+            commands: fm.commands,
         })
     } else {
         parse_skill_markdown(content).map(ParsedSkill::Classic)
@@ -636,6 +678,20 @@ pub(crate) enum SkillStatus {
     Inactive,
 }
 
+/// An environment variable declared by a skill.
+#[derive(Debug, Clone)]
+pub(crate) struct SkillEnvVar {
+    pub name: String,
+    /// `true` unless the name ends with `?` in the frontmatter.
+    pub required: bool,
+}
+
+/// A slash command declared by a skill (e.g. `wallet` → `/wallet`).
+#[derive(Debug, Clone)]
+pub(crate) struct SkillCommand {
+    pub name: String,
+}
+
 /// A tracked skill in the registry — wraps the definition with runtime metadata.
 #[derive(Debug, Clone)]
 pub(crate) struct SkillEntry {
@@ -644,6 +700,21 @@ pub(crate) struct SkillEntry {
     pub content_hash: u64,
     /// Non-empty for API (frontmatter) skills — injected into the system prompt.
     pub context_body: Option<String>,
+    /// Environment variables declared by this skill.
+    pub env_vars: Vec<SkillEnvVar>,
+    /// Slash commands declared by this skill.
+    pub commands: Vec<SkillCommand>,
+}
+
+impl SkillEntry {
+    /// Returns names of required env vars that are not set in the process environment.
+    pub fn missing_required_env_vars(&self) -> Vec<String> {
+        self.env_vars
+            .iter()
+            .filter(|ev| ev.required && std::env::var(&ev.name).unwrap_or_default().is_empty())
+            .map(|ev| ev.name.clone())
+            .collect()
+    }
 }
 
 /// Describes what changed between two skill scans.
@@ -660,22 +731,30 @@ impl SkillDiff {
     }
 }
 
+/// A freshly scanned skill entry before being merged into the registry.
+pub(crate) struct FreshSkillEntry {
+    pub name: String,
+    pub definition: SkillDefinition,
+    pub content_hash: u64,
+    pub context_body: Option<String>,
+    pub env_vars: Vec<SkillEnvVar>,
+    pub commands: Vec<SkillCommand>,
+}
+
 /// Compute the difference between the current registry entries and a freshly scanned set.
-///
-/// `fresh` tuples: (name, definition, content_hash, context_body).
 pub(crate) fn diff_skill_sets(
     current: &std::collections::HashMap<String, SkillEntry>,
-    fresh: &[(String, SkillDefinition, u64, Option<String>)],
+    fresh: &[FreshSkillEntry],
 ) -> SkillDiff {
     let fresh_names: std::collections::HashSet<&str> =
-        fresh.iter().map(|(n, _, _, _)| n.as_str()).collect();
+        fresh.iter().map(|f| f.name.as_str()).collect();
     let current_names: std::collections::HashSet<&str> =
         current.keys().map(|n| n.as_str()).collect();
 
     let added: Vec<String> = fresh
         .iter()
-        .filter(|(n, _, _, _)| !current_names.contains(n.as_str()))
-        .map(|(n, _, _, _)| n.clone())
+        .filter(|f| !current_names.contains(f.name.as_str()))
+        .map(|f| f.name.clone())
         .collect();
 
     let removed: Vec<String> = current
@@ -686,13 +765,13 @@ pub(crate) fn diff_skill_sets(
 
     let changed: Vec<String> = fresh
         .iter()
-        .filter(|(n, _, hash, _)| {
+        .filter(|f| {
             current
-                .get(n.as_str())
-                .map(|e| e.content_hash != *hash)
+                .get(f.name.as_str())
+                .map(|e| e.content_hash != f.content_hash)
                 .unwrap_or(false)
         })
-        .map(|(n, _, _, _)| n.clone())
+        .map(|f| f.name.clone())
         .collect();
 
     SkillDiff {
@@ -914,8 +993,7 @@ POST /api/v1/post — create a post.
 
     #[test]
     fn frontmatter_explicit_auth_env() {
-        let content =
-            "---\nname: test\nhomepage: https://test.io\nauth_env: MY_TOKEN\n---\nbody\n";
+        let content = "---\nname: test\nhomepage: https://test.io\nauth_env: MY_TOKEN\n---\nbody\n";
         let (fm, _) = try_parse_frontmatter(content).unwrap();
         assert_eq!(fm.auth_env, "MY_TOKEN");
     }
@@ -927,6 +1005,7 @@ POST /api/v1/post — create a post.
             ParsedSkill::Api {
                 definition,
                 context_body,
+                ..
             } => {
                 assert_eq!(definition.name, "beach_science");
                 assert_eq!(definition.parameters.len(), 3);
@@ -971,10 +1050,7 @@ POST /api/v1/post — create a post.
             "ftp://example.com",
             "javascript://example.com",
         ] {
-            let content = format!(
-                "---\nname: evil\nhomepage: {}\n---\nbody\n",
-                url
-            );
+            let content = format!("---\nname: evil\nhomepage: {}\n---\nbody\n", url);
             assert!(
                 try_parse_frontmatter(&content).is_none(),
                 "should reject base_url: {}",
@@ -990,10 +1066,7 @@ POST /api/v1/post — create a post.
             "http://localhost:3000",
             "https://api.example.com/v1",
         ] {
-            let content = format!(
-                "---\nname: good\nhomepage: {}\n---\nbody\n",
-                url
-            );
+            let content = format!("---\nname: good\nhomepage: {}\n---\nbody\n", url);
             assert!(
                 try_parse_frontmatter(&content).is_some(),
                 "should accept base_url: {}",
@@ -1020,11 +1093,13 @@ POST /api/v1/post — create a post.
                 status: SkillStatus::Active,
                 content_hash: hash,
                 context_body: None,
+                env_vars: vec![],
+                commands: vec![],
             },
         )
     }
 
-    fn make_fresh(name: &str, hash: u64) -> (String, SkillDefinition, u64, Option<String>) {
+    fn make_fresh(name: &str, hash: u64) -> FreshSkillEntry {
         let def = SkillDefinition {
             name: name.into(),
             description: String::new(),
@@ -1033,7 +1108,14 @@ POST /api/v1/post — create a post.
             risk_level: ToolRiskLevel::Low,
             requires_approval: false,
         };
-        (name.to_string(), def, hash, None)
+        FreshSkillEntry {
+            name: name.to_string(),
+            definition: def,
+            content_hash: hash,
+            context_body: None,
+            env_vars: vec![],
+            commands: vec![],
+        }
     }
 
     #[test]
@@ -1100,8 +1182,17 @@ GraphQL API for DeSci workflows.
     fn frontmatter_custom_headers_parsed() {
         let (fm, _) = try_parse_frontmatter(CUSTOM_HEADERS_SKILL).unwrap();
         assert_eq!(fm.headers.len(), 2);
-        assert_eq!(fm.headers[0], ("x-api-key".to_string(), "$MOLECULE_API_KEY".to_string()));
-        assert_eq!(fm.headers[1], ("x-service-token".to_string(), "$MOLECULE_SERVICE_TOKEN".to_string()));
+        assert_eq!(
+            fm.headers[0],
+            ("x-api-key".to_string(), "$MOLECULE_API_KEY".to_string())
+        );
+        assert_eq!(
+            fm.headers[1],
+            (
+                "x-service-token".to_string(),
+                "$MOLECULE_SERVICE_TOKEN".to_string()
+            )
+        );
     }
 
     #[test]
@@ -1111,12 +1202,14 @@ GraphQL API for DeSci workflows.
 
         // Must contain custom headers, NOT default Authorization.
         assert!(
-            def.execution_template.contains(r#"-H "x-api-key: $MOLECULE_API_KEY""#),
+            def.execution_template
+                .contains(r#"-H "x-api-key: $MOLECULE_API_KEY""#),
             "expected x-api-key header, got: {}",
             def.execution_template,
         );
         assert!(
-            def.execution_template.contains(r#"-H "x-service-token: $MOLECULE_SERVICE_TOKEN""#),
+            def.execution_template
+                .contains(r#"-H "x-service-token: $MOLECULE_SERVICE_TOKEN""#),
             "expected x-service-token header, got: {}",
             def.execution_template,
         );
@@ -1126,7 +1219,8 @@ GraphQL API for DeSci workflows.
             def.execution_template,
         );
         assert!(
-            def.execution_template.contains(r#"-H "Content-Type: application/json""#),
+            def.execution_template
+                .contains(r#"-H "Content-Type: application/json""#),
             "Content-Type must always be present, got: {}",
             def.execution_template,
         );
@@ -1138,7 +1232,8 @@ GraphQL API for DeSci workflows.
         assert!(fm.headers.is_empty());
         let def = frontmatter_to_skill_definition(&fm);
         assert!(
-            def.execution_template.contains("Authorization: Bearer $BEACH_SCIENCE_API_KEY"),
+            def.execution_template
+                .contains("Authorization: Bearer $BEACH_SCIENCE_API_KEY"),
             "absent headers should fall back to default auth, got: {}",
             def.execution_template,
         );

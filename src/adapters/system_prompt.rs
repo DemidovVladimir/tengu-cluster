@@ -3,6 +3,7 @@
 use crate::application::prompt_budget::truncate_to_token_budget;
 use crate::domain::agent_role::AgentRole;
 use tengu_core::token::estimate_tokens_approx_min1;
+use tengu_core::types::ToolDef;
 
 /// Build bounded system prompt from config identity, role, custom instructions, workspace files,
 /// and optional skill context fragments (API docs from frontmatter skills).
@@ -13,6 +14,16 @@ pub(crate) fn build_system_prompt(
     agent_config: &tengu_core::config::AgentConfig,
     advertise_workspace_tools: bool,
     skill_contexts: &[String],
+) -> String {
+    build_system_prompt_with_tools(agent_config, advertise_workspace_tools, skill_contexts, &[])
+}
+
+/// Build system prompt with dynamic tool listing generated from ToolDef metadata.
+pub(crate) fn build_system_prompt_with_tools(
+    agent_config: &tengu_core::config::AgentConfig,
+    advertise_workspace_tools: bool,
+    skill_contexts: &[String],
+    tools: &[ToolDef],
 ) -> String {
     let budget = &agent_config.prompt_budget;
     let max_file_tokens = budget.max_file_tokens;
@@ -32,16 +43,17 @@ pub(crate) fn build_system_prompt(
          call result, say so.\n\
          - NEVER present fictional output as if a command succeeded. If you did not execute \
          an action via a tool, do not claim it happened.\n\
-         - When asked to perform an action, use the available tools (run_command, API tools) \
+         - When asked to perform an action, use the available tools \
          to actually execute it. Report only real results from tool output."
     );
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
-    // 2. Role fragment — if agent has an orchestration role.
+    // 2. Role label — if agent has a role, note it in the prompt.
+    // Detailed role instructions come from identity.instructions in config.
     if let Some(ref role_str) = agent_config.role {
         if let Ok(role) = role_str.parse::<AgentRole>() {
-            let fragment = role.system_prompt_fragment().to_string();
+            let fragment = format!("Your role: {}.", role.label());
             total_tokens += estimate_tokens_approx_min1(&fragment);
             parts.push(fragment);
         }
@@ -91,13 +103,7 @@ pub(crate) fn build_system_prompt(
 
     // 5b. Skill tool usage instructions — tell the model to use skill tools directly.
     if !skill_contexts.is_empty() {
-        let instruction = "\
-            # Tool usage policy\n\n\
-            When the user asks you to interact with an external service for which you have \
-            a registered tool (e.g. beach_science), you MUST call that tool directly with \
-            the appropriate method, path, and body parameters. \
-            Do NOT write scripts, generate curl commands, or suggest manual steps. \
-            Always use the tool.";
+        let instruction = "When you have a registered tool for a service, call it directly. Do NOT write scripts or suggest manual steps.";
         let inst_tokens = estimate_tokens_approx_min1(instruction);
         if total_tokens + inst_tokens <= max_total_tokens + max_total_tokens / 20 {
             total_tokens += inst_tokens;
@@ -105,35 +111,41 @@ pub(crate) fn build_system_prompt(
         }
     }
 
-    // 6. Workspace tools description — only when backend supports runtime tool use.
-    if advertise_workspace_tools {
-        if agent_config.workspace.is_some() {
-            let tools_note = "\
-                # Workspace\n\n\
-                 You have access to a local workspace.\n\
-                 Available tools:\n\
-                 - read_file(path): Read file contents from the workspace (supports text files and PDFs)\n\
-                 - list_directory(path): List files and directories (use \".\" for root)\n\
-                 - write_file(path, content): Write content to a file (requires user approval)\n\
-                 - run_command(command): Execute a shell command in the workspace (requires user approval)\n\
-                 \n\
-                 All paths are relative to the workspace root.\n\
-                 \n\
-                 Tool-use policy:\n\
-                 - If asked about file contents, call read_file before answering.\n\
-                 - Do not claim file contents you have not read via tools in this turn.\n\
-                 - When the user asks you to perform an action (install packages, run scripts, call APIs, compile code, \
-                 execute commands), use run_command to execute it directly. Do NOT create script files for the user to \
-                 run manually — always execute actions yourself using run_command.\n\
-                 - When an action needs time to propagate (e.g. blockchain indexing, deployment, CI), \
-                 use run_command with a polling loop to check results automatically. Example: \
-                 for i in $(seq 1 10); do sleep 30; curl -s <check_url> && exit 0; done. \
-                 Do NOT tell the user to wait and check manually — poll for them."
-                .to_string();
-            let tools_tokens = estimate_tokens_approx_min1(&tools_note);
-            if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
-                parts.push(tools_note);
+    // 6. Workspace tools description — generated from ToolDef metadata.
+    if advertise_workspace_tools && agent_config.workspace.is_some() {
+        let tools_note = if tools.is_empty() {
+            "# Workspace\n\nYou have workspace access. Paths are relative to root. Use tools to execute actions directly — never create scripts for the user."
+                .to_string()
+        } else {
+            let mut lines = vec!["# Workspace tools".to_string()];
+            for tool in tools {
+                let params = tool
+                    .parameters
+                    .get("required")
+                    .and_then(|r| r.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let approval = tool
+                    .policy
+                    .as_ref()
+                    .map(|p| if p.requires_approval { " [approval]" } else { "" })
+                    .unwrap_or("");
+                lines.push(format!(
+                    "- {}({}): {}{}",
+                    tool.name, params, tool.description, approval
+                ));
             }
+            lines.push("Paths relative to workspace root. Read before answering about files. Execute actions directly — never create scripts.".to_string());
+            lines.join("\n")
+        };
+        let tools_tokens = estimate_tokens_approx_min1(&tools_note);
+        if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
+            parts.push(tools_note);
         }
     }
 

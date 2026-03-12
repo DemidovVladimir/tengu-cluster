@@ -1,0 +1,16 @@
+target/
+.git/
+.github/
+.env
+*.vault
+docs/
+tools/
+sandboxes/
+deploy/
+*.md
+!README.md
+.claude/
+.gitignore
+.dockerignore
+docker-compose.yml
+Makefile

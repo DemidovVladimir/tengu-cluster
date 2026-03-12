@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use crate::application::ports::SkillSourcePort;
 use crate::domain::skill::{
     api_skill_preamble, diff_skill_sets, parse_skill_file, skill_to_tool_def, validate_skill,
-    ParsedSkill, SkillDefinition, SkillDiff, SkillEntry, SkillStatus,
+    FreshSkillEntry, ParsedSkill, SkillDefinition, SkillDiff, SkillEntry, SkillStatus,
 };
 use tengu_core::types::ToolDef;
 
@@ -36,7 +36,7 @@ impl SkillRegistry {
         let raw_files = source.discover_skill_files();
         let reserved_strs: Vec<&str> = self.reserved_names.iter().map(|s| s.as_str()).collect();
 
-        let mut fresh: Vec<(String, SkillDefinition, u64, Option<String>)> = Vec::new();
+        let mut fresh: Vec<FreshSkillEntry> = Vec::new();
 
         for (filename, content) in &raw_files {
             let hash = content_hash(content);
@@ -47,11 +47,20 @@ impl SkillRegistry {
                         continue;
                     }
                     let name = skill.name.clone();
-                    fresh.push((name, skill, hash, None));
+                    fresh.push(FreshSkillEntry {
+                        name,
+                        definition: skill,
+                        content_hash: hash,
+                        context_body: None,
+                        env_vars: vec![],
+                        commands: vec![],
+                    });
                 }
                 Ok(ParsedSkill::Api {
                     definition,
                     context_body,
+                    env_vars,
+                    commands,
                 }) => {
                     if validate_skill(&definition, &reserved_strs).is_err() {
                         tracing::warn!("Skipping invalid API skill '{}'", filename);
@@ -59,7 +68,14 @@ impl SkillRegistry {
                     }
                     let preamble = api_skill_preamble(&definition.name);
                     let name = definition.name.clone();
-                    fresh.push((name, definition, hash, Some(format!("{preamble}{context_body}"))));
+                    fresh.push(FreshSkillEntry {
+                        name,
+                        definition,
+                        content_hash: hash,
+                        context_body: Some(format!("{preamble}{context_body}")),
+                        env_vars,
+                        commands,
+                    });
                 }
                 Err(e) => {
                     tracing::warn!("Failed to parse skill '{}': {}", filename, e);
@@ -79,32 +95,38 @@ impl SkillRegistry {
         }
 
         // Apply adds and changes — preserve status for changed skills.
-        for (name, definition, hash, ctx) in fresh {
-            if diff.added.contains(&name) {
-                tracing::info!("Skill added: {name}");
+        for entry in fresh {
+            if diff.added.contains(&entry.name) {
+                tracing::info!("Skill added: {}", entry.name);
+                let name = entry.name;
                 self.entries.insert(
                     name,
                     SkillEntry {
-                        definition,
+                        definition: entry.definition,
                         status: SkillStatus::Active,
-                        content_hash: hash,
-                        context_body: ctx,
+                        content_hash: entry.content_hash,
+                        context_body: entry.context_body,
+                        env_vars: entry.env_vars,
+                        commands: entry.commands,
                     },
                 );
-            } else if diff.changed.contains(&name) {
-                tracing::info!("Skill updated: {name}");
+            } else if diff.changed.contains(&entry.name) {
+                tracing::info!("Skill updated: {}", entry.name);
                 let prev_status = self
                     .entries
-                    .get(&name)
+                    .get(&entry.name)
                     .map(|e| e.status)
                     .unwrap_or(SkillStatus::Active);
+                let name = entry.name;
                 self.entries.insert(
                     name,
                     SkillEntry {
-                        definition,
+                        definition: entry.definition,
                         status: prev_status,
-                        content_hash: hash,
-                        context_body: ctx,
+                        content_hash: entry.content_hash,
+                        context_body: entry.context_body,
+                        env_vars: entry.env_vars,
+                        commands: entry.commands,
                     },
                 );
             }
@@ -155,6 +177,11 @@ impl SkillRegistry {
             .collect();
         list.sort_by(|a, b| a.0.cmp(&b.0));
         list
+    }
+
+    /// Read-only access to the underlying entries map.
+    pub(crate) fn entries(&self) -> &HashMap<String, SkillEntry> {
+        &self.entries
     }
 
     /// Enable a skill by name. Returns `Ok(true)` if status changed, `Ok(false)` if already active.

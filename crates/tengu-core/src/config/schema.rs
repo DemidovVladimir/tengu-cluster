@@ -27,6 +27,9 @@ pub struct Config {
 
     #[serde(default)]
     pub telegram: TelegramConfig,
+
+    #[serde(default)]
+    pub scaffold: Option<ScaffoldConfig>,
 }
 
 fn default_profile() -> String {
@@ -143,6 +146,10 @@ pub struct AgentConfig {
     /// Skill allowlist — `None` means all skills, `Some(names)` restricts.
     #[serde(default)]
     pub skills: Option<Vec<String>>,
+    /// Workspace tool allowlist — `None` means all tools, `Some(names)` restricts.
+    /// Valid names: read_file, list_directory, write_file, run_command, remember.
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
 }
@@ -240,8 +247,6 @@ fn default_max_tokens() -> u64 {
 pub struct OrchestratorConfig {
     #[serde(default = "default_orchestrator_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_heartbeat_interval")]
-    pub heartbeat_interval_s: u64,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 }
@@ -250,7 +255,6 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             enabled: default_orchestrator_enabled(),
-            heartbeat_interval_s: default_heartbeat_interval(),
             max_retries: default_max_retries(),
         }
     }
@@ -258,9 +262,6 @@ impl Default for OrchestratorConfig {
 
 fn default_orchestrator_enabled() -> bool {
     false
-}
-fn default_heartbeat_interval() -> u64 {
-    30
 }
 fn default_max_retries() -> u32 {
     3
@@ -274,6 +275,43 @@ pub struct TelegramConfig {
     /// Telegram user IDs allowed to interact with the bot.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+}
+
+/// Workspace scaffold — auto-creates directories and seed files on startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaffoldConfig {
+    /// Root workspace directory to create (supports ~ expansion).
+    pub root: String,
+    /// Subdirectories to create under root at startup.
+    #[serde(default)]
+    pub directories: Vec<String>,
+    /// Seed files to create at startup (only if they don't already exist).
+    #[serde(default)]
+    pub files: Vec<ScaffoldFile>,
+    /// Per-project template applied by `/project <name>`.
+    /// Directories and files are created inside `{root}/{project_name}/`.
+    #[serde(default)]
+    pub project: Option<ProjectScaffold>,
+}
+
+/// Template for per-project scaffolding (applied by `/project <name>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectScaffold {
+    /// Subdirectories to create inside the project folder.
+    #[serde(default)]
+    pub directories: Vec<String>,
+    /// Seed files to create inside the project folder.
+    #[serde(default)]
+    pub files: Vec<ScaffoldFile>,
+}
+
+/// A file to seed into the workspace during scaffold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaffoldFile {
+    /// Path relative to scaffold root.
+    pub path: String,
+    /// File content.
+    pub content: String,
 }
 
 /// Persistent vector memory configuration.
@@ -386,10 +424,10 @@ fn default_max_file_tokens() -> usize {
     2000
 }
 fn default_max_skill_context_tokens() -> usize {
-    8000
+    4000
 }
 fn default_max_total_tokens() -> usize {
-    16000
+    8000
 }
 
 /// Lens-specific retrieval and budgeting parameters.
@@ -640,10 +678,9 @@ impl Config {
         }
 
         if let Some(ref role) = agent.role {
-            errors.require_one_of(
-                &format!("agents.{agent_id}.role"),
-                role,
-                &["qa", "backend_engineer", "integration_master"],
+            errors.require(
+                !role.trim().is_empty(),
+                format!("agents.{agent_id}.role cannot be empty when set"),
             );
         }
 
@@ -728,6 +765,7 @@ impl Default for Config {
                 lens: LensConfig::default(),
                 role: None,
                 skills: None,
+                allowed_tools: None,
                 prompt_budget: PromptBudgetConfig::default(),
             },
         );
@@ -740,6 +778,7 @@ impl Default for Config {
             orchestrator: None,
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
+            scaffold: None,
         }
     }
 }

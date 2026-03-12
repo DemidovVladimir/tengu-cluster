@@ -1,17 +1,15 @@
 //! Prompt budgeting helpers for runtime turns.
 
-use crate::domain::chat::{HistoryAssembly, PromptAssemblyReport};
+use crate::domain::chat::HistoryAssembly;
 use tengu_core::token::estimate_tokens_approx_min1;
 use tengu_core::types::Message;
-use tengu_core::Lens;
-use tracing::info;
 
 /// Assemble newest contiguous history suffix that fits the token budget.
 pub(crate) fn assemble_recent_history(
     messages: &[Message],
     history_budget: usize,
 ) -> HistoryAssembly {
-    const MAX_HISTORY_MESSAGES: usize = 40;
+    const MAX_HISTORY_MESSAGES: usize = 20;
 
     if history_budget == 0 || messages.is_empty() {
         return HistoryAssembly::default();
@@ -90,31 +88,4 @@ pub(crate) fn compute_total_input_budget(
     context_window
         .saturating_sub(reserved_output)
         .min(remaining_flow_tokens as usize)
-}
-
-/// Emit per-request prompt budget telemetry.
-#[allow(dead_code)]
-pub(crate) fn log_prompt_budget_report(
-    flow_key: &str,
-    lens: Lens,
-    context_window: usize,
-    report: &PromptAssemblyReport,
-    history_messages_selected: usize,
-) {
-    info!(
-        flow_key = %flow_key,
-        lens = lens.as_str(),
-        context_window,
-        output_token_cap = report.output_token_cap,
-        total_input_budget = report.total_input_budget,
-        reserved_output_tokens = report.reserved_output_tokens,
-        flow_budget_remaining = report.flow_budget_remaining,
-        system_tokens = report.system_tokens,
-        history_tokens = report.history_tokens,
-        history_messages_selected,
-        dropped_history_messages = report.dropped_history_messages,
-        compaction_applied = report.compaction_applied,
-        compacted_messages = report.compacted_messages,
-        "Prompt budget report"
-    );
 }

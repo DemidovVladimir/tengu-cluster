@@ -25,7 +25,11 @@ pub(crate) struct OpenRouterEmbeddingAdapter {
 impl OpenRouterEmbeddingAdapter {
     pub(crate) fn new(api_key: String, model: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_default(),
             api_key,
             model,
         }
@@ -57,14 +61,13 @@ impl EmbeddingPort for OpenRouterEmbeddingAdapter {
             let status = resp.status();
             if !status.is_success() {
                 let error_body = resp.text().await.unwrap_or_default();
-                anyhow::bail!(
-                    "embedding API returned {}: {}",
-                    status,
-                    error_body
-                );
+                anyhow::bail!("embedding API returned {}: {}", status, error_body);
             }
 
-            let json: serde_json::Value = resp.json().await.context("failed to parse embedding response")?;
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .context("failed to parse embedding response")?;
             let data = json["data"]
                 .as_array()
                 .ok_or_else(|| anyhow::anyhow!("missing 'data' array in embedding response"))?;

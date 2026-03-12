@@ -247,38 +247,43 @@ model = "anthropic/claude-sonnet-4"
 - No `skills` field — agent can use all discovered skills
 - Skill names must match the `# heading` in the markdown file
 
-## Built-In Workspace Tools
+## Built-In Workspace Primitives
 
-When an agent has `workspace` configured, these tools are available automatically (no skill file needed):
+When an agent has `workspace` configured, four built-in primitives are available automatically (no skill file needed):
 
-| Tool | Parameters | Risk | Approval | Description |
-|------|-----------|------|----------|-------------|
+| Primitive | Parameters | Risk | Approval | Description |
+|-----------|-----------|------|----------|-------------|
 | `read_file` | `path` (string) | Low | No | Read file contents (text and PDF with auto-extraction) |
 | `list_directory` | `path` (string) | Low | No | List files and directories (`"."` for root) |
 | `write_file` | `path` (string), `content` (string) | Medium | Yes | Write content to file, creates parent dirs |
 | `run_command` | `command` (string) | High | Yes | Execute a shell command in the workspace directory (via `sh -c`) |
 
-When memory is enabled, an additional tool is available:
+These are the stable foundation through which all skills and external tools interact with the workspace. Additional subsystems (e.g., memory) register their own tools dynamically — when memory is enabled, the `remember` tool is automatically available.
 
-| Tool | Parameters | Risk | Approval | Description |
-|------|-----------|------|----------|-------------|
-| `remember` | `content` (string) | Low | No | Store a fact or insight in long-term memory |
-
-Tools with "Yes" approval require user confirmation — via dialog in TUI mode, or inline keyboard buttons in Telegram mode.
+Tools with "Yes" approval require user confirmation — via dialog in TUI mode, or inline keyboard buttons in Telegram mode. Approval dialogs are generated from tool metadata, not hardcoded per tool name.
 
 These tools operate strictly within the workspace boundary.
 
 ## Skill Discovery
 
-At startup, Tengu:
+At startup (and on hot-reload), Tengu scans three locations in priority order:
 
-1. Scans `skills/` directory for `*.md` files
-2. Tries frontmatter parsing first; falls back to classic format
-3. Validates: name format, required sections, parameter types
-4. Filters by agent's `skills` allowlist (if set)
-5. Classic skills produce a `ToolDef` + `SkillDefinition` for execution
-6. API skills produce a `ToolDef` + `SkillDefinition` + context fragment for the system prompt
-7. Names that conflict with built-in tools (`read_file`, `list_directory`, `write_file`) are rejected
+| Priority | Path | Use Case |
+|----------|------|----------|
+| 1 | `{workspace}/.tengu/skills/` | Agent-specific overrides |
+| 2 | `{workspace}/skills/` | Workspace-local skills |
+| 3 | `{cwd}/skills/` | Global/repo-wide skills (shared across sandboxes) |
+
+Higher-priority paths win on name collisions (dedup by skill name). The CWD path allows sandboxes with external workspaces (e.g., `~/desci-workspace`) to use skills from the tengu-cluster repo (`skills/aura-orchestrator/`, `skills/beach-science/`).
+
+For each discovered skill file, Tengu:
+
+1. Tries frontmatter parsing first; falls back to classic format
+2. Validates: name format, required sections, parameter types
+3. Filters by agent's `skills` allowlist (if set)
+4. Classic skills produce a `ToolDef` + `SkillDefinition` for execution
+5. API skills produce a `ToolDef` + `SkillDefinition` + context fragment for the system prompt
+6. Names that conflict with built-in workspace primitives (`read_file`, `list_directory`, `write_file`, `run_command`) are rejected
 
 ## Examples
 

@@ -30,17 +30,17 @@ mode = "off"
 [agents.main]
 default = true
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 
 # OpenRouter model examples (just change the model line):
-# model = "anthropic/claude-sonnet-4"        # Claude Sonnet 4
+# model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
+# model = "nvidia/nemotron-3-super-120b-a12b:free"        # Claude Sonnet 4 (premium)
 # model = "openai/gpt-4o"                    # GPT-4o
 # model = "google/gemini-2.5-pro"            # Gemini 2.5 Pro
 # model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
-# model = "mistralai/mistral-large"          # Mistral Large
-# model = "deepseek/deepseek-chat-v3"        # DeepSeek V3
+# model = "deepseek/deepseek-chat-v3"        # DeepSeek V3 (cheapest)
 
 # Alternative: direct provider engines (requires provider-specific API key)
 # engine = "anthropic"
@@ -108,20 +108,27 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- Fleet Orchestration ---
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
 # Run with: tengu orchestrate
+# Use sandboxes for domain-specific teams: tengu orchestrate --sandbox webstudio
+# See docs/SANDBOXES.md for details.
 
 # [orchestrator]
 # enabled = true
-# heartbeat_interval_s = 30
 # max_retries = 3
+
+# Roles are dynamic — any non-empty string works.
+# Define role behavior in identity.instructions.
+# Use allowed_tools to restrict workspace tools per agent.
 
 # [agents.qa]
 # engine = "openrouter"
-# model = "anthropic/claude-sonnet-4"
+# model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "qa"
+# allowed_tools = ["read_file", "list_directory", "run_command"]
 # skills = ["search", "test_runner"]
 #
 # [agents.qa.identity]
 # name = "QA Agent"
+# instructions = "You review code quality, run tests, and report issues."
 #
 # [agents.qa.flow]
 # scope = "per-sender"
@@ -132,30 +139,17 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [agents.backend]
 # engine = "openrouter"
-# model = "anthropic/claude-sonnet-4"
+# model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "backend_engineer"
+# allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 #
 # [agents.backend.identity]
 # name = "Backend Engineer"
+# instructions = "You design APIs, write server code, and manage databases."
 #
 # [agents.backend.flow]
 # scope = "per-sender"
 # reset_mode = "idle"
 #
 # [agents.backend.limits]
-# max_tokens_per_flow = 100_000
-
-# [agents.integrator]
-# engine = "openrouter"
-# model = "openai/gpt-4o"
-# role = "integration_master"
-#
-# [agents.integrator.identity]
-# name = "Integration Master"
-#
-# [agents.integrator.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-#
-# [agents.integrator.limits]
 # max_tokens_per_flow = 100_000

@@ -1,7 +1,7 @@
 //! In-memory task store adapter implementing `TaskStorePort`.
 
 use crate::application::ports::TaskStorePort;
-use crate::domain::task::{Task, TaskStatus};
+use crate::domain::task::Task;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -37,17 +37,6 @@ impl TaskStorePort for InMemoryTaskStore {
             .cloned())
     }
 
-    fn load_tasks_by_status(&self, status: TaskStatus) -> Result<Vec<Task>> {
-        Ok(self
-            .tasks
-            .read()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?
-            .values()
-            .filter(|t| t.status == status)
-            .cloned()
-            .collect())
-    }
-
     fn load_all_tasks(&self) -> Result<Vec<Task>> {
         Ok(self
             .tasks
@@ -67,7 +56,12 @@ mod tests {
     #[test]
     fn save_and_load_task() {
         let store = InMemoryTaskStore::new();
-        let task = Task::new("t-1".into(), "test".into(), AgentRole::QA, 2);
+        let task = Task::new(
+            "t-1".into(),
+            "test".into(),
+            "qa".parse::<AgentRole>().unwrap(),
+            2,
+        );
         store.save_task(&task).unwrap();
 
         let loaded = store.load_task("t-1").unwrap();
@@ -82,32 +76,21 @@ mod tests {
     }
 
     #[test]
-    fn load_by_status_filters() {
-        let store = InMemoryTaskStore::new();
-        let mut task = Task::new("t-1".into(), "test".into(), AgentRole::QA, 2);
-        store.save_task(&task).unwrap();
-
-        task.transition_to(TaskStatus::InProgress).unwrap();
-        store.save_task(&task).unwrap();
-
-        let pending = store.load_tasks_by_status(TaskStatus::Pending).unwrap();
-        assert!(pending.is_empty());
-
-        let in_prog = store.load_tasks_by_status(TaskStatus::InProgress).unwrap();
-        assert_eq!(in_prog.len(), 1);
-    }
-
-    #[test]
     fn load_all_returns_everything() {
         let store = InMemoryTaskStore::new();
         store
-            .save_task(&Task::new("t-1".into(), "a".into(), AgentRole::QA, 1))
+            .save_task(&Task::new(
+                "t-1".into(),
+                "a".into(),
+                "qa".parse::<AgentRole>().unwrap(),
+                1,
+            ))
             .unwrap();
         store
             .save_task(&Task::new(
                 "t-2".into(),
                 "b".into(),
-                AgentRole::BackendEngineer,
+                "backend_engineer".parse::<AgentRole>().unwrap(),
                 1,
             ))
             .unwrap();

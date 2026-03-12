@@ -64,7 +64,10 @@ pub fn apply_theme(siv: &mut Cursive, mode: ThemeMode) {
 
 /// Toggle between dark and light themes, returning the new mode.
 pub fn toggle_theme(siv: &mut Cursive) -> ThemeMode {
-    let current = siv.user_data::<ThemeMode>().copied().unwrap_or(ThemeMode::Dark);
+    let current = siv
+        .user_data::<ThemeMode>()
+        .copied()
+        .unwrap_or(ThemeMode::Dark);
     let new_mode = match current {
         ThemeMode::Dark => ThemeMode::Light,
         ThemeMode::Light => ThemeMode::Dark,
@@ -86,7 +89,11 @@ pub fn build_ui(siv: &mut Cursive, request_tx: mpsc::Sender<ChatRequest>) {
             ThemeMode::Dark => "dark",
             ThemeMode::Light => "light",
         };
-        push_bubble(s, BubbleRole::System, &format!("Switched to {} theme.", label));
+        push_bubble(
+            s,
+            BubbleRole::System,
+            &format!("Switched to {} theme.", label),
+        );
     });
 
     let tx = request_tx;
@@ -191,7 +198,11 @@ fn on_submit(siv: &mut Cursive, text: &str, tx: &mpsc::Sender<ChatRequest>) {
             ThemeMode::Dark => "dark",
             ThemeMode::Light => "light",
         };
-        push_bubble(siv, BubbleRole::System, &format!("Switched to {} theme.", label));
+        push_bubble(
+            siv,
+            BubbleRole::System,
+            &format!("Switched to {} theme.", label),
+        );
         return;
     }
 
@@ -247,7 +258,9 @@ fn scroll_chat_to_bottom(siv: &mut Cursive) {
 
 /// Get the current theme mode from cursive user data.
 fn current_theme(siv: &mut Cursive) -> ThemeMode {
-    siv.user_data::<ThemeMode>().copied().unwrap_or(ThemeMode::Dark)
+    siv.user_data::<ThemeMode>()
+        .copied()
+        .unwrap_or(ThemeMode::Dark)
 }
 
 /// Append a chat bubble to the chat area.
@@ -315,8 +328,8 @@ pub fn update_status(
 /// Muted/subdued color appropriate for the current theme.
 fn muted_color(theme: ThemeMode) -> Color {
     match theme {
-        ThemeMode::Dark => Color::Dark(BaseColor::White),   // light gray on black
-        ThemeMode::Light => Color::Light(BaseColor::Black),  // dark gray on white
+        ThemeMode::Dark => Color::Dark(BaseColor::White), // light gray on black
+        ThemeMode::Light => Color::Light(BaseColor::Black), // dark gray on white
     }
 }
 

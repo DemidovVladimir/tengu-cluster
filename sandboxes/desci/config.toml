@@ -1,0 +1,173 @@
+# Tengu Cluster — DeSci Sandbox
+# Multi-agent team for Decentralized Science workflows:
+# PDF research → IPNFT minting → Molecule project → Beach.science publishing.
+# Run with: tengu orchestrate --sandbox desci
+# Or Telegram: tengu telegram --sandbox desci
+
+runtime_profile = "cloud"
+
+[hub]
+bind = "127.0.0.1"
+port = 7071
+
+[memory]
+enabled = true
+
+[refiner]
+mode = "off"
+
+[orchestrator]
+enabled = true
+max_retries = 2
+
+# --- Scaffold ---
+# Root workspace created at startup (empty). Use /project <name> to create projects.
+[scaffold]
+root = "~/desci-workspace"
+
+# Per-project template: applied by /project <name> inside {root}/{name}/
+[scaffold.project]
+directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
+
+[[scaffold.project.files]]
+path = "README.md"
+content = """# DeSci Project
+
+- `research/` — Analysis summaries, hypothesis drafts
+- `mint/` — Minting metadata and logs
+- `uploads/` — Molecule data room uploads
+- `posts/` — Beach.science post records
+"""
+
+# --- Agents ---
+
+[agents.hypothesis_researcher]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "hypothesis_researcher"
+default = true
+workspace = "~/desci-workspace"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command", "remember"]
+
+[agents.hypothesis_researcher.identity]
+name = "Hypothesis Researcher"
+instructions = """You are a senior scientific researcher.
+Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
+
+Workflow:
+1. Find the PDF in .tengu-attachments/ via list_directory
+2. Analyze the document: hypotheses, methodology, findings, conclusions
+3. Write research summary to research/summaries/summary.md
+4. Write hypothesis draft to research/hypothesis.md
+
+Ground analysis in the actual document. Do NOT fabricate findings."""
+
+[agents.hypothesis_researcher.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.hypothesis_researcher.limits]
+max_tokens_per_flow = 120_000
+
+[agents.onchain_minter]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "onchain_minter"
+workspace = "~/desci-workspace"
+skills = ["aura-orchestrator", "privy"]
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command", "remember"]
+
+[agents.onchain_minter.identity]
+name = "On-Chain Minter"
+instructions = """You are a DeSci on-chain operations specialist for IPNFT minting.
+Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
+
+You have the aura-orchestrator and privy skills with full documentation.
+Follow the aura-orchestrator skill exactly — all stages:
+1. Resolve wallet address (Privy)
+2. Register POI (using run_command with curl)
+3. Submit POI on-chain (Privy eth_sendTransaction)
+4. Mint IP-NFT (GraphQL + Privy signing)
+
+Find the PDF and image in .tengu-attachments/ via list_directory.
+Save minting output (project_url, mint_tx, reservation_id, token_id) to mint/metadata/mint_result.md.
+If any step fails, STOP and report the error."""
+
+[agents.onchain_minter.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.onchain_minter.limits]
+max_tokens_per_flow = 100_000
+
+[agents.mol_labs]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "mol_labs"
+workspace = "~/desci-workspace"
+skills = ["aura-orchestrator"]
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command", "remember"]
+
+[agents.mol_labs.identity]
+name = "Molecule Labs Manager"
+instructions = """You are a Molecule DeSci Labs project manager.
+Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
+
+Before starting: read mint/metadata/mint_result.md for minting details.
+
+You have the aura-orchestrator skill. Use the aura_orchestrator tool for all GraphQL calls.
+The tool takes three parameters: method, path, body.
+For GraphQL: method="POST", path="" (empty — base URL is already the endpoint), body=JSON string with query and variables.
+
+Follow the aura-orchestrator skill documentation:
+1. Workflow 2: Create Project (requires ipnftSymbol and ipnftTokenId from mint results)
+2. Workflow 3: Upload the research PDF (three-phase: initiate via tool, PUT via run_command, finalize via tool)
+3. Workflow 4: Create Announcement
+
+Save all results (ipnftUid, datasetId, project URL) to uploads/molecule_result.md."""
+
+[agents.mol_labs.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.mol_labs.limits]
+max_tokens_per_flow = 100_000
+
+[agents.beach_scientist]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "beach_scientist"
+workspace = "~/desci-workspace"
+skills = ["beach-science"]
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command", "remember"]
+
+[agents.beach_scientist.identity]
+name = "Beach Scientist"
+instructions = """You are a DeSci science communicator who publishes to Beach.science.
+Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
+
+Before starting read:
+1. research/summaries/summary.md (hypothesis researcher's work)
+2. mint/metadata/mint_result.md (minting results)
+3. uploads/molecule_result.md (Molecule project info)
+
+You have the beach-science skill. Use the beach_science tool (method, path, body) to post.
+Follow the beach-science skill documentation for the API.
+
+Compose a hypothesis post with:
+- Core hypothesis and findings from the research
+- Clickable Markdown links: [text](url) for Molecule project and Etherscan tx
+- Only use actual URLs from previous agents' output, never fabricate links
+
+Save the post response to posts/beach_post.md."""
+
+[agents.beach_scientist.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.beach_scientist.limits]
+max_tokens_per_flow = 80_000

@@ -71,7 +71,6 @@ pub(crate) trait EmbeddingPort: Send + Sync {
 /// The `store` method persists a pre-embedded `MemoryEntry` (embedding vector
 /// already attached). The `search_by_vector` method accepts a query embedding
 /// and returns the top-k closest entries scored by cosine similarity.
-#[allow(dead_code)]
 pub(crate) trait MemoryStorePort: Send + Sync {
     /// Persist a memory entry (content + pre-computed embedding vector).
     fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
@@ -84,6 +83,7 @@ pub(crate) trait MemoryStorePort: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>>;
 
     /// Delete a memory entry by its UUID. Returns `true` if it existed.
+    #[allow(dead_code)] // used in tests and /purge flow
     fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
 
     /// Delete all stored entries, resetting the store to empty.
@@ -100,9 +100,5 @@ pub(crate) trait MemoryStorePort: Send + Sync {
 pub(crate) trait TaskStorePort: Send + Sync {
     fn save_task(&self, task: &crate::domain::task::Task) -> Result<()>;
     fn load_task(&self, task_id: &str) -> Result<Option<crate::domain::task::Task>>;
-    fn load_tasks_by_status(
-        &self,
-        status: crate::domain::task::TaskStatus,
-    ) -> Result<Vec<crate::domain::task::Task>>;
     fn load_all_tasks(&self) -> Result<Vec<crate::domain::task::Task>>;
 }

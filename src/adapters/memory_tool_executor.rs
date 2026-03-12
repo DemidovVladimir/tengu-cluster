@@ -1,5 +1,6 @@
 //! Adapter bridging memory tool calls to the MemoryService.
 //!
+//! Owns the memory subsystem's `ToolDef` definitions via `memory_tool_defs()`.
 //! The tool execution port is synchronous (called from the engine's tool loop),
 //! but both the embedding and memory store ports are async. Uses `block_in_place`
 //! when inside a multi-thread runtime (Telegram), or a fallback runtime (TUI).
@@ -8,8 +9,9 @@ use crate::application::memory_service::MemoryService;
 use crate::application::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
 use crate::domain::secret_registry::SecretRegistry;
 use anyhow::Result;
+use serde_json::json;
 use std::sync::Arc;
-use tengu_core::types::ToolCall;
+use tengu_core::types::{ToolCall, ToolDef, ToolPolicyMetadata, ToolRiskLevel};
 
 /// Shared handle owning the embedding + store ports for Arc-based sharing.
 ///
@@ -23,10 +25,15 @@ pub(crate) struct MemoryServiceHandle {
 
 /// Adapter implementing ToolExecutionPort by routing memory tool calls
 /// via `block_in_place` (multi-thread runtime) or a fallback runtime (TUI).
+///
+/// The fallback runtime is only created when no tokio runtime is active at
+/// construction time (TUI case). When running inside an existing runtime
+/// (Telegram/Orchestrator), it is `None` — avoiding the "Cannot drop a
+/// runtime in a context where blocking is not allowed" panic.
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
     secret_registry: Arc<SecretRegistry>,
-    fallback_runtime: tokio::runtime::Runtime,
+    fallback_runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl MemoryToolExecutionAdapter {
@@ -34,9 +41,16 @@ impl MemoryToolExecutionAdapter {
         handle: Arc<MemoryServiceHandle>,
         secret_registry: Arc<SecretRegistry>,
     ) -> Result<Self> {
-        let fallback_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+        let fallback_runtime = if tokio::runtime::Handle::try_current().is_ok() {
+            // Already inside a runtime — use block_in_place at call time.
+            None
+        } else {
+            Some(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?,
+            )
+        };
         Ok(Self {
             handle,
             secret_registry,
@@ -51,9 +65,34 @@ impl MemoryToolExecutionAdapter {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             tokio::task::block_in_place(|| handle.block_on(future))
         } else {
-            self.fallback_runtime.block_on(future)
+            self.fallback_runtime
+                .as_ref()
+                .expect("no tokio runtime available")
+                .block_on(future)
         }
     }
+}
+
+/// Return tool definitions owned by the memory subsystem.
+pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
+    vec![ToolDef {
+        name: "remember".into(),
+        description: "Store a fact or insight in long-term memory for future retrieval across sessions.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact, insight, or information to remember"
+                }
+            },
+            "required": ["content"]
+        }),
+        policy: Some(ToolPolicyMetadata {
+            risk_level: ToolRiskLevel::Low,
+            requires_approval: false,
+        }),
+    }]
 }
 
 impl ToolExecutionPort for MemoryToolExecutionAdapter {
@@ -75,13 +114,10 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
 
-                let service = MemoryService::new(
-                    self.handle.embedding.as_ref(),
-                    self.handle.store.as_ref(),
-                );
+                let service =
+                    MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
 
-                let id = self
-                    .run_async(service.remember(content, agent_id))?;
+                let id = self.run_async(service.remember(content, agent_id))?;
 
                 Ok(format!("Stored memory with id: {}", id))
             }

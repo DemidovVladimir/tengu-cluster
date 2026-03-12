@@ -143,7 +143,11 @@ impl OpenRouterEngine {
             max_output_tokens,
             referer: std::env::var("OPENROUTER_REFERER").ok(),
             title: std::env::var("OPENROUTER_TITLE").ok(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
         }
     }
 
@@ -164,10 +168,7 @@ impl OpenRouterEngine {
     fn default_context_window_tokens(model: &str) -> usize {
         let model_lower = model.to_ascii_lowercase();
         // Strip provider prefix for matching (e.g. "anthropic/claude-sonnet-4" -> "claude-sonnet-4")
-        let model_name = model_lower
-            .split('/')
-            .last()
-            .unwrap_or(&model_lower);
+        let model_name = model_lower.split('/').last().unwrap_or(&model_lower);
 
         if model_name.contains("claude") {
             200_000

@@ -14,20 +14,30 @@ Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
 
 ## Quickstart
 
-```bash
-# Build
-cargo build
+### Docker (recommended)
 
-# Configure
+```bash
+git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
+make setup          # creates .env and config.toml from templates
+nano .env           # set OPENROUTER_API_KEY (or other API keys)
+make up             # start tengu
+```
+
+### Native
+
+```bash
+cargo build
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
-
-# Store your API key in the encrypted vault
 cargo run -- secret init                              # prompts for master password
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for master password
-
-# Chat
 cargo run -- chat
+```
+
+### One-liner (cloud/VPS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
 ```
 
 The default config uses `anthropic/claude-sonnet-4` via OpenRouter. Change the model with one line:
@@ -80,24 +90,30 @@ cargo run -- secret remove K  # Remove a secret
 | `/reload` | Re-read env vars + re-scan skills |
 | `/skills` | List discovered skills |
 | `/enable N` / `/disable N` | Enable/disable a skill |
+| `/team <goal>` | Plan & execute goal across multiple agents (Telegram) |
+| `/project <name>` | Create new project subfolder in workspace (Telegram) |
+| `/agents` | List available agents and roles (Telegram) |
+| `/wallet` | Show Privy wallet address and balance (Telegram) |
+| `/wallet status` | Show wallet ID, address, balance, and policy (Telegram) |
 
-## Built-In Workspace Tools
+## Built-In Workspace Primitives
 
-When an agent has `workspace` configured, these tools are available automatically:
+When an agent has `workspace` configured, four built-in primitives are available automatically:
 
-| Tool | Risk | Approval | Description |
-|------|------|----------|-------------|
+| Primitive | Risk | Approval | Description |
+|-----------|------|----------|-------------|
 | `read_file` | Low | No | Read file contents (text and PDF) |
 | `list_directory` | Low | No | List files and directories |
 | `write_file` | Medium | Yes | Write content to file |
 | `run_command` | High | Yes | Execute shell command in workspace |
-| `remember` | Low | No | Store fact in long-term memory (when memory enabled) |
 
-Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode.
+These are the stable foundation — all skills and external tools interact with the workspace through these primitives. When memory is enabled, the memory subsystem registers its own `remember` tool automatically.
+
+Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode. Approval dialogs are generated generically from tool metadata (risk level, description), not hardcoded per tool name.
 
 ## Multi-Agent Fleet
 
-Run specialized agents as a team:
+Run specialized agents as a coordinated team. Roles are fully dynamic — any string works:
 
 ```toml
 [orchestrator]
@@ -107,21 +123,37 @@ enabled = true
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "qa"
-skills = ["search", "test_runner"]
+allowed_tools = ["read_file", "list_directory", "run_command"]
+
+[agents.qa.identity]
+name = "QA Agent"
+instructions = "You review code, run tests, and verify correctness."
 
 [agents.backend]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4"
 role = "backend_engineer"
+allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+
+[agents.backend.identity]
+name = "Backend Engineer"
+instructions = "You write server code, design APIs, and manage databases."
 ```
 
 ```bash
 cargo run -- orchestrate
+
+# Or use a sandbox config for domain-specific teams:
+cargo run -- orchestrate --sandbox webstudio
+cargo run -- telegram --sandbox webstudio
+cargo run -- telegram --sandbox desci
 ```
 
-Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure).
+Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `allowed_tools` to restrict which workspace tools each agent can access.
 
-See the [Fleet Orchestration Guide](docs/FLEET.md) for the full setup.
+In Telegram, use `/team <goal>` to decompose a goal into tasks with dependency tracking. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+
+See the [Fleet Orchestration Guide](docs/FLEET.md), [Sandboxes Guide](docs/SANDBOXES.md) for full setup.
 
 ## Custom Skills
 
@@ -163,39 +195,40 @@ See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 
 ## Standalone Tools
 
-The `tools/` directory contains standalone CLI binaries that agents invoke via `run_command`:
+The `tools/` directory contains standalone infrastructure that agents use via skills and primitives — no code changes to tengu-cluster required:
 
 | Tool | Description |
 |------|-------------|
-| `tools/ipnft-minter` | IP-NFT minting CLI for Molecule DeSci Labs (agreement, metadata, terms, on-chain mint) |
+| `tools/tengu-relay` | Cloudflare Worker — API key injection proxy for Molecule/POI/Beach Science (planned rewrite, currently legacy KV bridge) |
 
-These are separate Cargo packages — not part of the main workspace. Build them independently:
+On-chain operations use **Privy agentic wallets** — server-side wallets controlled by the agent with policy-based guardrails. No wallet page or relay needed for signing.
 
-```bash
-cd tools/ipnft-minter && cargo build --release
-```
+## Deployment
 
-### ipnft-minter
-
-Handles steps 2-9 of the IPNFT minting flow (agreement, image, metadata, terms, sign, mint). The POI registration and on-chain submission (step 1) must be done separately — see `skills/aura-orchestrator/SKILL.md`.
+Deploy anywhere with Docker Compose. GPU acceleration is supported via Ollama.
 
 ```bash
-ipnft-minter \
-  --reservation-id "TOKEN_ID_FROM_POI" \
-  --poi-tx-hash "0xPOI_TX_HASH" \
-  --merkle-root "MERKLE_ROOT_HASH" \
-  --name "Project" --description "Desc" --symbol SYM \
-  --organization "Org" --lead-name "Name" --lead-email "email" --topic "Topic"
+make up              # API backends only (OpenRouter, Anthropic, etc.)
+make up-gpu          # + Ollama with NVIDIA GPU (CUDA)
+make up-full         # + Ollama GPU + Qdrant vector memory
+make up-cpu          # + Ollama (CPU only)
+make down            # stop everything
+make logs            # tail logs
+make doctor          # run diagnostics
 ```
 
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--reservation-id` | Recommended | Token ID from POI on-chain transaction. If omitted, falls back to `reserve()` (sequential ID, not POI-linked). |
-| `--poi-tx-hash` | With `--reservation-id` | Transaction hash of the POI on-chain submission. Required for POI-based assignments. |
-| `--merkle-root` | With `--reservation-id` | Merkle root hash from POI response (`data.proof.tree[0]`). Required for POI-based assignments. |
-| `--name` | Yes | Project name |
-| `--symbol` | Yes | Token symbol |
-| `--image` | No | Path to cover image (uses 1x1 placeholder if omitted) |
+**GPU support:**
+- **NVIDIA CUDA** — `docker compose --profile ollama-gpu up -d` passes GPU to Ollama via `nvidia-container-toolkit`
+- **Apple Metal** — install Ollama natively (`brew install ollama`), set `OLLAMA_HOST=http://host.docker.internal:11434`
+
+**Cloud provisioning** — use `deploy/cloud-init.yml` with Hetzner, AWS, DigitalOcean, or any cloud-init provider:
+
+```bash
+hcloud server create --name tengu --type cx22 --image ubuntu-24.04 \
+  --user-data-from-file deploy/cloud-init.yml --ssh-key my-key
+```
+
+See the [Deployment Guide](docs/DEPLOYMENT.md) for full setup, GPU configuration, cloud provisioning, and production checklist.
 
 ## Token Budget Gates
 
@@ -214,9 +247,13 @@ max_tokens_per_flow = 100_000
 | Guide | What It Covers |
 |-------|---------------|
 | [Quickstart](docs/QUICKSTART.md) | Installation, first config, first chat, next steps |
+| [Deployment](docs/DEPLOYMENT.md) | Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning, production checklist |
 | [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
 | [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
-| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, heartbeat, events |
+| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, parallel execution |
+| [Sandboxes](docs/SANDBOXES.md) | Domain-specific multi-agent teams, per-agent tool restrictions |
+| [Wallet & Signing](docs/WALLET.md) | Privy agentic wallets, policy setup, on-chain transaction signing |
+| [DeSci Guide](docs/GUIDE_DESCI.md) | End-to-end IP-NFT minting with aura-orchestrator and Privy wallets |
 | [Architecture](ARCHITECTURE.md) | Hexagonal architecture rules and project structure |
 
 ## Feature Flags

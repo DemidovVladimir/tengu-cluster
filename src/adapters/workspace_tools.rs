@@ -91,16 +91,25 @@ pub fn execute_tool(workspace: &Path, call: &ToolCall) -> Result<String> {
                         MAX_PDF_SIZE
                     );
                 }
-                let text = pdf_extract::extract_text(&target)
-                    .map_err(|e| anyhow::anyhow!("Cannot extract text from PDF '{}': {}", path_str, e))?;
+                let text = pdf_extract::extract_text(&target).map_err(|e| {
+                    anyhow::anyhow!("Cannot extract text from PDF '{}': {}", path_str, e)
+                })?;
                 if text.trim().is_empty() {
-                    bail!("PDF '{}' contains no extractable text (may be image-only)", path_str);
+                    bail!(
+                        "PDF '{}' contains no extractable text (may be image-only)",
+                        path_str
+                    );
                 }
                 // Truncate extracted text to the standard read limit.
                 let max_chars = MAX_READ_SIZE as usize;
                 if text.len() > max_chars {
                     let truncated = truncate_utf8_safe(&text, max_chars);
-                    Ok(format!("{}\n\n[truncated — {} of {} bytes shown]", truncated, max_chars, text.len()))
+                    Ok(format!(
+                        "{}\n\n[truncated — {} of {} bytes shown]",
+                        truncated,
+                        max_chars,
+                        text.len()
+                    ))
                 } else {
                     Ok(text)
                 }
@@ -367,14 +376,14 @@ mod tests {
             ".tengu/skills/evil/SKILL.md",
             "subdir/skills/evil.md",
         ] {
-            let call = tool_call(
-                "write_file",
-                json!({"path": path, "content": "malicious"}),
-            );
+            let call = tool_call("write_file", json!({"path": path, "content": "malicious"}));
             let result = execute_tool(ws.path(), &call);
             assert!(result.is_err(), "write to '{}' should be rejected", path);
             assert!(
-                result.unwrap_err().to_string().contains("skill directories"),
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("skill directories"),
                 "error for '{}' should mention skill directories",
                 path,
             );

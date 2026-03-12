@@ -17,7 +17,11 @@ const MAX_TOOL_ROUNDS: usize = 15;
 
 /// Maximum characters kept per tool result to prevent context explosion.
 /// Tool results exceeding this limit are truncated with a suffix note.
-const MAX_TOOL_RESULT_CHARS: usize = 4_000;
+const MAX_TOOL_RESULT_CHARS: usize = 2_000;
+
+/// Maximum seconds to wait for a single stream event before treating the stream as dead.
+/// If no event arrives within this window, the engine turn is aborted with an error.
+const STREAM_EVENT_TIMEOUT_SECS: u64 = 120;
 
 /// Result of a single engine call including response text and token usage delta.
 pub(crate) struct EngineResponse {
@@ -28,7 +32,7 @@ pub(crate) struct EngineResponse {
 
 /// Trait for executing tool calls. Implementations decide how to handle
 /// each tool (immediate execution, user confirmation, etc.).
-pub(crate) trait ToolExecutor {
+pub(crate) trait ToolExecutor: Send + Sync {
     /// Execute a tool call and return the result string.
     /// Returns Err if the tool call cannot be executed.
     fn execute(&self, call: &ToolCall) -> Result<String>;
@@ -62,7 +66,7 @@ impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
 /// Optional callback invoked after each tool execution, before feeding the
 /// result back to the engine. Callers (e.g. Telegram) use this to show
 /// tool results to the user for debugging.
-pub(crate) type ToolResultObserver<'a> = &'a dyn Fn(&ToolCall, &str);
+pub(crate) type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 
 /// Execute one or more engine rounds, handling tool calls automatically.
 ///
@@ -71,6 +75,10 @@ pub(crate) type ToolResultObserver<'a> = &'a dyn Fn(&ToolCall, &str);
 ///
 /// `tool_observer` is called after each tool execution with the call and
 /// its result string. Pass `None` to skip observation.
+///
+/// `cancel` is checked between tool rounds and between individual tool
+/// executions. When set, processing stops and returns whatever text has
+/// been collected so far.
 pub(crate) async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
@@ -78,14 +86,26 @@ pub(crate) async fn collect_engine_response(
     context: &EngineContext,
     tool_executor: Option<&dyn ToolExecutor>,
     tool_observer: Option<ToolResultObserver<'_>>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<EngineResponse> {
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
 
+    let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
+
     for round in 0..MAX_TOOL_ROUNDS {
+        if is_cancelled() {
+            debug!("Turn cancelled before round {}", round);
+            return Ok(EngineResponse {
+                text: String::new(),
+                input_tokens_delta: total_input_delta,
+                output_tokens_delta: total_output_delta,
+            });
+        }
+
         let (response_text, tool_calls, input_delta, output_delta) =
-            run_single_engine_turn(engine, &messages, tools, context).await?;
+            run_single_engine_turn(engine, &messages, tools, context, cancel).await?;
 
         total_input_delta += input_delta;
         total_output_delta += output_delta;
@@ -112,6 +132,14 @@ pub(crate) async fn collect_engine_response(
 
         // Execute each tool and append results (truncated to cap context growth).
         for tc in &tool_calls {
+            if is_cancelled() {
+                debug!("Turn cancelled before executing tool {}", tc.name);
+                return Ok(EngineResponse {
+                    text: String::new(),
+                    input_tokens_delta: total_input_delta,
+                    output_tokens_delta: total_output_delta,
+                });
+            }
             let result = match executor.execute(tc) {
                 Ok(output) => output,
                 Err(e) => format!("Error: {}", e),
@@ -131,7 +159,7 @@ pub(crate) async fn collect_engine_response(
 
     // If we exhaust all rounds, return whatever text we have from the last round.
     let (response_text, _, input_delta, output_delta) =
-        run_single_engine_turn(engine, &messages, &[], context).await?;
+        run_single_engine_turn(engine, &messages, &[], context, cancel).await?;
     total_input_delta += input_delta;
     total_output_delta += output_delta;
 
@@ -148,6 +176,7 @@ async fn run_single_engine_turn(
     messages: &[Message],
     tools: &[ToolDef],
     context: &EngineContext,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(String, Vec<ToolCall>, u32, u32)> {
     let mut stream = engine.run(messages, tools, context).await?;
 
@@ -159,7 +188,28 @@ async fn run_single_engine_turn(
     let mut pending_tool_name: Option<String> = None;
     let mut pending_tool_args = String::new();
 
-    while let Some(event) = stream.next().await {
+    let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
+
+    loop {
+        if is_cancelled() {
+            debug!("Stream cancelled by user");
+            break;
+        }
+        let event = match tokio::time::timeout(
+            std::time::Duration::from_secs(STREAM_EVENT_TIMEOUT_SECS),
+            stream.next(),
+        )
+        .await
+        {
+            Ok(Some(event)) => event,
+            Ok(None) => break,
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "Engine stream timed out — no data for {}s",
+                    STREAM_EVENT_TIMEOUT_SECS
+                ));
+            }
+        };
         match event {
             StreamEvent::TextDelta { text } => {
                 response_text.push_str(&text);
@@ -327,7 +377,10 @@ fn extract_xml_tool_calls(text: &str) -> Vec<ToolCall> {
             };
             let value = &args_section[v_inner..v_inner + v_end];
 
-            args.insert(key.to_string(), serde_json::Value::String(value.to_string()));
+            args.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
             arg_cursor = v_inner + v_end + ARG_VAL_CLOSE.len();
         }
 
@@ -411,7 +464,8 @@ mod tests {
 
     #[test]
     fn test_strip_xml_tool_calls() {
-        let text = "Before\n<tool_call>foo<arg_key>a</arg_key><arg_value>1</arg_value></tool_call>\nAfter";
+        let text =
+            "Before\n<tool_call>foo<arg_key>a</arg_key><arg_value>1</arg_value></tool_call>\nAfter";
         let stripped = strip_xml_tool_calls(text);
         assert_eq!(stripped, "Before\n\nAfter");
     }

@@ -75,17 +75,6 @@ impl<'a> MemoryService<'a> {
         Ok(budgeted.into_iter().cloned().collect())
     }
 
-    /// Delete a memory entry by ID.
-    #[allow(dead_code)]
-    pub(crate) async fn forget(&self, id: &str) -> Result<bool> {
-        self.store.delete(id).await
-    }
-
-    /// Return total number of stored memories.
-    #[allow(dead_code)]
-    pub(crate) async fn entry_count(&self) -> usize {
-        self.store.entry_count().await
-    }
 }
 
 #[cfg(test)]
@@ -124,7 +113,10 @@ mod tests {
     }
 
     impl MemoryStorePort for MockStore {
-        fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        fn store(
+            &self,
+            entry: &MemoryEntry,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
             let entry = entry.clone();
             Box::pin(async move {
                 self.entries.lock().unwrap().push(entry);
@@ -169,9 +161,7 @@ mod tests {
         }
 
         fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
-            Box::pin(async move {
-                self.entries.lock().unwrap().len()
-            })
+            Box::pin(async move { self.entries.lock().unwrap().len() })
         }
 
         fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
@@ -189,7 +179,7 @@ mod tests {
 
         let id = service.remember("test memory", "agent1").await.unwrap();
         assert!(!id.is_empty());
-        assert_eq!(service.entry_count().await, 1);
+        assert_eq!(store.entry_count().await, 1);
     }
 
     #[tokio::test]
@@ -216,10 +206,10 @@ mod tests {
         let service = MemoryService::new(&embedding, &store);
 
         let id = service.remember("to forget", "agent1").await.unwrap();
-        assert_eq!(service.entry_count().await, 1);
+        assert_eq!(store.entry_count().await, 1);
 
-        let deleted = service.forget(&id).await.unwrap();
+        let deleted = store.delete(&id).await.unwrap();
         assert!(deleted);
-        assert_eq!(service.entry_count().await, 0);
+        assert_eq!(store.entry_count().await, 0);
     }
 }

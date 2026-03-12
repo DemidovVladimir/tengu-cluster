@@ -58,9 +58,17 @@ enum Commands {
     /// Run runtime/environment diagnostics.
     Doctor,
     /// Run multi-agent fleet orchestrator.
-    Orchestrate,
+    Orchestrate {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
     /// Run Telegram bot adapter.
-    Telegram,
+    Telegram {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
     /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
     Secret {
         #[command(subcommand)]
@@ -179,9 +187,9 @@ async fn main() -> Result<()> {
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
     match cli.command.unwrap_or(Commands::Chat) {
-        Commands::Chat => tokio::task::block_in_place(|| {
-            adapters::tui::run_tui(config, profile, secret_registry)
-        }),
+        Commands::Chat => {
+            tokio::task::block_in_place(|| adapters::tui::run_tui(config, profile, secret_registry))
+        }
         Commands::Status => {
             print_status(&config, profile);
             Ok(())
@@ -190,16 +198,17 @@ async fn main() -> Result<()> {
             run_doctor(&config).await;
             Ok(())
         }
-        Commands::Orchestrate => {
-            let event_bus = adapters::event_bus::InProcessEventBus::default();
-            adapters::orchestrator::boot_orchestrator(&config, &event_bus, secret_registry).await
+        Commands::Orchestrate { sandbox } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            adapters::orchestrator::boot_orchestrator(&config, secret_registry).await
         }
         #[cfg(feature = "telegram")]
-        Commands::Telegram => tokio::task::block_in_place(|| {
+        Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
+            let config = load_sandbox_or(sandbox, config)?;
             adapters::telegram_runtime::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
-        Commands::Telegram => {
+        Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
         }
         Commands::Secret { action } => {
@@ -349,6 +358,22 @@ fn print_findings(label: &str, entries: &[String]) {
     }
     if entries.len() > 3 {
         println!("      - ... and {} more", entries.len() - 3);
+    }
+}
+
+/// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
+///
+/// Sandbox configs are loaded from `sandboxes/<name>/config.toml` relative to the
+/// current working directory.
+fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
+    match sandbox {
+        None => Ok(default),
+        Some(name) => {
+            let path = PathBuf::from("sandboxes").join(&name).join("config.toml");
+            Config::load(&path).with_context(|| {
+                format!("Failed to load sandbox '{}' from {}", name, path.display())
+            })
+        }
     }
 }
 

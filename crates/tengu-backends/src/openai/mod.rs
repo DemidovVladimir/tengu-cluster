@@ -116,7 +116,11 @@ impl OpenAIEngine {
             api_key: api_key.to_string(),
             context_window_tokens,
             max_output_tokens,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_default(),
         }
     }
 
