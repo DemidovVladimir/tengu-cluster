@@ -9,6 +9,7 @@ pub(crate) mod flow_store;
 pub(crate) mod memory_store;
 pub(crate) mod memory_tool_executor;
 pub(crate) mod orchestrator;
+pub(crate) mod prune;
 #[cfg(feature = "qdrant")]
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod scaffold;

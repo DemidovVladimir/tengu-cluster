@@ -5,9 +5,7 @@
 //! task dependencies.
 
 use crate::adapters::channel_runtime;
-use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::engine_factory::build_engine;
-use crate::adapters::memory_store::DiskVectorMemoryStore;
 use crate::adapters::memory_tool_executor::MemoryServiceHandle;
 use crate::adapters::skill_source::FileSystemSkillSource;
 use crate::adapters::task_store::InMemoryTaskStore;
@@ -15,6 +13,7 @@ use crate::adapters::workspace_tools;
 use crate::application::engine_runtime::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
+use crate::application::memory_service::MemoryService;
 use crate::application::ports::{TaskStorePort, ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::task_orchestrator::TaskOrchestratorService;
@@ -80,40 +79,25 @@ pub(crate) async fn boot_orchestrator(
     // Apply workspace scaffold if configured.
     crate::adapters::scaffold::maybe_apply_scaffold(config);
 
-    // Build shared memory handle for all fleet agents.
-    let memory_handle: Option<Arc<MemoryServiceHandle>> = if config.memory.enabled {
-        match std::env::var("OPENROUTER_API_KEY") {
-            Ok(api_key) => {
-                let store_path_str = config.memory.store_path.replace(
-                    "~",
-                    &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
-                );
-                match DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str)) {
-                    Ok(store) => {
-                        let embedding = OpenRouterEmbeddingAdapter::new(
-                            api_key,
-                            config.memory.embedding_model.clone(),
-                        );
-                        info!("Shared memory store initialized for fleet");
-                        Some(Arc::new(MemoryServiceHandle {
-                            embedding: Arc::new(embedding),
-                            store: Arc::new(store),
-                        }))
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to init shared memory store");
-                        None
-                    }
-                }
-            }
-            Err(_) => {
-                tracing::warn!("OPENROUTER_API_KEY not set, fleet memory disabled");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Find first agent's workspace for per-sandbox memory scoping.
+    let first_workspace: Option<std::path::PathBuf> = config
+        .agents
+        .values()
+        .find_map(|ac| {
+            ac.workspace
+                .as_ref()
+                .map(|p| crate::adapters::workspace_tools::expand_tilde(p))
+        });
+
+    // Build shared memory handle (scoped to workspace if available).
+    // Uses build_memory_handle for unified backend selection (disk or Qdrant).
+    let memory_handle: Option<Arc<MemoryServiceHandle>> = tokio::task::block_in_place(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("memory init runtime");
+        channel_runtime::build_memory_handle(&config.memory, &rt, first_workspace.as_deref())
+    });
 
     let task_store = InMemoryTaskStore::new();
     let mut agent_runtimes: HashMap<String, Arc<AgentRuntime>> = HashMap::new();
@@ -392,9 +376,31 @@ pub(crate) async fn boot_orchestrator(
 
             println!("  Planning...");
 
+            // RAG: recall only orchestrator topic overviews for planner context.
+            let enriched_goal = if let Some(ref handle) = memory_handle {
+                let mem_svc =
+                    MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+                let mut filter = HashMap::new();
+                filter.insert("kind".into(), "topic_overview".into());
+                filter.insert("source".into(), "orchestrator".into());
+                match mem_svc.recall_filtered(&input, 3, 600, &filter).await {
+                    Ok(results) if !results.is_empty() => {
+                        let mut enriched = String::from("## Relevant Prior Work\n");
+                        for r in &results {
+                            enriched.push_str(&format!("- {}\n", r.entry.content));
+                        }
+                        enriched.push_str(&format!("\n## Current Goal\n{}", input));
+                        enriched
+                    }
+                    _ => input.clone(),
+                }
+            } else {
+                input.clone()
+            };
+
             let tasks = match task_planner::generate_plan(
                 planner_runtime.engine.as_ref(),
-                &input,
+                &enriched_goal,
                 &agent_descriptions,
             )
             .await
@@ -538,6 +544,40 @@ pub(crate) async fn boot_orchestrator(
                 succeeded,
                 step_results.len()
             );
+
+            // Auto-summarize: store a topic overview in memory for future recall.
+            if let Some(ref handle) = memory_handle {
+                let mut summary = format!("Goal: {}\n\nResults:\n", input);
+                for r in &step_results {
+                    summary.push_str(&format!(
+                        "- {} ({}): {}\n",
+                        r.role,
+                        if r.success { "ok" } else { "failed" },
+                        channel_runtime::truncate_output(&r.output, 500),
+                    ));
+                }
+                let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+                let mut meta = std::collections::HashMap::new();
+                meta.insert("kind".into(), "topic_overview".into());
+                meta.insert("source".into(), "orchestrator".into());
+                meta.insert("goal".into(), input.clone());
+                if let Some(ref ws) = first_workspace {
+                    if let Some(name) = ws.file_name() {
+                        meta.insert("workspace_id".into(), name.to_string_lossy().to_string());
+                    }
+                }
+                match mem_svc
+                    .remember_with_metadata(&summary, "orchestrator", meta)
+                    .await
+                {
+                    Ok(id) => {
+                        tracing::debug!(id, "Stored topic overview in memory");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to store topic overview");
+                    }
+                }
+            }
         }
     }
 
@@ -590,17 +630,11 @@ fn build_step_context(goal: &str, current_task: &str, previous_results: &[StepRe
         for (i, r) in previous_results.iter().enumerate() {
             ctx.push_str(&format!("### Step {}: {} — {}\n", i + 1, r.role, r.task));
             if r.success {
-                let mut end = r.output.len().min(MAX_STEP_CONTEXT_CHARS);
-                while end < r.output.len() && !r.output.is_char_boundary(end) {
-                    end -= 1;
-                }
-                if r.output.len() > MAX_STEP_CONTEXT_CHARS {
-                    ctx.push_str(&r.output[..end]);
-                    ctx.push_str("\n...(truncated)\n\n");
-                } else {
-                    ctx.push_str(&r.output);
-                    ctx.push('\n');
-                }
+                ctx.push_str(&channel_runtime::truncate_output(
+                    &r.output,
+                    MAX_STEP_CONTEXT_CHARS,
+                ));
+                ctx.push('\n');
             } else {
                 ctx.push_str(&format!("(failed: {})\n\n", r.output));
             }

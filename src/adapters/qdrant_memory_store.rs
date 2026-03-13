@@ -83,15 +83,21 @@ impl QdrantMemoryStore {
 
 impl MemoryStorePort for QdrantMemoryStore {
     fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let mut payload_json = serde_json::json!({
+            "content": entry.content,
+            "agent_id": entry.agent_id,
+            "created_at_epoch_s": entry.created_at_epoch_s,
+        });
+        // Store metadata as "meta_*" prefixed payload keys.
+        if let serde_json::Value::Object(ref mut map) = payload_json {
+            for (k, v) in &entry.metadata {
+                map.insert(format!("meta_{}", k), serde_json::Value::String(v.clone()));
+            }
+        }
         let point = PointStruct::new(
             entry.id.clone(),
             entry.embedding.clone(),
-            qdrant_client::Payload::try_from(serde_json::json!({
-                "content": entry.content,
-                "agent_id": entry.agent_id,
-                "created_at_epoch_s": entry.created_at_epoch_s,
-            }))
-            .unwrap_or_default(),
+            qdrant_client::Payload::try_from(payload_json).unwrap_or_default(),
         );
         let collection = self.collection.clone();
         Box::pin(async move {
@@ -165,6 +171,18 @@ impl MemoryStorePort for QdrantMemoryStore {
                             _ => None,
                         })?;
 
+                    // Reconstruct metadata from "meta_*" prefixed payload keys.
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &payload {
+                        if let Some(stripped) = k.strip_prefix("meta_") {
+                            if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) =
+                                &v.kind
+                            {
+                                metadata.insert(stripped.to_string(), s.clone());
+                            }
+                        }
+                    }
+
                     Some(MemorySearchResult {
                         entry: MemoryEntry {
                             id,
@@ -172,6 +190,7 @@ impl MemoryStorePort for QdrantMemoryStore {
                             embedding: Vec::new(), // Qdrant doesn't return vectors by default
                             agent_id,
                             created_at_epoch_s,
+                            metadata,
                         },
                         score: scored.score,
                     })
@@ -261,6 +280,7 @@ mod tests {
             embedding: vec![1.0, 0.0, 0.0],
             agent_id: "test-agent".to_string(),
             created_at_epoch_s: 1234567890,
+            metadata: std::collections::HashMap::new(),
         };
 
         // Store

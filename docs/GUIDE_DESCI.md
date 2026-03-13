@@ -140,6 +140,8 @@ Alternatively, use the pre-built DeSci sandbox with a multi-agent team:
 cargo run -- telegram --sandbox desci
 ```
 
+The DeSci sandbox uses per-workspace memory isolation — memories from DeSci runs do not pollute other sandbox recall results. When the orchestrator completes a multi-agent task, it auto-summarizes results into a topic overview stored in memory, so future runs can recall prior work context automatically.
+
 ## Step 6: Start the Bot
 
 ```bash

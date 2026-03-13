@@ -246,26 +246,29 @@ fn truncate_summary(text: &str, max: usize) -> String {
 /// Directory inside workspace where task outcomes are stored.
 const TASK_OUTCOMES_DIR: &str = ".tengu-tasks";
 
-/// Build the prompt for a task, including outcomes of dependency tasks.
+/// Max chars of each dependency output to embed inline in task prompts.
+const MAX_DEP_OUTPUT_CHARS: usize = 3000;
+
+/// Build the prompt for a task, embedding dependency outputs inline.
+///
+/// `dep_outcomes` elements: `(task_id, role, output_text)`.
 fn build_task_prompt(
     goal: &str,
     task_description: &str,
-    dep_outcomes: &[(String, String)],
+    dep_outcomes: &[(String, String, String)],
 ) -> String {
     let mut prompt = format!("## Goal\n{}\n\n## Your Task\n{}\n", goal, task_description);
 
     if !dep_outcomes.is_empty() {
-        prompt.push_str("\n## Completed dependency tasks — READ BEFORE STARTING\n");
-        prompt.push_str("The following tasks were completed before yours. Read the outcome files for full details.\n\n");
-        for (task_id, outcome_path) in dep_outcomes {
-            prompt.push_str(&format!(
-                "- **{}** → outcome at `{}`\n",
-                task_id, outcome_path
+        prompt.push_str("\n## Results from Previous Steps\n\n");
+        for (task_id, role, output_text) in dep_outcomes {
+            prompt.push_str(&format!("### {} ({})\n", task_id, role));
+            prompt.push_str(&channel_runtime::truncate_output(
+                output_text,
+                MAX_DEP_OUTPUT_CHARS,
             ));
+            prompt.push('\n');
         }
-        prompt.push_str(
-            "\nUse read_file on these outcome files to see what was done and build on it.\n",
-        );
     }
 
     prompt.push_str("\n## IMPORTANT\n\
@@ -363,9 +366,30 @@ async fn orchestrate_team_goal(
         }
     };
 
+    // RAG: recall only orchestrator topic overviews for planner context.
+    let enriched_goal = if let Some(ref handle) = memory_handle {
+        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+        let mut filter = std::collections::HashMap::new();
+        filter.insert("kind".into(), "topic_overview".into());
+        filter.insert("source".into(), "orchestrator".into());
+        match mem_svc.recall_filtered(&goal, 3, 600, &filter).await {
+            Ok(results) if !results.is_empty() => {
+                let mut enriched = String::from("## Relevant Prior Work\n");
+                for r in &results {
+                    enriched.push_str(&format!("- {}\n", r.entry.content));
+                }
+                enriched.push_str(&format!("\n## Current Goal\n{}", goal));
+                enriched
+            }
+            _ => goal.clone(),
+        }
+    } else {
+        goal.clone()
+    };
+
     let tasks = match crate::application::task_planner::generate_plan(
         planner_engine,
-        &goal,
+        &enriched_goal,
         agent_descriptions,
     )
     .await
@@ -415,7 +439,8 @@ async fn orchestrate_team_goal(
         std::fs::create_dir_all(dir).ok();
     }
 
-    let mut outcome_paths: HashMap<String, String> = HashMap::new();
+    // task_id → (outcome_rel_path, output_text)
+    let mut outcome_data: HashMap<String, (String, String)> = HashMap::new();
     turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut completed_count = 0usize;
     let mut stopped = false;
@@ -534,13 +559,18 @@ async fn orchestrate_team_goal(
                     .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
                 });
 
-            let dep_outcomes: Vec<(String, String)> = task
+            let dep_outcomes: Vec<(String, String, String)> = task
                 .depends_on
                 .iter()
                 .filter_map(|dep_id| {
-                    outcome_paths
-                        .get(dep_id)
-                        .map(|p| (dep_id.clone(), p.clone()))
+                    outcome_data.get(dep_id).map(|(_, output_text)| {
+                        let role = tasks
+                            .iter()
+                            .find(|t| t.id == *dep_id)
+                            .map(|t| t.role.clone())
+                            .unwrap_or_default();
+                        (dep_id.clone(), role, output_text.clone())
+                    })
                 })
                 .collect();
 
@@ -676,7 +706,8 @@ async fn orchestrate_team_goal(
                             let _ = pipe.send_text(sender, chunk, delivery_opts).await;
                         }
                     }
-                    outcome_paths.insert(task_id, outcome_rel_path);
+                    outcome_data
+                        .insert(task_id, (outcome_rel_path, output));
                     completed_count += 1;
                 }
                 Err(e) => {
@@ -687,6 +718,7 @@ async fn orchestrate_team_goal(
                             delivery_opts,
                         )
                         .await;
+                    let error_text = format!("FAILED: {}", e);
                     if let Some(ref dir) = outcomes_dir {
                         let path = dir.join(format!("{}.md", task_id));
                         let _ = std::fs::write(
@@ -694,8 +726,47 @@ async fn orchestrate_team_goal(
                             format!("# FAILED\n\nTask: {}\nError: {}\n", task_desc, e),
                         );
                     }
-                    outcome_paths.insert(task_id, outcome_rel_path);
+                    outcome_data.insert(task_id, (outcome_rel_path, error_text));
                 }
+            }
+        }
+    }
+
+    // Auto-summarize: store a topic overview in memory for future recall.
+    if let Some(ref handle) = memory_handle {
+        let mut mem_summary = format!("Goal: {}\n\nResults:\n", goal);
+        for task in &tasks {
+            if let Some((_, output_text)) = outcome_data.get(&task.id) {
+                mem_summary.push_str(&format!(
+                    "- {} ({}): {}\n",
+                    task.role,
+                    task.id,
+                    channel_runtime::truncate_output(output_text, 500),
+                ));
+            }
+        }
+        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+        let mut meta = std::collections::HashMap::new();
+        meta.insert("kind".into(), "topic_overview".into());
+        meta.insert("source".into(), "orchestrator".into());
+        meta.insert("goal".into(), goal.to_string());
+        if let Some(ws) = agent_states
+            .get(default_agent_id)
+            .and_then(|a| a.workspace.as_ref())
+        {
+            if let Some(name) = ws.file_name() {
+                meta.insert("workspace_id".into(), name.to_string_lossy().to_string());
+            }
+        }
+        match mem_svc
+            .remember_with_metadata(&mem_summary, "orchestrator", meta)
+            .await
+        {
+            Ok(id) => {
+                tracing::debug!(id, "Stored topic overview in memory");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to store topic overview");
             }
         }
     }
@@ -805,8 +876,15 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     let flow_store = FlowStore::new(&resolve_tengu_home())?;
     let memory_config = config.memory.clone();
 
-    // Build shared memory handle.
-    let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt);
+    // Find first agent's workspace for per-sandbox memory scoping.
+    let first_workspace: Option<std::path::PathBuf> = config
+        .agents
+        .values()
+        .find_map(|ac| ac.workspace.as_ref().map(|p| workspace_tools::expand_tilde(p)));
+
+    // Build shared memory handle (scoped to workspace if available).
+    let memory_handle =
+        channel_runtime::build_memory_handle(&memory_config, &rt, first_workspace.as_deref());
 
     let has_memory = memory_handle.is_some();
 
@@ -1286,7 +1364,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     continue;
                 }
 
-                // /purge — clear conversation state + wipe persistent memory.
+                // /purge — clear conversation state + wipe persistent memory + clean disk artifacts.
                 if msg.content == "/purge" || msg.content.starts_with("/purge@") {
                     let prefix = format!("{}:", sender_id);
                     for (key, state) in user_states.iter_mut() {
@@ -1303,6 +1381,26 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     } else {
                         lines.push("No persistent memory active.".to_string());
                     }
+
+                    // Clean workspace disk artifacts (.tengu-tasks, .tengu-attachments).
+                    let ws_set: HashSet<std::path::PathBuf> = agent_states
+                        .values()
+                        .filter_map(|s| s.workspace.clone())
+                        .collect();
+                    for ws in &ws_set {
+                        for subdir in &[".tengu-tasks", ".tengu-attachments"] {
+                            let p = ws.join(subdir);
+                            if p.exists() {
+                                match std::fs::remove_dir_all(&p) {
+                                    Ok(()) => lines.push(format!("Cleaned {}", p.display())),
+                                    Err(e) => {
+                                        lines.push(format!("Failed to clean {}: {}", p.display(), e))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     let _ = pipe
                         .send_text(&msg.sender, &lines.join("\n"), &delivery_opts)
                         .await;

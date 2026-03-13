@@ -20,23 +20,31 @@
 - **Role→agent lookup**: `telegram_runtime.rs:439-450`
 - **Skill hot-reload**: `telegram_runtime.rs:471-485`
 - **Executor build**: `telegram_runtime.rs:487-501`
-- **Dependency context**: `telegram_runtime.rs:520-535` — outcome file paths
+- **Dependency context**: `telegram_runtime.rs:541-553` — inline output embedding (via `truncate_output`)
 - **Chat runtime call**: `telegram_runtime.rs:553-571` — `process_user_text()`
 - **Result handling**: `telegram_runtime.rs:574-602`
+- **Auto-summarize**: after batch loop — stores `topic_overview` in memory with metadata
+- **RAG planner recall**: before `generate_plan()` — `recall_filtered(kind=topic_overview, source=orchestrator)`
 
 ### Task Execution (CLI Orchestrator)
-- **Boot**: `orchestrator.rs:69-545` — `boot_orchestrator()`
+- **Boot**: `orchestrator.rs:69+` — `boot_orchestrator()`
+- **Memory init**: `orchestrator.rs:84-95` — `build_memory_handle()` (per-workspace)
 - **Agent runtimes**: `orchestrator.rs:119-250` — `HashMap<String, Arc<AgentRuntime>>`
+- **RAG planner recall**: before `generate_plan()` — `recall_filtered(kind=topic_overview, source=orchestrator)`
 - **Parallel JoinSet**: `orchestrator.rs:441-533` — batch execution
-- **Step context**: `orchestrator.rs:582-611` — `build_step_context()` (in-memory, not file-based)
+- **Step context**: `orchestrator.rs:582+` — `build_step_context()` (uses shared `truncate_output`)
+- **Auto-summarize**: after batch loop — stores `topic_overview` in memory with metadata
 
 ### Shared Channel Runtime
 - **Tool rebuild**: `channel_runtime.rs:81-89` — `rebuild_tools()`
 - **Prompt rebuild**: `channel_runtime.rs:92-109` — `rebuild_system_prompt()`
 - **Executor build**: `channel_runtime.rs:116-211` — `build_tool_executor()`
 - **Base tools**: `channel_runtime.rs:221-240` — `compute_base_tools()`
-- **Agent routing**: `channel_runtime.rs:350-379` — `parse_agent_routing()`
-- **Message chunking**: `channel_runtime.rs:389-425` — `chunk_message()`
+- **Memory path resolution**: `channel_runtime.rs:252+` — `resolve_memory_store_path()`, `resolve_qdrant_collection()`
+- **Memory init**: `channel_runtime.rs:287+` — `build_memory_handle(workspace)` (per-workspace scoping)
+- **Output truncation**: `channel_runtime.rs:440+` — `truncate_output()` (char-boundary-safe)
+- **Agent routing**: `channel_runtime.rs:400+` — `parse_agent_routing()`
+- **Message chunking**: `channel_runtime.rs:430+` — `chunk_message()`
 
 ## Key Types
 

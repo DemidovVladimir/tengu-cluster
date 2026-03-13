@@ -195,7 +195,7 @@ pub fn run_tui(
             .map(|p| workspace_tools::expand_tilde(p));
 
         // Build memory subsystem if enabled.
-        let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt);
+        let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
 
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =

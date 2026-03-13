@@ -43,7 +43,7 @@ content = """# DeSci Project
 
 [agents.hypothesis_researcher]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4.5"
+model = "google/gemini-3-flash-preview"
 role = "hypothesis_researcher"
 default = true
 workspace = "~/desci-workspace"
@@ -76,11 +76,11 @@ idle_timeout_minutes = 30
 
 [agents.onchain_minter]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4.5"
+model = "google/gemini-3-flash-preview"
 role = "onchain_minter"
 workspace = "~/desci-workspace"
-skill_packages = ["aura-orchestrator", "privy"]
-capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember", "skill.aura_orchestrator", "skill.privy", "desci.poi.register", "desci.upload.binary"]
+skill_packages = ["aura-orchestrator"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell", "memory.remember", "skill.aura_orchestrator", "desci.poi.register", "desci.upload.binary"]
 
 [agents.onchain_minter.identity]
 name = "On-Chain Minter"
@@ -98,6 +98,10 @@ Find the PDF and image in .tengu-attachments/ via list_directory.
 Save minting output (project_url, mint_tx, reservation_id, token_id) to mint/metadata/mint_result.md.
 If any step fails, STOP and report the error."""
 
+[agents.onchain_minter.prompt_budget]
+max_skill_context_tokens = 12000
+max_total_tokens = 32000
+
 [agents.onchain_minter.flow]
 scope = "per-sender"
 reset_mode = "idle"
@@ -108,11 +112,11 @@ idle_timeout_minutes = 30
 
 [agents.mol_labs]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4.5"
+model = "google/gemini-3-flash-preview"
 role = "mol_labs"
 workspace = "~/desci-workspace"
-skill_packages = ["aura-orchestrator", "privy"]
-capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember", "skill.aura_orchestrator", "skill.privy", "desci.upload.binary"]
+skill_packages = ["aura-orchestrator"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell", "memory.remember", "skill.aura_orchestrator", "desci.upload.binary"]
 
 [agents.mol_labs.identity]
 name = "Molecule Labs Manager"
@@ -133,6 +137,10 @@ Follow the aura-orchestrator skill documentation:
 
 Save all results (ipnftUid, datasetId, project URL) to uploads/molecule_result.md."""
 
+[agents.mol_labs.prompt_budget]
+max_skill_context_tokens = 12000
+max_total_tokens = 32000
+
 [agents.mol_labs.flow]
 scope = "per-sender"
 reset_mode = "idle"
@@ -143,7 +151,7 @@ idle_timeout_minutes = 30
 
 [agents.beach_scientist]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4.5"
+model = "google/gemini-3-flash-preview"
 role = "beach_scientist"
 workspace = "~/desci-workspace"
 skill_packages = ["beach-science"]

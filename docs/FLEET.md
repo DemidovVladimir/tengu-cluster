@@ -264,11 +264,14 @@ Example explicit planning command:
 ```
 
 The orchestrator:
-1. Analyzes the goal and available agents
-2. Creates tasks with unique IDs, assigns each to an agent role
-3. Resolves dependencies — independent tasks are grouped into parallel batches
-4. Executes batches: all tasks in a batch run (dependent tasks wait for prerequisites)
-5. Agents communicate via outcome files in `.tengu-tasks/` — each agent writes its results, dependent agents read them
+1. Recalls relevant prior topic overviews from memory (filtered to `kind=topic_overview, source=orchestrator`) and injects them into the planner context
+2. Analyzes the goal and available agents
+3. Creates tasks with unique IDs, assigns each to an agent role
+4. Resolves dependencies — independent tasks are grouped into parallel batches
+5. Executes batches: all tasks in a batch run concurrently (dependent tasks wait for prerequisites)
+6. Dependent tasks receive prior step output embedded inline in their prompt (up to 3000 chars per dependency, char-boundary-safe truncation) — no file-path indirection, eliminating inter-agent hallucination
+7. After all batches complete, auto-summarizes results into a `topic_overview` memory entry with metadata tags (`kind`, `source`, `goal`, `workspace_id`)
+8. Outcome files are still written to `.tengu-tasks/` for audit, but prompts no longer depend on agents reading them
 
 Example plan output:
 ```

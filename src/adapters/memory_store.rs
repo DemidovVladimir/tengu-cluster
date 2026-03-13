@@ -166,6 +166,7 @@ mod tests {
             embedding,
             agent_id: "test".to_string(),
             created_at_epoch_s: 0,
+            metadata: std::collections::HashMap::new(),
         }
     }
 

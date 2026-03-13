@@ -23,6 +23,8 @@ The `--sandbox <name>` flag loads config from `sandboxes/<name>/config.toml` rel
 
 Each sandbox is a self-contained config file. There is no inheritance from the default config — define everything the team needs.
 
+**Memory isolation**: When agents have a `workspace` configured, persistent memory is automatically stored in `<workspace>/memory/` instead of the global `~/.tengu/memory/`. This means DeSci and WebStudio sandboxes get separate memory stores by default — no config changes needed. For Qdrant, a workspace-scoped collection name is used (e.g., `tengu-memory-desci-sandbox`).
+
 ## Defining Agents
 
 Agents are fully dynamic. Any role string works — there are no hardcoded role names. Define agents in `[agents.<id>]` sections:

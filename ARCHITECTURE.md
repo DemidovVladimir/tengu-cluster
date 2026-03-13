@@ -65,7 +65,7 @@ Forbidden:
 | `skill.rs` | Skill markdown parsing (classic + frontmatter API), validation, rendering, agent skill filtering |
 | `agent_role.rs` | Fleet agent roles — dynamic string wrapper (any non-empty role name) |
 | `task.rs` | Task lifecycle model (status machine, retry logic) |
-| `memory.rs` | Memory entry types, cosine similarity, token budgeting |
+| `memory.rs` | Memory entry types (with metadata `HashMap<String, String>`), cosine similarity, token budgeting |
 | `secret_registry.rs` | Secret value registry for output redaction (pure, no I/O) |
 
 ### Application Layer (`src/application/`)
@@ -83,14 +83,14 @@ Forbidden:
 | `tool_use_service.rs` | Tool execution with policy check, activity publishing, and approval gate |
 | `skill_catalog.rs` | Skill loading (`LoadedSkillSet`), validation, per-agent filtering, context fragment collection |
 | `task_orchestrator.rs` | Task lifecycle service (create/assign/complete/retry) |
-| `memory_service.rs` | Memory application service (embed→store, embed→search→budget recall, forget) |
+| `memory_service.rs` | Memory application service (embed→store with metadata, embed→search→budget recall, metadata-filtered recall, forget) |
 | `skill_registry.rs` | Mutable skill registry with hot-reload, enable/disable |
 
 ### Adapter Layer (`src/adapters/`)
 
 | File | Purpose |
 |------|---------|
-| `channel_runtime.rs` | Shared channel runtime helpers: tool/executor/prompt rebuilding, memory init, agent routing, message chunking, state factories — all channel adapters delegate here |
+| `channel_runtime.rs` | Shared channel runtime helpers: tool/executor/prompt rebuilding, per-workspace memory init (`resolve_memory_store_path`, `resolve_qdrant_collection`), output truncation, agent routing, message chunking, state factories — all channel adapters delegate here |
 | `tui/mod.rs` | Full-screen TUI with cursive, interactive tool approval dialog, delegates to channel_runtime + application services |
 | `workspace_tools.rs` | Filesystem tool execution adapter (read_file, list_directory, write_file, run_command) |
 | `flow_store.rs` | JSON-based flow persistence |
@@ -102,14 +102,14 @@ Forbidden:
 | `skill_tool_executor.rs` | Skill execution via shell |
 | `shell_executor.rs` | Local shell command execution |
 | `task_store.rs` | In-memory task store implementing TaskStorePort |
-| `orchestrator.rs` | Fleet orchestrator: per-agent engine/tools wiring, interactive stdin task dispatch, role-based routing, shared memory, JoinSet parallel batch execution |
+| `orchestrator.rs` | Fleet orchestrator: per-agent engine/tools wiring, interactive stdin task dispatch, role-based routing, shared per-workspace memory (via `build_memory_handle`), JoinSet parallel batch execution, auto-summarize topic overviews, RAG planner recall |
 | `embedding.rs` | OpenRouter embedding API adapter (EmbeddingPort) — produces `Vec<f32>` vectors |
 | `memory_store.rs` | Disk-backed vector store with brute-force cosine similarity and bincode persistence (MemoryStorePort) |
 | `qdrant_memory_store.rs` | Qdrant-backed vector store via gRPC, ANN cosine search (MemoryStorePort, `--features qdrant`) |
-| `memory_tool_executor.rs` | Memory tool definitions + execution bridge (owns `remember` ToolDef, sync→async via dedicated runtime) |
+| `memory_tool_executor.rs` | Memory tool definitions + execution bridge (owns `remember` ToolDef with optional metadata parameter, sync→async via dedicated runtime) |
 | `tool_ui.rs` | Shared generic UI helpers for tool approval dialogs and activity summaries (no tool name matching) |
 | `secret_store.rs` | AES-256-GCM encrypted secrets vault (PBKDF2 key derivation, rpassword prompting) |
-| `telegram_runtime.rs` | Headless Telegram bot adapter: TelegramPipe → ChatRuntimeService, inline keyboard approval, typing indicator, file attachments, delegates to channel_runtime for shared logic |
+| `telegram_runtime.rs` | Headless Telegram bot adapter: TelegramPipe → ChatRuntimeService, inline keyboard approval, typing indicator, file attachments, inline inter-agent data passing, auto-summarize topic overviews, RAG planner recall, delegates to channel_runtime for shared logic |
 
 ### Channel Adapters (`crates/tengu-channels/`)
 

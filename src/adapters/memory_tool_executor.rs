@@ -85,6 +85,11 @@ pub(crate) fn memory_tool_defs() -> Vec<RegisteredTool> {
                 "content": {
                     "type": "string",
                     "description": "The fact, insight, or information to remember"
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
+                    "additionalProperties": { "type": "string" }
                 }
             },
             "required": ["content"]
@@ -113,10 +118,23 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
                     .and_then(|v| v.as_str())
                     .unwrap_or("default");
 
+                // Extract optional metadata from tool arguments.
+                let metadata: std::collections::HashMap<String, String> = call
+                    .arguments
+                    .get("metadata")
+                    .and_then(|v| v.as_object())
+                    .map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 let service =
                     MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
 
-                let id = self.run_async(service.remember(content, agent_id))?;
+                let id =
+                    self.run_async(service.remember_with_metadata(content, agent_id, metadata))?;
 
                 Ok(format!("Stored memory with id: {}", id))
             }

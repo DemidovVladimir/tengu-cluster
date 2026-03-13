@@ -4,6 +4,8 @@
 //! all memory store backends (disk and Qdrant). It has no infrastructure
 //! dependencies — pure business logic only.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// A single memory entry stored in the vector store.
@@ -26,6 +28,9 @@ pub(crate) struct MemoryEntry {
     pub agent_id: String,
     /// Unix epoch seconds when the memory was created.
     pub created_at_epoch_s: u64,
+    /// Optional metadata for tagging (e.g. kind, source, goal, run_id).
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
 }
 
 /// A search result pairing a memory entry with its cosine similarity score.
@@ -155,6 +160,7 @@ mod tests {
                     embedding: vec![],
                     agent_id: "a".into(),
                     created_at_epoch_s: 0,
+                    metadata: HashMap::new(),
                 },
                 score: 0.9,
             },
@@ -165,6 +171,7 @@ mod tests {
                     embedding: vec![],
                     agent_id: "a".into(),
                     created_at_epoch_s: 0,
+                    metadata: HashMap::new(),
                 },
                 score: 0.8,
             },
@@ -191,6 +198,7 @@ mod tests {
                 embedding: vec![],
                 agent_id: "a".into(),
                 created_at_epoch_s: 0,
+                metadata: HashMap::new(),
             },
             score: 0.9,
         }];

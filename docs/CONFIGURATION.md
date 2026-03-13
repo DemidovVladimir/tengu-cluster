@@ -369,10 +369,17 @@ Persistent vector memory enables cross-session knowledge retrieval. When enabled
 
 **How it works:**
 
-1. **Remember**: user text → `EmbeddingPort::embed()` → `Vec<f32>` embedding → `MemoryStorePort::store()` (persisted with content, agent ID, timestamp)
+1. **Remember**: user text → `EmbeddingPort::embed()` → `Vec<f32>` embedding → `MemoryStorePort::store()` (persisted with content, agent ID, timestamp, and optional metadata tags)
 2. **Recall**: each turn, the user's message is embedded → `MemoryStorePort::search_by_vector()` finds the top-k closest memories by cosine similarity → results are budget-trimmed to fit token limits → injected as a `[Relevant memories]` system message before chat history
+3. **Filtered recall**: the orchestrator uses `recall_filtered()` to retrieve only memories matching specific metadata (e.g., `kind=topic_overview, source=orchestrator`), preventing unrelated memories from polluting planner context
 
 Both operations use the same embedding model, guaranteeing that stored vectors and query vectors share the same embedding space.
+
+**Per-workspace isolation**: When a sandbox agent has a `workspace` configured, memory is automatically stored in `<workspace>/memory/` instead of the global `~/.tengu/memory/`. For Qdrant, a workspace-scoped collection name is used (e.g., `tengu-memory-desci-sandbox`). No config changes needed — isolation is automatic.
+
+**Metadata tagging**: Each memory entry can carry `metadata: HashMap<String, String>` with convention keys like `kind` (fact, outcome, topic_overview), `source` (user, agent, orchestrator), `goal`, `workspace_id`, and `run_id`. The `remember` tool accepts an optional `metadata` object parameter so agents can tag memories at storage time. Old `vectors.bin` files deserialize with empty metadata (backward compatible via `#[serde(default)]`).
+
+**Orchestrator topic overviews**: After each multi-agent run, the orchestrator automatically compresses all step results into a topic overview and stores it in memory with `{kind: "topic_overview", source: "orchestrator", goal: "<goal>", workspace_id: "<ws>"}`. Before planning new goals, the orchestrator recalls prior topic overviews (filtered by `kind` + `source`) and injects them as "Relevant Prior Work" context for the planner.
 
 ```toml
 [memory]
@@ -390,11 +397,11 @@ store_path = "~/.tengu/memory/"
 | `embedding_provider` | string | `"openrouter"` | Embedding API provider |
 | `max_recall_entries` | usize | `5` | Max memories to retrieve per turn |
 | `max_recall_tokens` | usize | `600` | Token budget for recalled memories |
-| `store_path` | string | `"~/.tengu/memory/"` | Disk backend storage directory |
+| `store_path` | string | `"~/.tengu/memory/"` | Disk backend storage directory (overridden to `<workspace>/memory/` when agent has a workspace) |
 | `backend` | string | `"disk"` | `"disk"` or `"qdrant"` |
 | `qdrant_url` | string | `"http://localhost:6334"` | Qdrant gRPC endpoint |
 | `qdrant_api_key` | string? | none | API key for Qdrant Cloud |
-| `qdrant_collection` | string | `"tengu-memory"` | Qdrant collection name |
+| `qdrant_collection` | string | `"tengu-memory"` | Qdrant collection name (auto-scoped to `tengu-memory-<workspace>` when agent has a workspace) |
 | `vector_size` | u64 | `1536` | Embedding dimensionality (must match model) |
 
 Requires `OPENROUTER_API_KEY` for embedding generation.
@@ -681,7 +688,7 @@ See the [Deployment Guide](DEPLOYMENT.md) for Docker Compose profiles, GPU setup
 | `~/.tengu/secrets.vault` | AES-256-GCM encrypted secrets vault |
 | `~/.tengu/state/flows/` | Conversation history persistence |
 | `~/.tengu/state/flows/index.json` | Flow metadata index |
-| `~/.tengu/memory/vectors.bin` | Disk memory store (bincode, when `backend = "disk"`) |
+| `~/.tengu/memory/vectors.bin` | Global disk memory store (bincode, when no workspace; overridden to `<workspace>/memory/vectors.bin` for sandboxed agents) |
 | `~/.tengu/logs/tengu.log` | Runtime log file (in chat mode) |
 | `skills/*.md` | Skill definitions (project root) |
 | `{workspace}/IDENTITY.md` | Agent identity system prompt |

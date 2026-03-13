@@ -243,13 +243,51 @@ pub(crate) fn compute_base_tools(
 // Memory subsystem initialization
 // ---------------------------------------------------------------------------
 
+/// Resolve the memory store path: workspace-local if a workspace is provided,
+/// otherwise fall back to the global path from config (with tilde expansion).
+pub(crate) fn resolve_memory_store_path(
+    memory_config: &tengu_core::config::MemoryConfig,
+    workspace: Option<&Path>,
+) -> std::path::PathBuf {
+    match workspace {
+        Some(ws) => ws.join("memory"),
+        None => {
+            let store_path_str = memory_config.store_path.replace(
+                "~",
+                &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
+            );
+            std::path::PathBuf::from(store_path_str)
+        }
+    }
+}
+
+/// Resolve the Qdrant collection name: workspace-scoped if a workspace is
+/// provided, otherwise fall back to the config value.
+pub(crate) fn resolve_qdrant_collection(
+    memory_config: &tengu_core::config::MemoryConfig,
+    workspace: Option<&Path>,
+) -> String {
+    match workspace {
+        Some(ws) => {
+            let name = ws
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "default".to_string());
+            format!("tengu-memory-{}", name)
+        }
+        None => memory_config.qdrant_collection.clone(),
+    }
+}
+
 /// Build the shared memory subsystem handle from config.
 ///
 /// Returns `None` if memory is disabled, the API key is not set, or store init fails.
-/// The tokio runtime is needed for async Qdrant initialization.
+/// When `workspace` is `Some`, memory is stored in `<workspace>/memory/` instead
+/// of the global `~/.tengu/memory/` path.
 pub(crate) fn build_memory_handle(
     memory_config: &tengu_core::config::MemoryConfig,
     #[allow(unused_variables)] rt: &tokio::runtime::Runtime,
+    workspace: Option<&Path>,
 ) -> Option<Arc<MemoryServiceHandle>> {
     if !memory_config.enabled {
         return None;
@@ -257,6 +295,10 @@ pub(crate) fn build_memory_handle(
 
     match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
+            let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
+            #[allow(unused_variables)]
+            let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
+
             let store: Option<Arc<dyn crate::application::ports::MemoryStorePort>> =
                 match memory_config.backend.as_str() {
                     #[cfg(feature = "qdrant")]
@@ -265,7 +307,7 @@ pub(crate) fn build_memory_handle(
                         match rt.block_on(QdrantMemoryStore::new(
                             &memory_config.qdrant_url,
                             memory_config.qdrant_api_key.as_deref(),
-                            &memory_config.qdrant_collection,
+                            &resolved_collection,
                             memory_config.vector_size,
                         )) {
                             Ok(s) => Some(Arc::new(s)),
@@ -278,22 +320,14 @@ pub(crate) fn build_memory_handle(
                     #[cfg(not(feature = "qdrant"))]
                     "qdrant" => {
                         tracing::warn!("Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk");
-                        let store_path_str = memory_config.store_path.replace(
-                            "~",
-                            &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
-                        );
-                        DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
+                        DiskVectorMemoryStore::new(&resolved_store_path)
                             .ok()
                             .map(|s| {
                                 Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
                             })
                     }
                     _ => {
-                        let store_path_str = memory_config.store_path.replace(
-                            "~",
-                            &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
-                        );
-                        DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
+                        DiskVectorMemoryStore::new(&resolved_store_path)
                             .ok()
                             .map(|s| {
                                 Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
@@ -425,6 +459,25 @@ pub(crate) fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------------------
+// Output truncation (shared by both orchestrators)
+// ---------------------------------------------------------------------------
+
+/// Char-boundary-safe truncation with `"...(truncated)"` suffix.
+///
+/// Used by both CLI and Telegram orchestrators to embed previous step output
+/// inline in task prompts instead of referencing file paths.
+pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    let mut end = max_chars;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...(truncated)", &text[..end])
+}
+
+// ---------------------------------------------------------------------------
 // Skill list formatting
 // ---------------------------------------------------------------------------
 
@@ -485,6 +538,67 @@ mod tests {
         for c in &chunks {
             assert!(c.len() <= 2000);
         }
+    }
+
+    #[test]
+    fn resolve_memory_store_path_with_workspace() {
+        let cfg = tengu_core::config::MemoryConfig::default();
+        let ws = std::path::Path::new("/tmp/my-project");
+        let path = resolve_memory_store_path(&cfg, Some(ws));
+        assert_eq!(path, std::path::PathBuf::from("/tmp/my-project/memory"));
+    }
+
+    #[test]
+    fn resolve_memory_store_path_without_workspace() {
+        let mut cfg = tengu_core::config::MemoryConfig::default();
+        cfg.store_path = "/global/memory".to_string();
+        let path = resolve_memory_store_path(&cfg, None);
+        assert_eq!(path, std::path::PathBuf::from("/global/memory"));
+    }
+
+    #[test]
+    fn resolve_qdrant_collection_with_workspace() {
+        let cfg = tengu_core::config::MemoryConfig::default();
+        let ws = std::path::Path::new("/work/desci-sandbox");
+        let coll = resolve_qdrant_collection(&cfg, Some(ws));
+        assert_eq!(coll, "tengu-memory-desci-sandbox");
+    }
+
+    #[test]
+    fn resolve_qdrant_collection_without_workspace() {
+        let mut cfg = tengu_core::config::MemoryConfig::default();
+        cfg.qdrant_collection = "my-collection".to_string();
+        let coll = resolve_qdrant_collection(&cfg, None);
+        assert_eq!(coll, "my-collection");
+    }
+
+    #[test]
+    fn truncate_output_short_text() {
+        let result = truncate_output("hello world", 100);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn truncate_output_exact_limit() {
+        let text = "abcde";
+        let result = truncate_output(text, 5);
+        assert_eq!(result, "abcde");
+    }
+
+    #[test]
+    fn truncate_output_truncates_long() {
+        let text = "x".repeat(100);
+        let result = truncate_output(&text, 50);
+        assert!(result.ends_with("...(truncated)"));
+        assert!(result.len() < 100);
+    }
+
+    #[test]
+    fn truncate_output_char_boundary_safe() {
+        // Multi-byte character: é is 2 bytes
+        let text = "aaaaaaaaébb";
+        let result = truncate_output(text, 9); // Cuts mid-é
+        assert!(result.ends_with("...(truncated)"));
     }
 
     #[test]

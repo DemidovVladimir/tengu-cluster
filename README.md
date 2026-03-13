@@ -9,7 +9,7 @@ Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
 - **Any model, one key** — use [OpenRouter](https://openrouter.ai) to access Claude, GPT, Gemini, Llama, Mistral, DeepSeek and hundreds more behind one API key
 - **Custom skills** — define tools as markdown files, agents execute them during conversation
 - **Telegram channel** — chat with your agent from your phone, with inline keyboard approval for dangerous tools
-- **Persistent memory** — cross-session vector memory with automatic recall (disk or Qdrant)
+- **Persistent memory** — cross-session vector memory with automatic recall, per-workspace isolation, metadata tagging, and orchestrator topic overviews (disk or Qdrant)
 - **Token budget gates** — per-flow token limits with 80% warning threshold and hard cutoff
 
 ## Quickstart
@@ -107,7 +107,7 @@ When an agent has `workspace` configured, four built-in primitives are available
 | `write_file` | Medium | Yes | Write content to file |
 | `run_command` | High | Yes | Execute shell command in workspace |
 
-These are the stable foundation — all skills and external tools interact with the workspace through these primitives. When memory is enabled, the memory subsystem registers its own `remember` tool automatically.
+These are the stable foundation — all skills and external tools interact with the workspace through these primitives. When memory is enabled, the memory subsystem registers its own `remember` tool automatically. The `remember` tool accepts optional `metadata` key-value tags (e.g., `kind`, `topic`) for structured recall.
 
 Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode. Approval dialogs are generated generically from tool metadata (risk level, description), not hardcoded per tool name.
 
@@ -152,7 +152,7 @@ cargo run -- telegram --sandbox desci
 
 Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `capabilities` for hard runtime permissions and `skill_packages` for workflow-specific skill context.
 
-In Telegram multi-agent mode, plain messages are orchestrated across the team automatically, while `@role: message` forces a specific agent. `/team <goal>` remains available as an explicit planning command. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+In Telegram multi-agent mode, plain messages are orchestrated across the team automatically, while `@role: message` forces a specific agent. `/team <goal>` remains available as an explicit planning command. Independent tasks run in parallel batches; dependent tasks receive prior step output embedded inline in their prompt (no file-path indirection). After each multi-agent run, the orchestrator auto-summarizes results into a topic overview stored in memory. Before planning new goals, prior topic overviews are recalled via RAG and injected into the planner context. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
 
 See the [Fleet Orchestration Guide](docs/FLEET.md), [Sandboxes Guide](docs/SANDBOXES.md) for full setup.
 

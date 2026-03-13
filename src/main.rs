@@ -74,6 +74,15 @@ enum Commands {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
+    Prune {
+        /// Also prune workspace-local state for this sandbox
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -211,6 +220,43 @@ async fn main() -> Result<()> {
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
+        }
+        Commands::Prune { sandbox, yes } => {
+            let workspaces: Vec<PathBuf> = if let Some(ref name) = sandbox {
+                let config = load_sandbox_or(Some(name.clone()), config)?;
+                config
+                    .agents
+                    .values()
+                    .filter_map(|a| a.workspace.clone())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let targets = adapters::prune::plan_prune(&tengu_home, &workspaces);
+            if targets.iter().all(|t| !t.exists) {
+                println!("Nothing to prune.");
+                return Ok(());
+            }
+            println!("{}", adapters::prune::format_prune_plan(&targets));
+            if !yes {
+                eprint!("Proceed? [y/N] ");
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf)?;
+                if !buf.trim().eq_ignore_ascii_case("y") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+            let results = adapters::prune::execute_prune(&targets);
+            for (label, result) in &results {
+                match result {
+                    Ok(()) => println!("  ✓ {}", label),
+                    Err(e) => println!("  ✗ {} — {}", label, e),
+                }
+            }
+            Ok(())
         }
         Commands::Secret { action } => {
             let path = secret_store::secrets_file_path(&resolve_tengu_home());
