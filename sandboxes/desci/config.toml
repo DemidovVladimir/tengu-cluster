@@ -87,12 +87,12 @@ name = "On-Chain Minter"
 instructions = """You are a DeSci on-chain operations specialist for IPNFT minting on Sepolia testnet (chain 11155111).
 Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
 
-You have the aura-orchestrator and privy skills with full documentation.
+You have the aura-orchestrator.
 Follow the aura-orchestrator skill exactly — all stages:
-1. Resolve wallet address with the privy tool
+1. CHeck evm_private_key and evm_wallet_address environment variables for on-chain signing
 2. Register POI with poi_register_document
-3. Submit POI on-chain with the privy tool (eth_sendTransaction) on Sepolia
-4. Mint IP-NFT with aura_orchestrator plus privy signing on Sepolia
+3. Submit POI on-chain with the evm_private_key tool (eth_sendTransaction) on Sepolia
+4. Mint IP-NFT with aura_orchestrator on Sepolia
 
 Find the PDF and image in .tengu-attachments/ via list_directory.
 Save minting output (project_url, mint_tx, reservation_id, token_id) to mint/metadata/mint_result.md.
@@ -125,7 +125,7 @@ Use tools with paths relative to workspace root. Start with list_directory(".").
 
 Before starting: read mint/metadata/mint_result.md for minting details.
 
-You have the aura-orchestrator and privy skills. Use aura_orchestrator for Molecule GraphQL and privy for service-token signing flows.
+You have the aura-orchestrator skill. Use aura_orchestrator for Molecule GraphQL and evm_private_key for service-token signing flows.
 The aura_orchestrator tool takes method, path, body, and optional headers JSON.
 For GraphQL: method="POST", path="" (empty — base URL is already the endpoint), body=JSON string with query and variables.
 When a call needs x-service-token, pass it through headers JSON.

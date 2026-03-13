@@ -1,510 +1,595 @@
 ---
 name: aura-orchestrator
-description: DeSci lab automation — IPNFT minting, project creation, file uploads, and announcements via Molecule GraphQL API with Privy agentic wallet for on-chain transactions and signing.
-base_url: https://staging.graphql.api.molecule.xyz/graphql
-capability: skill.aura_orchestrator
-effect_class: external_api
-headers:
-  x-api-key: $MOLECULE_API_KEY
-env_vars:
-  - PRIVY_APP_ID
-  - PRIVY_APP_SECRET
-  - PRIVY_WALLET_ID
-  - MOLECULE_API_KEY
-  - MOLECULE_LABS_URL
-  - MOLECULE_CLIENT_URL
-  - POI_API_KEY
+description: Server-side orchestrator skill for the Aura agent. Automates end-to-end DeSci lab workflows — IPNFT minting, project creation, file uploads, and announcements — via Molecule DeSci GraphQL API and on-chain transactions. No UI assumptions; fully programmatic execution.
+homepage: https://testnet.molecule.xyz/ipnfts
 ---
 
-# Aura Orchestrator: DeSci Lab Automation
+# Aura Orchestrator Skill: DeSci Lab Automation
 
-**Execution order:** Step 0 (Wallet) → WF1 (Mint) → Service Token → WF2 (Project) → WF3 (Upload) → WF4 (Announcement)
+Aura is a server-side orchestrator LLM that reads a **Blueprint JSON** and dispatches workflow steps against the Molecule DeSci infrastructure. This skill covers four canonical workflows:
 
-## CRITICAL: URL Formats
+1. **IPNFT Mint** — submit POI, prepare metadata via GraphQL, mint on-chain
+2. **Project Creation** — create a data room linked to a minted IP-NFT via GraphQL
+3. **File Upload** — three-phase presigned upload via GraphQL
+4. **Announcement Creation** — publish updates with file attachments via GraphQL
 
-**Do NOT fabricate URLs from memory. Construct them ONLY from actual API responses and the constants below.**
-
-| URL | Format | Example |
-|-----|--------|---------|
-| **IP-NFT page** | `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}` | `https://testnet.molecule.xyz/ipnfts/42` |
-| **Etherscan tx** | `https://sepolia.etherscan.io/tx/${TX_HASH}` | `https://sepolia.etherscan.io/tx/0xabc...` |
-| **ipnftUid** | `0x152B444e60C526fe4434C721561a077269FcF61a_${RESERVATION_ID}` | `0x152B444e60C526fe4434C721561a077269FcF61a_42` |
-
-**The IPNFT contract is `0x152B444e60C526fe4434C721561a077269FcF61a`. No other contract address is valid.**
-**The client URL is `${MOLECULE_CLIENT_URL}` (e.g. `https://testnet.molecule.xyz`). No other domain is valid.**
+Each workflow section clearly separates **GraphQL operations** from **on-chain transaction responsibilities**.
 
 ---
 
-## Tool Routing
+## 1. Prerequisites & Configuration
 
-Each step below specifies exactly which tool to use. Follow it literally.
+Before executing any workflow, verify **all** required credentials and configuration are available. Abort with a clear error if any are missing.
 
-| Tool | When to use |
-|------|-------------|
-| `aura_orchestrator` | **ALL** Molecule GraphQL calls (WF1 steps 3a/3b-url/3c/3d/3f, Service Token A/C, WF2, WF3 steps 1/3, WF4, Queries) |
-| `run_command` with curl | Privy wallet calls (Step 0, WF1 steps 2/3e/3g, Service Token B) — needs shell env vars |
-| `poi_register_document` | POI document registration (WF1 step 1) |
-| `upload_binary_url` | Binary file uploads to presigned URLs (WF1 step 3b-put, WF3 step 2) |
+### Required Environment Variables
 
-**`aura_orchestrator` details:** `path` is always `""` (base URL IS the GraphQL endpoint). The tool auto-injects `x-api-key`. For calls needing a service token, pass `headers: "{\"x-service-token\":\"TOKEN\"}"`.
+| Variable | Required For | Description |
+|----------|-------------|-------------|
+| `MOLECULE_API_KEY` | All GraphQL calls | API key. Sent as `x-api-key` header. |
+| `MOLECULE_SERVICE_TOKEN` | File uploads, announcements | Service token JWT. Sent as `x-service-token` header. |
+| `MOLECULE_LABS_URL` | All GraphQL calls | GraphQL endpoint (e.g. `https://staging.graphql.api.molecule.xyz/graphql`). |
+| `MOLECULE_CLIENT_URL` | Link construction | Client URL (e.g. `https://testnet.molecule.xyz`). For user-facing links only. |
+| `EVM_PRIVATE_KEY` | On-chain signing | Wallet private key (hex). **Never sent to any API.** Local signing only. |
+| `EVM_RPC_URL` | On-chain transactions | Sepolia RPC endpoint (e.g. Alchemy, Infura). May contain provider credentials. |
+| `POI_API_KEY` | POI regestration call | API key. Sent as Authorization: Bearer $POI_API_KEY. |
 
----
-
-## Required User Inputs (Workflow 1 — Mint)
-
-**BEFORE starting any workflow, validate that ALL required fields are provided by the user. If ANY field is missing, ASK the user — do NOT invent, guess, or hallucinate values.**
-
-| Field | Rules | Example |
-|-------|-------|---------|
-| **name** | Non-empty, max 100 chars | `"Novel Protein Folding Method"` |
-| **description** | Non-empty | `"Computational method for membrane proteins"` |
-| **symbol** | 3-5 alphanumeric UPPERCASE | `"PROT1"` |
-| **organization** | Non-empty | `"DeSci Research Lab"` |
-| **research_lead.name** | Non-empty | `"Jane Doe"` |
-| **research_lead.email** | Valid email format | `"jane@example.com"` |
-| **topic** | Non-empty | `"Computational Biology"` |
-| **cover image** | Attached file (PNG/JPG) | user attachment |
-| **document** | Attached file (PDF/image) for POI | user attachment |
-
-**Fail-fast checklist** — run before Step 1:
-1. All 7 text fields present? If not → list missing fields, ask user, STOP.
-2. `symbol` matches `^[A-Z0-9]{3,5}$`? If not → tell user the rules, STOP.
-3. `research_lead.email` is valid email? If not → ask user to correct, STOP.
-4. Cover image attached? If not → ask user, STOP.
-5. Document for POI attached? If not → ask user, STOP.
-
-**Never fill in defaults like `"Tengu Research Labs"` or `"agent@tengu.dev"`. These are the user's legal/identity fields.**
-
-## Transaction Communication
-
-**BEFORE every `run_command` that sends an on-chain transaction, send a message to the user explaining:**
-1. **What** — plain-language description
-2. **Why** — why this step is required
-3. **Cost** — any ETH cost (e.g., "gas only" or "0.001 ETH mint fee")
-4. **Consequence of denial** — what happens if they press Deny
-
-## Constants
+### On-Chain Configuration (Hardcoded Constants)
 
 | Parameter | Value |
 |-----------|-------|
-| Chain | Sepolia testnet |
-| Chain ID | `11155111` |
-| CAIP-2 | `eip155:11155111` |
-| IPNFT Contract | `0x152B444e60C526fe4434C721561a077269FcF61a` |
-| Mint Fee | `0.001 ETH` = `1000000000000000` wei |
-| `ipnftUid` format | `{IPNFT_CONTRACT}_{RESERVATION_ID}` |
-| Project link | `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}` |
+| **Chain** | Sepolia testnet |
+| **Chain ID** | `11155111` |
+| **IPNFT Contract** | `0x152B444e60C526fe4434C721561a077269FcF61a` |
+| **Mint Fee** | `0.001 ETH` |
+| **IPNFT ABI** | `mintReservation(address to, uint256 reservationId, string tokenURI, string symbol, bytes authorization) payable returns (uint256)` |
 
-**Not required:** `EVM_PRIVATE_KEY`, `EVM_RPC_URL`, `MOLECULE_SERVICE_TOKEN`, `TENGU_RELAY_URL`, `TENGU_WALLET_SESSION`.
+### Prerequisite Checklist
+
+Before starting any blueprint execution, Aura **must** confirm:
+
+- [ ] `MOLECULE_API_KEY` is set and non-empty
+- [ ] `POI_API_KEY` is set and non-empty
+- [ ] `MOLECULE_LABS_URL` is set and starts with `https://`
+- [ ] `MOLECULE_CLIENT_URL` is set
+- [ ] `MOLECULE_SERVICE_TOKEN` is set (required for workflows 2–4)
+- [ ] `EVM_PRIVATE_KEY` is set (required for workflow 1)
+- [ ] `EVM_RPC_URL` is set and starts with `https://` (required for workflow 1)
+- [ ] Wallet has sufficient Sepolia ETH for gas + 0.001 ETH mint fee (workflow 1)
 
 ---
 
-## Step 0: Resolve Wallet Address
+## 2. Authentication
 
-**Tool: `run_command`** (Privy endpoint, needs shell env vars)
+### GraphQL Authentication
+
+All GraphQL requests go to:
+
+```
+POST ${MOLECULE_LABS_URL}
+Content-Type: application/json
+```
+
+**Headers by workflow:**
+
+| Workflow | Required Headers |
+|----------|-----------------|
+| IPNFT Mint (GraphQL steps) | `x-api-key: ${MOLECULE_API_KEY}` |
+| Project Creation | `x-api-key: ${MOLECULE_API_KEY}`, `x-service-token: ${MOLECULE_SERVICE_TOKEN}` |
+| File Upload | `x-api-key: ${MOLECULE_API_KEY}`, `x-service-token: ${MOLECULE_SERVICE_TOKEN}` |
+| Announcements | `x-api-key: ${MOLECULE_API_KEY}`, `x-service-token: ${MOLECULE_SERVICE_TOKEN}` |
+
+### Alternative Auth Mode
+
+Instead of `x-service-token`, you may authenticate with:
+
+```
+Authorization: <bearer_token>
+x-wallet-address: <admin_wallet_address>
+```
+
+Use this only if a service token is unavailable and the operator provides a bearer token + wallet address.
+
+### On-Chain Authentication
+
+On-chain transactions use `EVM_PRIVATE_KEY` for local signing via an Ethereum library (viem, ethers.js). The private key **never** leaves the runtime environment.
+
+---
+
+## 3. GraphQL Request Format
+
+All GraphQL operations use this shape:
+
 ```bash
-curl -s -X GET "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID"
+curl -X POST ${MOLECULE_LABS_URL} \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: ${MOLECULE_API_KEY}" \
+  -H "x-service-token: ${MOLECULE_SERVICE_TOKEN}" \
+  -d '{
+    "query": "mutation { ... }",
+    "variables": { ... }
+  }'
 ```
 
-**Expected response:**
+### Response Format
+
+**Success:**
 ```json
-{"id": "wallet-id", "address": "0x4A75...", "chain_type": "ethereum"}
+{
+  "data": {
+    "mutationName": {
+      "isSuccess": true,
+      "message": "Success message",
+      "error": null
+    }
+  }
+}
 ```
 
-**Save:** `address` → `WALLET_ADDRESS`. Used everywhere as `connectedWalletAddress`, `minter`, `to`, `changeBy`.
+**Failure:**
+```json
+{
+  "data": {
+    "mutationName": {
+      "isSuccess": false,
+      "error": {
+        "message": "What went wrong",
+        "code": "ERROR_CODE",
+        "retryable": false
+      }
+    }
+  }
+}
+```
+
+Always check `isSuccess` before proceeding to the next step.
 
 ---
 
-## Workflow 1: Mint an IP-NFT
+## 4. Workflow 1: IPNFT Mint
 
-9 sequential steps. **If any step fails, STOP and report the error. Do NOT skip steps.**
+A 9-step process combining on-chain transactions with GraphQL API calls. This is the most complex workflow and must be executed sequentially.
+
+**Responsibility split:**
+- Steps 1, 7, 9 → **On-chain / local signing** (no GraphQL)
+- Steps 2, 3, 5, 6, 8 → **GraphQL API**
+- Step 4 → **HTTP PUT** to presigned URL
+
+**Auth required:** `x-api-key` only (no service token needed for minting).
 
 ### Step 1: Register POI
 
-**Tool: `poi_register_document`**
-```json
-{"document_path": ".tengu-attachments/document.pdf"}
+```bash
+curl -X POST \
+  https://testnet.molecule.xyz/api/v1/inventions \
+  -H 'Authorization: Bearer POI_API_KEY' \
+  -H 'Content-Type: multipart/form-data' \
+  -F 'files=@document1.pdf' \
+  -F 'files=@document2.pdf'
 ```
-Find the actual filename first with `list_directory(".tengu-attachments")`.
 
-**Expected response:**
+### Response Format
+
+**Success:**
 ```json
 {
   "success": true,
   "data": {
     "proof": {
-      "tree": ["0xabc123...", "0xdef456...", "0x789..."]
+      "format": "simple-v1",
+      "tree": [
+        "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+        "0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba"
+      ],
+      "values": [
+        {
+          "value": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+          "treeIndex": 1
+        },
+        {
+          "value": "0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba",
+          "treeIndex": 2
+        }
+      ]
     },
     "transaction": {
-      "data": "0x1234abcd...",
+      "data": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
       "to": "0x1DEA29b04a59000b877979339a457d5aBE315b52"
     }
+  },
+  "metadata": {
+    "supportedEvmChainIds": [1, 8453],
+    "apiVersion": "1.0",
+    "timestamp": "2025-05-22T15:30:45.123Z"
   }
 }
 ```
 
-**Verify:** `success` is `true`. If `false`, read error and STOP.
-**Save:** `data.transaction.to` → `POI_CONTRACT`, `data.transaction.data` → `POI_CALLDATA`, `data.proof.tree[0]` → `MERKLE_ROOT`
+**Failure:**
+```json
+{
+  "success": false,
+  "error": {
+    "message": "Error message describing what went wrong",
+    "code": 400
+  },
+  "metadata": {
+    "supportedEvmChainIds": [1, 8453],
+    "apiVersion": "1.0",
+    "timestamp": "2025-05-22T15:31:12.456Z"
+  }
+}
+```
 
-### Step 2: Submit POI On-Chain
+Always check `isSuccess` before proceeding to the next step.
 
-**Tool: `run_command`** (Privy endpoint)
+Next Steps After API Response
+After receiving a successful response from the API, you'll need to submit the transaction to the blockchain to store your proof on-chain:
+
+Use the transaction object from the API response
+
+Submit a transaction to the selected EVM blockchain (Sepolia)
+
+Use the payload as transaction data and recipient as the recipient address
+
+Example (using viem)
+
+```javascript
+import { createWalletClient, createPublicClient, http, parseAbi } from "viem";
+import { sepolia } from "viem/chains";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount(process.env.EVM_PRIVATE_KEY);
+const walletClient = createWalletClient({
+  account,
+  chain: sepolia,
+  transport: http(process.env.EVM_RPC_URL),
+});
+const publicClient = createPublicClient({
+  chain: sepolia,
+  transport: http(process.env.EVM_RPC_URL),
+});
+
+
+const tx = await walletClient.sendTransaction({
+  data: result.transaction.data,  // Merkle root from API response
+  to: result.transaction.to,  // Contract address from API response
+  from: yourWalletAddress,
+  ...
+})
+
+// Wait for transaction confirmation
+const receipt = await waitForTransactionReceipt(walletClient, { hash: tx })
+// Cast input Data to uint256 to get reservationId
+```
+
+**State to persist:** `reservationId`, `transactionHash`
+
+**Gas estimation:** Call `estimateGas` before sending. If estimation fails, abort — the contract will revert.
+
+### Step 2: Generate Assignment Agreement (GraphQL)
+
+```graphql
+mutation GenerateAssignmentAgreement($projectData: AWSJSON!) {
+  generateAssignmentAgreement(projectData: $projectData) {
+    agreementCid
+    agreementUrl
+    agreementContentHash
+    agreementUri
+    isSuccess
+    error { message code retryable }
+  }
+}
+```
+
+**Variables** — `projectData` is a **JSON-encoded string**:
+
+```json
+{
+  "projectData": "{\"project\":{\"name\":\"Research Title\",\"description\":\"Description of the research.\",\"initialSymbol\":\"SYM1\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"},\"connectedWalletAddress\":\"0xYourWalletAddress\", \"agreementType\":\"POI_ASSIGNMENT\", \"chainId\":11155111,\"ipnftId\":\"RESERVATION_ID_FROM_STEP_1\"}"
+}
+```
+
+**Required fields in `project`:**
+
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `name` | string | min 1 char |
+| `description` | string | min 1 char |
+| `initialSymbol` | string | min 1 char, alphanumeric |
+| `funding_amount` | object | `{ value, currency, currency_type, decimals }` |
+| `organization` | string | min 1, max 120 chars |
+| `research_lead` | object | `name` (min 3 chars) + `email` (valid email) |
+| `topic` | string | min 3, max 80 chars |
+| `agreementType` | string | `POI_ASSIGNMENT`
+
+**Optional:** `industry` (max 80 chars)
+
+**State to persist:** `agreementCid`, `agreementContentHash`
+
+### Step 3: Generate Image Upload URL (GraphQL)
+
+```graphql
+mutation GenerateImageUploadUrl(
+  $filename: String!,
+  $contentType: String!,
+  $ipnftId: String!
+) {
+  generateImageUploadUrl(
+    filename: $filename,
+    contentType: $contentType,
+    ipnftId: $ipnftId
+  ) {
+    uploadUrl
+    key
+    isSuccess
+    error { message code retryable }
+  }
+}
+```
+
+**Variables:**
+```json
+{
+  "filename": "cover.png",
+  "contentType": "image/png",
+  "ipnftId": "RESERVATION_ID_FROM_STEP_1"
+}
+```
+
+**State to persist:** `imageUploadUrl`, `imageKey`
+
+### Step 4: Upload Image to Presigned URL (HTTP PUT)
+
 ```bash
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "caip2": "eip155:11155111",
-    "params": {
-      "transaction": {
-        "to": "POI_CONTRACT",
-        "data": "POI_CALLDATA",
-        "value": "0"
-      }
-    }
-  }'
+curl -X PUT "${imageUploadUrl}" \
+  -H "Content-Type: image/png" \
+  --data-binary @cover.png
 ```
 
-**Expected response:**
-```json
-{"data": {"hash": "0xf172ae62..."}}
-```
+Upload must complete before the presigned URL expires. On expiry, re-execute Step 3 to get a fresh URL.
 
-**Verify:** response contains `data.hash`. If error, STOP.
-**Save:** `data.hash` → `POI_TX_HASH`
-**Compute RESERVATION_ID:** `printf "%d\n" POI_CALLDATA` (converts the hex calldata to decimal uint256)
+### Step 5: Upload Metadata with Image Key (GraphQL)
 
-### Step 3a: Generate Assignment Agreement
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "mutation GenerateAssignmentAgreement($projectData: AWSJSON!) { generateAssignmentAgreement(projectData: $projectData) { agreementCid agreementContentHash isSuccess error { message code retryable } } }",
-  "variables": {
-    "projectData": "{\"project\":{\"name\":\"NAME\",\"description\":\"DESC\",\"initialSymbol\":\"SYM\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"ORG\",\"research_lead\":{\"name\":\"LEAD\",\"email\":\"EMAIL\"},\"topic\":\"TOPIC\"},\"connectedWalletAddress\":\"WALLET_ADDRESS\",\"agreementType\":\"POI_ASSIGNMENT\",\"chainId\":11155111,\"ipnftId\":\"RESERVATION_ID\",\"poiLocation\":{\"chainId\":11155111,\"transactionHash\":\"POI_TX_HASH\"},\"merkleRootHash\":\"MERKLE_ROOT\"}"
+```graphql
+mutation UploadMetadataWithImageKey(
+  $metadata: AWSJSON!,
+  $imageKey: String!,
+  $ipnftId: String!
+) {
+  uploadMetadataWithImageKey(
+    metadata: $metadata,
+    imageKey: $imageKey,
+    ipnftId: $ipnftId
+  ) {
+    metadataCid
+    metadataUrl
+    isSuccess
+    error { message code retryable }
   }
 }
 ```
 
-**Field rules:** `ipnftId` MUST be decimal (not hex) | `name` max 100 chars | `initialSymbol` 3-5 alphanumeric UPPERCASE | `email` valid format | `merkleRootHash` = `data.proof.tree[0]` from Step 1
+**Variables** — `metadata` is a **JSON-encoded string**. Do **NOT** include `schema_version` or `properties.type` (auto-injected by backend):
 
-**Expected response:**
 ```json
 {
-  "data": {
-    "generateAssignmentAgreement": {
-      "agreementCid": "QmXyz...",
-      "agreementContentHash": "0xabc...",
-      "isSuccess": true
-    }
+  "metadata": "{\"name\":\"Research Title\",\"description\":\"Description (min 10 chars)\",\"external_url\":\"https://project.example.com\",\"terms_signature\":\"placeholder\",\"properties\":{\"agreements\":[{\"content_hash\":\"AGREEMENT_CONTENT_HASH_FROM_STEP_2\",\"mime_type\":\"application/json\",\"type\":\"POI_ASSIGNMENT\",\"url\":\"ipfs://AGREEMENT_CID_FROM_STEP_2\"}],\"initial_symbol\":\"SYM1\",\"project_details\":{\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"Organization Name\",\"research_lead\":{\"name\":\"Lead Name\",\"email\":\"lead@example.com\"},\"topic\":\"Research Topic\"}}}",
+  "imageKey": "IMAGE_KEY_FROM_STEP_3",
+  "ipnftId": "RESERVATION_ID_FROM_STEP_1"
+}
+```
+
+**Required metadata fields:**
+
+| Field | Constraints |
+|-------|-------------|
+| `name` | min 5 chars |
+| `description` | min 10 chars |
+| `external_url` | min 1 char |
+| `terms_signature` | min 1 char (use `"placeholder"`) |
+| `properties.agreements` | At least one with `content_hash`, `mime_type`, `type`, `url` |
+| `properties.initial_symbol` | Must match symbol from Step 2 |
+| `properties.project_details` | Same structure as Step 2 |
+
+**Auto-injected by backend (do NOT include):** `schema_version`, `properties.type`, `image`
+
+**State to persist:** `metadataCid`, `metadataUrl`
+
+### Step 6: Get Terms Message (GraphQL)
+
+```graphql
+query GetTermsMessage(
+  $metadataCid: String!,
+  $minter: String!,
+  $chainId: Int!
+) {
+  getTermsMessage(
+    metadataCid: $metadataCid,
+    minter: $minter,
+    chainId: $chainId
+  ) {
+    message
+    digest
+    isSuccess
+    error { message code retryable }
   }
 }
 ```
 
-**Verify:** `isSuccess` is `true`. If `INTERNAL_ERROR` + `retryable: true`: check field rules above. If all correct, save response to `mint/diagnostics/error.json`, STOP. DO NOT retry with different parameters.
-**Save:** `agreementCid` → `AGREEMENT_CID`, `agreementContentHash` → `AGREEMENT_HASH`
-
-### Step 3b: Upload Cover Image
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""` (URL generation)
+**Variables:**
 ```json
 {
-  "query": "mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) { generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) { uploadUrl key isSuccess error { message code retryable } } }",
-  "variables": {"filename": "cover.png", "contentType": "image/png", "ipnftId": "RESERVATION_ID"}
+  "metadataCid": "METADATA_CID_FROM_STEP_5",
+  "minter": "0xYourWalletAddress",
+  "chainId": 11155111
 }
 ```
-Use actual filename and matching content type (e.g., `image/jpeg` for `.jpg`).
 
-**Expected response:**
-```json
-{
-  "data": {
-    "generateImageUploadUrl": {
-      "uploadUrl": "https://s3.amazonaws.com/...",
-      "key": "uploads/cover.png",
-      "isSuccess": true
-    }
+**State to persist:** `termsMessage`, `termsDigest`
+
+### Step 7: Sign Terms Message (Local Wallet — No Network Call)
+
+Sign the terms message locally. This is a message signature — no gas cost, no on-chain transaction.
+
+```javascript
+const signature = await account.signMessage({
+  message: termsMessage, // from Step 6
+});
+```
+
+**State to persist:** `termsSignature`
+
+### Step 8: Sign Off Metadata (GraphQL)
+
+The backend generates the on-chain authorization signature.
+
+```graphql
+mutation SignoffMetadata(
+  $ipnftId: String!,
+  $tokenURI: String!,
+  $chainId: Int!,
+  $minter: String!,
+  $to: String!,
+  $termsSignature: String!
+) {
+  signoffMetadata(
+    ipnftId: $ipnftId,
+    tokenURI: $tokenURI,
+    chainId: $chainId,
+    minter: $minter,
+    to: $to,
+    termsSignature: $termsSignature
+  ) {
+    authorization
+    isSuccess
+    error { message code retryable }
   }
 }
 ```
 
-**Verify:** `isSuccess` is `true`.
-**Save:** `key` → `IMAGE_KEY`
-
-Then upload the binary:
-
-**Tool: `upload_binary_url`**
+**Variables:**
 ```json
 {
-  "url": "https://s3.amazonaws.com/...(uploadUrl from above)",
-  "file_path": ".tengu-attachments/cover.png",
-  "content_type": "image/png"
+  "ipnftId": "RESERVATION_ID_FROM_STEP_1",
+  "tokenURI": "ipfs://METADATA_CID_FROM_STEP_5",
+  "chainId": 11155111,
+  "minter": "0xYourWalletAddress",
+  "to": "0xYourWalletAddress",
+  "termsSignature": "SIGNATURE_FROM_STEP_7"
 }
 ```
 
-**Verify:** HTTP 200 response.
+**State to persist:** `authorization`
 
-### Step 3c: Upload Metadata
+### Step 9: Mint the IP-NFT (On-Chain)
 
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ipnftId: String!) { uploadMetadataWithImageKey(metadata: $metadata, imageKey: $imageKey, ipnftId: $ipnftId) { metadataCid metadataUrl isSuccess error { message code retryable } } }",
-  "variables": {
-    "metadata": "{\"name\":\"NAME\",\"description\":\"DESC\",\"external_url\":\"MOLECULE_CLIENT_URL/ipnfts/RESERVATION_ID\",\"properties\":{\"symbol\":\"SYM\",\"organization\":\"ORG\",\"research_lead\":{\"name\":\"LEAD\",\"email\":\"EMAIL\"},\"topic\":\"TOPIC\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2}},\"terms_signature\":\"AGREEMENT_HASH\",\"agreements\":[{\"type\":\"POI_ASSIGNMENT\",\"cid\":\"AGREEMENT_CID\",\"contentHash\":\"AGREEMENT_HASH\"}]}",
-    "imageKey": "IMAGE_KEY",
-    "ipnftId": "RESERVATION_ID"
-  }
-}
+Call `mintReservation()` on the IPNFT contract. Costs gas + 0.001 ETH mint fee.
+
+```javascript
+import { parseEther } from "viem";
+
+// Estimate gas first
+const gasEstimate = await publicClient.estimateContractGas({
+  address: IPNFT_ADDRESS,
+  abi: IPNFT_ABI,
+  functionName: "mintReservation",
+  args: [
+    account.address,
+    reservationId,
+    `ipfs://${metadataCid}`,
+    "SYM1",
+    authorization,
+  ],
+  value: parseEther("0.001"),
+  account: account.address,
+});
+
+// Execute mint
+const hash = await walletClient.writeContract({
+  address: IPNFT_ADDRESS,
+  abi: IPNFT_ABI,
+  functionName: "mintReservation",
+  args: [
+    account.address,             // to
+    reservationId,               // from Step 1
+    `ipfs://${metadataCid}`,     // tokenURI from Step 5
+    "SYM1",                      // symbol (must match)
+    authorization,               // from Step 8
+  ],
+  value: parseEther("0.001"),
+});
+
+const receipt = await publicClient.waitForTransactionReceipt({ hash });
+// Verify receipt.status === "success"
 ```
 
-**Field mapping:**
-- `external_url` → `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}` (construct from env + Step 2)
-- `properties.symbol` → user-provided (NOT at top level — API rejects top-level `symbol`)
-- `terms_signature` → `AGREEMENT_HASH` from Step 3a
-- `agreements[0].cid` → `AGREEMENT_CID` from Step 3a
-- `agreements[0].contentHash` → `AGREEMENT_HASH` from Step 3a
+**Post-mint state:**
+- `ipnftUid` = `${IPNFT_ADDRESS}_${reservationId}` (e.g. `0x152B444e60C526fe4434C721561a077269FcF61a_42`)
+- `tokenId` = `reservationId`
+- Project link: `${MOLECULE_CLIENT_URL}/ipnfts/${reservationId}`
 
-**Expected response:**
-```json
-{
-  "data": {
-    "uploadMetadataWithImageKey": {
-      "metadataCid": "QmMetadata...",
-      "metadataUrl": "ipfs://QmMetadata...",
-      "isSuccess": true
-    }
-  }
-}
-```
-
-**Verify:** `isSuccess` is `true`. If `MISSING_PARAMETERS` or `INVALID_PARAMETERS`, save to `mint/diagnostics/metadata_error.json`, STOP. Do NOT guess alternative structures.
-**Save:** `metadataCid` → `METADATA_CID`
-
-### Step 3d: Get Terms Message
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }",
-  "variables": {"metadataCid": "METADATA_CID", "minter": "WALLET_ADDRESS", "chainId": 11155111}
-}
-```
-
-**Expected response:**
-```json
-{
-  "data": {
-    "getTermsMessage": {
-      "message": "I accept the terms...",
-      "digest": "0x...",
-      "isSuccess": true
-    }
-  }
-}
-```
-
-**Verify:** `isSuccess` is `true`.
-**Save:** `message` → `TERMS_MESSAGE`
-
-### Step 3e: Sign Terms Message
-
-**Tool: `run_command`** (Privy endpoint)
-```bash
-HEX_MSG=$(echo -n 'TERMS_MESSAGE' | xxd -p | tr -d '\n' | sed 's/^/0x/')
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d "{\"method\": \"personal_sign\", \"params\": {\"message\": \"$HEX_MSG\"}}"
-```
-
-**Expected response:**
-```json
-{"data": {"signature": "0xabc123..."}}
-```
-
-**Verify:** response contains `data.signature`.
-**Save:** `data.signature` → `TERMS_SIGNATURE`
-
-### Step 3f: Sign Off Metadata
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }",
-  "variables": {
-    "ipnftId": "RESERVATION_ID",
-    "tokenURI": "ipfs://METADATA_CID",
-    "chainId": 11155111,
-    "minter": "WALLET_ADDRESS",
-    "to": "WALLET_ADDRESS",
-    "termsSignature": "TERMS_SIGNATURE"
-  }
-}
-```
-
-**Expected response:**
-```json
-{
-  "data": {
-    "signoffMetadata": {
-      "authorization": "0xlong_hex...",
-      "isSuccess": true
-    }
-  }
-}
-```
-
-**Verify:** `isSuccess` is `true`. `tokenURI` must be `ipfs://CID` (not bare CID).
-**Save:** `authorization` → `AUTHORIZATION`
-
-### Step 3g: Mint On-Chain
-
-**Tool: `run_command`** (Privy endpoint)
-
-ABI-encode the calldata with `cast`:
-```bash
-cast calldata "mintReservation(address,uint256,string,string,bytes)" \
-  WALLET_ADDRESS RESERVATION_ID "ipfs://METADATA_CID" "SYMBOL" AUTHORIZATION
-```
-
-Send via Privy:
-```bash
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "caip2": "eip155:11155111",
-    "params": {
-      "transaction": {
-        "to": "0x152B444e60C526fe4434C721561a077269FcF61a",
-        "data": "CALLDATA_FROM_CAST",
-        "value": "1000000000000000"
-      }
-    }
-  }'
-```
-
-**Expected response:**
-```json
-{"data": {"hash": "0x5d3df8f5..."}}
-```
-
-**Verify:** response contains `data.hash`.
-**Save:** `data.hash` → `MINT_TX_HASH`
-
-**WF1 complete.** Construct these URLs from your saved values:
-- **IP-NFT page:** `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}` (e.g. `https://testnet.molecule.xyz/ipnfts/42`)
-- **Mint tx:** `https://sepolia.etherscan.io/tx/${MINT_TX_HASH}`
-- **POI tx:** `https://sepolia.etherscan.io/tx/${POI_TX_HASH}`
-- **ipnftUid:** `0x152B444e60C526fe4434C721561a077269FcF61a_${RESERVATION_ID}`
-
-Save all to `mint/metadata/mint_result.md`.
+**State to persist:** `mintTransactionHash`, `ipnftUid`, `tokenId`
 
 ---
 
-## Service Token Acquisition (for Workflows 2-4)
+## 5. Workflow 2: Create Project (Data Room)
 
-Run this after WF1 and before WF2. The service token is valid for 180 days.
+Creates a project linked to a minted IP-NFT. **Must be executed after Workflow 1.**
 
-### Step A: Get Sign-In Message
+**Responsibility:** GraphQL only.
+**Auth required:** `x-api-key` + `x-service-token`
 
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "query GetServiceSignInMessage($walletAddress: String!, $serviceName: String!) { getServiceSignInMessage(walletAddress: $walletAddress, serviceName: $serviceName) }",
-  "variables": {"walletAddress": "WALLET_ADDRESS", "serviceName": "tengu-agent"}
-}
-```
+### Sequencing Constraint
 
-**Expected response:**
-```json
-{
-  "data": {
-    "getServiceSignInMessage": "service.molecule.xyz wants you to sign in with your Ethereum account:\n0x4A75..."
-  }
-}
-```
+The project requires a valid `ipnftTokenId` from a successfully minted IP-NFT. The mint transaction must be confirmed on-chain before calling this mutation.
 
-**Save:** the message string → `SIGN_IN_MESSAGE`
+### Mutation
 
-### Step B: Sign Message with Privy
-
-**Tool: `run_command`** (Privy endpoint)
-```bash
-HEX_MSG=$(echo -n 'SIGN_IN_MESSAGE' | xxd -p | tr -d '\n' | sed 's/^/0x/')
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d "{\"method\": \"personal_sign\", \"params\": {\"message\": \"$HEX_MSG\"}}"
-```
-
-**Expected response:**
-```json
-{"data": {"signature": "0xdef456..."}}
-```
-
-**Save:** `data.signature` → `MESSAGE_SIGNATURE`
-
-### Step C: Exchange for Service Token
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`
-```json
-{
-  "query": "mutation GenerateServiceToken($serviceName: String!, $walletAddress: String!, $messageSignature: String!) { generateServiceToken(serviceName: $serviceName, walletAddress: $walletAddress, messageSignature: $messageSignature) { token metadata { tokenId expiresAt serviceName } } }",
-  "variables": {"serviceName": "tengu-agent", "walletAddress": "WALLET_ADDRESS", "messageSignature": "MESSAGE_SIGNATURE"}
-}
-```
-
-**Expected response:**
-```json
-{
-  "data": {
-    "generateServiceToken": {
-      "token": "eyJhbGciOiJ...",
-      "metadata": {"tokenId": "...", "expiresAt": "...", "serviceName": "tengu-agent"}
+```graphql
+mutation CreateProject($input: CreateProjectInput!) {
+  createProject(input: $input) {
+    isSuccess
+    message
+    error { message code retryable }
+    project {
+      ipnftUid
+      ipnftSymbol
+      ipnftAddress
+      ipnftTokenId
     }
   }
 }
 ```
 
-**Verify:** response contains `token`.
-**Save:** `token` → `SERVICE_TOKEN`
+### Variables
 
----
-
-## Workflow 2: Create Project (Data Room)
-
-**After WF1. Requires SERVICE_TOKEN.**
-
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, headers: `{"x-service-token": "SERVICE_TOKEN"}`
 ```json
 {
-  "query": "mutation CreateProject($input: CreateProjectInput!) { createProject(input: $input) { isSuccess message error { message code retryable } project { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } } }",
-  "variables": {"input": {"ipnftSymbol": "SYMBOL", "ipnftTokenId": "RESERVATION_ID"}}
+  "input": {
+    "ipnftSymbol": "SYM1",
+    "ipnftTokenId": "RESERVATION_ID_AS_STRING"
+  }
 }
 ```
 
-`ipnftSymbol` must match the symbol used during minting. `ipnftTokenId` is the RESERVATION_ID as a string.
+| Field | Type | Description |
+|-------|------|-------------|
+| `ipnftSymbol` | string | Symbol used during minting (must match exactly) |
+| `ipnftTokenId` | string | The reservation ID from Workflow 1, Step 1 (as string) |
 
-**Expected response:**
+### Expected Response
+
 ```json
 {
   "data": {
     "createProject": {
       "isSuccess": true,
       "message": "Project created",
+      "error": null,
       "project": {
         "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42",
-        "ipnftSymbol": "SYM",
+        "ipnftSymbol": "SYM1",
         "ipnftAddress": "0x152B444e60C526fe4434C721561a077269FcF61a",
         "ipnftTokenId": "42"
       }
@@ -513,35 +598,52 @@ curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
 }
 ```
 
-**Verify:** `isSuccess` is `true`. The `ipnftUid` in the response confirms the format `{contractAddress}_{tokenId}`.
-**Save:** `project.ipnftUid` → `IPNFT_UID` (use this exact value from the response for WF3 and WF4)
-
-**Project URL** (construct from constants, NOT from memory): `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}`
+**State to persist:** `ipnftUid` (confirms the format `{contractAddress}_{tokenId}`)
 
 ---
 
-## Workflow 3: File Upload
+## 6. Workflow 3: File Upload (V2)
 
-Three-phase presigned upload. **After WF2. Requires SERVICE_TOKEN.**
+Three-phase presigned upload flow. **Must be executed after Workflow 2** (project must exist).
 
-### Step 1: Initiate Upload
+**Responsibility:** GraphQL + HTTP PUT to presigned URL.
+**Auth required:** `x-api-key` + `x-service-token`
 
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, headers: `{"x-service-token": "SERVICE_TOKEN"}`
+### Step 1: Initiate Upload (GraphQL)
 
-First, get the file size:
-**Tool: `run_command`** — `wc -c < /path/to/file.pdf` (or `stat -f%z` on macOS)
-
-Then initiate:
-```json
-{
-  "query": "mutation InitiateCreateOrUpdateFileV2($ipnftUid: String!, $contentType: String!, $contentLength: Int!) { initiateCreateOrUpdateFileV2(ipnftUid: $ipnftUid, contentType: $contentType, contentLength: $contentLength) { uploadToken uploadUrl uploadUrlExpiry method headers { key value } useMultipart isSuccess error { message code retryable } } }",
-  "variables": {"ipnftUid": "IPNFT_UID", "contentType": "application/pdf", "contentLength": 381846}
+```graphql
+mutation InitiateCreateOrUpdateFileV2(
+  $ipnftUid: String!,
+  $contentType: String!,
+  $contentLength: Int!
+) {
+  initiateCreateOrUpdateFileV2(
+    ipnftUid: $ipnftUid,
+    contentType: $contentType,
+    contentLength: $contentLength
+  ) {
+    uploadToken
+    uploadUrl
+    uploadUrlExpiry
+    method
+    headers { key value }
+    useMultipart
+    isSuccess
+    error { message code retryable }
+  }
 }
 ```
 
-`ipnftUid` is the value from WF2 response (e.g. `0x152B444e60C526fe4434C721561a077269FcF61a_42`). `contentLength` must be the exact byte count.
+**Variables:**
+```json
+{
+  "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42",
+  "contentType": "application/pdf",
+  "contentLength": 381846
+}
+```
 
-**Expected response:**
+**Expected response (relevant fields):**
 ```json
 {
   "data": {
@@ -550,52 +652,109 @@ Then initiate:
       "uploadUrl": "https://s3.amazonaws.com/...",
       "uploadUrlExpiry": "2024-01-15T12:30:00Z",
       "method": "PUT",
-      "headers": [{"key": "Content-Type", "value": "application/pdf"}],
+      "headers": [
+        { "key": "Content-Type", "value": "application/pdf" }
+      ],
       "useMultipart": false,
-      "isSuccess": true
+      "isSuccess": true,
+      "error": null
     }
   }
 }
 ```
 
-**Verify:** `isSuccess` is `true`.
-**Save:** `uploadToken` → `UPLOAD_TOKEN`, `uploadUrl` → `UPLOAD_URL`, `headers` → `UPLOAD_HEADERS`
+**State to persist:** `uploadToken`, `uploadUrl`, `uploadUrlExpiry`, `headers`
 
-### Step 2: Upload File Bytes
+**Important:** The `uploadUrl` has an expiry (`uploadUrlExpiry`). Check the current time against this before uploading. If expired, re-initiate.
 
-**Tool: `upload_binary_url`**
-```json
-{
-  "url": "UPLOAD_URL",
-  "file_path": ".tengu-attachments/document.pdf",
-  "content_type": "application/pdf"
-}
+### Step 2: Upload File Bytes (HTTP PUT)
+
+Upload the file to the presigned URL using the `method` and `headers` from Step 1.
+
+```bash
+curl -X PUT "${uploadUrl}" \
+  -H "Content-Type: application/pdf" \
+  --data-binary @research-data.pdf
 ```
 
-**Verify:** HTTP 200 response. If the presigned URL expired, go back to Step 1 for a fresh URL.
+Include **all** headers returned in Step 1 — they contain authorization for the storage upload.
 
-### Step 3: Finalize Upload
+**Content-type and size considerations:**
+- The `Content-Type` must match what was declared in Step 1
+- The actual file size must match `contentLength` from Step 1
+- Common types: `application/pdf`, `text/csv`, `image/png`, `application/json`
 
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, headers: `{"x-service-token": "SERVICE_TOKEN"}`
-```json
-{
-  "query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $ref: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, ref: $ref, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }",
-  "variables": {
-    "ipnftUid": "IPNFT_UID",
-    "uploadToken": "UPLOAD_TOKEN",
-    "path": "hypothesis.pdf",
-    "accessLevel": "PUBLIC",
-    "changeBy": "WALLET_ADDRESS",
-    "description": "Research hypothesis document",
-    "tags": ["research", "hypothesis"],
-    "categories": ["research"]
+### Step 3: Finalize Upload (GraphQL)
+
+```graphql
+mutation FinishCreateOrUpdateFileV2(
+  $ipnftUid: String!,
+  $uploadToken: String!,
+  $path: String,
+  $ref: String,
+  $accessLevel: String!,
+  $changeBy: String!,
+  $description: String,
+  $tags: [String!],
+  $categories: [String!]
+) {
+  finishCreateOrUpdateFileV2(
+    ipnftUid: $ipnftUid,
+    uploadToken: $uploadToken,
+    path: $path,
+    ref: $ref,
+    accessLevel: $accessLevel,
+    changeBy: $changeBy,
+    description: $description,
+    tags: $tags,
+    categories: $categories
+  ) {
+    datasetId
+    contentHash
+    version
+    newHead
+    isSuccess
+    message
+    error { message code retryable }
   }
 }
 ```
 
-Use `path` for new files. Use `ref` (existing `datasetId`) for new versions. Access levels: `PUBLIC` | `HOLDERS` | `ADMIN`.
+**Variables (new file):**
+```json
+{
+  "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42",
+  "uploadToken": "TOKEN_FROM_STEP_1",
+  "path": "research-data.pdf",
+  "accessLevel": "PUBLIC",
+  "changeBy": "0xYourWalletAddress",
+  "description": "Initial research dataset",
+  "tags": ["research", "data"],
+  "categories": ["research"]
+}
+```
 
-**Expected response:**
+**Variables (new version of existing file):** Use `ref` instead of `path`:
+```json
+{
+  "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42",
+  "uploadToken": "TOKEN_FROM_STEP_1",
+  "ref": "EXISTING_DATASET_ID",
+  "accessLevel": "PUBLIC",
+  "changeBy": "0xYourWalletAddress",
+  "description": "Updated dataset v2"
+}
+```
+
+**Access levels:**
+
+| Level | Visibility |
+|-------|-----------|
+| `PUBLIC` | Anyone can view |
+| `HOLDERS` | Only IP-NFT/IPT token holders |
+| `ADMIN` | Only project admins |
+
+**Expected response (relevant fields):**
 ```json
 {
   "data": {
@@ -605,99 +764,362 @@ Use `path` for new files. Use `ref` (existing `datasetId`) for new versions. Acc
       "version": 1,
       "newHead": "head_xyz",
       "isSuccess": true,
-      "message": "File created"
+      "message": "File created",
+      "error": null
     }
   }
 }
 ```
 
-**Verify:** `isSuccess` is `true`.
-**Save:** `datasetId` → `DATASET_ID` (needed for WF4 attachments)
-
-Save results to `uploads/molecule_result.md`.
+**State to persist:** `datasetId`, `contentHash`, `version`
 
 ---
 
-## Workflow 4: Create Announcement
+## 7. Workflow 4: Create Announcement
 
-**After WF2. Requires SERVICE_TOKEN.** If attaching files, complete WF3 first.
+Publishes an announcement to the project activity feed. **Must be executed after Workflow 2** (project must exist).
 
-**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, headers: `{"x-service-token": "SERVICE_TOKEN"}`
-```json
-{
-  "query": "mutation CreateAnnouncementV2($ipnftUid: String!, $headline: String!, $body: String!, $attachments: [String!]) { createAnnouncementV2(ipnftUid: $ipnftUid, headline: $headline, body: $body, attachments: $attachments) { isSuccess message error { message code retryable } } }",
-  "variables": {
-    "ipnftUid": "IPNFT_UID",
-    "headline": "Research Published: Hypothesis Title",
-    "body": "## Summary\nResearch findings...\n\n## Links\n- [IP-NFT](https://testnet.molecule.xyz/ipnfts/42)\n- [Mint Transaction](https://sepolia.etherscan.io/tx/0x...)",
-    "attachments": ["DATASET_ID"]
+**Responsibility:** GraphQL only.
+**Auth required:** `x-api-key` + `x-service-token`
+
+### Validation Constraints
+
+- `attachments` references must correspond to **successfully completed** file uploads (valid `datasetId` values from Workflow 3)
+- `headline` and `body` must be non-empty
+- `body` supports Markdown
+
+### Mutation
+
+```graphql
+mutation CreateAnnouncementV2(
+  $ipnftUid: String!,
+  $headline: String!,
+  $body: String!,
+  $attachments: [String!]
+) {
+  createAnnouncementV2(
+    ipnftUid: $ipnftUid,
+    headline: $headline,
+    body: $body,
+    attachments: $attachments
+  ) {
+    isSuccess
+    message
+    error { message code retryable }
   }
 }
 ```
 
-Body supports Markdown. `attachments` is optional — use `datasetId` values from WF3.
+### Variables
 
-**Expected response:**
+```json
+{
+  "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42",
+  "headline": "Research Milestone: Phase 1 Complete",
+  "body": "We are excited to announce completion of Phase 1.\n\n## Key Results\n- Dataset collected and validated\n- Initial analysis supports the hypothesis\n\nFull details in the attached report.",
+  "attachments": ["DATASET_ID_FROM_FILE_UPLOAD"]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ipnftUid` | string | Project identifier (`{contractAddress}_{tokenId}`) |
+| `headline` | string | Short announcement title (non-empty) |
+| `body` | string | Full content, supports Markdown (non-empty) |
+| `attachments` | string[] | Optional. Array of `datasetId` from completed file uploads |
+
+### Expected Response
+
 ```json
 {
   "data": {
     "createAnnouncementV2": {
       "isSuccess": true,
-      "message": "Announcement created"
+      "message": "Announcement created",
+      "error": null
     }
   }
 }
 ```
 
-**Verify:** `isSuccess` is `true`.
+---
+
+## 8. Query Operations
+
+Use these to verify state, check existing projects, or retrieve data for blueprint processing.
+
+### List Projects
+
+```graphql
+query ProjectsV2 {
+  projectsV2 {
+    projects {
+      ipnftUid
+      ipnftSymbol
+      ipnftAddress
+      ipnftTokenId
+    }
+    isSuccess
+    error { message code }
+  }
+}
+```
+
+### Get Project with Data Room and Files
+
+```graphql
+query ProjectWithDataRoomAndFilesV2($ipnftUid: String!) {
+  projectWithDataRoomAndFilesV2(ipnftUid: $ipnftUid) {
+    isSuccess
+    error { message code }
+    project {
+      ipnftUid
+      ipnftSymbol
+    }
+    dataRoom {
+      files {
+        datasetId
+        name
+        contentType
+        accessLevel
+        description
+        tags
+        categories
+        versions {
+          version
+          contentHash
+          createdAt
+        }
+      }
+    }
+  }
+}
+```
+
+### Get Project Activity
+
+```graphql
+query ProjectActivityV2($ipnftUid: String!) {
+  projectActivityV2(ipnftUid: $ipnftUid) {
+    isSuccess
+    activities {
+      type
+      timestamp
+      headline
+      body
+      attachments
+    }
+  }
+}
+```
+
+### Search Projects
+
+```graphql
+query SearchLabs($query: String!) {
+  searchLabs(query: $query) {
+    isSuccess
+    results {
+      ipnftUid
+      ipnftSymbol
+    }
+  }
+}
+```
 
 ---
 
-## Query Operations
+## 9. Sequencing & Orchestration Constraints
 
-**Tool: `aura_orchestrator`** (only `x-api-key` needed, no service token)
+### Required Execution Order
 
-**List projects:**
-```json
-{"query": "query ProjectsV2 { projectsV2 { projects { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } isSuccess error { message code } } }"}
+```
+Workflow 1 (Mint IPNFT)
+    │
+    ├── Produces: reservationId, ipnftUid, tokenId
+    │
+    ▼
+Workflow 2 (Create Project)
+    │
+    ├── Requires: tokenId, symbol from Workflow 1
+    ├── Produces: ipnftUid (confirmed)
+    │
+    ▼
+┌───────────────────┬───────────────────┐
+│                   │                   │
+▼                   ▼                   │
+Workflow 3          Workflow 4          │
+(File Upload)       (Announcement)      │
+│                   │                   │
+├── Independent     ├── If attachments  │
+│   of Workflow 4   │   needed, depends │
+│                   │   on Workflow 3   │
+│                   │                   │
+└───────────────────┴───────────────────┘
 ```
 
-**Get project + data room:**
-```json
-{"query": "query ProjectWithDataRoomAndFilesV2($ipnftUid: String!) { projectWithDataRoomAndFilesV2(ipnftUid: $ipnftUid) { isSuccess project { ipnftUid ipnftSymbol } dataRoom { files { datasetId name contentType accessLevel description tags categories versions { version contentHash createdAt } } } } }", "variables": {"ipnftUid": "IPNFT_UID"}}
-```
+**Key constraints:**
+1. Workflow 1 **must** complete before Workflow 2
+2. Workflow 2 **must** complete before Workflows 3 or 4
+3. Workflow 3 and 4 can run in parallel **unless** Workflow 4 needs attachments from Workflow 3
+4. If announcements need file attachments, Workflow 3 **must** complete first
 
-**Get activity:**
-```json
-{"query": "query ProjectActivityV2($ipnftUid: String!) { projectActivityV2(ipnftUid: $ipnftUid) { isSuccess activities { type timestamp headline body attachments } } }", "variables": {"ipnftUid": "IPNFT_UID"}}
-```
+### State Dependencies
 
-**Search:**
+| State | Produced By | Consumed By |
+|-------|-------------|-------------|
+| `reservationId` / `tokenId` | Workflow 1, Step 1 | Workflow 1 (Steps 2–9), Workflow 2 |
+| `agreementCid`, `agreementContentHash` | Workflow 1, Step 2 | Workflow 1, Step 5 |
+| `imageKey` | Workflow 1, Step 3 | Workflow 1, Steps 4–5 |
+| `metadataCid` | Workflow 1, Step 5 | Workflow 1, Steps 6, 8, 9 |
+| `termsMessage` | Workflow 1, Step 6 | Workflow 1, Step 7 |
+| `termsSignature` | Workflow 1, Step 7 | Workflow 1, Step 8 |
+| `authorization` | Workflow 1, Step 8 | Workflow 1, Step 9 |
+| `ipnftUid` | Workflow 1 (derived), Workflow 2 | Workflows 3, 4 |
+| `uploadToken` | Workflow 3, Step 1 | Workflow 3, Step 3 |
+| `datasetId` | Workflow 3, Step 3 | Workflow 4 (as attachment) |
+
+### Blueprint JSON Interpretation
+
+Aura should interpret Blueprint JSON by:
+
+1. **Parse** the blueprint to identify which workflows are required
+2. **Validate** all prerequisites are met before starting
+3. **Map** blueprint stages to the canonical workflows above
+4. **Execute** in the required order, persisting intermediate state after each step
+5. **Record** final results (tokenId, ipnftUid, datasetIds, announcementId) back to the blueprint or operator callback
+
+### Intermediate State Persistence
+
+Aura **must** persist intermediate state after each successful step to enable recovery from partial failures:
+
 ```json
-{"query": "query SearchLabs($query: String!) { searchLabs(query: $query) { isSuccess results { ipnftUid ipnftSymbol } } }", "variables": {"query": "search term"}}
+{
+  "blueprintId": "bp_123",
+  "workflow": "mint_ipnft",
+  "currentStep": 5,
+  "state": {
+    "reservationId": "42",
+    "reservationTxHash": "0xabc...",
+    "agreementCid": "Qm...",
+    "agreementContentHash": "0xdef...",
+    "imageKey": "uploads/cover.png",
+    "metadataCid": "Qm...",
+    "metadataUrl": "ipfs://Qm..."
+  },
+  "startedAt": "2024-01-15T10:00:00Z",
+  "lastUpdatedAt": "2024-01-15T10:02:30Z"
+}
 ```
 
 ---
 
-## Error Handling
+## 10. Error Handling Playbook
 
-All responses include `isSuccess`. On failure: `{"error": {"message": "...", "code": "...", "retryable": true|false}}`
+### Common Error Codes
 
-**Decision tree:**
-1. `AUTH_FAILED` → `MOLECULE_API_KEY` wrong. STOP.
-2. `SERVICE_AUTH_FAILED` → Re-run Service Token Acquisition (A-C), retry the failed call.
-3. `MISSING_PARAMETERS` → Fix payload. Do NOT retry same request.
-4. `INVALID_IPNFT_UID` → Must be `{contractAddress}_{tokenId}` with underscore. Fix.
-5. `NOT_FOUND` → Prior step incomplete. Verify.
-6. `INTERNAL_ERROR` + `retryable: false` → Save to `mint/diagnostics/error.json`. STOP.
-7. `INTERNAL_ERROR` + `retryable: true` → Check per-mutation diagnostics below.
+| Code | Meaning | Retryable | Action |
+|------|---------|-----------|--------|
+| `AUTH_FAILED` | Invalid or missing `x-api-key` | No | Verify `MOLECULE_API_KEY` is correct. Do not retry. |
+| `SERVICE_AUTH_FAILED` | Invalid or expired `x-service-token` | No | Regenerate service token via `generateServiceToken`, then retry the failed operation. |
+| `MISSING_PARAMETERS` | Required field not provided | No | Fix the request payload. Do not retry without correction. |
+| `INVALID_IPNFT_UID` | Malformed `ipnftUid` | No | Verify format is `{contractAddress}_{tokenId}`. |
+| `NOT_FOUND` | Resource does not exist | No | Verify the resource was created in a prior step. |
+| `INTERNAL_ERROR` | Server error | Yes | Wait 3–5 seconds, retry up to 3 times with exponential backoff. |
 
-**Per-mutation diagnostics (`INTERNAL_ERROR` retryable):**
-- **`generateAssignmentAgreement`**: (1) `name` ≤ 100 chars, `initialSymbol` 3-5 alphanumeric (2) `email` valid (3) `RESERVATION_ID` decimal NOT hex (4) `TX_HASH` is POI tx (5) `MERKLE_ROOT` is `tree[0]`. If all correct → API down. Save, STOP.
-- **`uploadMetadataWithImageKey`**: (1) `imageKey` from `generateImageUploadUrl` (2) `symbol` inside `properties` NOT top-level (3) `terms_signature` = `agreementContentHash` (4) `properties` must have all required fields. Save error to `mint/diagnostics/metadata_error.json`, STOP.
-- **`signoffMetadata`**: `tokenURI` = `ipfs://CID` (not bare CID), `termsSignature` `0x`-prefixed, `minter`/`to` = `WALLET_ADDRESS`.
-- **`initiateCreateOrUpdateFileV2`**: `contentLength` exact byte count. `ipnftUid` uses underscore.
-- **`finishCreateOrUpdateFileV2`**: `uploadToken` from same session. If URL expired, re-initiate.
+### On-Chain Error Handling
 
-**On-chain (Privy):** `POLICY_VIOLATION` → check limits, STOP | `INSUFFICIENT_FUNDS` → fund wallet, STOP | `INVALID_TRANSACTION` → re-check ABI encoding | `Transaction reverted` → wrong params, no retry.
-**Presigned URL expiry:** Re-run initiate/generate step. Do NOT retry PUT with old URL.
+| Error | Cause | Action |
+|-------|-------|--------|
+| Gas estimation failure | Insufficient funds, contract revert | Check wallet balance. If sufficient, the contract will revert — do not submit. Investigate parameters. |
+| Transaction reverted | Invalid parameters, already minted | Check revert reason. Do **not** retry the same transaction — it will revert again. |
+| Nonce too low | Transaction already mined or replaced | Refresh nonce from chain. The operation may have already succeeded — check on-chain state. |
+| RPC timeout | Network issues | Retry with exponential backoff (max 3 attempts). Consider switching RPC provider. |
+
+### Presigned URL Expiry
+
+If the presigned URL from `initiateCreateOrUpdateFileV2` or `generateImageUploadUrl` has expired:
+
+1. Do **not** retry the HTTP PUT — it will fail with 403
+2. Re-execute the initiate/generate step to get a fresh URL
+3. The `uploadToken` from the expired initiation is invalid — use the new one
+
+### Partial Workflow Failure Recovery
+
+| Scenario | Recovery Strategy |
+|----------|-------------------|
+| Mint succeeded, project creation failed | Retry `createProject` with the same `tokenId` and `symbol`. The mint is permanent. |
+| File initiate succeeded, upload failed | Re-initiate (get fresh presigned URL). The old `uploadToken` is orphaned and will expire. |
+| File upload succeeded, finalize failed | Retry `finishCreateOrUpdateFileV2` with the same `uploadToken`. This is idempotent. |
+| Announcement failed with invalid attachment | Verify the `datasetId` exists by querying `projectWithDataRoomAndFilesV2`. Re-upload if needed. |
+| Reserve succeeded, later steps failed | Resume from the failed step using the persisted `reservationId`. Do **not** call `reserve()` again. |
+
+### Retry Guidance
+
+| Operation | Safe to Retry? | Max Retries | Backoff |
+|-----------|---------------|-------------|---------|
+| GraphQL queries | Yes | 3 | 1s, 2s, 4s |
+| GraphQL mutations (idempotent) | Yes | 3 | 2s, 4s, 8s |
+| `reserve()` on-chain | **No** — creates a new reservation each time | 0 | N/A |
+| `mintReservation()` on-chain | **No** — unless tx was not mined | Check chain first | N/A |
+| HTTP PUT to presigned URL | Yes (within expiry) | 2 | 1s, 3s |
+| Service token regeneration | Yes | 2 | 5s, 10s |
+
+### When NOT to Retry
+
+- `AUTH_FAILED` — credentials are wrong, not transient
+- `MISSING_PARAMETERS` — payload is malformed
+- `INVALID_IPNFT_UID` — format error
+- Contract revert — parameters are invalid, retrying will revert again
+- `reserve()` — each call creates a new on-chain reservation (wastes gas)
+
+### Logging Requirements
+
+Aura **must** log the following for operator observability:
+
+- Every GraphQL request/response (redact auth headers in logs)
+- Every on-chain transaction hash and receipt status
+- Step transitions with timestamps
+- All errors with full context (step number, state snapshot, error code)
+- Presigned URL expiry warnings (log when <60s remaining before upload)
+
+---
+
+## 11. Security
+
+- **`MOLECULE_API_KEY`:** Send only as `x-api-key` to `${MOLECULE_LABS_URL}`. Never log the full value.
+- **`MOLECULE_SERVICE_TOKEN`:** Send only as `x-service-token` to `${MOLECULE_LABS_URL}`. High-privilege — never expose in logs, commits, or external calls.
+- **`EVM_PRIVATE_KEY`:** **Critical secret.** Use only for local signing. Never send to any API, log, or external service.
+- **`EVM_RPC_URL`:** Treat as sensitive (often contains provider API keys). Do not expose in logs or public output.
+- **`MOLECULE_LABS_URL`:** Send GraphQL auth headers only to this host. Always use HTTPS.
+- **`MOLECULE_CLIENT_URL`:** Public URL for user-facing links only. Never attach auth headers to this URL.
+- **Content fields:** Never include keys, tokens, private keys, or RPC URLs in project metadata, file descriptions, or announcement bodies.
+
+---
+
+## 12. Content Guidelines
+
+For project metadata, file descriptions, and announcements:
+
+- **Be specific.** Describe methods, assumptions, and scope clearly.
+- **Be verifiable.** Reference datasets, analysis outputs, and reproducible steps.
+- **Be transparent.** Note limitations, unresolved risks, and open questions.
+- **Be structured.** Use headings/lists for long updates.
+- **Markdown supported:** `##`, `**bold**`, `*italic*`, `[links](url)`, lists, blockquotes, code blocks.
+
+---
+
+## 13. Quick Reference
+
+| What | Where / Value |
+|------|---------------|
+| GraphQL endpoint | `${MOLECULE_LABS_URL}` |
+| GraphQL API key header | `x-api-key: ${MOLECULE_API_KEY}` |
+| GraphQL service token header | `x-service-token: ${MOLECULE_SERVICE_TOKEN}` |
+| IPNFT contract (Sepolia) | `0x152B444e60C526fe4434C721561a077269FcF61a` |
+| Chain ID | `11155111` |
+| Mint fee | `0.001 ETH` |
+| `ipnftUid` format | `{contractAddress}_{tokenId}` |
+| Project link format | `${MOLECULE_CLIENT_URL}/ipnfts/{tokenId}` |
+| Execution order | Mint → Project → File Upload / Announcement |
+| On-chain library | viem (recommended), ethers.js, web3.js |

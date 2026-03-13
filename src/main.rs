@@ -227,7 +227,11 @@ async fn main() -> Result<()> {
                 config
                     .agents
                     .values()
-                    .filter_map(|a| a.workspace.clone())
+                    .filter_map(|a| {
+                        a.workspace
+                            .as_ref()
+                            .map(|p| adapters::workspace_tools::expand_tilde(p))
+                    })
                     .collect::<std::collections::HashSet<_>>()
                     .into_iter()
                     .collect()
