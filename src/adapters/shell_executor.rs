@@ -5,13 +5,27 @@ use anyhow::Result;
 use regex::Regex;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const SHELL_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MB
 
-pub(crate) struct LocalShellExecutor;
+pub(crate) struct LocalShellExecutor {
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl LocalShellExecutor {
+    pub(crate) fn new() -> Self {
+        Self { cancel: None }
+    }
+
+    pub(crate) fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+}
 
 impl ShellExecutionPort for LocalShellExecutor {
     fn execute_shell(&self, command: &str, workspace: &Path) -> Result<String> {
@@ -29,6 +43,14 @@ impl ShellExecutionPort for LocalShellExecutor {
             match child.try_wait() {
                 Ok(Some(_status)) => break,
                 Ok(None) => {
+                    // Check cancel flag — kill child immediately on /stop.
+                    if let Some(ref flag) = self.cancel {
+                        if flag.load(Ordering::Relaxed) {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            anyhow::bail!("Command cancelled by /stop");
+                        }
+                    }
                     if start.elapsed() >= SHELL_TIMEOUT {
                         let _ = child.kill();
                         let _ = child.wait();

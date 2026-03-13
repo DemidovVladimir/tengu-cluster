@@ -133,7 +133,13 @@ pub(crate) fn build_system_prompt_with_tools(
                 let approval = tool
                     .policy
                     .as_ref()
-                    .map(|p| if p.requires_approval { " [approval]" } else { "" })
+                    .map(|p| {
+                        if p.requires_approval {
+                            " [approval]"
+                        } else {
+                            ""
+                        }
+                    })
                     .unwrap_or("");
                 lines.push(format!(
                     "- {}({}): {}{}",

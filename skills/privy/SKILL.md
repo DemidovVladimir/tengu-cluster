@@ -1,7 +1,14 @@
 ---
 name: privy
 description: Create and manage agentic wallets with Privy. Use for autonomous onchain transactions, wallet creation, policy management, and transaction execution on Ethereum, Solana, and other chains. Triggers on requests involving crypto wallets for AI agents, server-side wallet operations, or autonomous transaction execution.
-homepage: https://api.privy.io
+base_url: https://api.privy.io
+auth_mode: basic
+auth_basic_user_env: PRIVY_APP_ID
+auth_basic_pass_env: PRIVY_APP_SECRET
+capability: skill.privy
+effect_class: chain_tx
+headers:
+  privy-app-id: $PRIVY_APP_ID
 env_vars:
   - PRIVY_APP_ID
   - PRIVY_APP_SECRET
@@ -14,7 +21,7 @@ commands:
 
 Create wallets that AI agents can control autonomously with policy-based guardrails.
 
-**Important:** This API uses HTTP Basic authentication. Use `run_command` with curl and `--user "$PRIVY_APP_ID:$PRIVY_APP_SECRET"` for all Privy API calls. Do not use the auto-generated `privy` tool directly.
+**Important:** Use the native `privy` tool directly. It already enforces the base URL, HTTP Basic auth, and required `privy-app-id` header.
 
 ---
 
@@ -104,7 +111,7 @@ If empty or not set:
 
 ## Authentication
 
-All requests require:
+All requests already include:
 ```
 Authorization: Basic base64(APP_ID:APP_SECRET)
 privy-app-id: <APP_ID>
@@ -121,54 +128,17 @@ Content-Type: application/json
 
 Policies constrain what the agent can do. See [policies.md](references/policies.md).
 
-```bash
-curl -X POST "https://api.privy.io/v1/policies" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": "1.0",
-    "name": "Agent safety limits",
-    "chain_type": "ethereum",
-    "rules": [
-      {
-        "name": "Max 0.05 ETH per transaction",
-        "method": "eth_sendTransaction",
-        "conditions": [{
-          "field_source": "ethereum_transaction",
-          "field": "value",
-          "operator": "lte",
-          "value": "50000000000000000"
-        }],
-        "action": "ALLOW"
-      },
-      {
-        "name": "Base chain only",
-        "method": "eth_sendTransaction",
-        "conditions": [{
-          "field_source": "ethereum_transaction",
-          "field": "chain_id",
-          "operator": "eq",
-          "value": "8453"
-        }],
-        "action": "ALLOW"
-      }
-    ]
-  }'
-```
+Use:
+- `method`: `POST`
+- `path`: `/v1/policies`
+- `body`: JSON string payload
 
 ### 2. Create an Agent Wallet
 
-```bash
-curl -X POST "https://api.privy.io/v1/wallets" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "chain_type": "ethereum",
-    "policy_ids": ["<policy_id>"]
-  }'
-```
+Use:
+- `method`: `POST`
+- `path`: `/v1/wallets`
+- `body`: JSON string payload
 
 Response includes `id` (wallet ID) and `address`.
 
@@ -178,22 +148,10 @@ Response includes `id` (wallet ID) and `address`.
 
 See [transactions.md](references/transactions.md) for chain-specific examples.
 
-```bash
-curl -X POST "https://api.privy.io/v1/wallets/<wallet_id>/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "caip2": "eip155:8453",
-    "params": {
-      "transaction": {
-        "to": "0x...",
-        "value": "1000000000000000"
-      }
-    }
-  }'
-```
+Use:
+- `method`: `POST`
+- `path`: `/v1/wallets/<wallet_id>/rpc`
+- `body`: JSON string payload
 
 ---
 

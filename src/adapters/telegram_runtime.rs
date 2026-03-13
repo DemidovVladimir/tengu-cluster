@@ -27,17 +27,18 @@ use crate::adapters::skill_source::FileSystemSkillSource;
 use crate::adapters::workspace_tools;
 use crate::application::chat_commands::{self, CommandResult, EngineInfo};
 use crate::application::chat_runtime::ChatRuntimeService;
-use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
+use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::skill_registry::SkillRegistry;
+use crate::domain::capability::{parse_capability_set, CapabilityId, RegisteredTool};
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::secret_registry::SecretRegistry;
 use crate::resolve_tengu_home;
 use tengu_core::config::Config;
-use tengu_core::types::{DeliveryOptions, ToolCall, ToolDef};
+use tengu_core::types::{DeliveryOptions, ToolCall};
 use tengu_core::{Engine, Pipe, PipeContext, Refiner};
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
@@ -68,6 +69,7 @@ type CurrentRecipient = Arc<std::sync::Mutex<Option<tengu_core::types::Recipient
 struct TelegramInlineApprovalAdapter {
     pipe: Arc<tengu_channels::telegram::TelegramPipe>,
     current_recipient: CurrentRecipient,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Timeout for waiting on user approval via inline keyboard.
@@ -117,14 +119,20 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
                         {
                             Ok(Ok(approved)) => {
                                 info!(tool = %call.name, approved, "Inline keyboard approval response");
+                                if !approved {
+                                    // User denied — set cancel flag to stop the entire turn.
+                                    self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                }
                                 Ok(approved)
                             }
                             Ok(Err(_)) => {
                                 warn!(tool = %call.name, "Approval channel closed — denying");
+                                self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                 Ok(false)
                             }
                             Err(_) => {
                                 warn!(tool = %call.name, "Approval timed out — denying");
+                                self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                 Ok(false)
                             }
                         }
@@ -138,7 +146,6 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
         })
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Cross-agent activity log
@@ -160,7 +167,10 @@ struct ActivityEntry {
 
 /// Format a tool call for the activity log.
 /// Only tools that require approval (mutations) are interesting for other agents.
-fn format_tool_for_activity(call: &ToolCall, tools: &[tengu_core::types::ToolDef]) -> Option<String> {
+fn format_tool_for_activity(
+    call: &ToolCall,
+    tools: &[tengu_core::types::ToolDef],
+) -> Option<String> {
     // Find the tool definition to check if it requires approval.
     let tool_def = tools.iter().find(|t| t.name == call.name);
     let requires_approval = tool_def
@@ -260,9 +270,461 @@ fn build_task_prompt(
 
     prompt.push_str("\n## IMPORTANT\n\
         When you finish, write a concise outcome summary to the file path provided below.\n\
-        Include: what you did, key results, file paths you created, URLs, IDs, and any info the next agent needs.\n");
+        Include: what you did, key results, file paths you created, URLs, IDs, and any info the next agent needs.\n\n\
+        ## STRICT RULES\n\
+        - NEVER fabricate, guess, or hallucinate URLs, transaction hashes, token IDs, or API responses.\n\
+        - Every URL, hash, and ID in your output MUST come from an actual tool call result.\n\
+        - If a tool call fails, STOP and report the error. Do NOT invent a successful result.\n\
+        - If you cannot complete your task, say so clearly — do NOT make up data.\n");
 
     prompt
+}
+
+/// Orchestrate a multi-agent goal: plan → parallel batch execution → collect results.
+///
+/// Uses `collect_engine_response` directly instead of `ChatRuntimeService` so that
+/// tasks within a batch can run concurrently via `tokio::task::JoinSet`. This means
+/// orchestrated tasks do NOT get:
+/// - Per-user conversation history (tasks are one-shot with a fresh prompt)
+/// - Flow compaction or persistence (tasks are ephemeral)
+/// - Automatic memory recall (context comes from planner prompt + dependency outcomes)
+///
+/// Memory **write** (the `remember` tool) still works through the tool executor.
+/// This matches the CLI orchestrator's approach (`src/adapters/orchestrator.rs`).
+async fn orchestrate_team_goal(
+    pipe: &Arc<tengu_channels::telegram::TelegramPipe>,
+    sender: &tengu_core::types::Recipient,
+    goal: &str,
+    media: Option<&Vec<tengu_core::types::MediaPayload>>,
+    delivery_opts: &DeliveryOptions,
+    agent_states: &mut HashMap<String, TelegramAgentState>,
+    default_agent_id: &str,
+    agent_descriptions: &HashMap<String, String>,
+    role_to_agent: &HashMap<String, String>,
+    current_recipient: &CurrentRecipient,
+    memory_handle: &Option<Arc<crate::adapters::memory_tool_executor::MemoryServiceHandle>>,
+    secret_registry: &Arc<SecretRegistry>,
+    approval_adapter: &Arc<dyn ToolApprovalPort>,
+    activity_adapter: &Arc<dyn ToolActivityPort>,
+    turn_cancel: &Arc<std::sync::atomic::AtomicBool>,
+    _user_states: &mut HashMap<String, ChatLoopState>,
+    _sender_id: &str,
+    _flow_store: &FlowStore,
+    _refiner: &dyn Refiner,
+    _memory_service_instance: Option<&MemoryService<'_>>,
+    _memory_config: &tengu_core::config::MemoryConfig,
+) -> Result<()> {
+    *current_recipient.lock().unwrap() = Some(sender.clone());
+
+    let mut attachment_notes: Vec<String> = Vec::new();
+    if let Some(media) = media {
+        let ws = agent_states
+            .get(default_agent_id)
+            .and_then(|a| a.workspace.as_ref());
+        if let Some(ws) = ws {
+            let attachments_dir = ws.join(".tengu-attachments");
+            std::fs::create_dir_all(&attachments_dir).ok();
+            for m in media {
+                let fname =
+                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
+                let path = attachments_dir.join(&fname);
+                match std::fs::write(&path, &m.data) {
+                    Ok(()) => {
+                        info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for orchestration");
+                        attachment_notes.push(format!(
+                            "[Attached file: {} ({}, {} bytes)]",
+                            path.display(),
+                            m.mime_type,
+                            m.data.len()
+                        ));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to save Telegram attachment for orchestration");
+                    }
+                }
+            }
+        }
+    }
+
+    let goal = if attachment_notes.is_empty() {
+        goal.to_string()
+    } else {
+        format!("{}\n{}", attachment_notes.join("\n"), goal)
+    };
+
+    pipe.send_text(sender, "Planning…", delivery_opts).await?;
+
+    let planner_engine = match agent_states.get(default_agent_id) {
+        Some(a) => a.engine.as_ref(),
+        None => {
+            pipe.send_text(sender, "Planner engine unavailable.", delivery_opts)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let tasks = match crate::application::task_planner::generate_plan(
+        planner_engine,
+        &goal,
+        agent_descriptions,
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            pipe.send_text(
+                sender,
+                &format!("Failed to generate plan: {}", e),
+                delivery_opts,
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let batches = match crate::application::task_planner::resolve_execution_order(&tasks) {
+        Ok(b) => b,
+        Err(e) => {
+            pipe.send_text(sender, &format!("Bad plan: {}", e), delivery_opts)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let mut plan_text = format!("Plan ({} tasks, {} batches):\n", tasks.len(), batches.len());
+    for (bi, batch) in batches.iter().enumerate() {
+        let parallel_note = if batch.len() > 1 { " [parallel]" } else { "" };
+        plan_text.push_str(&format!("Batch {}{}:\n", bi + 1, parallel_note));
+        for &idx in batch {
+            let t = &tasks[idx];
+            let deps = if t.depends_on.is_empty() {
+                String::new()
+            } else {
+                format!(" (after: {})", t.depends_on.join(", "))
+            };
+            plan_text.push_str(&format!("  - [{}] {}{}\n", t.role, t.task, deps));
+        }
+    }
+    pipe.send_text(sender, &plan_text, delivery_opts).await?;
+
+    let outcomes_dir = agent_states
+        .get(default_agent_id)
+        .and_then(|a| a.workspace.as_ref())
+        .map(|ws| ws.join(TASK_OUTCOMES_DIR));
+    if let Some(ref dir) = outcomes_dir {
+        std::fs::create_dir_all(dir).ok();
+    }
+
+    let mut outcome_paths: HashMap<String, String> = HashMap::new();
+    turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut completed_count = 0usize;
+    let mut stopped = false;
+
+    'batch_loop: for (bi, batch) in batches.iter().enumerate() {
+        if turn_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            pipe.send_text(sender, "Stopped by /stop.", delivery_opts)
+                .await?;
+            stopped = true;
+            break;
+        }
+
+        if batch.len() > 1 {
+            let labels: Vec<String> = batch.iter().map(|&idx| tasks[idx].role.clone()).collect();
+            pipe.send_text(
+                sender,
+                &format!(
+                    "Batch {}/{} — running in parallel: {}",
+                    bi + 1,
+                    batches.len(),
+                    labels.join(", ")
+                ),
+                delivery_opts,
+            )
+            .await?;
+        }
+
+        // Phase 1: Hot-reload skills and build task snapshots (needs &mut agent_states).
+        struct TaskSnapshot {
+            task_id: String,
+            task_desc: String,
+            role: String,
+            agent_label: String,
+            engine: Arc<dyn Engine>,
+            tools: Vec<tengu_core::types::ToolDef>,
+            system_prompt: String,
+            workspace: Option<std::path::PathBuf>,
+            tool_executor: Option<Arc<dyn ToolExecutor>>,
+            prompt: String,
+            outcome_rel_path: String,
+        }
+
+        let mut snapshots: Vec<TaskSnapshot> = Vec::new();
+
+        for &task_idx in batch {
+            if turn_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                pipe.send_text(sender, "Stopped by /stop.", delivery_opts)
+                    .await?;
+                stopped = true;
+                break 'batch_loop;
+            }
+
+            let task = &tasks[task_idx];
+            let task_agent_id = match role_to_agent.get(&task.role) {
+                Some(id) => id.clone(),
+                None => {
+                    pipe.send_text(
+                        sender,
+                        &format!("Unknown role '{}', skipping task '{}'.", task.role, task.id),
+                        delivery_opts,
+                    )
+                    .await?;
+                    continue;
+                }
+            };
+
+            let agent = match agent_states.get_mut(&task_agent_id) {
+                Some(a) => a,
+                None => continue,
+            };
+
+            let agent_label = agent
+                .agent_config
+                .identity
+                .name
+                .clone()
+                .unwrap_or_else(|| agent.agent_id.clone());
+
+            pipe.send_text(
+                sender,
+                &format!("[{}] {}", agent_label, task.task),
+                delivery_opts,
+            )
+            .await?;
+
+            // Hot-reload skills (mutable operation — must happen before spawning).
+            if let Some(ref src) = agent.skill_source {
+                if agent.skill_registry.reload(src) {
+                    agent.current_tools = channel_runtime::rebuild_tools(
+                        &agent.base_tools,
+                        &agent.skill_registry,
+                        &agent.capabilities,
+                    );
+                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                        &agent.agent_config,
+                        agent.advertise_workspace_tools,
+                        &agent.skill_registry,
+                        &agent.current_tools,
+                    );
+                }
+            }
+
+            // Build tool executor and wrap in Arc for sharing across spawn boundary.
+            let tool_executor: Option<Arc<dyn ToolExecutor>> =
+                agent.workspace.as_ref().and_then(|ws| {
+                    channel_runtime::build_tool_executor(
+                        ws,
+                        &agent.current_tools,
+                        &agent.skill_registry,
+                        memory_handle,
+                        secret_registry,
+                        Arc::clone(approval_adapter),
+                        Arc::clone(activity_adapter),
+                        Some(Arc::clone(turn_cancel)),
+                    )
+                    .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
+                });
+
+            let dep_outcomes: Vec<(String, String)> = task
+                .depends_on
+                .iter()
+                .filter_map(|dep_id| {
+                    outcome_paths
+                        .get(dep_id)
+                        .map(|p| (dep_id.clone(), p.clone()))
+                })
+                .collect();
+
+            let outcome_rel_path = format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id);
+            let mut prompt = build_task_prompt(&goal, &task.task, &dep_outcomes);
+            prompt.push_str(&format!(
+                "\nWrite your outcome summary to: `{}`\n",
+                outcome_rel_path
+            ));
+
+            snapshots.push(TaskSnapshot {
+                task_id: task.id.clone(),
+                task_desc: task.task.clone(),
+                role: task.role.clone(),
+                agent_label,
+                engine: Arc::clone(&agent.engine),
+                tools: channel_runtime::tool_defs(&agent.current_tools),
+                system_prompt: agent.current_system_prompt.clone(),
+                workspace: agent.workspace.clone(),
+                tool_executor,
+                prompt,
+                outcome_rel_path,
+            });
+        }
+        // &mut agent_states borrow ends here.
+
+        if stopped {
+            break;
+        }
+
+        // Phase 2: Spawn all tasks in this batch concurrently via JoinSet.
+        let mut set = tokio::task::JoinSet::new();
+
+        for snap in snapshots {
+            let sr = Arc::clone(secret_registry);
+            let cancel = Arc::clone(turn_cancel);
+            let obs_pipe = Arc::clone(pipe);
+            let obs_sender = sender.clone();
+            let obs_label = snap.agent_label.clone();
+
+            set.spawn(async move {
+                // Typing indicator for this task.
+                let typing_pipe = Arc::clone(&obs_pipe);
+                let typing_sender = obs_sender.clone();
+                let typing_handle = tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                        let _ = typing_pipe.send_chat_action(&typing_sender).await;
+                    }
+                });
+
+                // Tool observer sends tool-call labels to Telegram.
+                let obs_p = Arc::clone(&obs_pipe);
+                let obs_s = obs_sender.clone();
+                let obs_sr = Arc::clone(&sr);
+                let obs_l = obs_label.clone();
+                let observer = move |call: &ToolCall, result: &str| {
+                    let _ = obs_sr.redact(result);
+                    let text = format!("[{}] 🔧 `{}`", obs_l, call.name);
+                    let p = Arc::clone(&obs_p);
+                    let r = obs_s.clone();
+                    tokio::task::block_in_place(move || {
+                        let handle = tokio::runtime::Handle::current();
+                        handle.block_on(async {
+                            let _ = p.send_text(&r, &text, &DeliveryOptions::default()).await;
+                        });
+                    });
+                };
+
+                // Build messages and context (owned — no lifetimes).
+                let messages = vec![tengu_core::types::Message {
+                    role: tengu_core::types::Role::User,
+                    content: snap.prompt,
+                    tool_call_id: None,
+                    tool_calls: None,
+                }];
+
+                let context = tengu_core::EngineContext {
+                    workspace: snap.workspace,
+                    system_prompt: Some(snap.system_prompt),
+                };
+
+                // Wrap executor in SanitizedToolExecutor for secret redaction.
+                let sanitized = snap
+                    .tool_executor
+                    .as_ref()
+                    .map(|e| SanitizedToolExecutor::new(e.as_ref(), &sr));
+
+                let result = crate::application::engine_runtime::collect_engine_response(
+                    snap.engine.as_ref(),
+                    &messages,
+                    &snap.tools,
+                    &context,
+                    sanitized.as_ref().map(|s| s as &dyn ToolExecutor),
+                    Some(&observer),
+                    Some(&cancel),
+                )
+                .await;
+
+                typing_handle.abort();
+
+                let output = match result {
+                    Ok(resp) => Ok(resp.text),
+                    Err(e) => Err(e),
+                };
+
+                (
+                    snap.task_id,
+                    snap.task_desc,
+                    snap.role,
+                    snap.agent_label,
+                    snap.outcome_rel_path,
+                    output,
+                )
+            });
+        }
+
+        // Phase 3: Collect results from this batch.
+        while let Some(join_result) = set.join_next().await {
+            let (task_id, task_desc, _role, agent_label, outcome_rel_path, outcome) = match join_result {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "Orchestrated task panicked");
+                    continue;
+                }
+            };
+
+            match outcome {
+                Ok(output) => {
+                    if !output.is_empty() {
+                        let reply = secret_registry.redact(&output);
+                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                            let _ = pipe.send_text(sender, chunk, delivery_opts).await;
+                        }
+                    }
+                    outcome_paths.insert(task_id, outcome_rel_path);
+                    completed_count += 1;
+                }
+                Err(e) => {
+                    let _ = pipe
+                        .send_text(
+                            sender,
+                            &format!("[{}] Failed: {}", agent_label, e),
+                            delivery_opts,
+                        )
+                        .await;
+                    if let Some(ref dir) = outcomes_dir {
+                        let path = dir.join(format!("{}.md", task_id));
+                        let _ = std::fs::write(
+                            &path,
+                            format!("# FAILED\n\nTask: {}\nError: {}\n", task_desc, e),
+                        );
+                    }
+                    outcome_paths.insert(task_id, outcome_rel_path);
+                }
+            }
+        }
+    }
+
+    let status = if stopped { "stopped" } else { "completed" };
+
+    // Build a final summary from outcome files so the user gets actionable results.
+    let mut summary = format!("Team {} — {}/{} tasks done.\n", status, completed_count, tasks.len());
+
+    if let Some(ref dir) = outcomes_dir {
+        for task in &tasks {
+            let path = dir.join(format!("{}.md", task.id));
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let content = content.trim();
+                if !content.is_empty() {
+                    summary.push_str(&format!("\n── {} ({}) ──\n", task.role, task.id));
+                    summary.push_str(content);
+                    summary.push('\n');
+                }
+            }
+        }
+    }
+
+    let summary = secret_registry.redact(&summary);
+    for chunk in channel_runtime::chunk_message(&summary, TELEGRAM_MAX_LEN) {
+        let _ = pipe.send_text(sender, chunk, delivery_opts).await;
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -292,18 +754,19 @@ fn build_allowed_users(config: &Config) -> HashSet<String> {
 struct TelegramAgentState {
     agent_id: String,
     agent_config: tengu_core::config::AgentConfig,
-    engine: Box<dyn Engine>,
+    engine: Arc<dyn Engine>,
     engine_info: EngineInfo,
     workspace: Option<std::path::PathBuf>,
-    base_tools: Vec<ToolDef>,
+    base_tools: Vec<RegisteredTool>,
     skill_source: Option<FileSystemSkillSource>,
     skill_registry: SkillRegistry,
-    current_tools: Vec<ToolDef>,
+    current_tools: Vec<RegisteredTool>,
     current_system_prompt: String,
     advertise_workspace_tools: bool,
     history_turn_limit: usize,
     compaction_policy: crate::domain::chat::FlowCompactionPolicy,
     role: Option<String>,
+    capabilities: HashSet<CapabilityId>,
 }
 
 /// Run the headless Telegram bot adapter (sync — call from `block_in_place`).
@@ -314,8 +777,9 @@ struct TelegramAgentState {
 /// allowed" panic.
 ///
 /// Supports multi-agent routing: prefix messages with `@role: message` to
-/// target a specific agent. Unrouted messages go to the default agent.
-/// Use `/agents` to list available agents and their roles.
+/// target a specific agent. In multi-agent mode, unrouted plain messages are
+/// orchestrated across the team automatically. Use `/agents` to list available
+/// agents and their roles.
 pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -358,8 +822,8 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     let mut default_agent_id: Option<String> = None;
 
     for (agent_id, agent_config) in &config.agents {
-        let engine = match build_engine(agent_id, agent_config) {
-            Ok(e) => e,
+        let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config) {
+            Ok(e) => Arc::from(e),
             Err(e) => {
                 warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
                 continue;
@@ -379,26 +843,31 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         let advertise_workspace_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace();
         let uses_tools = advertise_workspace_tools && workspace.is_some();
+        let agent_capabilities = parse_capability_set(&agent_config.capabilities)
+            .expect("agent capabilities should validate");
 
-        let base_tools = channel_runtime::compute_base_tools(
-            uses_tools,
-            has_memory,
-            agent_config.allowed_tools.as_deref(),
-        );
+        let base_tools =
+            channel_runtime::compute_base_tools(uses_tools, has_memory, &agent_config.capabilities);
 
         let skill_source: Option<FileSystemSkillSource> = workspace
             .as_ref()
             .map(|ws| FileSystemSkillSource::new(ws.clone()));
 
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved);
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.def.name.clone()).collect();
+        let mut skill_registry = SkillRegistry::new(base_reserved)
+            .with_allowlist(Some(agent_config.skill_packages.clone()));
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
         }
 
-        let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-        let current_system_prompt =
-            channel_runtime::rebuild_system_prompt(agent_config, advertise_workspace_tools, &skill_registry, &current_tools);
+        let current_tools =
+            channel_runtime::rebuild_tools(&base_tools, &skill_registry, &agent_capabilities);
+        let current_system_prompt = channel_runtime::rebuild_system_prompt(
+            agent_config,
+            advertise_workspace_tools,
+            &skill_registry,
+            &current_tools,
+        );
 
         let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
         let compaction_policy = resolve_flow_compaction_policy(
@@ -451,6 +920,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                 history_turn_limit,
                 compaction_policy,
                 role,
+                capabilities: agent_capabilities,
             },
         );
     }
@@ -530,6 +1000,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     let approval_adapter: Arc<dyn ToolApprovalPort> = Arc::new(TelegramInlineApprovalAdapter {
         pipe: Arc::clone(&pipe),
         current_recipient: Arc::clone(&current_recipient),
+        cancel: Arc::clone(&turn_cancel),
     });
     let activity_adapter: Arc<dyn ToolActivityPort> = Arc::new(TelegramToolActivityAdapter);
 
@@ -549,9 +1020,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         let default_agent = agent_states.get(&default_agent_id);
         default_agent
             .map(|a| SkillCommandRouter::from_registry(&a.skill_registry))
-            .unwrap_or_else(|| SkillCommandRouter::from_registry(
-                &SkillRegistry::new(vec![]),
-            ))
+            .unwrap_or_else(|| SkillCommandRouter::from_registry(&SkillRegistry::new(vec![])))
     };
 
     // Cross-agent activity log — lets each agent see what others have done.
@@ -593,8 +1062,12 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             // Handle slash commands.
             if msg.content.starts_with('/') {
                 if msg.content == "/stop" || msg.content.starts_with("/stop@") {
+                    // Primary /stop is intercepted at the pipe level (TelegramPipe)
+                    // which sets turn_cancel to true. This is a fallback in case
+                    // the message reaches the runtime loop directly.
+                    turn_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     let _ = pipe
-                        .send_text(&msg.sender, "No active operation to stop.", &delivery_opts)
+                        .send_text(&msg.sender, "⏹ Stop requested.", &delivery_opts)
                         .await;
                     continue;
                 }
@@ -612,354 +1085,30 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         continue;
                     }
 
-                    // Set recipient for inline approvals.
-                    *current_recipient.lock().unwrap() = Some(msg.sender.clone());
-
-                    // Save attached files (PDF, images) so agents can access them.
-                    let mut attachment_notes: Vec<String> = Vec::new();
-                    if let Some(ref media) = msg.media {
-                        // Use default agent's workspace for attachments.
-                        let ws = agent_states
-                            .get(&default_agent_id)
-                            .and_then(|a| a.workspace.as_ref());
-                        if let Some(ws) = ws {
-                            let attachments_dir = ws.join(".tengu-attachments");
-                            std::fs::create_dir_all(&attachments_dir).ok();
-                            for m in media {
-                                let fname =
-                                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
-                                let path = attachments_dir.join(&fname);
-                                match std::fs::write(&path, &m.data) {
-                                    Ok(()) => {
-                                        info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for /team");
-                                        attachment_notes.push(format!(
-                                            "[Attached file: {} ({}, {} bytes)]",
-                                            path.display(),
-                                            m.mime_type,
-                                            m.data.len()
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        warn!(error = %e, "Failed to save Telegram attachment for /team");
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Build goal text including attachment paths so agents know where files are.
-                    let goal = if attachment_notes.is_empty() {
-                        goal.to_string()
-                    } else {
-                        format!("{}\n{}", attachment_notes.join("\n"), goal)
-                    };
-
-                    let _ = pipe
-                        .send_text(&msg.sender, "Planning…", &delivery_opts)
-                        .await;
-
-                    // Generate plan using the default agent's engine.
-                    let planner_engine = match agent_states.get(&default_agent_id) {
-                        Some(a) => a.engine.as_ref(),
-                        None => {
-                            let _ = pipe
-                                .send_text(&msg.sender, "Planner engine unavailable.", &delivery_opts)
-                                .await;
-                            continue;
-                        }
-                    };
-
-                    let tasks = match crate::application::task_planner::generate_plan(
-                        planner_engine,
-                        &goal,
+                    let _ = orchestrate_team_goal(
+                        &pipe,
+                        &msg.sender,
+                        goal,
+                        msg.media.as_ref(),
+                        &delivery_opts,
+                        &mut agent_states,
+                        &default_agent_id,
                         &agent_descriptions,
+                        &role_to_agent,
+                        &current_recipient,
+                        &memory_handle,
+                        &secret_registry,
+                        &approval_adapter,
+                        &activity_adapter,
+                        &turn_cancel,
+                        &mut user_states,
+                        sender_id,
+                        &flow_store,
+                        refiner.as_ref(),
+                        memory_service_instance.as_ref(),
+                        &memory_config,
                     )
-                    .await
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            let _ = pipe
-                                .send_text(
-                                    &msg.sender,
-                                    &format!("Failed to generate plan: {}", e),
-                                    &delivery_opts,
-                                )
-                                .await;
-                            continue;
-                        }
-                    };
-
-                    // Resolve execution order (parallel batches).
-                    let batches = match crate::application::task_planner::resolve_execution_order(&tasks) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            let _ = pipe
-                                .send_text(&msg.sender, &format!("Bad plan: {}", e), &delivery_opts)
-                                .await;
-                            continue;
-                        }
-                    };
-
-                    // Show plan to user.
-                    let mut plan_text = format!("Plan ({} tasks, {} batches):\n", tasks.len(), batches.len());
-                    for (bi, batch) in batches.iter().enumerate() {
-                        let parallel_note = if batch.len() > 1 { " [parallel]" } else { "" };
-                        plan_text.push_str(&format!("Batch {}{}:\n", bi + 1, parallel_note));
-                        for &idx in batch {
-                            let t = &tasks[idx];
-                            let deps = if t.depends_on.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" (after: {})", t.depends_on.join(", "))
-                            };
-                            plan_text.push_str(&format!("  - [{}] {}{}\n", t.role, t.task, deps));
-                        }
-                    }
-                    let _ = pipe
-                        .send_text(&msg.sender, &plan_text, &delivery_opts)
-                        .await;
-
-                    // Prepare outcomes dir in workspace.
-                    let outcomes_dir = agent_states
-                        .get(&default_agent_id)
-                        .and_then(|a| a.workspace.as_ref())
-                        .map(|ws| ws.join(TASK_OUTCOMES_DIR));
-                    if let Some(ref dir) = outcomes_dir {
-                        std::fs::create_dir_all(dir).ok();
-                    }
-
-                    // Track outcome file paths by task id.
-                    let mut outcome_paths: HashMap<String, String> = HashMap::new();
-
-                    turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
-                    let mut completed_count = 0usize;
-                    let mut stopped = false;
-
-                    'batch_loop: for (bi, batch) in batches.iter().enumerate() {
-                        if turn_cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                            let _ = pipe
-                                .send_text(&msg.sender, "Stopped by /stop.", &delivery_opts)
-                                .await;
-                            stopped = true;
-                            break;
-                        }
-
-                        if batch.len() > 1 {
-                            let labels: Vec<String> = batch
-                                .iter()
-                                .map(|&idx| tasks[idx].role.clone())
-                                .collect();
-                            let _ = pipe
-                                .send_text(
-                                    &msg.sender,
-                                    &format!("Batch {}/{} — running in parallel: {}", bi + 1, batches.len(), labels.join(", ")),
-                                    &delivery_opts,
-                                )
-                                .await;
-                        }
-
-                        // Run all tasks in this batch. For parallel batches we
-                        // unfortunately cannot run truly concurrently because
-                        // agent_states requires &mut and ChatRuntimeService
-                        // borrows from it. So we run them sequentially within a
-                        // batch for now — but the key design improvement is that
-                        // agents communicate via outcome files, not in-memory
-                        // prompt chains.
-                        for &task_idx in batch {
-                            if turn_cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                                let _ = pipe
-                                    .send_text(&msg.sender, "Stopped by /stop.", &delivery_opts)
-                                    .await;
-                                stopped = true;
-                                break 'batch_loop;
-                            }
-
-                            let task = &tasks[task_idx];
-                            let task_agent_id = match role_to_agent.get(&task.role) {
-                                Some(id) => id.clone(),
-                                None => {
-                                    let _ = pipe
-                                        .send_text(
-                                            &msg.sender,
-                                            &format!("Unknown role '{}', skipping task '{}'.", task.role, task.id),
-                                            &delivery_opts,
-                                        )
-                                        .await;
-                                    continue;
-                                }
-                            };
-
-                            let agent = match agent_states.get_mut(&task_agent_id) {
-                                Some(a) => a,
-                                None => continue,
-                            };
-
-                            let agent_label = agent
-                                .agent_config
-                                .identity
-                                .name
-                                .clone()
-                                .unwrap_or_else(|| agent.agent_id.clone());
-
-                            let _ = pipe
-                                .send_text(
-                                    &msg.sender,
-                                    &format!("[{}] {}", agent_label, task.task),
-                                    &delivery_opts,
-                                )
-                                .await;
-
-                            // Hot-reload skills.
-                            if let Some(ref src) = agent.skill_source {
-                                if agent.skill_registry.reload(src) {
-                                    agent.current_tools =
-                                        channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
-                                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-                                        &agent.agent_config,
-                                        agent.advertise_workspace_tools,
-                                        &agent.skill_registry,
-                                        &agent.current_tools,
-                                    );
-                                }
-                            }
-
-                            // Build executor.
-                            let task_executor =
-                                agent.workspace.as_ref().and_then(|ws| {
-                                    channel_runtime::build_tool_executor(
-                                        ws,
-                                        &agent.current_tools,
-                                        &agent.skill_registry,
-                                        &memory_handle,
-                                        &secret_registry,
-                                        Arc::clone(&approval_adapter),
-                                        Arc::clone(&activity_adapter),
-                                    )
-                                });
-                            let task_sanitized = task_executor.as_ref().map(|e| {
-                                SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
-                            });
-
-                            // Tool observer — notify user of tool calls.
-                            let obs_pipe = Arc::clone(&pipe);
-                            let obs_sender = msg.sender.clone();
-                            let obs_secrets = Arc::clone(&secret_registry);
-                            let obs_label = agent_label.clone();
-                            let task_observer = move |call: &ToolCall, result: &str| {
-                                let _ = obs_secrets.redact(result);
-                                let text = format!("[{}] 🔧 `{}`", obs_label, call.name);
-                                let p = Arc::clone(&obs_pipe);
-                                let r = obs_sender.clone();
-                                tokio::task::block_in_place(move || {
-                                    let handle = tokio::runtime::Handle::current();
-                                    handle.block_on(async {
-                                        let _ = p.send_text(&r, &text, &DeliveryOptions::default()).await;
-                                    });
-                                });
-                            };
-
-                            // Collect dependency outcome paths for this task.
-                            let dep_outcomes: Vec<(String, String)> = task
-                                .depends_on
-                                .iter()
-                                .filter_map(|dep_id| {
-                                    outcome_paths.get(dep_id).map(|p| (dep_id.clone(), p.clone()))
-                                })
-                                .collect();
-
-                            // Build prompt: goal + task + where to find dep outcomes + where to write own outcome.
-                            let outcome_rel_path = format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id);
-                            let mut prompt = build_task_prompt(&goal, &task.task, &dep_outcomes);
-                            prompt.push_str(&format!(
-                                "\nWrite your outcome summary to: `{}`\n",
-                                outcome_rel_path
-                            ));
-
-                            let state_key = format!("{}:{}", sender_id, task_agent_id);
-                            let state = user_states
-                                .entry(state_key)
-                                .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
-
-                            // Typing indicator.
-                            let _ = pipe.send_chat_action(&msg.sender).await;
-                            let t_pipe = Arc::clone(&pipe);
-                            let t_sender = msg.sender.clone();
-                            let t_handle = tokio::spawn(async move {
-                                loop {
-                                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-                                    let _ = t_pipe.send_chat_action(&t_sender).await;
-                                }
-                            });
-
-                            let task_runtime = ChatRuntimeService {
-                                engine: agent.engine.as_ref(),
-                                refiner: refiner.as_ref(),
-                                flow_store: &flow_store,
-                                agent_id: &agent.agent_id,
-                                agent_config: &agent.agent_config,
-                                history_turn_limit: agent.history_turn_limit,
-                                compaction_policy: agent.compaction_policy,
-                                system_prompt: agent.current_system_prompt.clone(),
-                                tools: &agent.current_tools,
-                                tool_executor: task_sanitized
-                                    .as_ref()
-                                    .map(|e| e as &dyn ToolExecutor),
-                                memory_service: memory_service_instance.as_ref(),
-                                max_recall_entries: memory_config.max_recall_entries,
-                                max_recall_tokens: memory_config.max_recall_tokens,
-                                tool_observer: Some(&task_observer),
-                                cancel: Some(&turn_cancel),
-                            };
-
-                            let result = task_runtime.process_user_text(state, &prompt).await;
-                            t_handle.abort();
-
-                            match result {
-                                Ok(res) => {
-                                    let output = res.assistant_text.unwrap_or_default();
-                                    if !output.is_empty() {
-                                        let reply = secret_registry.redact(&output);
-                                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                                            let _ = pipe
-                                                .send_text(&msg.sender, chunk, &delivery_opts)
-                                                .await;
-                                        }
-                                    }
-                                    // Record outcome path (agent should have written the file,
-                                    // but even if not, we track the expected path).
-                                    outcome_paths.insert(task.id.clone(), outcome_rel_path);
-                                    completed_count += 1;
-                                }
-                                Err(e) => {
-                                    let _ = pipe
-                                        .send_text(
-                                            &msg.sender,
-                                            &format!("[{}] Failed: {}", agent_label, e),
-                                            &delivery_opts,
-                                        )
-                                        .await;
-                                    // Write a failure outcome so dependents can see it.
-                                    if let Some(ref dir) = outcomes_dir {
-                                        let path = dir.join(format!("{}.md", task.id));
-                                        let _ = std::fs::write(
-                                            &path,
-                                            format!("# FAILED\n\nTask: {}\nError: {}\n", task.task, e),
-                                        );
-                                    }
-                                    outcome_paths.insert(task.id.clone(), outcome_rel_path);
-                                }
-                            }
-                        }
-                    }
-
-                    let status = if stopped { "stopped" } else { "completed" };
-                    let _ = pipe
-                        .send_text(
-                            &msg.sender,
-                            &format!("Team {} — {}/{} tasks done.", status, completed_count, tasks.len()),
-                            &delivery_opts,
-                        )
-                        .await;
+                    .await;
                     continue;
                 }
 
@@ -1038,7 +1187,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                             if let Some(ref src) = agent.skill_source {
                                 agent.skill_registry.reload(src);
                             }
-                            agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                            agent.current_tools = channel_runtime::rebuild_tools(
+                                &agent.base_tools,
+                                &agent.skill_registry,
+                                &agent.capabilities,
+                            );
 
                             created = true;
                         }
@@ -1088,9 +1241,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     }
                     lines.push(String::new());
                     lines.push("Direct: @role: message  or  role: message".to_string());
-                    lines.push("Team:    /team <goal>     (plan & execute across agents)".to_string());
+                    lines.push("Auto:    plain messages  (plan & execute across agents)".to_string());
+                    lines.push("Team:    /team <goal>     (explicit team planning command)".to_string());
                     lines.push("Project: /project <name>  (new project subfolder)".to_string());
                     lines.push("Example: @backend_engineer: add rate limiting".to_string());
+                    lines.push("Example: register POI and mint the IP-NFT".to_string());
                     lines.push("Example: /team build a full stack Rust app".to_string());
                     let _ = pipe
                         .send_text(&msg.sender, &lines.join("\n"), &delivery_opts)
@@ -1166,7 +1321,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     } else {
                         lines.push("No workspace — skills unavailable.".to_string());
                     }
-                    agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.current_tools = channel_runtime::rebuild_tools(
+                        &agent.base_tools,
+                        &agent.skill_registry,
+                        &agent.capabilities,
+                    );
                     agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                         &agent.agent_config,
                         agent.advertise_workspace_tools,
@@ -1207,7 +1366,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     // Hot-reload skills.
                     if let Some(ref src) = agent.skill_source {
                         if agent.skill_registry.reload(src) {
-                            agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                            agent.current_tools = channel_runtime::rebuild_tools(
+                                &agent.base_tools,
+                                &agent.skill_registry,
+                                &agent.capabilities,
+                            );
                             agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &agent.agent_config,
                                 agent.advertise_workspace_tools,
@@ -1232,6 +1395,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 &secret_registry,
                                 Arc::clone(&approval_adapter),
                                 Arc::clone(&activity_adapter),
+                                Some(Arc::clone(&turn_cancel)),
                             )
                         });
                     let sanitized_executor = current_executor.as_ref().map(|e| {
@@ -1256,6 +1420,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         }
                     });
 
+                    let active_tools = channel_runtime::tool_defs(&agent.current_tools);
                     let chat_runtime = ChatRuntimeService {
                         engine: agent.engine.as_ref(),
                         refiner: refiner.as_ref(),
@@ -1265,7 +1430,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         history_turn_limit: agent.history_turn_limit,
                         compaction_policy: agent.compaction_policy,
                         system_prompt: agent.current_system_prompt.clone(),
-                        tools: &agent.current_tools,
+                        tools: &active_tools,
                         tool_executor: sanitized_executor
                             .as_ref()
                             .map(|e| e as &dyn ToolExecutor),
@@ -1339,8 +1504,70 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             // ---------------------------------------------------------------
             // Route message to an agent.
             // ---------------------------------------------------------------
-            let (routed_role, user_text) =
+            let (mut routed_role, user_text) =
                 channel_runtime::parse_agent_routing(&msg.content, Some(&role_to_agent));
+
+            if routed_role.is_none() && is_multi_agent {
+                // Classify: single-agent or multi-agent?
+                let decision = match agent_states.get(&default_agent_id) {
+                    Some(a) => {
+                        crate::application::task_planner::classify_request(
+                            a.engine.as_ref(),
+                            &user_text,
+                            &agent_descriptions,
+                        )
+                        .await
+                    }
+                    None => Ok(crate::application::task_planner::RouteDecision::MultiAgent),
+                };
+
+                match decision {
+                    Ok(crate::application::task_planner::RouteDecision::SingleAgent(role_key)) => {
+                        if role_to_agent.contains_key(&role_key) {
+                            info!(role = %role_key, "Classifier routed to single agent");
+                            routed_role = Some(role_key);
+                            // Fall through to normal single-agent handling below.
+                        } else {
+                            warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
+                            let _ = orchestrate_team_goal(
+                                &pipe, &msg.sender, &user_text, msg.media.as_ref(),
+                                &delivery_opts, &mut agent_states, &default_agent_id,
+                                &agent_descriptions, &role_to_agent, &current_recipient,
+                                &memory_handle, &secret_registry, &approval_adapter,
+                                &activity_adapter, &turn_cancel, &mut user_states,
+                                sender_id, &flow_store, refiner.as_ref(),
+                                memory_service_instance.as_ref(), &memory_config,
+                            ).await;
+                            continue;
+                        }
+                    }
+                    Ok(crate::application::task_planner::RouteDecision::MultiAgent) => {
+                        let _ = orchestrate_team_goal(
+                            &pipe, &msg.sender, &user_text, msg.media.as_ref(),
+                            &delivery_opts, &mut agent_states, &default_agent_id,
+                            &agent_descriptions, &role_to_agent, &current_recipient,
+                            &memory_handle, &secret_registry, &approval_adapter,
+                            &activity_adapter, &turn_cancel, &mut user_states,
+                            sender_id, &flow_store, refiner.as_ref(),
+                            memory_service_instance.as_ref(), &memory_config,
+                        ).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Classifier failed, falling back to planner");
+                        let _ = orchestrate_team_goal(
+                            &pipe, &msg.sender, &user_text, msg.media.as_ref(),
+                            &delivery_opts, &mut agent_states, &default_agent_id,
+                            &agent_descriptions, &role_to_agent, &current_recipient,
+                            &memory_handle, &secret_registry, &approval_adapter,
+                            &activity_adapter, &turn_cancel, &mut user_states,
+                            sender_id, &flow_store, refiner.as_ref(),
+                            memory_service_instance.as_ref(), &memory_config,
+                        ).await;
+                        continue;
+                    }
+                }
+            }
 
             let target_agent_id = if let Some(ref role_key) = routed_role {
                 match role_to_agent.get(role_key) {
@@ -1363,15 +1590,6 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         continue;
                     }
                 }
-            } else if is_multi_agent {
-                // Try keyword-based auto-routing before falling back to sticky/default.
-                channel_runtime::infer_agent_from_keywords(&user_text, &role_to_agent)
-                    .unwrap_or_else(|| {
-                        user_active_agent
-                            .get(sender_id)
-                            .cloned()
-                            .unwrap_or_else(|| default_agent_id.clone())
-                    })
             } else {
                 default_agent_id.clone()
             };
@@ -1387,7 +1605,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             // Hot-reload skills for this agent.
             if let Some(ref src) = agent.skill_source {
                 if agent.skill_registry.reload(src) {
-                    agent.current_tools = channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.current_tools = channel_runtime::rebuild_tools(
+                        &agent.base_tools,
+                        &agent.skill_registry,
+                        &agent.capabilities,
+                    );
                     agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                         &agent.agent_config,
                         agent.advertise_workspace_tools,
@@ -1449,6 +1671,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         &secret_registry,
                         Arc::clone(&approval_adapter),
                         Arc::clone(&activity_adapter),
+                        Some(Arc::clone(&turn_cancel)),
                     )
                 });
 
@@ -1472,7 +1695,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                 .clone()
                 .unwrap_or_else(|| agent.agent_id.clone());
             let turn_tool_log_ref = Arc::clone(&turn_tool_log);
-            let observer_tools = agent.current_tools.clone();
+            let observer_tools = channel_runtime::tool_defs(&agent.current_tools);
             let tool_result_observer = move |call: &ToolCall, result: &str| {
                 // Record mutation-type tool calls for activity log.
                 if let Some(entry) = format_tool_for_activity(call, &observer_tools) {
@@ -1538,6 +1761,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             // No per-user env var injection needed — Privy credentials are global env vars
             // and the agent obtains Molecule service tokens autonomously via the skill.
 
+            let turn_tools = channel_runtime::tool_defs(&agent.current_tools);
             let chat_runtime = ChatRuntimeService {
                 engine: agent.engine.as_ref(),
                 refiner: refiner.as_ref(),
@@ -1547,7 +1771,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                 history_turn_limit: agent.history_turn_limit,
                 compaction_policy: agent.compaction_policy,
                 system_prompt: turn_system_prompt,
-                tools: &agent.current_tools,
+                tools: &turn_tools,
                 tool_executor: sanitized_executor
                     .as_ref()
                     .map(|e| e as &dyn ToolExecutor),
@@ -1646,7 +1870,13 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 /// without quoting issues.
 fn sanitize_attachment_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -1707,13 +1937,19 @@ mod tests {
                 name: "write_file".into(),
                 description: "Write a file".into(),
                 parameters: serde_json::json!({}),
-                policy: Some(ToolPolicyMetadata { risk_level: ToolRiskLevel::Medium, requires_approval: true }),
+                policy: Some(ToolPolicyMetadata {
+                    risk_level: ToolRiskLevel::Medium,
+                    requires_approval: true,
+                }),
             },
             ToolDef {
                 name: "read_file".into(),
                 description: "Read a file".into(),
                 parameters: serde_json::json!({}),
-                policy: Some(ToolPolicyMetadata { risk_level: ToolRiskLevel::Low, requires_approval: false }),
+                policy: Some(ToolPolicyMetadata {
+                    risk_level: ToolRiskLevel::Low,
+                    requires_approval: false,
+                }),
             },
         ]
     }
@@ -1729,7 +1965,11 @@ mod tests {
         let result = format_tool_for_activity(&call, &tools);
         assert!(result.is_some());
         let text = result.unwrap();
-        assert!(text.contains("write_file"), "should contain the tool name: {}", text);
+        assert!(
+            text.contains("write_file"),
+            "should contain the tool name: {}",
+            text
+        );
     }
 
     #[test]

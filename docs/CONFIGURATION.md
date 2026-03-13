@@ -31,7 +31,7 @@ All configuration lives in a single TOML file at `~/.tengu/config.toml`. Copy `c
 [agents.main]
 default = true
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 ```
 
 This is enough to run `cargo run -- chat`. Everything else has sensible defaults.
@@ -126,7 +126,7 @@ Each agent is defined under `[agents.<AGENT_ID>]`. You need at least one agent. 
 [agents.main]
 default = true
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 workspace = "~/projects/my-app"
 default_lens = "eco"
 ```
@@ -143,7 +143,7 @@ default_lens = "eco"
 
 | Engine | API Style | Model ID Format | Example |
 |--------|----------|----------------|---------|
-| `openrouter` | OpenAI-compatible | `provider/model` | `anthropic/claude-sonnet-4` |
+| `openrouter` | OpenAI-compatible | `provider/model` | `nvidia/nemotron-3-super-120b-a12b:free` |
 | `anthropic` | Anthropic native | Anthropic model ID | `claude-sonnet-4-20250514` |
 | `openai` | OpenAI native | OpenAI model ID | `gpt-4o` |
 | `ollama` | Ollama HTTP | Ollama model name | `llama3.2` |
@@ -153,12 +153,11 @@ default_lens = "eco"
 **OpenRouter model examples:**
 
 ```toml
-model = "anthropic/claude-sonnet-4"        # Claude Sonnet 4
-model = "openai/gpt-4o"                    # GPT-4o
-model = "google/gemini-2.5-pro"            # Gemini 2.5 Pro
-model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
-model = "mistralai/mistral-large"          # Mistral Large
-model = "deepseek/deepseek-chat-v3"        # DeepSeek V3
+model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
+model = "google/gemini-2.5-flash"                 # Gemini Flash (cheap)
+model = "anthropic/claude-sonnet-4"               # Claude Sonnet 4 (premium)
+model = "openai/gpt-4o"                           # GPT-4o
+model = "deepseek/deepseek-chat-v3"               # DeepSeek V3 (cheap)
 ```
 
 ### Identity
@@ -329,17 +328,17 @@ For fleet orchestration agents:
 ```toml
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
-allowed_tools = ["read_file", "list_directory", "run_command"]
-skills = ["search", "test_runner"]
+capabilities = ["workspace.read", "workspace.list", "workspace.shell", "skill.search", "skill.test_runner"]
+skill_packages = ["search", "test_runner"]
 ```
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `role` | string? | none | Any non-empty string (e.g., `"qa"`, `"frontend_engineer"`, `"warehouse_manager"`). Used for task routing in orchestrator. |
-| `allowed_tools` | string[]? | none | Allowlist of workspace primitives. Omit to grant all. Options: `read_file`, `list_directory`, `write_file`, `run_command`. Subsystem tools (e.g., `remember`) are not affected by this filter. |
-| `skills` | string[]? | none | Allowlist of skill names. Omit for all skills. |
+| `capabilities` | string[] | `[]` | Hard runtime permissions. Examples: `workspace.read`, `workspace.write`, `workspace.shell`, `memory.remember`, `skill.aura_orchestrator`, `desci.poi.register`. |
+| `skill_packages` | string[] | `[]` | Skill/workflow packages to load into the agent prompt and tool registry. |
 
 Roles are fully dynamic — any non-empty string is valid. Define role-specific behavior through `identity.instructions`.
 
@@ -461,7 +460,7 @@ allowed_users = ["123456789", "987654321"]
 
 **Message chunking:** Telegram has a 4096-character message limit. Long responses are automatically split at paragraph (`\n\n`) boundaries into chunks of at most 4000 characters.
 
-**Multi-agent routing:** All configured agents are loaded at startup. Route messages to specific agents with `@role: message` (e.g., `@backend_engineer: add rate limiting`). Unrouted messages go to the default agent or the last agent the user talked to. Use `/agents` to list available agents. When using sandboxes (`tengu telegram --sandbox webstudio`), all sandbox agents are available.
+**Multi-agent routing:** All configured agents are loaded at startup. Route messages to specific agents with `@role: message` (e.g., `@backend_engineer: add rate limiting`). In multi-agent Telegram mode, unrouted plain messages go through the team orchestrator automatically. Use `/agents` to list available agents. When using sandboxes (`tengu telegram --sandbox webstudio`), all sandbox agents are available.
 
 **Per-user conversations:** Each Telegram user gets their own `ChatLoopState` per agent (keyed by sender + agent ID), following the agent's configured `flow.scope` setting.
 
@@ -477,7 +476,7 @@ allowed_users = ["123456789", "987654321"]
 
 | Command | Description |
 |---------|-------------|
-| `/team <goal>` | Decompose goal into tasks with dependencies, execute in parallel batches |
+| `/team <goal>` | Explicitly decompose goal into tasks with dependencies, execute in parallel batches |
 | `/project <name>` | Create a new project subfolder, switch all agents to it |
 | `/agents` | List available agents and their roles |
 | `/stop` | Cancel the current operation (works during `/team` orchestration) |

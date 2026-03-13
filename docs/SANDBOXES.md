@@ -30,7 +30,7 @@ Agents are fully dynamic. Any role string works — there are no hardcoded role 
 ```toml
 [agents.warehouse_manager]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "warehouse_manager"
 workspace = "~/logistics-project"
 allowed_tools = ["read_file", "list_directory", "run_command"]
@@ -101,11 +101,11 @@ All agents from the sandbox config are loaded. Route messages to specific agents
 @frontend_engineer: build a responsive hero section
 ```
 
-Messages without a prefix go to the default agent (or the last agent the user talked to).
+Messages without a prefix are orchestrated across the team automatically. Use `@role: message` when you want to force a specific agent.
 
 Commands:
 - `/agents` — List all available agents and their roles
-- `/team <goal>` — Plan and execute a goal across multiple agents (parallel batches with dependencies)
+- `/team <goal>` — Explicitly plan and execute a goal across multiple agents (parallel batches with dependencies)
 - `/project <name>` — Create a new project subfolder in the workspace (resets conversations)
 - `/help` — Show help
 - `/stop` — Cancel the current operation
@@ -117,7 +117,7 @@ Set `TELEGRAM_BOT_TOKEN` in your secrets vault or environment.
 
 ### Web Studio (`sandboxes/webstudio/`)
 
-A 5-agent web development team:
+A 4-agent web development team:
 - **system_designer** — System architecture, API contracts (full tools)
 - **designer** — Design tokens, specs, visual review (no shell)
 - **backend_engineer** — APIs, database, auth (full tools)

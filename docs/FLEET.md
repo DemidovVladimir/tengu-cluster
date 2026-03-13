@@ -39,7 +39,7 @@ max_retries = 3
 
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 workspace = "~/my-project"
 allowed_tools = ["read_file", "list_directory", "run_command"]
@@ -57,7 +57,7 @@ max_tokens_per_flow = 100_000
 
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/my-project"
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
@@ -103,23 +103,25 @@ Roles are dynamic strings — any non-empty value works. The orchestrator routes
 
 ### Tool Restrictions
 
-Use `allowed_tools` to restrict which workspace primitives an agent can access:
+Use `capabilities` to restrict what an agent can actually execute. Typical workspace capabilities are:
 
-| Primitive | Risk Level | Description |
-|-----------|-----------|-------------|
-| `read_file` | Low | Read file contents |
-| `list_directory` | Low | List files and directories |
-| `write_file` | Medium | Write/create files (requires approval) |
-| `run_command` | High | Execute shell commands (requires approval) |
+| Capability | Effect | Description |
+|-----------|--------|-------------|
+| `workspace.read` | read | Read file contents |
+| `workspace.list` | read | List files and directories |
+| `workspace.write` | write | Write/create files (requires approval) |
+| `workspace.shell` | shell_exec | Execute shell commands (requires approval) |
+| `memory.remember` | read | Store long-term memory entries |
 
-Subsystem tools (e.g., `remember` from the memory subsystem) are not affected by `allowed_tools`.
+Skill-defined tools require both a loaded `skill_packages` entry and a matching capability such as `skill.search` or `skill.privy`.
 
 ```toml
 # Read-only advisor
-allowed_tools = ["read_file", "list_directory"]
+capabilities = ["workspace.read", "workspace.list"]
 
-# Full access (or omit allowed_tools entirely)
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+# Shell-enabled agent
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
+skill_packages = ["search"]
 ```
 
 ### Mixing Models Per Role
@@ -129,17 +131,17 @@ Use different models for different roles — all on one OpenRouter bill:
 ```toml
 [agents.reviewer]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"    # Claude for careful analysis
+model = "nvidia/nemotron-3-super-120b-a12b:free"    # Nemotron 120B (free)
 role = "code_reviewer"
 
 [agents.coder]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"    # Claude for code generation
+model = "google/gemini-2.5-flash"                    # Gemini Flash (fast)
 role = "developer"
 
 [agents.planner]
 engine = "openrouter"
-model = "openai/gpt-4o"               # GPT for planning
+model = "openai/gpt-4o"                              # GPT-4o (premium)
 role = "project_manager"
 ```
 
@@ -177,12 +179,12 @@ Tasks flow through a state machine:
 
 ### Transitions
 
-| From | To | Trigger | Event Published |
-|------|----|---------|----------------|
-| Pending | InProgress | `assign_task()` | `TaskAssigned` |
-| InProgress | Completed | `complete_task()` | `TaskCompleted` |
-| InProgress | Failed | task failure | `TaskFailed` |
-| Failed | InProgress | `retry_failed_task()` (auto) | `TaskAssigned` |
+| From | To | Trigger |
+|------|----|---------|
+| Pending | InProgress | `assign_task()` |
+| InProgress | Completed | `complete_task()` |
+| InProgress | Failed | task failure |
+| Failed | InProgress | `retry_failed_task()` (auto) |
 
 Invalid transitions (e.g., Pending -> Completed, Completed -> InProgress) are rejected.
 
@@ -251,9 +253,11 @@ role = "developer"
 
 See [Skills Guide](SKILLS.md) for custom skills and [Sandboxes Guide](SANDBOXES.md) for domain-specific team setups.
 
-## Telegram Team Orchestration (`/team`)
+## Telegram Team Orchestration
 
-In Telegram mode, use `/team <goal>` to decompose a goal into tasks with dependency tracking and parallel execution:
+In Telegram multi-agent mode, plain messages are decomposed into tasks with dependency tracking and parallel execution automatically. Use `@role: message` to bypass the planner and talk to one agent directly. `/team <goal>` remains available when you want to make the team-planning step explicit.
+
+Example explicit planning command:
 
 ```
 /team Build a REST API with auth, write tests, and deploy docs
@@ -312,7 +316,7 @@ max_retries = 2
 
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 workspace = "~/my-project"
 allowed_tools = ["read_file", "list_directory", "run_command"]
@@ -330,7 +334,7 @@ max_tokens_per_flow = 100_000
 
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/my-project"
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]

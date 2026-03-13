@@ -40,13 +40,13 @@ cargo run -- chat
 curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
 ```
 
-The default config uses `anthropic/claude-sonnet-4` via OpenRouter. Change the model with one line:
+The default config uses `nvidia/nemotron-3-super-120b-a12b:free` via OpenRouter (free tier). Change the model with one line:
 
 ```toml
 [agents.main]
 default = true
 engine = "openrouter"
-model = "openai/gpt-4o"    # or google/gemini-2.5-pro, meta-llama/llama-4-maverick, etc.
+model = "google/gemini-2.5-flash"    # or anthropic/claude-sonnet-4, openai/gpt-4o, etc.
 ```
 
 See the [Quickstart Guide](docs/QUICKSTART.md) for the full walkthrough.
@@ -55,7 +55,7 @@ See the [Quickstart Guide](docs/QUICKSTART.md) for the full walkthrough.
 
 | Engine | API Key | Model Format |
 |--------|---------|-------------|
-| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `provider/model` (e.g. `anthropic/claude-sonnet-4`) |
+| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `provider/model` (e.g. `nvidia/nemotron-3-super-120b-a12b:free`) |
 | **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
 | **OpenAI** | `OPENAI_API_KEY` | `gpt-4o` |
 | **Ollama** | (none, local) | `llama3.2` |
@@ -90,7 +90,7 @@ cargo run -- secret remove K  # Remove a secret
 | `/reload` | Re-read env vars + re-scan skills |
 | `/skills` | List discovered skills |
 | `/enable N` / `/disable N` | Enable/disable a skill |
-| `/team <goal>` | Plan & execute goal across multiple agents (Telegram) |
+| `/team <goal>` | Explicitly plan & execute goal across multiple agents (Telegram) |
 | `/project <name>` | Create new project subfolder in workspace (Telegram) |
 | `/agents` | List available agents and roles (Telegram) |
 | `/wallet` | Show Privy wallet address and balance (Telegram) |
@@ -121,9 +121,10 @@ enabled = true
 
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
-allowed_tools = ["read_file", "list_directory", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.shell"]
+skill_packages = ["search", "test_runner"]
 
 [agents.qa.identity]
 name = "QA Agent"
@@ -131,9 +132,9 @@ instructions = "You review code, run tests, and verify correctness."
 
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 
 [agents.backend.identity]
 name = "Backend Engineer"
@@ -149,9 +150,9 @@ cargo run -- telegram --sandbox webstudio
 cargo run -- telegram --sandbox desci
 ```
 
-Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `allowed_tools` to restrict which workspace tools each agent can access.
+Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `capabilities` for hard runtime permissions and `skill_packages` for workflow-specific skill context.
 
-In Telegram, use `/team <goal>` to decompose a goal into tasks with dependency tracking. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+In Telegram multi-agent mode, plain messages are orchestrated across the team automatically, while `@role: message` forces a specific agent. `/team <goal>` remains available as an explicit planning command. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
 
 See the [Fleet Orchestration Guide](docs/FLEET.md), [Sandboxes Guide](docs/SANDBOXES.md) for full setup.
 
@@ -189,7 +190,7 @@ homepage: https://api.example.com
 Full API reference here — injected into the agent's system prompt.
 ```
 
-Agents call these tools during conversation. Restrict skills per agent with `skills = ["tool1", "tool2"]`.
+Agents call these tools during conversation. Load them per agent with `skill_packages = ["tool1", "tool2"]` and grant execution with matching `capabilities`.
 
 See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 

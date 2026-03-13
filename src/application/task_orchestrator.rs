@@ -43,7 +43,6 @@ impl<'a> TaskOrchestratorService<'a> {
         self.store.save_task(&task)?;
         Ok(())
     }
-
 }
 
 #[cfg(test)]

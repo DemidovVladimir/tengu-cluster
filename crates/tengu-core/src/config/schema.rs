@@ -123,6 +123,7 @@ fn default_refiner_mode() -> String {
 
 /// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default)]
     pub default: bool,
@@ -143,13 +144,12 @@ pub struct AgentConfig {
     /// Fleet orchestration role (qa|backend_engineer|integration_master).
     #[serde(default)]
     pub role: Option<String>,
-    /// Skill allowlist — `None` means all skills, `Some(names)` restricts.
+    /// Explicit runtime capabilities enforced by the runtime.
     #[serde(default)]
-    pub skills: Option<Vec<String>>,
-    /// Workspace tool allowlist — `None` means all tools, `Some(names)` restricts.
-    /// Valid names: read_file, list_directory, write_file, run_command, remember.
+    pub capabilities: Vec<String>,
+    /// Optional workflow/document packages loaded into the prompt and tool registry.
     #[serde(default)]
-    pub allowed_tools: Option<Vec<String>>,
+    pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
 }
@@ -684,6 +684,15 @@ impl Config {
             );
         }
 
+        for capability in &agent.capabilities {
+            if let Err(e) = validate_capability_id(capability) {
+                errors.push(format!(
+                    "agents.{agent_id}.capabilities entry '{}' is invalid: {}",
+                    capability, e
+                ));
+            }
+        }
+
         errors.require(
             agent.lens.eco_max_tokens > 0,
             format!("agents.{agent_id}.lens.eco_max_tokens must be greater than 0"),
@@ -764,8 +773,8 @@ impl Default for Config {
                 limits: LimitsConfig::default(),
                 lens: LensConfig::default(),
                 role: None,
-                skills: None,
-                allowed_tools: None,
+                capabilities: vec![],
+                skill_packages: vec![],
                 prompt_budget: PromptBudgetConfig::default(),
             },
         );
@@ -781,6 +790,19 @@ impl Default for Config {
             scaffold: None,
         }
     }
+}
+
+fn validate_capability_id(value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err("cannot be empty".to_string());
+    }
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err("must use lowercase letters, digits, dot, underscore, or hyphen".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -816,5 +838,30 @@ mod tests {
         assert!(err
             .to_string()
             .contains("cannot exceed context_window_override"));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_capability_id() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.capabilities = vec!["Bad Capability".to_string()];
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("capabilities entry"));
+    }
+
+    #[test]
+    fn parse_rejects_legacy_agent_fields() {
+        let raw = r#"
+[agents.main]
+default = true
+engine = "ollama"
+model = "llama3.2"
+skills = ["search"]
+allowed_tools = ["read_file"]
+"#;
+
+        let err = toml::from_str::<Config>(raw).expect_err("legacy agent fields should fail");
+        assert!(err.to_string().contains("unknown field"));
     }
 }

@@ -21,15 +21,16 @@ use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
-use crate::application::skill_registry::SkillRegistry;
 use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
+use crate::application::skill_registry::SkillRegistry;
+use crate::domain::capability::{parse_capability_set, RegisteredTool};
 use crate::domain::chat::resolve_history_turn_limit;
-use crate::domain::skill::SkillStatus;
 use crate::domain::secret_registry::SecretRegistry;
+use crate::domain::skill::SkillStatus;
 use crate::resolve_tengu_home;
 use app::{BubbleRole, ChatRequest, SkillCommand};
 use tengu_core::config::{Config, RuntimeProfile};
-use tengu_core::types::{ToolCall, ToolDef};
+use tengu_core::types::ToolCall;
 use tengu_core::Refiner;
 use tengu_optimizer::{NoopRefiner, RuleRefiner};
 
@@ -200,11 +201,13 @@ pub fn run_tui(
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_handle.is_some();
+        let agent_capabilities = parse_capability_set(&engine_agent_config.capabilities)
+            .expect("agent capabilities should validate");
 
         let mut base_tools = channel_runtime::compute_base_tools(
             uses_tools,
             has_memory,
-            engine_agent_config.allowed_tools.as_deref(),
+            &engine_agent_config.capabilities,
         );
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
@@ -212,8 +215,9 @@ pub fn run_tui(
             .as_ref()
             .map(|ws| FileSystemSkillSource::new(ws.clone()));
 
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved);
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.def.name.clone()).collect();
+        let mut skill_registry = SkillRegistry::new(base_reserved)
+            .with_allowlist(Some(engine_agent_config.skill_packages.clone()));
 
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
@@ -230,7 +234,7 @@ pub fn run_tui(
         });
 
         let mut tools_dirty = true;
-        let mut current_tools: Vec<ToolDef> = vec![];
+        let mut current_tools: Vec<RegisteredTool> = vec![];
         let mut current_executor: Option<channel_runtime::ToolServiceExecutor> = None;
         let mut current_system_prompt = system_prompt;
 
@@ -299,7 +303,7 @@ pub fn run_tui(
                         let new_base = channel_runtime::compute_base_tools(
                             uses_tools,
                             has_memory,
-                            engine_agent_config.allowed_tools.as_deref(),
+                            &engine_agent_config.capabilities,
                         );
                         let env_changed = new_base.len() != base_tools.len();
                         base_tools = new_base;
@@ -322,7 +326,11 @@ pub fn run_tui(
 
                         // Always force a full rebuild to pick up env + skill changes.
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                            current_tools = channel_runtime::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                                &agent_capabilities,
+                            );
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
@@ -331,6 +339,7 @@ pub fn run_tui(
                                 &secret_registry,
                                 Arc::clone(&approval),
                                 Arc::clone(&activity),
+                                None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -373,18 +382,27 @@ pub fn run_tui(
                             skill = skill_name,
                         );
                         // Don't respond via response_tx — instead drop into a chat turn.
-                        let _ = response_tx.send(format!("Running /{} {}…", cmd_name, args).trim().to_string());
+                        let _ = response_tx.send(
+                            format!("Running /{} {}…", cmd_name, args)
+                                .trim()
+                                .to_string(),
+                        );
 
                         // Hot-reload + rebuild if dirty.
                         if let Some(ref src) = skill_source {
                             if skill_registry.reload(src) {
                                 tools_dirty = true;
-                                skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
+                                skill_command_router =
+                                    SkillCommandRouter::from_registry(&skill_registry);
                             }
                         }
                         if tools_dirty {
                             if let Some(ref ws) = workspace {
-                                current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                                current_tools = channel_runtime::rebuild_tools(
+                                    &base_tools,
+                                    &skill_registry,
+                                    &agent_capabilities,
+                                );
                                 current_executor = channel_runtime::build_tool_executor(
                                     ws,
                                     &current_tools,
@@ -393,6 +411,7 @@ pub fn run_tui(
                                     &secret_registry,
                                     Arc::clone(&approval),
                                     Arc::clone(&activity),
+                                    None,
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
@@ -409,6 +428,7 @@ pub fn run_tui(
                             let sanitized_executor = current_executor.as_ref().map(|e| {
                                 SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                             });
+                            let tool_defs = channel_runtime::tool_defs(&current_tools);
 
                             let chat_runtime = ChatRuntimeService {
                                 engine: engine.as_ref(),
@@ -419,7 +439,7 @@ pub fn run_tui(
                                 history_turn_limit,
                                 compaction_policy,
                                 system_prompt: current_system_prompt.clone(),
-                                tools: &current_tools,
+                                tools: &tool_defs,
                                 tool_executor: sanitized_executor
                                     .as_ref()
                                     .map(|e| e as &dyn ToolExecutor),
@@ -495,14 +515,19 @@ pub fn run_tui(
                     if let Some(ref src) = skill_source {
                         if skill_registry.reload(src) {
                             tools_dirty = true;
-                            skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
+                            skill_command_router =
+                                SkillCommandRouter::from_registry(&skill_registry);
                         }
                     }
 
                     // Rebuild tools/executor/prompt when dirty.
                     if tools_dirty {
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                            current_tools = channel_runtime::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                                &agent_capabilities,
+                            );
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
@@ -511,6 +536,7 @@ pub fn run_tui(
                                 &secret_registry,
                                 Arc::clone(&approval),
                                 Arc::clone(&activity),
+                                None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -529,6 +555,7 @@ pub fn run_tui(
                         let sanitized_executor = current_executor.as_ref().map(|e| {
                             SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                         });
+                        let tool_defs = channel_runtime::tool_defs(&current_tools);
 
                         let chat_runtime = ChatRuntimeService {
                             engine: engine.as_ref(),
@@ -539,7 +566,7 @@ pub fn run_tui(
                             history_turn_limit,
                             compaction_policy,
                             system_prompt: current_system_prompt.clone(),
-                            tools: &current_tools,
+                            tools: &tool_defs,
                             tool_executor: sanitized_executor
                                 .as_ref()
                                 .map(|e| e as &dyn ToolExecutor),

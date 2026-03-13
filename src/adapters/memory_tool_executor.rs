@@ -7,11 +7,12 @@
 
 use crate::application::memory_service::MemoryService;
 use crate::application::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
+use crate::domain::capability::{CapabilityId, EffectClass, RegisteredTool};
 use crate::domain::secret_registry::SecretRegistry;
 use anyhow::Result;
 use serde_json::json;
 use std::sync::Arc;
-use tengu_core::types::{ToolCall, ToolDef, ToolPolicyMetadata, ToolRiskLevel};
+use tengu_core::types::ToolCall;
 
 /// Shared handle owning the embedding + store ports for Arc-based sharing.
 ///
@@ -74,11 +75,11 @@ impl MemoryToolExecutionAdapter {
 }
 
 /// Return tool definitions owned by the memory subsystem.
-pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
-    vec![ToolDef {
-        name: "remember".into(),
-        description: "Store a fact or insight in long-term memory for future retrieval across sessions.".into(),
-        parameters: json!({
+pub(crate) fn memory_tool_defs() -> Vec<RegisteredTool> {
+    vec![RegisteredTool::new(
+        "remember",
+        "Store a fact or insight in long-term memory for future retrieval across sessions.",
+        json!({
             "type": "object",
             "properties": {
                 "content": {
@@ -88,11 +89,9 @@ pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
             },
             "required": ["content"]
         }),
-        policy: Some(ToolPolicyMetadata {
-            risk_level: ToolRiskLevel::Low,
-            requires_approval: false,
-        }),
-    }]
+        CapabilityId::new("memory.remember").expect("static capability is valid"),
+        EffectClass::Read,
+    )]
 }
 
 impl ToolExecutionPort for MemoryToolExecutionAdapter {

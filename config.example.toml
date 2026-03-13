@@ -117,14 +117,14 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
-# Use allowed_tools to restrict workspace tools per agent.
+# Use capabilities for hard permissions and skill_packages for workflow docs/tools.
 
 # [agents.qa]
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "qa"
-# allowed_tools = ["read_file", "list_directory", "run_command"]
-# skills = ["search", "test_runner"]
+# capabilities = ["workspace.read", "workspace.list", "workspace.shell", "skill.search", "skill.test_runner"]
+# skill_packages = ["search", "test_runner"]
 #
 # [agents.qa.identity]
 # name = "QA Agent"
@@ -141,7 +141,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "backend_engineer"
-# allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+# capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 #
 # [agents.backend.identity]
 # name = "Backend Engineer"

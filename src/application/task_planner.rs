@@ -9,6 +9,83 @@ use std::collections::HashMap;
 use tengu_core::types::{Message, Role};
 use tengu_core::{Engine, EngineContext};
 
+/// Routing decision from the lightweight classifier.
+pub(crate) enum RouteDecision {
+    /// Request can be handled by a single agent. Contains the role key.
+    SingleAgent(String),
+    /// Request requires multi-agent planning.
+    MultiAgent,
+}
+
+/// Lightweight LLM classifier that decides whether a request needs one agent
+/// or full multi-agent planning. Much cheaper than `generate_plan`.
+pub(crate) async fn classify_request(
+    engine: &dyn Engine,
+    message: &str,
+    agent_descriptions: &HashMap<String, String>,
+) -> Result<RouteDecision> {
+    let mut team = String::new();
+    for (role, desc) in agent_descriptions {
+        team.push_str(&format!("- {} : {}\n", role, desc));
+    }
+
+    let system = format!(
+        "You are a request router for a multi-agent team.\n\n\
+         Team members:\n{}\n\
+         Given a user request, decide:\n\
+         1. If ONE agent can fully handle it alone, respond: {{\"route\":\"single\",\"role\":\"exact_role_key\"}}\n\
+         2. If it needs MULTIPLE agents or is a compound goal, respond: {{\"route\":\"multi\"}}\n\n\
+         Rules:\n\
+         - Choose \"single\" when the request clearly falls under one agent's expertise\n\
+         - Choose \"multi\" when the request involves work across multiple domains, requires coordination, or has multiple distinct deliverables\n\
+         - Use ONLY the exact role keys listed above\n\
+         - Respond with ONLY valid JSON, no markdown fences, no extra text",
+        team
+    );
+
+    let messages = vec![Message {
+        role: Role::User,
+        content: message.to_string(),
+        tool_call_id: None,
+        tool_calls: None,
+    }];
+
+    let context = EngineContext {
+        workspace: None,
+        system_prompt: Some(system),
+    };
+
+    let response =
+        collect_engine_response(engine, &messages, &[], &context, None, None, None).await?;
+
+    parse_route_decision(&response.text, agent_descriptions)
+}
+
+/// Parse the classifier's JSON response into a `RouteDecision`.
+/// Falls back to `MultiAgent` on any parse failure or unknown role.
+fn parse_route_decision(
+    text: &str,
+    agent_descriptions: &HashMap<String, String>,
+) -> Result<RouteDecision> {
+    let json_str = match extract_json(text) {
+        Some(j) => j,
+        None => return Ok(RouteDecision::MultiAgent),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(_) => return Ok(RouteDecision::MultiAgent),
+    };
+    let route = value.get("route").and_then(|v| v.as_str()).unwrap_or("multi");
+    if route == "single" {
+        if let Some(role) = value.get("role").and_then(|v| v.as_str()) {
+            if agent_descriptions.contains_key(role) {
+                return Ok(RouteDecision::SingleAgent(role.to_string()));
+            }
+        }
+    }
+    Ok(RouteDecision::MultiAgent)
+}
+
 /// A single task in an execution plan.
 pub(crate) struct PlanTask {
     /// Unique identifier for this task (e.g. "research", "mint").
@@ -300,6 +377,39 @@ mod tests {
         let batches = resolve_execution_order(&tasks).unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0], vec![0, 1]);
+    }
+
+    #[test]
+    fn parse_route_decision_single() {
+        let mut descs = HashMap::new();
+        descs.insert("researcher".to_string(), "Research agent".to_string());
+        descs.insert("minter".to_string(), "Minting agent".to_string());
+        let result =
+            parse_route_decision(r#"{"route":"single","role":"researcher"}"#, &descs).unwrap();
+        assert!(matches!(result, RouteDecision::SingleAgent(r) if r == "researcher"));
+    }
+
+    #[test]
+    fn parse_route_decision_multi() {
+        let descs = HashMap::new();
+        let result = parse_route_decision(r#"{"route":"multi"}"#, &descs).unwrap();
+        assert!(matches!(result, RouteDecision::MultiAgent));
+    }
+
+    #[test]
+    fn parse_route_decision_unknown_role_falls_back() {
+        let mut descs = HashMap::new();
+        descs.insert("researcher".to_string(), "Research agent".to_string());
+        let result =
+            parse_route_decision(r#"{"route":"single","role":"nonexistent"}"#, &descs).unwrap();
+        assert!(matches!(result, RouteDecision::MultiAgent));
+    }
+
+    #[test]
+    fn parse_route_decision_invalid_json_falls_back() {
+        let descs = HashMap::new();
+        let result = parse_route_decision("not json at all", &descs).unwrap();
+        assert!(matches!(result, RouteDecision::MultiAgent));
     }
 
     #[test]

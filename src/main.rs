@@ -94,8 +94,10 @@ enum SecretAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load encrypted secrets vault first (higher priority), then .env.
-    // Shell env vars always win (load_secrets_into_env won't overwrite existing vars).
+    // Load .env first (highest priority after shell env), then vault.
+    // This way .env values are never redacted, while vault-only secrets are.
+    dotenvy::dotenv().ok();
+
     let tengu_home = resolve_tengu_home();
     let secrets_path = tengu_home.join("secrets.vault");
     let mut secret_registry = SecretRegistry::new();
@@ -134,7 +136,6 @@ async fn main() -> Result<()> {
         }
     }
     let secret_registry = std::sync::Arc::new(secret_registry);
-    dotenvy::dotenv().ok();
 
     let cli = Cli::parse();
 

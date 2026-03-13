@@ -1,4 +1,6 @@
 pub(crate) mod agent_role;
+pub(crate) mod approval;
+pub(crate) mod capability;
 pub(crate) mod chat;
 pub(crate) mod memory;
 pub(crate) mod secret_registry;

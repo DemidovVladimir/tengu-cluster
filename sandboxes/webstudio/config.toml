@@ -94,7 +94,7 @@ max_tokens_per_flow = 100_000
 
 [agents.designer]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "designer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file"]
@@ -121,7 +121,7 @@ max_tokens_per_flow = 80_000
 
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
@@ -148,7 +148,7 @@ max_tokens_per_flow = 100_000
 
 [agents.tech_writer]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "tech_writer"
 workspace = "~/webstudio-project"
 allowed_tools = ["read_file", "list_directory", "write_file"]

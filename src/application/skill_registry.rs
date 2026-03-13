@@ -4,11 +4,12 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::application::ports::SkillSourcePort;
+use crate::domain::capability::RegisteredTool;
 use crate::domain::skill::{
-    api_skill_preamble, diff_skill_sets, parse_skill_file, skill_to_tool_def, validate_skill,
-    FreshSkillEntry, ParsedSkill, SkillDefinition, SkillDiff, SkillEntry, SkillStatus,
+    api_skill_preamble, diff_skill_sets, parse_skill_file, skill_to_registered_tool,
+    validate_skill, FreshSkillEntry, ParsedSkill, SkillDefinition, SkillDiff, SkillEntry,
+    SkillStatus,
 };
-use tengu_core::types::ToolDef;
 
 /// Application-layer registry for discovered skills.
 ///
@@ -17,6 +18,9 @@ use tengu_core::types::ToolDef;
 pub(crate) struct SkillRegistry {
     entries: HashMap<String, SkillEntry>,
     reserved_names: Vec<String>,
+    /// Optional allowlist from agent config `skill_packages` field.
+    /// `None` = all skills allowed; `Some(vec)` = only listed names.
+    skill_allowlist: Option<Vec<String>>,
 }
 
 impl SkillRegistry {
@@ -25,7 +29,14 @@ impl SkillRegistry {
         Self {
             entries: HashMap::new(),
             reserved_names: reserved,
+            skill_allowlist: None,
         }
+    }
+
+    /// Set the agent's skill package allowlist.
+    pub(crate) fn with_allowlist(mut self, allowlist: Option<Vec<String>>) -> Self {
+        self.skill_allowlist = allowlist;
+        self
     }
 
     /// Re-scan the source, parse, diff, and apply changes.
@@ -83,6 +94,11 @@ impl SkillRegistry {
             }
         }
 
+        // Apply skill allowlist: if set, only keep skills whose name is in the list.
+        if let Some(ref allowlist) = self.skill_allowlist {
+            fresh.retain(|e| allowlist.iter().any(|a| a == &e.name));
+        }
+
         let diff: SkillDiff = diff_skill_sets(&self.entries, &fresh);
         if diff.is_empty() {
             return false;
@@ -136,12 +152,12 @@ impl SkillRegistry {
         true
     }
 
-    /// Tool definitions for only active skills.
-    pub(crate) fn active_tool_defs(&self) -> Vec<ToolDef> {
+    /// Capability-bound tool registrations for only active skills.
+    pub(crate) fn active_tools(&self) -> Vec<RegisteredTool> {
         self.entries
             .values()
             .filter(|e| e.status == SkillStatus::Active)
-            .map(|e| skill_to_tool_def(&e.definition))
+            .map(|e| skill_to_registered_tool(&e.definition))
             .collect()
     }
 
@@ -350,12 +366,12 @@ Documentation body here.
         let mut reg = SkillRegistry::new(vec![]);
         reg.reload(&source);
 
-        assert_eq!(reg.active_tool_defs().len(), 1);
+        assert_eq!(reg.active_tools().len(), 1);
         assert!(reg.disable("greet").unwrap());
-        assert!(reg.active_tool_defs().is_empty());
+        assert!(reg.active_tools().is_empty());
         assert!(!reg.disable("greet").unwrap()); // already disabled
         assert!(reg.enable("greet").unwrap());
-        assert_eq!(reg.active_tool_defs().len(), 1);
+        assert_eq!(reg.active_tools().len(), 1);
         assert!(!reg.enable("greet").unwrap()); // already enabled
     }
 
@@ -382,12 +398,12 @@ Documentation body here.
         let mut reg = SkillRegistry::new(vec![]);
         reg.reload(&source);
 
-        assert_eq!(reg.active_tool_defs().len(), 2);
+        assert_eq!(reg.active_tools().len(), 2);
         assert_eq!(reg.active_skill_definitions().len(), 2);
         assert_eq!(reg.active_context_fragments().len(), 1); // only API skill
 
         reg.disable("my_api").unwrap();
-        assert_eq!(reg.active_tool_defs().len(), 1);
+        assert_eq!(reg.active_tools().len(), 1);
         assert!(reg.active_context_fragments().is_empty());
     }
 

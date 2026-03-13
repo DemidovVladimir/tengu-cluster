@@ -7,26 +7,8 @@
 //! Subsystem tools (e.g., `remember` from memory) are owned by their respective
 //! adapter modules, not this catalog.
 
+use crate::domain::capability::{CapabilityId, EffectClass, RegisteredTool};
 use serde_json::json;
-use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
-
-fn tool_def(
-    name: &str,
-    description: &str,
-    parameters: serde_json::Value,
-    risk_level: ToolRiskLevel,
-    requires_approval: bool,
-) -> ToolDef {
-    ToolDef {
-        name: name.into(),
-        description: description.into(),
-        parameters,
-        policy: Some(ToolPolicyMetadata {
-            risk_level,
-            requires_approval,
-        }),
-    }
-}
 
 fn path_only_schema(path_description: &str) -> serde_json::Value {
     json!({
@@ -42,23 +24,23 @@ fn path_only_schema(path_description: &str) -> serde_json::Value {
 }
 
 /// Build the set of workspace tool definitions to pass to engine.run().
-pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
+pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
     vec![
-        tool_def(
+        RegisteredTool::new(
             "read_file",
             "Read the contents of a file in the workspace. Supports text files and PDF documents — PDF text is extracted automatically.",
             path_only_schema("File path relative to the workspace root"),
-            ToolRiskLevel::Low,
-            false,
+            CapabilityId::new("workspace.read").expect("static capability is valid"),
+            EffectClass::Read,
         ),
-        tool_def(
+        RegisteredTool::new(
             "list_directory",
             "List files and directories at a path in the workspace.",
             path_only_schema("Directory path relative to the workspace root. Use '.' for the root."),
-            ToolRiskLevel::Low,
-            false,
+            CapabilityId::new("workspace.list").expect("static capability is valid"),
+            EffectClass::Read,
         ),
-        tool_def(
+        RegisteredTool::new(
             "write_file",
             "Write content to a file in the workspace. Creates parent directories if needed.",
             json!({
@@ -75,10 +57,10 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
                 },
                 "required": ["path", "content"]
             }),
-            ToolRiskLevel::Medium,
-            true,
+            CapabilityId::new("workspace.write").expect("static capability is valid"),
+            EffectClass::Write,
         ),
-        tool_def(
+        RegisteredTool::new(
             "run_command",
             "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files.",
             json!({
@@ -91,29 +73,11 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
                 },
                 "required": ["command"]
             }),
-            ToolRiskLevel::High,
-            true,
+            CapabilityId::new("workspace.shell").expect("static capability is valid"),
+            EffectClass::ShellExec,
         ),
     ]
 }
-
-/// Filter workspace tools by an allowlist.
-///
-/// If `allowed` is `None`, all tools pass through. If `Some(names)`, only
-/// tools whose name appears in the list are kept.
-pub(crate) fn filter_tools_by_allowlist(
-    tools: Vec<ToolDef>,
-    allowed: Option<&[String]>,
-) -> Vec<ToolDef> {
-    match allowed {
-        None => tools,
-        Some(names) => tools
-            .into_iter()
-            .filter(|t| names.iter().any(|n| n == &t.name))
-            .collect(),
-    }
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -123,10 +87,10 @@ mod tests {
     fn build_workspace_tools_returns_four() {
         let tools = build_workspace_tools();
         assert_eq!(tools.len(), 4);
-        assert_eq!(tools[0].name, "read_file");
-        assert_eq!(tools[1].name, "list_directory");
-        assert_eq!(tools[2].name, "write_file");
-        assert_eq!(tools[3].name, "run_command");
-        assert!(tools[3].policy.as_ref().unwrap().requires_approval);
+        assert_eq!(tools[0].def.name, "read_file");
+        assert_eq!(tools[1].def.name, "list_directory");
+        assert_eq!(tools[2].def.name, "write_file");
+        assert_eq!(tools[3].def.name, "run_command");
+        assert!(tools[3].def.policy.as_ref().unwrap().requires_approval);
     }
 }

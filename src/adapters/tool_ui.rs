@@ -47,26 +47,44 @@ pub(crate) fn summarize_tool_args(args: &serde_json::Value) -> String {
     // Fallback: show all as key=value pairs.
     let parts: Vec<String> = obj
         .iter()
-        .filter_map(|(k, v)| v.as_str().map(|s| format!("{}={}", k, truncate_detail(s, 60))))
+        .filter_map(|(k, v)| {
+            v.as_str()
+                .map(|s| format!("{}={}", k, truncate_detail(s, 60)))
+        })
         .collect();
     parts.join(" ")
 }
 
+/// Maximum number of characters to show in the approval preview.
+const PREVIEW_MAX_CHARS: usize = 300;
+
 /// Format tool arguments as a readable preview for approval dialogs.
+///
+/// Long values (e.g., multi-line curl commands) are truncated to keep the
+/// dialog manageable — the agent should explain the action beforehand.
 fn format_args_preview(args: &serde_json::Value) -> String {
     let obj = match args.as_object() {
         Some(m) if !m.is_empty() => m,
         _ => return String::new(),
     };
 
-    let parts: Vec<String> = obj
-        .iter()
-        .filter_map(|(k, v)| {
-            let s = v.as_str()?;
-            Some(format!("{}: {}", k, s))
-        })
-        .collect();
-    parts.join("\n")
+    let mut out = String::new();
+    for (k, v) in obj {
+        let s = match v.as_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let line = format!("{}: {}", k, s);
+        let remaining = PREVIEW_MAX_CHARS.saturating_sub(out.len());
+        if remaining == 0 {
+            break;
+        }
+        out.push_str(&truncate_detail(&line, remaining));
+    }
+    out
 }
 
 /// Convert "run_command" → "Run Command", "write_file" → "Write File".

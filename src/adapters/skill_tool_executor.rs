@@ -1,7 +1,7 @@
 //! Adapter that executes skill-based tools via shell commands.
 
 use crate::application::ports::{ShellExecutionPort, ToolExecutionPort};
-use crate::domain::skill::{render_command, SkillDefinition};
+use crate::domain::skill::{render_command, SkillDefinition, SkillExecution};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,7 +38,16 @@ impl ToolExecutionPort for SkillToolExecutionAdapter {
             .skills
             .get(&call.name)
             .ok_or_else(|| anyhow::anyhow!("Unknown skill: {}", call.name))?;
-        let command = render_command(&skill.execution_template, &call.arguments)?;
+        let template = match &skill.execution {
+            SkillExecution::Shell { template } => template,
+            SkillExecution::Api(_) => {
+                return Err(anyhow::anyhow!(
+                    "API skill '{}' cannot execute through the shell adapter",
+                    call.name
+                ))
+            }
+        };
+        let command = render_command(template, &call.arguments)?;
         tracing::info!(skill = %call.name, command = %command, "Executing skill tool");
         let result = self.shell.execute_shell(&command, &self.workspace);
         match &result {

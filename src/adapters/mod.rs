@@ -1,5 +1,7 @@
+pub(crate) mod api_skill_executor;
 pub(crate) mod channel_runtime;
 pub(crate) mod composite_tool_executor;
+pub(crate) mod desci_tools;
 pub(crate) mod doctor_probe;
 pub(crate) mod embedding;
 pub(crate) mod engine_factory;

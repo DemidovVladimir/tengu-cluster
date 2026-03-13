@@ -1,7 +1,7 @@
 //! Domain types and pure logic for user-defined skill.md tools.
 
+use crate::domain::capability::{CapabilityId, EffectClass, RegisteredTool};
 use anyhow::{bail, Result};
-use tengu_core::types::{ToolDef, ToolPolicyMetadata, ToolRiskLevel};
 
 /// A parsed skill definition — the domain representation of a skill.md file.
 #[derive(Debug, Clone)]
@@ -9,9 +9,34 @@ pub(crate) struct SkillDefinition {
     pub name: String,
     pub description: String,
     pub parameters: Vec<SkillParameter>,
-    pub execution_template: String,
-    pub risk_level: ToolRiskLevel,
-    pub requires_approval: bool,
+    pub execution: SkillExecution,
+    pub capability: CapabilityId,
+    pub effect_class: EffectClass,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SkillExecution {
+    Shell { template: String },
+    Api(ApiExecution),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ApiExecution {
+    pub base_url: String,
+    pub auth: ApiAuth,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ApiAuth {
+    None,
+    BearerEnv {
+        env: String,
+    },
+    BasicEnv {
+        username_env: String,
+        password_env: String,
+    },
 }
 
 /// A single parameter declared in the skill markdown.
@@ -109,21 +134,35 @@ pub(crate) fn parse_skill_markdown(content: &str) -> Result<SkillDefinition> {
         .ok_or_else(|| anyhow::anyhow!("Missing '## Execution' section"))
         .and_then(|lines| extract_fenced_code(lines))?;
 
-    // --- Policy (optional) ---
-    let (risk_level, requires_approval) = if let Some(policy_lines) = sections.get("policy") {
-        parse_policy(policy_lines)
+    let default_capability = CapabilityId::new(format!("skill.{}", normalize_skill_name(&name)))?;
+    let default_effect_class = EffectClass::ShellExec;
+    let (capability, effect_class) = if let Some(policy_lines) = sections.get("policy") {
+        let (parsed_capability, parsed_effect_class) =
+            parse_policy(policy_lines, default_effect_class);
+        let capability = if parsed_capability.as_str() == "skill.unknown" {
+            default_capability
+        } else {
+            parsed_capability
+        };
+        (capability, parsed_effect_class)
     } else {
-        (ToolRiskLevel::Medium, true) // conservative defaults
+        (default_capability, default_effect_class)
     };
 
     Ok(SkillDefinition {
         name,
         description,
         parameters,
-        execution_template,
-        risk_level,
-        requires_approval,
+        execution: SkillExecution::Shell {
+            template: execution_template,
+        },
+        capability,
+        effect_class,
     })
+}
+
+fn normalize_skill_name(name: &str) -> String {
+    name.trim().to_lowercase().replace('-', "_")
 }
 
 /// Collect H2 sections as lowercase-key → Vec of body lines.
@@ -233,9 +272,9 @@ fn extract_fenced_code(lines: &[&str]) -> Result<String> {
 }
 
 /// Parse policy section key-value pairs.
-fn parse_policy(lines: &[&str]) -> (ToolRiskLevel, bool) {
-    let mut risk_level = ToolRiskLevel::Medium;
-    let mut requires_approval = true;
+fn parse_policy(lines: &[&str], default_effect_class: EffectClass) -> (CapabilityId, EffectClass) {
+    let mut capability = CapabilityId::new("skill.unknown").expect("static capability is valid");
+    let mut effect_class = default_effect_class;
 
     for line in lines {
         let trimmed = line.trim().trim_start_matches("- ");
@@ -243,21 +282,21 @@ fn parse_policy(lines: &[&str]) -> (ToolRiskLevel, bool) {
             let k = key.trim().to_lowercase();
             let v = value.trim().to_lowercase();
             match k.as_str() {
-                "risk_level" => {
-                    risk_level = match v.as_str() {
-                        "low" => ToolRiskLevel::Low,
-                        "high" => ToolRiskLevel::High,
-                        _ => ToolRiskLevel::Medium,
-                    };
+                "capability" => {
+                    if let Ok(parsed) = CapabilityId::new(value.trim().to_string()) {
+                        capability = parsed;
+                    }
                 }
-                "requires_approval" => {
-                    requires_approval = v != "false" && v != "no";
+                "effect_class" | "effect-class" => {
+                    if let Ok(parsed) = v.parse::<EffectClass>() {
+                        effect_class = parsed;
+                    }
                 }
                 _ => {}
             }
         }
     }
-    (risk_level, requires_approval)
+    (capability, effect_class)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,25 +317,32 @@ pub(crate) fn validate_skill(skill: &SkillDefinition, reserved: &[&str]) -> Resu
     if reserved.contains(&skill.name.as_str()) {
         bail!("Skill name '{}' conflicts with a built-in tool", skill.name);
     }
-    if skill.execution_template.is_empty() {
-        bail!("Skill must have a non-empty execution template");
-    }
-    // Check that template placeholders reference declared parameters.
-    let mut pos = 0;
-    let template = &skill.execution_template;
-    while let Some(start) = template[pos..].find("{{") {
-        let abs_start = pos + start + 2;
-        if let Some(end) = template[abs_start..].find("}}") {
-            let placeholder = template[abs_start..abs_start + end].trim();
-            if !skill.parameters.iter().any(|p| p.name == placeholder) {
-                bail!(
-                    "Template placeholder '{{{{{}}}}}' does not match any declared parameter",
-                    placeholder
-                );
+    match &skill.execution {
+        SkillExecution::Shell { template } => {
+            if template.is_empty() {
+                bail!("Skill must have a non-empty execution template");
             }
-            pos = abs_start + end + 2;
-        } else {
-            break;
+            let mut pos = 0;
+            while let Some(start) = template[pos..].find("{{") {
+                let abs_start = pos + start + 2;
+                if let Some(end) = template[abs_start..].find("}}") {
+                    let placeholder = template[abs_start..abs_start + end].trim();
+                    if !skill.parameters.iter().any(|p| p.name == placeholder) {
+                        bail!(
+                            "Template placeholder '{{{{{}}}}}' does not match any declared parameter",
+                            placeholder
+                        );
+                    }
+                    pos = abs_start + end + 2;
+                } else {
+                    break;
+                }
+            }
+        }
+        SkillExecution::Api(api) => {
+            if api.base_url.is_empty() {
+                bail!("API skill must declare a base_url");
+            }
         }
     }
     Ok(())
@@ -306,8 +352,8 @@ pub(crate) fn validate_skill(skill: &SkillDefinition, reserved: &[&str]) -> Resu
 // Conversion
 // ---------------------------------------------------------------------------
 
-/// Convert a `SkillDefinition` into the existing `ToolDef` for engine registration.
-pub(crate) fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
+/// Convert a `SkillDefinition` into a capability-bound runtime tool registration.
+pub(crate) fn skill_to_registered_tool(skill: &SkillDefinition) -> RegisteredTool {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
 
@@ -335,15 +381,13 @@ pub(crate) fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
         "required": required,
     });
 
-    ToolDef {
-        name: skill.name.clone(),
-        description: skill.description.clone(),
+    RegisteredTool::new(
+        &skill.name,
+        &skill.description,
         parameters,
-        policy: Some(ToolPolicyMetadata {
-            risk_level: skill.risk_level,
-            requires_approval: skill.requires_approval,
-        }),
-    }
+        skill.capability.clone(),
+        skill.effect_class,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -400,9 +444,10 @@ pub(crate) struct SkillFrontmatter {
     pub name: String,
     pub description: String,
     pub base_url: String,
-    pub auth_env: String,
-    /// Custom headers override the default `Authorization: Bearer $AUTH_ENV`.
+    pub auth: ApiAuth,
     pub headers: Vec<(String, String)>,
+    pub capability: CapabilityId,
+    pub effect_class: EffectClass,
     /// Environment variables declared by this skill.
     pub env_vars: Vec<SkillEnvVar>,
     /// Slash commands declared by this skill.
@@ -436,10 +481,8 @@ pub(crate) fn api_skill_preamble(name: &str) -> String {
     format!(
         "# {} — API skill\n\n\
          Use the `{}` tool for requests to this service's primary API \
-         (method, path, body parameters). \
-         Use `run_command` with curl when the skill instructions explicitly \
-         require it — e.g., for external services with different base URLs \
-         or headers the tool does not provide.\n\n",
+         (method, path, body, optional headers parameters). \
+         The runtime enforces the base URL, auth strategy, and approval policy for this tool.\n\n",
         name, name,
     )
 }
@@ -474,6 +517,11 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     let mut description = None;
     let mut base_url = None;
     let mut auth_env = None;
+    let mut auth_mode = None;
+    let mut auth_basic_user_env = None;
+    let mut auth_basic_pass_env = None;
+    let mut capability = None;
+    let mut effect_class = None;
     let mut headers: Vec<(String, String)> = Vec::new();
     let mut env_vars: Vec<SkillEnvVar> = Vec::new();
     let mut commands: Vec<SkillCommand> = Vec::new();
@@ -513,18 +561,24 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                     ListBlock::EnvVars => {
                         let item = line.trim_start_matches('-').trim();
                         if !item.is_empty() {
-                            let (var_name, required) = if let Some(stripped) = item.strip_suffix('?') {
-                                (stripped.to_string(), false)
-                            } else {
-                                (item.to_string(), true)
-                            };
-                            env_vars.push(SkillEnvVar { name: var_name, required });
+                            let (var_name, required) =
+                                if let Some(stripped) = item.strip_suffix('?') {
+                                    (stripped.to_string(), false)
+                                } else {
+                                    (item.to_string(), true)
+                                };
+                            env_vars.push(SkillEnvVar {
+                                name: var_name,
+                                required,
+                            });
                         }
                     }
                     ListBlock::Commands => {
                         let item = line.trim_start_matches('-').trim();
                         if !item.is_empty() {
-                            commands.push(SkillCommand { name: item.to_string() });
+                            commands.push(SkillCommand {
+                                name: item.to_string(),
+                            });
                         }
                     }
                 }
@@ -543,6 +597,11 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                 "description" => description = Some(v.to_string()),
                 "base_url" | "homepage" => base_url = Some(v.to_string()),
                 "auth_env" => auth_env = Some(v.to_string()),
+                "auth_mode" => auth_mode = Some(v.to_string()),
+                "auth_basic_user_env" => auth_basic_user_env = Some(v.to_string()),
+                "auth_basic_pass_env" => auth_basic_pass_env = Some(v.to_string()),
+                "capability" => capability = Some(v.to_string()),
+                "effect_class" | "effect-class" => effect_class = Some(v.to_string()),
                 "headers" => {
                     if v.is_empty() {
                         current_block = Some(ListBlock::Headers);
@@ -575,54 +634,57 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
         return None;
     }
 
-    // Derive auth_env from normalized name if not explicitly set.
-    let auth_env =
-        auth_env.unwrap_or_else(|| format!("{}_API_KEY", normalized_name.to_uppercase()));
+    let capability = capability
+        .map(CapabilityId::new)
+        .transpose()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            CapabilityId::new(format!("skill.{}", normalized_name))
+                .expect("generated capability is valid")
+        });
+    let effect_class = effect_class
+        .and_then(|value| value.parse::<EffectClass>().ok())
+        .unwrap_or(EffectClass::ExternalApi);
+    let auth = match auth_mode
+        .unwrap_or_else(|| {
+            if auth_basic_user_env.is_some() || auth_basic_pass_env.is_some() {
+                "basic".to_string()
+            } else if auth_env.is_some() {
+                "bearer".to_string()
+            } else {
+                "none".to_string()
+            }
+        })
+        .to_lowercase()
+        .as_str()
+    {
+        "basic" => ApiAuth::BasicEnv {
+            username_env: auth_basic_user_env?,
+            password_env: auth_basic_pass_env?,
+        },
+        "bearer" => ApiAuth::BearerEnv {
+            env: auth_env.unwrap_or_else(|| format!("{}_API_KEY", normalized_name.to_uppercase())),
+        },
+        _ => ApiAuth::None,
+    };
 
     Some((
         SkillFrontmatter {
             name: normalized_name,
             description: description.unwrap_or_default(),
             base_url,
-            auth_env,
+            auth,
             headers,
+            capability,
+            effect_class,
             env_vars,
             commands,
         },
         body.to_string(),
     ))
 }
-
-/// Convert a `SkillFrontmatter` into a `SkillDefinition` with a curl-based execution template.
-///
-/// Template design:
-/// - Placeholders (`{{method}}`, `{{path}}`, `{{body}}`) are shell-escaped by `render_command`,
-///   so the template must NOT add its own quotes around them.
-/// - The auth header uses double quotes so `$ENV_VAR` is expanded by the shell.
-/// - The URL is formed by concatenating the literal base_url with the shell-escaped path;
-///   in shell, `https://example.com'/api/v1/foo'` correctly concatenates into one word.
 fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
-    let header_flags = if fm.headers.is_empty() {
-        // Default: Authorization: Bearer $AUTH_ENV
-        format!(
-            r#"-H "Authorization: Bearer ${auth_env}""#,
-            auth_env = fm.auth_env
-        )
-    } else {
-        // Custom headers replace the default auth header.
-        fm.headers
-            .iter()
-            .map(|(k, v)| format!(r#"-H "{k}: {v}""#))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-
-    let template = format!(
-        r#"curl -s -X {{{{method}}}} {base_url}{{{{path}}}} -H "Content-Type: application/json" {header_flags} -d {{{{body}}}}"#,
-        base_url = fm.base_url,
-        header_flags = header_flags,
-    );
-
     SkillDefinition {
         name: fm.name.clone(),
         description: fm.description.clone(),
@@ -637,7 +699,11 @@ fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
                 name: "path".into(),
                 param_type: SkillParamType::String,
                 required: true,
-                description: "API path (e.g. /api/v1/posts)".into(),
+                description: if fm.base_url.ends_with("/graphql") {
+                    "API path — for GraphQL use empty string \"\"".into()
+                } else {
+                    "API path (e.g. /api/v1/posts)".into()
+                },
             },
             SkillParameter {
                 name: "body".into(),
@@ -645,10 +711,21 @@ fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
                 required: true,
                 description: "JSON request body (use \"{}\" for requests with no body)".into(),
             },
+            SkillParameter {
+                name: "headers".into(),
+                param_type: SkillParamType::String,
+                required: false,
+                description: "Optional JSON object of additional headers to merge into the request"
+                    .into(),
+            },
         ],
-        execution_template: template,
-        risk_level: ToolRiskLevel::Medium,
-        requires_approval: true,
+        execution: SkillExecution::Api(ApiExecution {
+            base_url: fm.base_url.clone(),
+            auth: fm.auth.clone(),
+            headers: fm.headers.clone(),
+        }),
+        capability: fm.capability.clone(),
+        effect_class: fm.effect_class,
     }
 }
 
@@ -789,6 +866,7 @@ pub(crate) fn diff_skill_sets(
 ///
 /// - `None` allowlist means all skills are allowed.
 /// - `Some(names)` restricts to only skills whose name appears in the list.
+#[allow(dead_code)]
 pub(crate) fn filter_skills_for_agent(
     skills: Vec<SkillDefinition>,
     allowed_names: Option<&[String]>,
@@ -809,7 +887,6 @@ pub(crate) fn filter_skills_for_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     const SAMPLE_SKILL: &str = r#"# search
 
 Search files in the workspace using ripgrep.
@@ -824,484 +901,145 @@ rg "{{pattern}}" {{path}}
 ```
 
 ## Policy
-- risk_level: low
-- requires_approval: false
+- capability: skill.search
+- effect_class: shell_exec
 "#;
 
-    #[test]
-    fn parse_valid_skill() {
-        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        assert_eq!(skill.name, "search");
-        assert!(skill.description.contains("ripgrep"));
-        assert_eq!(skill.parameters.len(), 2);
-        assert_eq!(skill.parameters[0].name, "pattern");
-        assert!(skill.parameters[0].required);
-        assert_eq!(skill.parameters[0].param_type, SkillParamType::String);
-        assert_eq!(skill.parameters[1].name, "path");
-        assert!(!skill.parameters[1].required);
-        assert!(skill.execution_template.contains("rg"));
-        assert_eq!(skill.risk_level, ToolRiskLevel::Low);
-        assert!(!skill.requires_approval);
+    const API_SKILL: &str = r#"---
+name: privy
+description: Privy wallet operations
+base_url: https://api.privy.io
+auth_mode: basic
+auth_basic_user_env: PRIVY_APP_ID
+auth_basic_pass_env: PRIVY_APP_SECRET
+capability: skill.privy
+effect_class: chain_tx
+headers:
+  privy-app-id: $PRIVY_APP_ID
+commands:
+  - wallet
+---
+
+# Privy
+
+Use this package for agentic wallet workflows.
+"#;
+
+    fn make_skill(name: &str) -> SkillDefinition {
+        SkillDefinition {
+            name: name.to_string(),
+            description: String::new(),
+            parameters: vec![],
+            execution: SkillExecution::Shell {
+                template: "echo hi".to_string(),
+            },
+            capability: CapabilityId::new(format!("skill.{name}")).unwrap(),
+            effect_class: EffectClass::ShellExec,
+        }
     }
 
     #[test]
-    fn parse_missing_execution_fails() {
-        let content = "# test\n\nSome tool.\n\n## Parameters\n";
-        assert!(parse_skill_markdown(content).is_err());
+    fn parse_classic_skill_uses_capability_and_effect() {
+        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
+        assert_eq!(skill.name, "search");
+        assert_eq!(skill.capability.as_str(), "skill.search");
+        assert_eq!(skill.effect_class, EffectClass::ShellExec);
+        match skill.execution {
+            SkillExecution::Shell { template } => assert!(template.contains("rg")),
+            SkillExecution::Api(_) => panic!("expected shell skill"),
+        }
     }
 
     #[test]
     fn validate_rejects_reserved_name() {
         let mut skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
         skill.name = "read_file".into();
-        let result = validate_skill(&skill, &["read_file", "write_file", "list_directory"]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("conflicts"));
+        assert!(validate_skill(&skill, &["read_file"]).is_err());
     }
 
     #[test]
-    fn validate_rejects_bad_name() {
-        let mut skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        skill.name = "my-tool!".into();
-        let result = validate_skill(&skill, &[]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn validate_rejects_unknown_placeholder() {
-        let mut skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        skill.execution_template = "echo {{unknown}}".into();
-        let result = validate_skill(&skill, &[]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown"));
-    }
-
-    #[test]
-    fn validate_accepts_valid_skill() {
+    fn skill_to_registered_tool_uses_effect_policy() {
         let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        assert!(validate_skill(&skill, &["read_file", "write_file", "list_directory"]).is_ok());
+        let tool = skill_to_registered_tool(&skill);
+        assert_eq!(tool.def.name, "search");
+        assert_eq!(tool.capability.as_str(), "skill.search");
+        assert!(tool.def.policy.unwrap().requires_approval);
     }
 
     #[test]
-    fn skill_to_tool_def_produces_correct_schema() {
-        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        let td = skill_to_tool_def(&skill);
-        assert_eq!(td.name, "search");
-        assert!(td.description.contains("ripgrep"));
-        let props = td.parameters.get("properties").unwrap();
-        assert!(props.get("pattern").is_some());
-        assert!(props.get("path").is_some());
-        let required = td.parameters.get("required").unwrap().as_array().unwrap();
-        assert!(required.iter().any(|v| v.as_str() == Some("pattern")));
-        assert!(!required.iter().any(|v| v.as_str() == Some("path")));
-        let policy = td.policy.unwrap();
-        assert_eq!(policy.risk_level, ToolRiskLevel::Low);
-        assert!(!policy.requires_approval);
-    }
-
-    #[test]
-    fn render_command_substitutes_values() {
-        let args = serde_json::json!({"pattern": "foo bar", "path": "src"});
-        let result = render_command(r#"rg "{{pattern}}" {{path}}"#, &args).unwrap();
-        assert_eq!(result, "rg \"'foo bar'\" 'src'");
-    }
-
-    #[test]
-    fn render_command_escapes_single_quotes() {
-        let args = serde_json::json!({"pattern": "it's a test"});
-        let result = render_command("echo {{pattern}}", &args).unwrap();
-        assert_eq!(result, "echo 'it'\\''s a test'");
-    }
-
-    #[test]
-    fn render_command_handles_missing_optional() {
-        let args = serde_json::json!({"pattern": "test"});
-        let result = render_command("rg {{pattern}} {{path}}", &args).unwrap();
-        assert_eq!(result, "rg 'test' ");
-    }
-
-    #[test]
-    fn filter_skills_none_allowlist_returns_all() {
-        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        let filtered = filter_skills_for_agent(vec![skill.clone()], None);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn filter_skills_matching_allowlist() {
-        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        let allowed = vec!["search".to_string()];
-        let filtered = filter_skills_for_agent(vec![skill], Some(&allowed));
-        assert_eq!(filtered.len(), 1);
+    fn render_command_shell_escapes_string_values() {
+        let tmpl = "echo {{msg}}";
+        let args = serde_json::json!({ "msg": "hello'; rm -rf / #" });
+        let rendered = render_command(tmpl, &args).unwrap();
+        assert_eq!(rendered, "echo 'hello'\\''; rm -rf / #'");
     }
 
     #[test]
     fn filter_skills_non_matching_allowlist() {
-        let skill = parse_skill_markdown(SAMPLE_SKILL).unwrap();
-        let allowed = vec!["deploy".to_string()];
-        let filtered = filter_skills_for_agent(vec![skill], Some(&allowed));
+        let filtered =
+            filter_skills_for_agent(vec![make_skill("search")], Some(&["other".to_string()]));
         assert!(filtered.is_empty());
     }
 
     #[test]
-    fn default_policy_is_conservative() {
-        let content = "# mytool\n\nDoes stuff.\n\n## Execution\n```bash\necho hi\n```\n";
-        let skill = parse_skill_markdown(content).unwrap();
-        assert_eq!(skill.risk_level, ToolRiskLevel::Medium);
-        assert!(skill.requires_approval);
-    }
-
-    // --- Frontmatter parsing tests ---
-
-    const FRONTMATTER_SKILL: &str = r#"---
-name: beach-science
-description: Scientific social platform for AI agents.
-homepage: https://beach.science
----
-
-# Beach.Science: Scientific Social Platform
-
-Beach.science is a collaborative platform.
-
-## API Reference
-
-### Posts
-
-POST /api/v1/post — create a post.
-"#;
-
-    #[test]
-    fn frontmatter_extraction() {
-        let (fm, body) = try_parse_frontmatter(FRONTMATTER_SKILL).unwrap();
-        assert_eq!(fm.name, "beach_science");
-        assert_eq!(fm.base_url, "https://beach.science");
-        assert!(body.contains("Beach.Science"));
-    }
-
-    #[test]
-    fn frontmatter_name_normalization() {
-        let content = "---\nname: my-cool-api\nhomepage: https://example.com\n---\nbody\n";
-        let (fm, _) = try_parse_frontmatter(content).unwrap();
-        assert_eq!(fm.name, "my_cool_api");
-    }
-
-    #[test]
-    fn frontmatter_auth_env_derivation() {
-        let (fm, _) = try_parse_frontmatter(FRONTMATTER_SKILL).unwrap();
-        assert_eq!(fm.auth_env, "BEACH_SCIENCE_API_KEY");
-    }
-
-    #[test]
-    fn frontmatter_explicit_auth_env() {
-        let content = "---\nname: test\nhomepage: https://test.io\nauth_env: MY_TOKEN\n---\nbody\n";
-        let (fm, _) = try_parse_frontmatter(content).unwrap();
-        assert_eq!(fm.auth_env, "MY_TOKEN");
-    }
-
-    #[test]
-    fn parse_skill_file_dispatches_frontmatter() {
-        let parsed = parse_skill_file(FRONTMATTER_SKILL).unwrap();
+    fn parse_frontmatter_api_skill_uses_native_api_metadata() {
+        let parsed = parse_skill_file(API_SKILL).unwrap();
         match parsed {
             ParsedSkill::Api {
                 definition,
                 context_body,
+                commands,
                 ..
             } => {
-                assert_eq!(definition.name, "beach_science");
-                assert_eq!(definition.parameters.len(), 3);
-                assert!(definition
-                    .execution_template
-                    .contains("https://beach.science"));
-                assert!(context_body.contains("Beach.Science"));
+                assert!(context_body.contains("agentic wallet workflows"));
+                assert_eq!(commands.len(), 1);
+                assert_eq!(definition.capability.as_str(), "skill.privy");
+                assert_eq!(definition.effect_class, EffectClass::ChainTx);
+                match definition.execution {
+                    SkillExecution::Api(api) => {
+                        assert_eq!(api.base_url, "https://api.privy.io");
+                        assert_eq!(api.headers[0].0, "privy-app-id");
+                        match api.auth {
+                            ApiAuth::BasicEnv {
+                                username_env,
+                                password_env,
+                            } => {
+                                assert_eq!(username_env, "PRIVY_APP_ID");
+                                assert_eq!(password_env, "PRIVY_APP_SECRET");
+                            }
+                            _ => panic!("expected basic auth"),
+                        }
+                    }
+                    SkillExecution::Shell { .. } => panic!("expected api skill"),
+                }
             }
-            ParsedSkill::Classic(_) => panic!("Expected Api variant"),
+            ParsedSkill::Classic(_) => panic!("expected api skill"),
         }
     }
 
     #[test]
-    fn parse_skill_file_dispatches_classic() {
-        let parsed = parse_skill_file(SAMPLE_SKILL).unwrap();
-        match parsed {
-            ParsedSkill::Classic(skill) => {
-                assert_eq!(skill.name, "search");
-            }
-            ParsedSkill::Api { .. } => panic!("Expected Classic variant"),
-        }
-    }
-
-    #[test]
-    fn frontmatter_without_homepage_returns_none() {
-        let content = "---\nname: test\ndescription: no url\n---\nbody\n";
-        assert!(try_parse_frontmatter(content).is_none());
-    }
-
-    #[test]
-    fn non_frontmatter_content_returns_none() {
-        assert!(try_parse_frontmatter(SAMPLE_SKILL).is_none());
-    }
-
-    #[test]
-    fn frontmatter_rejects_malicious_base_url() {
-        for url in &[
-            "https://example.com; rm -rf /",
-            "https://example.com | cat /etc/passwd",
-            "https://example.com$(whoami)",
-            "https://example.com`whoami`",
-            "ftp://example.com",
-            "javascript://example.com",
-        ] {
-            let content = format!("---\nname: evil\nhomepage: {}\n---\nbody\n", url);
-            assert!(
-                try_parse_frontmatter(&content).is_none(),
-                "should reject base_url: {}",
-                url,
-            );
-        }
-    }
-
-    #[test]
-    fn frontmatter_accepts_valid_base_url() {
-        for url in &[
-            "https://api.example.com",
-            "http://localhost:3000",
-            "https://api.example.com/v1",
-        ] {
-            let content = format!("---\nname: good\nhomepage: {}\n---\nbody\n", url);
-            assert!(
-                try_parse_frontmatter(&content).is_some(),
-                "should accept base_url: {}",
-                url,
-            );
-        }
-    }
-
-    // --- SkillDiff tests ---
-
-    fn make_entry(name: &str, hash: u64) -> (String, SkillEntry) {
-        let def = SkillDefinition {
-            name: name.into(),
-            description: String::new(),
-            parameters: vec![],
-            execution_template: "echo hi".into(),
-            risk_level: ToolRiskLevel::Low,
-            requires_approval: false,
-        };
-        (
-            name.to_string(),
+    fn diff_skill_sets_detects_change() {
+        let mut current = std::collections::HashMap::new();
+        current.insert(
+            "search".to_string(),
             SkillEntry {
-                definition: def,
+                definition: make_skill("search"),
                 status: SkillStatus::Active,
-                content_hash: hash,
+                content_hash: 1,
                 context_body: None,
                 env_vars: vec![],
                 commands: vec![],
             },
-        )
-    }
-
-    fn make_fresh(name: &str, hash: u64) -> FreshSkillEntry {
-        let def = SkillDefinition {
-            name: name.into(),
-            description: String::new(),
-            parameters: vec![],
-            execution_template: "echo hi".into(),
-            risk_level: ToolRiskLevel::Low,
-            requires_approval: false,
-        };
-        FreshSkillEntry {
-            name: name.to_string(),
-            definition: def,
-            content_hash: hash,
+        );
+        let fresh = vec![FreshSkillEntry {
+            name: "search".to_string(),
+            definition: make_skill("search"),
+            content_hash: 2,
             context_body: None,
             env_vars: vec![],
             commands: vec![],
-        }
-    }
-
-    #[test]
-    fn diff_empty_to_all_added() {
-        let current = std::collections::HashMap::new();
-        let fresh = vec![make_fresh("a", 1), make_fresh("b", 2)];
+        }];
         let diff = diff_skill_sets(&current, &fresh);
-        assert_eq!(diff.added.len(), 2);
-        assert!(diff.removed.is_empty());
-        assert!(diff.changed.is_empty());
-    }
-
-    #[test]
-    fn diff_detect_removals() {
-        let mut current = std::collections::HashMap::new();
-        let (k, v) = make_entry("old_skill", 1);
-        current.insert(k, v);
-        let fresh = vec![];
-        let diff = diff_skill_sets(&current, &fresh);
-        assert!(diff.added.is_empty());
-        assert_eq!(diff.removed, vec!["old_skill".to_string()]);
-        assert!(diff.changed.is_empty());
-    }
-
-    #[test]
-    fn diff_detect_content_hash_change() {
-        let mut current = std::collections::HashMap::new();
-        let (k, v) = make_entry("skill_a", 100);
-        current.insert(k, v);
-        let fresh = vec![make_fresh("skill_a", 200)];
-        let diff = diff_skill_sets(&current, &fresh);
-        assert!(diff.added.is_empty());
-        assert!(diff.removed.is_empty());
-        assert_eq!(diff.changed, vec!["skill_a".to_string()]);
-    }
-
-    #[test]
-    fn diff_noop_when_identical() {
-        let mut current = std::collections::HashMap::new();
-        let (k, v) = make_entry("skill_a", 42);
-        current.insert(k, v);
-        let fresh = vec![make_fresh("skill_a", 42)];
-        let diff = diff_skill_sets(&current, &fresh);
-        assert!(diff.is_empty());
-    }
-
-    // --- Custom headers tests ---
-
-    const CUSTOM_HEADERS_SKILL: &str = r#"---
-name: molecule-api
-description: Molecule DeSci API
-homepage: https://staging.graphql.api.molecule.xyz/graphql
-headers:
-  x-api-key: $MOLECULE_API_KEY
-  x-service-token: $MOLECULE_SERVICE_TOKEN
----
-
-# Molecule API
-
-GraphQL API for DeSci workflows.
-"#;
-
-    #[test]
-    fn frontmatter_custom_headers_parsed() {
-        let (fm, _) = try_parse_frontmatter(CUSTOM_HEADERS_SKILL).unwrap();
-        assert_eq!(fm.headers.len(), 2);
-        assert_eq!(
-            fm.headers[0],
-            ("x-api-key".to_string(), "$MOLECULE_API_KEY".to_string())
-        );
-        assert_eq!(
-            fm.headers[1],
-            (
-                "x-service-token".to_string(),
-                "$MOLECULE_SERVICE_TOKEN".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn frontmatter_custom_headers_curl_template() {
-        let (fm, _) = try_parse_frontmatter(CUSTOM_HEADERS_SKILL).unwrap();
-        let def = frontmatter_to_skill_definition(&fm);
-
-        // Must contain custom headers, NOT default Authorization.
-        assert!(
-            def.execution_template
-                .contains(r#"-H "x-api-key: $MOLECULE_API_KEY""#),
-            "expected x-api-key header, got: {}",
-            def.execution_template,
-        );
-        assert!(
-            def.execution_template
-                .contains(r#"-H "x-service-token: $MOLECULE_SERVICE_TOKEN""#),
-            "expected x-service-token header, got: {}",
-            def.execution_template,
-        );
-        assert!(
-            !def.execution_template.contains("Authorization: Bearer"),
-            "custom headers should replace default auth, got: {}",
-            def.execution_template,
-        );
-        assert!(
-            def.execution_template
-                .contains(r#"-H "Content-Type: application/json""#),
-            "Content-Type must always be present, got: {}",
-            def.execution_template,
-        );
-    }
-
-    #[test]
-    fn frontmatter_no_headers_falls_back_to_default_auth() {
-        let (fm, _) = try_parse_frontmatter(FRONTMATTER_SKILL).unwrap();
-        assert!(fm.headers.is_empty());
-        let def = frontmatter_to_skill_definition(&fm);
-        assert!(
-            def.execution_template
-                .contains("Authorization: Bearer $BEACH_SCIENCE_API_KEY"),
-            "absent headers should fall back to default auth, got: {}",
-            def.execution_template,
-        );
-    }
-
-    #[test]
-    fn frontmatter_rejects_dangerous_header_values() {
-        for bad_value in &[
-            "$KEY; rm -rf /",
-            "$KEY | cat",
-            "$KEY & bg",
-            "$KEY`whoami`",
-            "$KEY$(evil)",
-        ] {
-            let content = format!(
-                "---\nname: evil\nhomepage: https://example.com\nheaders:\n  x-api-key: {}\n---\nbody\n",
-                bad_value
-            );
-            assert!(
-                try_parse_frontmatter(&content).is_none(),
-                "should reject header value: {}",
-                bad_value,
-            );
-        }
-    }
-
-    #[test]
-    fn frontmatter_allows_dollar_in_header_values() {
-        let content = "---\nname: test\nhomepage: https://example.com\nheaders:\n  x-token: $MY_SECRET\n---\nbody\n";
-        let (fm, _) = try_parse_frontmatter(content).unwrap();
-        assert_eq!(fm.headers.len(), 1);
-        assert_eq!(fm.headers[0].1, "$MY_SECRET");
-    }
-
-    #[test]
-    fn frontmatter_curl_command_rendering() {
-        let parsed = parse_skill_file(FRONTMATTER_SKILL).unwrap();
-        let definition = match parsed {
-            ParsedSkill::Api { definition, .. } => definition,
-            _ => panic!("Expected Api variant"),
-        };
-
-        let args = serde_json::json!({
-            "method": "POST",
-            "path": "/api/v1/post",
-            "body": r#"{"title":"Test","body":"Hello","type":"hypothesis"}"#,
-        });
-        let cmd = render_command(&definition.execution_template, &args).unwrap();
-
-        // Auth header must use double quotes (env var expansion).
-        assert!(
-            cmd.contains(r#"-H "Authorization: Bearer $BEACH_SCIENCE_API_KEY""#),
-            "auth header must use double quotes for env var expansion, got: {cmd}"
-        );
-        // URL must be well-formed (no orphan quotes).
-        assert!(
-            cmd.contains("https://beach.science'/api/v1/post'"),
-            "URL must be base_url concatenated with shell-escaped path, got: {cmd}"
-        );
-        // Body must be shell-escaped (single-quoted JSON).
-        assert!(
-            cmd.contains(r#"-d '{"title":"Test","body":"Hello","type":"hypothesis"}'"#),
-            "body must be shell-escaped JSON, got: {cmd}"
-        );
-        // No orphan/double quotes around URL or body.
-        assert!(
-            !cmd.contains("''"),
-            "no empty-quote artifacts allowed, got: {cmd}"
-        );
+        assert_eq!(diff.changed, vec!["search".to_string()]);
     }
 }

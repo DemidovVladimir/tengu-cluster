@@ -31,10 +31,17 @@ impl ToolUseService {
     pub(crate) fn execute(&self, call: &ToolCall) -> Result<String> {
         self.activity.publish_tool_activity(call);
 
+        if !self.policies.is_allowed(&call.name) {
+            return Ok(format!(
+                "Tool '{}' is not available to this agent.",
+                call.name
+            ));
+        }
+
         if self.policies.requires_approval(&call.name)
             && !self.approval.request_tool_approval(call)?
         {
-            return Ok("Write denied by user.".to_string());
+            return Ok("Tool execution denied by user.".to_string());
         }
 
         self.execution.execute_tool(call)
@@ -45,9 +52,10 @@ impl ToolUseService {
 mod tests {
     use super::*;
     use crate::application::ports::{ToolActivityPort, ToolApprovalPort, ToolExecutionPort};
+    use crate::domain::capability::{CapabilityId, EffectClass, RegisteredTool};
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tengu_core::types::{ToolCall, ToolDef, ToolPolicyMetadata, ToolRiskLevel};
+    use tengu_core::types::ToolCall;
 
     struct TestActivity {
         calls: Arc<AtomicUsize>,
@@ -87,16 +95,19 @@ mod tests {
         }
     }
 
-    fn tool(name: &str, requires_approval: bool) -> ToolDef {
-        ToolDef {
-            name: name.into(),
-            description: String::new(),
-            parameters: json!({}),
-            policy: Some(ToolPolicyMetadata {
-                risk_level: ToolRiskLevel::Low,
-                requires_approval,
-            }),
-        }
+    fn tool(name: &str, effect_class: EffectClass) -> RegisteredTool {
+        let capability = match name {
+            "read_file" => "workspace.read",
+            "write_file" => "workspace.write",
+            _ => "workspace.shell",
+        };
+        RegisteredTool::new(
+            name,
+            "",
+            json!({}),
+            CapabilityId::new(capability).unwrap(),
+            effect_class,
+        )
     }
 
     #[test]
@@ -105,7 +116,7 @@ mod tests {
         let approval_calls = Arc::new(AtomicUsize::new(0));
         let execution_called = Arc::new(AtomicBool::new(false));
         let service = ToolUseService::new(
-            ToolPolicyCatalog::from_tools(&[tool("write_file", true)]),
+            ToolPolicyCatalog::from_tools(&[tool("write_file", EffectClass::Write)]),
             Arc::new(TestActivity {
                 calls: activity_calls.clone(),
             }),
@@ -119,7 +130,7 @@ mod tests {
         );
 
         let result = service.execute(&call("write_file")).unwrap();
-        assert_eq!(result, "Write denied by user.");
+        assert_eq!(result, "Tool execution denied by user.");
         assert_eq!(activity_calls.load(Ordering::Relaxed), 1);
         assert_eq!(approval_calls.load(Ordering::Relaxed), 1);
         assert!(!execution_called.load(Ordering::Relaxed));
@@ -128,7 +139,7 @@ mod tests {
     #[test]
     fn service_executes_tool_without_approval_when_policy_allows() {
         let service = ToolUseService::new(
-            ToolPolicyCatalog::from_tools(&[tool("read_file", false)]),
+            ToolPolicyCatalog::from_tools(&[tool("read_file", EffectClass::Read)]),
             Arc::new(TestActivity {
                 calls: Arc::new(AtomicUsize::new(0)),
             }),
@@ -143,5 +154,25 @@ mod tests {
 
         let result = service.execute(&call("read_file")).unwrap();
         assert_eq!(result, "ok");
+    }
+
+    #[test]
+    fn service_denies_unknown_tool_even_if_executor_supports_it() {
+        let service = ToolUseService::new(
+            ToolPolicyCatalog::from_tools(&[tool("read_file", EffectClass::Read)]),
+            Arc::new(TestActivity {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(TestApproval {
+                allow: true,
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(TestExecution {
+                called: Arc::new(AtomicBool::new(false)),
+            }),
+        );
+
+        let result = service.execute(&call("run_command")).unwrap();
+        assert_eq!(result, "Tool 'run_command' is not available to this agent.");
     }
 }

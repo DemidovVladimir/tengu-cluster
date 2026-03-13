@@ -11,7 +11,7 @@
 //! - **Memory subsystem initialization** — `build_memory_handle`
 //! - **Base tool computation** — `compute_base_tools` (workspace primitives +
 //!   subsystem tools)
-//! - **Agent routing** — `parse_agent_routing`, `infer_agent_from_keywords`
+//! - **Agent routing** — `parse_agent_routing`
 //! - **Message chunking** — `chunk_message` (for channels with length limits)
 //! - **State factories** — `create_chat_loop_state`
 //! - **Skill list formatting** — `format_skill_list`
@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::adapters::api_skill_executor::ApiSkillExecutionAdapter;
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
+use crate::adapters::desci_tools::{desci_tool_defs, DesciToolExecutionAdapter};
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::memory_store::DiskVectorMemoryStore;
 use crate::adapters::memory_tool_executor::{
@@ -36,13 +38,17 @@ use crate::application::engine_runtime::ToolExecutor;
 use crate::application::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::{build_workspace_tools, filter_tools_by_allowlist};
+use crate::application::workspace_tools_catalog::build_workspace_tools;
+use crate::domain::capability::{
+    filter_tools_by_capability, parse_capability_set, CapabilityId, RegisteredTool,
+};
 use crate::domain::chat::ChatLoopState;
 use crate::domain::secret_registry::SecretRegistry;
+use crate::domain::skill::SkillExecution;
 use crate::domain::skill::SkillStatus;
 use crate::domain::tool_policy::ToolPolicyCatalog;
 use tengu_core::config::AgentConfig;
-use tengu_core::types::{ToolCall, ToolDef};
+use tengu_core::types::ToolCall;
 use tengu_core::Lens;
 
 // ---------------------------------------------------------------------------
@@ -67,11 +73,19 @@ impl ToolExecutor for ToolServiceExecutor {
 // Tool, executor, and prompt rebuilding
 // ---------------------------------------------------------------------------
 
-/// Merge base workspace tools with active skill tools.
-pub(crate) fn rebuild_tools(base_tools: &[ToolDef], skill_registry: &SkillRegistry) -> Vec<ToolDef> {
+pub(crate) fn tool_defs(tools: &[RegisteredTool]) -> Vec<tengu_core::types::ToolDef> {
+    tools.iter().map(|tool| tool.def.clone()).collect()
+}
+
+/// Merge base workspace tools with active skill tools and filter by capabilities.
+pub(crate) fn rebuild_tools(
+    base_tools: &[RegisteredTool],
+    skill_registry: &SkillRegistry,
+    capabilities: &HashSet<CapabilityId>,
+) -> Vec<RegisteredTool> {
     let mut tools = base_tools.to_vec();
-    tools.extend(skill_registry.active_tool_defs());
-    tools
+    tools.extend(skill_registry.active_tools());
+    filter_tools_by_capability(tools, capabilities)
 }
 
 /// Rebuild the system prompt from agent config, skill registry state, and active tools.
@@ -79,7 +93,7 @@ pub(crate) fn rebuild_system_prompt(
     agent_config: &AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    tools: &[ToolDef],
+    tools: &[RegisteredTool],
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
@@ -90,7 +104,7 @@ pub(crate) fn rebuild_system_prompt(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
-        tools,
+        &tool_defs(tools),
     )
 }
 
@@ -101,36 +115,65 @@ pub(crate) fn rebuild_system_prompt(
 /// Slack interactive messages).
 pub(crate) fn build_tool_executor(
     workspace: &Path,
-    tools: &[ToolDef],
+    tools: &[RegisteredTool],
     skill_registry: &SkillRegistry,
     memory_handle: &Option<Arc<MemoryServiceHandle>>,
     secret_registry: &Arc<SecretRegistry>,
     approval: Arc<dyn ToolApprovalPort>,
     activity: Arc<dyn ToolActivityPort>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 ) -> Option<ToolServiceExecutor> {
     if tools.is_empty() {
         return None;
     }
 
-    let shell: Arc<dyn ShellExecutionPort> = Arc::new(LocalShellExecutor);
+    let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
+        Some(flag) => LocalShellExecutor::new().with_cancel(flag),
+        None => LocalShellExecutor::new(),
+    });
 
     let workspace_exec = Arc::new(
         workspace_tools::WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
             .with_shell(Arc::clone(&shell)),
     );
 
+    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.def.name.as_str()).collect();
     let skill_defs = skill_registry.active_skill_definitions();
-    let skill_names: HashSet<String> = skill_defs.iter().map(|s| s.name.clone()).collect();
+    let shell_skill_defs: Vec<_> = skill_defs
+        .iter()
+        .filter(|skill| {
+            allowed_names.contains(skill.name.as_str())
+                && matches!(skill.execution, SkillExecution::Shell { .. })
+        })
+        .cloned()
+        .collect();
+    let api_skill_defs: Vec<_> = skill_defs
+        .iter()
+        .filter(|skill| {
+            allowed_names.contains(skill.name.as_str())
+                && matches!(skill.execution, SkillExecution::Api(_))
+        })
+        .cloned()
+        .collect();
 
     let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
 
-    if !skill_defs.is_empty() {
+    if !shell_skill_defs.is_empty() {
+        let skill_names: HashSet<String> =
+            shell_skill_defs.iter().map(|s| s.name.clone()).collect();
         let skill_exec = Arc::new(SkillToolExecutionAdapter::new(
-            skill_defs,
+            shell_skill_defs,
             Arc::clone(&shell),
             workspace.to_path_buf(),
         ));
         composite = composite.with_executor(skill_exec, skill_names);
+    }
+
+    if !api_skill_defs.is_empty() {
+        let api_names: HashSet<String> = api_skill_defs.iter().map(|s| s.name.clone()).collect();
+        if let Ok(api_exec) = ApiSkillExecutionAdapter::new(api_skill_defs) {
+            composite = composite.with_executor(Arc::new(api_exec), api_names);
+        }
     }
 
     if let Some(ref handle) = memory_handle {
@@ -139,9 +182,20 @@ pub(crate) fn build_tool_executor(
         {
             let mem_names: HashSet<String> = memory_tool_defs()
                 .iter()
-                .map(|t| t.name.clone())
+                .map(|t| t.def.name.clone())
                 .collect();
             composite = composite.with_executor(Arc::new(mem_exec), mem_names);
+        }
+    }
+
+    let desci_names: HashSet<String> = desci_tool_defs()
+        .into_iter()
+        .map(|tool| tool.def.name)
+        .filter(|name| allowed_names.contains(name.as_str()))
+        .collect();
+    if !desci_names.is_empty() {
+        if let Ok(desci_exec) = DesciToolExecutionAdapter::new(workspace.to_path_buf()) {
+            composite = composite.with_executor(Arc::new(desci_exec), desci_names);
         }
     }
 
@@ -167,15 +221,21 @@ pub(crate) fn build_tool_executor(
 pub(crate) fn compute_base_tools(
     uses_tools: bool,
     has_memory: bool,
-    allowed_tools: Option<&[String]>,
-) -> Vec<ToolDef> {
+    capability_names: &[String],
+) -> Vec<RegisteredTool> {
     if !uses_tools {
         return vec![];
     }
-    let mut tools = filter_tools_by_allowlist(build_workspace_tools(), allowed_tools);
+    let capabilities =
+        parse_capability_set(capability_names).expect("agent capabilities should validate");
+    let mut tools = filter_tools_by_capability(build_workspace_tools(), &capabilities);
     if has_memory {
-        tools.extend(memory_tool_defs());
+        tools.extend(filter_tools_by_capability(
+            memory_tool_defs(),
+            &capabilities,
+        ));
     }
+    tools.extend(filter_tools_by_capability(desci_tool_defs(), &capabilities));
     tools
 }
 
@@ -225,8 +285,7 @@ pub(crate) fn build_memory_handle(
                         DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
                             .ok()
                             .map(|s| {
-                                Arc::new(s)
-                                    as Arc<dyn crate::application::ports::MemoryStorePort>
+                                Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
                             })
                     }
                     _ => {
@@ -237,17 +296,14 @@ pub(crate) fn build_memory_handle(
                         DiskVectorMemoryStore::new(std::path::Path::new(&store_path_str))
                             .ok()
                             .map(|s| {
-                                Arc::new(s)
-                                    as Arc<dyn crate::application::ports::MemoryStorePort>
+                                Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
                             })
                     }
                 };
 
             store.map(|s| {
-                let embedding = OpenRouterEmbeddingAdapter::new(
-                    api_key,
-                    memory_config.embedding_model.clone(),
-                );
+                let embedding =
+                    OpenRouterEmbeddingAdapter::new(api_key, memory_config.embedding_model.clone());
                 Arc::new(MemoryServiceHandle {
                     embedding: Arc::new(embedding),
                     store: s,
@@ -272,10 +328,7 @@ pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopStat
         active_flow_key: None,
         manual_session_id: None,
         flow_token_usage: 0,
-        active_lens: agent_config
-            .default_lens
-            .parse()
-            .unwrap_or(Lens::Eco),
+        active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
         total_input_tokens: 0,
         total_output_tokens: 0,
         tokens_saved: 0,
@@ -323,31 +376,6 @@ pub(crate) fn parse_agent_routing(
     }
 
     (None, trimmed.to_string())
-}
-
-/// Infer the target agent by matching whole words against known role keys / agent IDs.
-///
-/// Returns `Some(agent_id)` when exactly one agent is matched. Returns `None` when
-/// zero or multiple different agents match (ambiguous).
-pub(crate) fn infer_agent_from_keywords(
-    text: &str,
-    role_to_agent: &HashMap<String, String>,
-) -> Option<String> {
-    let mut matched: Option<String> = None;
-    for word in text.split_whitespace() {
-        let normalized = word
-            .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-            .to_lowercase()
-            .replace('-', "_");
-        if let Some(agent_id) = role_to_agent.get(&normalized) {
-            match matched {
-                None => matched = Some(agent_id.clone()),
-                Some(ref prev) if prev == agent_id => {} // same agent, ok
-                Some(_) => return None,                  // ambiguous
-            }
-        }
-    }
-    matched
 }
 
 // ---------------------------------------------------------------------------
@@ -509,48 +537,5 @@ mod tests {
         let (role, msg) = parse_agent_routing("hello: world", Some(&roles));
         assert!(role.is_none());
         assert_eq!(msg, "hello: world");
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_single_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        assert_eq!(
-            infer_agent_from_keywords("add backend feature", &roles),
-            Some("backend".into())
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_no_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        assert_eq!(
-            infer_agent_from_keywords("fix the button style", &roles),
-            None
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_ambiguous() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        assert_eq!(
-            infer_agent_from_keywords("connect frontend to backend", &roles),
-            None
-        );
-    }
-
-    #[test]
-    fn infer_agent_from_keywords_role_key_match() {
-        let mut roles = HashMap::new();
-        roles.insert("backend_engineer".into(), "backend".into());
-        roles.insert("backend".into(), "backend".into());
-        assert_eq!(
-            infer_agent_from_keywords("add backend", &roles),
-            Some("backend".into())
-        );
     }
 }

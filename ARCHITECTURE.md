@@ -63,7 +63,7 @@ Forbidden:
 | `usage.rs` | Token usage accounting (turn snapshots, session totals) |
 | `tool_policy.rs` | Tool risk-level/approval policy catalog |
 | `skill.rs` | Skill markdown parsing (classic + frontmatter API), validation, rendering, agent skill filtering |
-| `agent_role.rs` | Fleet agent roles (QA, BackendEngineer, IntegrationMaster) |
+| `agent_role.rs` | Fleet agent roles — dynamic string wrapper (any non-empty role name) |
 | `task.rs` | Task lifecycle model (status machine, retry logic) |
 | `memory.rs` | Memory entry types, cosine similarity, token budgeting |
 | `secret_registry.rs` | Secret value registry for output redaction (pure, no I/O) |
@@ -117,23 +117,6 @@ Forbidden:
 |--------|---------|
 | `cli/` | Local stdin/stdout pipe |
 | `telegram/` | Telegram bot pipe via teloxide: message handling, file download, inline keyboard approval callbacks (feature-gated) |
-
-### Core Events (`crates/tengu-core/src/events.rs`)
-
-| Event | Purpose |
-|-------|---------|
-| `InboundTurnReceived` | Inbound message received |
-| `FlowResolved` | Flow key resolved |
-| `PromptAssembled` | Prompt budget assembled |
-| `EngineTurnStarted` | Engine turn started |
-| `EngineTurnCompleted` | Engine turn completed |
-| `EngineTurnFailed` | Engine turn failed |
-| `FlowCompacted` | Flow history compacted |
-| `TaskAssigned` | Task assigned to fleet agent |
-| `TaskCompleted` | Task completed by agent |
-| `TaskFailed` | Task failed |
-| `HeartbeatTick` | Periodic heartbeat tick |
-| `AgentStatusReport` | Agent status broadcast |
 
 ## Composability Principles
 

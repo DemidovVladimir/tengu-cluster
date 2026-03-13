@@ -95,7 +95,7 @@ mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
 ```
 
-The default config uses OpenRouter with `anthropic/claude-sonnet-4`. If you set `OPENROUTER_API_KEY`, it works out of the box.
+The default config uses OpenRouter with `nvidia/nemotron-3-super-120b-a12b:free` (free tier). If you set `OPENROUTER_API_KEY`, it works out of the box.
 
 To use a different provider, edit `~/.tengu/config.toml`:
 
@@ -152,12 +152,11 @@ cargo run -- status
 With OpenRouter, switch models by editing one line in config:
 
 ```toml
-model = "anthropic/claude-sonnet-4"      # Claude
-model = "openai/gpt-4o"                  # GPT-4o
-model = "google/gemini-2.5-pro"          # Gemini
-model = "meta-llama/llama-4-maverick"    # Llama 4
-model = "mistralai/mistral-large"        # Mistral
-model = "deepseek/deepseek-chat-v3"      # DeepSeek
+model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
+model = "google/gemini-2.5-flash"                 # Gemini Flash (cheap)
+model = "anthropic/claude-sonnet-4"               # Claude Sonnet 4 (premium)
+model = "openai/gpt-4o"                           # GPT-4o
+model = "deepseek/deepseek-chat-v3"               # DeepSeek V3 (cheap)
 ```
 
 Browse all models: <https://openrouter.ai/models>
@@ -189,7 +188,7 @@ Point your agent at a project directory to enable file tools (read, write, list)
 ```toml
 [agents.main]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 workspace = "~/projects/my-app"
 ```
 
@@ -205,13 +204,13 @@ enabled = true
 
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 skills = ["search", "test_runner"]
 
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 ```
 

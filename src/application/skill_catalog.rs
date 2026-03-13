@@ -1,14 +1,15 @@
 //! Application service for loading and validating user-defined skills.
 
 use crate::application::ports::SkillSourcePort;
+use crate::domain::capability::RegisteredTool;
 use crate::domain::skill::{
-    api_skill_preamble, filter_skills_for_agent, parse_skill_file, skill_to_tool_def,
+    api_skill_preamble, filter_skills_for_agent, parse_skill_file, skill_to_registered_tool,
     validate_skill, ParsedSkill, SkillDefinition,
 };
-use tengu_core::types::ToolDef;
 
 /// A context fragment injected into the system prompt from a frontmatter API skill.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct SkillContextFragment {
     pub skill_name: String,
     pub body: String,
@@ -16,19 +17,21 @@ pub(crate) struct SkillContextFragment {
 
 /// The complete result of loading skills from the workspace.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct LoadedSkillSet {
-    pub tool_defs: Vec<ToolDef>,
+    pub tools: Vec<RegisteredTool>,
     pub executable_skills: Vec<SkillDefinition>,
     pub context_fragments: Vec<SkillContextFragment>,
 }
 
 /// Load all skills from a source port. Invalid skills are logged and skipped.
+#[allow(dead_code)]
 pub(crate) fn load_skills(
     source: &dyn SkillSourcePort,
     reserved_tool_names: &[&str],
 ) -> LoadedSkillSet {
     let raw_files = source.discover_skill_files();
-    let mut tool_defs = Vec::new();
+    let mut tools = Vec::new();
     let mut executable_skills = Vec::new();
     let mut context_fragments = Vec::new();
 
@@ -39,7 +42,7 @@ pub(crate) fn load_skills(
                     tracing::warn!("Skipping invalid skill '{}': {}", filename, e);
                     continue;
                 }
-                tool_defs.push(skill_to_tool_def(&skill));
+                tools.push(skill_to_registered_tool(&skill));
                 executable_skills.push(skill);
             }
             Ok(ParsedSkill::Api {
@@ -51,7 +54,7 @@ pub(crate) fn load_skills(
                     tracing::warn!("Skipping invalid API skill '{}': {}", filename, e);
                     continue;
                 }
-                tool_defs.push(skill_to_tool_def(&definition));
+                tools.push(skill_to_registered_tool(&definition));
                 let preamble = api_skill_preamble(&definition.name);
                 context_fragments.push(SkillContextFragment {
                     skill_name: definition.name.clone(),
@@ -66,7 +69,7 @@ pub(crate) fn load_skills(
     }
 
     LoadedSkillSet {
-        tool_defs,
+        tools,
         executable_skills,
         context_fragments,
     }
@@ -75,6 +78,7 @@ pub(crate) fn load_skills(
 /// Load skills filtered by an agent's skill allowlist.
 ///
 /// Delegates to `load_skills()` then applies `filter_skills_for_agent()`.
+#[allow(dead_code)]
 pub(crate) fn load_skills_for_agent(
     source: &dyn SkillSourcePort,
     reserved_tool_names: &[&str],
@@ -84,10 +88,10 @@ pub(crate) fn load_skills_for_agent(
     let filtered = filter_skills_for_agent(all.executable_skills, agent_skill_allowlist);
     let filtered_names: std::collections::HashSet<&str> =
         filtered.iter().map(|s| s.name.as_str()).collect();
-    let tool_defs = all
-        .tool_defs
+    let tools = all
+        .tools
         .into_iter()
-        .filter(|td| filtered_names.contains(td.name.as_str()))
+        .filter(|tool| filtered_names.contains(tool.def.name.as_str()))
         .collect();
     let context_fragments = all
         .context_fragments
@@ -95,7 +99,7 @@ pub(crate) fn load_skills_for_agent(
         .filter(|cf| filtered_names.contains(cf.skill_name.as_str()))
         .collect();
     LoadedSkillSet {
-        tool_defs,
+        tools,
         executable_skills: filtered,
         context_fragments,
     }
@@ -143,9 +147,9 @@ echo "Hello, {{name}}"
         };
 
         let loaded = load_skills(&source, &["read_file", "write_file", "list_directory"]);
-        assert_eq!(loaded.tool_defs.len(), 1);
+        assert_eq!(loaded.tools.len(), 1);
         assert_eq!(loaded.executable_skills.len(), 1);
-        assert_eq!(loaded.tool_defs[0].name, "greet");
+        assert_eq!(loaded.tools[0].def.name, "greet");
         assert!(loaded.context_fragments.is_empty());
     }
 
@@ -165,7 +169,7 @@ cat file
         };
 
         let loaded = load_skills(&source, &["read_file"]);
-        assert!(loaded.tool_defs.is_empty());
+        assert!(loaded.tools.is_empty());
         assert!(loaded.executable_skills.is_empty());
     }
 
@@ -186,8 +190,8 @@ Documentation body here.
         };
 
         let loaded = load_skills(&source, &[]);
-        assert_eq!(loaded.tool_defs.len(), 1);
-        assert_eq!(loaded.tool_defs[0].name, "my_api");
+        assert_eq!(loaded.tools.len(), 1);
+        assert_eq!(loaded.tools[0].def.name, "my_api");
         assert_eq!(loaded.executable_skills.len(), 1);
         assert_eq!(loaded.context_fragments.len(), 1);
         assert_eq!(loaded.context_fragments[0].skill_name, "my_api");
@@ -211,7 +215,7 @@ homepage: https://api.example.com
         // Filter to a different skill name — should exclude the API skill.
         let allowed = vec!["other_skill".to_string()];
         let loaded = load_skills_for_agent(&source, &[], Some(&allowed));
-        assert!(loaded.tool_defs.is_empty());
+        assert!(loaded.tools.is_empty());
         assert!(loaded.context_fragments.is_empty());
     }
 }

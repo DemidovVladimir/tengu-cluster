@@ -1,7 +1,9 @@
 ---
 name: aura-orchestrator
 description: DeSci lab automation — IPNFT minting, project creation, file uploads, and announcements via Molecule GraphQL API with Privy agentic wallet for on-chain transactions and signing.
-homepage: https://staging.graphql.api.molecule.xyz/graphql
+base_url: https://staging.graphql.api.molecule.xyz/graphql
+capability: skill.aura_orchestrator
+effect_class: external_api
 headers:
   x-api-key: $MOLECULE_API_KEY
 env_vars:
@@ -21,18 +23,13 @@ env_vars:
 
 ### When to use `aura_orchestrator` tool vs `run_command` with curl
 
-| Use `aura_orchestrator` tool | Use `run_command` with curl |
-|------------------------------|----------------------------|
-| Step 3a: generateAssignmentAgreement | Step 0: Privy wallet (different URL + auth) |
-| Step 3b: generateImageUploadUrl | Step 1: POI registration (different URL + auth) |
-| Step 3c: uploadMetadataWithImageKey | Step 2: POI on-chain via Privy |
-| Step 3d: getTermsMessage | Step 3b: PUT image to S3 presigned URL |
-| Step 3f: signoffMetadata | Step 3e: Sign terms via Privy |
-| Query operations (list/get/search) | Step 3g: Mint on-chain via Privy |
-| | Service Token Acquisition (Steps A-C) |
-| | Workflows 2-4 (need `x-service-token` header) |
+| Use `aura_orchestrator` tool | Use another native tool |
+|------------------------------|-------------------------|
+| Molecule GraphQL mutations/queries | `privy` for wallet/RPC/signing |
+| Service-token GraphQL calls via `headers` JSON | `poi_register_document` for POI upload |
+| URL generation and metadata mutations | `upload_binary_url` for presigned PUT uploads |
 
-**Rule:** Use `aura_orchestrator` tool ONLY for Molecule GraphQL mutations/queries that need just `x-api-key`. Use `run_command` with curl for everything else — Privy calls, POI API, S3 uploads, and any call needing `x-service-token`. Do NOT try to route Privy or POI calls through the `aura_orchestrator` tool — it only knows the Molecule GraphQL endpoint.
+**Rule:** Use `aura_orchestrator` for Molecule GraphQL only. When a GraphQL call needs a runtime `x-service-token`, pass it through the optional `headers` JSON parameter, for example `{"x-service-token":"TOKEN"}`. Do not fall back to shell or curl.
 
 ## Required User Inputs (Workflow 1 — Mint)
 
@@ -59,6 +56,19 @@ env_vars:
 
 **Never fill in defaults like `"Tengu Research Labs"` or `"agent@tengu.dev"`. These are the user's legal/identity fields.**
 
+## Transaction Communication
+
+**BEFORE every `run_command` that sends an on-chain transaction or calls an external API, send a message to the user explaining:**
+1. **What** — plain-language description (e.g., "Submitting your Proof of Invention to the Sepolia blockchain")
+2. **Why** — why this step is required (e.g., "This anchors your invention on-chain so we can mint the IP-NFT")
+3. **Cost** — any ETH cost (e.g., "0 ETH (gas only)" or "0.001 ETH mint fee")
+4. **Consequence of denial** — what happens if they press Deny (e.g., "Without this transaction, we cannot proceed to minting")
+
+The user will see an Approve/Deny dialog showing the raw command. Without your explanation beforehand, they won't understand what they're approving and will deny it. **Every Privy transaction and every POI/Molecule API call needs this explanation.**
+
+Example message before Step 2:
+> I'm about to submit your Proof of Invention registration to the Sepolia blockchain. This is a 0 ETH transaction (gas only) that anchors your research document on-chain. You'll see an approval dialog with the curl command — please approve it. If denied, we cannot proceed with IP-NFT minting.
+
 ## Reference
 
 **Env vars:** `PRIVY_APP_ID`/`PRIVY_APP_SECRET`/`PRIVY_WALLET_ID` (on-chain ops) | `MOLECULE_API_KEY` (`x-api-key` header) | `MOLECULE_LABS_URL` (GraphQL endpoint) | `MOLECULE_CLIENT_URL` (links) | `POI_API_KEY` (`Authorization: Bearer`)
@@ -71,6 +81,7 @@ env_vars:
 ---
 
 ## Step 0: Resolve Wallet Address
+**Tool: `run_command` with curl** (NOT `aura_orchestrator` — different URL and auth)
 ```bash
 curl -s -X GET "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID" \
   --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
@@ -80,7 +91,7 @@ Save `address` as `WALLET_ADDRESS` — used for `connectedWalletAddress`, `minte
 
 ## Service Token Acquisition (for Workflows 2-4)
 
-**Step A** — get sign-in message:
+**Step A** — get sign-in message: **Tool: `run_command` with curl**
 ```bash
 curl -s -X POST "$MOLECULE_LABS_URL" \
   -H "Content-Type: application/json" \
@@ -90,7 +101,7 @@ curl -s -X POST "$MOLECULE_LABS_URL" \
     "variables": { "walletAddress": "WALLET_ADDRESS", "serviceName": "tengu-agent" }
   }'
 ```
-**Step B** — sign with Privy:
+**Step B** — sign with Privy: **Tool: `run_command` with curl**
 ```bash
 HEX_MSG=$(echo -n 'THE_MESSAGE_FROM_STEP_A' | xxd -p | tr -d '\n' | sed 's/^/0x/')
 curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
@@ -99,7 +110,7 @@ curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
   -H "Content-Type: application/json" \
   -d "{\"method\": \"personal_sign\", \"params\": {\"message\": \"$HEX_MSG\"}}"
 ```
-**Step C** — exchange for token (valid 180 days):
+**Step C** — exchange for token (valid 180 days): **Tool: `run_command` with curl**
 ```bash
 curl -s -X POST "$MOLECULE_LABS_URL" \
   -H "Content-Type: application/json" \
@@ -118,6 +129,7 @@ Save `token` as `SERVICE_TOKEN`.
 Three mandatory stages. Each depends on the previous. **If any step fails, STOP and report.**
 
 ### Step 1: Register POI
+**Tool: `run_command` with curl** (NOT `aura_orchestrator` — different URL and auth)
 **`-F` MUST use `=@` syntax — `files=@path`. Missing `=` causes curl error.**
 ```bash
 curl -X POST https://testnet.molecule.xyz/api/v1/inventions \
@@ -128,6 +140,7 @@ curl -X POST https://testnet.molecule.xyz/api/v1/inventions \
 Save: `data.transaction.to` (contract), `data.transaction.data` (calldata), `data.proof.tree[0]` (merkle root).
 
 ### Step 2: Submit POI on-chain (Privy)
+**Tool: `run_command` with curl** (NOT `aura_orchestrator` — Privy endpoint)
 ```bash
 curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
   --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
@@ -150,6 +163,7 @@ Save `data.hash` as `TX_HASH`. Compute `RESERVATION_ID`: `printf "%d\n" <transac
 ### Step 3: Mint the IP-NFT
 
 #### 3a: Generate assignment agreement
+**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, body: GraphQL JSON
 ```graphql
 mutation GenerateAssignmentAgreement($projectData: AWSJSON!) {
   generateAssignmentAgreement(projectData: $projectData) {
@@ -178,6 +192,7 @@ DO NOT retry with "different parameters" — either fields are wrong or API is d
 Save `agreementCid` and `agreementContentHash`.
 
 #### 3b: Upload cover image
+**Tool: `aura_orchestrator`** for URL generation (path: `""`), then **`run_command`** for the PUT upload
 ```graphql
 mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) {
   generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) {
@@ -193,6 +208,7 @@ curl -X PUT "UPLOAD_URL" -H "Content-Type: image/png" --data-binary @cover.png
 Save `key` as `IMAGE_KEY`.
 
 #### 3c: Upload metadata
+**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, body: GraphQL JSON
 ```graphql
 mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ipnftId: String!) {
   uploadMetadataWithImageKey(metadata: $metadata, imageKey: $imageKey, ipnftId: $ipnftId) {
@@ -226,6 +242,7 @@ mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ip
 Save `metadataCid`.
 
 #### 3d: Get terms message
+**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, body: GraphQL JSON
 ```graphql
 query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) {
   getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) {
@@ -237,6 +254,7 @@ query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) {
 Variables: `{"metadataCid": "METADATA_CID", "minter": "WALLET_ADDRESS", "chainId": 11155111}`. Save `message`.
 
 #### 3e: Sign terms (Privy)
+**Tool: `run_command` with curl** (NOT `aura_orchestrator` — Privy endpoint)
 ```bash
 HEX_MSG=$(echo -n 'TERMS_MESSAGE_FROM_3d' | xxd -p | tr -d '\n' | sed 's/^/0x/')
 curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
@@ -248,6 +266,7 @@ curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
 Save `data.signature`.
 
 #### 3f: Sign off metadata
+**Tool: `aura_orchestrator`** — method: `POST`, path: `""`, body: GraphQL JSON
 ```graphql
 mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) {
   signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) {
@@ -259,6 +278,7 @@ mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, 
 Variables: `{"ipnftId": "RESERVATION_ID", "tokenURI": "ipfs://METADATA_CID", "chainId": 11155111, "minter": "WALLET_ADDRESS", "to": "WALLET_ADDRESS", "termsSignature": "SIGNATURE_FROM_3e"}`. Save `authorization`.
 
 #### 3g: Mint on-chain (Privy)
+**Tool: `run_command` with curl** (NOT `aura_orchestrator` — Privy endpoint)
 ABI-encode with `cast`:
 ```bash
 cast calldata "mintReservation(address,uint256,string,string,bytes)" \

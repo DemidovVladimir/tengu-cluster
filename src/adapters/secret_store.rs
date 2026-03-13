@@ -229,12 +229,16 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
             continue;
         }
         if let Some((k, v)) = trimmed.split_once('=') {
-            // Don't overwrite existing env vars (same semantics as dotenvy).
-            if std::env::var(k).is_err() {
+            // Don't overwrite existing env vars (shell or .env take priority).
+            // Empty env vars (e.g. `KEY=` placeholders in .env) are treated as
+            // unset so the vault can still fill them in.
+            // Only register for redaction if the vault actually provided the value.
+            let existing = std::env::var(k).unwrap_or_default();
+            if existing.is_empty() {
                 std::env::set_var(k, v);
-            }
-            if !v.is_empty() {
-                secret_values.push(v.to_string());
+                if !v.is_empty() {
+                    secret_values.push(v.to_string());
+                }
             }
         }
     }

@@ -224,14 +224,14 @@ Restrict which skills an agent can use via the `skills` config field:
 # QA agent: only search and test tools
 [agents.qa]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 skills = ["search", "test_runner", "lint"]
 
 # Backend agent: file manipulation and build tools
 [agents.backend]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 skills = ["read_file", "write_file", "search", "build"]
 
@@ -239,7 +239,7 @@ skills = ["read_file", "write_file", "search", "build"]
 [agents.main]
 default = true
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
 ```
 
 **Rules:**

@@ -74,7 +74,6 @@ impl<'a> MemoryService<'a> {
         let budgeted = budget_memories(&results, max_tokens);
         Ok(budgeted.into_iter().cloned().collect())
     }
-
 }
 
 #[cfg(test)]
