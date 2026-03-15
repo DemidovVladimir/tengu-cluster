@@ -430,7 +430,7 @@ Before running in production:
 - [ ] Change `hub.bind` to `0.0.0.0` if external access is needed
 - [ ] Set `hub.auth_mode = "token"` and configure `hub.auth_token`
 - [ ] Set `allowed_users` in `[telegram]` section (never leave empty in production)
-- [ ] Review `allowed_tools` per agent — restrict `write_file` and `run_command` as needed
+- [ ] Review `capabilities` per agent — restrict `workspace.write` and `workspace.shell` as needed
 - [ ] Set `RUST_LOG=warn` for production (reduce log volume)
 - [ ] Configure firewall: allow only ports 22 (SSH) and 7070 (Tengu hub)
 - [ ] Set up volume backups for `tengu-data`

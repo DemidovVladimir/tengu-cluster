@@ -35,6 +35,9 @@ pub(crate) struct ChatTurnResult {
     pub system_notice: Option<String>,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
+    /// Tool call outcomes from this turn (name, result).
+    /// Used by cross-agent activity context so subsequent agents see concrete data.
+    pub tool_outcomes: Vec<(String, String)>,
 }
 
 /// Central chat orchestration service.
@@ -136,6 +139,7 @@ impl<'a> ChatRuntimeService<'a> {
                 ),
                 total_input_tokens: state.total_input_tokens,
                 total_output_tokens: state.total_output_tokens,
+                tool_outcomes: Vec::new(),
             });
         }
 
@@ -206,6 +210,7 @@ impl<'a> ChatRuntimeService<'a> {
                 system_notice: Some("Context budget exhausted. Use /reset to continue.".into()),
                 total_input_tokens: state.total_input_tokens,
                 total_output_tokens: state.total_output_tokens,
+                tool_outcomes: Vec::new(),
             });
         }
 
@@ -227,6 +232,7 @@ impl<'a> ChatRuntimeService<'a> {
         state.total_input_tokens += resp.input_tokens_delta;
         state.total_output_tokens += resp.output_tokens_delta;
         let response_text = resp.text;
+        let tool_outcomes = resp.tool_outcomes;
 
         if !response_text.is_empty() {
             let assistant_message = Message {
@@ -282,6 +288,7 @@ impl<'a> ChatRuntimeService<'a> {
             system_notice: budget_notice,
             total_input_tokens: state.total_input_tokens,
             total_output_tokens: state.total_output_tokens,
+            tool_outcomes,
         })
     }
 }

@@ -21,8 +21,10 @@ use crate::application::task_planner;
 use crate::domain::agent_role::AgentRole;
 use crate::domain::approval::DenyByDefaultApproval;
 use crate::domain::capability::parse_capability_set;
+use crate::domain::run_state::RunState;
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::task::TaskResult;
+use crate::domain::tool_result::parse_tool_result_envelope;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -80,14 +82,11 @@ pub(crate) async fn boot_orchestrator(
     crate::adapters::scaffold::maybe_apply_scaffold(config);
 
     // Find first agent's workspace for per-sandbox memory scoping.
-    let first_workspace: Option<std::path::PathBuf> = config
-        .agents
-        .values()
-        .find_map(|ac| {
-            ac.workspace
-                .as_ref()
-                .map(|p| crate::adapters::workspace_tools::expand_tilde(p))
-        });
+    let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
+        ac.workspace
+            .as_ref()
+            .map(|p| crate::adapters::workspace_tools::expand_tilde(p))
+    });
 
     // Build shared memory handle (scoped to workspace if available).
     // Uses build_memory_handle for unified backend selection (disk or Qdrant).
@@ -216,18 +215,34 @@ pub(crate) async fn boot_orchestrator(
         );
 
         // Collect role descriptions for the planner.
+        // Include full instructions (truncated) and dependency info.
         let identity_name = agent_config
             .identity
             .name
             .as_deref()
             .unwrap_or(agent_id.as_str());
-        let brief = agent_config
+        let instructions = agent_config
             .identity
             .instructions
             .as_deref()
-            .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
             .unwrap_or("AI assistant");
-        agent_descriptions.insert(role_str.clone(), format!("{} — {}", identity_name, brief));
+        let truncated = if instructions.len() > 500 {
+            let mut end = 500;
+            while end > 0 && !instructions.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}…", &instructions[..end])
+        } else {
+            instructions.to_string()
+        };
+        let mut desc = format!("{}\nInstructions: {}", identity_name, truncated);
+        if !agent_config.requires.is_empty() {
+            desc.push_str(&format!(
+                "\nREQUIRES (must depend on): {}",
+                agent_config.requires.join(", ")
+            ));
+        }
+        agent_descriptions.insert(role_str.clone(), desc);
         if planner_agent_id.is_none() {
             planner_agent_id = Some(agent_id.clone());
         }
@@ -344,7 +359,7 @@ pub(crate) async fn boot_orchestrator(
             let result = execute_agent_task(runtime, &description, &secret_registry).await;
 
             match result {
-                Ok(output) => {
+                Ok((output, _tool_outcomes)) => {
                     println!();
                     println!("  ── {} ({}) ──", agent_id, role.label());
                     println!("{}", output);
@@ -378,8 +393,7 @@ pub(crate) async fn boot_orchestrator(
 
             // RAG: recall only orchestrator topic overviews for planner context.
             let enriched_goal = if let Some(ref handle) = memory_handle {
-                let mem_svc =
-                    MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+                let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
                 let mut filter = HashMap::new();
                 filter.insert("kind".into(), "topic_overview".into());
                 filter.insert("source".into(), "orchestrator".into());
@@ -398,7 +412,7 @@ pub(crate) async fn boot_orchestrator(
                 input.clone()
             };
 
-            let tasks = match task_planner::generate_plan(
+            let mut tasks = match task_planner::generate_plan(
                 planner_runtime.engine.as_ref(),
                 &enriched_goal,
                 &agent_descriptions,
@@ -411,6 +425,30 @@ pub(crate) async fn boot_orchestrator(
                     continue;
                 }
             };
+
+            // Build role dependency constraints from agent configs.
+            let role_deps: task_planner::RoleDependencies = config
+                .agents
+                .values()
+                .filter_map(|ac| {
+                    let role = ac.role.as_deref()?;
+                    if ac.requires.is_empty() {
+                        return None;
+                    }
+                    Some((role.to_string(), ac.requires.clone()))
+                })
+                .collect();
+
+            // Auto-repair plan dependencies, then validate.
+            let repaired =
+                task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
+            if repaired > 0 {
+                println!("  Auto-repaired plan: added {} dependency edges", repaired);
+            }
+            if let Err(e) = task_planner::validate_plan_dependencies(&tasks, &role_deps) {
+                println!("  Plan rejected: {}", e);
+                continue;
+            }
 
             let batches = match task_planner::resolve_execution_order(&tasks) {
                 Ok(b) => b,
@@ -443,6 +481,7 @@ pub(crate) async fn boot_orchestrator(
             println!();
 
             let mut step_results: Vec<StepResult> = Vec::new();
+            let mut run_state = RunState::default();
 
             for (bi, batch) in batches.iter().enumerate() {
                 if batch.len() > 1 {
@@ -463,6 +502,26 @@ pub(crate) async fn boot_orchestrator(
 
                 for &task_idx in batch {
                     let plan_task = &tasks[task_idx];
+                    let missing_artifacts = run_state.missing_artifacts(
+                        channel_runtime::required_artifacts_for_role(&plan_task.role),
+                    );
+                    if !missing_artifacts.is_empty() {
+                        println!(
+                            "  {} blocked: missing required artifacts: {}",
+                            plan_task.role,
+                            missing_artifacts.join(", ")
+                        );
+                        step_results.push(StepResult {
+                            role: plan_task.role.clone(),
+                            task: plan_task.task.clone(),
+                            output: format!(
+                                "Failed: missing required artifacts: {}",
+                                missing_artifacts.join(", ")
+                            ),
+                            success: false,
+                        });
+                        continue;
+                    }
                     let agent_id = match role_to_agent.get(&plan_task.role) {
                         Some(id) => id.clone(),
                         None => {
@@ -479,7 +538,8 @@ pub(crate) async fn boot_orchestrator(
 
                     let runtime = Arc::clone(agent_runtimes.get(&agent_id).unwrap());
                     let sr = Arc::clone(&secret_registry);
-                    let prompt = build_step_context(&input, &plan_task.task, &step_results);
+                    let prompt =
+                        build_step_context(&input, &plan_task.task, &step_results, &run_state);
                     let role = plan_task.role.clone();
                     let task_desc = plan_task.task.clone();
 
@@ -504,7 +564,12 @@ pub(crate) async fn boot_orchestrator(
                         join_result.map_err(|e| anyhow::anyhow!("Task panicked: {}", e))?;
 
                     match outcome {
-                        Ok(output) => {
+                        Ok((output, tool_outcomes)) => {
+                            for (_, result) in &tool_outcomes {
+                                if let Some(envelope) = parse_tool_result_envelope(result) {
+                                    run_state.ingest_tool_envelope(&envelope);
+                                }
+                            }
                             println!();
                             println!("  ── {} ({}) ──", agent_id, role);
                             println!("{}", output);
@@ -589,7 +654,7 @@ async fn execute_agent_task(
     runtime: &AgentRuntime,
     task_description: &str,
     secret_registry: &SecretRegistry,
-) -> Result<String> {
+) -> Result<(String, Vec<(String, String)>)> {
     let messages = vec![Message {
         role: Role::User,
         content: task_description.to_string(),
@@ -615,11 +680,29 @@ async fn execute_agent_task(
     )
     .await?;
 
-    Ok(response.text)
+    let mut combined = response.text;
+    // Append tool outcomes so dependent tasks get concrete data
+    // (the LLM's final text may omit values that tool results contain).
+    if !response.tool_outcomes.is_empty() {
+        combined.push_str("\n\n## Tool Results\n");
+        for (name, result) in &response.tool_outcomes {
+            combined.push_str(&format!(
+                "### {}\n{}\n",
+                name,
+                channel_runtime::truncate_output(&result, 2000),
+            ));
+        }
+    }
+    Ok((combined, response.tool_outcomes))
 }
 
 /// Build an enriched prompt for a task with context from completed steps.
-fn build_step_context(goal: &str, current_task: &str, previous_results: &[StepResult]) -> String {
+fn build_step_context(
+    goal: &str,
+    current_task: &str,
+    previous_results: &[StepResult],
+    run_state: &RunState,
+) -> String {
     let mut ctx = format!(
         "## Overall Goal\n{}\n\n## Your Task\n{}\n",
         goal, current_task
@@ -640,6 +723,9 @@ fn build_step_context(goal: &str, current_task: &str, previous_results: &[StepRe
             }
         }
     }
+
+    ctx.push('\n');
+    ctx.push_str(&channel_runtime::format_run_state_prompt(run_state));
 
     ctx
 }
@@ -759,7 +845,12 @@ mod tests {
 
     #[test]
     fn build_step_context_first_step() {
-        let ctx = build_step_context("build a site", "design the layout", &[]);
+        let ctx = build_step_context(
+            "build a site",
+            "design the layout",
+            &[],
+            &RunState::default(),
+        );
         assert!(ctx.contains("Overall Goal"));
         assert!(ctx.contains("build a site"));
         assert!(ctx.contains("design the layout"));
@@ -774,7 +865,7 @@ mod tests {
             output: "Primary: #2563eb, font: Inter".into(),
             success: true,
         }];
-        let ctx = build_step_context("build a site", "implement UI", &prior);
+        let ctx = build_step_context("build a site", "implement UI", &prior, &RunState::default());
         assert!(ctx.contains("Results from Previous Steps"));
         assert!(ctx.contains("Primary: #2563eb"));
     }
@@ -788,7 +879,7 @@ mod tests {
             output: long_output,
             success: true,
         }];
-        let ctx = build_step_context("goal", "next task", &prior);
+        let ctx = build_step_context("goal", "next task", &prior, &RunState::default());
         assert!(ctx.contains("(truncated)"));
         assert!(ctx.len() < MAX_STEP_CONTEXT_CHARS + 1000);
     }

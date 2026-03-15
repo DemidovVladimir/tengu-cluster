@@ -35,7 +35,9 @@ use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::skill_registry::SkillRegistry;
 use crate::domain::capability::{parse_capability_set, CapabilityId, RegisteredTool};
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
+use crate::domain::run_state::{RunState, TaskExecutionRecord};
 use crate::domain::secret_registry::SecretRegistry;
+use crate::domain::tool_result::parse_tool_result_envelope;
 use crate::resolve_tengu_home;
 use tengu_core::config::Config;
 use tengu_core::types::{DeliveryOptions, ToolCall};
@@ -163,6 +165,8 @@ struct ActivityEntry {
     agent_id: String,
     tools_used: Vec<String>,
     response_summary: String,
+    /// Key tool outcomes (name, result) — concrete data for cross-agent handoff.
+    tool_outcomes: Vec<(String, String)>,
 }
 
 /// Format a tool call for the activity log.
@@ -221,6 +225,18 @@ fn build_activity_context(activity_log: &[ActivityEntry], current_agent_id: &str
             ctx.push_str(&entry.response_summary);
             ctx.push('\n');
         }
+        // Include concrete tool outputs so the next agent gets actual data
+        // (not just the LLM's summary which may omit critical values).
+        if !entry.tool_outcomes.is_empty() {
+            ctx.push_str("\nKey outputs:\n");
+            for (name, result) in &entry.tool_outcomes {
+                ctx.push_str(&format!(
+                    "- `{}`: {}\n",
+                    name,
+                    channel_runtime::truncate_output(result, 1000),
+                ));
+            }
+        }
         ctx.push('\n');
     }
 
@@ -256,6 +272,7 @@ fn build_task_prompt(
     goal: &str,
     task_description: &str,
     dep_outcomes: &[(String, String, String)],
+    run_state: &RunState,
 ) -> String {
     let mut prompt = format!("## Goal\n{}\n\n## Your Task\n{}\n", goal, task_description);
 
@@ -270,6 +287,9 @@ fn build_task_prompt(
             prompt.push('\n');
         }
     }
+
+    prompt.push('\n');
+    prompt.push_str(&channel_runtime::format_run_state_prompt(run_state));
 
     prompt.push_str("\n## IMPORTANT\n\
         When you finish, write a concise outcome summary to the file path provided below.\n\
@@ -387,7 +407,7 @@ async fn orchestrate_team_goal(
         goal.clone()
     };
 
-    let tasks = match crate::application::task_planner::generate_plan(
+    let mut tasks = match crate::application::task_planner::generate_plan(
         planner_engine,
         &enriched_goal,
         agent_descriptions,
@@ -405,6 +425,30 @@ async fn orchestrate_team_goal(
             return Ok(());
         }
     };
+
+    // Build role dependency constraints from agent configs.
+    let role_deps: crate::application::task_planner::RoleDependencies = agent_states
+        .iter()
+        .filter_map(|(_, astate)| {
+            let role_key = astate.role.as_deref()?;
+            if astate.agent_config.requires.is_empty() {
+                return None;
+            }
+            Some((role_key.to_string(), astate.agent_config.requires.clone()))
+        })
+        .collect();
+
+    // Auto-repair plan dependencies, then validate.
+    let repaired = crate::application::task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
+    if repaired > 0 {
+        tracing::info!(repaired, "Auto-repaired plan: added {} dependency edges", repaired);
+    }
+    if let Err(e) = crate::application::task_planner::validate_plan_dependencies(&tasks, &role_deps)
+    {
+        pipe.send_text(sender, &format!("Plan rejected: {}", e), delivery_opts)
+            .await?;
+        return Ok(());
+    }
 
     let batches = match crate::application::task_planner::resolve_execution_order(&tasks) {
         Ok(b) => b,
@@ -441,6 +485,7 @@ async fn orchestrate_team_goal(
 
     // task_id → (outcome_rel_path, output_text)
     let mut outcome_data: HashMap<String, (String, String)> = HashMap::new();
+    let mut run_state = RunState::default();
     turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut completed_count = 0usize;
     let mut stopped = false;
@@ -494,6 +539,34 @@ async fn orchestrate_team_goal(
             }
 
             let task = &tasks[task_idx];
+            let missing_artifacts = run_state
+                .missing_artifacts(channel_runtime::required_artifacts_for_role(&task.role));
+            if !missing_artifacts.is_empty() {
+                let message = format!(
+                    "[{}] Missing required run-state artifacts: {}",
+                    task.role,
+                    missing_artifacts.join(", ")
+                );
+                pipe.send_text(sender, &message, delivery_opts).await?;
+                let error_text = format!("FAILED: {}", message);
+                outcome_data.insert(
+                    task.id.clone(),
+                    (
+                        format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id),
+                        error_text.clone(),
+                    ),
+                );
+                run_state.set_task_record(
+                    task.id.clone(),
+                    TaskExecutionRecord {
+                        role: task.role.clone(),
+                        success: false,
+                        output_summary: error_text,
+                        artifact_count: 0,
+                    },
+                );
+                continue;
+            }
             let task_agent_id = match role_to_agent.get(&task.role) {
                 Some(id) => id.clone(),
                 None => {
@@ -575,7 +648,7 @@ async fn orchestrate_team_goal(
                 .collect();
 
             let outcome_rel_path = format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id);
-            let mut prompt = build_task_prompt(&goal, &task.task, &dep_outcomes);
+            let mut prompt = build_task_prompt(&goal, &task.task, &dep_outcomes, &run_state);
             prompt.push_str(&format!(
                 "\nWrite your outcome summary to: `{}`\n",
                 outcome_rel_path
@@ -673,7 +746,22 @@ async fn orchestrate_team_goal(
                 typing_handle.abort();
 
                 let output = match result {
-                    Ok(resp) => Ok(resp.text),
+                    Ok(resp) => {
+                        let mut combined = resp.text;
+                        // Append tool outcomes so dependent tasks get concrete data
+                        // (the LLM's final text may omit values that tool results contain).
+                        if !resp.tool_outcomes.is_empty() {
+                            combined.push_str("\n\n## Tool Results\n");
+                            for (name, result) in &resp.tool_outcomes {
+                                combined.push_str(&format!(
+                                    "### {}\n{}\n",
+                                    name,
+                                    channel_runtime::truncate_output(result, 2000),
+                                ));
+                            }
+                        }
+                        Ok((combined, resp.tool_outcomes))
+                    }
                     Err(e) => Err(e),
                 };
 
@@ -690,24 +778,44 @@ async fn orchestrate_team_goal(
 
         // Phase 3: Collect results from this batch.
         while let Some(join_result) = set.join_next().await {
-            let (task_id, task_desc, _role, agent_label, outcome_rel_path, outcome) = match join_result {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(error = %e, "Orchestrated task panicked");
-                    continue;
-                }
-            };
+            let (task_id, task_desc, _role, agent_label, outcome_rel_path, outcome) =
+                match join_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(error = %e, "Orchestrated task panicked");
+                        continue;
+                    }
+                };
 
             match outcome {
-                Ok(output) => {
+                Ok((output, tool_outcomes)) => {
+                    let mut artifact_count = 0usize;
+                    for (_, result) in &tool_outcomes {
+                        if let Some(envelope) = parse_tool_result_envelope(result) {
+                            artifact_count += envelope.artifacts.len()
+                                + envelope.ids.len()
+                                + envelope.urls.len()
+                                + envelope.hashes.len();
+                            run_state.ingest_tool_envelope(&envelope);
+                        }
+                    }
                     if !output.is_empty() {
                         let reply = secret_registry.redact(&output);
                         for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
                             let _ = pipe.send_text(sender, chunk, delivery_opts).await;
                         }
                     }
-                    outcome_data
-                        .insert(task_id, (outcome_rel_path, output));
+                    outcome_data.insert(task_id.clone(), (outcome_rel_path, output.clone()));
+                    run_state.set_task_output(task_id.clone(), output.clone());
+                    run_state.set_task_record(
+                        task_id.clone(),
+                        TaskExecutionRecord {
+                            role: _role.clone(),
+                            success: true,
+                            output_summary: channel_runtime::truncate_output(&output, 500),
+                            artifact_count,
+                        },
+                    );
                     completed_count += 1;
                 }
                 Err(e) => {
@@ -726,7 +834,16 @@ async fn orchestrate_team_goal(
                             format!("# FAILED\n\nTask: {}\nError: {}\n", task_desc, e),
                         );
                     }
-                    outcome_data.insert(task_id, (outcome_rel_path, error_text));
+                    outcome_data.insert(task_id.clone(), (outcome_rel_path, error_text.clone()));
+                    run_state.set_task_record(
+                        task_id,
+                        TaskExecutionRecord {
+                            role: _role,
+                            success: false,
+                            output_summary: error_text,
+                            artifact_count: 0,
+                        },
+                    );
                 }
             }
         }
@@ -773,20 +890,34 @@ async fn orchestrate_team_goal(
 
     let status = if stopped { "stopped" } else { "completed" };
 
-    // Build a final summary from outcome files so the user gets actionable results.
-    let mut summary = format!("Team {} — {}/{} tasks done.\n", status, completed_count, tasks.len());
+    // Build a concise final summary from structured run_state data, not raw outcome files.
+    let mut summary = format!(
+        "Team {} — {}/{} tasks done.\n",
+        status,
+        completed_count,
+        tasks.len()
+    );
 
-    if let Some(ref dir) = outcomes_dir {
-        for task in &tasks {
-            let path = dir.join(format!("{}.md", task.id));
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let content = content.trim();
-                if !content.is_empty() {
-                    summary.push_str(&format!("\n── {} ({}) ──\n", task.role, task.id));
-                    summary.push_str(content);
-                    summary.push('\n');
-                }
+    for task in &tasks {
+        if let Some(record) = run_state.record_for(&task.id) {
+            let mark = if record.success { "✓" } else { "✗" };
+            summary.push_str(&format!("\n{} {} ({})\n", mark, task.role, task.id));
+            if !record.output_summary.is_empty() {
+                summary.push_str(&record.output_summary);
+                summary.push('\n');
             }
+        }
+    }
+
+    let artifacts = run_state.artifacts();
+    if !artifacts.is_empty() {
+        summary.push_str("\n── Key outputs ──\n");
+        for (key, value) in artifacts {
+            let rendered = match value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            summary.push_str(&format!("• {} = {}\n", key, rendered));
         }
     }
 
@@ -877,10 +1008,11 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     let memory_config = config.memory.clone();
 
     // Find first agent's workspace for per-sandbox memory scoping.
-    let first_workspace: Option<std::path::PathBuf> = config
-        .agents
-        .values()
-        .find_map(|ac| ac.workspace.as_ref().map(|p| workspace_tools::expand_tilde(p)));
+    let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
+        ac.workspace
+            .as_ref()
+            .map(|p| workspace_tools::expand_tilde(p))
+    });
 
     // Build shared memory handle (scoped to workspace if available).
     let memory_handle =
@@ -1037,19 +1169,38 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     }
 
     // Build agent descriptions for the planner prompt (multi-agent orchestration).
+    // Include full instructions (truncated) and dependency info so the planner
+    // can make informed decisions about task ordering.
     let agent_descriptions: HashMap<String, String> = agent_states
         .iter()
         .map(|(aid, astate)| {
             let role_key = astate.role.as_deref().unwrap_or(aid).to_string();
             let name = astate.agent_config.identity.name.as_deref().unwrap_or(aid);
-            let brief = astate
+            let instructions = astate
                 .agent_config
                 .identity
                 .instructions
                 .as_deref()
-                .and_then(|s| s.lines().find(|l| !l.trim().is_empty()))
                 .unwrap_or("AI assistant");
-            (role_key, format!("{} — {}", name, brief))
+            // Truncate long instructions but keep enough for the planner to understand
+            // prerequisites, dependencies, and workflow constraints.
+            let truncated = if instructions.len() > 500 {
+                let mut end = 500;
+                while end > 0 && !instructions.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}…", &instructions[..end])
+            } else {
+                instructions.to_string()
+            };
+            let mut desc = format!("{}\nInstructions: {}", name, truncated);
+            if !astate.agent_config.requires.is_empty() {
+                desc.push_str(&format!(
+                    "\nREQUIRES (must depend on): {}",
+                    astate.agent_config.requires.join(", ")
+                ));
+            }
+            (role_key, desc)
         })
         .collect();
 
@@ -1935,6 +2086,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 agent_id: target_agent_id.clone(),
                                 tools_used,
                                 response_summary,
+                                tool_outcomes: result.tool_outcomes,
                             });
                             if activity_log.len() > MAX_ACTIVITY_ENTRIES {
                                 activity_log
@@ -1999,6 +2151,7 @@ mod tests {
             agent_id: "frontend".into(),
             tools_used: vec!["wrote `src/app.js`".into()],
             response_summary: "Created app component.".into(),
+            tool_outcomes: Vec::new(),
         }];
         // Same agent — should produce empty context.
         assert!(build_activity_context(&log, "frontend").is_empty());
@@ -2012,12 +2165,14 @@ mod tests {
                 agent_id: "frontend".into(),
                 tools_used: vec!["wrote `src/app.js`".into()],
                 response_summary: "Created the main app component.".into(),
+                tool_outcomes: Vec::new(),
             },
             ActivityEntry {
                 agent_label: "Backend Engineer".into(),
                 agent_id: "backend".into(),
                 tools_used: vec!["wrote `src/api/server.js`".into()],
                 response_summary: "Set up Express server.".into(),
+                tool_outcomes: Vec::new(),
             },
         ];
         let ctx = build_activity_context(&log, "marketing");

@@ -68,6 +68,7 @@ cursive = { version = "0.21", default-features = false, features = ["crossterm-b
 pdf-extract = "0.10"
 regex = "1"
 qdrant-client = { workspace = true, optional = true }
+alloy = { version = "1", features = ["full"] }
 
 [features]
 default = ["ollama", "anthropic", "openai", "openrouter", "claude-code", "telegram"]

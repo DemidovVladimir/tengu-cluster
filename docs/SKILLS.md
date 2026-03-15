@@ -218,7 +218,7 @@ Given `skills/beach-science.md` with frontmatter, the agent gets:
 
 ## Per-Agent Skill Filtering
 
-Restrict which skills an agent can use via the `skills` config field:
+Restrict which skills an agent can use via the `skill_packages` config field:
 
 ```toml
 # QA agent: only search and test tools
@@ -226,16 +226,16 @@ Restrict which skills an agent can use via the `skills` config field:
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
-skills = ["search", "test_runner", "lint"]
+skill_packages = ["search", "test_runner", "lint"]
 
 # Backend agent: file manipulation and build tools
 [agents.backend]
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
-skills = ["read_file", "write_file", "search", "build"]
+skill_packages = ["search", "build"]
 
-# Main agent: no skills field = all skills available
+# Main agent: no skill_packages field = all skills available
 [agents.main]
 default = true
 engine = "openrouter"
@@ -243,8 +243,8 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 ```
 
 **Rules:**
-- `skills = ["name1", "name2"]` — agent can only use listed skills
-- No `skills` field — agent can use all discovered skills
+- `skill_packages = ["name1", "name2"]` — agent can only use listed skills
+- No `skill_packages` field — agent can use all discovered skills
 - Skill names must match the `# heading` in the markdown file
 
 ## Built-In Workspace Primitives
@@ -280,7 +280,7 @@ For each discovered skill file, Tengu:
 
 1. Tries frontmatter parsing first; falls back to classic format
 2. Validates: name format, required sections, parameter types
-3. Filters by agent's `skills` allowlist (if set)
+3. Filters by agent's `skill_packages` allowlist (if set)
 4. Classic skills produce a `ToolDef` + `SkillDefinition` for execution
 5. API skills produce a `ToolDef` + `SkillDefinition` + context fragment for the system prompt
 6. Names that conflict with built-in workspace primitives (`read_file`, `list_directory`, `write_file`, `run_command`) are rejected

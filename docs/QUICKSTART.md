@@ -206,7 +206,7 @@ enabled = true
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
-skills = ["search", "test_runner"]
+skill_packages = ["search", "test_runner"]
 
 [agents.backend]
 engine = "openrouter"

@@ -76,10 +76,7 @@ pub fn execute_prune(targets: &[PruneTarget]) -> Vec<(String, Result<(), String>
         } else {
             std::fs::remove_file(&t.path)
         };
-        results.push((
-            t.label.clone(),
-            outcome.map_err(|e| e.to_string()),
-        ));
+        results.push((t.label.clone(), outcome.map_err(|e| e.to_string())));
     }
     results
 }
@@ -91,7 +88,11 @@ pub fn format_prune_plan(targets: &[PruneTarget]) -> String {
         if t.exists {
             out.push_str(&format!("  ✓ {} ({})\n", t.label, t.path.display()));
         } else {
-            out.push_str(&format!("  - {} ({}) [not found]\n", t.label, t.path.display()));
+            out.push_str(&format!(
+                "  - {} ({}) [not found]\n",
+                t.label,
+                t.path.display()
+            ));
         }
     }
     out

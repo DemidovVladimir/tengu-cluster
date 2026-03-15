@@ -71,7 +71,7 @@ model = "openai/gpt-4o"
 role = "system_designer"
 default = true
 workspace = "~/webstudio-project"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 
 [agents.system_designer.identity]
 name = "System Designer"
@@ -97,7 +97,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "designer"
 workspace = "~/webstudio-project"
-allowed_tools = ["read_file", "list_directory", "write_file"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write"]
 
 [agents.designer.identity]
 name = "Designer"
@@ -124,7 +124,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/webstudio-project"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 
 [agents.backend.identity]
 name = "Backend Engineer"
@@ -151,7 +151,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "tech_writer"
 workspace = "~/webstudio-project"
-allowed_tools = ["read_file", "list_directory", "write_file"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write"]
 
 [agents.tech_writer.identity]
 name = "Tech Writer"

@@ -30,7 +30,7 @@ The orchestrator:
 
 ### 1. Configure Agents with Roles
 
-Roles are fully dynamic — any non-empty string works. Define agent behavior through `identity.instructions` and restrict tools with `allowed_tools`.
+Roles are fully dynamic — any non-empty string works. Define agent behavior through `identity.instructions` and restrict tools with `capabilities`.
 
 ```toml
 [orchestrator]
@@ -42,7 +42,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 workspace = "~/my-project"
-allowed_tools = ["read_file", "list_directory", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.shell"]
 
 [agents.qa.identity]
 name = "QA Agent"
@@ -60,7 +60,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/my-project"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 
 [agents.backend.identity]
 name = "Backend Engineer"
@@ -232,23 +232,23 @@ max_retries = 3              # Retry failed tasks up to 3 times (default)
 
 ## Per-Agent Restrictions
 
-Enforce separation of concerns with two independent allowlists:
+Enforce separation of concerns with `capabilities` and `skill_packages`:
 
-- **`allowed_tools`** — restricts workspace primitives (read_file, write_file, etc.)
-- **`skills`** — restricts frontmatter skills (from workspace `skills/`, or global `skills/` in CWD)
+- **`capabilities`** — hard runtime permissions controlling workspace primitives and subsystem access
+- **`skill_packages`** — skill/workflow packages loaded into the agent prompt and tool registry
 
 ```toml
 # Read-only advisor — no write or execute
 [agents.reviewer]
 role = "code_reviewer"
-allowed_tools = ["read_file", "list_directory"]
-skills = ["search", "lint"]
+capabilities = ["workspace.read", "workspace.list"]
+skill_packages = ["search", "lint"]
 
 # Full-access developer
 [agents.developer]
 role = "developer"
-# No allowed_tools = all workspace tools available
-# No skills = all skills available
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
+# No skill_packages = no extra skills loaded
 ```
 
 See [Skills Guide](SKILLS.md) for custom skills and [Sandboxes Guide](SANDBOXES.md) for domain-specific team setups.
@@ -322,7 +322,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "qa"
 workspace = "~/my-project"
-allowed_tools = ["read_file", "list_directory", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.shell"]
 
 [agents.qa.identity]
 name = "QA Agent"
@@ -340,7 +340,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "backend_engineer"
 workspace = "~/my-project"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 
 [agents.backend.identity]
 name = "Backend Engineer"

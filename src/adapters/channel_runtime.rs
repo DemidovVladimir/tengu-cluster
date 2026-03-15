@@ -43,6 +43,7 @@ use crate::domain::capability::{
     filter_tools_by_capability, parse_capability_set, CapabilityId, RegisteredTool,
 };
 use crate::domain::chat::ChatLoopState;
+use crate::domain::run_state::RunState;
 use crate::domain::secret_registry::SecretRegistry;
 use crate::domain::skill::SkillExecution;
 use crate::domain::skill::SkillStatus;
@@ -326,13 +327,11 @@ pub(crate) fn build_memory_handle(
                                 Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
                             })
                     }
-                    _ => {
-                        DiskVectorMemoryStore::new(&resolved_store_path)
-                            .ok()
-                            .map(|s| {
-                                Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
-                            })
-                    }
+                    _ => DiskVectorMemoryStore::new(&resolved_store_path)
+                        .ok()
+                        .map(|s| {
+                            Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
+                        }),
                 };
 
             store.map(|s| {
@@ -477,6 +476,29 @@ pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
     format!("{}...(truncated)", &text[..end])
 }
 
+/// Render a compact shared-run-state section for dependent task prompts.
+pub(crate) fn format_run_state_prompt(run_state: &RunState) -> String {
+    format!(
+        "## Shared Run State\n{}\n",
+        run_state.artifacts_for_prompt(20)
+    )
+}
+
+/// Runtime artifact requirements for known workflow roles.
+pub(crate) fn required_artifacts_for_role(role: &str) -> &'static [&'static str] {
+    match role {
+        "mol_labs" => &["mint.ipnft_symbol", "mint.token_id", "mint.project_url"],
+        "beach_scientist" => &[
+            "mint.project_url",
+            "mint.mint_tx",
+            "project.ipnft_uid",
+            "project.project_url",
+            "project.dataset_id",
+        ],
+        _ => &[],
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Skill list formatting
 // ---------------------------------------------------------------------------
@@ -599,6 +621,13 @@ mod tests {
         let text = "aaaaaaaaébb";
         let result = truncate_output(text, 9); // Cuts mid-é
         assert!(result.ends_with("...(truncated)"));
+    }
+
+    #[test]
+    fn required_artifacts_for_role_desci_defaults() {
+        assert!(required_artifacts_for_role("mol_labs").contains(&"mint.token_id"));
+        assert!(required_artifacts_for_role("beach_scientist").contains(&"project.dataset_id"));
+        assert!(required_artifacts_for_role("unknown").is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # DeSci Guide: IP-NFT Minting with Tengu + Aura-Orchestrator
 
-End-to-end guide for minting IP-NFTs on Molecule DeSci Labs using Tengu agents with Privy agentic wallets.
+End-to-end guide for minting IP-NFTs on Molecule DeSci Labs using Tengu agents.
 
 ---
 
@@ -11,13 +11,15 @@ End-to-end guide for minting IP-NFTs on Molecule DeSci Labs using Tengu agents w
 | **OpenRouter API key** (or Anthropic/OpenAI) | https://openrouter.ai |
 | **Telegram bot token** | @BotFather on Telegram |
 | **Molecule API key** | Molecule DeSci Labs team |
+| **Molecule service token** | Molecule DeSci Labs team (JWT for Workflows 2-4) |
 | **POI API key** | Molecule DeSci Labs team |
-| **Privy app ID + secret** | https://dashboard.privy.io |
+| **EVM private key** | Wallet with Sepolia ETH for on-chain signing |
+| **Sepolia RPC URL** | Alchemy, Infura, or public endpoint |
 | **Sepolia ETH** (~0.01) | Sepolia faucet |
 
 ---
 
-## Step 1: Build Tengu
+## Step 1: Build Tengu and Tools
 
 ```bash
 git clone https://github.com/user/tengu-cluster.git
@@ -34,82 +36,23 @@ cargo run -- secret init
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 cargo run -- secret set TELEGRAM_BOT_TOKEN 123456:ABC-DEF...
 cargo run -- secret set MOLECULE_API_KEY mol-...
+cargo run -- secret set MOLECULE_SERVICE_TOKEN jwt-...
 cargo run -- secret set POI_API_KEY poi-...
-cargo run -- secret set PRIVY_APP_ID clz...
-cargo run -- secret set PRIVY_APP_SECRET your-secret
+cargo run -- secret set EVM_PRIVATE_KEY 0xabcdef...
+cargo run -- secret set EVM_RPC_URL https://rpc.sepolia.org
 ```
 
 Set `TENGU_MASTER_PASSWORD` env var to skip the interactive password prompt on startup.
 
-## Step 3: Create a Privy Wallet
+## Step 3: Fund the Wallet
 
-Create an agentic wallet with a safety policy. You can do this from the command line:
-
-```bash
-# Create a policy (Sepolia only, max 0.01 ETH per tx)
-curl -X POST "https://api.privy.io/v1/policies" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": "1.0",
-    "name": "DeSci agent policy",
-    "chain_type": "ethereum",
-    "rules": [
-      {
-        "name": "Max 0.01 ETH per tx",
-        "method": "eth_sendTransaction",
-        "conditions": [{
-          "field_source": "ethereum_transaction",
-          "field": "value",
-          "operator": "lte",
-          "value": "10000000000000000"
-        }],
-        "action": "ALLOW"
-      },
-      {
-        "name": "Sepolia only",
-        "method": "eth_sendTransaction",
-        "conditions": [{
-          "field_source": "ethereum_transaction",
-          "field": "chain_id",
-          "operator": "eq",
-          "value": "11155111"
-        }],
-        "action": "ALLOW"
-      }
-    ]
-  }'
-```
-
-Save the `id` from the response, then create the wallet:
-
-```bash
-curl -X POST "https://api.privy.io/v1/wallets" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "chain_type": "ethereum",
-    "policy_ids": ["<policy_id>"]
-  }'
-```
-
-Save the `id` as your wallet ID and `address` as the wallet address:
-
-```bash
-cargo run -- secret set PRIVY_WALLET_ID <wallet_id>
-```
-
-## Step 4: Fund the Wallet
-
-Send at least 0.01 Sepolia ETH to your wallet address. You'll need:
+Your EVM wallet needs at least 0.01 Sepolia ETH:
 - ~0.001 ETH for the POI on-chain submission + gas
 - 0.001 ETH for the mint fee + gas
 
 Get Sepolia ETH from a faucet (e.g., Alchemy Sepolia faucet, Google Cloud faucet).
 
-## Step 5: Configure Tengu
+## Step 4: Configure Tengu
 
 Create or edit your config file (`~/.tengu/config.toml`):
 
@@ -118,7 +61,7 @@ Create or edit your config file (`~/.tengu/config.toml`):
 default = true
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
-skills = ["aura-orchestrator", "privy"]
+skill_packages = ["aura-orchestrator"]
 
 [telegram]
 enabled = true
@@ -142,13 +85,13 @@ cargo run -- telegram --sandbox desci
 
 The DeSci sandbox uses per-workspace memory isolation — memories from DeSci runs do not pollute other sandbox recall results. When the orchestrator completes a multi-agent task, it auto-summarizes results into a topic overview stored in memory, so future runs can recall prior work context automatically.
 
-## Step 6: Start the Bot
+## Step 5: Start the Bot
 
 ```bash
 cargo run -- telegram
 ```
 
-## Step 7: Mint an IP-NFT
+## Step 6: Mint an IP-NFT
 
 Attach a PDF (for POI) and a cover image (PNG/JPG) to your Telegram message and provide **all required fields**:
 
@@ -166,21 +109,14 @@ Mint an IP-NFT with:
 
 The agent follows the aura-orchestrator workflow automatically:
 
-1. **Resolves wallet address** from Privy
-2. **Registers POI** — uploads your PDF to the Molecule proof-of-invention API
-3. **Submits POI on-chain** — sends transaction via Privy wallet (automatic, no approval needed)
-4. **Generates assignment agreement** — via Molecule GraphQL
-5. **Uploads cover image and metadata** — via Molecule GraphQL
-6. **Signs terms** — signs the terms message via Privy `personal_sign` (automatic)
-7. **Gets authorization** — via Molecule GraphQL
-8. **Mints the IP-NFT** — sends mint transaction via Privy wallet (0.001 ETH, automatic)
-9. **Returns the project URL** — e.g. `https://testnet.molecule.xyz/ipnfts/42`
+1. **Registers POI** — uploads your PDF to the Molecule proof-of-invention API via `poi_register_document`, which returns POI transaction data and a merkle root
+2. **Mints the IP-NFT** — the `mint_ipnft` native tool submits the POI on-chain via alloy (using `EVM_PRIVATE_KEY`), then handles the full Molecule GraphQL flow: reservation, assignment agreement, image upload, metadata, terms signing, signoff, and the final mint transaction. Outputs structured JSON with `reservation_id`, `token_id`, `mint_tx`, `metadata_cid`, and `project_url`
 
-All on-chain operations are autonomous — no manual approval needed. The Privy policy ensures spending limits are enforced.
+All output values come from the native tool results — the agent saves them exactly as returned, never fabricating data.
 
 ## After Minting
 
-Once your IP-NFT is minted, you can continue with additional workflows. The agent will automatically obtain a Molecule service token (via wallet signature) for these operations:
+Once your IP-NFT is minted, you can continue with additional workflows (requires `MOLECULE_SERVICE_TOKEN`):
 
 **Create a project data room:**
 ```
@@ -206,18 +142,18 @@ You don't need Tengu or Telegram to use the aura-orchestrator skill. The Privy w
 ### 1. Set up env vars
 
 ```bash
-export PRIVY_APP_ID=clz...
-export PRIVY_APP_SECRET=your-secret
-export PRIVY_WALLET_ID=your-wallet-id
 export MOLECULE_API_KEY=mol-...
+export MOLECULE_SERVICE_TOKEN=jwt-...
 export POI_API_KEY=poi-...
+export EVM_PRIVATE_KEY=0xabcdef...
+export EVM_RPC_URL=https://rpc.sepolia.org
 export MOLECULE_LABS_URL=https://staging.graphql.api.molecule.xyz/graphql
 export MOLECULE_CLIENT_URL=https://testnet.molecule.xyz
 ```
 
 ### 2. Use the skills
 
-Paste the contents of `skills/aura-orchestrator/SKILL.md` and `skills/privy/SKILL.md` into your Claude Code session or OpenClaw workspace. The skill instructions use Privy API calls directly — no relay or wallet page needed.
+Paste the contents of `skills/aura-orchestrator/SKILL.md` into your Claude Code session or OpenClaw workspace. The skill provides workflow reference for the native DeSci tools.
 
 ---
 
@@ -225,16 +161,30 @@ Paste the contents of `skills/aura-orchestrator/SKILL.md` and `skills/privy/SKIL
 
 | Problem | Solution |
 |---------|----------|
-| "PRIVY_APP_ID not set" | Store it via `cargo run -- secret set PRIVY_APP_ID ...` |
-| "PRIVY_WALLET_ID not set" | Create a wallet (Step 3), then store the ID |
-| `POLICY_VIOLATION` from Privy | Transaction exceeds policy limits. Check spending limits and chain restrictions. |
-| `INSUFFICIENT_FUNDS` from Privy | Fund the wallet with more Sepolia ETH (Step 4) |
+| Agent says `EVM_PRIVATE_KEY` not set | Store it via `cargo run -- secret set EVM_PRIVATE_KEY 0x...` |
+| Agent says `EVM_RPC_URL` not set | Store it via `cargo run -- secret set EVM_RPC_URL https://rpc.sepolia.org` |
 | Agent says `MOLECULE_API_KEY` not set | Store it via `cargo run -- secret set MOLECULE_API_KEY ...` |
 | Agent says `POI_API_KEY` not set | Store it via `cargo run -- secret set POI_API_KEY ...` |
-| `cast` command not found (for ABI encoding) | Install Foundry: `curl -L https://foundry.paradigm.xyz \| bash && foundryup` |
 | Mint transaction reverts | Check you have enough Sepolia ETH (0.001 + gas) |
-| `SERVICE_AUTH_FAILED` | Service token expired. Agent will re-acquire automatically. |
-| `401 Unauthorized` from Privy | Check PRIVY_APP_ID and PRIVY_APP_SECRET are correct |
+| `SERVICE_AUTH_FAILED` | Service token expired. Get a new one and update `MOLECULE_SERVICE_TOKEN`. |
+| Agent fabricates values | Stale state? Run `tengu prune --sandbox desci --yes` |
+| Stale conversation/memory from prior runs | Run `tengu prune --sandbox desci --yes` to reset all ephemeral state |
+
+---
+
+## Cleaning Up State
+
+After debugging or failed runs, use `tengu prune` to wipe all cached/ephemeral state (conversations, memory, task outcomes, attachments, logs) while preserving config and secrets:
+
+```bash
+# Preview what will be removed
+tengu prune --sandbox desci
+
+# Skip confirmation
+tengu prune --sandbox desci --yes
+```
+
+In Telegram, use `/purge` to clear conversation state, persistent memory, and workspace artifacts.
 
 ---
 
@@ -242,9 +192,7 @@ Paste the contents of `skills/aura-orchestrator/SKILL.md` and `skills/privy/SKIL
 
 | Resource | Link |
 |----------|------|
-| Privy agentic wallets skill | [skills/privy/SKILL.md](../skills/privy/SKILL.md) |
 | Aura-orchestrator skill reference | [skills/aura-orchestrator/SKILL.md](../skills/aura-orchestrator/SKILL.md) |
 | Full configuration reference | [docs/CONFIGURATION.md](CONFIGURATION.md) |
 | DeSci sandbox (multi-agent team) | [sandboxes/desci/config.toml](../sandboxes/desci/config.toml) |
-| Privy dashboard | https://dashboard.privy.io |
 | Molecule DeSci Labs | https://testnet.molecule.xyz |

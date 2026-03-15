@@ -67,6 +67,10 @@ Forbidden:
 | `task.rs` | Task lifecycle model (status machine, retry logic) |
 | `memory.rs` | Memory entry types (with metadata `HashMap<String, String>`), cosine similarity, token budgeting |
 | `secret_registry.rs` | Secret value registry for output redaction (pure, no I/O) |
+| `approval.rs` | DenyByDefaultApproval trait implementation |
+| `capability.rs` | CapabilityId, EffectClass (Read/Write/ExternalApi/ChainTx/ShellExec), RegisteredTool, capability filtering |
+| `run_state.rs` | TaskExecutionRecord, RunState (artifact tracking across task outputs) |
+| `tool_result.rs` | ToolResultEnvelope — structured JSON output format (status, artifacts, ids, urls, hashes, provenance) |
 
 ### Application Layer (`src/application/`)
 
@@ -82,7 +86,9 @@ Forbidden:
 | `workspace_tools_catalog.rs` | Built-in workspace primitive definitions: read_file, list_directory, write_file, run_command |
 | `tool_use_service.rs` | Tool execution with policy check, activity publishing, and approval gate |
 | `skill_catalog.rs` | Skill loading (`LoadedSkillSet`), validation, per-agent filtering, context fragment collection |
+| `skill_commands.rs` | Skill-provided CLI command routing |
 | `task_orchestrator.rs` | Task lifecycle service (create/assign/complete/retry) |
+| `task_planner.rs` | Multi-agent task planning: classify_request, generate_plan, resolve_execution_order, validate/repair plan dependencies |
 | `memory_service.rs` | Memory application service (embed→store with metadata, embed→search→budget recall, metadata-filtered recall, forget) |
 | `skill_registry.rs` | Mutable skill registry with hot-reload, enable/disable |
 
@@ -90,7 +96,9 @@ Forbidden:
 
 | File | Purpose |
 |------|---------|
+| `api_skill_executor.rs` | API-based skill execution adapter (curl templates, env var expansion) |
 | `channel_runtime.rs` | Shared channel runtime helpers: tool/executor/prompt rebuilding, per-workspace memory init (`resolve_memory_store_path`, `resolve_qdrant_collection`), output truncation, agent routing, message chunking, state factories — all channel adapters delegate here |
+| `desci_tools.rs` | Native DeSci tool executor — 6 tools: poi_register_document, mint_ipnft, create_molecule_project, upload_molecule_file, create_molecule_announcement, publish_beach_post |
 | `tui/mod.rs` | Full-screen TUI with cursive, interactive tool approval dialog, delegates to channel_runtime + application services |
 | `workspace_tools.rs` | Filesystem tool execution adapter (read_file, list_directory, write_file, run_command) |
 | `flow_store.rs` | JSON-based flow persistence |
@@ -109,6 +117,8 @@ Forbidden:
 | `memory_tool_executor.rs` | Memory tool definitions + execution bridge (owns `remember` ToolDef with optional metadata parameter, sync→async via dedicated runtime) |
 | `tool_ui.rs` | Shared generic UI helpers for tool approval dialogs and activity summaries (no tool name matching) |
 | `secret_store.rs` | AES-256-GCM encrypted secrets vault (PBKDF2 key derivation, rpassword prompting) |
+| `prune.rs` | Ephemeral state cleanup: plan/execute removal of flows, memory vectors, task outcomes, attachments, logs — used by `tengu prune` CLI and `/purge` Telegram command |
+| `scaffold.rs` | Workspace auto-creation: directories and seed files from config, runs before agents start |
 | `telegram_runtime.rs` | Headless Telegram bot adapter: TelegramPipe → ChatRuntimeService, inline keyboard approval, typing indicator, file attachments, inline inter-agent data passing, auto-summarize topic overviews, RAG planner recall, delegates to channel_runtime for shared logic |
 
 ### Channel Adapters (`crates/tengu-channels/`)

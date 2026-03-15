@@ -1,6 +1,9 @@
 # Wallet & On-Chain Signing
 
-Tengu uses **Privy agentic wallets** for on-chain operations. The agent controls a server-side wallet autonomously, with policy-based guardrails enforced by Privy.
+Tengu supports two on-chain signing methods:
+
+- **Direct signing** — `EVM_PRIVATE_KEY` via alloy (used by the DeSci minting pipeline's native tools)
+- **Privy agentic wallets** — server-side wallet controlled by the agent with policy-based guardrails (used by the `/wallet` command and available for custom workflows)
 
 ## Architecture
 
@@ -153,7 +156,7 @@ export PRIVY_APP_SECRET=your-secret
 export PRIVY_WALLET_ID=your-wallet-id
 ```
 
-Use `skills/privy/SKILL.md` for general wallet operations, or `skills/aura-orchestrator/SKILL.md` for DeSci-specific workflows.
+Use `skills/aura-orchestrator/SKILL.md` for DeSci-specific workflows. The wallet API calls can be made via curl with the Privy credentials.
 
 ## Troubleshooting
 

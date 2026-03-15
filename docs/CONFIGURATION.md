@@ -337,6 +337,7 @@ skill_packages = ["search", "test_runner"]
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `role` | string? | none | Any non-empty string (e.g., `"qa"`, `"frontend_engineer"`, `"warehouse_manager"`). Used for task routing in orchestrator. |
+| `requires` | string[] | `[]` | Role keys this agent depends on. Tasks for this agent must follow tasks from these roles. Used by the planner to enforce correct dependency ordering. |
 | `capabilities` | string[] | `[]` | Hard runtime permissions. Examples: `workspace.read`, `workspace.write`, `workspace.shell`, `memory.remember`, `skill.aura_orchestrator`, `desci.poi.register`. |
 | `skill_packages` | string[] | `[]` | Skill/workflow packages to load into the agent prompt and tool registry. |
 
@@ -479,7 +480,11 @@ allowed_users = ["123456789", "987654321"]
 
 **Token budget warnings:** When a conversation reaches 80% of `max_tokens_per_flow`, a warning message is sent showing current usage and remaining budget. At 100%, further requests are blocked until `/reset`.
 
-**Slash commands in Telegram:** The bot supports the same slash commands as TUI mode (`/help`, `/cost`, `/reset`, `/purge`, `/reload`, `/skills`, etc.) plus these Telegram-specific commands:
+**Slash commands in Telegram:** The bot supports the same slash commands as TUI mode (`/help`, `/cost`, `/reset`, `/purge`, `/reload`, `/skills`, etc.) plus these Telegram-specific commands.
+
+`/purge` clears conversation state, wipes persistent memory, and cleans workspace disk artifacts (`.tengu-tasks/`, `.tengu-attachments/`). Use the CLI equivalent `tengu prune --sandbox <name>` to also clean global state (flows, logs, global memory).
+
+Telegram-specific commands:
 
 | Command | Description |
 |---------|-------------|
@@ -490,20 +495,18 @@ allowed_users = ["123456789", "987654321"]
 | `/wallet` | Show Privy wallet address and balance |
 | `/wallet status` | Show wallet ID, address, balance, and policy |
 
-#### Wallet (Privy Agentic Wallets)
+#### Wallet
 
-On-chain operations (IP-NFT minting, POI submission, terms signing) use a **Privy agentic wallet** — a server-side wallet controlled by the agent with policy-based guardrails.
+The `/wallet` and `/wallet status` commands query the Privy agentic wallet API to show wallet address and balance.
 
-**Setup:**
+**DeSci minting** uses `EVM_PRIVATE_KEY` directly for on-chain signing via native tools (alloy). Privy agentic wallets are available as an optional alternative for other use cases.
+
+**Privy setup** (optional):
 1. Create a Privy app at [dashboard.privy.io](https://dashboard.privy.io)
 2. Store credentials: `cargo run -- secret set PRIVY_APP_ID ...` and `cargo run -- secret set PRIVY_APP_SECRET ...`
-3. Create a wallet with a policy (the agent can do this via the `privy` skill)
-4. Store the wallet ID: `cargo run -- secret set PRIVY_WALLET_ID ...`
-5. Fund the wallet with Sepolia ETH (0.002+ ETH for minting)
+3. Store the wallet ID: `cargo run -- secret set PRIVY_WALLET_ID ...`
 
-The agent signs transactions and messages autonomously — no user approval needed per transaction. Security is enforced by Privy policies (spending limits, chain restrictions, contract allowlists).
-
-**Prerequisites:** Set `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, and `PRIVY_WALLET_ID` environment variables.
+**Prerequisites for `/wallet`:** Set `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, and `PRIVY_WALLET_ID` environment variables.
 
 ---
 
@@ -603,7 +606,10 @@ All environment variables. Export them in your shell, `direnv`, process manager,
 | `MOLECULE_API_KEY` | aura-orchestrator skill | Molecule DeSci Labs API key (sent as `x-api-key` header) |
 | `MOLECULE_LABS_URL` | aura-orchestrator skill | GraphQL endpoint (e.g., `https://staging.graphql.api.molecule.xyz/graphql`) |
 | `MOLECULE_CLIENT_URL` | aura-orchestrator | Client URL for project links (e.g., `https://testnet.molecule.xyz`) |
+| `MOLECULE_SERVICE_TOKEN` | aura-orchestrator (Workflows 2-4) | Service token JWT for file uploads and announcements |
 | `POI_API_KEY` | POI registration (Workflow 1) | Bearer token for `testnet.molecule.xyz/api/v1/inventions` |
+| `EVM_PRIVATE_KEY` | DeSci minting (aura-orchestrator) | Wallet private key (hex) for on-chain signing via native tools (alloy) |
+| `EVM_RPC_URL` | DeSci minting (aura-orchestrator) | Sepolia RPC endpoint (e.g., `https://rpc.sepolia.org`) |
 
 ---
 

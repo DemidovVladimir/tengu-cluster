@@ -74,6 +74,8 @@ cargo run -- secret init      # Create encrypted secrets vault
 cargo run -- secret set K V   # Store a secret
 cargo run -- secret list      # List stored secret keys
 cargo run -- secret remove K  # Remove a secret
+cargo run -- prune            # Remove all cached/ephemeral state
+cargo run -- prune --sandbox desci  # Also clean workspace state
 ```
 
 ### Chat Commands
@@ -86,7 +88,7 @@ cargo run -- secret remove K  # Remove a secret
 | `/engine` | Current engine details |
 | `/eco` / `/standard` / `/precise` | Switch lens mode |
 | `/reset` | Clear conversation |
-| `/purge` | Clear conversation + wipe persistent memory |
+| `/purge` | Clear conversation + wipe persistent memory + clean workspace artifacts |
 | `/reload` | Re-read env vars + re-scan skills |
 | `/skills` | List discovered skills |
 | `/enable N` / `/disable N` | Enable/disable a skill |
@@ -194,15 +196,9 @@ Agents call these tools during conversation. Load them per agent with `skill_pac
 
 See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
 
-## Standalone Tools
+## On-Chain Signing
 
-The `tools/` directory contains standalone infrastructure that agents use via skills and primitives — no code changes to tengu-cluster required:
-
-| Tool | Description |
-|------|-------------|
-| `tools/tengu-relay` | Cloudflare Worker — API key injection proxy for Molecule/POI/Beach Science (planned rewrite, currently legacy KV bridge) |
-
-On-chain operations use **Privy agentic wallets** — server-side wallets controlled by the agent with policy-based guardrails. No wallet page or relay needed for signing.
+DeSci minting uses `EVM_PRIVATE_KEY` for direct on-chain signing via alloy — the full minting pipeline (reservation, metadata upload, terms signing, mint transaction) runs natively inside `src/adapters/desci_tools.rs`. Other workflows can use **Privy agentic wallets** for policy-based guardrails.
 
 ## Deployment
 

@@ -75,7 +75,10 @@ fn parse_route_decision(
         Ok(v) => v,
         Err(_) => return Ok(RouteDecision::MultiAgent),
     };
-    let route = value.get("route").and_then(|v| v.as_str()).unwrap_or("multi");
+    let route = value
+        .get("route")
+        .and_then(|v| v.as_str())
+        .unwrap_or("multi");
     if route == "single" {
         if let Some(role) = value.get("role").and_then(|v| v.as_str()) {
             if agent_descriptions.contains_key(role) {
@@ -97,6 +100,10 @@ pub(crate) struct PlanTask {
     /// IDs of tasks that must complete before this one starts.
     pub depends_on: Vec<String>,
 }
+
+/// Declared dependency constraints from agent config.
+/// Maps role_key -> list of role_keys it must depend on.
+pub(crate) type RoleDependencies = HashMap<String, Vec<String>>;
 
 /// Generate an execution plan by asking an LLM to decompose a goal into tasks
 /// with dependency information.
@@ -126,10 +133,11 @@ pub(crate) async fn generate_plan(
          - Each task gets a unique short id (snake_case)\n\
          - Use ONLY the exact role keys listed above\n\
          - depends_on lists task ids that MUST complete first (empty = can run immediately)\n\
-         - Tasks with no dependency on each other SHOULD have empty depends_on so they run in parallel\n\
+         - CRITICAL: If an agent's description says REQUIRES (must depend on), then every task for that agent \
+           MUST have depends_on that includes a task from each required role. This is mandatory, not optional.\n\
+         - Only parallelize tasks whose agents have no REQUIRES relationship with each other\n\
          - Each task must be specific and actionable\n\
-         - Keep to 2-6 tasks\n\
-         - Think about what can run in parallel vs what needs sequential execution",
+         - Keep to 2-6 tasks",
         team
     );
 
@@ -160,6 +168,19 @@ pub(crate) fn resolve_execution_order(tasks: &[PlanTask]) -> Result<Vec<Vec<usiz
         .map(|(i, t)| (t.id.as_str(), i))
         .collect();
 
+    // Reject unknown dependency IDs instead of silently treating them as satisfied.
+    for task in tasks {
+        for dep in &task.depends_on {
+            if !id_to_idx.contains_key(dep.as_str()) {
+                anyhow::bail!(
+                    "Task '{}' depends on unknown task '{}' — plan is invalid",
+                    task.id,
+                    dep
+                );
+            }
+        }
+    }
+
     let mut completed: Vec<bool> = vec![false; tasks.len()];
     let mut batches: Vec<Vec<usize>> = Vec::new();
     let mut remaining = tasks.len();
@@ -177,7 +198,7 @@ pub(crate) fn resolve_execution_order(tasks: &[PlanTask]) -> Result<Vec<Vec<usiz
             let deps_met = task.depends_on.iter().all(|dep| {
                 id_to_idx
                     .get(dep.as_str())
-                    .map_or(true, |&idx| completed[idx])
+                    .map_or(false, |&idx| completed[idx])
             });
             if deps_met {
                 batch.push(i);
@@ -194,6 +215,156 @@ pub(crate) fn resolve_execution_order(tasks: &[PlanTask]) -> Result<Vec<Vec<usiz
     }
 
     Ok(batches)
+}
+
+/// Auto-repair a plan by injecting missing `depends_on` entries based on
+/// declared `requires` constraints. For each task whose role requires another
+/// role, ensures at least one transitive dependency on a task from that role.
+/// Returns the number of edges added.
+pub(crate) fn repair_plan_dependencies(
+    tasks: &mut [PlanTask],
+    role_deps: &RoleDependencies,
+) -> usize {
+    // Snapshot: role -> last task id, and id -> (index, role) — all owned.
+    let last_task_for_role: HashMap<String, String> = {
+        let mut map = HashMap::new();
+        for task in tasks.iter() {
+            map.insert(task.role.clone(), task.id.clone());
+        }
+        map
+    };
+    let id_to_meta: HashMap<String, (usize, String)> = tasks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.clone(), (i, t.role.clone())))
+        .collect();
+
+    // Collect repairs as (task_index, dep_id_to_add).
+    let mut repairs: Vec<(usize, String)> = Vec::new();
+    for i in 0..tasks.len() {
+        let required_roles = match role_deps.get(&tasks[i].role) {
+            Some(deps) => deps.clone(),
+            None => continue,
+        };
+
+        for required_role in &required_roles {
+            // Walk transitive deps to check if already satisfied.
+            let mut visited = std::collections::HashSet::new();
+            let mut stack: Vec<String> = tasks[i].depends_on.clone();
+            let mut found = false;
+            while let Some(dep_id) = stack.pop() {
+                if !visited.insert(dep_id.clone()) {
+                    continue;
+                }
+                if let Some((idx, role)) = id_to_meta.get(&dep_id) {
+                    if role == required_role {
+                        found = true;
+                        break;
+                    }
+                    stack.extend(tasks[*idx].depends_on.clone());
+                }
+            }
+            if found {
+                continue;
+            }
+
+            if let Some(dep_task_id) = last_task_for_role.get(required_role.as_str()) {
+                if !tasks[i].depends_on.contains(dep_task_id) {
+                    repairs.push((i, dep_task_id.clone()));
+                }
+            }
+        }
+    }
+
+    let added = repairs.len();
+    for (idx, dep_id) in repairs {
+        tasks[idx].depends_on.push(dep_id);
+    }
+    added
+}
+
+/// Validate a plan against declared role dependencies.
+///
+/// If role B `requires` role A, then every task assigned to B must
+/// (transitively) depend on at least one task assigned to A.
+pub(crate) fn validate_plan_dependencies(
+    tasks: &[PlanTask],
+    role_deps: &RoleDependencies,
+) -> Result<()> {
+    // Build role -> task IDs mapping.
+    let mut role_tasks: HashMap<&str, Vec<&str>> = HashMap::new();
+    for task in tasks {
+        role_tasks
+            .entry(task.role.as_str())
+            .or_default()
+            .push(task.id.as_str());
+    }
+
+    // Build task -> set of transitive dependencies.
+    let id_to_task: HashMap<&str, &PlanTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut transitive_deps: HashMap<&str, std::collections::HashSet<&str>> = HashMap::new();
+
+    fn collect_deps<'a>(
+        task_id: &'a str,
+        id_to_task: &HashMap<&str, &'a PlanTask>,
+        cache: &mut HashMap<&'a str, std::collections::HashSet<&'a str>>,
+    ) -> std::collections::HashSet<&'a str> {
+        if let Some(cached) = cache.get(task_id) {
+            return cached.clone();
+        }
+        let mut deps = std::collections::HashSet::new();
+        if let Some(task) = id_to_task.get(task_id) {
+            for dep_id in &task.depends_on {
+                deps.insert(dep_id.as_str());
+                deps.extend(collect_deps(dep_id.as_str(), id_to_task, cache));
+            }
+        }
+        cache.insert(task_id, deps.clone());
+        deps
+    }
+
+    for task in tasks {
+        collect_deps(task.id.as_str(), &id_to_task, &mut transitive_deps);
+    }
+
+    // Check: for each role with declared requirements, every task assigned to it
+    // must transitively depend on at least one task from each required role.
+    for (role, required_roles) in role_deps {
+        let tasks_for_role: Vec<&PlanTask> = tasks.iter().filter(|t| t.role == *role).collect();
+        if tasks_for_role.is_empty() {
+            continue; // Role not used in this plan.
+        }
+
+        for required_role in required_roles {
+            let required_task_ids: Vec<&str> = role_tasks
+                .get(required_role.as_str())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+                .to_vec();
+            if required_task_ids.is_empty() {
+                continue; // Required role not in plan — can't enforce.
+            }
+
+            for task in &tasks_for_role {
+                let deps = transitive_deps
+                    .get(task.id.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let has_required = required_task_ids.iter().any(|rid| deps.contains(rid));
+                if !has_required {
+                    anyhow::bail!(
+                        "Task '{}' (role '{}') must depend on a '{}' task but doesn't. \
+                         Add depends_on to fix the plan.",
+                        task.id,
+                        role,
+                        required_role,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Extract a JSON object from text that may contain markdown fences or prose.
@@ -436,5 +607,205 @@ mod tests {
         ];
         let batches = resolve_execution_order(&tasks).unwrap();
         assert_eq!(batches.len(), 3);
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_dependency() {
+        let tasks = vec![
+            PlanTask {
+                id: "a".into(),
+                role: "r1".into(),
+                task: "do A".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "b".into(),
+                role: "r2".into(),
+                task: "do B".into(),
+                depends_on: vec!["nonexistent".into()],
+            },
+        ];
+        let err = resolve_execution_order(&tasks).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown task"), "got: {}", msg);
+        assert!(msg.contains("nonexistent"), "got: {}", msg);
+    }
+
+    #[test]
+    fn validate_deps_passes_valid_plan() {
+        let tasks = vec![
+            PlanTask {
+                id: "research".into(),
+                role: "hypothesis_researcher".into(),
+                task: "analyze PDF".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "mint".into(),
+                role: "onchain_minter".into(),
+                task: "mint IPNFT".into(),
+                depends_on: vec!["research".into()],
+            },
+            PlanTask {
+                id: "upload".into(),
+                role: "mol_labs".into(),
+                task: "upload to Molecule".into(),
+                depends_on: vec!["mint".into()],
+            },
+        ];
+        let mut role_deps = RoleDependencies::new();
+        role_deps.insert(
+            "onchain_minter".into(),
+            vec!["hypothesis_researcher".into()],
+        );
+        role_deps.insert("mol_labs".into(), vec!["onchain_minter".into()]);
+
+        assert!(validate_plan_dependencies(&tasks, &role_deps).is_ok());
+    }
+
+    #[test]
+    fn validate_deps_catches_missing_dependency() {
+        // mol_labs requires onchain_minter, but the task has no dependency on any minter task.
+        let tasks = vec![
+            PlanTask {
+                id: "research".into(),
+                role: "hypothesis_researcher".into(),
+                task: "analyze PDF".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "mint".into(),
+                role: "onchain_minter".into(),
+                task: "mint IPNFT".into(),
+                depends_on: vec!["research".into()],
+            },
+            PlanTask {
+                id: "upload".into(),
+                role: "mol_labs".into(),
+                task: "upload to Molecule".into(),
+                depends_on: vec!["research".into()], // wrong: should depend on mint
+            },
+        ];
+        let mut role_deps = RoleDependencies::new();
+        role_deps.insert("mol_labs".into(), vec!["onchain_minter".into()]);
+
+        let err = validate_plan_dependencies(&tasks, &role_deps).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("upload"), "got: {}", msg);
+        assert!(msg.contains("onchain_minter"), "got: {}", msg);
+    }
+
+    #[test]
+    fn validate_deps_transitive_ok() {
+        // beach_scientist requires hypothesis_researcher transitively through onchain_minter.
+        let tasks = vec![
+            PlanTask {
+                id: "research".into(),
+                role: "hypothesis_researcher".into(),
+                task: "analyze".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "mint".into(),
+                role: "onchain_minter".into(),
+                task: "mint".into(),
+                depends_on: vec!["research".into()],
+            },
+            PlanTask {
+                id: "post".into(),
+                role: "beach_scientist".into(),
+                task: "publish".into(),
+                depends_on: vec!["mint".into()], // transitive: mint -> research
+            },
+        ];
+        let mut role_deps = RoleDependencies::new();
+        role_deps.insert(
+            "beach_scientist".into(),
+            vec!["hypothesis_researcher".into(), "onchain_minter".into()],
+        );
+
+        assert!(validate_plan_dependencies(&tasks, &role_deps).is_ok());
+    }
+
+    #[test]
+    fn validate_deps_no_constraints_always_passes() {
+        let tasks = vec![PlanTask {
+            id: "a".into(),
+            role: "any".into(),
+            task: "do something".into(),
+            depends_on: vec![],
+        }];
+        let role_deps = RoleDependencies::new(); // no constraints
+        assert!(validate_plan_dependencies(&tasks, &role_deps).is_ok());
+    }
+
+    #[test]
+    fn repair_adds_missing_dependency() {
+        // Planner produced parallel tasks, but mol_labs requires onchain_minter.
+        let mut tasks = vec![
+            PlanTask {
+                id: "research".into(),
+                role: "hypothesis_researcher".into(),
+                task: "analyze".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "mint".into(),
+                role: "onchain_minter".into(),
+                task: "mint".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "upload".into(),
+                role: "mol_labs".into(),
+                task: "upload".into(),
+                depends_on: vec![],
+            },
+        ];
+        let mut role_deps = RoleDependencies::new();
+        role_deps.insert(
+            "onchain_minter".into(),
+            vec!["hypothesis_researcher".into()],
+        );
+        role_deps.insert("mol_labs".into(), vec!["onchain_minter".into()]);
+
+        // Before repair: validation fails.
+        assert!(validate_plan_dependencies(&tasks, &role_deps).is_err());
+
+        let added = repair_plan_dependencies(&mut tasks, &role_deps);
+        assert!(added >= 2, "expected at least 2 edges added, got {}", added);
+
+        // After repair: validation passes.
+        assert!(validate_plan_dependencies(&tasks, &role_deps).is_ok());
+
+        // And execution order is fully sequential.
+        let batches = resolve_execution_order(&tasks).unwrap();
+        assert_eq!(batches.len(), 3);
+    }
+
+    #[test]
+    fn repair_no_op_when_already_correct() {
+        let mut tasks = vec![
+            PlanTask {
+                id: "research".into(),
+                role: "hypothesis_researcher".into(),
+                task: "analyze".into(),
+                depends_on: vec![],
+            },
+            PlanTask {
+                id: "mint".into(),
+                role: "onchain_minter".into(),
+                task: "mint".into(),
+                depends_on: vec!["research".into()],
+            },
+        ];
+        let mut role_deps = RoleDependencies::new();
+        role_deps.insert(
+            "onchain_minter".into(),
+            vec!["hypothesis_researcher".into()],
+        );
+
+        let added = repair_plan_dependencies(&mut tasks, &role_deps);
+        assert_eq!(added, 0);
     }
 }

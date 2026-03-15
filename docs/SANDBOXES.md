@@ -35,7 +35,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 role = "warehouse_manager"
 workspace = "~/logistics-project"
-allowed_tools = ["read_file", "list_directory", "run_command"]
+capabilities = ["workspace.read", "workspace.list", "workspace.shell"]
 
 [agents.warehouse_manager.identity]
 name = "Warehouse Manager"
@@ -55,24 +55,28 @@ max_tokens_per_flow = 80_000
 | Field | Description |
 |-------|-------------|
 | `role` | Any non-empty string. Used for task routing in orchestrator (`role: task description`). |
-| `allowed_tools` | Optional allowlist of workspace primitives. Omit to grant all. Available: `read_file`, `list_directory`, `write_file`, `run_command`. Subsystem tools (e.g., `remember`) are not affected. |
+| `requires` | List of role keys this agent depends on. The planner ensures tasks for this agent always follow tasks from required roles. Example: `requires = ["hypothesis_researcher"]`. |
+| `capabilities` | Hard runtime permissions. Controls which workspace primitives and subsystem tools the agent can use. See examples below. |
+| `skill_packages` | Skill/workflow packages to load into the agent prompt and tool registry. |
 | `workspace` | Shared or per-agent workspace directory. Tilde expansion supported. |
 | `identity.instructions` | Role-specific system prompt. This is where you define what the agent does. |
-| `skills` | Optional skill allowlist (frontmatter skills in workspace `skills/` directory). |
 
-### Primitive Restrictions
+### Capability Restrictions
 
-The `allowed_tools` field restricts which workspace primitives an agent can use:
+The `capabilities` field controls which workspace primitives and subsystem features an agent can use:
 
 ```toml
 # Read-only advisor — cannot write files or run commands
-allowed_tools = ["read_file", "list_directory"]
+capabilities = ["workspace.read", "workspace.list"]
 
-# Full access (same as omitting allowed_tools entirely)
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+# Full workspace access
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
+
+# Workspace + memory
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember"]
 ```
 
-Subsystem tools (e.g., `remember` from the memory subsystem) are not affected by `allowed_tools` — they are always available when their subsystem is enabled.
+Available workspace capabilities: `workspace.read`, `workspace.list`, `workspace.write`, `workspace.shell`. Subsystem tools (e.g., `memory.remember`) require their corresponding capability. See [CONFIGURATION.md](CONFIGURATION.md) for the full capabilities reference.
 
 ## Using the Orchestrator
 
@@ -127,11 +131,11 @@ A 4-agent web development team:
 
 ### DeSci (`sandboxes/desci/`)
 
-A 4-agent Decentralized Science pipeline:
+A 4-agent Decentralized Science pipeline with declared dependencies:
 - **hypothesis_researcher** — PDF analysis, hypothesis extraction
-- **onchain_minter** — IPNFT minting via Molecule/Sepolia (aura-orchestrator skill)
-- **mol_labs** — Molecule project creation, file uploads, announcements (aura-orchestrator skill)
-- **beach_scientist** — Science publishing on Beach.science (beach-science skill)
+- **onchain_minter** — IPNFT minting via Molecule/Sepolia (`requires = ["hypothesis_researcher"]`)
+- **mol_labs** — Molecule project creation, file uploads (`requires = ["onchain_minter"]`)
+- **beach_scientist** — Science publishing on Beach.science (`requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]`)
 
 ## Workspace Scaffold
 

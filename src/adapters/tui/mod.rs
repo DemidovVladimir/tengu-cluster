@@ -195,7 +195,8 @@ pub fn run_tui(
             .map(|p| workspace_tools::expand_tilde(p));
 
         // Build memory subsystem if enabled.
-        let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
+        let memory_handle =
+            channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
 
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =
@@ -586,6 +587,7 @@ pub fn run_tui(
                                 system_notice,
                                 total_input_tokens,
                                 total_output_tokens,
+                                ..
                             }) => {
                                 let memory_stats = if let Some(ref h) = memory_handle {
                                     let count = h.store.entry_count().await;

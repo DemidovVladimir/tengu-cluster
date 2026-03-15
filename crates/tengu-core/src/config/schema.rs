@@ -152,6 +152,10 @@ pub struct AgentConfig {
     pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
+    /// Roles this agent depends on — tasks for this agent must follow tasks from these roles.
+    /// Used by the planner to enforce correct dependency ordering.
+    #[serde(default)]
+    pub requires: Vec<String>,
 }
 
 fn default_lens() -> String {
@@ -776,6 +780,7 @@ impl Default for Config {
                 capabilities: vec![],
                 skill_packages: vec![],
                 prompt_budget: PromptBudgetConfig::default(),
+                requires: vec![],
             },
         );
 

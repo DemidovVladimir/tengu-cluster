@@ -28,6 +28,9 @@ pub(crate) struct EngineResponse {
     pub text: String,
     pub input_tokens_delta: u32,
     pub output_tokens_delta: u32,
+    /// Tool call outcomes collected during the turn (name, result).
+    /// Used by orchestrators to pass concrete data between agents.
+    pub tool_outcomes: Vec<(String, String)>,
 }
 
 /// Trait for executing tool calls. Implementations decide how to handle
@@ -91,6 +94,7 @@ pub(crate) async fn collect_engine_response(
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
+    let mut tool_outcomes: Vec<(String, String)> = Vec::new();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -101,6 +105,7 @@ pub(crate) async fn collect_engine_response(
                 text: String::new(),
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
+                tool_outcomes,
             });
         }
 
@@ -116,6 +121,7 @@ pub(crate) async fn collect_engine_response(
                 text: response_text,
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
+                tool_outcomes,
             });
         }
 
@@ -138,6 +144,7 @@ pub(crate) async fn collect_engine_response(
                     text: String::new(),
                     input_tokens_delta: total_input_delta,
                     output_tokens_delta: total_output_delta,
+                    tool_outcomes,
                 });
             }
             let result = match executor.execute(tc) {
@@ -147,6 +154,7 @@ pub(crate) async fn collect_engine_response(
             if let Some(observer) = &tool_observer {
                 observer(tc, &result);
             }
+            tool_outcomes.push((tc.name.clone(), result.clone()));
             let content = truncate_tool_result(&result);
             messages.push(Message {
                 role: Role::Tool,
@@ -167,6 +175,7 @@ pub(crate) async fn collect_engine_response(
         text: response_text,
         input_tokens_delta: total_input_delta,
         output_tokens_delta: total_output_delta,
+        tool_outcomes,
     })
 }
 

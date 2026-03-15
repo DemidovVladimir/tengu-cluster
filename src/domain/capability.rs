@@ -88,11 +88,46 @@ impl FromStr for EffectClass {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ToolClass {
+    ReadTool,
+    PrepareTool,
+    ExecuteTool,
+}
+
+impl ToolClass {
+    fn default_for_effect(effect_class: EffectClass) -> Self {
+        match effect_class {
+            EffectClass::Read => Self::ReadTool,
+            EffectClass::Write
+            | EffectClass::ExternalApi
+            | EffectClass::ChainTx
+            | EffectClass::ShellExec => Self::ExecuteTool,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolRuntimeMetadata {
+    pub tool_class: ToolClass,
+    pub output_schema: Option<serde_json::Value>,
+    pub required_secrets: Vec<String>,
+    pub host_allowlist: Vec<String>,
+}
+
+impl Default for ToolClass {
+    fn default() -> Self {
+        Self::ExecuteTool
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RegisteredTool {
     pub def: ToolDef,
     pub capability: CapabilityId,
     pub effect_class: EffectClass,
+    pub metadata: ToolRuntimeMetadata,
 }
 
 impl RegisteredTool {
@@ -115,7 +150,31 @@ impl RegisteredTool {
             },
             capability,
             effect_class,
+            metadata: ToolRuntimeMetadata {
+                tool_class: ToolClass::default_for_effect(effect_class),
+                ..ToolRuntimeMetadata::default()
+            },
         }
+    }
+
+    pub(crate) fn with_tool_class(mut self, tool_class: ToolClass) -> Self {
+        self.metadata.tool_class = tool_class;
+        self
+    }
+
+    pub(crate) fn with_output_schema(mut self, output_schema: serde_json::Value) -> Self {
+        self.metadata.output_schema = Some(output_schema);
+        self
+    }
+
+    pub(crate) fn with_required_secrets(mut self, required_secrets: &[&str]) -> Self {
+        self.metadata.required_secrets = required_secrets.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    pub(crate) fn with_host_allowlist(mut self, host_allowlist: &[&str]) -> Self {
+        self.metadata.host_allowlist = host_allowlist.iter().map(|s| s.to_string()).collect();
+        self
     }
 }
 
@@ -160,5 +219,25 @@ mod tests {
         assert!(EffectClass::ExternalApi.requires_approval());
         assert!(EffectClass::ChainTx.requires_approval());
         assert!(EffectClass::ShellExec.requires_approval());
+    }
+
+    #[test]
+    fn tool_class_defaults_follow_effect_class() {
+        let read_tool = RegisteredTool::new(
+            "read_file",
+            "Read",
+            serde_json::json!({}),
+            CapabilityId::new("workspace.read").unwrap(),
+            EffectClass::Read,
+        );
+        let exec_tool = RegisteredTool::new(
+            "write_file",
+            "Write",
+            serde_json::json!({}),
+            CapabilityId::new("workspace.write").unwrap(),
+            EffectClass::Write,
+        );
+        assert_eq!(read_tool.metadata.tool_class, ToolClass::ReadTool);
+        assert_eq!(exec_tool.metadata.tool_class, ToolClass::ExecuteTool);
     }
 }
