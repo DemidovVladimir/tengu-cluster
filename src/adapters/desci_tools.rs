@@ -373,37 +373,26 @@ impl DesciToolExecutionAdapter {
             Ok::<String, anyhow::Error>(tx_hash)
         })?;
 
+        // Derive reservation ID: POI transaction data cast to uint256 (the merkle root).
+        // This produces a 256-bit ID (> u128), which is the correct format for POI-based minting.
+        let data_hex = poi_transaction_data.strip_prefix("0x").unwrap_or(poi_transaction_data);
+        let data_bytes = alloy::primitives::hex::decode(data_hex)
+            .context("invalid POI transaction data hex")?;
+        let reservation_id = U256::from_be_slice(&data_bytes);
+        if reservation_id.is_zero() {
+            bail!("reservation ID is zero — POI transaction data is invalid");
+        }
+
         // Read image data (sync — local file).
         let image_data = match &image_path {
             Some(path) => std::fs::read(path).with_context(|| format!("read image: {}", path))?,
             None => DEFAULT_PNG.to_vec(),
         };
 
-        // Steps 2-10: Reserve token → Molecule GraphQL flow → on-chain mint.
+        // Steps 2-8: Molecule GraphQL flow → on-chain mint.
         let client = self.client.clone();
         let (reservation_id, mint_tx, metadata_cid) = self.run_async(async {
-            // Step 2: Reserve token ID on the IPNFT contract.
-            let (reserve_tx, reserve_ok, reserve_logs) = send_tx(
-                &signer, &rpc_url, IPNFT_CONTRACT, Some("0xcd3293de"), Some("0"),
-            ).await?;
-            if !reserve_ok {
-                bail!("IPNFT.reserve() reverted: {}", reserve_tx);
-            }
-            let reservation_id = reserve_logs
-                .iter()
-                .find_map(|log| {
-                    if log.topics().len() >= 3 {
-                        Some(U256::from_be_bytes(log.topics()[2].0))
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| anyhow::anyhow!("could not parse reservation ID from reserve() logs"))?;
-            if reservation_id.is_zero() {
-                bail!("reservation ID is zero");
-            }
-
-            // Step 3: Generate assignment agreement.
+            // Step 2: Generate assignment agreement.
             let mut project_data = json!({
                 "project": {
                     "name": name, "description": description,
@@ -435,7 +424,7 @@ impl DesciToolExecutionAdapter {
             let agreement_hash = node["agreementContentHash"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing agreementContentHash"))?.to_string();
 
-            // Step 4: Get image upload URL.
+            // Step 3: Get image upload URL.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
                 "mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) { generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) { uploadUrl key isSuccess error { message code retryable } } }",
                 json!({"filename": "cover.png", "contentType": "image/png", "ipnftId": reservation_id.to_string()}),
@@ -447,7 +436,7 @@ impl DesciToolExecutionAdapter {
             let image_key = node["key"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing image key"))?.to_string();
 
-            // Step 5: Upload image.
+            // Step 4: Upload image.
             let resp = client.put(&upload_url)
                 .header("Content-Type", "image/png")
                 .body(image_data)
@@ -456,7 +445,7 @@ impl DesciToolExecutionAdapter {
                 bail!("image upload failed: {}", resp.status());
             }
 
-            // Step 6: Upload metadata.
+            // Step 5: Upload metadata.
             let metadata = json!({
                 "name": name, "description": description,
                 "external_url": &client_url, "terms_signature": "placeholder",
@@ -480,7 +469,7 @@ impl DesciToolExecutionAdapter {
             let metadata_cid = node["metadataCid"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing metadataCid"))?.to_string();
 
-            // Step 7: Get terms message.
+            // Step 6: Get terms message.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
                 "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }",
                 json!({"metadataCid": &metadata_cid, "minter": &wallet, "chainId": CHAIN_ID as i64}),
@@ -490,7 +479,7 @@ impl DesciToolExecutionAdapter {
             let terms_message = node["message"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing terms message"))?.to_string();
 
-            // Step 8: Sign terms (EIP-191 personal_sign, v = 27/28 to match viem).
+            // Step 7: Sign terms (EIP-191 personal_sign, v = 27/28 to match viem).
             let sig = signer.sign_message(terms_message.as_bytes()).await.context("signing failed")?;
             let v = if sig.v() { 28u8 } else { 27u8 };
             let mut sig_bytes = [0u8; 65];
@@ -499,7 +488,7 @@ impl DesciToolExecutionAdapter {
             sig_bytes[64] = v;
             let signature = format!("0x{}", alloy::primitives::hex::encode(sig_bytes));
 
-            // Step 9: Sign off metadata.
+            // Step 8: Sign off metadata.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
                 "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }",
                 json!({
@@ -515,7 +504,7 @@ impl DesciToolExecutionAdapter {
             let authorization = node["authorization"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing authorization"))?.to_string();
 
-            // Step 10: Mint (ABI-encoded mintReservation call).
+            // Step 9: Mint (ABI-encoded mintReservation call).
             let auth_hex = authorization.strip_prefix("0x").unwrap_or(&authorization);
             let auth_bytes = alloy::primitives::hex::decode(auth_hex).context("invalid authorization hex")?;
             let mint_call = mintReservationCall {
@@ -1016,28 +1005,7 @@ fn molecule_client_host() -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::B256;
     use std::collections::BTreeMap;
-
-    fn extract_reservation_id_from_topic_sets(topic_sets: &[&[B256]]) -> Option<U256> {
-        for topics in topic_sets {
-            if topics.len() >= 3 {
-                let candidate = U256::from_be_bytes(topics[2].0);
-                if !candidate.is_zero() {
-                    return Some(candidate);
-                }
-            }
-        }
-        for topics in topic_sets {
-            if topics.len() >= 2 {
-                let candidate = U256::from_be_bytes(topics[topics.len() - 1].0);
-                if !candidate.is_zero() {
-                    return Some(candidate);
-                }
-            }
-        }
-        None
-    }
 
     #[test]
     fn desci_tools_include_native_execute_wrappers() {
@@ -1065,32 +1033,13 @@ mod tests {
     }
 
     #[test]
-    fn reservation_id_prefers_legacy_topics_two_index() {
-        let topic0 = B256::from([0u8; 32]);
-        let topic1 = B256::from([1u8; 32]);
-        let mut rid = [0u8; 32];
-        rid[31] = 42;
-        let topic2 = B256::from(rid);
-        let topics = vec![vec![topic0, topic1, topic2]];
-        let topic_refs: Vec<&[B256]> = topics.iter().map(|t| t.as_slice()).collect();
-        assert_eq!(
-            extract_reservation_id_from_topic_sets(&topic_refs),
-            Some(U256::from(42u64))
-        );
-    }
-
-    #[test]
-    fn reservation_id_falls_back_to_last_indexed_topic() {
-        let topic0 = B256::from([0u8; 32]);
-        let mut rid = [0u8; 32];
-        rid[31] = 7;
-        let topic1 = B256::from(rid);
-        let topics = vec![vec![topic0, topic1]];
-        let topic_refs: Vec<&[B256]> = topics.iter().map(|t| t.as_slice()).collect();
-        assert_eq!(
-            extract_reservation_id_from_topic_sets(&topic_refs),
-            Some(U256::from(7u64))
-        );
+    fn reservation_id_from_poi_data_is_large() {
+        // POI transaction data (merkle root) cast to uint256 should be > u128.
+        let data_hex = "c6ca4467b7c69b44ef01d5b3cc5c9f4aa0a25a2db13c78055b8b4cb41bbda676";
+        let data_bytes = alloy::primitives::hex::decode(data_hex).unwrap();
+        let reservation_id = U256::from_be_slice(&data_bytes);
+        assert!(!reservation_id.is_zero());
+        assert!(reservation_id > U256::from(u128::MAX));
     }
 
 }
