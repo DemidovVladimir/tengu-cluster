@@ -39,6 +39,10 @@ name = "tengu-cluster"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "tengu"
+path = "src/main.rs"
+
 [dependencies]
 tengu-core.workspace = true
 tengu-backends.workspace = true

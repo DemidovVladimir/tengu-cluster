@@ -26,7 +26,7 @@ use crate::adapters::flow_store::FlowStore;
 use crate::adapters::skill_source::FileSystemSkillSource;
 use crate::adapters::workspace_tools;
 use crate::application::chat_commands::{self, CommandResult, EngineInfo};
-use crate::application::chat_runtime::ChatRuntimeService;
+use crate::application::chat_runtime::{needs_fresh_history_grounding, ChatRuntimeService};
 use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
 use crate::application::flow_policy::resolve_flow_compaction_policy;
 use crate::application::memory_service::MemoryService;
@@ -34,6 +34,7 @@ use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::skill_registry::SkillRegistry;
 use crate::domain::capability::{parse_capability_set, CapabilityId, RegisteredTool};
+use crate::domain::approval::AllowAllApproval;
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::run_state::{RunState, TaskExecutionRecord};
 use crate::domain::secret_registry::SecretRegistry;
@@ -51,12 +52,29 @@ const TELEGRAM_MAX_LEN: usize = 4000;
 // Port adapters for Telegram
 // ---------------------------------------------------------------------------
 
-/// Lightweight tool activity adapter — just logs.
-struct TelegramToolActivityAdapter;
+/// Telegram adapter for tool progress — logs to tracing only, no chat messages.
+struct TelegramToolActivityAdapter {
+    agent_label: String,
+    tools: Vec<RegisteredTool>,
+}
 
 impl ToolActivityPort for TelegramToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        tracing::debug!(tool = %call.name, "Tool activity");
+        let (title, detail) = crate::adapters::tool_ui::build_tool_activity_text(call, &self.tools);
+        let mut text = format!("[{}] {}", self.agent_label, title);
+        if let Some(detail) = detail {
+            text.push_str(": ");
+            text.push_str(&detail);
+        }
+
+        // Log to terminal/file only — don't spam the Telegram chat.
+        // The typing indicator already signals that work is in progress.
+        tracing::info!(
+            agent = %self.agent_label,
+            tool = %call.name,
+            message = %text,
+            "Tool activity"
+        );
     }
 }
 
@@ -255,6 +273,19 @@ fn truncate_summary(text: &str, max: usize) -> String {
     format!("{}…", &text[..end])
 }
 
+fn make_telegram_tool_activity_adapter(
+    pipe: &Arc<tengu_channels::telegram::TelegramPipe>,
+    recipient: &tengu_core::types::Recipient,
+    agent_label: impl Into<String>,
+    tools: &[RegisteredTool],
+) -> Arc<dyn ToolActivityPort> {
+    let _ = (pipe, recipient); // retained in signature for caller compatibility
+    Arc::new(TelegramToolActivityAdapter {
+        agent_label: agent_label.into(),
+        tools: tools.to_vec(),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Multi-agent orchestration (plan-and-execute for Telegram)
 // ---------------------------------------------------------------------------
@@ -328,7 +359,6 @@ async fn orchestrate_team_goal(
     memory_handle: &Option<Arc<crate::adapters::memory_tool_executor::MemoryServiceHandle>>,
     secret_registry: &Arc<SecretRegistry>,
     approval_adapter: &Arc<dyn ToolApprovalPort>,
-    activity_adapter: &Arc<dyn ToolActivityPort>,
     turn_cancel: &Arc<std::sync::atomic::AtomicBool>,
     _user_states: &mut HashMap<String, ChatLoopState>,
     _sender_id: &str,
@@ -617,6 +647,12 @@ async fn orchestrate_team_goal(
             }
 
             // Build tool executor and wrap in Arc for sharing across spawn boundary.
+            let activity_adapter = make_telegram_tool_activity_adapter(
+                pipe,
+                sender,
+                agent_label.clone(),
+                &agent.current_tools,
+            );
             let tool_executor: Option<Arc<dyn ToolExecutor>> =
                 agent.workspace.as_ref().and_then(|ws| {
                     channel_runtime::build_tool_executor(
@@ -626,7 +662,7 @@ async fn orchestrate_team_goal(
                         memory_handle,
                         secret_registry,
                         Arc::clone(approval_adapter),
-                        Arc::clone(activity_adapter),
+                        activity_adapter,
                         Some(Arc::clone(turn_cancel)),
                     )
                     .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
@@ -695,22 +731,17 @@ async fn orchestrate_team_goal(
                     }
                 });
 
-                // Tool observer sends tool-call labels to Telegram.
-                let obs_p = Arc::clone(&obs_pipe);
-                let obs_s = obs_sender.clone();
+                // Keep detailed tool activity in logs, not Telegram replies.
                 let obs_sr = Arc::clone(&sr);
                 let obs_l = obs_label.clone();
                 let observer = move |call: &ToolCall, result: &str| {
-                    let _ = obs_sr.redact(result);
-                    let text = format!("[{}] 🔧 `{}`", obs_l, call.name);
-                    let p = Arc::clone(&obs_p);
-                    let r = obs_s.clone();
-                    tokio::task::block_in_place(move || {
-                        let handle = tokio::runtime::Handle::current();
-                        handle.block_on(async {
-                            let _ = p.send_text(&r, &text, &DeliveryOptions::default()).await;
-                        });
-                    });
+                    let preview = truncate_summary(&obs_sr.redact(result), 500);
+                    tracing::debug!(
+                        agent = %obs_l,
+                        tool = %call.name,
+                        result = %preview,
+                        "Orchestrated Telegram tool result"
+                    );
                 };
 
                 // Build messages and context (owned — no lifetimes).
@@ -747,6 +778,7 @@ async fn orchestrate_team_goal(
 
                 let output = match result {
                     Ok(resp) => {
+                        let user_facing = resp.text.clone();
                         let mut combined = resp.text;
                         // Append tool outcomes so dependent tasks get concrete data
                         // (the LLM's final text may omit values that tool results contain).
@@ -760,7 +792,7 @@ async fn orchestrate_team_goal(
                                 ));
                             }
                         }
-                        Ok((combined, resp.tool_outcomes))
+                        Ok((user_facing, combined, resp.tool_outcomes))
                     }
                     Err(e) => Err(e),
                 };
@@ -788,7 +820,7 @@ async fn orchestrate_team_goal(
                 };
 
             match outcome {
-                Ok((output, tool_outcomes)) => {
+                Ok((_user_output, output, tool_outcomes)) => {
                     let mut artifact_count = 0usize;
                     for (_, result) in &tool_outcomes {
                         if let Some(envelope) = parse_tool_result_envelope(result) {
@@ -797,12 +829,6 @@ async fn orchestrate_team_goal(
                                 + envelope.urls.len()
                                 + envelope.hashes.len();
                             run_state.ingest_tool_envelope(&envelope);
-                        }
-                    }
-                    if !output.is_empty() {
-                        let reply = secret_registry.redact(&output);
-                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                            let _ = pipe.send_text(sender, chunk, delivery_opts).await;
                         }
                     }
                     outcome_data.insert(task_id.clone(), (outcome_rel_path, output.clone()));
@@ -906,18 +932,6 @@ async fn orchestrate_team_goal(
                 summary.push_str(&record.output_summary);
                 summary.push('\n');
             }
-        }
-    }
-
-    let artifacts = run_state.artifacts();
-    if !artifacts.is_empty() {
-        summary.push_str("\n── Key outputs ──\n");
-        for (key, value) in artifacts {
-            let rendered = match value {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            summary.push_str(&format!("• {} = {}\n", key, rendered));
         }
     }
 
@@ -1226,12 +1240,15 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
     rt.block_on(pipe.connect(PipeContext { inbound_tx }))?;
 
     let current_recipient: CurrentRecipient = Arc::new(std::sync::Mutex::new(None));
-    let approval_adapter: Arc<dyn ToolApprovalPort> = Arc::new(TelegramInlineApprovalAdapter {
-        pipe: Arc::clone(&pipe),
-        current_recipient: Arc::clone(&current_recipient),
-        cancel: Arc::clone(&turn_cancel),
-    });
-    let activity_adapter: Arc<dyn ToolActivityPort> = Arc::new(TelegramToolActivityAdapter);
+    let approval_adapter: Arc<dyn ToolApprovalPort> = if config.telegram.tool_approvals {
+        Arc::new(TelegramInlineApprovalAdapter {
+            pipe: Arc::clone(&pipe),
+            current_recipient: Arc::clone(&current_recipient),
+            cancel: Arc::clone(&turn_cancel),
+        })
+    } else {
+        Arc::new(AllowAllApproval)
+    };
 
     let memory_service_instance = memory_handle
         .as_ref()
@@ -1328,7 +1345,6 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         &memory_handle,
                         &secret_registry,
                         &approval_adapter,
-                        &activity_adapter,
                         &turn_cancel,
                         &mut user_states,
                         sender_id,
@@ -1634,6 +1650,18 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     *current_recipient.lock().unwrap() = Some(msg.sender.clone());
 
                     // Build executor.
+                    let agent_label = agent
+                        .agent_config
+                        .identity
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| agent.agent_id.clone());
+                    let activity_adapter = make_telegram_tool_activity_adapter(
+                        &pipe,
+                        &msg.sender,
+                        agent_label,
+                        &agent.current_tools,
+                    );
                     let current_executor =
                         agent.workspace.as_ref().and_then(|ws| {
                             channel_runtime::build_tool_executor(
@@ -1643,7 +1671,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 &memory_handle,
                                 &secret_registry,
                                 Arc::clone(&approval_adapter),
-                                Arc::clone(&activity_adapter),
+                                activity_adapter,
                                 Some(Arc::clone(&turn_cancel)),
                             )
                         });
@@ -1783,7 +1811,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 &delivery_opts, &mut agent_states, &default_agent_id,
                                 &agent_descriptions, &role_to_agent, &current_recipient,
                                 &memory_handle, &secret_registry, &approval_adapter,
-                                &activity_adapter, &turn_cancel, &mut user_states,
+                                &turn_cancel, &mut user_states,
                                 sender_id, &flow_store, refiner.as_ref(),
                                 memory_service_instance.as_ref(), &memory_config,
                             ).await;
@@ -1796,7 +1824,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                             &delivery_opts, &mut agent_states, &default_agent_id,
                             &agent_descriptions, &role_to_agent, &current_recipient,
                             &memory_handle, &secret_registry, &approval_adapter,
-                            &activity_adapter, &turn_cancel, &mut user_states,
+                            &turn_cancel, &mut user_states,
                             sender_id, &flow_store, refiner.as_ref(),
                             memory_service_instance.as_ref(), &memory_config,
                         ).await;
@@ -1809,7 +1837,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                             &delivery_opts, &mut agent_states, &default_agent_id,
                             &agent_descriptions, &role_to_agent, &current_recipient,
                             &memory_handle, &secret_registry, &approval_adapter,
-                            &activity_adapter, &turn_cancel, &mut user_states,
+                            &turn_cancel, &mut user_states,
                             sender_id, &flow_store, refiner.as_ref(),
                             memory_service_instance.as_ref(), &memory_config,
                         ).await;
@@ -1910,6 +1938,16 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             *current_recipient.lock().unwrap() = Some(msg.sender.clone());
 
             // Build executor for this agent.
+            let activity_adapter = make_telegram_tool_activity_adapter(
+                &pipe,
+                &msg.sender,
+                agent.agent_config
+                    .identity
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| agent.agent_id.clone()),
+                &agent.current_tools,
+            );
             let current_executor =
                 agent.workspace.as_ref().and_then(|ws| {
                     channel_runtime::build_tool_executor(
@@ -1919,7 +1957,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         &memory_handle,
                         &secret_registry,
                         Arc::clone(&approval_adapter),
-                        Arc::clone(&activity_adapter),
+                        activity_adapter,
                         Some(Arc::clone(&turn_cancel)),
                     )
                 });
@@ -1933,9 +1971,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
                 Arc::new(std::sync::Mutex::new(Vec::new()));
 
-            // Debug tool observer — sends tool results to Telegram + records for activity log.
-            let observer_pipe = Arc::clone(&pipe);
-            let observer_sender = msg.sender.clone();
+            // Record tool activity for logs and cross-agent context, not Telegram chat.
             let observer_secrets = Arc::clone(&secret_registry);
             let observer_agent_label = agent
                 .agent_config
@@ -1961,18 +1997,12 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                 } else {
                     redacted
                 };
-                let text = format!(
-                    "[{}] 🔧 `{}` →\n```\n{}\n```",
-                    observer_agent_label, call.name, truncated
+                tracing::debug!(
+                    agent = %observer_agent_label,
+                    tool = %call.name,
+                    result = %truncated,
+                    "Telegram tool result"
                 );
-                let p = Arc::clone(&observer_pipe);
-                let r = observer_sender.clone();
-                tokio::task::block_in_place(move || {
-                    let handle = tokio::runtime::Handle::current();
-                    handle.block_on(async {
-                        let _ = p.send_text(&r, &text, &DeliveryOptions::default()).await;
-                    });
-                });
             };
 
             // Reset the cancel flag before each turn.
@@ -1999,12 +2029,16 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
             // Inject cross-agent activity so this agent knows what others have done.
             let mut turn_system_prompt = agent.current_system_prompt.clone();
-            if is_multi_agent {
+            if is_multi_agent && !needs_fresh_history_grounding(&user_content) {
                 let activity_ctx =
                     build_activity_context(&activity_log, &target_agent_id);
                 if !activity_ctx.is_empty() {
                     turn_system_prompt.push_str(&activity_ctx);
                 }
+            } else if is_multi_agent {
+                turn_system_prompt.push_str(
+                    "\n\n## Grounding Rule\nFor questions about last/latest/most recent work, do not answer from Recent Team Activity. Verify against current workspace files, conversation state, or tool results first.\n",
+                );
             }
 
             // No per-user env var injection needed — Privy credentials are global env vars

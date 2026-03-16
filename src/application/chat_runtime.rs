@@ -64,6 +64,21 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
+pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
+    let lower = text.trim().to_lowercase();
+    [
+        "last",
+        "latest",
+        "most recent",
+        "newest",
+        "previous",
+        "recently",
+        "before that",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
 impl<'a> ChatRuntimeService<'a> {
     pub(crate) async fn process_user_text(
         &self,
@@ -143,8 +158,12 @@ impl<'a> ChatRuntimeService<'a> {
             });
         }
 
+        let needs_fresh_grounding = needs_fresh_history_grounding(text);
+
         // Recall relevant memories if memory service is available.
-        let memory_block = if let Some(mem) = self.memory_service {
+        let memory_block = if needs_fresh_grounding {
+            None
+        } else if let Some(mem) = self.memory_service {
             match mem
                 .recall(
                     &state
@@ -195,6 +214,14 @@ impl<'a> ChatRuntimeService<'a> {
         let history_assembly = assemble_recent_history(&state.messages, history_budget);
 
         let mut prompt_messages = Vec::new();
+        if needs_fresh_grounding {
+            prompt_messages.push(Message {
+                role: Role::System,
+                content: "For questions about last/latest/most recent history, do not rely on recalled memory summaries. Verify against the current conversation and available tools/workspace state before answering. If you cannot verify, say so clearly.".into(),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
         if let Some(ref block) = memory_block {
             prompt_messages.push(Message {
                 role: Role::System,
@@ -290,5 +317,27 @@ impl<'a> ChatRuntimeService<'a> {
             total_output_tokens: state.total_output_tokens,
             tool_outcomes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_fresh_history_grounding;
+
+    #[test]
+    fn fresh_history_grounding_detects_temporal_queries() {
+        assert!(needs_fresh_history_grounding(
+            "What was the last hypothesis you posted?"
+        ));
+        assert!(needs_fresh_history_grounding(
+            "Show me the most recent upload"
+        ));
+    }
+
+    #[test]
+    fn fresh_history_grounding_ignores_plain_fact_queries() {
+        assert!(!needs_fresh_history_grounding(
+            "Summarize the hypothesis document"
+        ));
     }
 }

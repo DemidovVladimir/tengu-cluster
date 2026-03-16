@@ -8,6 +8,7 @@ use anyhow::{bail, Result};
 pub(crate) struct SkillDefinition {
     pub name: String,
     pub description: String,
+    pub activity_description: Option<String>,
     pub parameters: Vec<SkillParameter>,
     pub execution: SkillExecution,
     pub capability: CapabilityId,
@@ -136,22 +137,24 @@ pub(crate) fn parse_skill_markdown(content: &str) -> Result<SkillDefinition> {
 
     let default_capability = CapabilityId::new(format!("skill.{}", normalize_skill_name(&name)))?;
     let default_effect_class = EffectClass::ShellExec;
-    let (capability, effect_class) = if let Some(policy_lines) = sections.get("policy") {
-        let (parsed_capability, parsed_effect_class) =
+    let (capability, effect_class, activity_description) =
+        if let Some(policy_lines) = sections.get("policy") {
+            let (parsed_capability, parsed_effect_class, parsed_activity_description) =
             parse_policy(policy_lines, default_effect_class);
-        let capability = if parsed_capability.as_str() == "skill.unknown" {
-            default_capability
+            let capability = if parsed_capability.as_str() == "skill.unknown" {
+                default_capability
+            } else {
+                parsed_capability
+            };
+            (capability, parsed_effect_class, parsed_activity_description)
         } else {
-            parsed_capability
+            (default_capability, default_effect_class, None)
         };
-        (capability, parsed_effect_class)
-    } else {
-        (default_capability, default_effect_class)
-    };
 
     Ok(SkillDefinition {
         name,
         description,
+        activity_description,
         parameters,
         execution: SkillExecution::Shell {
             template: execution_template,
@@ -272,9 +275,13 @@ fn extract_fenced_code(lines: &[&str]) -> Result<String> {
 }
 
 /// Parse policy section key-value pairs.
-fn parse_policy(lines: &[&str], default_effect_class: EffectClass) -> (CapabilityId, EffectClass) {
+fn parse_policy(
+    lines: &[&str],
+    default_effect_class: EffectClass,
+) -> (CapabilityId, EffectClass, Option<String>) {
     let mut capability = CapabilityId::new("skill.unknown").expect("static capability is valid");
     let mut effect_class = default_effect_class;
+    let mut activity_description = None;
 
     for line in lines {
         let trimmed = line.trim().trim_start_matches("- ");
@@ -292,11 +299,17 @@ fn parse_policy(lines: &[&str], default_effect_class: EffectClass) -> (Capabilit
                         effect_class = parsed;
                     }
                 }
+                "activity_description" | "activity-description" => {
+                    let raw = value.trim();
+                    if !raw.is_empty() {
+                        activity_description = Some(raw.to_string());
+                    }
+                }
                 _ => {}
             }
         }
     }
-    (capability, effect_class)
+    (capability, effect_class, activity_description)
 }
 
 // ---------------------------------------------------------------------------
@@ -381,13 +394,19 @@ pub(crate) fn skill_to_registered_tool(skill: &SkillDefinition) -> RegisteredToo
         "required": required,
     });
 
-    RegisteredTool::new(
+    let tool = RegisteredTool::new(
         &skill.name,
         &skill.description,
         parameters,
         skill.capability.clone(),
         skill.effect_class,
-    )
+    );
+
+    if let Some(activity_description) = &skill.activity_description {
+        tool.with_activity_description(activity_description.clone())
+    } else {
+        tool
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +462,7 @@ fn shell_escape(s: &str) -> String {
 pub(crate) struct SkillFrontmatter {
     pub name: String,
     pub description: String,
+    pub activity_description: Option<String>,
     pub base_url: String,
     pub auth: ApiAuth,
     pub headers: Vec<(String, String)>,
@@ -515,6 +535,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     // Parse key-value pairs from the YAML block.
     let mut name = None;
     let mut description = None;
+    let mut activity_description = None;
     let mut base_url = None;
     let mut auth_env = None;
     let mut auth_mode = None;
@@ -595,6 +616,9 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             match k {
                 "name" => name = Some(v.to_string()),
                 "description" => description = Some(v.to_string()),
+                "activity_description" | "activity-description" => {
+                    activity_description = Some(v.to_string())
+                }
                 "base_url" | "homepage" => base_url = Some(v.to_string()),
                 "auth_env" => auth_env = Some(v.to_string()),
                 "auth_mode" => auth_mode = Some(v.to_string()),
@@ -673,6 +697,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
         SkillFrontmatter {
             name: normalized_name,
             description: description.unwrap_or_default(),
+            activity_description,
             base_url,
             auth,
             headers,
@@ -688,6 +713,7 @@ fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
     SkillDefinition {
         name: fm.name.clone(),
         description: fm.description.clone(),
+        activity_description: fm.activity_description.clone(),
         parameters: vec![
             SkillParameter {
                 name: "method".into(),
@@ -929,6 +955,7 @@ Use this package for agentic wallet workflows.
         SkillDefinition {
             name: name.to_string(),
             description: String::new(),
+            activity_description: None,
             parameters: vec![],
             execution: SkillExecution::Shell {
                 template: "echo hi".to_string(),

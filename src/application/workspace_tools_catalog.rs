@@ -32,14 +32,16 @@ pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
             path_only_schema("File path relative to the workspace root"),
             CapabilityId::new("workspace.read").expect("static capability is valid"),
             EffectClass::Read,
-        ),
+        )
+        .with_activity_description("Reading file"),
         RegisteredTool::new(
             "list_directory",
             "List files and directories at a path in the workspace.",
             path_only_schema("Directory path relative to the workspace root. Use '.' for the root."),
             CapabilityId::new("workspace.list").expect("static capability is valid"),
             EffectClass::Read,
-        ),
+        )
+        .with_activity_description("Listing directory"),
         RegisteredTool::new(
             "write_file",
             "Write content to a file in the workspace. Creates parent directories if needed.",
@@ -59,7 +61,8 @@ pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
             }),
             CapabilityId::new("workspace.write").expect("static capability is valid"),
             EffectClass::Write,
-        ),
+        )
+        .with_activity_description("Writing file"),
         RegisteredTool::new(
             "run_command",
             "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files.",
@@ -75,7 +78,8 @@ pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
             }),
             CapabilityId::new("workspace.shell").expect("static capability is valid"),
             EffectClass::ShellExec,
-        ),
+        )
+        .with_activity_description("Running command"),
     ]
 }
 

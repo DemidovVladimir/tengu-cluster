@@ -38,14 +38,24 @@ impl ToolUseService {
             ));
         }
 
-        if self.policies.requires_approval(&call.name)
-            && !self.approval.request_tool_approval(call)?
-        {
+        let needs_approval =
+            self.policies.requires_approval(&call.name) && !is_read_only_call(call);
+        if needs_approval && !self.approval.request_tool_approval(call)? {
             return Ok("Tool execution denied by user.".to_string());
         }
 
         self.execution.execute_tool(call)
     }
+}
+
+/// A tool call is read-only if it carries a `method` argument equal to "GET".
+/// API-style skill tools use this convention — reads don't need user approval.
+fn is_read_only_call(call: &ToolCall) -> bool {
+    call.arguments
+        .get("method")
+        .and_then(|v| v.as_str())
+        .map(|m| m.eq_ignore_ascii_case("GET"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -174,5 +184,63 @@ mod tests {
 
         let result = service.execute(&call("run_command")).unwrap();
         assert_eq!(result, "Tool 'run_command' is not available to this agent.");
+    }
+
+    #[test]
+    fn service_skips_approval_for_get_requests() {
+        let approval_calls = Arc::new(AtomicUsize::new(0));
+        let execution_called = Arc::new(AtomicBool::new(false));
+        let service = ToolUseService::new(
+            ToolPolicyCatalog::from_tools(&[tool("privy", EffectClass::ChainTx)]),
+            Arc::new(TestActivity {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(TestApproval {
+                allow: false,
+                calls: approval_calls.clone(),
+            }),
+            Arc::new(TestExecution {
+                called: execution_called.clone(),
+            }),
+        );
+
+        // GET request: should skip approval and execute directly.
+        let get_call = ToolCall {
+            id: "1".into(),
+            name: "privy".into(),
+            arguments: json!({"method": "GET", "path": "/v1/wallets", "body": "{}"}),
+        };
+        let result = service.execute(&get_call).unwrap();
+        assert_eq!(result, "ok");
+        assert_eq!(approval_calls.load(Ordering::Relaxed), 0);
+        assert!(execution_called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn service_requires_approval_for_post_requests() {
+        let approval_calls = Arc::new(AtomicUsize::new(0));
+        let service = ToolUseService::new(
+            ToolPolicyCatalog::from_tools(&[tool("privy", EffectClass::ChainTx)]),
+            Arc::new(TestActivity {
+                calls: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(TestApproval {
+                allow: false,
+                calls: approval_calls.clone(),
+            }),
+            Arc::new(TestExecution {
+                called: Arc::new(AtomicBool::new(false)),
+            }),
+        );
+
+        // POST request: should require approval.
+        let post_call = ToolCall {
+            id: "1".into(),
+            name: "privy".into(),
+            arguments: json!({"method": "POST", "path": "/v1/wallets", "body": "{}"}),
+        };
+        let result = service.execute(&post_call).unwrap();
+        assert_eq!(result, "Tool execution denied by user.");
+        assert_eq!(approval_calls.load(Ordering::Relaxed), 1);
     }
 }

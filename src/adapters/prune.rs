@@ -11,7 +11,14 @@ pub struct PruneTarget {
 }
 
 /// Scan `tengu_home` and workspace directories, returning every prunable target.
-pub fn plan_prune(tengu_home: &Path, workspaces: &[PathBuf]) -> Vec<PruneTarget> {
+///
+/// `scaffold_dirs` lists scaffold project directories (e.g. `["research", "mint", "uploads", "posts"]`)
+/// whose contents are pipeline outputs and should be cleaned between runs.
+pub fn plan_prune(
+    tengu_home: &Path,
+    workspaces: &[PathBuf],
+    scaffold_dirs: &[String],
+) -> Vec<PruneTarget> {
     let mut targets = Vec::new();
 
     let push = |targets: &mut Vec<PruneTarget>, path: PathBuf, label: String| {
@@ -58,6 +65,25 @@ pub fn plan_prune(tengu_home: &Path, workspaces: &[PathBuf]) -> Vec<PruneTarget>
             ws.join(".tengu-attachments"),
             format!("attachments ({ws_display})"),
         );
+
+        // Scaffold project output directories — pipeline artifacts that go stale between runs.
+        // Only add top-level dirs; skip subdirs already covered by a parent (e.g. mint/metadata under mint/).
+        let mut added_dirs: Vec<String> = Vec::new();
+        for dir in scaffold_dirs {
+            let dominated = added_dirs.iter().any(|parent| dir.starts_with(&format!("{parent}/")));
+            if dominated {
+                continue;
+            }
+            let p = ws.join(dir);
+            if p.exists() {
+                push(
+                    &mut targets,
+                    p,
+                    format!("pipeline outputs {dir}/ ({ws_display})"),
+                );
+                added_dirs.push(dir.clone());
+            }
+        }
     }
 
     targets

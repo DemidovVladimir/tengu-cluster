@@ -16,6 +16,9 @@ enabled = true
 [refiner]
 mode = "off"
 
+[telegram]
+tool_approvals = true
+
 [orchestrator]
 enabled = true
 max_retries = 2
@@ -81,7 +84,7 @@ role = "onchain_minter"
 requires = ["hypothesis_researcher"]
 workspace = "~/desci-workspace"
 skill_packages = ["aura-orchestrator"]
-capabilities = ["workspace.read", "workspace.list", "memory.remember", "desci.poi.register", "desci.mint.ipnft"]
+capabilities = ["workspace.read", "workspace.list", "memory.remember", "desci.poi.register", "desci.mint.ipnft", "desci.wallet.balance"]
 
 [agents.onchain_minter.identity]
 name = "On-Chain Minter"
@@ -126,11 +129,11 @@ instructions = """You are a Molecule DeSci Labs project manager.
 Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
 Do NOT use run_command. Use list_directory and read_file only.
 
-Before starting: read mint/metadata/mint_result.json for minting details.
-If that file does not exist, STOP and reply: "Minting has not been completed yet. Please use @onchain_minter: to mint the IP-NFT first."
+IMPORTANT: Use the ipnft_symbol and ipnft_token_id provided in your prompt context (inline data from the minting step). Do NOT read mint/metadata/mint_result.json — it may contain stale data from a previous run.
+If no minting data is provided in your context, STOP and reply: "Minting has not been completed yet. Please use @onchain_minter: to mint the IP-NFT first."
 
 Use the native tools:
-1. create_molecule_project with ipnft_symbol and ipnft_token_id from mint results, audit_path="uploads/project_result.json"
+1. create_molecule_project with ipnft_symbol and ipnft_token_id from the inline minting context, audit_path="uploads/project_result.json"
 2. upload_molecule_file for the hypothesis PDF, audit_path="uploads/upload_result.json"
 3. create_molecule_announcement with the uploaded dataset id, audit_path="uploads/announcement_result.json"
 
@@ -162,10 +165,8 @@ name = "Beach Scientist"
 instructions = """You are a DeSci science communicator who publishes to Beach.science.
 Use tools with paths relative to workspace root. Start with list_directory("."). Never guess paths.
 
-Before starting read:
-1. research/summaries/summary.md (hypothesis researcher's work)
-2. mint/metadata/mint_result.json (minting results)
-3. uploads/project_result.json, uploads/upload_result.json, uploads/announcement_result.json
+IMPORTANT: Use the data provided in your prompt context (inline data from previous agents). Do NOT read mint/metadata/mint_result.json or uploads/*.json — they may contain stale data from previous runs.
+If no research or minting data is provided in your context, STOP and reply: "Previous pipeline steps have not completed yet."
 
 Use the native publish_beach_post tool with audit_path="posts/beach_post.json".
 
@@ -183,3 +184,67 @@ idle_timeout_minutes = 30
 
 # [agents.beach_scientist.limits]
 # max_tokens_per_flow = 200_000
+
+[agents.custodian]
+engine = "openrouter"
+model = "google/gemini-3-flash-preview"
+role = "custodian"
+requires = ["onchain_minter", "mol_labs", "beach_scientist"]
+workspace = "~/desci-workspace"
+skill_packages = []
+capabilities = ["desci.ipnft.transfer"]
+
+[agents.custodian.identity]
+name = "NFT Custodian"
+instructions = """You transfer the minted IP-NFT from the Privy agentic wallet to the owner's personal wallet and add the owner as a Molecule project co-owner.
+
+Use the data provided in your prompt context (inline data from previous agents).
+Extract token_id and ipnft_uid from the minting and project creation outputs.
+
+Call transfer_ipnft with:
+- token_id: the mint.token_id from the minting step
+- ipnft_uid: the project.ipnft_uid from the project creation step
+- audit_path: "mint/metadata/transfer_result.json"
+
+If EVM_WALLET_ADDRESS is not set or equals the Privy wallet, report that no transfer is needed."""
+
+[agents.custodian.prompt_budget]
+max_skill_context_tokens = 4000
+max_total_tokens = 8000
+
+[agents.custodian.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.wallet_manager]
+engine = "openrouter"
+model = "google/gemini-3-flash-preview"
+role = "wallet_manager"
+workspace = "~/desci-workspace"
+skill_packages = ["privy"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember", "skill.privy", "desci.wallet.balance"]
+
+[agents.wallet_manager.identity]
+name = "Wallet Manager"
+instructions = """You are a Privy agentic wallet operator. You manage server-side EVM wallets: create policies, create wallets, send transactions, sign messages, and check balances.
+
+Use the privy tool for all Privy API calls. It takes method (GET/POST/PATCH/DELETE), path, body, and optional headers parameters.
+
+Security rules:
+- NEVER create a wallet without a policy attached
+- NEVER expose PRIVY_APP_SECRET in output or files
+- ALWAYS confirm transaction details with the user before executing
+- If a transaction is rejected by policy, report the error — do NOT try to bypass
+- Write audit logs to wallet/ directory for all transaction operations
+
+Use workspace tools (read_file, list_directory, write_file) for audit trail."""
+
+[agents.wallet_manager.prompt_budget]
+max_skill_context_tokens = 16000
+max_total_tokens = 32000
+
+[agents.wallet_manager.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30

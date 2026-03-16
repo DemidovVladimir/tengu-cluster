@@ -149,7 +149,10 @@ pub(crate) async fn collect_engine_response(
             }
             let result = match executor.execute(tc) {
                 Ok(output) => output,
-                Err(e) => format!("Error: {}", e),
+                Err(e) => {
+                    tracing::error!(tool = %tc.name, error = %e, "Tool execution failed");
+                    format!("Error: {}", e)
+                }
             };
             if let Some(observer) = &tool_observer {
                 observer(tc, &result);

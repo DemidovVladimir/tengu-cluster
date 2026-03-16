@@ -3,16 +3,51 @@
 //! Generic implementations that work from tool metadata — no tool name matching.
 //! Used by both TUI and Telegram adapters.
 
+use crate::domain::capability::RegisteredTool;
 use tengu_core::types::ToolCall;
 
 /// Build title, description, and preview text for a tool approval dialog.
 ///
 /// Works generically from the tool call's arguments — no hardcoded tool names.
+/// For API-style tools (with method/path args), shows a compact HTTP summary.
 pub(crate) fn build_approval_text(call: &ToolCall) -> (String, String, String) {
     let title = prettify_tool_name(&call.name);
+
+    // API-style tools: show "POST /v1/wallets/{id}/rpc" instead of raw JSON.
+    let method = call.arguments.get("method").and_then(|v| v.as_str());
+    let path = call.arguments.get("path").and_then(|v| v.as_str());
+    if let (Some(method), Some(path)) = (method, path) {
+        let description = format!("{} {}", method.to_uppercase(), path);
+        let body = call
+            .arguments
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("{}");
+        let preview = if body.trim() == "{}" || body.trim().is_empty() {
+            String::new()
+        } else {
+            truncate_detail(body, PREVIEW_MAX_CHARS)
+        };
+        return (title, description, preview);
+    }
+
     let description = format!("Allow '{}' to run?", call.name);
     let preview = format_args_preview(&call.arguments);
     (title, description, preview)
+}
+
+pub(crate) fn build_tool_activity_text(
+    call: &ToolCall,
+    tools: &[RegisteredTool],
+) -> (String, Option<String>) {
+    let title = tools
+        .iter()
+        .find(|tool| tool.def.name == call.name)
+        .and_then(|tool| tool.metadata.activity_description.clone())
+        .unwrap_or_else(|| prettify_tool_name(&call.name));
+    let detail = summarize_tool_args(&call.arguments);
+    let detail = if detail.is_empty() { None } else { Some(detail) };
+    (title, detail)
 }
 
 /// Build a short human-readable summary of tool arguments for activity lines.
@@ -150,5 +185,50 @@ mod tests {
         assert_eq!(title, "Run Command");
         assert!(desc.contains("run_command"));
         assert!(preview.contains("cargo build"));
+    }
+
+    #[test]
+    fn approval_text_api_style_shows_http_summary() {
+        let call = ToolCall {
+            id: "1".into(),
+            name: "privy".into(),
+            arguments: json!({"method": "POST", "path": "/v1/wallets", "body": r#"{"chain_type":"ethereum"}"#}),
+        };
+        let (title, desc, preview) = build_approval_text(&call);
+        assert_eq!(title, "Privy");
+        assert_eq!(desc, "POST /v1/wallets");
+        assert!(preview.contains("ethereum"));
+    }
+
+    #[test]
+    fn approval_text_api_get_empty_body() {
+        let call = ToolCall {
+            id: "1".into(),
+            name: "privy".into(),
+            arguments: json!({"method": "GET", "path": "/v1/wallets", "body": "{}"}),
+        };
+        let (_, desc, preview) = build_approval_text(&call);
+        assert_eq!(desc, "GET /v1/wallets");
+        assert!(preview.is_empty());
+    }
+
+    #[test]
+    fn tool_activity_uses_registered_metadata_when_present() {
+        let tool = crate::domain::capability::RegisteredTool::new(
+            "mint_ipnft",
+            "",
+            json!({}),
+            crate::domain::capability::CapabilityId::new("desci.mint.ipnft").unwrap(),
+            crate::domain::capability::EffectClass::ChainTx,
+        )
+        .with_activity_description("Minting IP-NFT");
+        let call = ToolCall {
+            id: "1".into(),
+            name: "mint_ipnft".into(),
+            arguments: json!({"symbol": "BPLM"}),
+        };
+        let (title, detail) = build_tool_activity_text(&call, &[tool]);
+        assert_eq!(title, "Minting IP-NFT");
+        assert_eq!(detail.as_deref(), Some("BPLM"));
     }
 }

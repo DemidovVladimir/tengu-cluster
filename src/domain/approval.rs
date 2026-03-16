@@ -13,3 +13,13 @@ impl ToolApprovalPort for DenyByDefaultApproval {
         Ok(false)
     }
 }
+
+/// Approval adapter for trusted interactive flows where explicit confirmation is disabled.
+pub(crate) struct AllowAllApproval;
+
+impl ToolApprovalPort for AllowAllApproval {
+    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
+        tracing::info!(tool = %call.name, "Auto-approving tool call");
+        Ok(true)
+    }
+}

@@ -70,6 +70,7 @@ impl RunState {
         self.task_records.get(task_id)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn artifacts(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.artifacts
     }

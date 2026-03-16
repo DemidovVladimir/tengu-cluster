@@ -279,6 +279,10 @@ pub struct TelegramConfig {
     /// Telegram user IDs allowed to interact with the bot.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// Require explicit approve/deny for tools whose policies demand approval.
+    /// Defaults to false so Telegram flows can run end-to-end without extra taps.
+    #[serde(default)]
+    pub tool_approvals: bool,
 }
 
 /// Workspace scaffold — auto-creates directories and seed files on startup.

@@ -3,10 +3,10 @@
 ## Critical Paths
 
 ### Plain Message Routing (Telegram)
-- **Entry**: `telegram_runtime.rs:1750` — route decision (multi-agent orchestration)
+- **Entry**: `telegram_runtime.rs:1787` — route decision (multi-agent orchestration)
 - **Parser**: `channel_runtime.rs:383` — `parse_agent_routing()` (@role: and role: formats)
-- **Multi-agent flag**: `telegram_runtime.rs:1249` — `is_multi_agent = agent_states.len() > 1`
-- **Orchestration**: `telegram_runtime.rs:317` — `orchestrate_team_goal()`
+- **Multi-agent flag**: `telegram_runtime.rs:1286` — `is_multi_agent = agent_states.len() > 1`
+- **Orchestration**: `telegram_runtime.rs:353` — `orchestrate_team_goal()`
 - **Direct routing**: explicit @role: fallback to default
 
 ### Planning
@@ -48,7 +48,7 @@
 ## Key Types
 
 ```
-TelegramAgentState          telegram_runtime.rs:947
+TelegramAgentState          telegram_runtime.rs:984
 AgentRuntime                orchestrator.rs:47
 PlanTask                    task_planner.rs:93
 RoleDependencies            task_planner.rs:106

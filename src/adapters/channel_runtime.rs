@@ -129,7 +129,7 @@ pub(crate) fn build_tool_executor(
     }
 
     let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
-        Some(flag) => LocalShellExecutor::new().with_cancel(flag),
+        Some(ref flag) => LocalShellExecutor::new().with_cancel(Arc::clone(flag)),
         None => LocalShellExecutor::new(),
     });
 
@@ -196,6 +196,10 @@ pub(crate) fn build_tool_executor(
         .collect();
     if !desci_names.is_empty() {
         if let Ok(desci_exec) = DesciToolExecutionAdapter::new(workspace.to_path_buf()) {
+            let desci_exec = match cancel {
+                Some(ref flag) => desci_exec.with_cancel(Arc::clone(flag)),
+                None => desci_exec,
+            };
             composite = composite.with_executor(Arc::new(desci_exec), desci_names);
         }
     }

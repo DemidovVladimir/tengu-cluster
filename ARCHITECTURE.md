@@ -51,7 +51,7 @@ Forbidden:
 - `src/domain`: runtime domain policies/state.
 - `src/application`: runtime use-case orchestration.
 - `src/adapters`: runtime infrastructure adapters (engine factory, probes, flow-store, workspace tools, task-store, Telegram, TUI, memory).
-- `tools/`: standalone infrastructure (services, CLIs) used by agents via skills and workspace primitives (not workspace members, no code changes to tengu-cluster required).
+- `skills/`: domain-specific SKILL.md files that agents load at startup (workflow references, instructions).
 
 ## Current Applied Runtime Slices
 
@@ -133,7 +133,7 @@ Forbidden:
 The system is designed for maximum composability — adding new capabilities should never require code changes to tengu-cluster:
 
 - **Skills** (knowledge/instructions) — drop a `SKILL.md` file into `skills/`, it's immediately available. No code changes.
-- **Tools** (infrastructure/capability) — standalone services, CLIs, or libraries in `tools/`. Agents interact with them via skills and workspace primitives. No code changes.
+- **Tools** (infrastructure/capability) — native tool adapters in `src/adapters/` (e.g., `desci_tools.rs`). Agents interact with them via registered tool definitions. Adding a new tool requires code.
 - **Channels** (communication) — telegram, TUI, future slack/discord/email. Isolated via port traits. Application and domain layers are channel-agnostic.
 - **4 Workspace Primitives** — `read_file`, `list_directory`, `write_file`, `run_command`. These are the stable "syscall" layer through which agents interact with all external tools.
 

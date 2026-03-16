@@ -148,14 +148,18 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // In TUI mode, redirect logs to a file to avoid corrupting the alternate screen.
-    // For other commands, log to stderr as usual.
+    // In TUI mode, persist logs to file only so interactive output stays clean.
+    // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat));
+    let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
-        let log_file =
-            std::fs::File::create(log_dir.join("tengu.log")).expect("Failed to create log file");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("tengu.log"))
+            .expect("Failed to open log file");
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
@@ -165,6 +169,30 @@ async fn main() -> Result<()> {
             .with_writer(std::sync::Mutex::new(log_file))
             .with_ansi(false)
             .init();
+    } else if is_telegram {
+        use tracing_subscriber::layer::SubscriberExt;
+        let filter = tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive("tengu=info".parse().unwrap());
+        let log_dir = resolve_tengu_home().join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("tengu.log"))
+            .expect("Failed to open log file");
+        let file_layer = tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(log_file));
+        let stderr_layer = tracing_subscriber::fmt::layer()
+            .compact()
+            .with_writer(std::io::stderr);
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(stderr_layer);
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("Failed to set tracing subscriber");
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -222,23 +250,32 @@ async fn main() -> Result<()> {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
         }
         Commands::Prune { sandbox, yes } => {
-            let workspaces: Vec<PathBuf> = if let Some(ref name) = sandbox {
-                let config = load_sandbox_or(Some(name.clone()), config)?;
-                config
-                    .agents
-                    .values()
-                    .filter_map(|a| {
-                        a.workspace
-                            .as_ref()
-                            .map(|p| adapters::workspace_tools::expand_tilde(p))
-                    })
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let targets = adapters::prune::plan_prune(&tengu_home, &workspaces);
+            let (workspaces, scaffold_dirs): (Vec<PathBuf>, Vec<String>) =
+                if let Some(ref name) = sandbox {
+                    let config = load_sandbox_or(Some(name.clone()), config)?;
+                    let ws = config
+                        .agents
+                        .values()
+                        .filter_map(|a| {
+                            a.workspace
+                                .as_ref()
+                                .map(|p| adapters::workspace_tools::expand_tilde(p))
+                        })
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    let dirs = config
+                        .scaffold
+                        .as_ref()
+                        .and_then(|s| s.project.as_ref())
+                        .map(|p| p.directories.clone())
+                        .unwrap_or_default();
+                    (ws, dirs)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            let targets =
+                adapters::prune::plan_prune(&tengu_home, &workspaces, &scaffold_dirs);
             if targets.iter().all(|t| !t.exists) {
                 println!("Nothing to prune.");
                 return Ok(());

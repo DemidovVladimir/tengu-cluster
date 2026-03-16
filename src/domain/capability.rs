@@ -114,6 +114,7 @@ pub(crate) struct ToolRuntimeMetadata {
     pub output_schema: Option<serde_json::Value>,
     pub required_secrets: Vec<String>,
     pub host_allowlist: Vec<String>,
+    pub activity_description: Option<String>,
 }
 
 impl Default for ToolClass {
@@ -174,6 +175,14 @@ impl RegisteredTool {
 
     pub(crate) fn with_host_allowlist(mut self, host_allowlist: &[&str]) -> Self {
         self.metadata.host_allowlist = host_allowlist.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    pub(crate) fn with_activity_description(
+        mut self,
+        activity_description: impl Into<String>,
+    ) -> Self {
+        self.metadata.activity_description = Some(activity_description.into());
         self
     }
 }
