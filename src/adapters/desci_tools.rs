@@ -2,9 +2,10 @@ use crate::application::ports::ToolExecutionPort;
 use crate::domain::capability::{CapabilityId, EffectClass, RegisteredTool, ToolClass};
 use crate::domain::tool_result::ToolResultEnvelope;
 use alloy::primitives::{Address, Bytes, U256};
+use alloy::providers::{Provider, ProviderBuilder};
+use alloy::signers::{local::PrivateKeySigner, Signer};
 use alloy::sol;
 use alloy::sol_types::SolCall;
-use std::sync::{Arc, Mutex};
 use anyhow::{bail, Context, Result};
 use reqwest::multipart;
 use serde_json::json;
@@ -13,7 +14,6 @@ use std::str::FromStr;
 
 sol! {
     function mintReservation(address to, uint256 reservationId, string tokenURI, string symbol, bytes authorization) external payable returns (uint256);
-    function safeTransferFrom(address from, address to, uint256 tokenId);
 }
 
 const CHAIN_ID: u64 = 11155111;
@@ -22,11 +22,6 @@ const BEACH_API_URL: &str = "https://beach.science/api/v1/posts";
 const DEFAULT_ACCESS_LEVEL: &str = "PUBLIC";
 const IPNFT_CONTRACT: &str = "0x152B444e60C526fe4434C721561a077269FcF61a";
 const MINT_FEE_WEI: &str = "1000000000000000";
-const PRIVY_API_URL: &str = "https://api.privy.io";
-const DEFAULT_SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
-
-static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
-static SERVICE_TOKEN_CACHE: Mutex<Option<String>> = Mutex::new(None);
 
 // 1x1 transparent PNG — used when no cover image is provided for minting.
 const DEFAULT_PNG: &[u8] = &[
@@ -61,7 +56,6 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ExternalApi,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Registering hypothesis document")
         .with_required_secrets(&["POI_API_KEY"])
         .with_host_allowlist(&["testnet.molecule.xyz"])
         .with_output_schema(json!({
@@ -77,7 +71,7 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
         })),
         RegisteredTool::new(
             "mint_ipnft",
-            "Mint an IP-NFT: submit the POI transaction on-chain, run the Molecule GraphQL metadata flow, and execute the on-chain mint. Returns structured mint outputs.",
+            "Submit the POI transaction on-chain, reserve a token ID, and mint an IP-NFT via the Molecule GraphQL API. Returns structured mint outputs.",
             json!({
                 "type": "object",
                 "properties": {
@@ -111,8 +105,7 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ChainTx,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Minting IP-NFT")
-        .with_required_secrets(&["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID", "MOLECULE_API_KEY"])
+        .with_required_secrets(&["EVM_PRIVATE_KEY", "EVM_RPC_URL", "MOLECULE_API_KEY"])
         .with_host_allowlist(&["staging.graphql.api.molecule.xyz"])
         .with_output_schema(json!({"type": "object"})),
         RegisteredTool::new(
@@ -131,8 +124,7 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ExternalApi,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Creating data room")
-        .with_required_secrets(&["MOLECULE_API_KEY", "MOLECULE_CLIENT_URL", "PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"])
+        .with_required_secrets(&["MOLECULE_API_KEY", "MOLECULE_SERVICE_TOKEN", "MOLECULE_CLIENT_URL"])
         .with_host_allowlist(&["staging.graphql.api.molecule.xyz", "testnet.molecule.xyz"])
         .with_output_schema(json!({"type": "object"})),
         RegisteredTool::new(
@@ -164,8 +156,7 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ExternalApi,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Uploading research file")
-        .with_required_secrets(&["MOLECULE_API_KEY", "PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"])
+        .with_required_secrets(&["MOLECULE_API_KEY", "MOLECULE_SERVICE_TOKEN"])
         .with_host_allowlist(&["staging.graphql.api.molecule.xyz"])
         .with_output_schema(json!({"type": "object"})),
         RegisteredTool::new(
@@ -189,8 +180,7 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ExternalApi,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Creating announcement")
-        .with_required_secrets(&["MOLECULE_API_KEY", "PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"])
+        .with_required_secrets(&["MOLECULE_API_KEY", "MOLECULE_SERVICE_TOKEN"])
         .with_host_allowlist(&["staging.graphql.api.molecule.xyz"])
         .with_output_schema(json!({"type": "object"})),
         RegisteredTool::new(
@@ -210,55 +200,8 @@ pub(crate) fn desci_tool_defs() -> Vec<RegisteredTool> {
             EffectClass::ExternalApi,
         )
         .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Publishing Beach.science post")
         .with_required_secrets(&["BEACH_SCIENCE_API_KEY"])
         .with_host_allowlist(&["beach.science"])
-        .with_output_schema(json!({"type": "object"})),
-        RegisteredTool::new(
-            "check_wallet_balance",
-            "Check the ETH balance of a wallet address on Sepolia testnet. If no address is provided, checks the Privy agentic wallet address.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "address": {
-                        "type": "string",
-                        "description": "Wallet address to check (0x...). Omit to use the Privy agentic wallet."
-                    }
-                },
-                "required": []
-            }),
-            CapabilityId::new("desci.wallet.balance").expect("static capability is valid"),
-            EffectClass::Read,
-        )
-        .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Checking wallet balance"),
-        RegisteredTool::new(
-            "transfer_ipnft",
-            "Transfer an IP-NFT from the Privy agentic wallet to the owner wallet (EVM_WALLET_ADDRESS) and add the owner as a Molecule project co-owner. Call this AFTER the full Molecule pipeline (project creation, file upload, announcement) is complete.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "token_id": {
-                        "type": "string",
-                        "description": "The IP-NFT token ID to transfer"
-                    },
-                    "ipnft_uid": {
-                        "type": "string",
-                        "description": "The Molecule project ipnft_uid (format: contractAddress_tokenId)"
-                    },
-                    "audit_path": {
-                        "type": "string",
-                        "description": "Optional workspace-relative path for the audit result"
-                    }
-                },
-                "required": ["token_id", "ipnft_uid"]
-            }),
-            CapabilityId::new("desci.ipnft.transfer").expect("static capability is valid"),
-            EffectClass::ExternalApi,
-        )
-        .with_tool_class(ToolClass::ExecuteTool)
-        .with_activity_description("Transferring IP-NFT to owner wallet")
-        .with_required_secrets(&["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"])
         .with_output_schema(json!({"type": "object"})),
     ]
 }
@@ -267,7 +210,6 @@ pub(crate) struct DesciToolExecutionAdapter {
     client: reqwest::Client,
     workspace: PathBuf,
     fallback_runtime: Option<tokio::runtime::Runtime>,
-    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl DesciToolExecutionAdapter {
@@ -285,26 +227,7 @@ impl DesciToolExecutionAdapter {
             client: reqwest::Client::builder().build()?,
             workspace,
             fallback_runtime,
-            cancel: None,
         })
-    }
-
-    pub(crate) fn with_cancel(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
-        self.cancel = Some(flag);
-        self
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancel
-            .as_ref()
-            .map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
-    fn check_cancel(&self) -> Result<()> {
-        if self.is_cancelled() {
-            bail!("Operation cancelled by /stop");
-        }
-        Ok(())
     }
 
     fn run_async<F, T>(&self, future: F) -> T
@@ -331,8 +254,6 @@ impl ToolExecutionPort for DesciToolExecutionAdapter {
             "upload_molecule_file" => self.execute_upload_molecule_file(call),
             "create_molecule_announcement" => self.execute_create_molecule_announcement(call),
             "publish_beach_post" => self.execute_publish_beach_post(call),
-            "check_wallet_balance" => self.execute_check_wallet_balance(call),
-            "transfer_ipnft" => self.execute_transfer_ipnft(call),
             other => bail!("Unknown DeSci tool: {}", other),
         }
     }
@@ -421,6 +342,10 @@ impl DesciToolExecutionAdapter {
             .map(|path| resolve_optional_workspace_path(&self.workspace, path))
             .transpose()?;
 
+        let private_key = std::env::var("EVM_PRIVATE_KEY")
+            .map_err(|_| anyhow::anyhow!("Missing environment variable EVM_PRIVATE_KEY"))?;
+        let rpc_url = std::env::var("EVM_RPC_URL")
+            .map_err(|_| anyhow::anyhow!("Missing environment variable EVM_RPC_URL"))?;
         let api_key = std::env::var("MOLECULE_API_KEY")
             .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_API_KEY"))?;
         let gql_url = std::env::var("MOLECULE_LABS_URL")
@@ -428,30 +353,25 @@ impl DesciToolExecutionAdapter {
         let client_url = std::env::var("MOLECULE_CLIENT_URL")
             .unwrap_or_else(|_| "https://testnet.molecule.xyz".to_string());
 
-        // Resolve wallet address from Privy agentic wallet.
-        let client = self.client.clone();
-        let wallet = self.run_async(async { privy_wallet_address(&client).await })?;
-        self.check_cancel()?;
+        let key_hex = private_key.strip_prefix("0x").unwrap_or(&private_key);
+        let signer = PrivateKeySigner::from_str(key_hex).context("invalid EVM_PRIVATE_KEY")?;
+        let wallet = format!("{}", signer.address());
 
-        // Pre-check: ensure symbol is available on Molecule (up to 5 alternatives).
-        let symbol = self.run_async(async {
-            find_available_symbol(&client, symbol, 5).await
-        })?;
-        self.check_cancel()?;
-
-        // Step 1: Submit the POI transaction on-chain via Privy.
+        // Step 1: Submit the POI transaction on-chain.
         let poi_tx_hash = self.run_async(async {
-            let tx_hash = privy_send_transaction(
-                &client, poi_transaction_to, Some(poi_transaction_data), Some("0"),
-            ).await?;
-            let success = wait_for_receipt(&client, &tx_hash).await?;
+            let (tx_hash, success, _logs) = send_tx(
+                &signer,
+                &rpc_url,
+                poi_transaction_to,
+                Some(poi_transaction_data),
+                Some("0"),
+            )
+            .await?;
             if !success {
                 bail!("POI on-chain transaction reverted: {}", tx_hash);
             }
             Ok::<String, anyhow::Error>(tx_hash)
         })?;
-
-        self.check_cancel()?;
 
         // Derive reservation ID: POI transaction data cast to uint256 (the merkle root).
         // This produces a 256-bit ID (> u128), which is the correct format for POI-based minting.
@@ -469,16 +389,8 @@ impl DesciToolExecutionAdapter {
             None => DEFAULT_PNG.to_vec(),
         };
 
-        self.check_cancel()?;
-
-        // Steps 2-9: Molecule GraphQL flow → on-chain mint via Privy.
-        let cancel_flag = self.cancel.clone();
-        let check = || -> Result<()> {
-            if cancel_flag.as_ref().map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed)) {
-                bail!("Operation cancelled by /stop");
-            }
-            Ok(())
-        };
+        // Steps 2-8: Molecule GraphQL flow → on-chain mint.
+        let client = self.client.clone();
         let (reservation_id, mint_tx, metadata_cid) = self.run_async(async {
             // Step 2: Generate assignment agreement.
             let mut project_data = json!({
@@ -512,7 +424,6 @@ impl DesciToolExecutionAdapter {
             let agreement_hash = node["agreementContentHash"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing agreementContentHash"))?.to_string();
 
-            check()?;
             // Step 3: Get image upload URL.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
                 "mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) { generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) { uploadUrl key isSuccess error { message code retryable } } }",
@@ -558,7 +469,6 @@ impl DesciToolExecutionAdapter {
             let metadata_cid = node["metadataCid"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing metadataCid"))?.to_string();
 
-            check()?;
             // Step 6: Get terms message.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
                 "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }",
@@ -569,8 +479,14 @@ impl DesciToolExecutionAdapter {
             let terms_message = node["message"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing terms message"))?.to_string();
 
-            // Step 7: Sign terms via Privy personal_sign.
-            let signature = privy_personal_sign(&client, &terms_message).await?;
+            // Step 7: Sign terms (EIP-191 personal_sign, v = 27/28 to match viem).
+            let sig = signer.sign_message(terms_message.as_bytes()).await.context("signing failed")?;
+            let v = if sig.v() { 28u8 } else { 27u8 };
+            let mut sig_bytes = [0u8; 65];
+            sig_bytes[..32].copy_from_slice(&sig.r().to_be_bytes::<32>());
+            sig_bytes[32..64].copy_from_slice(&sig.s().to_be_bytes::<32>());
+            sig_bytes[64] = v;
+            let signature = format!("0x{}", alloy::primitives::hex::encode(sig_bytes));
 
             // Step 8: Sign off metadata.
             let resp = ipnft_graphql(&client, &gql_url, &api_key,
@@ -588,7 +504,6 @@ impl DesciToolExecutionAdapter {
             let authorization = node["authorization"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing authorization"))?.to_string();
 
-            check()?;
             // Step 9: Mint (ABI-encoded mintReservation call).
             let auth_hex = authorization.strip_prefix("0x").unwrap_or(&authorization);
             let auth_bytes = alloy::primitives::hex::decode(auth_hex).context("invalid authorization hex")?;
@@ -600,10 +515,9 @@ impl DesciToolExecutionAdapter {
                 authorization: Bytes::from(auth_bytes),
             };
             let calldata = format!("0x{}", alloy::primitives::hex::encode(mint_call.abi_encode()));
-            let mint_tx = privy_send_transaction(
-                &client, IPNFT_CONTRACT, Some(&calldata), Some(MINT_FEE_WEI),
+            let (mint_tx, mint_ok, _) = send_tx(
+                &signer, &rpc_url, IPNFT_CONTRACT, Some(&calldata), Some(MINT_FEE_WEI),
             ).await?;
-            let mint_ok = wait_for_receipt(&client, &mint_tx).await?;
             if !mint_ok {
                 bail!("mint reverted: {}", mint_tx);
             }
@@ -671,14 +585,10 @@ impl DesciToolExecutionAdapter {
         let project = &node["project"];
         let ipnft_uid = project["ipnftUid"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("createProject response missing project.ipnftUid"))?
-            .to_string();
-        let token_id = project["ipnftTokenId"]
-            .as_str()
-            .ok_or_else(|| {
-                anyhow::anyhow!("createProject response missing project.ipnftTokenId")
-            })?
-            .to_string();
+            .ok_or_else(|| anyhow::anyhow!("createProject response missing project.ipnftUid"))?;
+        let token_id = project["ipnftTokenId"].as_str().ok_or_else(|| {
+            anyhow::anyhow!("createProject response missing project.ipnftTokenId")
+        })?;
         let client_url = std::env::var("MOLECULE_CLIENT_URL")
             .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_CLIENT_URL"))?;
         let project_url = format!("{}/ipnfts/{}", client_url.trim_end_matches('/'), token_id);
@@ -687,7 +597,7 @@ impl DesciToolExecutionAdapter {
             "create_molecule_project",
             "Created Molecule project data room.",
         )
-        .with_id("project.ipnft_uid", ipnft_uid.clone())
+        .with_id("project.ipnft_uid", ipnft_uid.to_string())
         .with_id(
             "project.ipnft_symbol",
             project["ipnftSymbol"]
@@ -695,7 +605,7 @@ impl DesciToolExecutionAdapter {
                 .unwrap_or_default()
                 .to_string(),
         )
-        .with_id("project.ipnft_token_id", token_id.clone())
+        .with_id("project.ipnft_token_id", token_id.to_string())
         .with_artifact(
             "project.ipnft_address",
             project["ipnftAddress"].as_str().unwrap_or_default(),
@@ -771,16 +681,8 @@ impl DesciToolExecutionAdapter {
             })
             .unwrap_or_default();
 
-        let upload_bytes_len = bytes.len();
         let client = self.client.clone();
-        let s3_upload_result = self.run_async(async move {
-            tracing::info!(
-                url_len = upload_url.len(),
-                method = %upload_method,
-                content_length = upload_bytes_len,
-                "Uploading {} bytes to presigned S3 URL",
-                upload_bytes_len
-            );
+        self.run_async(async move {
             let mut request = match upload_method.as_str() {
                 "POST" => client.post(upload_url),
                 _ => client.put(upload_url),
@@ -789,12 +691,9 @@ impl DesciToolExecutionAdapter {
             for (key, value) in &required_headers {
                 request = request.header(key.as_str(), value.as_str());
             }
-            // Set Content-Type and Content-Length if not already provided by the initiate headers.
+            // Set Content-Type if not already provided by the initiate headers.
             if !required_headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
                 request = request.header("Content-Type", content_type);
-            }
-            if !required_headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-length")) {
-                request = request.header("Content-Length", upload_bytes_len.to_string());
             }
             let response = request
                 .body(bytes)
@@ -803,10 +702,9 @@ impl DesciToolExecutionAdapter {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             if !status.is_success() {
-                bail!("S3 upload failed: HTTP {} — {}", status, text);
+                bail!("HTTP {} from Molecule upload URL: {}", status, text);
             }
-            tracing::info!(status = %status, bytes = upload_bytes_len, "S3 upload completed");
-            Ok::<(u16, usize), anyhow::Error>((status.as_u16(), upload_bytes_len))
+            Ok::<(), anyhow::Error>(())
         })?;
 
         let finish = self.run_async(async {
@@ -848,14 +746,7 @@ impl DesciToolExecutionAdapter {
             vec![file_path.to_string()],
             vec![molecule_labs_host()?],
         )
-        .with_raw_response(json!({
-            "initiate": initiate,
-            "s3_upload": {
-                "status": s3_upload_result.0,
-                "bytes_uploaded": s3_upload_result.1
-            },
-            "finish": finish
-        }));
+        .with_raw_response(json!({"initiate": initiate, "finish": finish}));
 
         self.finalize_tool_result(&envelope, audit_path)
     }
@@ -943,120 +834,6 @@ impl DesciToolExecutionAdapter {
         self.finalize_tool_result(&envelope, audit_path)
     }
 
-    fn execute_check_wallet_balance(&self, call: &tengu_core::types::ToolCall) -> Result<String> {
-        let explicit_address = optional_str(call, "address");
-        let client = self.client.clone();
-        let (address, balance_wei, balance_eth) = self.run_async(async {
-            let address = match explicit_address {
-                Some(addr) => addr,
-                None => privy_wallet_address(&client).await?,
-            };
-            let rpc_url = std::env::var("EVM_RPC_URL")
-                .unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
-            let resp = client
-                .post(&rpc_url)
-                .json(&json!({
-                    "jsonrpc": "2.0",
-                    "method": "eth_getBalance",
-                    "params": [&address, "latest"],
-                    "id": 1
-                }))
-                .send()
-                .await?;
-            let body: serde_json::Value = resp.json().await?;
-            let hex_balance = body["result"]
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("RPC eth_getBalance returned no result: {:?}", body))?;
-            let wei = U256::from_str_radix(
-                hex_balance.strip_prefix("0x").unwrap_or(hex_balance), 16,
-            ).context("invalid balance hex")?;
-            let eth = format_wei_as_eth(wei);
-            Ok::<(String, String, String), anyhow::Error>((address, wei.to_string(), eth))
-        })?;
-
-        let envelope = ToolResultEnvelope::ok(
-            "check_wallet_balance",
-            format!("{} ETH (Sepolia)", balance_eth),
-        )
-        .with_artifact("wallet.address", &address)?
-        .with_artifact("wallet.balance_wei", &balance_wei)?
-        .with_artifact("wallet.balance_eth", &balance_eth)?
-        .with_artifact("wallet.network", "sepolia")?;
-
-        Ok(envelope.to_json_string()?)
-    }
-
-    fn execute_transfer_ipnft(&self, call: &tengu_core::types::ToolCall) -> Result<String> {
-        let token_id_str = required_str(call, "token_id")?;
-        let ipnft_uid = required_str(call, "ipnft_uid")?;
-        let audit_path = optional_str(call, "audit_path");
-
-        let owner = std::env::var("EVM_WALLET_ADDRESS")
-            .map_err(|_| anyhow::anyhow!("EVM_WALLET_ADDRESS not set — cannot transfer"))?;
-        if owner.is_empty() {
-            bail!("EVM_WALLET_ADDRESS is empty — cannot transfer");
-        }
-
-        let client = self.client.clone();
-        let (transfer_tx, add_owner_ok) = self.run_async(async {
-            let privy_addr = privy_wallet_address(&client).await?;
-            if privy_addr.to_lowercase() == owner.to_lowercase() {
-                bail!("Privy wallet and owner wallet are the same — no transfer needed");
-            }
-
-            let token_id = U256::from_str_radix(token_id_str, 10)
-                .context("invalid token_id — expected decimal string")?;
-
-            // 1. Transfer NFT on-chain.
-            tracing::info!(from = %privy_addr, to = %owner, token_id = %token_id, "Transferring IP-NFT to owner wallet");
-            let transfer_call = safeTransferFromCall {
-                from: Address::from_str(&privy_addr).context("invalid privy wallet address")?,
-                to: Address::from_str(&owner).context("invalid owner wallet address")?,
-                tokenId: token_id,
-            };
-            let calldata = format!("0x{}", alloy::primitives::hex::encode(transfer_call.abi_encode()));
-            let tx = privy_send_transaction(&client, IPNFT_CONTRACT, Some(&calldata), None).await?;
-            let ok = wait_for_receipt(&client, &tx).await?;
-            if !ok {
-                bail!("NFT transfer reverted: {}", tx);
-            }
-
-            // 2. Add owner wallet to Molecule project.
-            tracing::info!(ipnft_uid = %ipnft_uid, owner = %owner, "Adding owner to Molecule project");
-            let add_resp = molecule_graphql(
-                &client,
-                "mutation AddProjectOwner($ipnftUid: String!, $ownerAddress: String!) { addProjectOwner(ipnftUid: $ipnftUid, ownerAddress: $ownerAddress) { isSuccess message error { message code retryable } } }",
-                json!({"ipnftUid": ipnft_uid, "ownerAddress": owner}),
-            ).await;
-            let add_ok = match add_resp {
-                Ok(resp) => resp["data"]["addProjectOwner"]["isSuccess"].as_bool().unwrap_or(false),
-                Err(e) => {
-                    tracing::warn!("addProjectOwner failed (non-fatal): {}", e);
-                    false
-                }
-            };
-
-            Ok::<(String, bool), anyhow::Error>((tx, add_ok))
-        })?;
-
-        let envelope = ToolResultEnvelope::ok(
-            "transfer_ipnft",
-            format!("Transferred IP-NFT to {}", owner),
-        )
-        .with_hash("transfer.tx", transfer_tx.clone())
-        .with_artifact("transfer.from", "privy_wallet")?
-        .with_artifact("transfer.to", &owner)?
-        .with_artifact("transfer.token_id", token_id_str)?
-        .with_artifact("transfer.project_owner_added", if add_owner_ok { "true" } else { "false" })?
-        .with_raw_response(json!({
-            "transfer_tx": transfer_tx,
-            "owner_address": owner,
-            "project_owner_added": add_owner_ok
-        }));
-
-        self.finalize_tool_result(&envelope, audit_path)
-    }
-
     fn finalize_tool_result(
         &self,
         envelope: &ToolResultEnvelope,
@@ -1076,294 +853,41 @@ impl DesciToolExecutionAdapter {
 
 }
 
-// ---------------------------------------------------------------------------
-// Privy agentic wallet helpers
-// ---------------------------------------------------------------------------
-
-/// Resolve the wallet address from Privy. Cached after first call.
-async fn privy_wallet_address(client: &reqwest::Client) -> Result<String> {
-    if let Some(cached) = WALLET_ADDRESS_CACHE.lock().unwrap().as_ref() {
-        return Ok(cached.clone());
-    }
-
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
-
-    let resp = client
-        .get(format!("{}/v1/wallets/{}", PRIVY_API_URL, wallet_id))
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
-    if !status.is_success() {
-        bail!("Privy wallet lookup failed: {} {:?}", status, body);
-    }
-    let address = body["address"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Privy response missing address"))?
-        .to_string();
-
-    *WALLET_ADDRESS_CACHE.lock().unwrap() = Some(address.clone());
-    Ok(address)
-}
-
-/// Send an on-chain transaction via Privy agentic wallet. Returns tx hash.
-async fn privy_send_transaction(
-    client: &reqwest::Client,
+async fn send_tx(
+    signer: &PrivateKeySigner,
+    rpc_url: &str,
     to: &str,
     data: Option<&str>,
     value: Option<&str>,
-) -> Result<String> {
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
+) -> Result<(String, bool, Vec<alloy::rpc::types::Log>)> {
+    let url = rpc_url.parse().context("invalid RPC URL")?;
+    let provider = ProviderBuilder::new()
+        .wallet(signer.clone())
+        .connect_http(url);
 
-    // Privy requires 0x-prefixed hex values.
-    let hex_value = match value {
-        Some(v) => format!("0x{:x}", U256::from_str_radix(v, 10).context("invalid tx value")?),
-        None => "0x0".to_string(),
-    };
-    let mut transaction = json!({ "to": to, "value": hex_value });
+    let to_addr = Address::from_str(to).context("invalid address")?;
+    let mut tx = alloy::rpc::types::TransactionRequest::default().to(to_addr);
+    tx.chain_id = Some(CHAIN_ID);
+
     if let Some(d) = data {
-        transaction["data"] = json!(d);
+        let hex = d.strip_prefix("0x").unwrap_or(d);
+        let bytes = alloy::primitives::hex::decode(hex).context("invalid calldata")?;
+        tx.input = alloy::rpc::types::TransactionInput::new(Bytes::from(bytes));
+    }
+    if let Some(v) = value {
+        tx = tx.value(U256::from_str_radix(v, 10).context("invalid value")?);
     }
 
-    let resp = client
-        .post(format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id))
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .json(&json!({
-            "method": "eth_sendTransaction",
-            "caip2": format!("eip155:{}", CHAIN_ID),
-            "params": { "transaction": transaction }
-        }))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
-    if !status.is_success() {
-        bail!("Privy eth_sendTransaction failed: {} {:?}", status, body);
-    }
-    body["data"]["hash"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Privy response missing data.hash"))
-        .map(String::from)
+    let pending = provider
+        .send_transaction(tx)
+        .await
+        .context("tx send failed")?;
+    let receipt = pending.get_receipt().await.context("tx receipt failed")?;
+    let hash = format!("{}", receipt.transaction_hash);
+    let success = receipt.status();
+    let logs = receipt.inner.logs().to_vec();
+    Ok((hash, success, logs))
 }
-
-/// Sign a message via Privy personal_sign. Returns the signature hex string.
-async fn privy_personal_sign(
-    client: &reqwest::Client,
-    message: &str,
-) -> Result<String> {
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
-
-    let resp = client
-        .post(format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id))
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .json(&json!({
-            "method": "personal_sign",
-            "params": { "message": message, "encoding": "utf-8" }
-        }))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
-    if !status.is_success() {
-        bail!("Privy personal_sign failed: {} {:?}", status, body);
-    }
-    let raw_sig = body["data"]["signature"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Privy response missing data.signature"))?;
-
-    // Normalize v: Privy may return v=0/1, Molecule expects v=27/28.
-    let hex = raw_sig.strip_prefix("0x").unwrap_or(raw_sig);
-    let mut sig_bytes = alloy::primitives::hex::decode(hex).context("invalid signature hex")?;
-    if sig_bytes.len() == 65 && sig_bytes[64] < 27 {
-        sig_bytes[64] += 27;
-    }
-    Ok(format!("0x{}", alloy::primitives::hex::encode(sig_bytes)))
-}
-
-/// Wait for a transaction receipt. Uses EVM_RPC_URL or a public Sepolia endpoint.
-async fn wait_for_receipt(client: &reqwest::Client, tx_hash: &str) -> Result<bool> {
-    let rpc_url = std::env::var("EVM_RPC_URL")
-        .unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
-
-    for _ in 0..90 {
-        let resp = client
-            .post(&rpc_url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "method": "eth_getTransactionReceipt",
-                "params": [tx_hash],
-                "id": 1
-            }))
-            .send()
-            .await?;
-        let body: serde_json::Value = resp.json().await?;
-        if let Some(result) = body.get("result") {
-            if !result.is_null() {
-                let status = result["status"].as_str().unwrap_or("0x0");
-                return Ok(status == "0x1");
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-    bail!("Transaction receipt not found after 180s: {}", tx_hash)
-}
-
-/// Acquire a Molecule service token via Privy wallet signing.
-/// Cached after first successful acquisition.
-async fn acquire_service_token(client: &reqwest::Client) -> Result<String> {
-    if let Some(cached) = SERVICE_TOKEN_CACHE.lock().unwrap().as_ref() {
-        return Ok(cached.clone());
-    }
-
-    let labs_url = std::env::var("MOLECULE_LABS_URL")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_LABS_URL"))?;
-    let api_key = std::env::var("MOLECULE_API_KEY")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_API_KEY"))?;
-    let wallet_address = privy_wallet_address(client).await?;
-
-    // Step A: Get the sign-in message.
-    let resp = client
-        .post(&labs_url)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", &api_key)
-        .json(&json!({
-            "query": "query GetServiceSignInMessage($walletAddress: String!, $serviceName: String!) { getServiceSignInMessage(walletAddress: $walletAddress, serviceName: $serviceName) { message } }",
-            "variables": { "walletAddress": &wallet_address, "serviceName": "tengu-agent" }
-        }))
-        .send()
-        .await?;
-    let body: serde_json::Value = resp.json().await?;
-    let message = body["data"]["getServiceSignInMessage"]["message"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("getServiceSignInMessage returned no message: {:?}", body))?;
-
-    // Step B: Sign with Privy personal_sign.
-    let signature = privy_personal_sign(client, message).await?;
-
-    // Step C: Exchange signature for service token.
-    let resp = client
-        .post(&labs_url)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", &api_key)
-        .json(&json!({
-            "query": "mutation GenerateServiceToken($serviceName: String!, $expiresIn: String!, $walletAddress: String, $messageSignature: String) { generateServiceToken(serviceName: $serviceName, expiresIn: $expiresIn, walletAddress: $walletAddress, messageSignature: $messageSignature) { token isSuccess message } }",
-            "variables": {
-                "serviceName": "tengu-agent",
-                "expiresIn": "720h",
-                "walletAddress": &wallet_address,
-                "messageSignature": &signature
-            }
-        }))
-        .send()
-        .await?;
-    let body: serde_json::Value = resp.json().await?;
-    let token = body["data"]["generateServiceToken"]["token"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("generateServiceToken returned no token: {:?}", body))?
-        .to_string();
-
-    *SERVICE_TOKEN_CACHE.lock().unwrap() = Some(token.clone());
-    Ok(token)
-}
-
-fn invalidate_service_token_cache() {
-    *SERVICE_TOKEN_CACHE.lock().unwrap() = None;
-}
-
-/// Check if a symbol is already taken by an existing Molecule project.
-/// Uses the public `projectsV2` query (no auth required).
-async fn is_symbol_taken(client: &reqwest::Client, symbol: &str) -> Result<bool> {
-    let labs_url = std::env::var("MOLECULE_LABS_URL")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_LABS_URL"))?;
-    let api_key = std::env::var("MOLECULE_API_KEY")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_API_KEY"))?;
-    let upper = symbol.to_uppercase();
-    let mut page = 0;
-    loop {
-        let resp = client
-            .post(&labs_url)
-            .header("Content-Type", "application/json")
-            .header("x-api-key", &api_key)
-            .json(&json!({
-                "query": "query GetProjectsV2($page: Int, $perPage: Int) { projectsV2(page: $page, perPage: $perPage) { nodes { ipnftSymbol } pageInfo { hasNextPage } } }",
-                "variables": {"page": page, "perPage": 100}
-            }))
-            .send()
-            .await?;
-        let body: serde_json::Value = resp.json().await?;
-        let nodes = body["data"]["projectsV2"]["nodes"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("projectsV2 returned no nodes: {:?}", body))?;
-        for node in nodes {
-            if let Some(s) = node["ipnftSymbol"].as_str() {
-                if s.to_uppercase() == upper {
-                    return Ok(true);
-                }
-            }
-        }
-        let has_next = body["data"]["projectsV2"]["pageInfo"]["hasNextPage"]
-            .as_bool()
-            .unwrap_or(false);
-        if !has_next {
-            break;
-        }
-        page += 1;
-    }
-    Ok(false)
-}
-
-/// Find an available symbol, appending numeric suffixes if needed.
-/// Returns the original symbol if available, otherwise tries symbol2, symbol3, ... up to max_attempts.
-async fn find_available_symbol(
-    client: &reqwest::Client,
-    base_symbol: &str,
-    max_attempts: usize,
-) -> Result<String> {
-    // Try original symbol first.
-    if !is_symbol_taken(client, base_symbol).await? {
-        tracing::info!(symbol = %base_symbol, "Symbol is available");
-        return Ok(base_symbol.to_string());
-    }
-    tracing::warn!(symbol = %base_symbol, "Symbol already taken, trying alternatives");
-
-    for i in 2..=(max_attempts + 1) {
-        let candidate = format!("{}{}", base_symbol, i);
-        if !is_symbol_taken(client, &candidate).await? {
-            tracing::info!(symbol = %candidate, "Found available symbol");
-            return Ok(candidate);
-        }
-        tracing::warn!(symbol = %candidate, "Also taken");
-    }
-    bail!(
-        "All symbol variants taken ({} through {}{}). Choose a different base symbol.",
-        base_symbol,
-        base_symbol,
-        max_attempts + 1
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Molecule GraphQL helpers
-// ---------------------------------------------------------------------------
 
 async fn molecule_graphql(
     client: &reqwest::Client,
@@ -1374,48 +898,19 @@ async fn molecule_graphql(
         .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_LABS_URL"))?;
     let api_key = std::env::var("MOLECULE_API_KEY")
         .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_API_KEY"))?;
-
-    // Use explicit env var if set, otherwise auto-acquire via Privy signing.
-    let service_token = match std::env::var("MOLECULE_SERVICE_TOKEN") {
-        Ok(token) if !token.is_empty() => token,
-        _ => acquire_service_token(client).await?,
-    };
+    let service_token = std::env::var("MOLECULE_SERVICE_TOKEN")
+        .map_err(|_| anyhow::anyhow!("Missing environment variable MOLECULE_SERVICE_TOKEN"))?;
 
     let response = client
         .post(&labs_url)
         .header("Content-Type", "application/json")
-        .header("x-api-key", &api_key)
-        .header("x-service-token", &service_token)
+        .header("x-api-key", api_key)
+        .header("x-service-token", service_token)
         .json(&json!({ "query": query, "variables": variables }))
         .send()
         .await?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
-
-    // Token expired — invalidate cache, acquire fresh token, retry once.
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        // Only retry if we were using a cached/auto-acquired token (not an explicit env var).
-        if std::env::var("MOLECULE_SERVICE_TOKEN").map_or(true, |t| t.is_empty()) {
-            tracing::warn!("Service token expired, re-acquiring via Privy");
-            invalidate_service_token_cache();
-            let fresh_token = acquire_service_token(client).await?;
-            let retry = client
-                .post(&labs_url)
-                .header("Content-Type", "application/json")
-                .header("x-api-key", &api_key)
-                .header("x-service-token", &fresh_token)
-                .json(&json!({ "query": query, "variables": variables }))
-                .send()
-                .await?;
-            let retry_status = retry.status();
-            let retry_text = retry.text().await.unwrap_or_default();
-            if !retry_status.is_success() {
-                bail!("HTTP {} from Molecule GraphQL (after token refresh): {}", retry_status, retry_text);
-            }
-            return Ok(serde_json::from_str(&retry_text).context("Molecule GraphQL returned invalid JSON")?);
-        }
-    }
-
     if !status.is_success() {
         bail!("HTTP {} from Molecule GraphQL: {}", status, text);
     }
@@ -1457,16 +952,6 @@ fn optional_string_array(call: &tengu_core::types::ToolCall, key: &str) -> Vec<S
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Format U256 wei value as human-readable ETH string.
-fn format_wei_as_eth(wei: U256) -> String {
-    let divisor = U256::from(1_000_000_000_000_000_000u64);
-    let whole = wei / divisor;
-    let frac = wei % divisor;
-    // Show 6 decimal places.
-    let frac_scaled = frac * U256::from(1_000_000u64) / divisor;
-    format!("{}.{:06}", whole, frac_scaled.to::<u64>())
 }
 
 fn resolve_optional_workspace_path(workspace: &Path, raw: String) -> Result<String> {

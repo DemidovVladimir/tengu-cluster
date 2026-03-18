@@ -170,7 +170,10 @@ impl OpenRouterEngine {
         // Strip provider prefix for matching (e.g. "anthropic/claude-sonnet-4" -> "claude-sonnet-4")
         let model_name = model_lower.split('/').last().unwrap_or(&model_lower);
 
-        if model_name.contains("claude") {
+        if model_name.contains("claude-sonnet-4.6") || model_name.contains("claude-opus-4.6") {
+            // Sonnet 4.6 / Opus 4.6 — 1M context (Feb 2026+)
+            1_000_000
+        } else if model_name.contains("claude") {
             200_000
         } else if model_name.starts_with("gpt-4.1") {
             1_047_576
@@ -190,7 +193,15 @@ impl OpenRouterEngine {
     }
 
     fn default_max_output_tokens(context_window_tokens: usize) -> u32 {
-        ((context_window_tokens / 8).clamp(512, 8_192)) as u32
+        // Models with large context windows (≥200K, e.g. Claude) may use extended
+        // thinking that consumes output tokens. Allow up to 16K to leave room for
+        // both reasoning and actual output.
+        let cap = if context_window_tokens >= 200_000 {
+            16_384
+        } else {
+            8_192
+        };
+        ((context_window_tokens / 8).clamp(512, cap)) as u32
     }
 
     /// Convert tengu ToolDef array to OpenAI-compatible function-calling format.
@@ -356,7 +367,24 @@ impl Engine for OpenRouterEngine {
             }])));
         }
 
-        let parsed: OpenRouterChatResponse = response.json().await?;
+        let raw_body = response.text().await?;
+        debug!(
+            model = %self.model,
+            body_len = raw_body.len(),
+            body_preview = %if raw_body.len() > 500 { &raw_body[..500] } else { &raw_body },
+            "OpenRouter raw response"
+        );
+        let parsed: OpenRouterChatResponse = serde_json::from_str(&raw_body).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse OpenRouter response: {} — body: {}",
+                e,
+                if raw_body.len() > 300 {
+                    &raw_body[..300]
+                } else {
+                    &raw_body
+                }
+            )
+        })?;
         Ok(Box::pin(stream::iter(Self::success_events(&parsed))))
     }
 }
@@ -544,6 +572,16 @@ mod tests {
 
     #[test]
     fn context_window_detects_claude_models() {
+        // Claude 4.6 models: 1M context
+        assert_eq!(
+            OpenRouterEngine::resolve_context_window_tokens("anthropic/claude-sonnet-4.6", None),
+            1_000_000
+        );
+        assert_eq!(
+            OpenRouterEngine::resolve_context_window_tokens("anthropic/claude-opus-4.6", None),
+            1_000_000
+        );
+        // Older Claude models: 200K context
         assert_eq!(
             OpenRouterEngine::resolve_context_window_tokens("anthropic/claude-sonnet-4", None),
             200_000
@@ -589,7 +627,7 @@ mod tests {
     fn max_output_tokens_uses_fallback_and_override() {
         assert_eq!(
             OpenRouterEngine::resolve_max_output_tokens(128_000, None),
-            8_192
+            8_192 // 128K context → cap at 8192
         );
         assert_eq!(
             OpenRouterEngine::resolve_max_output_tokens(8_192, None),

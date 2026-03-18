@@ -79,14 +79,24 @@ pub(crate) async fn maybe_compact_flow(
         .map(|m| estimate_tokens_approx_min1(&m.content) as u64)
         .sum();
 
-    flow_store.append_message(flow_key, agent_id, &summary_message)?;
+    // Rewrite the on-disk transcript with only the compacted messages.
+    // This reclaims disk space — without it, compaction only trims in-memory
+    // messages while the transcript file grows forever.
+    if let Err(e) = flow_store.rewrite_transcript(flow_key, agent_id, messages) {
+        tracing::warn!(
+            flow_key = %flow_key,
+            error = %e,
+            "Failed to rewrite transcript after compaction — disk file will be larger than in-memory state"
+        );
+    }
+
     info!(
         flow_key = %flow_key,
         phase,
         compacted_messages,
         flow_tokens = *flow_token_usage,
         threshold_tokens = policy.threshold_tokens,
-        "Applied flow compaction summary"
+        "Applied flow compaction with disk rewrite"
     );
 
     Ok(CompactionOutcome {

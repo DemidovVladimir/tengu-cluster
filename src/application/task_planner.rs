@@ -37,7 +37,9 @@ pub(crate) async fn classify_request(
          2. If it needs MULTIPLE agents or is a compound goal, respond: {{\"route\":\"multi\"}}\n\n\
          Rules:\n\
          - Choose \"single\" when the request clearly falls under one agent's expertise\n\
-         - Choose \"multi\" when the request involves work across multiple domains, requires coordination, or has multiple distinct deliverables\n\
+         - Choose \"multi\" ONLY when the user EXPLICITLY asks for work that spans multiple agents\n\
+         - Do NOT choose \"multi\" just because additional agents COULD be useful. Only if the user asked for their specific work.\n\
+         - Route based on the CURRENT user request only; do not expand scope based on prior context or likely follow-up work\n\
          - Use ONLY the exact role keys listed above\n\
          - Respond with ONLY valid JSON, no markdown fences, no extra text",
         team
@@ -56,7 +58,7 @@ pub(crate) async fn classify_request(
     };
 
     let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None).await?;
+        collect_engine_response(engine, &messages, &[], &context, None, None, None, None).await?;
 
     parse_route_decision(&response.text, agent_descriptions)
 }
@@ -130,13 +132,21 @@ pub(crate) async fn generate_plan(
              \"depends_on\":[]}}\
          ]}}\n\n\
          Rules:\n\
+         - ONLY create tasks that the user EXPLICITLY asked for. Do NOT infer additional work.\n\
+         - NOT every team member needs a task. Most requests only need 1-3 agents.\n\
+         - If the user says \"register POI and mint IP-NFT\" → only hypothesis_researcher + onchain_minter. Do NOT add mol_labs, beach_scientist, custodian, or any other agent.\n\
+         - If the user says \"create a post on beach-science\" → only beach_scientist (+ dependencies for data it needs).\n\
+         - Do NOT add publication, upload, announcement, transfer, or follow-up tasks unless the user LITERALLY asked for them by name.\n\
          - Each task gets a unique short id (snake_case)\n\
          - Use ONLY the exact role keys listed above\n\
          - depends_on lists task ids that MUST complete first (empty = can run immediately)\n\
          - CRITICAL: If an agent's description says REQUIRES (must depend on), then every task for that agent \
            MUST have depends_on that includes a task from each required role. This is mandatory, not optional.\n\
+         - CRITICAL: Create at most ONE task per agent/role. Each agent handles its own internal workflow \
+           (e.g. authenticate → create → upload → announce). Do NOT split an agent's workflow into multiple tasks.\n\
+         - If the user asked for only part of a larger workflow, plan ONLY that subset\n\
+         - If the input contains sections like \"Relevant Prior Work\", treat them as background context only. They do NOT expand the requested deliverables\n\
          - Only parallelize tasks whose agents have no REQUIRES relationship with each other\n\
-         - Each task must be specific and actionable\n\
          - Keep to 2-6 tasks",
         team
     );
@@ -154,9 +164,27 @@ pub(crate) async fn generate_plan(
     };
 
     let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None).await?;
+        collect_engine_response(engine, &messages, &[], &context, None, None, None, None).await?;
 
-    parse_plan_json(&response.text)
+    if response.text.is_empty() {
+        anyhow::bail!("Planner received empty response from engine");
+    }
+
+    match parse_plan_json(&response.text) {
+        Ok(plan) => Ok(plan),
+        Err(e) => {
+            tracing::warn!(
+                "Plan parsing failed. Raw response ({} chars): {}",
+                response.text.len(),
+                if response.text.len() > 500 {
+                    format!("{}...", &response.text[..500])
+                } else {
+                    response.text.clone()
+                }
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Resolve execution order: returns batches of task indices that can run in parallel.
@@ -215,6 +243,44 @@ pub(crate) fn resolve_execution_order(tasks: &[PlanTask]) -> Result<Vec<Vec<usiz
     }
 
     Ok(batches)
+}
+
+/// Fix `depends_on` entries that reference role names instead of task IDs.
+///
+/// LLMs sometimes put a role key (e.g. `"onchain_minter"`) in depends_on
+/// instead of a task ID (e.g. `"mint_ipnft"`). This function resolves
+/// role references to the last task with that role. Returns the number
+/// of entries fixed.
+pub(crate) fn resolve_role_refs_in_depends(tasks: &mut [PlanTask]) -> usize {
+    let id_set: std::collections::HashSet<String> =
+        tasks.iter().map(|t| t.id.clone()).collect();
+    let last_task_for_role: HashMap<String, String> = {
+        let mut map = HashMap::new();
+        for task in tasks.iter() {
+            map.insert(task.role.clone(), task.id.clone());
+        }
+        map
+    };
+
+    let mut fixed = 0usize;
+    for task in tasks.iter_mut() {
+        for dep in task.depends_on.iter_mut() {
+            if !id_set.contains(dep.as_str()) {
+                // Not a known task ID — try interpreting it as a role name.
+                if let Some(task_id) = last_task_for_role.get(dep.as_str()) {
+                    tracing::info!(
+                        task = %task.id,
+                        role_ref = %dep,
+                        resolved_to = %task_id,
+                        "Resolved role reference in depends_on to task ID"
+                    );
+                    *dep = task_id.clone();
+                    fixed += 1;
+                }
+            }
+        }
+    }
+    fixed
 }
 
 /// Auto-repair a plan by injecting missing `depends_on` entries based on

@@ -274,8 +274,7 @@ async fn main() -> Result<()> {
                 } else {
                     (Vec::new(), Vec::new())
                 };
-            let targets =
-                adapters::prune::plan_prune(&tengu_home, &workspaces, &scaffold_dirs);
+            let targets = adapters::prune::plan_prune(&tengu_home, &workspaces, &scaffold_dirs);
             if targets.iter().all(|t| !t.exists) {
                 println!("Nothing to prune.");
                 return Ok(());

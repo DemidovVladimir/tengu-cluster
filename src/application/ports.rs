@@ -18,6 +18,14 @@ use crate::domain::memory::{MemoryEntry, MemorySearchResult};
 pub(crate) trait FlowStorePort: Send + Sync {
     fn load_messages(&self, flow_key: &str, max_messages: usize) -> Result<Vec<Message>>;
     fn append_message(&self, flow_key: &str, agent_id: &str, message: &Message) -> Result<()>;
+    /// Atomically rewrite a transcript with only the given messages.
+    /// Used after compaction to reclaim disk space.
+    fn rewrite_transcript(
+        &self,
+        flow_key: &str,
+        agent_id: &str,
+        messages: &[Message],
+    ) -> Result<()>;
 }
 
 /// Output port for publishing tool activity events to the UI/log layer.

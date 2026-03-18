@@ -109,15 +109,27 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
 # Run with: tengu orchestrate
 # Use sandboxes for domain-specific teams: tengu orchestrate --sandbox webstudio
-# See docs/SANDBOXES.md for details.
+# See tengu/Sandboxes.md for details.
 
 # [orchestrator]
 # enabled = true
-# max_retries = 3
+# max_retries = 0
+# planner_engine = "openrouter"         # Dedicated engine for task planning/classification
+# planner_model = "google/gemini-2.5-flash"  # Cheaper/faster model for planning (default: uses default agent's model)
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
 # Use capabilities for hard permissions and skill_packages for workflow docs/tools.
+#
+# Available capabilities:
+#   workspace.read, workspace.list, workspace.write, workspace.shell — file + shell
+#   http.request           — generic HTTP client (any REST API via skills)
+#   crypto.sign_tx         — EVM transaction signing via Privy wallet
+#   crypto.sign_message    — message signing via Privy wallet
+#   crypto.wallet_address  — read wallet address
+#   crypto.abi_encode      — ABI-encode EVM function calls into calldata
+#   memory.write           — persist memory entries
+#   DeSci workflows should be modeled as skills over the generic HTTP/crypto tools
 
 # [agents.qa]
 # engine = "openrouter"

@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::adapters::api_skill_executor::ApiSkillExecutionAdapter;
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
-use crate::adapters::desci_tools::{desci_tool_defs, DesciToolExecutionAdapter};
+use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
+use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
 use crate::adapters::memory_store::DiskVectorMemoryStore;
 use crate::adapters::memory_tool_executor::{
     memory_tool_defs, MemoryServiceHandle, MemoryToolExecutionAdapter,
@@ -35,6 +35,7 @@ use crate::adapters::skill_tool_executor::SkillToolExecutionAdapter;
 use crate::adapters::system_prompt;
 use crate::adapters::workspace_tools;
 use crate::application::engine_runtime::ToolExecutor;
+use crate::application::platform_tools_catalog::build_platform_tools;
 use crate::application::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_registry::SkillRegistry;
 use crate::application::tool_use_service::ToolUseService;
@@ -42,6 +43,7 @@ use crate::application::workspace_tools_catalog::build_workspace_tools;
 use crate::domain::capability::{
     filter_tools_by_capability, parse_capability_set, CapabilityId, RegisteredTool,
 };
+// NOTE: SkillExecution is used for filtering shell vs API skills in build_tool_executor.
 use crate::domain::chat::ChatLoopState;
 use crate::domain::run_state::RunState;
 use crate::domain::secret_registry::SecretRegistry;
@@ -78,15 +80,19 @@ pub(crate) fn tool_defs(tools: &[RegisteredTool]) -> Vec<tengu_core::types::Tool
     tools.iter().map(|tool| tool.def.clone()).collect()
 }
 
-/// Merge base workspace tools with active skill tools and filter by capabilities.
+/// Merge base platform tools (capability-filtered) with active skill tools.
+///
+/// Platform tools are gated by the agent's capability set.
+/// Skill tools bypass capability filtering — `skill_packages` already controls
+/// which skills load, so a loaded skill's tools are always available.
 pub(crate) fn rebuild_tools(
     base_tools: &[RegisteredTool],
     skill_registry: &SkillRegistry,
     capabilities: &HashSet<CapabilityId>,
 ) -> Vec<RegisteredTool> {
-    let mut tools = base_tools.to_vec();
+    let mut tools = filter_tools_by_capability(base_tools.to_vec(), capabilities);
     tools.extend(skill_registry.active_tools());
-    filter_tools_by_capability(tools, capabilities)
+    tools
 }
 
 /// Rebuild the system prompt from agent config, skill registry state, and active tools.
@@ -114,6 +120,9 @@ pub(crate) fn rebuild_system_prompt(
 /// The `approval` and `activity` ports are channel-specific — each channel adapter
 /// provides its own implementations (e.g., TUI dialogs, Telegram inline keyboards,
 /// Slack interactive messages).
+///
+/// `shared_http_client` — when `Some`, all HTTP and crypto executors share one
+/// `reqwest::Client` instead of each building their own connection pool.
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[RegisteredTool],
@@ -123,6 +132,7 @@ pub(crate) fn build_tool_executor(
     approval: Arc<dyn ToolApprovalPort>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    shared_http_client: Option<&reqwest::Client>,
 ) -> Option<ToolServiceExecutor> {
     if tools.is_empty() {
         return None;
@@ -139,22 +149,15 @@ pub(crate) fn build_tool_executor(
     );
 
     let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.def.name.as_str()).collect();
-    let skill_defs = skill_registry.active_skill_definitions();
-    let shell_skill_defs: Vec<_> = skill_defs
-        .iter()
+
+    // Shell skills create named tools; API skills are documentation-only.
+    let shell_skill_defs: Vec<_> = skill_registry
+        .active_skill_definitions()
+        .into_iter()
         .filter(|skill| {
             allowed_names.contains(skill.name.as_str())
                 && matches!(skill.execution, SkillExecution::Shell { .. })
         })
-        .cloned()
-        .collect();
-    let api_skill_defs: Vec<_> = skill_defs
-        .iter()
-        .filter(|skill| {
-            allowed_names.contains(skill.name.as_str())
-                && matches!(skill.execution, SkillExecution::Api(_))
-        })
-        .cloned()
         .collect();
 
     let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
@@ -170,13 +173,6 @@ pub(crate) fn build_tool_executor(
         composite = composite.with_executor(skill_exec, skill_names);
     }
 
-    if !api_skill_defs.is_empty() {
-        let api_names: HashSet<String> = api_skill_defs.iter().map(|s| s.name.clone()).collect();
-        if let Ok(api_exec) = ApiSkillExecutionAdapter::new(api_skill_defs) {
-            composite = composite.with_executor(Arc::new(api_exec), api_names);
-        }
-    }
-
     if let Some(ref handle) = memory_handle {
         if let Ok(mem_exec) =
             MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
@@ -189,18 +185,59 @@ pub(crate) fn build_tool_executor(
         }
     }
 
-    let desci_names: HashSet<String> = desci_tool_defs()
-        .into_iter()
-        .map(|tool| tool.def.name)
-        .filter(|name| allowed_names.contains(name.as_str()))
-        .collect();
-    if !desci_names.is_empty() {
-        if let Ok(desci_exec) = DesciToolExecutionAdapter::new(workspace.to_path_buf()) {
-            let desci_exec = match cancel {
-                Some(ref flag) => desci_exec.with_cancel(Arc::clone(flag)),
-                None => desci_exec,
-            };
-            composite = composite.with_executor(Arc::new(desci_exec), desci_names);
+    // Platform primitives: HTTP request
+    if allowed_names.contains("http_request") {
+        // Collect allowed hosts and env var names from active API skill
+        // documentation to block hallucinated URLs and env var names at runtime.
+        let mut http_allowed_hosts = HashSet::new();
+        let mut http_allowed_env_vars = HashSet::new();
+        for entry in skill_registry.entries().values() {
+            if entry.status != SkillStatus::Active {
+                continue;
+            }
+            if let SkillExecution::Api(ref api) = entry.definition.execution {
+                if let Some(host) =
+                    crate::adapters::http_tool_executor::extract_hosts_from_text(&api.base_url)
+                        .into_iter()
+                        .next()
+                {
+                    http_allowed_hosts.insert(host);
+                }
+            }
+            if let Some(ref body) = entry.context_body {
+                http_allowed_hosts
+                    .extend(crate::adapters::http_tool_executor::extract_hosts_from_text(body));
+                http_allowed_env_vars
+                    .extend(crate::adapters::http_tool_executor::extract_env_refs_from_text(body));
+            }
+        }
+        if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(
+            shared_http_client.cloned(),
+            workspace.to_path_buf(),
+            http_allowed_hosts,
+            http_allowed_env_vars,
+        ) {
+            composite = composite.with_executor(
+                Arc::new(http_exec),
+                HashSet::from(["http_request".to_string()]),
+            );
+        }
+    }
+
+    // Platform primitives: crypto signing + ABI encoding
+    let crypto_tool_names: HashSet<String> = [
+        "sign_and_send_transaction",
+        "sign_message",
+        "get_wallet_address",
+        "abi_encode",
+    ]
+    .iter()
+    .filter(|n| allowed_names.contains(**n))
+    .map(|n| n.to_string())
+    .collect();
+    if !crypto_tool_names.is_empty() {
+        if let Ok(crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+            composite = composite.with_executor(Arc::new(crypto_exec), crypto_tool_names);
         }
     }
 
@@ -240,7 +277,10 @@ pub(crate) fn compute_base_tools(
             &capabilities,
         ));
     }
-    tools.extend(filter_tools_by_capability(desci_tool_defs(), &capabilities));
+    tools.extend(filter_tools_by_capability(
+        build_platform_tools(),
+        &capabilities,
+    ));
     tools
 }
 
@@ -489,18 +529,12 @@ pub(crate) fn format_run_state_prompt(run_state: &RunState) -> String {
 }
 
 /// Runtime artifact requirements for known workflow roles.
-pub(crate) fn required_artifacts_for_role(role: &str) -> &'static [&'static str] {
-    match role {
-        "mol_labs" => &["mint.ipnft_symbol", "mint.token_id", "mint.project_url"],
-        "beach_scientist" => &[
-            "mint.project_url",
-            "mint.mint_tx",
-            "project.ipnft_uid",
-            "project.project_url",
-            "project.dataset_id",
-        ],
-        _ => &[],
-    }
+///
+/// With platform primitives replacing hardcoded tools, artifact tracking
+/// is driven by skill documentation rather than hardcoded role maps.
+/// Keeping the function signature for backward compatibility.
+pub(crate) fn required_artifacts_for_role(_role: &str) -> &'static [&'static str] {
+    &[]
 }
 
 // ---------------------------------------------------------------------------
@@ -628,9 +662,8 @@ mod tests {
     }
 
     #[test]
-    fn required_artifacts_for_role_desci_defaults() {
-        assert!(required_artifacts_for_role("mol_labs").contains(&"mint.token_id"));
-        assert!(required_artifacts_for_role("beach_scientist").contains(&"project.dataset_id"));
+    fn required_artifacts_for_role_returns_empty() {
+        assert!(required_artifacts_for_role("mol_labs").is_empty());
         assert!(required_artifacts_for_role("unknown").is_empty());
     }
 

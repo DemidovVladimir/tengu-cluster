@@ -7,6 +7,7 @@
 use crate::domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 use anyhow::Result;
 use futures::StreamExt;
+use std::collections::HashMap;
 use tengu_core::types::{Message, Role, StreamEvent, ToolCall, ToolDef};
 use tengu_core::{Engine, EngineContext};
 use tracing::debug;
@@ -15,13 +16,20 @@ use tracing::debug;
 /// Kept low to avoid re-sending the entire conversation on each round.
 const MAX_TOOL_ROUNDS: usize = 15;
 
-/// Maximum characters kept per tool result to prevent context explosion.
-/// Tool results exceeding this limit are truncated with a suffix note.
-const MAX_TOOL_RESULT_CHARS: usize = 2_000;
+/// Maximum characters kept per successful tool result.
+const MAX_TOOL_RESULT_CHARS: usize = 6_000;
+
+/// Maximum characters kept for error tool results — errors only need
+/// a short message, not the full response body that bloats the context.
+const MAX_ERROR_RESULT_CHARS: usize = 1_500;
 
 /// Maximum seconds to wait for a single stream event before treating the stream as dead.
 /// If no event arrives within this window, the engine turn is aborted with an error.
 const STREAM_EVENT_TIMEOUT_SECS: u64 = 120;
+
+/// Number of consecutive HTTP error results (4xx/5xx) from the same tool
+/// before we abort the turn to prevent token drain.
+const MAX_CONSECUTIVE_TOOL_ERRORS: usize = 3;
 
 /// Result of a single engine call including response text and token usage delta.
 pub(crate) struct EngineResponse {
@@ -82,6 +90,10 @@ pub(crate) type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + S
 /// `cancel` is checked between tool rounds and between individual tool
 /// executions. When set, processing stops and returns whatever text has
 /// been collected so far.
+///
+/// `token_budget` optionally caps the total tokens (input + output) for
+/// this call. When exceeded, the current text is returned immediately.
+/// Used by orchestrators to prevent runaway tasks from draining tokens.
 pub(crate) async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
@@ -90,11 +102,15 @@ pub(crate) async fn collect_engine_response(
     tool_executor: Option<&dyn ToolExecutor>,
     tool_observer: Option<ToolResultObserver<'_>>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    token_budget: Option<u32>,
 ) -> Result<EngineResponse> {
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
     let mut tool_outcomes: Vec<(String, String)> = Vec::new();
+    let mut executed_tool_results: HashMap<String, String> = HashMap::new();
+    // Track consecutive HTTP errors per tool name to detect retry loops.
+    let mut consecutive_errors: HashMap<String, usize> = HashMap::new();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -115,6 +131,24 @@ pub(crate) async fn collect_engine_response(
         total_input_delta += input_delta;
         total_output_delta += output_delta;
 
+        // Token budget enforcement: abort early if total tokens exceed the cap.
+        if let Some(budget) = token_budget {
+            let total = total_input_delta + total_output_delta;
+            if total > budget {
+                debug!(
+                    total_tokens = total,
+                    budget,
+                    "Token budget exceeded — returning current text"
+                );
+                return Ok(EngineResponse {
+                    text: response_text,
+                    input_tokens_delta: total_input_delta,
+                    output_tokens_delta: total_output_delta,
+                    tool_outcomes,
+                });
+            }
+        }
+
         // If no tool calls, we're done — return the text response.
         if tool_calls.is_empty() || tool_executor.is_none() || tools.is_empty() {
             return Ok(EngineResponse {
@@ -131,7 +165,7 @@ pub(crate) async fn collect_engine_response(
         // Append the assistant message with tool_calls to the conversation.
         messages.push(Message {
             role: Role::Assistant,
-            content: response_text,
+            content: response_text.clone(),
             tool_call_id: None,
             tool_calls: Some(tool_calls.clone()),
         });
@@ -147,18 +181,71 @@ pub(crate) async fn collect_engine_response(
                     tool_outcomes,
                 });
             }
+            let signature = tool_call_signature(tc);
+            if let Some(previous_result) = executed_tool_results.get(&signature) {
+                return Err(anyhow::anyhow!(
+                    "Tool '{}' was requested multiple times with identical arguments in the same turn. Aborting to prevent unintended retries.\nPrevious result:\n{}",
+                    tc.name,
+                    truncate_tool_result(previous_result, MAX_ERROR_RESULT_CHARS)
+                ));
+            }
             let result = match executor.execute(tc) {
                 Ok(output) => output,
                 Err(e) => {
                     tracing::error!(tool = %tc.name, error = %e, "Tool execution failed");
-                    format!("Error: {}", e)
+                    let assistant_context = if response_text.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "\nAssistant context before failure:\n{}",
+                            truncate_tool_result(&response_text, MAX_ERROR_RESULT_CHARS)
+                        )
+                    };
+                    return Err(anyhow::anyhow!(
+                        "Tool '{}' failed: {}{}",
+                        tc.name,
+                        e,
+                        assistant_context
+                    ));
                 }
             };
+            executed_tool_results.insert(signature, result.clone());
+
+            // Track consecutive HTTP errors: if a tool keeps returning errors
+            // (HTTP 4xx/5xx or envelope error status), abort early to save tokens.
+            let is_error_result = result.starts_with("HTTP 4")
+                || result.starts_with("HTTP 5")
+                || result.contains("\"status\": \"error\"")
+                || result.contains("\"status\":\"error\"");
+            if is_error_result {
+                let count = consecutive_errors
+                    .entry(tc.name.clone())
+                    .or_insert(0);
+                *count += 1;
+                if *count >= MAX_CONSECUTIVE_TOOL_ERRORS {
+                    return Err(anyhow::anyhow!(
+                        "Tool '{}' returned {} consecutive errors. Aborting to prevent token drain.\nLast error:\n{}",
+                        tc.name,
+                        count,
+                        truncate_tool_result(&result, MAX_ERROR_RESULT_CHARS)
+                    ));
+                }
+            } else {
+                consecutive_errors.remove(&tc.name);
+            }
+
             if let Some(observer) = &tool_observer {
                 observer(tc, &result);
             }
             tool_outcomes.push((tc.name.clone(), result.clone()));
-            let content = truncate_tool_result(&result);
+            // Truncate error results aggressively — they only need enough
+            // info for the LLM to understand what went wrong, not the full body.
+            let limit = if is_error_result {
+                MAX_ERROR_RESULT_CHARS
+            } else {
+                MAX_TOOL_RESULT_CHARS
+            };
+            let content = truncate_tool_result(&result, limit);
             messages.push(Message {
                 role: Role::Tool,
                 content,
@@ -292,11 +379,11 @@ async fn run_single_engine_turn(
 }
 
 /// Truncate a tool result to prevent context explosion in multi-round tool loops.
-fn truncate_tool_result(result: &str) -> String {
-    if result.len() <= MAX_TOOL_RESULT_CHARS {
+fn truncate_tool_result(result: &str, limit: usize) -> String {
+    if result.len() <= limit {
         return result.to_string();
     }
-    let mut end = MAX_TOOL_RESULT_CHARS;
+    let mut end = limit;
     while end > 0 && !result.is_char_boundary(end) {
         end -= 1;
     }
@@ -306,6 +393,38 @@ fn truncate_tool_result(result: &str) -> String {
         end,
         result.len()
     )
+}
+
+fn tool_call_signature(call: &ToolCall) -> String {
+    format!("{}:{}", call.name, canonicalize_json(&call.arguments))
+}
+
+fn canonicalize_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => value.to_string(),
+        serde_json::Value::Array(items) => {
+            let rendered: Vec<String> = items.iter().map(canonicalize_json).collect();
+            format!("[{}]", rendered.join(","))
+        }
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+            keys.sort_unstable();
+            let rendered: Vec<String> = keys
+                .into_iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String(key.to_string()),
+                        canonicalize_json(&map[key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", rendered.join(","))
+        }
+    }
 }
 
 /// Flush a pending tool call into the tool_calls vector.
@@ -506,5 +625,29 @@ mod tests {
         assert_eq!(calls[0].name, "search");
         assert_eq!(calls[0].arguments["query"], "hello");
         assert_eq!(calls[0].arguments["limit"], "10");
+    }
+
+    #[test]
+    fn tool_call_signature_ignores_object_key_order() {
+        let first = ToolCall {
+            id: "1".into(),
+            name: "http_request".into(),
+            arguments: serde_json::json!({
+                "method": "POST",
+                "url": "https://example.test",
+                "headers": {"b": "2", "a": "1"}
+            }),
+        };
+        let second = ToolCall {
+            id: "2".into(),
+            name: "http_request".into(),
+            arguments: serde_json::json!({
+                "headers": {"a": "1", "b": "2"},
+                "url": "https://example.test",
+                "method": "POST"
+            }),
+        };
+
+        assert_eq!(tool_call_signature(&first), tool_call_signature(&second));
     }
 }

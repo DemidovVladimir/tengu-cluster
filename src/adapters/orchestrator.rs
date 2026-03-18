@@ -50,6 +50,9 @@ struct AgentRuntime {
     tool_executor: Arc<dyn ToolExecutor>,
     system_prompt: String,
     workspace: Option<std::path::PathBuf>,
+    /// Per-task token budget (input + output). Derived from agent's
+    /// `limits.max_tokens_per_flow` — caps runaway orchestrated tasks.
+    task_token_budget: Option<u32>,
 }
 
 /// Result of a completed task, fed as context to dependent tasks.
@@ -61,7 +64,7 @@ struct StepResult {
 }
 
 /// Max chars of each previous step's output to include in context for the next step.
-const MAX_STEP_CONTEXT_CHARS: usize = 3000;
+const MAX_STEP_CONTEXT_CHARS: usize = 8000;
 
 /// Boot the orchestrator: build agents, run interactive task dispatch.
 ///
@@ -108,6 +111,12 @@ pub(crate) async fn boot_orchestrator(
 
     let deny_approval: Arc<dyn ToolApprovalPort> = Arc::new(DenyByDefaultApproval);
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(LogToolActivity);
+
+    // Shared HTTP client across all agents — eliminates redundant connection pools.
+    let shared_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .ok();
 
     // Register agents with roles, build engines and tool executors.
     for (agent_id, agent_config) in &config.agents {
@@ -175,6 +184,7 @@ pub(crate) async fn boot_orchestrator(
                 deny_approval.clone(),
                 log_activity.clone(),
                 None,
+                shared_http_client.as_ref(),
             )
             .map(|executor| Arc::new(executor) as Arc<dyn ToolExecutor>)
             .unwrap_or_else(|| Arc::new(NoopRuntimeToolExecutor));
@@ -202,6 +212,7 @@ pub(crate) async fn boot_orchestrator(
                 tool_executor,
                 system_prompt: system_prompt_str,
                 workspace,
+                task_token_budget: Some(agent_config.limits.max_tokens_per_flow as u32),
             }),
         );
 
@@ -251,6 +262,27 @@ pub(crate) async fn boot_orchestrator(
     if agent_runtimes.is_empty() {
         anyhow::bail!("No agents with roles configured for orchestration");
     }
+
+    // Build a dedicated planner engine if configured.
+    let orch = config.orchestrator.as_ref();
+    let dedicated_planner: Option<Box<dyn Engine>> = match (
+        orch.and_then(|o| o.planner_engine.as_ref()),
+        orch.and_then(|o| o.planner_model.as_ref()),
+    ) {
+        (Some(engine_type), Some(model)) => {
+            match crate::adapters::engine_factory::build_planner_engine(engine_type, model) {
+                Ok(e) => {
+                    tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
+                    Some(e)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to build planner engine, falling back to default agent");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
 
     // Print fleet banner.
     println!();
@@ -399,7 +431,11 @@ pub(crate) async fn boot_orchestrator(
                 filter.insert("source".into(), "orchestrator".into());
                 match mem_svc.recall_filtered(&input, 3, 600, &filter).await {
                     Ok(results) if !results.is_empty() => {
-                        let mut enriched = String::from("## Relevant Prior Work\n");
+                        let mut enriched = String::from(
+                            "## Relevant Prior Work\n\
+                             Background only. Use this for continuity or implementation hints.\n\
+                             Do NOT treat it as additional requested deliverables, and do NOT expand scope beyond the current goal.\n",
+                        );
                         for r in &results {
                             enriched.push_str(&format!("- {}\n", r.entry.content));
                         }
@@ -412,19 +448,19 @@ pub(crate) async fn boot_orchestrator(
                 input.clone()
             };
 
-            let mut tasks = match task_planner::generate_plan(
-                planner_runtime.engine.as_ref(),
-                &enriched_goal,
-                &agent_descriptions,
-            )
-            .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    println!("  Failed to generate plan: {}", e);
-                    continue;
-                }
-            };
+            let plan_engine: &dyn Engine = dedicated_planner
+                .as_deref()
+                .unwrap_or(planner_runtime.engine.as_ref());
+            let mut tasks =
+                match task_planner::generate_plan(plan_engine, &enriched_goal, &agent_descriptions)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        println!("  Failed to generate plan: {}", e);
+                        continue;
+                    }
+                };
 
             // Build role dependency constraints from agent configs.
             let role_deps: task_planner::RoleDependencies = config
@@ -439,9 +475,13 @@ pub(crate) async fn boot_orchestrator(
                 })
                 .collect();
 
-            // Auto-repair plan dependencies, then validate.
-            let repaired =
-                task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
+            // Resolve role-name references in depends_on to task IDs, then
+            // auto-repair plan dependencies and validate.
+            let role_refs = task_planner::resolve_role_refs_in_depends(&mut tasks);
+            if role_refs > 0 {
+                println!("  Resolved {} role-name references in depends_on", role_refs);
+            }
+            let repaired = task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
             if repaired > 0 {
                 println!("  Auto-repaired plan: added {} dependency edges", repaired);
             }
@@ -522,6 +562,26 @@ pub(crate) async fn boot_orchestrator(
                         });
                         continue;
                     }
+                    // Check if any dependency failed — skip this task if so.
+                    let failed_dep = plan_task.depends_on.iter().find(|dep_id| {
+                        step_results
+                            .iter()
+                            .any(|r| !r.success && tasks.iter().any(|t| t.id == **dep_id && t.role == r.role))
+                    });
+                    if let Some(dep_id) = failed_dep {
+                        println!(
+                            "  {} skipped — dependency '{}' failed",
+                            plan_task.role, dep_id
+                        );
+                        step_results.push(StepResult {
+                            role: plan_task.role.clone(),
+                            task: plan_task.task.clone(),
+                            output: format!("Skipped — dependency '{}' failed", dep_id),
+                            success: false,
+                        });
+                        continue;
+                    }
+
                     let agent_id = match role_to_agent.get(&plan_task.role) {
                         Some(id) => id.clone(),
                         None => {
@@ -677,6 +737,7 @@ async fn execute_agent_task(
         Some(&sanitized),
         None,
         None,
+        runtime.task_token_budget,
     )
     .await?;
 

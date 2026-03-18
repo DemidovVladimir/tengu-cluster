@@ -4,6 +4,7 @@ pub(crate) mod engine_runtime;
 pub(crate) mod flow_compaction;
 pub(crate) mod flow_policy;
 pub(crate) mod memory_service;
+pub(crate) mod platform_tools_catalog;
 pub(crate) mod ports;
 pub(crate) mod prompt_budget;
 pub(crate) mod skill_catalog;

@@ -341,6 +341,7 @@ pub fn run_tui(
                                 Arc::clone(&approval),
                                 Arc::clone(&activity),
                                 None,
+                                None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -412,6 +413,7 @@ pub fn run_tui(
                                     &secret_registry,
                                     Arc::clone(&approval),
                                     Arc::clone(&activity),
+                                    None,
                                     None,
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
@@ -537,6 +539,7 @@ pub fn run_tui(
                                 &secret_registry,
                                 Arc::clone(&approval),
                                 Arc::clone(&activity),
+                                None,
                                 None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(

@@ -253,6 +253,13 @@ pub struct OrchestratorConfig {
     pub enabled: bool,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Optional dedicated engine for the planner/classifier (e.g. "openrouter").
+    /// When set together with `planner_model`, a separate engine is created for
+    /// plan generation and request classification instead of reusing the default
+    /// agent's engine. This lets you use a cheaper/faster model for planning.
+    pub planner_engine: Option<String>,
+    /// Optional dedicated model for the planner/classifier (e.g. "google/gemini-2.5-flash").
+    pub planner_model: Option<String>,
 }
 
 impl Default for OrchestratorConfig {
@@ -260,6 +267,8 @@ impl Default for OrchestratorConfig {
         Self {
             enabled: default_orchestrator_enabled(),
             max_retries: default_max_retries(),
+            planner_engine: None,
+            planner_model: None,
         }
     }
 }
@@ -283,6 +292,11 @@ pub struct TelegramConfig {
     /// Defaults to false so Telegram flows can run end-to-end without extra taps.
     #[serde(default)]
     pub tool_approvals: bool,
+    /// When non-empty, only these tool names require user approval.
+    /// All other tools are auto-approved even if tool_approvals is true.
+    /// Example: `approve_only = ["sign_and_send_transaction"]`
+    #[serde(default)]
+    pub approve_only: Vec<String>,
 }
 
 /// Workspace scaffold — auto-creates directories and seed files on startup.

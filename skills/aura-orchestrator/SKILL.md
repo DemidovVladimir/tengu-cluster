@@ -1,64 +1,49 @@
 ---
 name: aura-orchestrator
-description: Molecule DeSci workflow reference for IP-NFT minting, project creation, uploads, and announcements.
+description: Deprecated legacy Molecule workflow reference. Prefer the smaller plug-and-play skills (`poi-register`, `ipnft-mint`, `molecule-project`, `molecule-upload`, `molecule-announcement`) over generic platform tools.
 homepage: https://staging.graphql.api.molecule.xyz/graphql
 headers:
   x-api-key: $MOLECULE_API_KEY
+  x-service-token: $MOLECULE_SERVICE_TOKEN
 ---
 
-# Aura Orchestrator: DeSci Workflow Reference
+# Aura Orchestrator: Deprecated Legacy Reference
 
-This package is **documentation only** for production DeSci agents.
+This package is kept only as a legacy reference.
 
-Use it to understand:
-- the correct workflow order
+Do not use it as the primary execution path.
+Use the smaller skill packages and the generic platform tools instead:
+- `http_request`
+- `get_wallet_address`
+- `sign_message`
+- `sign_and_send_transaction`
+- `abi_encode`
+
+Use it only to understand:
+- the workflow order
 - required business fields
 - the meaning of Molecule entities such as `ipnftUid`, `datasetId`, and announcements
-
-Do **not** use this package as an execution path for minting, uploads, or announcements when native `desci.*` tools are available.
-
-## Prerequisites
-
-### Required Environment Variables
-
-| Variable | Required For | Description |
-|----------|-------------|-------------|
-| `PRIVY_APP_ID` | On-chain operations, signing | Privy app identifier |
-| `PRIVY_APP_SECRET` | On-chain operations, signing | Privy secret key |
-| `PRIVY_WALLET_ID` | On-chain operations, signing | Privy agentic wallet ID |
-| `MOLECULE_API_KEY` | All GraphQL calls | Sent as `x-api-key` header |
-| `MOLECULE_LABS_URL` | All GraphQL calls | GraphQL endpoint |
-| `MOLECULE_CLIENT_URL` | Link construction | Client URL for project links |
-| `POI_API_KEY` | POI registration | Bearer token for POI endpoint |
-
-**Not required:** `EVM_PRIVATE_KEY`, `EVM_RPC_URL`, `MOLECULE_SERVICE_TOKEN`. All signing and transactions use Privy agentic wallets. The service token is acquired autonomously via Privy wallet signing.
 
 ## Canonical Workflow Order
 
 1. Register POI for the hypothesis PDF
-2. Mint the IP-NFT (on-chain via Privy wallet)
+2. Mint the IP-NFT
 3. Create the Molecule project / data room
 4. Upload the research file
 5. Create the announcement
 
 Each step depends on real outputs from the prior step. Do not skip or reorder them.
 
-## Native Tool Mapping
+## Preferred Skill Mapping
 
-Use these runtime tools instead of raw shell commands or generic GraphQL calls:
+Prefer these generic skill packages instead of native runtime wrappers:
 
-- `poi_register_document`
-  - returns POI transaction target/data and the merkle root
-- `mint_ipnft`
-  - submits POI on-chain and mints via Privy agentic wallet
-  - returns reservation ID, token ID, mint tx, metadata CID, and project URL
-- `create_molecule_project`
-  - service token auto-acquired via Privy signing
-  - returns `ipnft_uid`, `ipnft_symbol`, `ipnft_token_id`, and project URL
-- `upload_molecule_file`
-  - returns `dataset_id` and upload/content hashes
-- `create_molecule_announcement`
-  - returns the announcement result payload
+- `poi-register`
+- `ipnft-mint`
+- `molecule-auth`
+- `molecule-project`
+- `molecule-upload`
+- `molecule-announcement`
 
 ## Required Inputs
 
@@ -118,6 +103,6 @@ These are infrastructure artifacts for audit trails, not for readers.
 
 ## Security
 
-- `MOLECULE_API_KEY` may only be used against Molecule hosts
-- `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` are runtime secrets and must never be echoed into user content
+- `MOLECULE_API_KEY` and `MOLECULE_SERVICE_TOKEN` may only be used against Molecule hosts
+- `EVM_PRIVATE_KEY` and `EVM_RPC_URL` are runtime secrets and must never be echoed into user content
 - `MOLECULE_CLIENT_URL` is for user-facing links only

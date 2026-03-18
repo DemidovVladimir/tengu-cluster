@@ -24,11 +24,14 @@ pub(crate) enum SkillExecution {
 #[derive(Debug, Clone)]
 pub(crate) struct ApiExecution {
     pub base_url: String,
+    #[allow(dead_code)]
     pub auth: ApiAuth,
+    #[allow(dead_code)]
     pub headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum ApiAuth {
     None,
     BearerEnv {
@@ -140,7 +143,7 @@ pub(crate) fn parse_skill_markdown(content: &str) -> Result<SkillDefinition> {
     let (capability, effect_class, activity_description) =
         if let Some(policy_lines) = sections.get("policy") {
             let (parsed_capability, parsed_effect_class, parsed_activity_description) =
-            parse_policy(policy_lines, default_effect_class);
+                parse_policy(policy_lines, default_effect_class);
             let capability = if parsed_capability.as_str() == "skill.unknown" {
                 default_capability
             } else {
@@ -499,11 +502,17 @@ fn validate_base_url(url: &str) -> bool {
 /// Shared preamble for API skill context injection.
 pub(crate) fn api_skill_preamble(name: &str) -> String {
     format!(
-        "# {} — API skill\n\n\
-         Use the `{}` tool for requests to this service's primary API \
-         (method, path, body, optional headers parameters). \
-         The runtime enforces the base URL, auth strategy, and approval policy for this tool.\n\n",
-        name, name,
+        "# {} — API reference\n\n\
+         CRITICAL: Follow the documented examples EXACTLY. The platform expands \
+         `$ENV_VAR` references automatically at runtime — pass them as literal strings \
+         (e.g. pass `$MOLECULE_LABS_URL` as the url value, do NOT guess what it resolves to). \
+         Use ONLY the URLs and env var names shown below. \
+         Do NOT invent, modify, or construct your own URLs or variable names.\n\n\
+         Parameters: `url`, `method`, `headers` (JSON object, values support $ENV_VAR), \
+         `body` (JSON string), `file_path`, `file_field_name`, \
+         `auth_bearer_env` (env var name for Bearer token), \
+         `auth_basic_user_env` / `auth_basic_pass_env` (env var names for Basic auth).\n\n",
+        name,
     )
 }
 

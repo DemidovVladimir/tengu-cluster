@@ -40,6 +40,7 @@ pub(crate) struct ToolResultEnvelope {
     pub provenance: ToolProvenance,
 }
 
+#[allow(dead_code)]
 impl ToolResultEnvelope {
     pub(crate) fn ok(tool_name: &str, summary: impl Into<String>) -> Self {
         Self {
@@ -50,7 +51,6 @@ impl ToolResultEnvelope {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn error(tool_name: &str, summary: impl Into<String>) -> Self {
         Self {
             tool_name: tool_name.to_string(),

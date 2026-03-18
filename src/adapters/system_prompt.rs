@@ -103,7 +103,7 @@ pub(crate) fn build_system_prompt_with_tools(
 
     // 5b. Skill tool usage instructions — tell the model to use skill tools directly.
     if !skill_contexts.is_empty() {
-        let instruction = "When you have a registered tool for a service, call it directly. Do NOT write scripts or suggest manual steps.";
+        let instruction = "When a skill documents a workflow, follow it exactly with the available tools. If a registered skill tool exists, call it directly. Otherwise use the generic platform tools the skill describes. Do NOT write scripts or suggest manual steps.";
         let inst_tokens = estimate_tokens_approx_min1(instruction);
         if total_tokens + inst_tokens <= max_total_tokens + max_total_tokens / 20 {
             total_tokens += inst_tokens;

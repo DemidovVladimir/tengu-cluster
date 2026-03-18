@@ -1,3 +1,11 @@
+---
+tags:
+  - operations
+  - deployment
+  - docker
+  - cloud
+---
+
 # Deployment Guide
 
 Run Tengu Cluster locally, in Docker, or on any cloud provider.
@@ -63,13 +71,13 @@ cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 cargo run -- chat
 ```
 
-For Qdrant vector memory support:
+For Qdrant vector [[Memory]] support:
 
 ```bash
 cargo build --features qdrant
 ```
 
-See the [Quickstart Guide](QUICKSTART.md) for the full walkthrough.
+See the [[Quickstart]] guide for the full walkthrough.
 
 ---
 
@@ -125,6 +133,8 @@ nano .env
 # Edit agent configuration
 nano config.toml
 ```
+
+See [[Configuration]] for full details on config files and environment variables.
 
 ### Start
 
@@ -323,7 +333,7 @@ hcloud server create \
 |------|-------|-----|-----|----------|
 | `cx22` | 2 | 4 GB | — | Single agent, API backends |
 | `cx32` | 4 | 8 GB | — | Multi-agent fleet, API backends |
-| `cx42` | 8 | 16 GB | — | Large fleet, Qdrant memory |
+| `cx42` | 8 | 16 GB | — | Large fleet, Qdrant [[Memory]] |
 | `gx11` | 8 | 30 GB | A100 40GB | Local inference with Ollama |
 
 After provisioning, SSH in and configure:
@@ -391,7 +401,7 @@ Docker Compose profiles control which services start alongside Tengu:
 | (none) | Tengu only | API backends (OpenRouter, Anthropic, OpenAI) |
 | `ollama` | Tengu + Ollama (CPU) | Local inference without GPU |
 | `ollama-gpu` | Tengu + Ollama (NVIDIA GPU) | Local inference with CUDA |
-| `qdrant` | Tengu + Qdrant | Vector memory with ANN search |
+| `qdrant` | Tengu + Qdrant | Vector [[Memory]] with ANN search |
 | `full` | Tengu + Ollama GPU + Qdrant | Everything with GPU |
 | `full-cpu` | Tengu + Ollama CPU + Qdrant | Everything without GPU |
 
@@ -403,7 +413,7 @@ Docker Compose creates named volumes for persistent data:
 
 | Volume | Container Path | Purpose |
 |--------|---------------|---------|
-| `tengu-data` | `/opt/tengu/data` | Conversation history, logs, memory store |
+| `tengu-data` | `/opt/tengu/data` | Conversation history, logs, [[Memory|memory store]] |
 | `ollama-data` | `/root/.ollama` | Downloaded Ollama models |
 | `qdrant-data` | `/qdrant/storage` | Qdrant vector collections |
 
@@ -436,3 +446,12 @@ Before running in production:
 - [ ] Set up volume backups for `tengu-data`
 - [ ] Monitor with `make doctor` or health check endpoint
 - [ ] Set `max_tokens_per_flow` and `max_cost_per_flow` limits per agent
+
+See [[Configuration]] for full reference on all settings mentioned above. See [[Channels]] for Telegram-specific production hardening.
+
+## Related
+
+- [[Configuration]] — config files, env vars, secrets vault
+- [[Channels]] — TUI vs Telegram deployment
+- [[Memory]] — Qdrant and disk-based vector stores
+- [[Quickstart]] — first-run walkthrough

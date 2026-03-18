@@ -46,7 +46,11 @@ pub(crate) fn build_tool_activity_text(
         .and_then(|tool| tool.metadata.activity_description.clone())
         .unwrap_or_else(|| prettify_tool_name(&call.name));
     let detail = summarize_tool_args(&call.arguments);
-    let detail = if detail.is_empty() { None } else { Some(detail) };
+    let detail = if detail.is_empty() {
+        None
+    } else {
+        Some(detail)
+    };
     (title, detail)
 }
 
@@ -215,20 +219,20 @@ mod tests {
     #[test]
     fn tool_activity_uses_registered_metadata_when_present() {
         let tool = crate::domain::capability::RegisteredTool::new(
-            "mint_ipnft",
+            "sign_and_send_transaction",
             "",
             json!({}),
-            crate::domain::capability::CapabilityId::new("desci.mint.ipnft").unwrap(),
+            crate::domain::capability::CapabilityId::new("crypto.sign_tx").unwrap(),
             crate::domain::capability::EffectClass::ChainTx,
         )
-        .with_activity_description("Minting IP-NFT");
+        .with_activity_description("Signing transaction");
         let call = ToolCall {
             id: "1".into(),
-            name: "mint_ipnft".into(),
-            arguments: json!({"symbol": "BPLM"}),
+            name: "sign_and_send_transaction".into(),
+            arguments: json!({"to": "0xabc"}),
         };
         let (title, detail) = build_tool_activity_text(&call, &[tool]);
-        assert_eq!(title, "Minting IP-NFT");
-        assert_eq!(detail.as_deref(), Some("BPLM"));
+        assert_eq!(title, "Signing transaction");
+        assert_eq!(detail.as_deref(), Some("0xabc"));
     }
 }

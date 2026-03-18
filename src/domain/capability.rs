@@ -110,9 +110,12 @@ impl ToolClass {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolRuntimeMetadata {
+    #[allow(dead_code)]
     pub tool_class: ToolClass,
+    #[allow(dead_code)]
     pub output_schema: Option<serde_json::Value>,
     pub required_secrets: Vec<String>,
+    #[allow(dead_code)]
     pub host_allowlist: Vec<String>,
     pub activity_description: Option<String>,
 }
@@ -158,11 +161,13 @@ impl RegisteredTool {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_tool_class(mut self, tool_class: ToolClass) -> Self {
         self.metadata.tool_class = tool_class;
         self
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_output_schema(mut self, output_schema: serde_json::Value) -> Self {
         self.metadata.output_schema = Some(output_schema);
         self
@@ -173,6 +178,7 @@ impl RegisteredTool {
         self
     }
 
+    #[allow(dead_code)]
     pub(crate) fn with_host_allowlist(mut self, host_allowlist: &[&str]) -> Self {
         self.metadata.host_allowlist = host_allowlist.iter().map(|s| s.to_string()).collect();
         self

@@ -78,6 +78,14 @@ impl TelegramPipe {
         Ok(())
     }
 
+    /// Remove a pending approval entry to prevent orphaned map entries
+    /// when the user never clicks approve/deny (e.g., timeout).
+    pub fn remove_pending_approval(&self, approval_id: &str) {
+        if let Some(ref pending) = self.pending_approvals {
+            pending.lock().unwrap().remove(approval_id);
+        }
+    }
+
     /// Send an inline keyboard approval request and return a oneshot receiver
     /// that resolves to `true` (approved) or `false` (denied).
     ///

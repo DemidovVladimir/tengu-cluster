@@ -1,9 +1,16 @@
+---
+tags:
+  - subsystem
+  - wallet
+  - blockchain
+  - privy
+---
+
 # Wallet & On-Chain Signing
 
-Tengu supports two on-chain signing methods:
+Tengu uses **Privy agentic wallets** for all on-chain signing — server-side wallets controlled by the agent with policy-based guardrails. Alloy is used for ABI encoding and hex utilities only, not for transaction signing.
 
-- **Direct signing** — `EVM_PRIVATE_KEY` via alloy (used by the DeSci minting pipeline's native tools)
-- **Privy agentic wallets** — server-side wallet controlled by the agent with policy-based guardrails (used by the `/wallet` command and available for custom workflows)
+The [[DeSci]] minting pipeline, `/wallet` command, and all other on-chain workflows go through the Privy API.
 
 ## Architecture
 
@@ -36,6 +43,8 @@ Go to [dashboard.privy.io](https://dashboard.privy.io) and create an app. Get yo
 cargo run -- secret set PRIVY_APP_ID clz...
 cargo run -- secret set PRIVY_APP_SECRET your-secret
 ```
+
+See [[Configuration]] for details on the encrypted secrets vault.
 
 ### 3. Create a policy
 
@@ -99,7 +108,7 @@ Send Sepolia ETH to the wallet address (from the response above). For IP-NFT min
 
 ## How Signing Works
 
-When a skill (e.g. aura-orchestrator) needs to sign a message or send a transaction, it calls the Privy RPC API:
+When a [[Skills|skill]] (e.g. aura-orchestrator) needs to sign a message or send a transaction, it calls the Privy RPC API:
 
 **Send transaction:**
 ```bash
@@ -148,7 +157,7 @@ echo -n "Message text" | xxd -p | tr -d '\n' | sed 's/^/0x/'
 
 ## Using Without Tengu (Claude Code, OpenClaw, etc.)
 
-The Privy skill works on any platform. Set the environment variables and paste the skill instructions into your agent:
+The Privy [[Skills|skill]] works on any platform. Set the environment variables and paste the skill instructions into your agent:
 
 ```bash
 export PRIVY_APP_ID=clz...
@@ -156,7 +165,7 @@ export PRIVY_APP_SECRET=your-secret
 export PRIVY_WALLET_ID=your-wallet-id
 ```
 
-Use `skills/aura-orchestrator/SKILL.md` for DeSci-specific workflows. The wallet API calls can be made via curl with the Privy credentials.
+Use `skills/aura-orchestrator/SKILL.md` for [[DeSci]]-specific workflows. The wallet API calls can be made via curl with the Privy credentials.
 
 ## Troubleshooting
 
@@ -167,3 +176,10 @@ Use `skills/aura-orchestrator/SKILL.md` for DeSci-specific workflows. The wallet
 | `INSUFFICIENT_FUNDS` | Fund the wallet with more ETH |
 | Wallet not found | Check PRIVY_WALLET_ID is correct. Run `GET /v1/wallets` to list wallets. |
 | Wrong chain | Ensure `caip2` matches the policy's allowed chain_id |
+
+## Related
+
+- [[DeSci]] — IP-NFT minting pipeline using Privy wallet
+- [[Configuration]] — secrets vault and environment variables
+- [[Skills]] — aura-orchestrator skill reference
+- [[Channels]] — `/wallet` command in Telegram

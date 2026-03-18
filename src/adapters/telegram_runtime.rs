@@ -33,8 +33,8 @@ use crate::application::memory_service::MemoryService;
 use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
 use crate::application::skill_registry::SkillRegistry;
-use crate::domain::capability::{parse_capability_set, CapabilityId, RegisteredTool};
 use crate::domain::approval::AllowAllApproval;
+use crate::domain::capability::{parse_capability_set, CapabilityId, RegisteredTool};
 use crate::domain::chat::{resolve_history_turn_limit, ChatLoopState};
 use crate::domain::run_state::{RunState, TaskExecutionRecord};
 use crate::domain::secret_registry::SecretRegistry;
@@ -131,7 +131,7 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
             handle.block_on(async {
                 match pipe.send_inline_approval(&recipient, &aid, &text).await {
                     Ok(rx) => {
-                        match tokio::time::timeout(
+                        let result = match tokio::time::timeout(
                             std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
                             rx,
                         )
@@ -143,19 +143,23 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
                                     // User denied — set cancel flag to stop the entire turn.
                                     self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
-                                Ok(approved)
+                                approved
                             }
                             Ok(Err(_)) => {
                                 warn!(tool = %call.name, "Approval channel closed — denying");
                                 self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                                Ok(false)
+                                false
                             }
                             Err(_) => {
                                 warn!(tool = %call.name, "Approval timed out — denying");
                                 self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                                Ok(false)
+                                false
                             }
-                        }
+                        };
+                        // Clean up the pending approval entry to prevent
+                        // orphaned map entries when user never clicks.
+                        pipe.remove_pending_approval(&aid);
+                        Ok(result)
                     }
                     Err(e) => {
                         error!(tool = %call.name, error = %e, "Failed to send approval request — denying");
@@ -164,6 +168,23 @@ impl ToolApprovalPort for TelegramInlineApprovalAdapter {
                 }
             })
         })
+    }
+}
+
+/// Approval adapter that only prompts the user for tools in the `approve_only` set.
+/// All other tools are auto-approved silently.
+struct FilteredApprovalAdapter {
+    inner: Arc<dyn ToolApprovalPort>,
+    approve_only: HashSet<String>,
+}
+
+impl ToolApprovalPort for FilteredApprovalAdapter {
+    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
+        if self.approve_only.contains(&call.name) {
+            self.inner.request_tool_approval(call)
+        } else {
+            Ok(true) // auto-approve tools not in the list
+        }
     }
 }
 
@@ -290,11 +311,8 @@ fn make_telegram_tool_activity_adapter(
 // Multi-agent orchestration (plan-and-execute for Telegram)
 // ---------------------------------------------------------------------------
 
-/// Directory inside workspace where task outcomes are stored.
-const TASK_OUTCOMES_DIR: &str = ".tengu-tasks";
-
 /// Max chars of each dependency output to embed inline in task prompts.
-const MAX_DEP_OUTPUT_CHARS: usize = 3000;
+const MAX_DEP_OUTPUT_CHARS: usize = 8000;
 
 /// Build the prompt for a task, embedding dependency outputs inline.
 ///
@@ -323,7 +341,7 @@ fn build_task_prompt(
     prompt.push_str(&channel_runtime::format_run_state_prompt(run_state));
 
     prompt.push_str("\n## IMPORTANT\n\
-        When you finish, write a concise outcome summary to the file path provided below.\n\
+        Return a concise outcome summary in your final answer.\n\
         Include: what you did, key results, file paths you created, URLs, IDs, and any info the next agent needs.\n\n\
         ## STRICT RULES\n\
         - NEVER fabricate, guess, or hallucinate URLs, transaction hashes, token IDs, or API responses.\n\
@@ -360,6 +378,7 @@ async fn orchestrate_team_goal(
     secret_registry: &Arc<SecretRegistry>,
     approval_adapter: &Arc<dyn ToolApprovalPort>,
     turn_cancel: &Arc<std::sync::atomic::AtomicBool>,
+    dedicated_planner_engine: Option<&dyn Engine>,
     _user_states: &mut HashMap<String, ChatLoopState>,
     _sender_id: &str,
     _flow_store: &FlowStore,
@@ -407,12 +426,20 @@ async fn orchestrate_team_goal(
 
     pipe.send_text(sender, "Planning…", delivery_opts).await?;
 
-    let planner_engine = match agent_states.get(default_agent_id) {
-        Some(a) => a.engine.as_ref(),
-        None => {
-            pipe.send_text(sender, "Planner engine unavailable.", delivery_opts)
-                .await?;
-            return Ok(());
+    let fallback_engine;
+    let planner_engine: &dyn Engine = if let Some(dedicated) = dedicated_planner_engine {
+        dedicated
+    } else {
+        match agent_states.get(default_agent_id) {
+            Some(a) => {
+                fallback_engine = a.engine.clone();
+                fallback_engine.as_ref()
+            }
+            None => {
+                pipe.send_text(sender, "Planner engine unavailable.", delivery_opts)
+                    .await?;
+                return Ok(());
+            }
         }
     };
 
@@ -424,7 +451,11 @@ async fn orchestrate_team_goal(
         filter.insert("source".into(), "orchestrator".into());
         match mem_svc.recall_filtered(&goal, 3, 600, &filter).await {
             Ok(results) if !results.is_empty() => {
-                let mut enriched = String::from("## Relevant Prior Work\n");
+                let mut enriched = String::from(
+                    "## Relevant Prior Work\n\
+                     Background only. Use this for continuity or implementation hints.\n\
+                     Do NOT treat it as additional requested deliverables, and do NOT expand scope beyond the current goal.\n",
+                );
                 for r in &results {
                     enriched.push_str(&format!("- {}\n", r.entry.content));
                 }
@@ -468,10 +499,21 @@ async fn orchestrate_team_goal(
         })
         .collect();
 
-    // Auto-repair plan dependencies, then validate.
-    let repaired = crate::application::task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
+    // Resolve role-name references in depends_on to task IDs, then
+    // auto-repair plan dependencies and validate.
+    let role_refs =
+        crate::application::task_planner::resolve_role_refs_in_depends(&mut tasks);
+    if role_refs > 0 {
+        tracing::info!(role_refs, "Resolved role-name references in depends_on");
+    }
+    let repaired =
+        crate::application::task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
     if repaired > 0 {
-        tracing::info!(repaired, "Auto-repaired plan: added {} dependency edges", repaired);
+        tracing::info!(
+            repaired,
+            "Auto-repaired plan: added {} dependency edges",
+            repaired
+        );
     }
     if let Err(e) = crate::application::task_planner::validate_plan_dependencies(&tasks, &role_deps)
     {
@@ -505,16 +547,7 @@ async fn orchestrate_team_goal(
     }
     pipe.send_text(sender, &plan_text, delivery_opts).await?;
 
-    let outcomes_dir = agent_states
-        .get(default_agent_id)
-        .and_then(|a| a.workspace.as_ref())
-        .map(|ws| ws.join(TASK_OUTCOMES_DIR));
-    if let Some(ref dir) = outcomes_dir {
-        std::fs::create_dir_all(dir).ok();
-    }
-
-    // task_id → (outcome_rel_path, output_text)
-    let mut outcome_data: HashMap<String, (String, String)> = HashMap::new();
+    let mut outcome_data: HashMap<String, String> = HashMap::new();
     let mut run_state = RunState::default();
     turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut completed_count = 0usize;
@@ -555,7 +588,7 @@ async fn orchestrate_team_goal(
             workspace: Option<std::path::PathBuf>,
             tool_executor: Option<Arc<dyn ToolExecutor>>,
             prompt: String,
-            outcome_rel_path: String,
+            token_budget: Option<u32>,
         }
 
         let mut snapshots: Vec<TaskSnapshot> = Vec::new();
@@ -579,13 +612,7 @@ async fn orchestrate_team_goal(
                 );
                 pipe.send_text(sender, &message, delivery_opts).await?;
                 let error_text = format!("FAILED: {}", message);
-                outcome_data.insert(
-                    task.id.clone(),
-                    (
-                        format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id),
-                        error_text.clone(),
-                    ),
-                );
+                outcome_data.insert(task.id.clone(), error_text.clone());
                 run_state.set_task_record(
                     task.id.clone(),
                     TaskExecutionRecord {
@@ -664,15 +691,42 @@ async fn orchestrate_team_goal(
                         Arc::clone(approval_adapter),
                         activity_adapter,
                         Some(Arc::clone(turn_cancel)),
+                        None,
                     )
                     .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
                 });
+
+            // Check if any dependency failed — skip this task if so.
+            let failed_dep = task.depends_on.iter().find(|dep_id| {
+                outcome_data
+                    .get(dep_id.as_str())
+                    .map_or(false, |out| out.starts_with("FAILED:"))
+            });
+            if let Some(dep_id) = failed_dep {
+                let message = format!(
+                    "[{}] Skipped — dependency '{}' failed",
+                    task.role, dep_id
+                );
+                pipe.send_text(sender, &message, delivery_opts).await?;
+                let error_text = format!("FAILED: {}", message);
+                outcome_data.insert(task.id.clone(), error_text.clone());
+                run_state.set_task_record(
+                    task.id.clone(),
+                    TaskExecutionRecord {
+                        role: task.role.clone(),
+                        success: false,
+                        output_summary: error_text,
+                        artifact_count: 0,
+                    },
+                );
+                continue;
+            }
 
             let dep_outcomes: Vec<(String, String, String)> = task
                 .depends_on
                 .iter()
                 .filter_map(|dep_id| {
-                    outcome_data.get(dep_id).map(|(_, output_text)| {
+                    outcome_data.get(dep_id).map(|output_text| {
                         let role = tasks
                             .iter()
                             .find(|t| t.id == *dep_id)
@@ -683,12 +737,7 @@ async fn orchestrate_team_goal(
                 })
                 .collect();
 
-            let outcome_rel_path = format!("{}/{}.md", TASK_OUTCOMES_DIR, task.id);
-            let mut prompt = build_task_prompt(&goal, &task.task, &dep_outcomes, &run_state);
-            prompt.push_str(&format!(
-                "\nWrite your outcome summary to: `{}`\n",
-                outcome_rel_path
-            ));
+            let prompt = build_task_prompt(&goal, &task.task, &dep_outcomes, &run_state);
 
             snapshots.push(TaskSnapshot {
                 task_id: task.id.clone(),
@@ -701,7 +750,7 @@ async fn orchestrate_team_goal(
                 workspace: agent.workspace.clone(),
                 tool_executor,
                 prompt,
-                outcome_rel_path,
+                token_budget: Some(agent.agent_config.limits.max_tokens_per_flow as u32),
             });
         }
         // &mut agent_states borrow ends here.
@@ -771,6 +820,7 @@ async fn orchestrate_team_goal(
                     sanitized.as_ref().map(|s| s as &dyn ToolExecutor),
                     Some(&observer),
                     Some(&cancel),
+                    snap.token_budget,
                 )
                 .await;
 
@@ -802,7 +852,6 @@ async fn orchestrate_team_goal(
                     snap.task_desc,
                     snap.role,
                     snap.agent_label,
-                    snap.outcome_rel_path,
                     output,
                 )
             });
@@ -810,14 +859,13 @@ async fn orchestrate_team_goal(
 
         // Phase 3: Collect results from this batch.
         while let Some(join_result) = set.join_next().await {
-            let (task_id, task_desc, _role, agent_label, outcome_rel_path, outcome) =
-                match join_result {
-                    Ok(r) => r,
-                    Err(e) => {
-                        warn!(error = %e, "Orchestrated task panicked");
-                        continue;
-                    }
-                };
+            let (task_id, _task_desc, _role, agent_label, outcome) = match join_result {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "Orchestrated task panicked");
+                    continue;
+                }
+            };
 
             match outcome {
                 Ok((_user_output, output, tool_outcomes)) => {
@@ -831,7 +879,7 @@ async fn orchestrate_team_goal(
                             run_state.ingest_tool_envelope(&envelope);
                         }
                     }
-                    outcome_data.insert(task_id.clone(), (outcome_rel_path, output.clone()));
+                    outcome_data.insert(task_id.clone(), output.clone());
                     run_state.set_task_output(task_id.clone(), output.clone());
                     run_state.set_task_record(
                         task_id.clone(),
@@ -853,14 +901,7 @@ async fn orchestrate_team_goal(
                         )
                         .await;
                     let error_text = format!("FAILED: {}", e);
-                    if let Some(ref dir) = outcomes_dir {
-                        let path = dir.join(format!("{}.md", task_id));
-                        let _ = std::fs::write(
-                            &path,
-                            format!("# FAILED\n\nTask: {}\nError: {}\n", task_desc, e),
-                        );
-                    }
-                    outcome_data.insert(task_id.clone(), (outcome_rel_path, error_text.clone()));
+                    outcome_data.insert(task_id.clone(), error_text.clone());
                     run_state.set_task_record(
                         task_id,
                         TaskExecutionRecord {
@@ -879,7 +920,7 @@ async fn orchestrate_team_goal(
     if let Some(ref handle) = memory_handle {
         let mut mem_summary = format!("Goal: {}\n\nResults:\n", goal);
         for task in &tasks {
-            if let Some((_, output_text)) = outcome_data.get(&task.id) {
+            if let Some(output_text) = outcome_data.get(&task.id) {
                 mem_summary.push_str(&format!(
                     "- {} ({}): {}\n",
                     task.role,
@@ -1218,9 +1259,36 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         })
         .collect();
 
+    // Build a dedicated planner engine if configured, otherwise None (falls back to default agent).
+    let planner_engine: Option<Arc<dyn Engine>> = match (
+        config
+            .orchestrator
+            .as_ref()
+            .and_then(|o| o.planner_engine.as_ref()),
+        config
+            .orchestrator
+            .as_ref()
+            .and_then(|o| o.planner_model.as_ref()),
+    ) {
+        (Some(engine_type), Some(model)) => {
+            match crate::adapters::engine_factory::build_planner_engine(engine_type, model) {
+                Ok(e) => {
+                    info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
+                    Some(Arc::from(e))
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to build planner engine, falling back to default agent");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
     info!(
         agents = agent_states.len(),
         default = %default_agent_id,
+        planner = planner_engine.as_ref().map(|_| "dedicated").unwrap_or("default agent"),
         "Telegram multi-agent setup complete"
     );
 
@@ -1241,11 +1309,25 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
     let current_recipient: CurrentRecipient = Arc::new(std::sync::Mutex::new(None));
     let approval_adapter: Arc<dyn ToolApprovalPort> = if config.telegram.tool_approvals {
-        Arc::new(TelegramInlineApprovalAdapter {
+        let inner: Arc<dyn ToolApprovalPort> = Arc::new(TelegramInlineApprovalAdapter {
             pipe: Arc::clone(&pipe),
             current_recipient: Arc::clone(&current_recipient),
             cancel: Arc::clone(&turn_cancel),
-        })
+        });
+        if config.telegram.approve_only.is_empty() {
+            inner
+        } else {
+            let filter: HashSet<String> =
+                config.telegram.approve_only.iter().cloned().collect();
+            info!(
+                tools = ?filter,
+                "Telegram approval filter: only these tools require approval"
+            );
+            Arc::new(FilteredApprovalAdapter {
+                inner,
+                approve_only: filter,
+            })
+        }
     } else {
         Arc::new(AllowAllApproval)
     };
@@ -1256,6 +1338,14 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
     // Per-user-per-agent conversation states: keyed by "sender_id:agent_id".
     let mut user_states: HashMap<String, ChatLoopState> = HashMap::new();
+
+    // Track last access time per user_state key for idle eviction.
+    let mut user_state_last_active: HashMap<String, std::time::Instant> = HashMap::new();
+    let mut last_eviction_check = std::time::Instant::now();
+    /// How often to sweep for idle user states.
+    const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+    /// Idle threshold before evicting a user state (history reloads from flow store).
+    const IDLE_EVICTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1800);
 
     // Track which agent each user last talked to (for showing in prompts).
     let mut user_active_agent: HashMap<String, String> = HashMap::new();
@@ -1295,6 +1385,29 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
             };
 
             let sender_id = &msg.sender.peer_id;
+
+            // Periodic sweep: evict idle user states to prevent unbounded memory growth.
+            // Evicted users get a fresh state on next message (history reloads from flow store).
+            if last_eviction_check.elapsed() >= EVICTION_SWEEP_INTERVAL {
+                let now = std::time::Instant::now();
+                let idle_keys: Vec<String> = user_state_last_active
+                    .iter()
+                    .filter(|(_, &last)| now.duration_since(last) >= IDLE_EVICTION_THRESHOLD)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for key in &idle_keys {
+                    user_states.remove(key);
+                    user_state_last_active.remove(key);
+                }
+                if !idle_keys.is_empty() {
+                    info!(
+                        evicted = idle_keys.len(),
+                        remaining = user_states.len(),
+                        "Evicted idle user states"
+                    );
+                }
+                last_eviction_check = now;
+            }
 
             // Access control.
             if !allowed_users.is_empty() && !allowed_users.contains(sender_id) {
@@ -1346,6 +1459,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         &secret_registry,
                         &approval_adapter,
                         &turn_cancel,
+                        planner_engine.as_deref(),
                         &mut user_states,
                         sender_id,
                         &flow_store,
@@ -1673,6 +1787,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 Arc::clone(&approval_adapter),
                                 activity_adapter,
                                 Some(Arc::clone(&turn_cancel)),
+                                None,
                             )
                         });
                     let sanitized_executor = current_executor.as_ref().map(|e| {
@@ -1682,6 +1797,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                     turn_cancel.store(false, std::sync::atomic::Ordering::Relaxed);
 
                     let state_key = format!("{}:{}", sender_id, active_aid);
+                    user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
                     let state = user_states.entry(state_key).or_insert_with(|| {
                         channel_runtime::create_chat_loop_state(&agent.agent_config)
                     });
@@ -1743,6 +1859,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                 }
 
                 let state_key = format!("{}:{}", sender_id, active_aid);
+                user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
                 let state = user_states.entry(state_key).or_insert_with(|| {
                     channel_runtime::create_chat_loop_state(&agent.agent_config)
                 });
@@ -1786,16 +1903,24 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
             if routed_role.is_none() && is_multi_agent {
                 // Classify: single-agent or multi-agent?
-                let decision = match agent_states.get(&default_agent_id) {
-                    Some(a) => {
-                        crate::application::task_planner::classify_request(
-                            a.engine.as_ref(),
-                            &user_text,
-                            &agent_descriptions,
-                        )
-                        .await
+                let decision = {
+                    let engine_ref: Option<&dyn Engine> =
+                        if let Some(ref dedicated) = planner_engine {
+                            Some(dedicated.as_ref())
+                        } else {
+                            agent_states.get(&default_agent_id).map(|a| a.engine.as_ref())
+                        };
+                    match engine_ref {
+                        Some(eng) => {
+                            crate::application::task_planner::classify_request(
+                                eng,
+                                &user_text,
+                                &agent_descriptions,
+                            )
+                            .await
+                        }
+                        None => Ok(crate::application::task_planner::RouteDecision::MultiAgent),
                     }
-                    None => Ok(crate::application::task_planner::RouteDecision::MultiAgent),
                 };
 
                 match decision {
@@ -1811,7 +1936,8 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                                 &delivery_opts, &mut agent_states, &default_agent_id,
                                 &agent_descriptions, &role_to_agent, &current_recipient,
                                 &memory_handle, &secret_registry, &approval_adapter,
-                                &turn_cancel, &mut user_states,
+                                &turn_cancel, planner_engine.as_deref(),
+                                &mut user_states,
                                 sender_id, &flow_store, refiner.as_ref(),
                                 memory_service_instance.as_ref(), &memory_config,
                             ).await;
@@ -1824,7 +1950,8 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                             &delivery_opts, &mut agent_states, &default_agent_id,
                             &agent_descriptions, &role_to_agent, &current_recipient,
                             &memory_handle, &secret_registry, &approval_adapter,
-                            &turn_cancel, &mut user_states,
+                            &turn_cancel, planner_engine.as_deref(),
+                            &mut user_states,
                             sender_id, &flow_store, refiner.as_ref(),
                             memory_service_instance.as_ref(), &memory_config,
                         ).await;
@@ -1837,7 +1964,8 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                             &delivery_opts, &mut agent_states, &default_agent_id,
                             &agent_descriptions, &role_to_agent, &current_recipient,
                             &memory_handle, &secret_registry, &approval_adapter,
-                            &turn_cancel, &mut user_states,
+                            &turn_cancel, planner_engine.as_deref(),
+                            &mut user_states,
                             sender_id, &flow_store, refiner.as_ref(),
                             memory_service_instance.as_ref(), &memory_config,
                         ).await;
@@ -1959,6 +2087,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
                         Arc::clone(&approval_adapter),
                         activity_adapter,
                         Some(Arc::clone(&turn_cancel)),
+                        None,
                     )
                 });
 
@@ -2010,6 +2139,7 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
             // Get or create per-user-per-agent state.
             let state_key = format!("{}:{}", sender_id, target_agent_id);
+            user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
             let state = user_states.entry(state_key).or_insert_with(|| {
                 channel_runtime::create_chat_loop_state(&agent.agent_config)
             });

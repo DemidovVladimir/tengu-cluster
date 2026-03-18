@@ -21,7 +21,7 @@ pub fn plan_prune(
 ) -> Vec<PruneTarget> {
     let mut targets = Vec::new();
 
-    let push = |targets: &mut Vec<PruneTarget>, path: PathBuf, label: String| {
+    let mut push = |path: PathBuf, label: String| {
         let exists = path.exists();
         targets.push(PruneTarget {
             path,
@@ -32,36 +32,27 @@ pub fn plan_prune(
 
     // Global state
     push(
-        &mut targets,
         tengu_home.join("state/flows"),
         "conversation flows".to_string(),
     );
     push(
-        &mut targets,
         tengu_home.join("memory"),
         "global memory vectors".to_string(),
     );
-    push(
-        &mut targets,
-        tengu_home.join("logs"),
-        "log files".to_string(),
-    );
+    push(tengu_home.join("logs"), "log files".to_string());
 
     // Per-workspace state
     for ws in workspaces {
         let ws_display = ws.display();
         push(
-            &mut targets,
             ws.join("memory"),
             format!("workspace memory ({ws_display})"),
         );
         push(
-            &mut targets,
             ws.join(".tengu-tasks"),
             format!("task outcomes ({ws_display})"),
         );
         push(
-            &mut targets,
             ws.join(".tengu-attachments"),
             format!("attachments ({ws_display})"),
         );
@@ -70,17 +61,15 @@ pub fn plan_prune(
         // Only add top-level dirs; skip subdirs already covered by a parent (e.g. mint/metadata under mint/).
         let mut added_dirs: Vec<String> = Vec::new();
         for dir in scaffold_dirs {
-            let dominated = added_dirs.iter().any(|parent| dir.starts_with(&format!("{parent}/")));
+            let dominated = added_dirs
+                .iter()
+                .any(|parent| dir.starts_with(&format!("{parent}/")));
             if dominated {
                 continue;
             }
             let p = ws.join(dir);
             if p.exists() {
-                push(
-                    &mut targets,
-                    p,
-                    format!("pipeline outputs {dir}/ ({ws_display})"),
-                );
+                push(p, format!("pipeline outputs {dir}/ ({ws_display})"));
                 added_dirs.push(dir.clone());
             }
         }

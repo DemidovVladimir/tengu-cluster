@@ -1,3 +1,10 @@
+---
+tags:
+  - getting-started
+  - setup
+  - quickstart
+---
+
 # Quickstart
 
 Get Tengu Cluster running in under 5 minutes.
@@ -36,7 +43,7 @@ docker compose exec -it tengu tengu chat          # interactive chat
 # make down && make up        # restarts with telegram as default
 ```
 
-For GPU acceleration, Qdrant memory, or cloud deployment, see the [Deployment Guide](DEPLOYMENT.md).
+For GPU acceleration, Qdrant memory, or cloud deployment, see [[Deployment]].
 
 ---
 
@@ -97,7 +104,7 @@ cp config.example.toml ~/.tengu/config.toml
 
 The default config uses OpenRouter with `nvidia/nemotron-3-super-120b-a12b:free` (free tier). If you set `OPENROUTER_API_KEY`, it works out of the box.
 
-To use a different provider, edit `~/.tengu/config.toml`:
+To use a different provider, edit `~/.tengu/config.toml`. See [[Configuration]] for all available fields.
 
 ```toml
 [agents.main]
@@ -163,7 +170,7 @@ Browse all models: <https://openrouter.ai/models>
 
 ## Adding Skills
 
-Skills give your agent the ability to execute commands. Place markdown files in a `skills/` directory at the project root:
+[[Skills]] give your agent the ability to execute commands. Place markdown files in a `skills/` directory at the project root:
 
 ```markdown
 # search
@@ -179,11 +186,11 @@ find . -name "{{pattern}}"
 ```
 ```
 
-The agent can now call this skill as a tool during conversation. See [Skills Guide](SKILLS.md) for the full format.
+The agent can now call this skill as a tool during conversation. See [[Skills]] for the full format, API skills, discovery rules, and per-agent filtering.
 
 ## Adding a Workspace
 
-Point your agent at a project directory to enable file tools (read, write, list):
+Point your agent at a project directory to enable file [[Tools]] (read, write, list):
 
 ```toml
 [agents.main]
@@ -196,7 +203,7 @@ The agent can now read files, list directories, and write files within that work
 
 ## Running Multiple Agents
 
-Configure a fleet of specialized agents with roles:
+Configure a fleet of specialized agents with roles via the [[Orchestrator]]:
 
 ```toml
 [orchestrator]
@@ -218,11 +225,11 @@ role = "backend_engineer"
 cargo run -- orchestrate
 ```
 
-See [Fleet Orchestration Guide](FLEET.md) for the full setup.
+See [[Orchestrator]] for the full setup, task planning, parallel execution, and dependency resolution.
 
 ## Telegram Bot
 
-Chat with your agent from Telegram instead of the terminal:
+Chat with your agent from Telegram instead of the terminal (one of the available [[Channels]]):
 
 ```bash
 # Store your bot token (get one from @BotFather on Telegram)
@@ -238,13 +245,13 @@ cargo run -- secret set TELEGRAM_BOT_TOKEN 123456:ABC-DEF...
 cargo run -- telegram
 ```
 
-Send a message to your bot in Telegram and it responds with full agent capabilities including tools, skills, memory, and file attachments. Dangerous tools (`write_file`, `run_command`) prompt you with inline keyboard Approve/Deny buttons before execution. See [Configuration Reference](CONFIGURATION.md#telegram) for details.
+Send a message to your bot in Telegram and it responds with full agent capabilities including [[Tools]], [[Skills]], memory, and file attachments. Dangerous tools (`write_file`, `run_command`) prompt you with inline keyboard Approve/Deny buttons before execution. See [[Configuration]] for Telegram-specific settings.
 
 ## Next Steps
 
-- [Deployment Guide](DEPLOYMENT.md) — Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning
-- [Configuration Reference](CONFIGURATION.md) — every config field, env var, and default value
-- [Skills Guide](SKILLS.md) — define custom tools for your agent
-- [Fleet Orchestration Guide](FLEET.md) — multi-agent setup, roles, task lifecycle
-- [DeSci Guide](GUIDE_DESCI.md) — IP-NFT minting with Privy agentic wallets and aura-orchestrator
-- [Wallet & Signing](WALLET.md) — Privy agentic wallets, policy setup, on-chain transaction signing
+- [[Deployment]] — Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning
+- [[Configuration]] — every config field, env var, and default value
+- [[Skills]] — define custom tools for your agent
+- [[Orchestrator]] — multi-agent setup, roles, task lifecycle
+- [[Tools]] — workspace primitives and tool approval system
+- [[Channels]] — Telegram, TUI, and other communication adapters

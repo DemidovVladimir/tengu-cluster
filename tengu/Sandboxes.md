@@ -1,3 +1,11 @@
+---
+tags:
+  - subsystem
+  - multi-agent
+  - sandboxes
+  - configuration
+---
+
 # Sandboxes — Multi-Agent Domain Configurations
 
 Sandboxes let you define isolated multi-agent teams for different domains (web studio, logistics, customer support, etc.) without modifying your default `~/.tengu/config.toml`.
@@ -23,11 +31,11 @@ The `--sandbox <name>` flag loads config from `sandboxes/<name>/config.toml` rel
 
 Each sandbox is a self-contained config file. There is no inheritance from the default config — define everything the team needs.
 
-**Memory isolation**: When agents have a `workspace` configured, persistent memory is automatically stored in `<workspace>/memory/` instead of the global `~/.tengu/memory/`. This means DeSci and WebStudio sandboxes get separate memory stores by default — no config changes needed. For Qdrant, a workspace-scoped collection name is used (e.g., `tengu-memory-desci-sandbox`).
+**[[Memory]] isolation**: When [[Agents]] have a `workspace` configured, persistent memory is automatically stored in `<workspace>/memory/` instead of the global `~/.tengu/memory/`. This means [[DeSci]] and WebStudio sandboxes get separate memory stores by default — no config changes needed. For Qdrant, a workspace-scoped collection name is used (e.g., `tengu-memory-desci-sandbox`).
 
 ## Defining Agents
 
-Agents are fully dynamic. Any role string works — there are no hardcoded role names. Define agents in `[agents.<id>]` sections:
+[[Agents]] are fully dynamic. Any role string works — there are no hardcoded role names. Define agents in `[agents.<id>]` sections:
 
 ```toml
 [agents.warehouse_manager]
@@ -54,16 +62,16 @@ max_tokens_per_flow = 80_000
 
 | Field | Description |
 |-------|-------------|
-| `role` | Any non-empty string. Used for task routing in orchestrator (`role: task description`). |
+| `role` | Any non-empty string. Used for task routing in [[Orchestrator]] (`role: task description`). |
 | `requires` | List of role keys this agent depends on. The planner ensures tasks for this agent always follow tasks from required roles. Example: `requires = ["hypothesis_researcher"]`. |
-| `capabilities` | Hard runtime permissions. Controls which workspace primitives and subsystem tools the agent can use. See examples below. |
+| `capabilities` | Hard runtime permissions. Controls which workspace primitives and subsystem tools the agent can use. See [[Capabilities]] for the full reference. |
 | `skill_packages` | Skill/workflow packages to load into the agent prompt and tool registry. |
 | `workspace` | Shared or per-agent workspace directory. Tilde expansion supported. |
 | `identity.instructions` | Role-specific system prompt. This is where you define what the agent does. |
 
 ### Capability Restrictions
 
-The `capabilities` field controls which workspace primitives and subsystem features an agent can use:
+The [[Capabilities]] field controls which workspace primitives and subsystem features an agent can use:
 
 ```toml
 # Read-only advisor — cannot write files or run commands
@@ -76,7 +84,7 @@ capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspac
 capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember"]
 ```
 
-Available workspace capabilities: `workspace.read`, `workspace.list`, `workspace.write`, `workspace.shell`. Subsystem tools (e.g., `memory.remember`) require their corresponding capability. See [CONFIGURATION.md](CONFIGURATION.md) for the full capabilities reference.
+Available workspace capabilities: `workspace.read`, `workspace.list`, `workspace.write`, `workspace.shell`. Subsystem tools (e.g., `memory.remember`) require their corresponding capability. See [[Configuration]] for the full capabilities reference.
 
 ## Using the Orchestrator
 
@@ -93,7 +101,9 @@ Commands:
 - `/tasks` — Show task history
 - `/quit` — Exit
 
-## Using with Telegram
+See [[Orchestrator]] for full details on dependency resolution and parallel execution.
+
+## Using with [[Channels|Telegram]]
 
 ```bash
 tengu telegram --sandbox webstudio
@@ -129,13 +139,15 @@ A 4-agent web development team:
 - **backend_engineer** — APIs, database, auth (full tools)
 - **tech_writer** — Documentation, API references (no shell)
 
-### DeSci (`sandboxes/desci/`)
+### [[DeSci]] (`sandboxes/desci/`)
 
-A 4-agent Decentralized Science pipeline with declared dependencies:
-- **hypothesis_researcher** — PDF analysis, hypothesis extraction
-- **onchain_minter** — IPNFT minting via Molecule/Sepolia (`requires = ["hypothesis_researcher"]`)
-- **mol_labs** — Molecule project creation, file uploads (`requires = ["onchain_minter"]`)
-- **beach_scientist** — Science publishing on Beach.science (`requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]`)
+A 6-agent Decentralized Science pipeline with declared dependencies:
+- **hypothesis_researcher** — PDF analysis, hypothesis extraction (no API access)
+- **wallet_manager** — [[Skill - Privy Wallets|Privy wallet]] lifecycle management
+- **onchain_minter** — 10-step [[Skill - IP-NFT Mint|IP-NFT minting]] pipeline (`requires = ["hypothesis_researcher"]`)
+- **mol_labs** — [[Skill - Molecule Project|Molecule project]], uploads, announcements (`requires = ["onchain_minter"]`)
+- **beach_scientist** — [[Skill - Beach Science|Beach.science]] publishing (`requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]`)
+- **custodian** — NFT transfer to owner wallet (`requires = ["onchain_minter", "mol_labs", "beach_scientist"]`)
 
 ## Workspace Scaffold
 
@@ -177,7 +189,7 @@ Any domain works: logistics, healthcare, education, finance, etc. The system imp
 
 ## Multi-Project Workflows
 
-Use `/project <name>` in Telegram to create isolated project subfolders within the workspace:
+Use `/project <name>` in [[Channels|Telegram]] to create isolated project subfolders within the workspace:
 
 ```
 /project peptide-study
@@ -190,3 +202,13 @@ This creates `{workspace}/peptide-study/` with all scaffold subdirectories, swit
 ```
 
 Use `/project` (no argument) to see the current workspace path.
+
+## Related
+
+- [[Agents]] — agent definition and dynamic roles
+- [[Capabilities]] — runtime permissions
+- [[Orchestrator]] — dependency resolution and parallel execution
+- [[Channels]] — TUI and Telegram adapters
+- [[Configuration]] — config file reference
+- [[Memory]] — per-workspace memory isolation
+- [[DeSci]] — DeSci sandbox example

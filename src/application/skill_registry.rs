@@ -95,8 +95,14 @@ impl SkillRegistry {
         }
 
         // Apply skill allowlist: if set, only keep skills whose name is in the list.
+        // Normalize allowlist entries the same way skill names are normalized
+        // (hyphens → underscores, lowercase) so "aura-orchestrator" matches "aura_orchestrator".
         if let Some(ref allowlist) = self.skill_allowlist {
-            fresh.retain(|e| allowlist.iter().any(|a| a == &e.name));
+            fresh.retain(|e| {
+                allowlist
+                    .iter()
+                    .any(|a| a.replace('-', "_").to_lowercase() == e.name)
+            });
         }
 
         let diff: SkillDiff = diff_skill_sets(&self.entries, &fresh);
@@ -152,11 +158,18 @@ impl SkillRegistry {
         true
     }
 
-    /// Capability-bound tool registrations for only active skills.
+    /// Tool registrations for active shell skills only.
+    ///
+    /// API/documentation skills don't create tools — they inject context into
+    /// the system prompt and the LLM uses platform primitives (http_request, etc.).
     pub(crate) fn active_tools(&self) -> Vec<RegisteredTool> {
+        use crate::domain::skill::SkillExecution;
         self.entries
             .values()
-            .filter(|e| e.status == SkillStatus::Active)
+            .filter(|e| {
+                e.status == SkillStatus::Active
+                    && matches!(e.definition.execution, SkillExecution::Shell { .. })
+            })
             .map(|e| skill_to_registered_tool(&e.definition))
             .collect()
     }
@@ -398,12 +411,13 @@ Documentation body here.
         let mut reg = SkillRegistry::new(vec![]);
         reg.reload(&source);
 
-        assert_eq!(reg.active_tools().len(), 2);
+        // Only shell skills create tools; API skills are documentation-only.
+        assert_eq!(reg.active_tools().len(), 1); // greet only
         assert_eq!(reg.active_skill_definitions().len(), 2);
         assert_eq!(reg.active_context_fragments().len(), 1); // only API skill
 
         reg.disable("my_api").unwrap();
-        assert_eq!(reg.active_tools().len(), 1);
+        assert_eq!(reg.active_tools().len(), 1); // greet still active
         assert!(reg.active_context_fragments().is_empty());
     }
 
@@ -415,5 +429,19 @@ Documentation body here.
         let mut reg = SkillRegistry::new(vec!["read_file".into()]);
         reg.reload(&source);
         assert!(reg.list_all().is_empty());
+    }
+
+    #[test]
+    fn allowlist_normalizes_hyphens_to_underscores() {
+        let source = MockSource {
+            files: vec![("api".into(), API_SKILL.into())],
+        };
+        // API_SKILL has name: "my-api" which normalizes to "my_api".
+        // Allowlist uses the hyphenated form from config — must still match.
+        let mut reg = SkillRegistry::new(vec![]).with_allowlist(Some(vec!["my-api".into()]));
+        let changed = reg.reload(&source);
+        assert!(changed);
+        assert_eq!(reg.list_all().len(), 1);
+        assert_eq!(reg.list_all()[0].0, "my_api");
     }
 }

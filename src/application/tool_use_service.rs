@@ -32,16 +32,13 @@ impl ToolUseService {
         self.activity.publish_tool_activity(call);
 
         if !self.policies.is_allowed(&call.name) {
-            return Ok(format!(
-                "Tool '{}' is not available to this agent.",
-                call.name
-            ));
+            anyhow::bail!("Tool '{}' is not available to this agent.", call.name);
         }
 
         let needs_approval =
             self.policies.requires_approval(&call.name) && !is_read_only_call(call);
         if needs_approval && !self.approval.request_tool_approval(call)? {
-            return Ok("Tool execution denied by user.".to_string());
+            anyhow::bail!("Tool execution denied by user.");
         }
 
         self.execution.execute_tool(call)
@@ -139,8 +136,8 @@ mod tests {
             }),
         );
 
-        let result = service.execute(&call("write_file")).unwrap();
-        assert_eq!(result, "Tool execution denied by user.");
+        let err = service.execute(&call("write_file")).unwrap_err();
+        assert_eq!(err.to_string(), "Tool execution denied by user.");
         assert_eq!(activity_calls.load(Ordering::Relaxed), 1);
         assert_eq!(approval_calls.load(Ordering::Relaxed), 1);
         assert!(!execution_called.load(Ordering::Relaxed));
@@ -182,8 +179,11 @@ mod tests {
             }),
         );
 
-        let result = service.execute(&call("run_command")).unwrap();
-        assert_eq!(result, "Tool 'run_command' is not available to this agent.");
+        let err = service.execute(&call("run_command")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Tool 'run_command' is not available to this agent."
+        );
     }
 
     #[test]
@@ -239,8 +239,8 @@ mod tests {
             name: "privy".into(),
             arguments: json!({"method": "POST", "path": "/v1/wallets", "body": "{}"}),
         };
-        let result = service.execute(&post_call).unwrap();
-        assert_eq!(result, "Tool execution denied by user.");
+        let err = service.execute(&post_call).unwrap_err();
+        assert_eq!(err.to_string(), "Tool execution denied by user.");
         assert_eq!(approval_calls.load(Ordering::Relaxed), 1);
     }
 }

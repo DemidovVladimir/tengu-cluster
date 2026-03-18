@@ -311,6 +311,81 @@ impl FlowStore {
         Ok(())
     }
 
+    /// Atomically rewrite a transcript with only the given messages.
+    /// Uses a temporary file + rename for crash safety. Updates index metadata.
+    pub fn rewrite_transcript(
+        &self,
+        flow_key: &str,
+        agent_id: &str,
+        messages: &[Message],
+    ) -> Result<()> {
+        let _guard = self.acquire_index_lock()?;
+        let mut index = self.load_index()?;
+        let now = epoch_s_now();
+
+        let relpath = self.resolve_transcript_relpath(flow_key);
+        let transcript_path = self.flows_root.join(&relpath);
+
+        // Write to a temp file first, then atomically rename.
+        let tmp_path = transcript_path.with_extension("jsonl.tmp");
+        {
+            let flow_dir = transcript_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            fs::create_dir_all(flow_dir)?;
+
+            let mut file = File::create(&tmp_path).with_context(|| {
+                format!("failed to create temp transcript at {}", tmp_path.display())
+            })?;
+            let mut total_tokens: u64 = 0;
+            for message in messages {
+                let line = TranscriptLine {
+                    ts_epoch_s: now,
+                    message: message.clone(),
+                };
+                let encoded = serde_json::to_string(&line)?;
+                file.write_all(encoded.as_bytes())?;
+                file.write_all(b"\n")?;
+                total_tokens += estimate_tokens_approx_min1(&message.content) as u64;
+            }
+            file.flush()?;
+
+            // Atomic rename (same filesystem).
+            fs::rename(&tmp_path, &transcript_path).with_context(|| {
+                format!(
+                    "failed to rename temp transcript {} → {}",
+                    tmp_path.display(),
+                    transcript_path.display()
+                )
+            })?;
+
+            // Update index metadata.
+            let meta = index
+                .flows
+                .entry(flow_key.to_string())
+                .or_insert_with(|| FlowMetadata {
+                    flow_key: flow_key.to_string(),
+                    agent_id: agent_id.to_string(),
+                    transcript_relpath: relpath,
+                    message_count: 0,
+                    token_estimate: 0,
+                    updated_at_epoch_s: now,
+                });
+            meta.message_count = messages.len() as u64;
+            meta.token_estimate = total_tokens;
+            meta.updated_at_epoch_s = now;
+        }
+
+        self.write_index(&index)?;
+
+        tracing::info!(
+            flow_key = %flow_key,
+            messages = messages.len(),
+            "Rewrote transcript (disk compaction)"
+        );
+        Ok(())
+    }
+
     fn resolve_transcript_relpath(&self, flow_key: &str) -> String {
         let safe = sanitize_flow_component(flow_key);
         format!("{}/{}", safe, TRANSCRIPT_FILENAME)
@@ -375,6 +450,15 @@ impl FlowStorePort for FlowStore {
 
     fn append_message(&self, flow_key: &str, agent_id: &str, message: &Message) -> Result<()> {
         FlowStore::append_message(self, flow_key, agent_id, message)
+    }
+
+    fn rewrite_transcript(
+        &self,
+        flow_key: &str,
+        agent_id: &str,
+        messages: &[Message],
+    ) -> Result<()> {
+        FlowStore::rewrite_transcript(self, flow_key, agent_id, messages)
     }
 }
 
