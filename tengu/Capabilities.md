@@ -53,7 +53,7 @@ At runtime, `filter_tools_by_capability()` removes tools the agent is not permit
 
 ## Effect Classes
 
-Defined in `src/domain/capability.rs`:
+Defined in `src/adapters/tool_builder.rs`:
 
 - **Read** — no side effects, safe by default
 - **Write** — modifies state, requires approval
@@ -80,4 +80,4 @@ Adding a new skill is plug-and-play: drop the SKILL.md, add to `skill_packages`,
 - [[Agents]] — who has capabilities
 - [[Tools]] — what capabilities gate
 - [[Skills]] — knowledge that guides tool usage (no capabilities needed)
-- [[Architecture]] — how capability filtering fits in the hex layers
+- [[Architecture]] — how capability filtering fits in the flat structure

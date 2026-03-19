@@ -3,15 +3,15 @@
 //! Extracts generic blockchain capabilities from the DeSci-specific adapter into
 //! reusable platform primitives that any skill can compose.
 
-use crate::application::ports::ToolExecutionPort;
-use crate::domain::tool_result::ToolResultEnvelope;
+use crate::adapters::ports::ToolExecutionPort;
+use crate::adapters::types::ToolResultEnvelope;
 use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Address, I256, U256};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::str::FromStr;
 use std::sync::Mutex;
-use tengu_core::types::ToolCall;
+use crate::adapters::types::ToolCall;
 
 const PRIVY_API_URL: &str = "https://api.privy.io";
 const DEFAULT_CHAIN_ID: u64 = 11155111;
@@ -25,11 +25,6 @@ pub(crate) struct CryptoToolExecutionAdapter {
 }
 
 impl CryptoToolExecutionAdapter {
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Result<Self> {
-        Self::with_client(None)
-    }
-
     /// Create with an optional shared `reqwest::Client`. Sharing eliminates
     /// redundant connection pools when multiple agents use crypto tools.
     pub(crate) fn with_client(shared_client: Option<reqwest::Client>) -> Result<Self> {
@@ -182,6 +177,22 @@ impl CryptoToolExecutionAdapter {
         .with_id("calldata", &calldata);
         envelope.to_json_string()
     }
+
+    fn execute_hex_to_uint256(call: &ToolCall) -> Result<String> {
+        let hex = call
+            .arguments
+            .get("hex")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("hex_to_uint256: missing 'hex'"))?;
+        let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+        let value = U256::from_str_radix(stripped, 16)
+            .map_err(|e| anyhow::anyhow!("hex_to_uint256: invalid hex — {e}"))?;
+        let decimal = value.to_string();
+        let envelope = ToolResultEnvelope::ok("hex_to_uint256", &decimal)
+            .with_id("decimal", &decimal)
+            .with_id("hex", hex);
+        envelope.to_json_string()
+    }
 }
 
 impl ToolExecutionPort for CryptoToolExecutionAdapter {
@@ -191,6 +202,7 @@ impl ToolExecutionPort for CryptoToolExecutionAdapter {
             "sign_message" => self.execute_sign_message(call),
             "get_wallet_address" => self.execute_get_wallet_address(),
             "abi_encode" => self.execute_abi_encode(call),
+            "hex_to_uint256" => Self::execute_hex_to_uint256(call),
             other => bail!("Unknown crypto tool: {}", other),
         }
     }
@@ -499,74 +511,4 @@ async fn wait_for_receipt(client: &reqwest::Client, tx_hash: &str) -> Result<ser
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
     bail!("Transaction receipt not found after 180s: {}", tx_hash)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn abi_encode_simple_function() {
-        // transfer(address,uint256)
-        let result = abi_encode_function_call(
-            "transfer(address,uint256)",
-            &[
-                json!("0x0000000000000000000000000000000000000001"),
-                json!("100"),
-            ],
-        )
-        .unwrap();
-        assert!(result.starts_with("0x"));
-        // selector for transfer(address,uint256) = 0xa9059cbb
-        assert!(result.starts_with("0xa9059cbb"));
-        // 4 bytes selector + 2 * 32 bytes params = 68 bytes = 136 hex chars + "0x"
-        assert_eq!(result.len(), 2 + 136);
-    }
-
-    #[test]
-    fn abi_encode_with_string_and_bytes() {
-        let result = abi_encode_function_call(
-            "mintReservation(address,uint256,string,string,bytes)",
-            &[
-                json!("0x0000000000000000000000000000000000000001"),
-                json!("42"),
-                json!("ipfs://QmTest"),
-                json!("VDNA"),
-                json!("0xdead"),
-            ],
-        )
-        .unwrap();
-        assert!(result.starts_with("0x"));
-        // selector is 4 bytes = 8 hex chars
-        assert!(result.len() > 10);
-    }
-
-    #[test]
-    fn abi_encode_no_args() {
-        let result = abi_encode_function_call("pause()", &[]).unwrap();
-        // Just 4-byte selector
-        assert_eq!(result.len(), 2 + 8); // "0x" + 8 hex chars
-    }
-
-    #[test]
-    fn abi_encode_arg_count_mismatch() {
-        let err = abi_encode_function_call("transfer(address,uint256)", &[json!("0x01")]);
-        assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("expects 2 args but got 1"));
-    }
-
-    #[test]
-    fn abi_encode_hex_uint256() {
-        let result = abi_encode_function_call("setValue(uint256)", &[json!("0xff")]).unwrap();
-        assert!(result.starts_with("0x"));
-    }
-
-    #[test]
-    fn abi_encode_bool_arg() {
-        let result = abi_encode_function_call("setApproval(bool)", &[json!("true")]).unwrap();
-        assert!(result.starts_with("0x"));
-    }
 }

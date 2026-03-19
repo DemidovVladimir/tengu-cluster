@@ -401,4 +401,4 @@ cargo run -- orchestrate --sandbox webstudio
 - [[Orchestrator]] -- multi-agent execution model
 - [[Channels]] -- adapter details (Telegram, TUI)
 - [[Deployment]] -- runtime setup and Docker
-- [[Architecture]] -- hexagonal design and ports/adapters
+- [[Architecture]] -- project structure

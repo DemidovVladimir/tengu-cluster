@@ -1,36 +1,32 @@
 //! Adapter wiring for fleet orchestrator bootstrap and task dispatch.
 //!
-//! Uses JoinSet for parallel batch execution: independent tasks within a
-//! batch run concurrently, while batches execute sequentially to honor
-//! task dependencies.
+//! Uses the event-bus architecture: agents run as persistent workers listening
+//! on dedicated channels, the orchestrator dispatches tasks reactively as
+//! dependencies are satisfied, and parallelism emerges from the DAG.
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_factory::build_engine;
-use crate::adapters::memory_tool_executor::MemoryServiceHandle;
-use crate::adapters::skill_source::FileSystemSkillSource;
-use crate::adapters::task_store::InMemoryTaskStore;
-use crate::adapters::workspace_tools;
-use crate::application::engine_runtime::{
+use crate::adapters::engine_builder::build_engine;
+use crate::adapters::memory_builder::MemoryServiceHandle;
+use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::adapters::task_builder;
+use crate::adapters::agent_builder::{agent_worker};
+use crate::adapters::engine_builder::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
-use crate::application::memory_service::MemoryService;
-use crate::application::ports::{TaskStorePort, ToolActivityPort, ToolApprovalPort};
-use crate::application::skill_registry::SkillRegistry;
-use crate::application::task_orchestrator::TaskOrchestratorService;
-use crate::application::task_planner;
-use crate::domain::agent_role::AgentRole;
-use crate::domain::approval::DenyByDefaultApproval;
-use crate::domain::capability::parse_capability_set;
-use crate::domain::run_state::RunState;
-use crate::domain::secret_registry::SecretRegistry;
-use crate::domain::task::TaskResult;
-use crate::domain::tool_result::parse_tool_result_envelope;
+use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
+use crate::adapters::memory_builder::MemoryService;
+use crate::adapters::ports::{ToolActivityPort, ToolApprovalPort};
+use crate::adapters::approval::DenyByDefaultApproval;
+use crate::adapters::secret_builder::SecretRegistry;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tengu_core::config::Config;
-use tengu_core::types::{Message, Role, ToolCall, ToolDef};
-use tengu_core::{Engine, EngineContext};
+use crate::adapters::config::Config;
+use crate::adapters::types::{
+    AgentRole, AgentTaskExecutor, EventBus, Message, Plan, Role, RoleDependencies, Task,
+    TaskHistory, TaskStatus, ToolCall, ToolDef,
+};
+use crate::adapters::{Engine, EngineContext};
 use tracing::info;
 
 /// No-op tool activity adapter for fleet agents — logs are sufficient.
@@ -55,16 +51,20 @@ struct AgentRuntime {
     task_token_budget: Option<u32>,
 }
 
-/// Result of a completed task, fed as context to dependent tasks.
-struct StepResult {
-    role: String,
-    task: String,
-    output: String,
-    success: bool,
+/// Adapter implementing `AgentTaskExecutor` for real agent runtimes.
+struct AgentRuntimeExecutor {
+    runtime: Arc<AgentRuntime>,
+    secret_registry: Arc<SecretRegistry>,
 }
 
-/// Max chars of each previous step's output to include in context for the next step.
-const MAX_STEP_CONTEXT_CHARS: usize = 8000;
+#[async_trait::async_trait]
+impl AgentTaskExecutor for AgentRuntimeExecutor {
+    async fn execute(&self, description: &str) -> std::result::Result<(String, Vec<(String, String)>), String> {
+        execute_agent_task(&self.runtime, description, &self.secret_registry)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
 
 /// Boot the orchestrator: build agents, run interactive task dispatch.
 ///
@@ -88,7 +88,7 @@ pub(crate) async fn boot_orchestrator(
     let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
         ac.workspace
             .as_ref()
-            .map(|p| crate::adapters::workspace_tools::expand_tilde(p))
+            .map(|p| crate::adapters::tool_builder::expand_tilde(p))
     });
 
     // Build shared memory handle (scoped to workspace if available).
@@ -101,7 +101,7 @@ pub(crate) async fn boot_orchestrator(
         channel_runtime::build_memory_handle(&config.memory, &rt, first_workspace.as_deref())
     });
 
-    let task_store = InMemoryTaskStore::new();
+    let task_history = TaskHistory::new();
     let mut agent_runtimes: HashMap<String, Arc<AgentRuntime>> = HashMap::new();
     let mut role_to_agent: HashMap<String, String> = HashMap::new();
     let mut agent_descriptions: HashMap<String, String> = HashMap::new();
@@ -145,19 +145,17 @@ pub(crate) async fn boot_orchestrator(
         let workspace = agent_config
             .workspace
             .as_ref()
-            .map(|ws_raw| workspace_tools::expand_tilde(ws_raw));
+            .map(|ws_raw| crate::adapters::tool_builder::expand_tilde(ws_raw));
 
         let (system_prompt_str, tools, tool_executor): (
             String,
             Vec<ToolDef>,
             Arc<dyn ToolExecutor>,
         ) = if let Some(ref ws) = workspace {
-            let capabilities = parse_capability_set(&agent_config.capabilities)
-                .expect("agent capabilities should validate");
             let base_tools = channel_runtime::compute_base_tools(
                 true,
                 memory_handle.is_some(),
-                &agent_config.capabilities,
+                &agent_config.workspace_tools,
             );
             let skill_source = FileSystemSkillSource::new(ws.clone());
             let base_reserved: Vec<String> =
@@ -167,7 +165,7 @@ pub(crate) async fn boot_orchestrator(
             skill_registry.reload(&skill_source);
 
             let current_tools =
-                channel_runtime::rebuild_tools(&base_tools, &skill_registry, &capabilities);
+                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
             let prompt = channel_runtime::rebuild_system_prompt(
                 agent_config,
                 true,
@@ -192,7 +190,7 @@ pub(crate) async fn boot_orchestrator(
             (prompt, tool_defs, tool_executor)
         } else {
             let prompt =
-                crate::adapters::system_prompt::build_system_prompt(agent_config, false, &[]);
+                crate::adapters::skill_builder::build_system_prompt(agent_config, false, &[]);
             (prompt, vec![], Arc::new(NoopRuntimeToolExecutor))
         };
 
@@ -270,7 +268,7 @@ pub(crate) async fn boot_orchestrator(
         orch.and_then(|o| o.planner_model.as_ref()),
     ) {
         (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_factory::build_planner_engine(engine_type, model) {
+            match crate::adapters::engine_builder::build_planner_engine(engine_type, model) {
                 Ok(e) => {
                     tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
                     Some(e)
@@ -300,7 +298,7 @@ pub(crate) async fn boot_orchestrator(
             "disabled"
         }
     );
-    println!("  Execution: parallel (JoinSet batches)");
+    println!("  Execution: event-bus (DAG dispatch)");
     println!("  ─────────────────────────────────────");
     println!();
     println!("  Commands:");
@@ -328,11 +326,45 @@ pub(crate) async fn boot_orchestrator(
         }
     });
 
-    let orchestrator = TaskOrchestratorService {
-        store: &task_store,
-        max_retries: orch_config.max_retries,
-    };
     let mut task_counter: u64 = 0;
+
+    // ── Persistent EventBus + workers (created once, reused across plans) ──
+
+    let all_agent_ids: Vec<String> = agent_runtimes.keys().cloned().collect();
+
+    // Create the star-topology channel hub once: one inbox for the orchestrator
+    // (receives TaskCompletion/TaskError from all agents) and one inbox per
+    // agent (receives TaskAssignment from the orchestrator).  Workers are
+    // spawned below by the adapter — the application-layer `run_orchestrator`
+    // and `agent_worker` stay decoupled from concrete executor wiring.
+    let EventBus {
+        mut orchestrator_rx,
+        orchestrator_tx,
+        agent_txs,
+        mut agent_rxs,
+    } = EventBus::new(&all_agent_ids, 32);
+
+    // Spawn persistent agent workers.
+    let mut worker_handles = vec![];
+    for agent_id in agent_runtimes.keys() {
+        let rx = agent_rxs.remove(agent_id).unwrap();
+        let tx = orchestrator_tx.clone();
+        let executor: Arc<dyn AgentTaskExecutor> = Arc::new(AgentRuntimeExecutor {
+            runtime: Arc::clone(agent_runtimes.get(agent_id).unwrap()),
+            secret_registry: Arc::clone(&secret_registry),
+        });
+        let id = agent_id.clone();
+        worker_handles.push(tokio::spawn(agent_worker(id, rx, tx, executor)));
+    }
+
+    // Drop original so channel closes only when all workers exit.
+    drop(orchestrator_tx);
+
+    let ev_config = OrchestratorConfig {
+        max_retries: orch_config.max_retries,
+        task_timeout: std::time::Duration::from_secs(300),
+        ..OrchestratorConfig::default()
+    };
 
     // Main dispatch loop.
     loop {
@@ -359,7 +391,7 @@ pub(crate) async fn boot_orchestrator(
                 continue;
             }
             "/tasks" => {
-                print_task_history(&task_store)?;
+                print_task_history(&task_history);
                 continue;
             }
             _ => {}
@@ -382,8 +414,8 @@ pub(crate) async fn boot_orchestrator(
 
             task_counter += 1;
             let task_id = format!("task-{}", task_counter);
-            orchestrator.create_task(task_id.clone(), description.clone(), role.clone())?;
-            orchestrator.assign_task(&task_id, &agent_id)?;
+            task_history.record(task_id.clone(), description.clone(), role.key().to_string());
+            task_history.assign(&task_id, &agent_id);
 
             println!("  Task {} → {} ({})", task_id, agent_id, role.label());
 
@@ -398,14 +430,14 @@ pub(crate) async fn boot_orchestrator(
                     println!("  ── end ──");
                     println!();
 
-                    orchestrator.complete_task(&task_id, TaskResult { output })?;
+                    task_history.complete(&task_id);
                 }
                 Err(e) => {
                     println!("  Task failed: {}", e);
                 }
             }
         } else {
-            // ── Plan-and-execute: decompose goal into parallel task batches ──
+            // ── Plan-and-execute: decompose goal → Plan → event-bus ──
             let pid = match planner_agent_id {
                 Some(ref id) => id.clone(),
                 None => {
@@ -452,7 +484,7 @@ pub(crate) async fn boot_orchestrator(
                 .as_deref()
                 .unwrap_or(planner_runtime.engine.as_ref());
             let mut tasks =
-                match task_planner::generate_plan(plan_engine, &enriched_goal, &agent_descriptions)
+                match task_builder::generate_plan(plan_engine, &enriched_goal, &agent_descriptions)
                     .await
                 {
                     Ok(t) => t,
@@ -463,7 +495,7 @@ pub(crate) async fn boot_orchestrator(
                 };
 
             // Build role dependency constraints from agent configs.
-            let role_deps: task_planner::RoleDependencies = config
+            let role_deps: RoleDependencies = config
                 .agents
                 .values()
                 .filter_map(|ac| {
@@ -477,233 +509,170 @@ pub(crate) async fn boot_orchestrator(
 
             // Resolve role-name references in depends_on to task IDs, then
             // auto-repair plan dependencies and validate.
-            let role_refs = task_planner::resolve_role_refs_in_depends(&mut tasks);
+            let role_refs = task_builder::resolve_role_refs_in_depends(&mut tasks);
             if role_refs > 0 {
                 println!("  Resolved {} role-name references in depends_on", role_refs);
             }
-            let repaired = task_planner::repair_plan_dependencies(&mut tasks, &role_deps);
+            let repaired = task_builder::repair_plan_dependencies(&mut tasks, &role_deps);
             if repaired > 0 {
                 println!("  Auto-repaired plan: added {} dependency edges", repaired);
             }
-            if let Err(e) = task_planner::validate_plan_dependencies(&tasks, &role_deps) {
+            if let Err(e) = task_builder::validate_plan_dependencies(&tasks, &role_deps) {
                 println!("  Plan rejected: {}", e);
                 continue;
             }
 
-            let batches = match task_planner::resolve_execution_order(&tasks) {
-                Ok(b) => b,
-                Err(e) => {
-                    println!("  Bad plan: {}", e);
-                    continue;
-                }
-            };
+            // Convert PlanTask list → Plan for event-bus execution.
+            let plan_tasks: Vec<Task> = tasks
+                .iter()
+                .map(|pt| Task {
+                    id: pt.id.clone(),
+                    role: pt.role.clone(),
+                    description: pt.task.clone(),
+                    depends_on: pt.depends_on.clone(),
+                    status: TaskStatus::Pending,
+                    output: None,
+                    artifacts: HashMap::new(),
+                    assigned_agent: None,
+                    started_at: None,
+                    attempt: 0,
+                })
+                .collect();
+            let plan = Plan::new(enriched_goal.clone(), plan_tasks);
 
             println!();
-            println!(
-                "  Execution Plan ({} tasks, {} batches):",
-                tasks.len(),
-                batches.len()
-            );
-            for (bi, batch) in batches.iter().enumerate() {
-                let labels: Vec<String> = batch
-                    .iter()
-                    .map(|&idx| format!("[{}] {}", tasks[idx].role, tasks[idx].task))
-                    .collect();
-                if batch.len() > 1 {
-                    println!("    Batch {} (parallel):", bi + 1);
+            println!("  Execution Plan ({} tasks, DAG dispatch):", tasks.len());
+            for pt in &tasks {
+                let deps = if pt.depends_on.is_empty() {
+                    String::new()
                 } else {
-                    println!("    Batch {}:", bi + 1);
-                }
-                for label in &labels {
-                    println!("      {}", label);
-                }
+                    format!(" → depends on: {}", pt.depends_on.join(", "))
+                };
+                println!("    [{}] {}{}", pt.role, pt.task, deps);
             }
             println!();
 
-            let mut step_results: Vec<StepResult> = Vec::new();
-            let mut run_state = RunState::default();
-
-            for (bi, batch) in batches.iter().enumerate() {
-                if batch.len() > 1 {
-                    let roles: Vec<&str> =
-                        batch.iter().map(|&idx| tasks[idx].role.as_str()).collect();
-                    println!(
-                        "  Batch {}/{} — parallel: {}",
-                        bi + 1,
-                        batches.len(),
-                        roles.join(", ")
-                    );
-                } else {
-                    println!("  Batch {}/{}...", bi + 1, batches.len());
+            // Track tasks in history.
+            for pt in &tasks {
+                task_counter += 1;
+                let tid = format!("task-{}", task_counter);
+                task_history.record(tid.clone(), pt.task.clone(), pt.role.clone());
+                if let Some(aid) = role_to_agent.get(&pt.role) {
+                    task_history.assign(&tid, aid);
                 }
+            }
 
-                // Spawn all tasks in this batch concurrently via JoinSet.
-                let mut set = tokio::task::JoinSet::new();
+            // Drain stale events from a previous run before starting a new plan.
+            while orchestrator_rx.try_recv().is_ok() {}
 
-                for &task_idx in batch {
-                    let plan_task = &tasks[task_idx];
-                    let missing_artifacts = run_state.missing_artifacts(
-                        channel_runtime::required_artifacts_for_role(&plan_task.role),
-                    );
-                    if !missing_artifacts.is_empty() {
-                        println!(
-                            "  {} blocked: missing required artifacts: {}",
-                            plan_task.role,
-                            missing_artifacts.join(", ")
-                        );
-                        step_results.push(StepResult {
-                            role: plan_task.role.clone(),
-                            task: plan_task.task.clone(),
-                            output: format!(
-                                "Failed: missing required artifacts: {}",
-                                missing_artifacts.join(", ")
-                            ),
-                            success: false,
-                        });
-                        continue;
-                    }
-                    // Check if any dependency failed — skip this task if so.
-                    let failed_dep = plan_task.depends_on.iter().find(|dep_id| {
-                        step_results
-                            .iter()
-                            .any(|r| !r.success && tasks.iter().any(|t| t.id == **dep_id && t.role == r.role))
-                    });
-                    if let Some(dep_id) = failed_dep {
-                        println!(
-                            "  {} skipped — dependency '{}' failed",
-                            plan_task.role, dep_id
-                        );
-                        step_results.push(StepResult {
-                            role: plan_task.role.clone(),
-                            task: plan_task.task.clone(),
-                            output: format!("Skipped — dependency '{}' failed", dep_id),
-                            success: false,
-                        });
-                        continue;
-                    }
+            // Run the event-bus orchestrator (reuses persistent workers + channels).
+            let outcome = event_orchestrator::run_orchestrator(
+                plan,
+                &mut orchestrator_rx,
+                &agent_txs,
+                &role_to_agent,
+                &ev_config,
+            )
+            .await;
 
-                    let agent_id = match role_to_agent.get(&plan_task.role) {
-                        Some(id) => id.clone(),
-                        None => {
-                            println!("  No agent for role '{}', skipping", plan_task.role);
-                            step_results.push(StepResult {
-                                role: plan_task.role.clone(),
-                                task: plan_task.task.clone(),
-                                output: "Skipped — no agent for role".into(),
-                                success: false,
-                            });
-                            continue;
-                        }
-                    };
-
-                    let runtime = Arc::clone(agent_runtimes.get(&agent_id).unwrap());
-                    let sr = Arc::clone(&secret_registry);
-                    let prompt =
-                        build_step_context(&input, &plan_task.task, &step_results, &run_state);
-                    let role = plan_task.role.clone();
-                    let task_desc = plan_task.task.clone();
-
-                    // Track in task store.
-                    task_counter += 1;
-                    let task_id = format!("task-{}", task_counter);
-                    let agent_role: AgentRole =
-                        role.parse().unwrap_or_else(|_| "unknown".parse().unwrap());
-                    orchestrator.create_task(task_id.clone(), task_desc.clone(), agent_role)?;
-                    orchestrator.assign_task(&task_id, &agent_id)?;
-
-                    let tid = task_id.clone();
-                    set.spawn(async move {
-                        let result = execute_agent_task(&runtime, &prompt, &sr).await;
-                        (tid, agent_id, role, task_desc, result)
-                    });
-                }
-
-                // Collect results from this batch.
-                while let Some(join_result) = set.join_next().await {
-                    let (task_id, agent_id, role, task_desc, outcome) =
-                        join_result.map_err(|e| anyhow::anyhow!("Task panicked: {}", e))?;
-
-                    match outcome {
-                        Ok((output, tool_outcomes)) => {
-                            for (_, result) in &tool_outcomes {
-                                if let Some(envelope) = parse_tool_result_envelope(result) {
-                                    run_state.ingest_tool_envelope(&envelope);
-                                }
-                            }
+            match outcome {
+                Ok(plan_outcome) => {
+                    // Print results.
+                    for task_out in &plan_outcome.tasks {
+                        if let Some(ref output) = task_out.output {
+                            let agent = role_to_agent
+                                .iter()
+                                .find(|(_, v)| {
+                                    tasks.iter().any(|t| t.id == task_out.id && role_to_agent.get(&t.role) == Some(v))
+                                })
+                                .map(|(_, v)| v.as_str())
+                                .unwrap_or("?");
                             println!();
-                            println!("  ── {} ({}) ──", agent_id, role);
+                            println!("  ── {} ({}) ──", agent, task_out.id);
                             println!("{}", output);
                             println!("  ── end ──");
-                            println!();
-
-                            orchestrator.complete_task(
-                                &task_id,
-                                TaskResult {
-                                    output: output.clone(),
-                                },
-                            )?;
-
-                            step_results.push(StepResult {
-                                role,
-                                task: task_desc,
-                                output,
-                                success: true,
-                            });
-                        }
-                        Err(e) => {
-                            println!("  {} ({}) failed: {}", agent_id, role, e);
-                            step_results.push(StepResult {
-                                role,
-                                task: task_desc,
-                                output: format!("Failed: {}", e),
-                                success: false,
-                            });
                         }
                     }
-                }
-            }
 
-            let succeeded = step_results.iter().filter(|r| r.success).count();
-            println!(
-                "  Plan completed: {}/{} tasks successful",
-                succeeded,
-                step_results.len()
-            );
+                    let succeeded = plan_outcome
+                        .tasks
+                        .iter()
+                        .filter(|t| t.status == TaskStatus::Completed)
+                        .count();
+                    let skipped = plan_outcome
+                        .tasks
+                        .iter()
+                        .filter(|t| t.status == TaskStatus::Skipped)
+                        .count();
+                    let failed = plan_outcome
+                        .tasks
+                        .iter()
+                        .filter(|t| t.status == TaskStatus::Failed)
+                        .count();
+                    println!();
+                    println!(
+                        "  Plan completed: {}/{} succeeded, {} failed, {} skipped",
+                        succeeded,
+                        plan_outcome.tasks.len(),
+                        failed,
+                        skipped,
+                    );
 
-            // Auto-summarize: store a topic overview in memory for future recall.
-            if let Some(ref handle) = memory_handle {
-                let mut summary = format!("Goal: {}\n\nResults:\n", input);
-                for r in &step_results {
-                    summary.push_str(&format!(
-                        "- {} ({}): {}\n",
-                        r.role,
-                        if r.success { "ok" } else { "failed" },
-                        channel_runtime::truncate_output(&r.output, 500),
-                    ));
-                }
-                let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("kind".into(), "topic_overview".into());
-                meta.insert("source".into(), "orchestrator".into());
-                meta.insert("goal".into(), input.clone());
-                if let Some(ref ws) = first_workspace {
-                    if let Some(name) = ws.file_name() {
-                        meta.insert("workspace_id".into(), name.to_string_lossy().to_string());
+                    // Auto-summarize: store topic overview in memory.
+                    if let Some(ref handle) = memory_handle {
+                        let mut summary = format!("Goal: {}\n\nResults:\n", input);
+                        for t in &plan_outcome.tasks {
+                            let status = match t.status {
+                                TaskStatus::Completed => "ok",
+                                TaskStatus::Failed => "failed",
+                                TaskStatus::Skipped => "skipped",
+                                _ => "unknown",
+                            };
+                            let output_preview = t
+                                .output
+                                .as_deref()
+                                .map(|o| channel_runtime::truncate_output(o, 500))
+                                .unwrap_or_default();
+                            summary.push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
+                        }
+                        let mem_svc =
+                            MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+                        let mut meta = std::collections::HashMap::new();
+                        meta.insert("kind".into(), "topic_overview".into());
+                        meta.insert("source".into(), "orchestrator".into());
+                        meta.insert("goal".into(), input.clone());
+                        if let Some(ref ws) = first_workspace {
+                            if let Some(name) = ws.file_name() {
+                                meta.insert(
+                                    "workspace_id".into(),
+                                    name.to_string_lossy().to_string(),
+                                );
+                            }
+                        }
+                        match mem_svc
+                            .remember_with_metadata(&summary, "orchestrator", meta)
+                            .await
+                        {
+                            Ok(id) => {
+                                tracing::debug!(id, "Stored topic overview in memory");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "Failed to store topic overview");
+                            }
+                        }
                     }
                 }
-                match mem_svc
-                    .remember_with_metadata(&summary, "orchestrator", meta)
-                    .await
-                {
-                    Ok(id) => {
-                        tracing::debug!(id, "Stored topic overview in memory");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to store topic overview");
-                    }
+                Err(e) => {
+                    println!("  Orchestration failed: {}", e);
                 }
             }
         }
+    }
+
+    // Shutdown persistent workers by closing their inboxes.
+    drop(agent_txs);
+    for handle in worker_handles {
+        let _ = handle.await;
     }
 
     Ok(())
@@ -757,40 +726,6 @@ async fn execute_agent_task(
     Ok((combined, response.tool_outcomes))
 }
 
-/// Build an enriched prompt for a task with context from completed steps.
-fn build_step_context(
-    goal: &str,
-    current_task: &str,
-    previous_results: &[StepResult],
-    run_state: &RunState,
-) -> String {
-    let mut ctx = format!(
-        "## Overall Goal\n{}\n\n## Your Task\n{}\n",
-        goal, current_task
-    );
-
-    if !previous_results.is_empty() {
-        ctx.push_str("\n## Results from Previous Steps\n\n");
-        for (i, r) in previous_results.iter().enumerate() {
-            ctx.push_str(&format!("### Step {}: {} — {}\n", i + 1, r.role, r.task));
-            if r.success {
-                ctx.push_str(&channel_runtime::truncate_output(
-                    &r.output,
-                    MAX_STEP_CONTEXT_CHARS,
-                ));
-                ctx.push('\n');
-            } else {
-                ctx.push_str(&format!("(failed: {})\n\n", r.output));
-            }
-        }
-    }
-
-    ctx.push('\n');
-    ctx.push_str(&channel_runtime::format_run_state_prompt(run_state));
-
-    ctx
-}
-
 struct NoopRuntimeToolExecutor;
 
 impl ToolExecutor for NoopRuntimeToolExecutor {
@@ -822,126 +757,30 @@ fn print_agents(agent_list: &[(String, String, String)]) {
     println!();
 }
 
-fn print_task_history(store: &InMemoryTaskStore) -> Result<()> {
-    let tasks = store.load_all_tasks()?;
+fn print_task_history(history: &TaskHistory) {
+    let entries = history.all();
     println!();
-    if tasks.is_empty() {
+    if entries.is_empty() {
         println!("  No tasks yet.");
     } else {
         println!("  Task History");
         println!("  ─────────────────────────────────────");
-        for task in &tasks {
-            let status = match task.status {
-                crate::domain::task::TaskStatus::Pending => "pending",
-                crate::domain::task::TaskStatus::InProgress => "in-progress",
-                crate::domain::task::TaskStatus::Completed => "completed",
-                crate::domain::task::TaskStatus::Failed => "failed",
-            };
-            let agent = task.assigned_agent.as_deref().unwrap_or("-");
+        for entry in &entries {
+            let agent = entry.assigned_agent.as_deref().unwrap_or("-");
             println!(
                 "    {} [{}] {} → {} | {}",
-                task.id.0,
-                status,
-                task.role.label(),
+                entry.id,
+                entry.status,
+                entry.role,
                 agent,
-                if task.description.len() > 60 {
-                    format!("{}...", &task.description[..57])
+                if entry.description.len() > 60 {
+                    format!("{}...", &entry.description[..57])
                 } else {
-                    task.description.clone()
+                    entry.description.clone()
                 },
             );
         }
         println!("  ─────────────────────────────────────");
     }
     println!();
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_task_input_valid() {
-        let (role, desc) = parse_task_input("qa: review the auth module").unwrap();
-        assert_eq!(role.key(), "qa");
-        assert_eq!(desc, "review the auth module");
-    }
-
-    #[test]
-    fn parse_task_input_backend() {
-        let (role, desc) = parse_task_input("backend_engineer: implement caching").unwrap();
-        assert_eq!(role.key(), "backend_engineer");
-        assert_eq!(desc, "implement caching");
-    }
-
-    #[test]
-    fn parse_task_input_hyphenated() {
-        let (role, _) = parse_task_input("integration-master: wire up API").unwrap();
-        assert_eq!(role.key(), "integration_master");
-    }
-
-    #[test]
-    fn parse_task_input_no_colon() {
-        assert!(parse_task_input("just some text").is_none());
-    }
-
-    #[test]
-    fn parse_task_input_empty_description() {
-        assert!(parse_task_input("qa:").is_none());
-        assert!(parse_task_input("qa:   ").is_none());
-    }
-
-    #[test]
-    fn parse_task_input_any_role_is_valid() {
-        let (role, desc) = parse_task_input("unknown_role: do something").unwrap();
-        assert_eq!(role.key(), "unknown_role");
-        assert_eq!(desc, "do something");
-    }
-
-    #[test]
-    fn parse_task_input_empty_role_part() {
-        assert!(parse_task_input(" : do something").is_none());
-    }
-
-    #[test]
-    fn build_step_context_first_step() {
-        let ctx = build_step_context(
-            "build a site",
-            "design the layout",
-            &[],
-            &RunState::default(),
-        );
-        assert!(ctx.contains("Overall Goal"));
-        assert!(ctx.contains("build a site"));
-        assert!(ctx.contains("design the layout"));
-        assert!(!ctx.contains("Previous Steps"));
-    }
-
-    #[test]
-    fn build_step_context_with_prior_results() {
-        let prior = vec![StepResult {
-            role: "designer".into(),
-            task: "create tokens".into(),
-            output: "Primary: #2563eb, font: Inter".into(),
-            success: true,
-        }];
-        let ctx = build_step_context("build a site", "implement UI", &prior, &RunState::default());
-        assert!(ctx.contains("Results from Previous Steps"));
-        assert!(ctx.contains("Primary: #2563eb"));
-    }
-
-    #[test]
-    fn build_step_context_truncates_long_output() {
-        let long_output = "x".repeat(MAX_STEP_CONTEXT_CHARS + 500);
-        let prior = vec![StepResult {
-            role: "backend".into(),
-            task: "build API".into(),
-            output: long_output,
-            success: true,
-        }];
-        let ctx = build_step_context("goal", "next task", &prior, &RunState::default());
-        assert!(ctx.contains("(truncated)"));
-        assert!(ctx.len() < MAX_STEP_CONTEXT_CHARS + 1000);
-    }
 }

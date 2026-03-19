@@ -81,7 +81,7 @@ Where `TaskOutput` holds:
 - audit file path
 
 **Files**:
-- `src/adapters/telegram_runtime.rs` — `build_task_prompt()`, batch result collection in `orchestrate_team_goal()`
+- `src/adapters/telegram_builder.rs` — `build_task_prompt()`, batch result collection in `orchestrate_team_goal()`
 - `src/adapters/channel_runtime.rs` — shared `truncate_output()` helper
 - `src/adapters/orchestrator.rs` — uses shared truncation helper
 
@@ -206,7 +206,7 @@ Initialized via `build_memory_handle(workspace: Option<&Path>)` in [[Channels|ch
 
 ## Memory [[Tools]]
 
-Tools registered by the memory subsystem (defined in `memory_tool_executor.rs` via `memory_tool_defs()`):
+Tools registered by the memory subsystem (defined in `memory_builder.rs` via `memory_tool_defs()`):
 
 - **`remember`** — store content with optional metadata (`kind`, `topic`, `source`, etc.)
 - **`recall`** — vector search for similar entries
@@ -219,7 +219,7 @@ The `remember_with_metadata()` method on `MemoryService` enables Phase 3+ functi
 
 Default: OpenRouter `text-embedding-3-small` (1536 dimensions).
 
-Configured via `EmbeddingPort` in [[Architecture|application ports]] (`src/application/ports.rs`). Adapter implementation in `src/adapters/embedding.rs`.
+Configured via `EmbeddingPort` in `src/adapters/ports.rs`. Adapter implementation in `src/adapters/embedding.rs`.
 
 ## [[Orchestrator]] Integration
 
@@ -247,7 +247,7 @@ The topic overview includes:
 - Unresolved follow-ups
 
 **Files**:
-- `src/adapters/telegram_runtime.rs` — after batch loop in `orchestrate_team_goal()`
+- `src/adapters/telegram_builder.rs` — after batch loop in `orchestrate_team_goal()`
 - `src/adapters/orchestrator.rs` — after plan-and-execute loop
 
 ### RAG Planner Recall (Phase 5)
@@ -276,7 +276,7 @@ It does **not** inject:
 - Arbitrary unrelated memories
 
 **Files**:
-- `src/adapters/telegram_runtime.rs` — before `generate_plan()` in `orchestrate_team_goal()`
+- `src/adapters/telegram_builder.rs` — before `generate_plan()` in `orchestrate_team_goal()`
 - `src/adapters/orchestrator.rs` — before `generate_plan()` in plan-and-execute path
 
 ### Conversation Handling Policy
@@ -445,13 +445,10 @@ These are patterns observed in the research that could be valuable later but are
 
 | File | Purpose |
 |------|---------|
-| `src/domain/memory.rs` | Domain types: `MemoryEntry`, `MemorySearchResult`, `cosine_similarity`, `budget_memories` |
-| `src/application/memory_service.rs` | Application service: `remember()`, `remember_with_metadata()`, `recall()`, `recall_filtered()`, `forget()` |
-| `src/application/ports.rs` | Ports: `EmbeddingPort` and `MemoryStorePort` (async `Pin<Box<Future>>`) |
-| `src/adapters/memory_store.rs` | Disk adapter: brute-force cosine, bincode persistence |
+| `src/adapters/memory_builder.rs` | All memory logic: types (`MemoryEntry`, `MemorySearchResult`), service (`remember`, `recall`, `recall_filtered`, `forget`), disk store (brute-force cosine, bincode), tool definitions (`memory_tool_defs()`) |
+| `src/adapters/ports.rs` | Ports: `EmbeddingPort` and `MemoryStorePort` (async `Pin<Box<Future>>`) |
 | `src/adapters/qdrant_memory_store.rs` | Qdrant adapter: gRPC/tonic, ANN cosine, feature-gated `--features qdrant` |
 | `src/adapters/embedding.rs` | Embedding adapter: OpenRouter API, `text-embedding-3-small`, 1536 dims |
-| `src/adapters/memory_tool_executor.rs` | Memory tool definitions: `memory_tool_defs()` |
 | `src/adapters/channel_runtime.rs` | Shared logic: `build_memory_handle()`, `resolve_memory_store_path()`, `resolve_qdrant_collection()`, `truncate_output()` |
 
 ## Related
@@ -460,5 +457,5 @@ These are patterns observed in the research that could be valuable later but are
 - [[Agents]] — who uses memory
 - [[Tools]] — memory tools (remember, recall)
 - [[Configuration]] — memory backend config
-- [[Architecture]] — hexagonal architecture with ports and adapters
+- [[Architecture]] — project structure
 - [[Channels]] — channel adapters share memory init logic

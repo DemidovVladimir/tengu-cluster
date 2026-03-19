@@ -3,7 +3,7 @@ tags:
   - core
   - orchestrator
   - multi-agent
-  - parallel-execution
+  - event-bus
 aliases:
   - Fleet Orchestration
   - Task Planner
@@ -12,31 +12,43 @@ aliases:
 
 # Orchestrator
 
-Run multiple AI [[Agents]] as a coordinated fleet. Each agent has a role, tasks are assigned and tracked, and independent tasks execute in parallel via JoinSet batches.
+Run multiple AI [[Agents]] as a coordinated fleet. Each agent has a role, tasks are assigned and tracked, and parallelism emerges from the dependency graph via a reactive event-bus architecture.
 
 ## Overview
 
 ```
-                        ┌─────────────────┐
-                        │  Orchestrator   │
-                        │  (task planner  │
-                        │   + JoinSet)    │
-                        └────────┬────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              │                  │                   │
-     ┌────────▼───────┐ ┌───────▼────────┐ ┌───────▼────────┐
-     │   Agent A      │ │   Agent B      │ │   Agent C      │
-     │ (role: qa)     │ │ (role: backend)│ │ (role: devops) │
-     └────────────────┘ └────────────────┘ └────────────────┘
+                    ┌─────────────────┐
+                    │   Orchestrator   │
+                    │   (event loop)   │
+                    └──┬──┬──┬──┬──┬──┘
+          Tx(A)  Tx(B)│  │  │  │  │ Tx(N)
+           ┌─────────┘  │  │  │  └─────────┐
+           ▼             ▼  ▼  ▼            ▼
+        ┌──────┐    ┌──────┐  ┌──────┐  ┌──────┐
+        │Agent │    │Agent │  │Agent │  │Agent │
+        │  A   │    │  B   │  │  C   │  │  N   │
+        └──┬───┘    └──┬───┘  └──┬───┘  └──┬───┘
+           │           │         │          │
+           └───────────┴────┬────┴──────────┘
+                            │
+                     shared Tx(orch)
+                            ▼
+                    ┌─────────────────┐
+                    │  Orchestrator   │
+                    │  Rx (mpsc)      │
+                    └─────────────────┘
 ```
 
 The orchestrator:
 - Registers [[Agents]] with roles from [[Configuration|config]]
 - Matches incoming tasks to agents by role
 - Decomposes goals into tasks with dependency tracking
-- Executes independent tasks in parallel via `tokio::task::JoinSet`
-- Sequential batches for dependent tasks
+- Each agent runs as a persistent worker with a dedicated mpsc channel (star topology)
+- Tasks are dispatched the instant their dependencies are satisfied — no batch boundaries
+- Selective context routing: structured artifacts + short text verbatim, long text via LLM summarization (Tier 2)
+- Dynamic re-planning: agents can request plan modifications at runtime (with cycle detection + guards)
+- Cascade-skip: failed tasks automatically skip all transitive dependents
+- Aggregate token budget (`max_tokens_per_run`) enforced across all agents
 - Recalls prior topic overviews from [[Memory]] before planning
 - Auto-summarizes results into [[Memory]] after each run
 
@@ -102,7 +114,7 @@ cargo run -- orchestrate --sandbox webstudio
 The orchestrator:
 1. Reads all [[Agents]] with `role` set from [[Configuration|config]]
 2. For each agent with a workspace: loads [[Skills]] and builds a system prompt with skill context
-3. Wraps each agent in `Arc<AgentRuntime>` for parallel task sharing
+3. Wraps each agent in `Arc<AgentRuntime>` for sharing across workers
 4. Enters the interactive dispatch loop
 
 ### 3. Verify with Doctor
@@ -129,7 +141,7 @@ Use [[Capabilities]] to restrict what an agent can actually execute. Typical wor
 | `workspace.shell` | shell_exec | Execute shell commands (requires approval) |
 | `memory.remember` | read | Store long-term [[Memory]] entries |
 
-[[Skills|Skill]]-defined [[Tools]] require both a loaded `skill_packages` entry and a matching capability such as `skill.search` or `skill.privy`.
+[[Skills]] are controlled separately via `skill_packages` — they don't require capabilities.
 
 ```toml
 # Read-only advisor
@@ -163,92 +175,97 @@ role = "project_manager"
 
 ## Task Lifecycle
 
-Tasks flow through a state machine:
+Tasks flow through a LivePlan state machine:
 
 ```
-  ┌─────────┐     assign      ┌─────────────┐    complete    ┌───────────┐
-  │ Pending │ ───────────────> │ InProgress  │ ─────────────> │ Completed │
-  └─────────┘                  └──────┬──────┘                └───────────┘
-                                      │
-                                      │ fail
-                                      ▼
-                                ┌──────────┐
-                                │  Failed  │
-                                └─────┬────┘
-                                      │
-                           (if retries remain)
-                                      │
-                                      ▼
-                                ┌─────────┐
-                                │ Pending │  (re-queued)
-                                └─────────┘
+Pending ──dispatch_ready_tasks()──> Ready ──dispatch_task()──> Running
+                                                                  │
+                                              TaskCompletion <────┤
+                                                  │               │
+                                              Completed       TaskError
+                                                              │       │
+                                                          retryable  permanent
+                                                              │       │
+                                                          Pending   Failed
+                                                         (attempt++)    │
+                                                                   cascade_skip()
+                                                                        │
+                                                                    Skipped
 ```
 
 ### States
 
 | State | Meaning |
 |-------|---------|
-| **Pending** | Created, waiting for an available agent |
-| **InProgress** | Assigned to an agent, work underway |
+| **Pending** | Created, waiting for dependencies to be satisfied |
+| **Ready** | All dependencies met, eligible for dispatch |
+| **Running** | Assigned to an agent worker, execution in progress |
 | **Completed** | Successfully finished |
-| **Failed** | Execution error. May retry if `retry_count < max_retries` |
+| **Failed** | Permanent failure (retries exhausted or non-retryable error) |
+| **Skipped** | Cascade-skipped because a dependency failed |
 
-### Transitions
-
-| From | To | Trigger |
-|------|----|---------|
-| Pending | InProgress | `assign_task()` |
-| InProgress | Completed | `complete_task()` |
-| InProgress | Failed | task failure |
-| Failed | InProgress | `retry_failed_task()` (auto) |
-
-Invalid transitions (e.g., Pending -> Completed, Completed -> InProgress) are rejected.
-
-### Task Fields
+### LiveTask Fields
 
 Each task tracks:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | UUID, auto-generated |
-| `description` | string | What the task is about |
-| `assigned_agent` | string? | Agent currently working on it |
-| `status` | enum | Pending / InProgress / Completed / Failed |
-| `role` | AgentRole | Which role should handle this task |
-| `result` | string? | Output or error message |
-| `retry_count` | u32 | Number of failed attempts |
-| `max_retries` | u32 | Retry limit (from `orchestrator.max_retries`) |
-| `created_at` | u64 | Unix epoch milliseconds |
-| `updated_at` | u64 | Last state change timestamp |
+| `id` | TaskId (String) | Unique identifier |
+| `role` | String | Which role should handle this task |
+| `description` | String | What the task is about |
+| `depends_on` | Vec\<TaskId\> | Tasks that must complete before this one |
+| `status` | LiveTaskStatus | Pending / Ready / Running / Completed / Failed / Skipped |
+| `output` | Option\<String\> | Task output (populated on completion) |
+| `artifacts` | HashMap | Structured artifacts extracted from tool envelopes |
+| `assigned_agent` | Option\<AgentId\> | Agent currently working on it |
+| `started_at` | Option\<Instant\> | Wall-clock start time (for timeout detection) |
+| `attempt` | u32 | Number of execution attempts |
 
-## Parallel Execution
+## Event-Bus Execution
 
-The orchestrator uses `tokio::task::JoinSet` for parallel batch execution:
+The orchestrator uses a reactive event-bus architecture. Each agent runs as a persistent worker with a dedicated mpsc channel. The orchestrator dispatches tasks as dependencies are satisfied and processes results in a single `tokio::select!` event loop.
+
+### How It Works
 
 1. The task planner decomposes a goal into tasks with `depends_on` fields
-2. `resolve_execution_order()` groups tasks into batches — tasks in the same batch have no mutual dependencies
-3. Each batch spawns tasks concurrently via `JoinSet::spawn`
-4. Results are collected before the next batch starts
+2. `LivePlan::dispatch_ready_tasks()` marks tasks with satisfied dependencies as Ready
+3. `dispatch_task()` transitions Ready tasks to Running and sends a `TaskAssignment` to the agent's channel
+4. The agent worker executes the task and sends back a `TaskCompletion` or `TaskError`
+5. The orchestrator updates the LivePlan and dispatches newly-unblocked tasks
+6. This continues until all tasks reach a terminal state (Completed, Failed, or Skipped)
 
-```
-Batch 1 (parallel): [research, design]  <- no dependencies, run concurrently
-Batch 2 (parallel): [implement, test]   <- depend on batch 1, run after it
-Batch 3:            [deploy]            <- depends on batch 2
-```
+Parallelism emerges from the dependency graph — if tasks B and C both depend only on A, they are both dispatched the instant A completes.
 
-Each agent runtime is wrapped in `Arc<AgentRuntime>` and cloned per-task. Engine trait is `Send + Sync`, `ToolUseService` is `Clone` — no shared mutable state needed.
+### Context Routing (Two-Tier)
 
-### Inline Data Passing
+When dispatching a downstream task, the orchestrator builds selective context from completed dependencies:
 
-Dependent tasks receive prior step output **embedded directly in their prompt** — not file paths. This eliminates inter-agent hallucination (see [[Memory]] Layer 1: Handoff Context for full details).
+| Condition | Tier | Action |
+|-----------|------|--------|
+| Upstream produced structured artifacts | Tier 1 (free) | Include artifacts in context |
+| Upstream text output < 500 chars | Tier 1 (free) | Include full text verbatim |
+| Upstream text output >= 500 chars | Tier 2 (LLM) | Planner LLM extracts relevant subset |
 
-- Output truncated to 3000 chars per dependency (char-boundary-safe)
-- Shared `truncate_output()` helper in `channel_runtime.rs`
-- Outcome files still written to `.tengu-tasks/` for audit, but prompts no longer depend on agents reading them
+### Error Handling
+
+- **Retryable errors** (timeout, rate limit, HTTP 429/502/503): task resets to Pending with `attempt++`, re-dispatched automatically
+- **Permanent errors**: task marked Failed, all transitive dependents cascade-skipped
+- **Timeout detection**: `tokio::select!` with a sleep branch that fires at the earliest running task's deadline
+
+### Dynamic Re-Planning
+
+Agents can send `PlanModificationRequest` events to add, remove, or update task dependencies at runtime. Guards prevent abuse:
+- **Max modifications cap** (default: 10 per run)
+- **No self-referential adds** (agent cannot add task for itself)
+- **Cycle detection** (DAG validation before committing)
+
+### Token Budget
+
+Aggregate `max_tokens_per_run` (default: 2M) enforced across all agents. When exceeded, remaining pending/ready tasks are skipped.
 
 ### [[Memory]] Integration
 
-After all batches complete, the orchestrator:
+After all tasks complete, the orchestrator:
 
 1. **Auto-summarizes** results into a `topic_overview` [[Memory]] entry with metadata tags (`kind`, `source=orchestrator`, `goal`, `workspace_id`)
 2. **Before planning** new goals, recalls prior `topic_overview` entries via filtered RAG and injects them as planner context
@@ -262,6 +279,12 @@ This gives the system **continuity across sessions** — it learns from past run
 enabled = true
 max_retries = 3              # Retry failed tasks up to 3 times (default)
 ```
+
+## Fan-Out Ensemble Execution
+
+For model benchmarking and validation, the same task can be dispatched to N agents in parallel via `run_fan_out()`. Results are collected into an `EnsembleReport` with per-agent duration, token usage, and status.
+
+Use cases: model benchmarking, prompt regression testing, consensus verification, cost/latency profiling.
 
 ## Per-Agent Restrictions
 
@@ -284,11 +307,11 @@ capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspac
 # No skill_packages = no extra skills loaded
 ```
 
-`filter_tools_by_allowlist()` in `src/application/workspace_tools_catalog.rs` enforces the capability filter at runtime across all adapters.
+`filter_tools_by_capability()` in `src/adapters/tool_builder.rs` enforces the capability filter at runtime across all adapters.
 
 ## Telegram Team Orchestration
 
-In Telegram multi-agent mode, plain messages are decomposed into tasks with dependency tracking and parallel execution automatically. Use `@role: message` to bypass the planner and talk to one agent directly. `/team <goal>` remains available when you want to make the team-planning step explicit.
+In Telegram multi-agent mode, plain messages are decomposed into tasks with dependency tracking and reactive execution automatically. Use `@role: message` to bypass the planner and talk to one agent directly. `/team <goal>` remains available when you want to make the team-planning step explicit.
 
 Example explicit planning command:
 
@@ -300,23 +323,21 @@ The orchestrator:
 1. Recalls relevant prior topic overviews from [[Memory]] (filtered to `kind=topic_overview, source=orchestrator`) and injects them into the planner context
 2. Analyzes the goal and available [[Agents]]
 3. Creates tasks with unique IDs, assigns each to an agent role
-4. Resolves dependencies — independent tasks are grouped into parallel batches
-5. Executes batches: all tasks in a batch run concurrently (dependent tasks wait for prerequisites)
-6. Dependent tasks receive prior step output embedded inline in their prompt (up to 3000 chars per dependency, char-boundary-safe truncation) — no file-path indirection, eliminating inter-agent hallucination
-7. After all batches complete, auto-summarizes results into a `topic_overview` [[Memory]] entry with metadata tags (`kind`, `source`, `goal`, `workspace_id`)
-8. Outcome files are still written to `.tengu-tasks/` for audit, but prompts no longer depend on agents reading them
+4. Converts PlanTasks into a LivePlan and wires up the EventBus
+5. Spawns agent workers (with typing indicators and tool observers for Telegram)
+6. Runs the event-bus orchestrator: tasks dispatch as dependencies are satisfied
+7. Dependent tasks receive selective upstream context (artifacts + short text or LLM-summarized long text)
+8. After completion, auto-summarizes results into a `topic_overview` [[Memory]] entry
 
 Example plan output:
 ```
-Plan (3 tasks, 2 batches):
-Batch 1 [parallel]:
+Plan (3 tasks, DAG dispatch):
   - [backend_engineer] Implement REST API with authentication
-  - [qa] Write integration tests for auth endpoints
-Batch 2:
+  - [qa] Write integration tests for auth endpoints (after: implement_api)
   - [tech_writer] Document the API (after: implement_api, write_tests)
 ```
 
-Use `/stop` to cancel mid-execution. [[Agents]] can also send multiple files (PDF + images) with the `/team` message — they are saved to `.tengu-attachments/` and included in the goal context.
+Use `/stop` to cancel mid-execution (broadcasts Shutdown to all workers). [[Agents]] can also send multiple files (PDF + images) with the `/team` message — they are saved to `.tengu-attachments/` and included in the goal context.
 
 ### Routing Modes
 
@@ -324,7 +345,7 @@ Use `/stop` to cancel mid-execution. [[Agents]] can also send multiple files (PD
 |------|---------|----------|
 | **Single agent** | Default config | Direct agent handling |
 | **Explicit routing** | `@role: message` | Routes to specific agent, bypasses planner |
-| **Team orchestration** | Plain message in multi-agent mode | Full decomposition + parallel execution |
+| **Team orchestration** | Plain message in multi-agent mode | Full decomposition + event-bus execution |
 | **`/team <goal>`** | Explicit command | Forces team orchestration |
 
 `parse_agent_routing()` parses the `@role: message` syntax and falls back to default/last-used agent. Per-user-per-agent conversation states are keyed by `"sender_id:agent_id"`.
@@ -410,26 +431,27 @@ cargo run -- orchestrate
 
 | File | Purpose |
 |------|---------|
-| `src/adapters/orchestrator.rs` | CLI fleet orchestrator with JoinSet parallel batch execution |
-| `src/adapters/telegram_runtime.rs` | Telegram orchestrator with inline data passing and auto-summarize |
-| `src/application/task_planner.rs` | LLM-based goal decomposition into tasks with `depends_on` dependencies |
-| `src/adapters/channel_runtime.rs` | Shared logic: tool/executor/prompt rebuild, [[Memory]] init, agent routing, message chunking, `truncate_output()` |
-
-`resolve_execution_order()` returns `Vec<Vec<usize>>` — batches of task indices for parallel execution. `ToolExecutor` trait has `Send + Sync` bounds for spawning across tokio tasks. `ToolResultObserver` type alias requires `Send + Sync`.
+| `src/adapters/types.rs` | Event types (`OrchestratorEvent`, `PlanModification`, `TokenUsage`), `LivePlan` state machine, `EventBus` channels |
+| `src/adapters/agent_builder.rs` | Agent worker loop: listens on inbox, executes tasks, sends results, artifact extraction |
+| `src/adapters/event_orchestrator.rs` | Event-bus orchestrator core: event loop, dispatch, error handling, data routing, RunBudget |
+| `src/adapters/orchestrator.rs` | CLI adapter: plan generation, EventBus wiring, agent worker spawning, fan-out ensemble |
+| `src/adapters/task_builder.rs` | LLM-based goal decomposition into tasks with `depends_on` dependencies |
+| `src/adapters/telegram_builder.rs` | Telegram adapter: `TelegramTaskExecutor`, EventBus wiring, message rendering |
+| `src/adapters/channel_runtime.rs` | Shared logic: tool/executor/prompt rebuild, [[Memory]] init, agent routing |
 
 ## Troubleshooting
 
-**"No idle agent found for role X"**
-All [[Agents]] with that role are busy. Wait for a task to complete, or add more agents with the same role.
+**"No agent for role X"**
+No [[Agents]] with that role are configured. Check your config file.
 
-**Tasks stuck in InProgress**
-Check logs at `~/.tengu/logs/tengu.log`. Engine stream timeouts (120s default) will surface stalled tasks.
+**Tasks stuck in Running**
+Check logs at `~/.tengu/logs/tengu.log`. The orchestrator has timeout detection that will cancel stuck tasks. Engine stream timeouts (120s default) will also surface stalled tasks.
 
 **Agent can't reach endpoint**
 Run `cargo run -- doctor` to test connectivity for all configured [[Agents]].
 
 **Task retries exhausted**
-A task that fails `max_retries` times stays in Failed state. Check the failure reason in logs or events. Increase `max_retries` if the failures are transient.
+A task that fails `max_retries` times stays in Failed state and cascade-skips dependents. Check the failure reason in logs. Increase `max_retries` if the failures are transient.
 
 ## Related
 

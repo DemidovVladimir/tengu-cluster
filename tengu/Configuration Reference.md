@@ -30,18 +30,13 @@ default_lens = "eco"
 | `workspace` | string? | none | Path to local workspace for file [[Tools]] |
 | `default_lens` | string | `"eco"` | `"eco"`, `"standard"`, `"precise"` |
 
-**Supported engines:**
+**Supported engine:**
 
 | Engine | API Style | Model ID Format | Example |
 |--------|----------|----------------|---------|
 | `openrouter` | OpenAI-compatible | `provider/model` | `nvidia/nemotron-3-super-120b-a12b:free` |
-| `anthropic` | Anthropic native | Anthropic model ID | `claude-sonnet-4-20250514` |
-| `openai` | OpenAI native | OpenAI model ID | `gpt-4o` |
-| `ollama` | Ollama HTTP | Ollama model name | `llama3.2` |
-| `huggingface` | OpenAI-compatible | `org/model:variant` | `THUDM/GLM-4.7:fastest` |
-| `claude-code` | Subprocess CLI | Claude model ID | `claude-sonnet-4-5-20250929` |
 
-See [[Architecture]] for how engines map to backend adapters.
+OpenRouter provides access to all major providers (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.) behind a single API key. See [[Architecture]] for how the engine maps to the backend adapter.
 
 **OpenRouter model examples:**
 
@@ -256,14 +251,11 @@ See [[Orchestrator]] for fleet execution and [[Agents]] for the full agent model
 
 All environment variables. Export them in your shell, `direnv`, process manager, or store them in the encrypted secrets vault (see [[Configuration]]).
 
-### Required (by engine)
+### Required
 
 | Variable | Required When | Example |
 |----------|--------------|---------|
-| `OPENROUTER_API_KEY` | `engine = "openrouter"` or `memory.enabled = true` | `sk-or-v1-abc...` |
-| `ANTHROPIC_API_KEY` | `engine = "anthropic"` | `sk-ant-api03-abc...` |
-| `OPENAI_API_KEY` | `engine = "openai"` | `sk-abc...` |
-| `HF_TOKEN` | `engine = "huggingface"` | `hf_abc...` |
+| `OPENROUTER_API_KEY` | Always (engine + memory embeddings) | `sk-or-v1-abc...` |
 | `TELEGRAM_BOT_TOKEN` | `tengu telegram` command | `123456:ABC-DEF...` |
 
 ### Optional
@@ -272,15 +264,9 @@ All environment variables. Export them in your shell, `direnv`, process manager,
 |----------|---------|-------|
 | `TENGU_MASTER_PASSWORD` | none | Master password for secrets vault (skips interactive prompt) |
 | `TENGU_HOME` | `~/.tengu` | Base config/state directory |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama endpoint |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic endpoint override |
-| `OPENAI_BASE_URL` | `https://api.openai.com` | OpenAI endpoint override |
-| `HF_BASE_URL` | `https://router.huggingface.co/v1` | Hugging Face endpoint override |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api` | OpenRouter endpoint override |
 | `OPENROUTER_REFERER` | none | Your site URL for OpenRouter leaderboard |
 | `OPENROUTER_TITLE` | none | App name for OpenRouter leaderboard |
-| `CLAUDE_CODE_BIN` | `claude` | Path to Claude Code CLI binary |
-| `CLAUDE_CODE_PERMISSION_MODE` | `dontAsk` | Claude Code permission mode |
 | `QDRANT_API_KEY` | none | Qdrant Cloud API key (when `backend = "qdrant"`) |
 | `TENGU_TELEGRAM_ALLOWED_USERS` | none | Comma-separated Telegram user IDs (merged with config `allowed_users`) |
 | `TENGU_GPU_HINT` | none | Force GPU detection: `"gpu"`, `"cuda"`, `"metal"`, `"none"`, `"cpu"` |
@@ -350,21 +336,6 @@ When running in Docker (via `docker-compose.yml` or `make up`), paths differ fro
 
 **Environment variables** are loaded from `.env` in the project root. Set API keys there instead of the secrets vault when using Docker.
 
-**Ollama connection** -- when Ollama runs as a compose service, Tengu connects via Docker networking:
-
-```toml
-# config.toml — no changes needed, compose handles networking
-[agents.local]
-engine = "ollama"
-model = "llama3.2"
-```
-
-The `OLLAMA_HOST` is set automatically by the compose network. When using native Ollama on macOS (for Metal GPU), set in `.env`:
-
-```bash
-OLLAMA_HOST=http://host.docker.internal:11434
-```
-
 **Hub bind address** -- for external access (cloud [[Deployment]]), change in `config.toml`:
 
 ```toml
@@ -403,4 +374,4 @@ bind = "0.0.0.0"    # default: 127.0.0.1
 - [[Channels]] -- adapter details
 - [[Deployment]] -- Docker and cloud setup
 - [[DeSci]] -- DeSci-specific environment variables
-- [[Architecture]] -- hexagonal design
+- [[Architecture]] -- project structure

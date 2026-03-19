@@ -26,7 +26,7 @@ This means:
 | `write_file` | Medium | Yes | Write content to file |
 | `run_command` | High | Yes | Execute shell command in workspace |
 
-Defined in `src/application/workspace_tools_catalog.rs`.
+Defined in `src/adapters/tool_builder.rs`.
 
 ## Platform Primitives
 
@@ -38,7 +38,7 @@ Defined in `src/application/workspace_tools_catalog.rs`.
 | `get_wallet_address` | Low | No | Read configured wallet address |
 | `abi_encode` | Low | No | ABI-encode EVM function calls into calldata hex |
 
-Defined in `src/application/platform_tools_catalog.rs`.
+Defined in `src/adapters/tool_builder.rs`.
 
 ### `http_request` — the skill enabler
 
@@ -72,7 +72,7 @@ When [[Memory]] is enabled, the memory subsystem registers its own tools:
 - **`remember`** — store content with optional metadata tags
 - **`recall`** — retrieve similar entries via vector search
 
-Defined in `src/adapters/memory_tool_executor.rs`.
+Defined in `src/adapters/memory_builder.rs`.
 
 ## Tool Approval
 
@@ -80,7 +80,7 @@ Tools with `requires_approval: true` go through the `ToolApprovalPort`:
 - **TUI**: interactive dialog
 - **Telegram**: inline keyboard (Approve/Deny, 60s timeout)
 
-Approval is **metadata-driven** (risk level + description), not hardcoded per tool name. Shared UI logic in `src/adapters/tool_ui.rs`.
+Approval is **metadata-driven** (risk level + description), not hardcoded per tool name. Approval logic lives in `src/adapters/tool_builder.rs`.
 
 ## Tool Execution Flow
 
@@ -97,4 +97,4 @@ Agent request -> Engine emits ToolCall
 - [[Agents]] — who uses tools
 - [[Skills]] — domain knowledge that guides tool usage
 - [[Capabilities]] — permissions that gate tool access
-- [[Architecture]] — where tools sit in the hex layers
+- [[Architecture]] — where tools sit in the flat structure

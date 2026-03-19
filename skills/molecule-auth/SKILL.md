@@ -45,10 +45,12 @@ http_request:
   url: $MOLECULE_LABS_URL
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
-  body: {"query": "mutation GenerateServiceToken($serviceName: String!, $expiresIn: String!, $walletAddress: String!, $messageSignature: String!) { generateServiceToken(serviceName: $serviceName, expiresIn: $expiresIn, walletAddress: $walletAddress, messageSignature: $messageSignature) }", "variables": {"serviceName": "tengu-agent", "expiresIn": "720h", "walletAddress": "<address from step 1>", "messageSignature": "<signature from step 3>"}}
+  body: {"query": "mutation GenerateServiceToken($serviceName: String!, $expiresIn: String!, $walletAddress: String!, $messageSignature: String!) { generateServiceToken(serviceName: $serviceName, expiresIn: $expiresIn, walletAddress: $walletAddress, messageSignature: $messageSignature) { token } }", "variables": {"serviceName": "tengu-agent", "expiresIn": "720h", "walletAddress": "<address from step 1>", "messageSignature": "<signature from step 3>"}}
 ```
 
 ## Output
+
+The response contains: `data.generateServiceToken.token` — this is the service token string.
 
 Save the service token to `uploads/service_token.txt`.
 Use it as `x-service-token` header in all subsequent Molecule GraphQL calls.

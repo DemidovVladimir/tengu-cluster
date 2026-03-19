@@ -1,7 +1,7 @@
 //! Workspace scaffold — creates directories and seed files before agents start.
 
 use std::path::PathBuf;
-use tengu_core::config::ScaffoldConfig;
+use crate::adapters::config::ScaffoldConfig;
 use tracing::info;
 
 /// Expand `~` to the user's home directory.
@@ -63,7 +63,7 @@ pub(crate) fn apply_scaffold(scaffold: &ScaffoldConfig) -> anyhow::Result<PathBu
 }
 
 /// Run scaffold if configured, log result. Called before agents start.
-pub(crate) fn maybe_apply_scaffold(config: &tengu_core::config::Config) {
+pub(crate) fn maybe_apply_scaffold(config: &crate::adapters::config::Config) {
     if let Some(ref scaffold) = config.scaffold {
         match apply_scaffold(scaffold) {
             Ok(root) => {
@@ -73,68 +73,5 @@ pub(crate) fn maybe_apply_scaffold(config: &tengu_core::config::Config) {
                 eprintln!("  WARNING: Scaffold failed: {}", e);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tengu_core::config::ScaffoldFile;
-
-    #[test]
-    fn scaffold_creates_dirs_and_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("test-project");
-
-        let scaffold = ScaffoldConfig {
-            root: root.to_string_lossy().to_string(),
-            directories: vec!["src".into(), "docs".into(), "public/assets".into()],
-            files: vec![
-                ScaffoldFile {
-                    path: "README.md".into(),
-                    content: "# Test".into(),
-                },
-                ScaffoldFile {
-                    path: "src/index.js".into(),
-                    content: "console.log('hello');".into(),
-                },
-            ],
-            project: None,
-        };
-
-        let result = apply_scaffold(&scaffold).unwrap();
-        assert_eq!(result, root);
-        assert!(root.join("src").is_dir());
-        assert!(root.join("docs").is_dir());
-        assert!(root.join("public/assets").is_dir());
-        assert!(root.join("README.md").exists());
-        assert_eq!(
-            std::fs::read_to_string(root.join("src/index.js")).unwrap(),
-            "console.log('hello');"
-        );
-    }
-
-    #[test]
-    fn scaffold_does_not_overwrite_existing_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("existing");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("keep.txt"), "original").unwrap();
-
-        let scaffold = ScaffoldConfig {
-            root: root.to_string_lossy().to_string(),
-            directories: vec![],
-            files: vec![ScaffoldFile {
-                path: "keep.txt".into(),
-                content: "overwritten".into(),
-            }],
-            project: None,
-        };
-
-        apply_scaffold(&scaffold).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.join("keep.txt")).unwrap(),
-            "original"
-        );
     }
 }

@@ -8,14 +8,14 @@ tags:
 
 A **composable multi-agent system** built to run 24/7 — model-agnostic, pluggable, and designed for autonomous orchestration with permanent memory.
 
-Single Rust binary. Zero external dependencies. [[Architecture|Hexagonal architecture]].
+Single Rust binary. Zero external dependencies.
 
 ## Core Design Goals
 
 1. **24/7 autonomous operation** — the [[Orchestrator]] coordinates [[Agents]], decomposes goals, routes tasks, and maintains continuity through [[Memory]]
 2. **Plug-and-play extensibility** — new [[Skills]] are added as markdown files with zero code changes; new [[Agents]] require only config
 3. **General-purpose [[Tools]]** — 4 stable primitives reusable across all skills, gated by [[Capabilities]] per agent
-4. **Channel-agnostic** — [[Channels]] (TUI, Telegram, future Slack/Discord) are isolated behind port traits
+4. **Channel-agnostic** — [[Channels]] (TUI, Telegram, future Slack/Discord) are isolated
 5. **Composable and understandable** — clear separation makes the system easy to extend and reason about
 
 ## Concept Map
@@ -39,7 +39,7 @@ User ──→ [[Channels|Channel]] ──→ [[Orchestrator]]
 ## Key Principles
 
 See [[Principles]] for the full list:
-- [[Architecture|Hexagonal Architecture]] (mandatory)
+- [[Architecture|Flat module structure]]
 - DRY and KISS
 - Idiomatic Rust best practices
 - Every task includes tests and doc updates
@@ -53,7 +53,7 @@ See [[Principles]] for the full list:
 - [[Deployment]] — Docker, cloud, GPU
 
 **Core Concepts:**
-- [[Architecture]] — hexagonal layers and enforcement
+- [[Architecture]] — project structure
 - [[Agents]] — roles, identity, permissions
 - [[Tools]] — workspace primitives
 - [[Skills]] — plug-and-play capabilities

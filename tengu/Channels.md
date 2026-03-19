@@ -6,7 +6,7 @@ tags:
 
 # Channels
 
-**Channels** are communication adapters — how users interact with [[Agents]]. They are isolated behind port traits, so adding a new channel **never touches business logic**.
+**Channels** are communication adapters — how users interact with [[Agents]]. They are isolated so adding a new channel **never touches business logic**.
 
 ## Current Channels
 
@@ -26,15 +26,14 @@ tags:
 - `cargo run -- telegram`
 
 ### CLI Orchestrator
-- Direct multi-agent dispatch
+- Direct multi-agent dispatch via event-bus
 - `cargo run -- orchestrate`
 
 ## Adding a New Channel
 
 A new channel adapter needs only:
-1. **I/O Pipe** — implements `Pipe` trait from `tengu-core`
-2. **Approval Adapter** — implements `ToolApprovalPort`
-3. **Activity Adapter** — implements `ToolActivityPort`
+1. **Approval Adapter** — implements `ToolApprovalPort`
+2. **Activity Adapter** — implements `ToolActivityPort`
 
 All shared logic lives in `src/adapters/channel_runtime.rs`:
 - Tool/executor/prompt rebuilding
@@ -43,11 +42,11 @@ All shared logic lives in `src/adapters/channel_runtime.rs`:
 - Message chunking
 - State factories
 
-The [[Architecture|application and domain layers]] are completely channel-agnostic.
+The core logic is completely channel-agnostic.
 
 ## Channel-Ready Design
 
-The system is built to support future channels (Slack, Discord, API, email) with minimal effort. Each channel is an adapter behind a port trait — no changes to:
+The system is built to support future channels (Slack, Discord, API, email) with minimal effort. Each channel is an adapter — no changes to:
 - [[Agents]] configuration
 - [[Tools]] or [[Skills]]
 - [[Orchestrator]] logic
@@ -57,5 +56,5 @@ The system is built to support future channels (Slack, Discord, API, email) with
 
 - [[Agents]] — what channels talk to
 - [[Orchestrator]] — multi-agent routing through channels
-- [[Architecture]] — ports and adapters pattern
+- [[Architecture]] — project structure
 - [[Configuration]] — channel-specific config (`[telegram]`)

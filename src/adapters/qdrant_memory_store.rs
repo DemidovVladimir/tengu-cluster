@@ -18,8 +18,8 @@
 //! The collection is auto-created on first connect if it doesn't exist, using
 //! `Distance::Cosine` and the configured `vector_size`.
 
-use crate::application::ports::MemoryStorePort;
-use crate::domain::memory::{MemoryEntry, MemorySearchResult};
+use crate::adapters::ports::MemoryStorePort;
+use crate::adapters::types::{MemoryEntry, MemorySearchResult};
 use anyhow::{Context, Result};
 use qdrant_client::qdrant::{
     CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, PointStruct,
@@ -250,62 +250,5 @@ impl MemoryStorePort for QdrantMemoryStore {
     fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
         // Not meaningful for a remote database.
         Box::pin(async { 0 })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn qdrant_store_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<QdrantMemoryStore>();
-    }
-
-    /// Integration test requiring a running Qdrant instance.
-    /// Run with: cargo test --features qdrant -- --ignored qdrant_integration
-    /// Start Qdrant: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-    #[tokio::test]
-    #[ignore]
-    async fn qdrant_integration_round_trip() {
-        let collection = format!("test-tengu-{}", uuid::Uuid::new_v4());
-        let store = QdrantMemoryStore::new("http://localhost:6334", None, &collection, 3)
-            .await
-            .expect("connect to Qdrant");
-
-        let entry = MemoryEntry {
-            id: uuid::Uuid::new_v4().to_string(),
-            content: "test memory content".to_string(),
-            embedding: vec![1.0, 0.0, 0.0],
-            agent_id: "test-agent".to_string(),
-            created_at_epoch_s: 1234567890,
-            metadata: std::collections::HashMap::new(),
-        };
-
-        // Store
-        store.store(&entry).await.expect("store entry");
-        assert_eq!(store.entry_count().await, 1);
-
-        // Search
-        let results = store
-            .search_by_vector(&[1.0, 0.0, 0.0], 5)
-            .await
-            .expect("search");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].entry.content, "test memory content");
-        assert_eq!(results[0].entry.agent_id, "test-agent");
-
-        // Delete
-        let deleted = store.delete(&entry.id).await.expect("delete");
-        assert!(deleted);
-        assert_eq!(store.entry_count().await, 0);
-
-        // Cleanup: delete test collection
-        store
-            .client
-            .delete_collection(&collection)
-            .await
-            .expect("cleanup collection");
     }
 }

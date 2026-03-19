@@ -2,7 +2,7 @@
 
 **A composable multi-agent system built to run 24/7** — model-agnostic, pluggable, and designed for autonomous orchestration with permanent memory.
 
-Single Rust binary. Zero external dependencies. Hexagonal architecture.
+Single Rust binary. Zero external dependencies.
 
 ## Vision
 
@@ -11,18 +11,18 @@ Tengu Cluster is a **multi-agent runtime** where:
 - **Agents** coordinate through an orchestrator, communicate results inline, and maintain permanent memory across sessions
 - **Skills** are fully plug-and-play — drop a `SKILL.md` file into `skills/` and it's immediately available, no code changes required
 - **Tools** are general-purpose primitives (read, write, list, execute) reusable across any skill — sandbox policy controls which agents can use which tools
-- **Channels** (TUI, Telegram, and any future channel) are isolated behind port traits — adding a new channel never touches business logic
+- **Channels** (TUI, Telegram, and any future channel) are isolated — adding a new channel never touches business logic
 
-The system follows **hexagonal architecture** (mandatory), **DRY**, and **KISS** principles, with idiomatic Rust throughout. See [Architecture](tengu/Architecture.md) for the full rules.
+The system follows **DRY** and **KISS** principles, with idiomatic Rust throughout. See [Architecture](tengu/Architecture.md) for the project structure.
 
 ## What It Does
 
-- **Multi-agent orchestration** — specialized agents (any role) coordinate as a team, with LLM-based task planning, dependency resolution, and parallel batch execution via `JoinSet`
-- **24/7 autonomous operation** — orchestrator decomposes goals, routes to agents, passes results inline between dependent tasks, and auto-summarizes outcomes into permanent memory
+- **Multi-agent orchestration** — specialized agents (any role) coordinate as a team, with LLM-based task planning, dependency resolution, and reactive event-bus execution where parallelism emerges from the DAG
+- **24/7 autonomous operation** — orchestrator decomposes goals, routes to agents via dedicated channels, passes context selectively between dependent tasks, and auto-summarizes outcomes into permanent memory
 - **Plug-and-play skills** — define new capabilities as markdown files, no code changes — agents discover and execute them automatically
 - **Permanent memory** — cross-session vector memory (disk or Qdrant) with metadata tagging, per-workspace isolation, filtered recall, and orchestrator topic overviews for continuity
 - **Any model, one key** — use [OpenRouter](https://openrouter.ai) to access Claude, GPT, Gemini, Llama, Mistral, DeepSeek and hundreds more behind one API key
-- **Channel-ready** — TUI and Telegram today, architected for Slack, Discord, API, or any channel via port traits
+- **Channel-ready** — TUI and Telegram today, architected for Slack, Discord, API, or any channel
 - **Composable and understandable** — clear separation of agents, tools, skills, and capabilities makes the system easy to extend and reason about
 - **Token budget gates** — per-flow token limits with 80% warning threshold and hard cutoff
 
@@ -82,16 +82,13 @@ model = "google/gemini-2.5-flash"    # or anthropic/claude-sonnet-4, openai/gpt-
 
 See the [Quickstart Guide](tengu/Quickstart.md) for the full walkthrough.
 
-## Supported Backends
+## Supported Backend
 
 | Engine | API Key | Model Format |
 |--------|---------|-------------|
-| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `provider/model` (e.g. `nvidia/nemotron-3-super-120b-a12b:free`) |
-| **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
-| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o` |
-| **Ollama** | (none, local) | `llama3.2` |
-| **Hugging Face** | `HF_TOKEN` | `org/model:variant` |
-| **Claude Code** | (subprocess) | `claude-sonnet-4-5-20250929` |
+| **OpenRouter** | `OPENROUTER_API_KEY` | `provider/model` (e.g. `nvidia/nemotron-3-super-120b-a12b:free`) |
+
+OpenRouter provides access to all major providers (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.) behind a single API key and bill.
 
 ## Commands
 
@@ -105,6 +102,8 @@ cargo run -- secret init      # Create encrypted secrets vault
 cargo run -- secret set K V   # Store a secret
 cargo run -- secret list      # List stored secret keys
 cargo run -- secret remove K  # Remove a secret
+cargo run -- cache list --workspace ~/my-app  # List cached entries
+cargo run -- cache stats --workspace ~/my-app # Cache statistics
 cargo run -- prune            # Remove all cached/ephemeral state
 cargo run -- prune --sandbox desci  # Also clean workspace state
 ```
@@ -183,9 +182,9 @@ cargo run -- telegram --sandbox webstudio
 cargo run -- telegram --sandbox desci
 ```
 
-Tasks flow through: **Pending -> InProgress -> Completed/Failed**. The orchestrator is fail-fast by default: tool failures surface immediately instead of being retried automatically. Use `capabilities` for hard runtime permissions and `skill_packages` for workflow-specific skill context.
+Tasks flow through: **Pending → Ready → Running → Completed/Failed/Skipped**. The orchestrator uses an event-bus architecture where each agent runs as a persistent worker with a dedicated channel. Parallelism emerges from the dependency graph — tasks are dispatched the instant their dependencies are satisfied, with no batch boundaries. Failed tasks cascade-skip their dependents automatically. Use `capabilities` for hard runtime permissions and `skill_packages` for workflow-specific skill context.
 
-In Telegram multi-agent mode, plain messages are orchestrated across the team automatically, while `@role: message` forces a specific agent. `/team <goal>` remains available as an explicit planning command. Independent tasks run in parallel batches; dependent tasks receive prior step output embedded inline in their prompt (no file-path indirection). After each multi-agent run, the orchestrator auto-summarizes results into a topic overview stored in memory. Before planning new goals, prior topic overviews are recalled via RAG and injected into the planner context. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+In Telegram multi-agent mode, plain messages are orchestrated across the team automatically, while `@role: message` forces a specific agent. `/team <goal>` remains available as an explicit planning command. Dependent tasks receive selective upstream context (structured artifacts + short text verbatim, long text via LLM summarization). After each multi-agent run, the orchestrator auto-summarizes results into a topic overview stored in memory. Before planning new goals, prior topic overviews are recalled via RAG and injected into the planner context. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
 
 See the [Fleet Orchestration Guide](tengu/Orchestrator.md), [Sandboxes Guide](tengu/Sandboxes.md) for full setup.
 
@@ -229,7 +228,7 @@ See the [Skills Guide](tengu/Skills.md) for the full format and examples.
 
 ## On-Chain Signing
 
-All on-chain signing uses **Privy agentic wallets** — server-side wallets with policy-based guardrails. The full DeSci minting pipeline (reservation, metadata upload, terms signing, mint transaction) runs natively inside `src/adapters/desci_tools.rs`. Alloy is used for ABI encoding only.
+All on-chain signing uses **Privy agentic wallets** — server-side wallets with policy-based guardrails. On-chain operations are exposed as platform primitives (`sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`) — domain workflows like DeSci minting are composed entirely from skills + these primitives.
 
 ## Deployment
 
@@ -286,7 +285,7 @@ All documentation lives in the `tengu/` Obsidian vault:
 | [Sandboxes](tengu/Sandboxes.md) | Domain-specific multi-agent teams, per-agent tool restrictions |
 | [Wallet](tengu/Wallet.md) | Privy agentic wallets, policy setup, on-chain transaction signing |
 | [DeSci](tengu/DeSci.md) | End-to-end IP-NFT minting with generic HTTP/crypto tools plus plug-and-play skills |
-| [Architecture](tengu/Architecture.md) | Hexagonal architecture rules and project structure |
+| [Architecture](tengu/Architecture.md) | Project structure and module organization |
 | [Memory](tengu/Memory.md) | Three-layer memory architecture, RAG, research comparison |
 
 ## Feature Flags
@@ -294,11 +293,6 @@ All documentation lives in the `tengu/` Obsidian vault:
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `openrouter` | on | OpenRouter unified API |
-| `anthropic` | on | Anthropic/Claude |
-| `openai` | on | OpenAI |
-| `ollama` | on | Ollama local models |
-| `claude-code` | on | Claude Code subprocess |
-| `huggingface` | off | Hugging Face Inference Providers |
 | `telegram` | on | Telegram bot channel |
 | `qdrant` | off | Qdrant vector store for RAG memory |
 
@@ -312,24 +306,17 @@ cargo build --all-features
 
 ## Architecture
 
-This project uses **hexagonal architecture** as a **mandatory** requirement. See [Architecture](tengu/Architecture.md) for the full rules.
-
-- `src/domain/` — pure business rules, no I/O
-- `src/application/` — use-case orchestration via ports
-- `src/adapters/` — infrastructure implementations
+Flat module structure — everything lives under `src/adapters/` alongside `src/main.rs`. See [Architecture](tengu/Architecture.md) for details.
 
 ## Development Principles
 
-- **Hexagonal architecture** — mandatory. Domain has no I/O, application depends on ports, adapters implement ports. See [Architecture](tengu/Architecture.md).
+- **Flat structure** — all code in `src/adapters/`, easy to navigate and modify.
 - **DRY** — no duplicated logic. Shared channel runtime, shared tool UI, shared memory init.
 - **KISS** — simplest solution that works. No premature abstractions, no feature flags for hypothetical futures.
 - **Idiomatic Rust** — `Send + Sync` bounds for async concurrency, `Arc<T>` for shared state, trait objects for polymorphism, feature gates for optional dependencies. Follow clippy lints.
-- **Every task includes tests** — architecture enforcement tests, integration tests for new adapters, unit tests for domain logic.
 - **Docs stay current** — every feature change updates the corresponding documentation.
 
 ```bash
 cargo fmt --all
 cargo test --workspace
 ```
-
-Architecture guardrails are enforced by `tests/hex_architecture_enforcement.rs`.

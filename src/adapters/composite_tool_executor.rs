@@ -1,10 +1,10 @@
 //! Composite adapter that routes tool calls to the correct executor.
 
-use crate::application::ports::ToolExecutionPort;
+use crate::adapters::ports::ToolExecutionPort;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tengu_core::types::ToolCall;
+use crate::adapters::types::ToolCall;
 
 pub(crate) struct CompositeToolExecutionAdapter {
     executors: Vec<(Arc<dyn ToolExecutionPort>, HashSet<String>)>,

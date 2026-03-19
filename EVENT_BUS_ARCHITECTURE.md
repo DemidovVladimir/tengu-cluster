@@ -901,11 +901,17 @@ tokio::spawn(async move {
 - Unit tests for `dispatch_ready_tasks()`, `apply_modification()`, cycle detection.
 - **Zero changes** to `orchestrator.rs` — new code exists alongside old.
 
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
+
 ### Phase 2: Agent worker loop
 
 - Add `src/application/agent_worker.rs` with the `agent_worker()` function.
 - Workers call the existing `execute_agent_task()` — no engine changes.
 - Unit test: send `TaskAssignment`, verify `TaskCompletion` arrives on outbox.
+
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
 
 ### Phase 3: Event-driven orchestrator core
 
@@ -914,6 +920,9 @@ tokio::spawn(async move {
 - Integrates Tier 1 data routing (`build_task_context()`).
 - Integration test: construct a 3-task plan, run through event bus, verify execution order.
 
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
+
 ### Phase 4: Replace batch execution in CLI
 
 - Modify `boot_orchestrator()` to use `EventBus` + `run_orchestrator()` instead of JoinSet batches.
@@ -921,11 +930,17 @@ tokio::spawn(async move {
 - Remove `build_step_context()` and `StepResult`.
 - The stdin loop becomes: read input → `generate_plan()` → construct `LivePlan` → `run_orchestrator()`.
 
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
+
 ### Phase 5: Unified channel support
 
 - Modify Telegram adapter to feed events into the same `run_orchestrator()`.
 - Telegram-specific code only handles message rendering and user I/O.
 - Remove duplicated orchestration logic from `telegram_runtime.rs`.
+
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
 
 ### Phase 6: Dynamic re-planning and Tier 2 routing
 
@@ -933,6 +948,9 @@ tokio::spawn(async move {
 - Add LLM-based selective forwarding (Tier 2) for unstructured handoffs.
 - Add configurable guards: max modifications, cycle detection, timeout-based re-dispatch.
 - This phase is the only one that adds new LLM calls to the orchestrator.
+
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
 
 ### Phase 7: Storage agent
 
@@ -943,6 +961,9 @@ tokio::spawn(async move {
 - Replace direct `MemoryService` calls for structured data.
 - Update `/purge` to clear JSONL alongside memory store.
 
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
+
 ### Phase 8: Fan-out and agent pools
 
 - Add `[[agent_pools]]` config parsing and `expand_agent_pools()` (§11.6).
@@ -952,6 +973,9 @@ tokio::spawn(async move {
 - Wire `/team` command to detect fan-out vs DAG mode.
 - Integration test: 5-model pool, verify all results collected.
 
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
+
 ### Phase 9: Commands and token boundaries
 
 - Adapt `/stop` to send `Shutdown` to all workers (§13).
@@ -959,6 +983,9 @@ tokio::spawn(async move {
 - Add `/agents` listing with pool/storage agent info (§13).
 - Add aggregate `max_tokens_per_run` enforcement (§15).
 - Add `/cost` aggregation across agent workers.
+
+# !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.
 
 ---
 
@@ -2743,16 +2770,86 @@ tengu telegram --sandbox desci &        # Telegram bot for DeSci
 No shared state. If the DeSci sandbox's storage agent writes data, the
 WebStudio sandbox cannot see it. If one sandbox crashes, others continue.
 
-### 14.4 Agent pools within sandboxes
+### 14.4 Primary pattern: per-agent config (DAG orchestration)
 
-A sandbox config can define both individual agents (for DAG) and pools
-(for fan-out):
+The main use case is a small team of precisely configured agents, each
+with its own model, skills, capabilities, and dependency declarations.
+This is the DeSci sandbox pattern — it works with the event bus
+**unchanged**. No pools, no fan-out, no new config syntax.
 
 ```toml
-# sandboxes/benchmark/config.toml
+# sandboxes/desci/config.toml — the primary pattern
 
-[scaffold]
-root = "~/benchmark-workspace"
+[orchestrator]
+enabled = true
+
+[storage_agent]
+enabled = true
+
+[agents.hypothesis_researcher]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4.6"
+role = "hypothesis_researcher"
+default = true
+workspace = "~/desci-workspace"
+skill_packages = []
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember"]
+
+[agents.onchain_minter]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4.6"
+role = "onchain_minter"
+requires = ["hypothesis_researcher"]
+workspace = "~/desci-workspace"
+skill_packages = ["poi-register", "ipnft-mint"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember",
+                "http.request", "crypto.sign_tx", "crypto.sign_message",
+                "crypto.wallet_address", "crypto.abi_encode"]
+
+[agents.mol_labs]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4.6"
+role = "mol_labs"
+requires = ["onchain_minter"]
+workspace = "~/desci-workspace"
+skill_packages = ["molecule-auth", "molecule-project", "molecule-upload", "molecule-announcement"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember",
+                "http.request", "crypto.sign_message", "crypto.wallet_address"]
+
+[agents.beach_scientist]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4.6"
+role = "beach_scientist"
+requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]
+workspace = "~/desci-workspace"
+skill_packages = ["beach-science"]
+capabilities = ["workspace.read", "workspace.list", "workspace.write", "memory.remember",
+                "http.request"]
+```
+
+This config has **zero** `[[agent_pools]]`. The event bus handles it
+exactly as described in §4: `generate_plan()` decomposes the goal,
+`repair_plan_dependencies()` enforces `requires` constraints,
+`dispatch_ready_tasks()` drives execution. Each agent is individually
+configured with its own model, skills, capabilities, and identity. The
+`/team` command triggers DAG mode via `run_orchestrator()`.
+
+This is the primary pattern because:
+- Most real workflows need precise per-agent control (different models,
+  different capabilities, different skill packages)
+- Dependency chains are explicit (`requires` field)
+- The planner LLM sees each agent's description and routes tasks
+  to the right specialist
+- 3-6 agents is the typical fleet size
+
+### 14.5 Secondary pattern: agent pools (fan-out benchmarking)
+
+Pools are an **optional addition** for a specific use case: running the
+same task across many models for comparison. A sandbox can include both
+per-agent configs AND pools:
+
+```toml
+# sandboxes/benchmark/config.toml — pools are optional
 
 [orchestrator]
 enabled = true
@@ -2760,9 +2857,8 @@ task_timeout_secs = 180
 
 [storage_agent]
 enabled = true
-store_path = "~/benchmark-workspace/storage/data.jsonl"
 
-# Individual agent for planning/judging.
+# Individual agent for planning/judging — normal per-agent config.
 [agents.planner]
 default = true
 role = "planner"
@@ -2770,7 +2866,7 @@ engine = "openrouter"
 model = "google/gemini-2.5-flash"
 workspace = "~/benchmark-workspace"
 
-# Pool for benchmarking.
+# Pool — only used when /fan-out is invoked.
 [[agent_pools]]
 role = "benchmark-runner"
 system_prompt = "Answer the research question concisely."
@@ -2788,11 +2884,17 @@ copies_per_model = 4
 max_concurrency = 10
 ```
 
-This sandbox has 1 planner agent + 20 pool agents (5 × 4) + 1 storage
-agent = 22 agents total. All scoped to `~/benchmark-workspace/` with
-per-agent subdirectories for workspace isolation.
+Pool agents are expanded at config load time (§11.6) and added to the
+same `HashMap<String, Arc<AgentRuntime>>` as individually configured
+agents. But they are only activated by `/fan-out` — the `/team` command
+ignores pool agents and uses only the `[agents.*]` entries for DAG
+planning.
 
-### 14.5 Storage agent scoping
+**A sandbox with no `[[agent_pools]]` section works exactly as today.**
+The pool feature is purely additive — it does not change how per-agent
+configs are loaded, how the planner works, or how DAG execution runs.
+
+### 14.6 Storage agent scoping
 
 The storage agent's JSONL file lives within the sandbox workspace:
 
@@ -3895,3 +3997,6 @@ Ready at t=0 → both execute in parallel on separate agent workers.
 Current batch model would also parallelize this, but only because they
 happen to be in the same batch. The event-bus does it for the right
 reason: no dependency edges.
+
+### !!! IMPORTANT
+I should never guess as an ingeneer of what happens. So every step, every hop, everythign should be tracked with loggin. Logs should be reach enough to be able to deliver me enough info to be able to debug, what been passed where, what info stored and as much available info as possible, what function is executed, where and so on.

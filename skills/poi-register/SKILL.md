@@ -55,3 +55,7 @@ Extract these values:
 - `data.proof.tree[0]` — the POI merkle root (first element of the tree array)
 
 Save the full response to `mint/metadata/poi_result.json` for the minting step.
+Save the merkle tree proof (i.e. `data.proof.tree[0]`) to shared_cache with key="proof", namespace="poi".
+Save the data transaction (i.e. `data.transaction.data`) to shared_cache with key="data", namespace="poi".
+
+IMPORTANT: After completing POI registration, immediately continue with the IP-NFT minting pipeline (ipnft-mint). Do NOT stop, report progress, or output text between POI and minting — execute both as one continuous sequence of tool calls.

@@ -6,88 +6,31 @@ tags:
 
 # Architecture
 
-Tengu Cluster uses **hexagonal architecture** as a **mandatory** requirement. This is not optional.
+Tengu Cluster uses a **flat module structure** — everything lives under `src/adapters/` alongside `src/main.rs`.
 
-## Why Hexagonal
+## Why Flat
 
 The system is a [[Overview|multi-agent runtime]] that must support:
 - Multiple [[Channels]] without business logic changes
-- Multiple LLM backends without domain changes
+- Multiple LLM backends without code changes
 - [[Skills|Plug-and-play skills]] without recompilation
 - [[Memory]] backends swappable via feature flags
 
-Hexagonal architecture makes all of this possible through strict dependency inversion.
+A flat structure makes it easy to navigate, modify, and reason about the codebase — every file is a sibling in `src/adapters/`.
 
-## Layers
+## Structure
 
-### 1. Domain (`src/domain/`)
-Pure business rules and invariants. No I/O, no network, no filesystem.
+All source files live in `src/adapters/` (single crate, no sub-crates):
 
-| File | Purpose |
-|------|---------|
-| `chat.rs` | Chat state machine, flow keys, history limits |
-| `usage.rs` | Token usage accounting |
-| `tool_policy.rs` | Tool risk-level and approval policies |
-| `skill.rs` | Skill parsing, validation, rendering |
-| `agent_role.rs` | Dynamic role wrapper (any string) |
-| `task.rs` | Task lifecycle (status machine, retry) |
-| `memory.rs` | Memory entry types, cosine similarity, budgeting |
-| `capability.rs` | CapabilityId, EffectClass, capability filtering |
-| `secret_registry.rs` | Secret redaction (pure, no I/O) |
-| `tool_result.rs` | Structured tool output format |
-
-### 2. Application (`src/application/`)
-Use-case orchestration. Depends on domain + ports only.
-
-| File | Purpose |
-|------|---------|
-| `ports.rs` | All port traits (FlowStore, Embedding, MemoryStore, etc.) |
-| `chat_runtime.rs` | Per-turn orchestration, token budget gates |
-| `engine_runtime.rs` | [[Tools|Tool]] loop (MAX_TOOL_ROUNDS=15) |
-| `tool_use_service.rs` | Approval gate + activity publishing |
-| `task_planner.rs` | LLM-based goal decomposition for [[Orchestrator]] |
-| `memory_service.rs` | [[Memory]] embed -> store -> recall |
-| `skill_catalog.rs` | [[Skills]] loading and per-agent filtering |
-| `workspace_tools_catalog.rs` | Workspace [[Tools|primitives]] (read_file, write_file, etc.) |
-| `platform_tools_catalog.rs` | Platform [[Tools|primitives]] (http_request, crypto signing) |
-
-### 3. Ports (`src/application/ports.rs`)
-Stable contracts between application and adapters:
-- `FlowStorePort`, `ToolActivityPort`, `ToolApprovalPort`
-- `ToolExecutionPort`, `SkillSourcePort`, `ShellExecutionPort`
-- `EmbeddingPort`, `MemoryStorePort`, `TaskStorePort`
-
-### 4. Adapters (`src/adapters/`)
-Infrastructure implementations. See [[Channels]], [[Memory]].
-
-| File | Purpose |
-|------|---------|
-| `channel_runtime.rs` | Shared logic for all [[Channels]] |
-| `engine_factory.rs` | Engine construction from config |
-| `orchestrator.rs` | [[Orchestrator]] with JoinSet parallel execution |
-| `telegram_runtime.rs` | [[Channels|Telegram]] adapter |
-| `http_tool_executor.rs` | `http_request` tool executor |
-| `crypto_tool_executor.rs` | Crypto signing tool executor (Privy) |
-| `memory_store.rs` | Disk vector store |
-| `qdrant_memory_store.rs` | Qdrant vector store |
-| `tool_ui.rs` | Generic approval UI (shared) |
-
-## Dependency Rules
-
-```
-Adapters --> Ports --> (nothing)
-Application --> Domain + Ports
-Domain --> (nothing)
-```
-
-**Forbidden:**
-- Application importing `cursive`, `reqwest`, `std::fs`, `tokio::process`
-- Domain importing any infrastructure code
-- Bypassing use-case services from adapters
-
-## Enforcement
-
-5 automated tests in `tests/hex_architecture_enforcement.rs` verify these rules on every build. See [[Testing]].
+| Category | Files | Purpose |
+|----------|-------|---------|
+| **Types & config** | `types.rs`, `config.rs`, `ports.rs`, `token.rs` | Engine trait, Message, ToolCall, OrchestratorEvent, Plan/Task state machine, EventBus, MemoryEntry, config schema, port traits |
+| **Builders** | `engine_builder.rs`, `tool_builder.rs`, `chat_builder.rs`, `memory_builder.rs`, `skill_builder.rs`, `task_builder.rs`, `agent_builder.rs`, `secret_builder.rs`, `flow_builder.rs` | Factory + configuration modules that compose subsystems |
+| **Orchestration** | `event_orchestrator.rs`, `orchestrator.rs` | Event-bus core (event loop, dispatch, data routing, RunBudget) and CLI wiring |
+| **Tool executors** | `composite_tool_executor.rs`, `http_tool_executor.rs`, `crypto_tool_executor.rs`, `cache_tool_executor.rs` | Tool execution adapters |
+| **Channels** | `tui/`, `telegram_builder.rs`, `channel_runtime.rs` | User interfaces and shared channel logic |
+| **Storage** | `qdrant_memory_store.rs`, `embedding.rs` | Qdrant adapter (feature-gated), OpenRouter embedding |
+| **Infra** | `scaffold.rs`, `prune.rs`, `shell_executor.rs`, `approval.rs`, `prompt_budget.rs`, `usage.rs` | Infrastructure utilities |
 
 ## Related
 

@@ -8,22 +8,26 @@ homepage: https://sepolia.etherscan.io
 
 10-step workflow using `sign_and_send_transaction`, `abi_encode`, `sign_message`, and `http_request`.
 
+IMPORTANT: Execute ALL 10 steps in sequence using tool calls. Do NOT stop mid-pipeline, report progress, or output text until every step is complete.
+
+## Required Environment Variables
+
+| Variable | Usage |
+|---|---|
+| `MOLECULE_LABS_URL` | Molecule GraphQL endpoint (steps 2-3, 5-6, 8) |
+| `MOLECULE_API_KEY` | x-api-key header for Molecule GraphQL |
+| `MOLECULE_CLIENT_URL` | Molecule frontend URL (for metadata external_url) |
+
 ## Input
 
-Read `mint/metadata/poi_result.json`. The POI response has this structure:
-```json
-{
-  "data": {
-    "transaction": { "to": "0x...", "data": "0x..." },
-    "proof": { "tree": ["0x...merkle_root..."] }
-  }
-}
-```
+Get these values from shared_cache (namespace="poi"):
+- `data` — the data transaction (i.e. `data.transaction.data` from `poi_result.json`)
+- `proof` — the POI merkle root (i.e. `data.proof.tree[0]` from `poi_result.json`)
 
 Extract:
-- `data.transaction.to` → use as `to` in step 1
-- `data.transaction.data` → use as `data` in step 1
-- `data.proof.tree[0]` → this is the `merkle_root`
+- `data.to` → use as `to` in step 1
+- `data.data` → use as `data` in step 1
+- `proof` → this is the `merkle_root`
 
 Get your wallet address via `get_wallet_address`.
 
@@ -38,7 +42,14 @@ sign_and_send_transaction:
 
 Save the `tx_hash` from the response as `poi_tx_hash`.
 
-Derive the `reservationId` from `merkle_root` (which is `data.proof.tree[0]`): strip the `0x` prefix, interpret the 32-byte hex value as a big-endian uint256, convert to a decimal string. Use that decimal string as both the reservation ID and the `ipnftId` in all subsequent steps. Do not cast the entire `transaction_data` blob to uint256.
+Derive the `reservationId` from `merkle_root` (which is `data.proof.tree[0]`) using `hex_to_uint256`:
+
+```
+hex_to_uint256:
+  hex: <merkle_root, e.g. "0xe6f7...728c">
+```
+
+The returned `decimal` value is the reservation ID. Use it as both the reservation ID and the `ipnftId` in all subsequent steps. Do not cast the entire `transaction_data` blob to uint256.
 
 ## Step 2 — Generate assignment agreement
 
@@ -256,10 +267,11 @@ Save to `mint/metadata/mint_result.json`:
 
 The `ipnft_uid` for downstream steps is: `{contract_address}_{token_id}`
 
-## Environment Variables
-
-| Variable | Usage |
-|---|---|
-| `MOLECULE_LABS_URL` | Molecule GraphQL endpoint (steps 2-3, 5-6, 8) |
-| `MOLECULE_API_KEY` | x-api-key header for Molecule GraphQL |
-| `MOLECULE_CLIENT_URL` | Molecule frontend URL (for metadata external_url) |
+Save the `reservationId` to shared_cache with key="reservation_id", namespace="mint" for downstream steps.
+Save the `token_id` to shared_cache with key="token_id", namespace="mint" for downstream steps.
+Save the `metadata_cid` to shared_cache with key="metadata_cid", namespace="mint" for downstream steps.
+Save the `ipnft_uid` to shared_cache with key="ipnft_uid", namespace="mint" for downstream steps.
+Save the `contract_address` to shared_cache with key="contract_address", namespace="mint" for downstream steps.
+Save the `poi_tx_hash` to shared_cache with key="poi_tx_hash", namespace="mint" for downstream steps.
+Save the `mint_tx_hash` to shared_cache with key="mint_tx_hash", namespace="mint" for downstream steps.
+Save the `ipnft_symbol` to shared_cache with key="ipnft_symbol", namespace="mint" for downstream steps.

@@ -1,26 +1,40 @@
+// --- types & config ---
+pub mod config;
+pub(crate) mod token;
+pub mod types;
+
+// Re-export engine types at the adapters level for ergonomic access.
+pub use types::{Engine, EngineContext, EngineDiagnostics};
+
+pub(crate) mod agent_builder;
+pub(crate) mod approval;
+pub(crate) mod chat_builder;
+pub(crate) mod memory_builder;
+pub(crate) mod secret_builder;
+pub(crate) mod skill_builder;
+pub(crate) mod task_builder;
+pub(crate) mod tool_builder;
+pub(crate) mod usage;
+
+// --- services & ports ---
+pub(crate) mod ports;
+pub(crate) mod event_orchestrator;
+pub(crate) mod flow_builder;
+pub(crate) mod prompt_budget;
+// --- adapters ---
+pub(crate) mod cache_tool_executor;
 pub(crate) mod channel_runtime;
 pub(crate) mod composite_tool_executor;
 pub(crate) mod crypto_tool_executor;
-pub(crate) mod doctor_probe;
 pub(crate) mod embedding;
-pub(crate) mod engine_factory;
-pub(crate) mod flow_store;
+pub(crate) mod engine_builder;
 pub(crate) mod http_tool_executor;
-pub(crate) mod memory_store;
-pub(crate) mod memory_tool_executor;
 pub(crate) mod orchestrator;
 pub(crate) mod prune;
 #[cfg(feature = "qdrant")]
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod scaffold;
-pub(crate) mod secret_store;
 pub(crate) mod shell_executor;
-pub(crate) mod skill_source;
-pub(crate) mod skill_tool_executor;
-pub(crate) mod system_prompt;
-pub(crate) mod task_store;
 #[cfg(feature = "telegram")]
-pub(crate) mod telegram_runtime;
-pub(crate) mod tool_ui;
+pub(crate) mod telegram_builder;
 pub(crate) mod tui;
-pub(crate) mod workspace_tools;
