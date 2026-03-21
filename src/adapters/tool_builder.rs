@@ -545,6 +545,10 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                     "auth_basic_pass_env": {
                         "type": "string",
                         "description": "Env var name for Basic auth password (e.g. \"PRIVY_APP_SECRET\")"
+                    },
+                    "return_body": {
+                        "type": "boolean",
+                        "description": "If true, include the response body in the result. Default false — only status is returned on success. Set to true when you need data from the response (e.g. upload URLs, created resource IDs). Errors always include the body."
                     }
                 },
                 "required": ["url", "method"]

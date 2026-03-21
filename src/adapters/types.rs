@@ -559,15 +559,15 @@ pub(crate) struct ToolResultEnvelope {
     pub status: ToolResultStatus,
     #[serde(default)]
     pub summary: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub artifacts: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ids: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub urls: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hashes: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_response: Option<serde_json::Value>,
 }
 
@@ -592,7 +592,7 @@ impl ToolResultEnvelope {
     }
 
     pub(crate) fn to_json_string(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string_pretty(self)?)
+        Ok(serde_json::to_string(self)?)
     }
 }
 
@@ -750,6 +750,9 @@ pub(crate) struct Task {
     pub assigned_agent: Option<AgentId>,
     pub started_at: Option<Instant>,
     pub attempt: u32,
+    /// Error from the previous attempt — included in retry prompts so the agent
+    /// adapts its approach instead of repeating the same failure.
+    pub last_error: Option<String>,
 }
 
 /// A mutable plan that tracks task states and supports runtime modifications.
@@ -854,6 +857,7 @@ impl Plan {
                         assigned_agent: None,
                         started_at: None,
                         attempt: 0,
+                        last_error: None,
                     },
                 );
                 self.revision += 1;

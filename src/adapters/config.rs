@@ -305,6 +305,9 @@ pub struct LimitsConfig {
     pub context_window_override: Option<u32>,
     #[serde(default)]
     pub max_output_tokens_per_turn: Option<u32>,
+    /// Maximum tool-call round-trips per engine turn. Defaults to 30 if not set.
+    #[serde(default)]
+    pub max_tool_rounds: Option<u32>,
 }
 
 impl Default for LimitsConfig {
@@ -315,6 +318,7 @@ impl Default for LimitsConfig {
             warn_at_cost: None,
             context_window_override: None,
             max_output_tokens_per_turn: None,
+            max_tool_rounds: None,
         }
     }
 }

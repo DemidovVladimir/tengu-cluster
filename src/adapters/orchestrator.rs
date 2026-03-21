@@ -8,13 +8,10 @@ use crate::adapters::channel_runtime;
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::memory_builder::MemoryServiceHandle;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
-use crate::adapters::task_builder;
-use crate::adapters::agent_builder::{agent_worker};
 use crate::adapters::engine_builder::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
 use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
-use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::ports::{ToolActivityPort, ToolApprovalPort};
 use crate::adapters::approval::DenyByDefaultApproval;
 use crate::adapters::secret_builder::SecretRegistry;
@@ -23,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use crate::adapters::config::Config;
 use crate::adapters::types::{
-    AgentRole, AgentTaskExecutor, EventBus, Message, Plan, Role, RoleDependencies, Task,
+    AgentRole, AgentTaskExecutor, Message, Role, RoleDependencies,
     TaskHistory, TaskStatus, ToolCall, ToolDef,
 };
 use crate::adapters::{Engine, EngineContext};
@@ -49,6 +46,7 @@ struct AgentRuntime {
     /// Per-task token budget (input + output). Derived from agent's
     /// `limits.max_tokens_per_flow` — caps runaway orchestrated tasks.
     task_token_budget: Option<u32>,
+    max_tool_rounds: Option<u32>,
 }
 
 /// Adapter implementing `AgentTaskExecutor` for real agent runtimes.
@@ -211,6 +209,7 @@ pub(crate) async fn boot_orchestrator(
                 system_prompt: system_prompt_str,
                 workspace,
                 task_token_budget: Some(agent_config.limits.max_tokens_per_flow as u32),
+                max_tool_rounds: agent_config.limits.max_tool_rounds,
             }),
         );
 
@@ -328,38 +327,6 @@ pub(crate) async fn boot_orchestrator(
 
     let mut task_counter: u64 = 0;
 
-    // ── Persistent EventBus + workers (created once, reused across plans) ──
-
-    let all_agent_ids: Vec<String> = agent_runtimes.keys().cloned().collect();
-
-    // Create the star-topology channel hub once: one inbox for the orchestrator
-    // (receives TaskCompletion/TaskError from all agents) and one inbox per
-    // agent (receives TaskAssignment from the orchestrator).  Workers are
-    // spawned below by the adapter — the application-layer `run_orchestrator`
-    // and `agent_worker` stay decoupled from concrete executor wiring.
-    let EventBus {
-        mut orchestrator_rx,
-        orchestrator_tx,
-        agent_txs,
-        mut agent_rxs,
-    } = EventBus::new(&all_agent_ids, 32);
-
-    // Spawn persistent agent workers.
-    let mut worker_handles = vec![];
-    for agent_id in agent_runtimes.keys() {
-        let rx = agent_rxs.remove(agent_id).unwrap();
-        let tx = orchestrator_tx.clone();
-        let executor: Arc<dyn AgentTaskExecutor> = Arc::new(AgentRuntimeExecutor {
-            runtime: Arc::clone(agent_runtimes.get(agent_id).unwrap()),
-            secret_registry: Arc::clone(&secret_registry),
-        });
-        let id = agent_id.clone();
-        worker_handles.push(tokio::spawn(agent_worker(id, rx, tx, executor)));
-    }
-
-    // Drop original so channel closes only when all workers exit.
-    drop(orchestrator_tx);
-
     let ev_config = OrchestratorConfig {
         max_retries: orch_config.max_retries,
         task_timeout: std::time::Duration::from_secs(300),
@@ -437,62 +404,15 @@ pub(crate) async fn boot_orchestrator(
                 }
             }
         } else {
-            // ── Plan-and-execute: decompose goal → Plan → event-bus ──
-            let pid = match planner_agent_id {
-                Some(ref id) => id.clone(),
-                None => {
-                    println!("  No agents available for planning.");
-                    continue;
-                }
-            };
-            let planner_runtime = match agent_runtimes.get(&pid) {
-                Some(rt) => rt,
-                None => {
-                    println!("  Planner agent not found.");
-                    continue;
-                }
-            };
-
-            println!("  Planning...");
-
-            // RAG: recall only orchestrator topic overviews for planner context.
-            let enriched_goal = if let Some(ref handle) = memory_handle {
-                let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-                let mut filter = HashMap::new();
-                filter.insert("kind".into(), "topic_overview".into());
-                filter.insert("source".into(), "orchestrator".into());
-                match mem_svc.recall_filtered(&input, 3, 600, &filter).await {
-                    Ok(results) if !results.is_empty() => {
-                        let mut enriched = String::from(
-                            "## Relevant Prior Work\n\
-                             Background only. Use this for continuity or implementation hints.\n\
-                             Do NOT treat it as additional requested deliverables, and do NOT expand scope beyond the current goal.\n",
-                        );
-                        for r in &results {
-                            enriched.push_str(&format!("- {}\n", r.entry.content));
-                        }
-                        enriched.push_str(&format!("\n## Current Goal\n{}", input));
-                        enriched
-                    }
-                    _ => input.clone(),
-                }
-            } else {
-                input.clone()
-            };
-
+            // ── Plan-and-execute: shared orchestration pipeline ──
             let plan_engine: &dyn Engine = dedicated_planner
                 .as_deref()
-                .unwrap_or(planner_runtime.engine.as_ref());
-            let mut tasks =
-                match task_builder::generate_plan(plan_engine, &enriched_goal, &agent_descriptions)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        println!("  Failed to generate plan: {}", e);
-                        continue;
-                    }
-                };
+                .unwrap_or_else(|| {
+                    let pid = planner_agent_id.as_ref().unwrap();
+                    agent_runtimes.get(pid).unwrap().engine.as_ref()
+                });
+
+            println!("  Planning...");
 
             // Build role dependency constraints from agent configs.
             let role_deps: RoleDependencies = config
@@ -507,88 +427,62 @@ pub(crate) async fn boot_orchestrator(
                 })
                 .collect();
 
-            // Resolve role-name references in depends_on to task IDs, then
-            // auto-repair plan dependencies and validate.
-            let role_refs = task_builder::resolve_role_refs_in_depends(&mut tasks);
-            if role_refs > 0 {
-                println!("  Resolved {} role-name references in depends_on", role_refs);
-            }
-            let repaired = task_builder::repair_plan_dependencies(&mut tasks, &role_deps);
-            if repaired > 0 {
-                println!("  Auto-repaired plan: added {} dependency edges", repaired);
-            }
-            if let Err(e) = task_builder::validate_plan_dependencies(&tasks, &role_deps) {
-                println!("  Plan rejected: {}", e);
-                continue;
-            }
+            // Phase 1: Generate and validate plan (shared with Telegram).
+            let prepared = match event_orchestrator::prepare_plan(
+                &input,
+                plan_engine,
+                &agent_descriptions,
+                &role_deps,
+                &memory_handle,
+            )
+            .await
+            {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("  Failed: {}", e);
+                    continue;
+                }
+            };
 
-            // Convert PlanTask list → Plan for event-bus execution.
-            let plan_tasks: Vec<Task> = tasks
+            println!();
+            println!("  {}", prepared.summary);
+
+            // Build executors for this plan.
+            let executors: HashMap<String, Arc<dyn AgentTaskExecutor>> = agent_runtimes
                 .iter()
-                .map(|pt| Task {
-                    id: pt.id.clone(),
-                    role: pt.role.clone(),
-                    description: pt.task.clone(),
-                    depends_on: pt.depends_on.clone(),
-                    status: TaskStatus::Pending,
-                    output: None,
-                    artifacts: HashMap::new(),
-                    assigned_agent: None,
-                    started_at: None,
-                    attempt: 0,
+                .map(|(id, rt)| {
+                    let executor: Arc<dyn AgentTaskExecutor> = Arc::new(AgentRuntimeExecutor {
+                        runtime: Arc::clone(rt),
+                        secret_registry: Arc::clone(&secret_registry),
+                    });
+                    (id.clone(), executor)
                 })
                 .collect();
-            let plan = Plan::new(enriched_goal.clone(), plan_tasks);
 
-            println!();
-            println!("  Execution Plan ({} tasks, DAG dispatch):", tasks.len());
-            for pt in &tasks {
-                let deps = if pt.depends_on.is_empty() {
-                    String::new()
-                } else {
-                    format!(" → depends on: {}", pt.depends_on.join(", "))
-                };
-                println!("    [{}] {}{}", pt.role, pt.task, deps);
-            }
-            println!();
+            let workspace_name = first_workspace
+                .as_ref()
+                .and_then(|ws| ws.file_name())
+                .map(|n| n.to_string_lossy().to_string());
 
-            // Track tasks in history.
-            for pt in &tasks {
-                task_counter += 1;
-                let tid = format!("task-{}", task_counter);
-                task_history.record(tid.clone(), pt.task.clone(), pt.role.clone());
-                if let Some(aid) = role_to_agent.get(&pt.role) {
-                    task_history.assign(&tid, aid);
-                }
-            }
-
-            // Drain stale events from a previous run before starting a new plan.
-            while orchestrator_rx.try_recv().is_ok() {}
-
-            // Run the event-bus orchestrator (reuses persistent workers + channels).
-            let outcome = event_orchestrator::run_orchestrator(
-                plan,
-                &mut orchestrator_rx,
-                &agent_txs,
+            // Phase 2: Execute plan via EventBus (shared with Telegram).
+            let outcome = event_orchestrator::execute_plan(
+                prepared,
                 &role_to_agent,
+                &executors,
+                &memory_handle,
+                &input,
+                workspace_name.as_deref(),
                 &ev_config,
             )
             .await;
 
+            // Present results (CLI-specific).
             match outcome {
                 Ok(plan_outcome) => {
-                    // Print results.
                     for task_out in &plan_outcome.tasks {
                         if let Some(ref output) = task_out.output {
-                            let agent = role_to_agent
-                                .iter()
-                                .find(|(_, v)| {
-                                    tasks.iter().any(|t| t.id == task_out.id && role_to_agent.get(&t.role) == Some(v))
-                                })
-                                .map(|(_, v)| v.as_str())
-                                .unwrap_or("?");
                             println!();
-                            println!("  ── {} ({}) ──", agent, task_out.id);
+                            println!("  ── {} ──", task_out.id);
                             println!("{}", output);
                             println!("  ── end ──");
                         }
@@ -599,15 +493,15 @@ pub(crate) async fn boot_orchestrator(
                         .iter()
                         .filter(|t| t.status == TaskStatus::Completed)
                         .count();
-                    let skipped = plan_outcome
-                        .tasks
-                        .iter()
-                        .filter(|t| t.status == TaskStatus::Skipped)
-                        .count();
                     let failed = plan_outcome
                         .tasks
                         .iter()
                         .filter(|t| t.status == TaskStatus::Failed)
+                        .count();
+                    let skipped = plan_outcome
+                        .tasks
+                        .iter()
+                        .filter(|t| t.status == TaskStatus::Skipped)
                         .count();
                     println!();
                     println!(
@@ -617,62 +511,12 @@ pub(crate) async fn boot_orchestrator(
                         failed,
                         skipped,
                     );
-
-                    // Auto-summarize: store topic overview in memory.
-                    if let Some(ref handle) = memory_handle {
-                        let mut summary = format!("Goal: {}\n\nResults:\n", input);
-                        for t in &plan_outcome.tasks {
-                            let status = match t.status {
-                                TaskStatus::Completed => "ok",
-                                TaskStatus::Failed => "failed",
-                                TaskStatus::Skipped => "skipped",
-                                _ => "unknown",
-                            };
-                            let output_preview = t
-                                .output
-                                .as_deref()
-                                .map(|o| channel_runtime::truncate_output(o, 500))
-                                .unwrap_or_default();
-                            summary.push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
-                        }
-                        let mem_svc =
-                            MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-                        let mut meta = std::collections::HashMap::new();
-                        meta.insert("kind".into(), "topic_overview".into());
-                        meta.insert("source".into(), "orchestrator".into());
-                        meta.insert("goal".into(), input.clone());
-                        if let Some(ref ws) = first_workspace {
-                            if let Some(name) = ws.file_name() {
-                                meta.insert(
-                                    "workspace_id".into(),
-                                    name.to_string_lossy().to_string(),
-                                );
-                            }
-                        }
-                        match mem_svc
-                            .remember_with_metadata(&summary, "orchestrator", meta)
-                            .await
-                        {
-                            Ok(id) => {
-                                tracing::debug!(id, "Stored topic overview in memory");
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to store topic overview");
-                            }
-                        }
-                    }
                 }
                 Err(e) => {
                     println!("  Orchestration failed: {}", e);
                 }
             }
         }
-    }
-
-    // Shutdown persistent workers by closing their inboxes.
-    drop(agent_txs);
-    for handle in worker_handles {
-        let _ = handle.await;
     }
 
     Ok(())
@@ -707,22 +551,11 @@ async fn execute_agent_task(
         None,
         None,
         runtime.task_token_budget,
+        runtime.max_tool_rounds,
     )
     .await?;
 
-    let mut combined = response.text;
-    // Append tool outcomes so dependent tasks get concrete data
-    // (the LLM's final text may omit values that tool results contain).
-    if !response.tool_outcomes.is_empty() {
-        combined.push_str("\n\n## Tool Results\n");
-        for (name, result) in &response.tool_outcomes {
-            combined.push_str(&format!(
-                "### {}\n{}\n",
-                name,
-                channel_runtime::truncate_output(&result, 2000),
-            ));
-        }
-    }
+    let combined = response.text;
     Ok((combined, response.tool_outcomes))
 }
 

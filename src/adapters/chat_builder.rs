@@ -407,6 +407,7 @@ impl<'a> ChatRuntimeService<'a> {
             self.tool_observer,
             self.cancel,
             None, // chat runtime has its own flow-level budget enforcement
+            None,
         )
         .await?;
 

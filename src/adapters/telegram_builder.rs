@@ -649,6 +649,7 @@ struct TelegramTaskExecutor {
     secret_registry: Arc<SecretRegistry>,
     cancel: Arc<AtomicBool>,
     token_budget: Option<u32>,
+    max_tool_rounds: Option<u32>,
     pipe: Arc<TelegramPipe>,
     sender: Recipient,
     agent_label: String,
@@ -711,6 +712,7 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
             Some(&observer),
             Some(&self.cancel),
             self.token_budget,
+            self.max_tool_rounds,
         )
         .await;
 
@@ -718,17 +720,7 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
 
         match result {
             Ok(resp) => {
-                let mut combined = resp.text;
-                if !resp.tool_outcomes.is_empty() {
-                    combined.push_str("\n\n## Tool Results\n");
-                    for (name, result) in &resp.tool_outcomes {
-                        combined.push_str(&format!(
-                            "### {}\n{}\n",
-                            name,
-                            channel_runtime::truncate_output(result, 2000),
-                        ));
-                    }
-                }
+                let combined = resp.text;
                 Ok((combined, resp.tool_outcomes))
             }
             Err(e) => Err(e.to_string()),
@@ -758,9 +750,8 @@ async fn handle_team(
     turn_cancel: &Arc<AtomicBool>,
     dedicated_planner_engine: Option<&dyn Engine>,
 ) -> Result<()> {
-    use crate::adapters::agent_builder::agent_worker;
     use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
-    use crate::adapters::types::{AgentTaskExecutor, EventBus, Plan, Task, TaskStatus};
+    use crate::adapters::types::{AgentTaskExecutor, TaskStatus};
 
     *current_recipient.lock().unwrap() = Some(sender.clone());
 
@@ -820,50 +811,6 @@ async fn handle_team(
         }
     };
 
-    // RAG: recall orchestrator topic overviews for planner context.
-    let enriched_goal = if let Some(ref handle) = memory_handle {
-        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-        let mut filter = std::collections::HashMap::new();
-        filter.insert("kind".into(), "topic_overview".into());
-        filter.insert("source".into(), "orchestrator".into());
-        match mem_svc.recall_filtered(&goal, 3, 600, &filter).await {
-            Ok(results) if !results.is_empty() => {
-                let mut enriched = String::from(
-                    "## Relevant Prior Work\n\
-                     Background only. Use this for continuity or implementation hints.\n\
-                     Do NOT treat it as additional requested deliverables, and do NOT expand scope beyond the current goal.\n",
-                );
-                for r in &results {
-                    enriched.push_str(&format!("- {}\n", r.entry.content));
-                }
-                enriched.push_str(&format!("\n## Current Goal\n{}", goal));
-                enriched
-            }
-            _ => goal.clone(),
-        }
-    } else {
-        goal.clone()
-    };
-
-    let mut tasks = match crate::adapters::task_builder::generate_plan(
-        planner_engine,
-        &enriched_goal,
-        agent_descriptions,
-    )
-    .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            pipe.send_text(
-                sender,
-                &format!("Failed to generate plan: {}", e),
-                delivery_opts,
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-
     // Build role dependency constraints from agent configs.
     let role_deps: crate::adapters::types::RoleDependencies = agent_states
         .iter()
@@ -876,57 +823,32 @@ async fn handle_team(
         })
         .collect();
 
-    let role_refs = crate::adapters::task_builder::resolve_role_refs_in_depends(&mut tasks);
-    if role_refs > 0 {
-        tracing::info!(role_refs, "Resolved role-name references in depends_on");
-    }
-    let repaired = crate::adapters::task_builder::repair_plan_dependencies(&mut tasks, &role_deps);
-    if repaired > 0 {
-        tracing::info!(repaired, "Auto-repaired plan: added {} dependency edges", repaired);
-    }
-    if let Err(e) =
-        crate::adapters::task_builder::validate_plan_dependencies(&tasks, &role_deps)
+    // Phase 1: Generate and validate plan (shared with CLI).
+    let prepared = match event_orchestrator::prepare_plan(
+        &goal,
+        planner_engine,
+        agent_descriptions,
+        &role_deps,
+        memory_handle,
+    )
+    .await
     {
-        pipe.send_text(sender, &format!("Plan rejected: {}", e), delivery_opts)
-            .await?;
-        return Ok(());
-    }
+        Ok(p) => p,
+        Err(e) => {
+            pipe.send_text(sender, &format!("Plan failed: {}", e), delivery_opts)
+                .await?;
+            return Ok(());
+        }
+    };
 
-    // Convert PlanTask → Plan for event-bus execution.
-    let live_tasks: Vec<Task> = tasks
-        .iter()
-        .map(|pt| Task {
-            id: pt.id.clone(),
-            role: pt.role.clone(),
-            description: pt.task.clone(),
-            depends_on: pt.depends_on.clone(),
-            status: TaskStatus::Pending,
-            output: None,
-            artifacts: HashMap::new(),
-            assigned_agent: None,
-            started_at: None,
-            attempt: 0,
-        })
-        .collect();
-    let live_plan = Plan::new(enriched_goal.clone(), live_tasks);
-
-    // Send plan summary.
-    let mut plan_text = format!("Plan ({} tasks, DAG dispatch):\n", tasks.len());
-    for pt in &tasks {
-        let deps = if pt.depends_on.is_empty() {
-            String::new()
-        } else {
-            format!(" (after: {})", pt.depends_on.join(", "))
-        };
-        plan_text.push_str(&format!("  - [{}] {}{}\n", pt.role, pt.task, deps));
-    }
-    pipe.send_text(sender, &plan_text, delivery_opts).await?;
-
+    pipe.send_text(sender, &prepared.summary, delivery_opts).await?;
     turn_cancel.store(false, Ordering::Relaxed);
 
-    // Determine which agents are needed and hot-reload skills.
-    let needed_agent_ids: Vec<String> = tasks
-        .iter()
+    // Hot-reload skills for needed agents.
+    let needed_agent_ids: Vec<String> = prepared
+        .plan
+        .tasks
+        .values()
         .filter_map(|t| role_to_agent.get(&t.role).cloned())
         .collect::<HashSet<_>>()
         .into_iter()
@@ -994,6 +916,7 @@ async fn handle_team(
                 secret_registry: Arc::clone(secret_registry),
                 cancel: Arc::clone(turn_cancel),
                 token_budget: Some(agent.agent_config.limits.max_tokens_per_flow as u32),
+                max_tool_rounds: agent.agent_config.limits.max_tool_rounds,
                 pipe: Arc::clone(pipe),
                 sender: sender.clone(),
                 agent_label,
@@ -1001,90 +924,50 @@ async fn handle_team(
         );
     }
 
-    // Wire EventBus and spawn agent workers.
-    let EventBus {
-        mut orchestrator_rx,
-        orchestrator_tx,
-        agent_txs,
-        mut agent_rxs,
-    } = EventBus::new(&needed_agent_ids, 32);
+    // Phase 2: Execute plan via EventBus (shared with CLI).
+    let workspace_name = agent_states
+        .get(default_agent_id)
+        .and_then(|a| a.workspace.as_ref())
+        .and_then(|ws| ws.file_name())
+        .map(|n| n.to_string_lossy().to_string());
 
-    let mut worker_handles = vec![];
-    for (agent_id, executor) in executors {
-        let rx = agent_rxs.remove(&agent_id).unwrap();
-        let tx = orchestrator_tx.clone();
-        worker_handles.push(tokio::spawn(agent_worker(agent_id, rx, tx, executor)));
-    }
-
-    drop(orchestrator_tx);
+    // Notification channel: orchestrator sends immediate failure messages here.
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(16);
+    let notify_pipe = Arc::clone(pipe);
+    let notify_sender = sender.clone();
+    let notify_opts = delivery_opts.clone();
+    let notify_handle = tokio::spawn(async move {
+        while let Some(msg) = notify_rx.recv().await {
+            let _ = notify_pipe.send_text(&notify_sender, &msg, &notify_opts).await;
+        }
+    });
 
     let ev_config = OrchestratorConfig {
         max_retries: 2,
         task_timeout: std::time::Duration::from_secs(300),
         cancel: Some(Arc::clone(turn_cancel)),
+        notifications_tx: Some(notify_tx),
         ..OrchestratorConfig::default()
     };
-    let outcome = event_orchestrator::run_orchestrator(
-        live_plan,
-        &mut orchestrator_rx,
-        &agent_txs,
+
+    let outcome = event_orchestrator::execute_plan(
+        prepared,
         role_to_agent,
+        &executors,
+        memory_handle,
+        &goal,
+        workspace_name.as_deref(),
         &ev_config,
     )
     .await;
 
-    drop(agent_txs);
-    for handle in worker_handles {
-        let _ = handle.await;
-    }
+    // Drop config (closes notifications_tx), then drain any remaining messages.
+    drop(ev_config);
+    let _ = notify_handle.await;
 
+    // Present results (Telegram-specific).
     match outcome {
         Ok(plan_outcome) => {
-            // Auto-summarize in memory.
-            if let Some(ref handle) = memory_handle {
-                let mut mem_summary = format!("Goal: {}\n\nResults:\n", goal);
-                for t in &plan_outcome.tasks {
-                    let status = match t.status {
-                        TaskStatus::Completed => "ok",
-                        TaskStatus::Failed => "failed",
-                        TaskStatus::Skipped => "skipped",
-                        _ => "unknown",
-                    };
-                    let output_preview = t
-                        .output
-                        .as_deref()
-                        .map(|o| channel_runtime::truncate_output(o, 500))
-                        .unwrap_or_default();
-                    mem_summary
-                        .push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
-                }
-                let mem_svc =
-                    MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-                let mut meta = std::collections::HashMap::new();
-                meta.insert("kind".into(), "topic_overview".into());
-                meta.insert("source".into(), "orchestrator".into());
-                meta.insert("goal".into(), goal.to_string());
-                if let Some(ws) = agent_states
-                    .get(default_agent_id)
-                    .and_then(|a| a.workspace.as_ref())
-                {
-                    if let Some(name) = ws.file_name() {
-                        meta.insert(
-                            "workspace_id".into(),
-                            name.to_string_lossy().to_string(),
-                        );
-                    }
-                }
-                match mem_svc
-                    .remember_with_metadata(&mem_summary, "orchestrator", meta)
-                    .await
-                {
-                    Ok(id) => tracing::debug!(id, "Stored topic overview in memory"),
-                    Err(e) => tracing::warn!(error = %e, "Failed to store topic overview"),
-                }
-            }
-
-            // Build Telegram summary.
             let completed = plan_outcome
                 .tasks
                 .iter()
@@ -2058,9 +1941,20 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
                 match decision {
                     Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                        if role_to_agent.contains_key(&role_key) {
+                        let orchestrator_enabled = config.orchestrator.as_ref().is_some_and(|o| o.enabled);
+                        if role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
                             info!(role = %role_key, "Classifier routed to single agent");
                             routed_role = Some(role_key);
+                        } else if role_to_agent.contains_key(&role_key) && orchestrator_enabled {
+                            info!(role = %role_key, "Classifier routed to single agent, but orchestrator enabled — using planner");
+                            let _ = handle_team(
+                                &pipe, &msg.sender, &user_text, msg.media.as_ref(),
+                                &delivery_opts, &mut agent_states, &default_agent_id,
+                                &agent_descriptions, &role_to_agent, &current_recipient,
+                                &memory_handle, &secret_registry, &approval_adapter,
+                                &turn_cancel, planner_engine.as_deref(),
+                            ).await;
+                            continue;
                         } else {
                             warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
                             let _ = handle_team(

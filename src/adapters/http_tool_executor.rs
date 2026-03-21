@@ -8,8 +8,6 @@ use reqwest::Method;
 use std::path::PathBuf;
 use crate::adapters::types::ToolCall;
 
-const MAX_RESPONSE_BYTES: usize = 200_000;
-
 pub(crate) struct HttpToolExecutionAdapter {
     client: reqwest::Client,
     workspace: PathBuf,
@@ -60,59 +58,33 @@ impl HttpToolExecutionAdapter {
 
 impl ToolExecutionPort for HttpToolExecutionAdapter {
     fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        let url = call
-            .arguments
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("http_request: missing 'url' argument"))?;
-        let method_str = call
-            .arguments
-            .get("method")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("http_request: missing 'method' argument"))?;
-        let body = call.arguments.get("body").and_then(|v| v.as_str());
-        let headers_json = call.arguments.get("headers").and_then(|v| v.as_str());
+        let url = call.arguments.get("url").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("http_request: missing 'url'"))?;
+        let method_str = call.arguments.get("method").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("http_request: missing 'method'"))?;
+        let body = arg_to_string(call, "body");
+        let headers_json = arg_to_string(call, "headers");
         let file_path = call.arguments.get("file_path").and_then(|v| v.as_str());
-        let file_field_name = call
-            .arguments
-            .get("file_field_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let auth_bearer_env = call
-            .arguments
-            .get("auth_bearer_env")
-            .and_then(|v| v.as_str());
-        let auth_basic_user_env = call
-            .arguments
-            .get("auth_basic_user_env")
-            .and_then(|v| v.as_str());
-        let auth_basic_pass_env = call
-            .arguments
-            .get("auth_basic_pass_env")
-            .and_then(|v| v.as_str());
+        let file_field_name = call.arguments.get("file_field_name")
+            .and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let auth_bearer_env = call.arguments.get("auth_bearer_env").and_then(|v| v.as_str());
+        let auth_basic_user_env = call.arguments.get("auth_basic_user_env").and_then(|v| v.as_str());
+        let auth_basic_pass_env = call.arguments.get("auth_basic_pass_env").and_then(|v| v.as_str());
+        let return_body = call.arguments.get("return_body").and_then(|v| v.as_bool()).unwrap_or(false);
 
-        // Expand $ENV_VAR in URL so skills can reference configurable endpoints.
         let url = expand_env_refs(url)?;
-
         if !url.starts_with("https://") && !url.starts_with("http://") {
             bail!("http_request: url must start with http:// or https://");
         }
-
         let method = Method::from_bytes(method_str.trim().to_uppercase().as_bytes())
             .context("http_request: invalid HTTP method")?;
 
-        let client = self.client.clone();
-        let body = body.map(|s| s.to_string());
-        let file_field_name = file_field_name.to_string();
-
-        // Read file bytes before entering async context.
         let file_data = match file_path {
             Some(fp) => {
                 let validated = validate_path(&self.workspace, fp)?;
                 let bytes = std::fs::read(&validated)
                     .map_err(|e| anyhow::anyhow!("Cannot read file '{}': {}", fp, e))?;
-                let filename = validated
-                    .file_name()
+                let filename = validated.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
                 Some((bytes, filename))
@@ -120,123 +92,108 @@ impl ToolExecutionPort for HttpToolExecutionAdapter {
             None => None,
         };
 
-        let headers = parse_headers(headers_json.unwrap_or("{}"))?;
+        let headers = parse_headers(headers_json.as_deref().unwrap_or("{}"))?;
         let auth = resolve_auth(auth_bearer_env, auth_basic_user_env, auth_basic_pass_env)?;
+        let client = self.client.clone();
 
         self.run_async(async move {
-            let response = if let Some((bytes, filename)) = file_data {
-                if file_field_name.is_empty() {
-                    // Raw body upload (e.g. S3 presigned PUT).
-                    let mut request = client.request(method, &url);
-                    request = apply_auth(request, &auth);
-                    for (key, value) in &headers {
-                        request = request.header(key, value);
-                    }
-                    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
-                        let mime = mime_from_filename(&filename);
-                        request = request.header("Content-Type", mime);
-                    }
-                    request
-                        .header("Content-Length", bytes.len().to_string())
-                        .body(bytes)
-                        .send()
-                        .await?
-                } else {
+            let is_multipart = file_data.is_some() && !file_field_name.is_empty();
+
+            // Common setup: method, url, auth, headers (once instead of per-branch).
+            let mut req = client.request(method, &url);
+            req = apply_auth(req, &auth);
+            for (key, value) in &headers {
+                if is_multipart && key.eq_ignore_ascii_case("content-type") {
+                    continue;
+                }
+                req = req.header(key, value);
+            }
+
+            let response = match file_data {
+                Some((bytes, filename)) if !file_field_name.is_empty() => {
                     // Multipart upload.
                     let mime = mime_from_filename(&filename);
                     let part = reqwest::multipart::Part::bytes(bytes)
-                        .file_name(filename)
-                        .mime_str(&mime)?;
+                        .file_name(filename).mime_str(&mime)?;
                     let mut form = reqwest::multipart::Form::new().part(file_field_name, part);
-
-                    if let Some(ref body_str) = body {
-                        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(body_str) {
-                            if let Some(map) = obj.as_object() {
-                                for (key, value) in map {
-                                    let v = match value.as_str() {
-                                        Some(s) => s.to_string(),
-                                        None => value.to_string(),
-                                    };
-                                    form = form.text(key.clone(), v);
-                                }
+                    if let Some(ref b) = body {
+                        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(b) {
+                            for (k, v) in map {
+                                form = form.text(k, v.as_str().map(String::from).unwrap_or_else(|| v.to_string()));
                             }
                         }
                     }
-
-                    let mut request = client.request(method, &url);
-                    request = apply_auth(request, &auth);
-                    for (key, value) in &headers {
-                        if !key.eq_ignore_ascii_case("content-type") {
-                            request = request.header(key, value);
+                    req.multipart(form).send().await?
+                }
+                Some((bytes, filename)) => {
+                    // Raw body upload (e.g. S3 presigned PUT).
+                    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                        req = req.header("Content-Type", mime_from_filename(&filename));
+                    }
+                    req.header("Content-Length", bytes.len().to_string())
+                        .body(bytes).send().await?
+                }
+                None => {
+                    // Standard request.
+                    if let Some(ref b) = body {
+                        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                            req = req.header("Content-Type", "application/json");
                         }
+                        req = req.body(b.clone());
                     }
-                    request.multipart(form).send().await?
+                    req.send().await?
                 }
-            } else {
-                // Standard request.
-                let mut request = client.request(method.clone(), &url);
-                request = apply_auth(request, &auth);
-                for (key, value) in &headers {
-                    request = request.header(key, value);
-                }
-                if let Some(ref body_str) = body {
-                    if !headers
-                        .iter()
-                        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
-                    {
-                        request = request.header("Content-Type", "application/json");
-                    }
-                    request = request.body(body_str.clone());
-                }
-                request.send().await?
             };
 
-            let status = response.status();
-            let resp_headers = format_response_headers(&response);
-            let text = response.text().await.unwrap_or_default();
-
-            let body_output = if text.len() > MAX_RESPONSE_BYTES {
-                let mut end = MAX_RESPONSE_BYTES;
-                while end > 0 && !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}...(truncated, {} total bytes)", &text[..end], text.len())
-            } else {
-                text
-            };
-
-            let envelope_status = if status.is_success() {
-                ToolResultStatus::Ok
-            } else {
-                ToolResultStatus::Error
-            };
-            let mut envelope = ToolResultEnvelope {
-                tool_name: "http_request".to_string(),
-                status: envelope_status,
-                summary: format!("HTTP {} {}", status.as_u16(), url),
-                ..Default::default()
-            };
-            if status.is_success() {
-                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&body_output) {
-                    envelope.raw_response = Some(json_val);
-                } else {
-                    envelope.raw_response = Some(serde_json::Value::String(body_output));
-                }
-            } else {
-                let body_json: serde_json::Value =
-                    serde_json::from_str(&body_output).unwrap_or_else(|_| {
-                        serde_json::Value::String(body_output)
-                    });
-                envelope.raw_response = Some(serde_json::json!({
-                    "status": status.as_u16(),
-                    "url": url,
-                    "headers": resp_headers,
-                    "body": body_json,
-                }));
-            }
-            envelope.to_json_string().map_err(|e| e.into())
+            format_response(&url, response, return_body).await
         })
     }
+}
+
+fn arg_to_string(call: &ToolCall, key: &str) -> Option<String> {
+    call.arguments.get(key).and_then(|v| match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    })
+}
+
+async fn format_response(url: &str, response: reqwest::Response, return_body: bool) -> Result<String> {
+    let status = response.status();
+
+    // On success without return_body, skip reading the response entirely.
+    if status.is_success() && !return_body {
+        let envelope = ToolResultEnvelope {
+            tool_name: "http_request".to_string(),
+            status: ToolResultStatus::Ok,
+            summary: format!("HTTP {} {}", status.as_u16(), url),
+            ..Default::default()
+        };
+        return envelope.to_json_string().map_err(|e| e.into());
+    }
+
+    let resp_headers = format_response_headers(&response);
+    let body_text = response.text().await.unwrap_or_default();
+    let body_json: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|_| serde_json::Value::String(body_text));
+
+    let mut envelope = ToolResultEnvelope {
+        tool_name: "http_request".to_string(),
+        status: if status.is_success() { ToolResultStatus::Ok } else { ToolResultStatus::Error },
+        summary: format!("HTTP {} {}", status.as_u16(), url),
+        ..Default::default()
+    };
+    envelope.raw_response = Some(if status.is_success() {
+        body_json
+    } else {
+        serde_json::json!({
+            "status": status.as_u16(),
+            "url": url,
+            "headers": resp_headers,
+            "body": body_json,
+        })
+    });
+    envelope.to_json_string().map_err(|e| e.into())
 }
 
 enum ResolvedAuth {
@@ -277,21 +234,12 @@ fn parse_headers(raw: &str) -> Result<Vec<(String, String)>> {
     if raw.trim().is_empty() || raw.trim() == "{}" {
         return Ok(Vec::new());
     }
-    let value: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|e| anyhow::anyhow!("headers must be a JSON object string: {}", e))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("headers must decode to a JSON object"))?;
-    let mut headers = Vec::new();
-    for (key, value) in object {
-        let v = match value.as_str() {
-            Some(s) => s.to_string(),
-            None => value.to_string(),
-        };
-        let expanded = expand_env_refs(&v)?;
-        headers.push((key.clone(), expanded));
-    }
-    Ok(headers)
+    let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw)
+        .map_err(|e| anyhow::anyhow!("headers must be a JSON object: {}", e))?;
+    object.into_iter().map(|(key, value)| {
+        let v = value.as_str().map(String::from).unwrap_or_else(|| value.to_string());
+        Ok((key, expand_env_refs(&v)?))
+    }).collect()
 }
 
 /// Expand `$UPPERCASE_VAR` tokens in a string from the process environment.
@@ -326,7 +274,6 @@ fn expand_env_refs(input: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Guess MIME type from filename extension.
 fn mime_from_filename(filename: &str) -> String {
     match filename.rsplit('.').next().map(|e| e.to_lowercase()) {
         Some(ref ext) if ext == "pdf" => "application/pdf".to_string(),

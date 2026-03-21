@@ -27,6 +27,7 @@ http_request:
   auth_bearer_env: POI_API_KEY
   file_path: <path-to-pdf>
   file_field_name: files
+  return_body: true
 ```
 
 IMPORTANT: The field name MUST be `files` (plural), not `file`. The API rejects requests with `file`.
@@ -55,7 +56,6 @@ Extract these values:
 - `data.proof.tree[0]` — the POI merkle root (first element of the tree array)
 
 Save the full response to `mint/metadata/poi_result.json` for the minting step.
-Save the merkle tree proof (i.e. `data.proof.tree[0]`) to shared_cache with key="proof", namespace="poi".
-Save the data transaction (i.e. `data.transaction.data`) to shared_cache with key="data", namespace="poi".
+The orchestrator will automatically forward these values to downstream tasks via context.
 
 IMPORTANT: After completing POI registration, immediately continue with the IP-NFT minting pipeline (ipnft-mint). Do NOT stop, report progress, or output text between POI and minting — execute both as one continuous sequence of tool calls.

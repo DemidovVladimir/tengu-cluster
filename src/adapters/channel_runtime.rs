@@ -212,7 +212,10 @@ pub(crate) fn build_tool_executor(
     .map(|n| n.to_string())
     .collect();
     if !crypto_tool_names.is_empty() {
-        if let Ok(crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+        if let Ok(mut crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+            if let Some(ref flag) = cancel {
+                crypto_exec = crypto_exec.with_cancel(Arc::clone(flag));
+            }
             composite = composite.with_executor(Arc::new(crypto_exec), crypto_tool_names);
         }
     }

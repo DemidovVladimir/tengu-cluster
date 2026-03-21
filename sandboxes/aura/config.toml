@@ -1,0 +1,83 @@
+# Tengu Cluster — DeSci Sandbox
+# Multi-agent team for Decentralized Science workflows:
+# PDF research → IPNFT minting → Molecule project → Beach.science publishing.
+# Run with: tengu orchestrate --sandbox desci
+# Or Telegram: tengu telegram --sandbox desci
+
+runtime_profile = "cloud"
+
+[hub]
+bind = "127.0.0.1"
+port = 7071
+
+[memory]
+enabled = true
+
+[telegram]
+tool_approvals = true
+approve_only = ["sign_and_send_transaction"]
+
+[orchestrator]
+enabled = true
+max_retries = 2
+planner_engine = "openrouter"
+planner_model = "anthropic/claude-sonnet-4"
+
+# --- Scaffold ---
+# Root workspace with working directories created at startup.
+[scaffold]
+root = "~/aura-workspace"
+directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
+
+# Per-project template: applied by /project <name> inside {root}/{name}/
+[scaffold.project]
+directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
+
+[[scaffold.project.files]]
+path = "README.md"
+content = """# DeSci Project
+- `poi/` — Proof of Invention registration
+- `mint/` — Minting metadata and logs
+- `create_molecule/` — Molecule project creation
+- `uploads/` — Molecule data room uploads
+- `posts/` — Beach.science post records
+"""
+
+[agents.aura]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4"
+role = "aura"
+default = true
+requires = []
+workspace = "~/aura-workspace"
+skill_packages = ["aura-orchestrator", "beach-science", "privy"]
+
+[agents.aura.limits]
+# Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
+max_tokens_per_flow = 5_000_000
+
+[agents.aura.identity]
+name = "Aura DeSci Agent"
+instructions = """You are the single DeSci agent handling the ENTIRE pipeline: document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
+
+## You have those capabilities, which need to be executed sequentially as one continuous flow without stopping or reporting intermediate progress:
+1. POI Registration
+2. IP-NFT Minting 
+3. Authenticate — follow molecule-auth skill
+4. Create project — follow molecule-project skill
+5. Upload file — follow molecule-upload skill (3-step: initiate → S3 PUT → finalize)
+6. Create announcement — follow molecule-announcement skill
+7. Extract title, key_findings, ipnft_symbol, ipnft_uid, and project_url from the previous steps.
+8. Compose a Beach.science hypothesis post with:
+   - Core hypothesis and findings
+   - Clickable Markdown links: [View on Molecule]({project_url})
+     If project_url is not available, construct it as: https://testnet.molecule.xyz/ipnfts/{ipnftTokenId}
+     where ipnftTokenId is the decimal reservation/token ID (numeric only, NOT the full ipnft_uid with contract prefix).
+9. POST to Beach.science API using http_request as documented in beach-science skill
+   - Authenticate with auth_bearer_env="BEACH_API_KEY"
+   - Use return_body=true to capture the post URL from the response
+10. Save result to posts/beach_post_result.txt
+11. Transfer the minted IP-NFT from the Privy agentic wallet to the owner's personal wallet and add the owner as a Molecule project co-owner
+
+"""
+

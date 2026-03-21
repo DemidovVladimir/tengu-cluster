@@ -50,11 +50,18 @@ pub(crate) fn extract_artifacts(tool_outcomes: &[(String, String)]) -> HashMap<S
 
 /// Classify whether an error message indicates a retryable failure.
 fn is_retryable(error: &str) -> bool {
+    // Hard failures from http_request / transactions are never retryable.
+    if error.contains("no retries allowed") || error.contains("must not be retried") {
+        return false;
+    }
     error.contains("timed out")
         || error.contains("rate limit")
         || error.contains("HTTP 429")
         || error.contains("HTTP 502")
         || error.contains("HTTP 503")
+        || error.contains("response body")
+        || error.contains("connection closed")
+        || error.contains("connection reset")
 }
 
 /// Long-lived worker loop for a single agent. Listens on its dedicated

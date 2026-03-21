@@ -17,6 +17,15 @@ use tokio::sync::mpsc;
 /// Longer outputs use Tier 2 LLM summarization when a planner engine is available.
 const SHORT_OUTPUT_THRESHOLD: usize = 4000;
 
+/// Artifacts that are internal to a task and useless for downstream agents.
+/// These are large blobs (calldata, raw signatures) that waste context tokens.
+fn should_skip_artifact(key: &str) -> bool {
+    key.contains("calldata")
+        || key.starts_with("sign_message.id.signature")
+        || key.starts_with("sign_message.id.signer")
+        || key.starts_with("sign_and_send_transaction.id.chain_id")
+}
+
 /// Extract a structured output block from an agent's response.
 /// Looks for patterns like `RESEARCH_OUTPUT:`, `MINT_OUTPUT:`, `MOL_LABS_OUTPUT:` etc.
 /// Returns the block content if found, otherwise None.
@@ -81,6 +90,9 @@ pub(crate) struct OrchestratorConfig {
     /// Optional external cancel flag (e.g., from Telegram /stop).
     /// Checked in the event loop — when set, remaining tasks are skipped.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional notification channel for immediate feedback to the user
+    /// (e.g., task failures sent to Telegram as they happen, not batched).
+    pub notifications_tx: Option<mpsc::Sender<String>>,
 }
 
 impl Default for OrchestratorConfig {
@@ -92,6 +104,7 @@ impl Default for OrchestratorConfig {
             planner: None,
             max_tokens_per_run: 2_000_000,
             cancel: None,
+            notifications_tx: None,
         }
     }
 }
@@ -105,6 +118,7 @@ impl std::fmt::Debug for OrchestratorConfig {
             .field("planner", &self.planner.is_some())
             .field("max_tokens_per_run", &self.max_tokens_per_run)
             .field("cancel", &self.cancel.is_some())
+            .field("notifications", &self.notifications_tx.is_some())
             .finish()
     }
 }
@@ -173,6 +187,227 @@ fn plan_outcome(plan: &Plan) -> PlanOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// Shared orchestration pipeline (used by CLI + Telegram)
+// ---------------------------------------------------------------------------
+
+/// Result of plan preparation — ready for execution.
+#[allow(dead_code)]
+pub(crate) struct PreparedPlan {
+    pub plan: Plan,
+    pub enriched_goal: String,
+    /// Human-readable plan summary for display.
+    pub summary: String,
+}
+
+/// Phase 1: Enrich goal with memory, generate plan, validate dependencies.
+/// Channel adapters call this, display the summary, then call `execute_plan`.
+pub(crate) async fn prepare_plan(
+    goal: &str,
+    planner_engine: &dyn Engine,
+    agent_descriptions: &HashMap<String, String>,
+    role_deps: &crate::adapters::types::RoleDependencies,
+    memory_handle: &Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
+) -> anyhow::Result<PreparedPlan> {
+    use crate::adapters::memory_builder::MemoryService;
+    use crate::adapters::task_builder;
+    use crate::adapters::types::{Task, TaskStatus};
+
+    // RAG: recall orchestrator topic overviews for planner context.
+    let enriched_goal = if let Some(ref handle) = memory_handle {
+        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+        let mut filter = HashMap::new();
+        filter.insert("kind".into(), "topic_overview".into());
+        filter.insert("source".into(), "orchestrator".into());
+        match mem_svc.recall_filtered(goal, 3, 600, &filter).await {
+            Ok(results) if !results.is_empty() => {
+                let mut enriched = String::from(
+                    "## Relevant Prior Work\n\
+                     Background only. Use this for continuity or implementation hints.\n\
+                     Do NOT treat it as additional requested deliverables, and do NOT expand scope beyond the current goal.\n",
+                );
+                for r in &results {
+                    enriched.push_str(&format!("- {}\n", r.entry.content));
+                }
+                enriched.push_str(&format!("\n## Current Goal\n{}", goal));
+                enriched
+            }
+            _ => goal.to_string(),
+        }
+    } else {
+        goal.to_string()
+    };
+
+    // Generate plan via planner LLM.
+    let mut tasks = task_builder::generate_plan(planner_engine, &enriched_goal, agent_descriptions).await?;
+
+    // Resolve role-name references, auto-repair dependencies, validate.
+    let role_refs = task_builder::resolve_role_refs_in_depends(&mut tasks);
+    if role_refs > 0 {
+        tracing::info!(role_refs, "Resolved role-name references in depends_on");
+    }
+    let repaired = task_builder::repair_plan_dependencies(&mut tasks, role_deps);
+    if repaired > 0 {
+        tracing::info!(repaired, "Auto-repaired plan: added {} dependency edges", repaired);
+    }
+    task_builder::validate_plan_dependencies(&tasks, role_deps)?;
+
+    // Build human-readable summary.
+    let mut summary = format!("Plan ({} tasks, DAG dispatch):\n", tasks.len());
+    for pt in &tasks {
+        let deps = if pt.depends_on.is_empty() {
+            String::new()
+        } else {
+            format!(" (after: {})", pt.depends_on.join(", "))
+        };
+        summary.push_str(&format!("  - [{}] {}{}\n", pt.role, pt.task, deps));
+    }
+
+    // Convert PlanTask → live Plan.
+    let live_tasks: Vec<Task> = tasks
+        .iter()
+        .map(|pt| Task {
+            id: pt.id.clone(),
+            role: pt.role.clone(),
+            description: pt.task.clone(),
+            depends_on: pt.depends_on.clone(),
+            status: TaskStatus::Pending,
+            output: None,
+            artifacts: HashMap::new(),
+            assigned_agent: None,
+            started_at: None,
+            attempt: 0,
+            last_error: None,
+        })
+        .collect();
+    let plan = crate::adapters::types::Plan::new(enriched_goal.clone(), live_tasks);
+
+    Ok(PreparedPlan {
+        plan,
+        enriched_goal,
+        summary,
+    })
+}
+
+/// Phase 2: Wire EventBus, spawn agent workers, run the orchestrator loop,
+/// store memory summary. Returns the final PlanOutcome.
+pub(crate) async fn execute_plan(
+    prepared: PreparedPlan,
+    role_to_agent: &HashMap<String, String>,
+    executors: &HashMap<String, Arc<dyn crate::adapters::types::AgentTaskExecutor>>,
+    memory_handle: &Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
+    original_goal: &str,
+    workspace_name: Option<&str>,
+    config: &OrchestratorConfig,
+) -> Result<PlanOutcome, String> {
+    use crate::adapters::agent_builder::agent_worker;
+    use crate::adapters::memory_builder::MemoryService;
+    use crate::adapters::types::EventBus;
+    use std::collections::HashSet;
+
+    // Determine which agents are needed for this plan.
+    let needed_agent_ids: Vec<String> = prepared
+        .plan
+        .tasks
+        .values()
+        .filter_map(|t| role_to_agent.get(&t.role).cloned())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Create per-plan EventBus + spawn workers.
+    let EventBus {
+        mut orchestrator_rx,
+        orchestrator_tx,
+        agent_txs,
+        mut agent_rxs,
+    } = EventBus::new(&needed_agent_ids, 32);
+
+    let mut worker_handles = vec![];
+    for agent_id in &needed_agent_ids {
+        if let Some(executor) = executors.get(agent_id) {
+            let rx = agent_rxs.remove(agent_id).unwrap();
+            let tx = orchestrator_tx.clone();
+            worker_handles.push(tokio::spawn(agent_worker(
+                agent_id.clone(),
+                rx,
+                tx,
+                Arc::clone(executor),
+            )));
+        }
+    }
+    drop(orchestrator_tx);
+
+    // Run the orchestrator event loop.
+    let outcome = run_orchestrator(
+        prepared.plan,
+        &mut orchestrator_rx,
+        &agent_txs,
+        role_to_agent,
+        config,
+    )
+    .await;
+
+    // Shut down workers.
+    drop(agent_txs);
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+
+    // Store topic overview in memory for future RAG enrichment.
+    // Skip storing if no tasks completed — failed/skipped runs add noise.
+    if let (Ok(ref plan_outcome), Some(ref handle)) = (&outcome, memory_handle) {
+        let has_completed = plan_outcome
+            .tasks
+            .iter()
+            .any(|t| t.status == TaskStatus::Completed);
+        if !has_completed {
+            tracing::debug!("Skipping topic overview storage — no completed tasks");
+        } else {
+        // Strip file attachment paths from the goal — they are ephemeral and
+        // would pollute future plan prompts when recalled as prior work.
+        let clean_goal: String = original_goal
+            .lines()
+            .filter(|line| !line.starts_with("[Attached file:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut mem_summary = format!("Goal: {}\n\nResults:\n", clean_goal.trim());
+        for t in &plan_outcome.tasks {
+            let status = match t.status {
+                TaskStatus::Completed => "ok",
+                TaskStatus::Failed => "failed",
+                TaskStatus::Skipped => "skipped",
+                _ => "unknown",
+            };
+            let output_preview = t
+                .output
+                .as_deref()
+                .map(|o| crate::adapters::channel_runtime::truncate_output(o, 500))
+                .unwrap_or_default();
+            mem_summary.push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
+        }
+
+        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+        let mut meta = HashMap::new();
+        meta.insert("kind".into(), "topic_overview".into());
+        meta.insert("source".into(), "orchestrator".into());
+        meta.insert("goal".into(), original_goal.to_string());
+        if let Some(name) = workspace_name {
+            meta.insert("workspace_id".into(), name.to_string());
+        }
+        match mem_svc
+            .remember_with_metadata(&mem_summary, "orchestrator", meta)
+            .await
+        {
+            Ok(id) => tracing::debug!(id, "Stored topic overview in memory"),
+            Err(e) => tracing::warn!(error = %e, "Failed to store topic overview"),
+        }
+        } // else (has_completed)
+    }
+
+    outcome
+}
+
+// ---------------------------------------------------------------------------
 // Tier 1 data routing
 // ---------------------------------------------------------------------------
 
@@ -197,8 +432,12 @@ pub(crate) fn build_task_context(
         let mut all_fields: HashMap<String, String> = HashMap::new();
 
         // In-memory artifacts (tool envelopes + structured block fields).
+        // Filter out bulky/internal artifacts that downstream agents don't need.
         if let Some(dep_task) = plan.tasks.get(dep_id) {
             for (k, v) in &dep_task.artifacts {
+                if should_skip_artifact(k) {
+                    continue;
+                }
                 let val_str = match v {
                     Value::String(s) => s.clone(),
                     other => serde_json::to_string(other).unwrap_or_default(),
@@ -327,6 +566,7 @@ async fn summarize_for_downstream(
         None,
         None,
         Some(2000),
+        None,
     )
     .await
     .map_err(|e| format!("Tier 2 summarization failed: {e}"))?;
@@ -400,12 +640,12 @@ async fn dispatch_task(
     role_to_agent: &HashMap<String, AgentId>,
     planner: Option<&dyn Engine>,
 ) -> Result<(), String> {
-    let (role, raw_description) = {
+    let (role, raw_description, last_error, attempt) = {
         let task = plan
             .tasks
             .get(task_id)
             .ok_or_else(|| format!("task {task_id} not found"))?;
-        (task.role.clone(), task.description.clone())
+        (task.role.clone(), task.description.clone(), task.last_error.clone(), task.attempt)
     };
 
     let agent_id = role_to_agent
@@ -425,7 +665,17 @@ async fn dispatch_task(
     task.assigned_agent = Some(agent_id.clone());
     task.started_at = Some(Instant::now());
 
-    let rendered_prompt = format_task_prompt(&plan.goal, &raw_description, &context);
+    // On retry, include the previous error so the agent takes a different approach.
+    let description = if let Some(ref error) = last_error {
+        format!(
+            "{}\n\n## Previous Attempt Failed (attempt {})\nError: {}\n\nDo NOT repeat the same approach. Analyze what went wrong and try a different strategy.",
+            raw_description, attempt, error
+        )
+    } else {
+        raw_description.clone()
+    };
+
+    let rendered_prompt = format_task_prompt(&plan.goal, &description, &context);
 
     // Log the full context being passed to this task.
     for (dep_id, dep_data) in &context {
@@ -469,8 +719,8 @@ async fn dispatch_task(
 // Error handling
 // ---------------------------------------------------------------------------
 
-/// Handle a failed task: retry if eligible, otherwise fail permanently and
-/// cascade-skip all transitive dependents.
+/// Handle a failed task: retry with error context if eligible, otherwise fail
+/// permanently, cascade-skip dependents, and notify the user immediately.
 fn handle_task_error(
     plan: &mut Plan,
     task_id: &TaskId,
@@ -484,11 +734,27 @@ fn handle_task_error(
 
     if retryable && task.attempt < config.max_retries {
         task.attempt += 1;
+        // Store error so the retry prompt includes it — prevents the agent
+        // from repeating the exact same approach that failed.
+        task.last_error = Some(error.to_string());
         task.status = TaskStatus::Pending;
-        tracing::info!(task = %task_id, attempt = task.attempt, "Retrying failed task");
+        tracing::info!(task = %task_id, attempt = task.attempt, "Retrying failed task with error context");
     } else {
         task.status = TaskStatus::Failed;
+        task.last_error = Some(error.to_string());
         tracing::error!(task = %task_id, error = %error, "Task failed permanently");
+
+        // Notify user immediately — don't wait for plan completion.
+        if let Some(ref tx) = config.notifications_tx {
+            let truncated_error = if error.len() > 500 {
+                format!("{}...", &error[..500])
+            } else {
+                error.to_string()
+            };
+            let msg = format!("Task '{}' failed: {}", task_id, truncated_error);
+            let _ = tx.try_send(msg);
+        }
+
         cascade_skip(plan, task_id);
     }
 }
@@ -677,6 +943,7 @@ pub(crate) async fn run_orchestrator(
 
                                 if let Some(task) = plan.tasks.get_mut(&task_id) {
                                     task.status = TaskStatus::Completed;
+                                    task.last_error = None; // Clear on success (may have been set by prior failed attempt).
                                     // Extract structured output block fields and merge into artifacts.
                                     // This captures LLM-computed values (token_id, ipnft_symbol, project_url)
                                     // that don't appear in tool envelopes.

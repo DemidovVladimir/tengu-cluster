@@ -20,14 +20,10 @@ IMPORTANT: Execute ALL 10 steps in sequence using tool calls. Do NOT stop mid-pi
 
 ## Input
 
-Get these values from shared_cache (namespace="poi"):
-- `data` — the data transaction (i.e. `data.transaction.data` from `poi_result.json`)
-- `proof` — the POI merkle root (i.e. `data.proof.tree[0]` from `poi_result.json`)
-
-Extract:
-- `data.to` → use as `to` in step 1
-- `data.data` → use as `data` in step 1
-- `proof` → this is the `merkle_root`
+These values come from the orchestrator context (provided by the upstream POI registration task) or from `mint/metadata/poi_result.json`:
+- `data.transaction.to` → use as `to` in step 1
+- `data.transaction.data` → use as `data` in step 1
+- `data.proof.tree[0]` → this is the `merkle_root`
 
 Get your wallet address via `get_wallet_address`.
 
@@ -59,6 +55,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 GraphQL mutation:
@@ -101,6 +98,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -135,6 +133,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -177,6 +176,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -208,6 +208,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -267,11 +268,4 @@ Save to `mint/metadata/mint_result.json`:
 
 The `ipnft_uid` for downstream steps is: `{contract_address}_{token_id}`
 
-Save the `reservationId` to shared_cache with key="reservation_id", namespace="mint" for downstream steps.
-Save the `token_id` to shared_cache with key="token_id", namespace="mint" for downstream steps.
-Save the `metadata_cid` to shared_cache with key="metadata_cid", namespace="mint" for downstream steps.
-Save the `ipnft_uid` to shared_cache with key="ipnft_uid", namespace="mint" for downstream steps.
-Save the `contract_address` to shared_cache with key="contract_address", namespace="mint" for downstream steps.
-Save the `poi_tx_hash` to shared_cache with key="poi_tx_hash", namespace="mint" for downstream steps.
-Save the `mint_tx_hash` to shared_cache with key="mint_tx_hash", namespace="mint" for downstream steps.
-Save the `ipnft_symbol` to shared_cache with key="ipnft_symbol", namespace="mint" for downstream steps.
+The orchestrator will automatically forward these values to downstream tasks via context.

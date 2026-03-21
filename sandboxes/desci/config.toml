@@ -36,41 +36,11 @@ directories = ["research", "research/summaries", "mint", "mint/metadata", "uploa
 [[scaffold.project.files]]
 path = "README.md"
 content = """# DeSci Project
-
 - `research/` — Analysis summaries, hypothesis drafts
 - `mint/` — Minting metadata and logs
 - `uploads/` — Molecule data room uploads
 - `posts/` — Beach.science post records
 """
-
-# --- Agents ---
-# All pipeline agents share ~/desci-workspace and have shared_cache enabled.
-# The cache lives at ~/desci-workspace/.tengu/cache.db (inspectable with sqlite3).
-# Debug with: tengu cache list --workspace ~/desci-workspace
-#
-# Data flow contract:
-#
-#   hypothesis_researcher
-#     PRODUCES: research/summaries/summary.md, research/hypothesis.md
-#     CACHE PUT: "research" namespace — title, key_findings
-#
-#   onchain_minter (depends on: hypothesis_researcher)
-#     READS: .tengu-attachments/*.pdf (the original PDF)
-#     PRODUCES: mint/metadata/poi_result.json, mint/metadata/mint_result.json
-#     CACHE PUT: "mint" namespace — token_id, mint_tx_hash, poi_tx_hash,
-#       metadata_cid, ipnft_symbol, ipnft_uid, contract_address
-#
-#   mol_labs (depends on: onchain_minter)
-#     CACHE GET: "mint" namespace (ipnft_symbol, token_id, contract_address)
-#     PRODUCES: uploads/project_result.json, uploads/upload_result.json
-#     CACHE PUT: "molecule" namespace — ipnft_uid, ipnft_token_id, project_url
-#
-#   beach_scientist (depends on: hypothesis_researcher, onchain_minter, mol_labs)
-#     CACHE GET: "research", "mint", "molecule" namespaces
-#     PRODUCES: posts/beach_post_result.json
-#
-#   custodian (depends on: onchain_minter, mol_labs)
-#     CACHE GET: "mint", "molecule" namespaces
 
 [agents.hypothesis_researcher]
 engine = "openrouter"
@@ -79,7 +49,6 @@ role = "hypothesis_researcher"
 default = true
 workspace = "~/desci-workspace"
 skill_packages = []
-workspace_tools = ["shared_cache"]
 
 [agents.hypothesis_researcher.identity]
 name = "Hypothesis Researcher"
@@ -91,13 +60,9 @@ Workflow:
 2. Analyze the document: hypotheses, methodology, findings, conclusions
 3. Write research summary to research/summaries/summary.md
 4. Write hypothesis draft to research/hypothesis.md
-5. Store key results in shared_cache (namespace="research") so downstream agents can retrieve them:
-   - key="title", value=JSON string of the hypothesis title
-   - key="key_findings", value=JSON string of 2-3 sentence summary
-   - key="summary_path", value='"research/summaries/summary.md"'
-   - key="hypothesis_path", value='"research/hypothesis.md"'
 
-Ground analysis in the actual document. Do NOT fabricate findings."""
+Ground analysis in the actual document. Do NOT fabricate findings.
+The orchestrator will automatically forward your output to downstream tasks."""
 
 [agents.hypothesis_researcher.flow]
 scope = "per-sender"
@@ -113,11 +78,10 @@ role = "onchain_minter"
 requires = ["hypothesis_researcher"]
 workspace = "~/desci-workspace"
 skill_packages = ["poi-register", "ipnft-mint"]
-workspace_tools = ["shared_cache"]
 
 [agents.onchain_minter.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
-max_tokens_per_flow = 300_000
+max_tokens_per_flow = 500_000
 
 [agents.onchain_minter.identity]
 name = "On-Chain Minter"
@@ -126,7 +90,7 @@ Use tools with paths relative to workspace root. Never guess paths.
 
 ## What you need from upstream
 - The original PDF file in .tengu-attachments/ — find it with list_directory(".tengu-attachments")
-- Title and description for the IPNFT from shared_cache (namespace="research", keys="title" and "key_findings")
+- Title and description for the IPNFT — provided in the orchestrator context from the research task
 
 ## You have only 2 capabilities, which need to be executed sequentially as one continuous flow without stopping or reporting intermediate progress:
 1. POI Registration
@@ -139,175 +103,135 @@ reset_mode = "idle"
 idle_timeout_minutes = 60 
 
 
-# [agents.mol_labs]
-# engine = "openrouter"
-# # mol_labs has 4-phase workflow: auth + GraphQL project + S3 upload + announcement.
-# # Free models browse the filesystem instead of reading context.
-# model = "anthropic/claude-sonnet-4"
-# role = "mol_labs"
-# requires = ["onchain_minter"]
-# workspace = "~/desci-workspace"
-# skill_packages = ["molecule-auth", "molecule-project", "molecule-upload", "molecule-announcement"]
-# workspace_tools = ["shared_cache"]
+[agents.mol_labs]
+engine = "openrouter"
+# mol_labs has 4-phase workflow: auth + GraphQL project + S3 upload + announcement.
+# Free models browse the filesystem instead of reading context.
+model = "anthropic/claude-sonnet-4"
+role = "mol_labs"
+requires = ["onchain_minter"]
+workspace = "~/desci-workspace"
+skill_packages = ["molecule-auth", "molecule-project", "molecule-upload", "molecule-announcement"]
 
-# [agents.mol_labs.identity]
-# name = "Molecule Labs Manager"
-# instructions = """
-# You are a Molecule DeSci Labs project manager.
-# Use tools with paths relative to workspace root.
+[agents.mol_labs.identity]
+name = "Molecule Labs Manager"
+instructions = """
+You are a Molecule DeSci Labs project manager.
+Use tools with paths relative to workspace root.
 
-# ## What you need from upstream
-# First try shared_cache get (namespace="mint", key="result") to retrieve minting data.
-# If the cache misses, fall back to your prompt context under "Context from upstream tasks".
+## Important: use upstream context
+When orchestrated, upstream context (mint data, wallet address, etc.) is provided directly in the task prompt.
+Use those values directly — do not re-fetch them from files or other sources.
 
-# From the minting data, extract:
-# - token_id
-# - ipnft_symbol
-# - contract_address (always: 0x152B444e60C526fe4434C721561a077269FcF61a)
-# - ipnft_uid = contract_address + "_" + token_id
+## Your workflow has exactly 4 phases IN ORDER, all 4 must be completed in one continuous flow without stopping or reporting intermediate progress:
+1. Authenticate — follow molecule-auth skill
+2. Create project — follow molecule-project skill
+3. Upload file — follow molecule-upload skill (3-step: initiate → S3 PUT → finalize)
+4. Create announcement — follow molecule-announcement skill
+"""
 
-# ## Your workflow has exactly 4 phases IN ORDER:
-# 1. Authenticate — follow molecule-auth skill:
-#    a. get_wallet_address → wallet_address
-#    b. http_request to get sign-in message
-#    c. sign_message to sign the message
-#    d. http_request to get service token
-#    e. Save token to uploads/service_token.txt
-# 2. Create project — follow molecule-project skill:
-#    - Use ipnft_symbol and token_id
-#    - Save result to uploads/project_result.json with fields: ipnft_uid, ipnft_token_id, project_url
-#    - project_url format: $MOLECULE_CLIENT_URL/ipnfts/{token_id}
-# 3. Upload file — follow molecule-upload skill (3-step: initiate → S3 PUT → finalize):
-#    - Upload the original PDF from .tengu-attachments/
-#    - IMPORTANT: After creating a project, wait a few seconds before uploading
-#    - If finalize returns dataRoom:null, wait 10 seconds and retry once
-#    - Save result to uploads/upload_result.json
-# 4. Create announcement — follow molecule-announcement skill:
-#    - Use ipnft_uid from step 2
-#    - Save result to uploads/announcement_result.json
+[agents.mol_labs.limits]
+max_tokens_per_flow = 5_000_000
+max_tool_rounds = 50
 
-# ## What you must produce
-# After completing all phases, store the result in shared_cache (namespace="molecule", key="result"):
-# ```json
-# {
-#   "ipnft_uid": "<uid>",
-#   "ipnft_token_id": "<id>",
-#   "project_url": "<exact URL>"
-# }
-# ```"""
+[agents.mol_labs.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
 
-# [agents.mol_labs.prompt_budget]
-# max_skill_context_tokens = 12000
-# # 4-phase workflow: auth + project + S3 upload + announcement — multiple tool calls each.
-# max_total_tokens = 96000
+[agents.beach_scientist]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4"
+role = "beach_scientist"
+requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]
+workspace = "~/desci-workspace"
+skill_packages = ["beach-science"]
 
-# [agents.mol_labs.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-# idle_timeout_minutes = 30
+[agents.beach_scientist.identity]
+name = "Beach Scientist"
+instructions = """You are a DeSci science communicator who publishes to Beach.science.
 
-# [agents.beach_scientist]
-# engine = "openrouter"
-# model = "nvidia/nemotron-3-super-120b-a12b:free"
-# role = "beach_scientist"
-# requires = ["hypothesis_researcher", "onchain_minter", "mol_labs"]
-# workspace = "~/desci-workspace"
-# skill_packages = ["beach-science"]
-# workspace_tools = ["shared_cache"]
+## What you need from upstream
+When orchestrated, upstream context is provided in the task prompt — use it directly.
+Values available from context: title, key_findings, ipnft_symbol, ipnft_uid, project_url.
 
-# [agents.beach_scientist.identity]
-# name = "Beach Scientist"
-# instructions = """You are a DeSci science communicator who publishes to Beach.science.
+## Your workflow
+1. Extract title, key_findings, ipnft_symbol, ipnft_uid, and project_url from the provided upstream context.
+2. Compose a Beach.science hypothesis post with:
+   - Core hypothesis and findings
+   - Clickable Markdown links: [View on Molecule]({project_url})
+     If project_url is not available, construct it as: https://testnet.molecule.xyz/ipnfts/{ipnftTokenId}
+     where ipnftTokenId is the decimal reservation/token ID (numeric only, NOT the full ipnft_uid with contract prefix).
+3. POST to Beach.science API using http_request as documented in beach-science skill
+   - Authenticate with auth_bearer_env="BEACH_API_KEY"
+   - Use return_body=true to capture the post URL from the response
+4. Save result to posts/beach_post_result.txt
+"""
 
-# ## What you need from upstream
-# Retrieve data from shared_cache before composing the post:
-# 1. shared_cache get namespace="research" key="title" → hypothesis title
-# 2. shared_cache get namespace="research" key="key_findings" → findings summary
-# 3. shared_cache get namespace="mint" key="result" → mint_tx_hash for Etherscan link
-# 4. shared_cache get namespace="molecule" key="result" → project_url for Molecule link
+[agents.beach_scientist.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
 
-# If any cache entry is missing, fall back to your prompt context under "Context from upstream tasks".
 
-# ## Your workflow
-# 1. Retrieve upstream data from shared_cache (see above).
-# 2. Compose a Beach.science hypothesis post with:
-#    - Core hypothesis and findings from the research context
-#    - Clickable Markdown links: [View on Molecule]({project_url}) and [View on Etherscan](https://sepolia.etherscan.io/tx/{mint_tx_hash})
-# 3. POST to Beach.science API using http_request as documented in beach-science skill
-#    - Authenticate with auth_bearer_env="BEACH_API_KEY"
-# 4. Save result to posts/beach_post_result.json
+[agents.beach_scientist.limits]
+max_tokens_per_flow = 1_000_000
 
-# ## URL RULES
-# - Etherscan URL = https://sepolia.etherscan.io/tx/{mint_tx_hash} from context
-# - Molecule project URL = project_url from shared_cache or context
-# - If a URL is not available, omit the link — do NOT try to read files
-# - NEVER include internal data: merkle roots, metadata CIDs, reservation IDs, wallet addresses"""
+[agents.custodian]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "custodian"
+requires = ["onchain_minter", "mol_labs", "beach_scientist"]
+workspace = "~/desci-workspace"
+skill_packages = []
 
-# [agents.beach_scientist.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-# idle_timeout_minutes = 30
+[agents.custodian.identity]
+name = "NFT Custodian"
+instructions = """You transfer the minted IP-NFT from the Privy agentic wallet to the owner's personal wallet and add the owner as a Molecule project co-owner.
 
-# [agents.custodian]
-# engine = "openrouter"
-# model = "nvidia/nemotron-3-super-120b-a12b:free"
-# role = "custodian"
-# requires = ["onchain_minter", "mol_labs", "beach_scientist"]
-# workspace = "~/desci-workspace"
-# skill_packages = []
-# workspace_tools = ["shared_cache"]
+## What you need from upstream
+When orchestrated, upstream context is provided in the task prompt — use it directly.
+Values available from context:
+- contract_address (from mint_ipnft artifacts: sign_and_send_transaction.id.to)
+- token_id (from mint artifacts)
+- ipnft_uid (from mint artifacts)
+- wallet address (from mint artifacts: get_wallet_address.id.address)
 
-# [agents.custodian.identity]
-# name = "NFT Custodian"
-# instructions = """You transfer the minted IP-NFT from the Privy agentic wallet to the owner's personal wallet and add the owner as a Molecule project co-owner.
+Use http_request (with return_body=true) for Molecule GraphQL calls and sign_and_send_transaction for the NFT transfer.
+If EVM_WALLET_ADDRESS is not set or equals the Privy wallet, report that no transfer is needed."""
 
-# ## What you need from upstream
-# Retrieve data from shared_cache:
-# 1. shared_cache get namespace="mint" key="result" → token_id, contract_address
-# 2. shared_cache get namespace="molecule" key="result" → ipnft_uid
+[agents.custodian.limits]
+max_tokens_per_flow = 300_000
 
-# If cache misses, fall back to prompt context under "Context from upstream tasks".
-# - contract_address is always: 0x152B444e60C526fe4434C721561a077269FcF61a
-# - ipnft_uid format: {contract_address}_{token_id}
+[agents.custodian.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
 
-# Use http_request for Molecule GraphQL calls and sign_and_send_transaction for the NFT transfer.
+[agents.wallet_manager]
+engine = "openrouter"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+role = "wallet_manager"
+workspace = "~/desci-workspace"
+skill_packages = ["privy"]
 
-# If EVM_WALLET_ADDRESS is not set or equals the Privy wallet, report that no transfer is needed."""
+[agents.wallet_manager.identity]
+name = "Wallet Manager"
+instructions = """You are a Privy agentic wallet operator. You manage server-side EVM wallets: create policies, create wallets, send transactions, sign messages, and check balances.
 
-# [agents.custodian.prompt_budget]
-# max_skill_context_tokens = 4000
-# max_total_tokens = 8000
+Use http_request for all Privy API calls as documented in the privy skill.
+Authenticate with auth_basic_user_env="PRIVY_APP_ID", auth_basic_pass_env="PRIVY_APP_SECRET".
 
-# [agents.custodian.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-# idle_timeout_minutes = 30
+Security rules:
+- NEVER create a wallet without a policy attached
+- NEVER expose PRIVY_APP_SECRET in output or files
+- ALWAYS confirm transaction details with the user before executing
+- Write audit logs to wallet/ directory for all transaction operations"""
 
-# [agents.wallet_manager]
-# engine = "openrouter"
-# model = "nvidia/nemotron-3-super-120b-a12b:free"
-# role = "wallet_manager"
-# workspace = "~/desci-workspace"
-# skill_packages = ["privy"]
+[agents.wallet_manager.limits]
+max_tokens_per_flow = 200_000
 
-# [agents.wallet_manager.identity]
-# name = "Wallet Manager"
-# instructions = """You are a Privy agentic wallet operator. You manage server-side EVM wallets: create policies, create wallets, send transactions, sign messages, and check balances.
-
-# Use http_request for all Privy API calls as documented in the privy skill.
-# Authenticate with auth_basic_user_env="PRIVY_APP_ID", auth_basic_pass_env="PRIVY_APP_SECRET".
-
-# Security rules:
-# - NEVER create a wallet without a policy attached
-# - NEVER expose PRIVY_APP_SECRET in output or files
-# - ALWAYS confirm transaction details with the user before executing
-# - Write audit logs to wallet/ directory for all transaction operations"""
-
-# [agents.wallet_manager.prompt_budget]
-# max_skill_context_tokens = 16000
-# max_total_tokens = 32000
-
-# [agents.wallet_manager.flow]
-# scope = "per-sender"
-# reset_mode = "idle"
-# idle_timeout_minutes = 30
+[agents.wallet_manager.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30

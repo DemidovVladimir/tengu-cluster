@@ -10,7 +10,8 @@ use alloy::primitives::{Address, I256, U256};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use crate::adapters::types::ToolCall;
 
 const PRIVY_API_URL: &str = "https://api.privy.io";
@@ -22,6 +23,7 @@ static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
 pub(crate) struct CryptoToolExecutionAdapter {
     client: reqwest::Client,
     fallback_runtime: Option<tokio::runtime::Runtime>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl CryptoToolExecutionAdapter {
@@ -39,12 +41,20 @@ impl CryptoToolExecutionAdapter {
         };
         let client = match shared_client {
             Some(c) => c,
-            None => reqwest::Client::builder().build()?,
+            None => reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()?,
         };
         Ok(Self {
             client,
             fallback_runtime,
+            cancel: None,
         })
+    }
+
+    pub(crate) fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     fn run_async<F, T>(&self, future: F) -> T
@@ -84,6 +94,7 @@ impl CryptoToolExecutionAdapter {
         let to = to.to_string();
         let data = data.map(|s| s.to_string());
         let value = value.map(|s| s.to_string());
+        let cancel = self.cancel.clone();
 
         self.run_async(async move {
             let tx_hash =
@@ -91,7 +102,7 @@ impl CryptoToolExecutionAdapter {
                     .await?;
 
             if wait {
-                let receipt = wait_for_receipt(&client, &tx_hash).await?;
+                let receipt = wait_for_receipt(&client, &tx_hash, cancel.as_ref()).await?;
                 let status_hex = receipt["status"].as_str().unwrap_or("0x0");
                 let confirmed = status_hex == "0x1";
                 let summary = if confirmed {
@@ -488,10 +499,17 @@ fn parse_uint256(s: &str) -> Result<U256> {
     }
 }
 
-async fn wait_for_receipt(client: &reqwest::Client, tx_hash: &str) -> Result<serde_json::Value> {
+async fn wait_for_receipt(
+    client: &reqwest::Client,
+    tx_hash: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<serde_json::Value> {
     let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
 
     for _ in 0..90 {
+        if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
+        }
         let resp = client
             .post(&rpc_url)
             .json(&json!({

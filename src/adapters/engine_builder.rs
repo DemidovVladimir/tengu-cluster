@@ -27,7 +27,9 @@ const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 const MAX_TOOL_ROUNDS: usize = 30;
 
 /// Maximum characters kept per successful tool result.
-const MAX_TOOL_RESULT_CHARS: usize = 6_000;
+/// Kept small to control quadratic token growth: each result is re-sent on
+/// every subsequent tool round, so N rounds = N*(N+1)/2 * this value in input.
+const MAX_TOOL_RESULT_CHARS: usize = 3_000;
 
 /// Maximum characters kept for error tool results.
 const MAX_ERROR_RESULT_CHARS: usize = 1_500;
@@ -368,24 +370,35 @@ impl Engine for OpenRouterEngine {
             }])));
         }
 
-        let raw_body = response.text().await?;
+        let raw_body = match response.text().await {
+            Ok(body) => body,
+            Err(e) => {
+                error!(model = %self.model, error = %e, "Failed to read OpenRouter response body");
+                return Ok(Box::pin(stream::iter(vec![StreamEvent::Error {
+                    message: format!("OpenRouter response body read failed: {}", e),
+                }])));
+            }
+        };
         debug!(
             model = %self.model,
             body_len = raw_body.len(),
             body_preview = %if raw_body.len() > 500 { &raw_body[..500] } else { &raw_body },
             "OpenRouter raw response"
         );
-        let parsed: OpenRouterChatResponse = serde_json::from_str(&raw_body).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to parse OpenRouter response: {} — body: {}",
-                e,
-                if raw_body.len() > 300 {
-                    &raw_body[..300]
-                } else {
-                    &raw_body
-                }
-            )
-        })?;
+        let parsed: OpenRouterChatResponse = match serde_json::from_str(&raw_body) {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    model = %self.model,
+                    error = %e,
+                    body_preview = %if raw_body.len() > 300 { &raw_body[..300] } else { &raw_body },
+                    "Failed to parse OpenRouter response"
+                );
+                return Ok(Box::pin(stream::iter(vec![StreamEvent::Error {
+                    message: format!("Failed to parse OpenRouter response: {}", e),
+                }])));
+            }
+        };
         Ok(Box::pin(stream::iter(Self::success_events(&parsed))))
     }
 }
@@ -521,7 +534,9 @@ pub(crate) async fn collect_engine_response(
     tool_observer: Option<ToolResultObserver<'_>>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     token_budget: Option<u32>,
+    max_tool_rounds: Option<u32>,
 ) -> Result<EngineResponse> {
+    let tool_rounds = max_tool_rounds.map(|v| v as usize).unwrap_or(MAX_TOOL_ROUNDS);
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
@@ -531,7 +546,7 @@ pub(crate) async fn collect_engine_response(
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
-    for round in 0..MAX_TOOL_ROUNDS {
+    for round in 0..tool_rounds {
         if is_cancelled() {
             debug!("Turn cancelled before round {}", round);
             return Ok(EngineResponse {
@@ -571,7 +586,7 @@ pub(crate) async fn collect_engine_response(
             // If the model was truncated mid-response, auto-continue.
             if tool_calls.is_empty()
                 && !tools.is_empty()
-                && round < MAX_TOOL_ROUNDS - 1
+                && round < tool_rounds - 1
                 && response_text.ends_with("[OUTPUT_TRUNCATED]")
             {
                 let clean_text = response_text
@@ -627,14 +642,22 @@ pub(crate) async fn collect_engine_response(
             if let Some(previous_result) = executed_tool_results.get(&signature) {
                 let is_idempotent = matches!(
                     tc.name.as_str(),
-                    "list_directory" | "read_file" | "get_wallet_address" | "write_file"
+                    "list_directory"
+                        | "read_file"
+                        | "get_wallet_address"
+                        | "write_file"
+                        | "shared_cache"
+                        | "recall"
                 );
                 if is_idempotent {
                     tracing::info!(
                         tool = %tc.name,
                         "Duplicate idempotent tool call — returning cached result"
                     );
-                    let content = truncate_tool_result(previous_result, MAX_TOOL_RESULT_CHARS);
+                    let content = format!(
+                        "[CACHED — identical call already executed this turn. Use the result below; do not retry.]\n{}",
+                        truncate_tool_result(previous_result, MAX_TOOL_RESULT_CHARS)
+                    );
                     messages.push(Message {
                         role: Role::Tool,
                         content,
@@ -649,8 +672,44 @@ pub(crate) async fn collect_engine_response(
                     || previous_result.starts_with("HTTP 4")
                     || previous_result.starts_with("HTTP 5");
                 if !previous_was_error {
+                    // Hard-abort only for tools that are truly dangerous to re-execute
+                    // (e.g. sending on-chain transactions). For http_request and others,
+                    // return the cached result so the model can continue without
+                    // losing all work done so far.
+                    let is_dangerous = matches!(
+                        tc.name.as_str(),
+                        "sign_and_send_transaction"
+                    );
+                    if is_dangerous {
+                        return Err(anyhow::anyhow!(
+                            "Tool '{}' was requested multiple times with identical arguments in the same turn. Aborting to prevent unintended retries.\nPrevious result:\n{}",
+                            tc.name,
+                            truncate_tool_result(previous_result, MAX_ERROR_RESULT_CHARS)
+                        ));
+                    }
+                    tracing::warn!(
+                        tool = %tc.name,
+                        "Duplicate non-idempotent tool call — returning cached result instead of aborting"
+                    );
+                    let note = format!(
+                        "[NOTE: This exact call was already executed successfully. Returning previous result. Do not retry.]\n{}",
+                        truncate_tool_result(previous_result, MAX_TOOL_RESULT_CHARS)
+                    );
+                    messages.push(Message {
+                        role: Role::Tool,
+                        content: note,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_calls: None,
+                    });
+                    continue;
+                }
+                let no_retry = matches!(
+                    tc.name.as_str(),
+                    "http_request" | "sign_and_send_transaction" | "sign_message"
+                );
+                if no_retry {
                     return Err(anyhow::anyhow!(
-                        "Tool '{}' was requested multiple times with identical arguments in the same turn. Aborting to prevent unintended retries.\nPrevious result:\n{}",
+                        "Tool '{}' failed and must not be retried. Previous error:\n{}",
                         tc.name,
                         truncate_tool_result(previous_result, MAX_ERROR_RESULT_CHARS)
                     ));
@@ -663,9 +722,19 @@ pub(crate) async fn collect_engine_response(
             let result = match executor.execute(tc) {
                 Ok(output) => output,
                 Err(e) => {
+                    // Executor errors (bad args, connection refused, etc.) are
+                    // recoverable — return the error to the LLM so it can self-correct.
+                    // HTTP *response* errors (4xx/5xx) are handled separately below
+                    // via is_error_result and are fatal for http_request/transactions.
                     let is_non_fatal = matches!(
                         tc.name.as_str(),
-                        "read_file" | "list_directory" | "get_wallet_address"
+                        "read_file"
+                            | "list_directory"
+                            | "get_wallet_address"
+                            | "run_command"
+                            | "http_request"
+                            | "sign_and_send_transaction"
+                            | "sign_message"
                     );
                     if is_non_fatal {
                         tracing::warn!(
@@ -695,11 +764,32 @@ pub(crate) async fn collect_engine_response(
             };
             executed_tool_results.insert(signature, result.clone());
 
+            // HTTP 400 = client-side formatting error (malformed JSON, bad args).
+            // Return to LLM for self-correction — it can fix and retry with different args.
+            // Check both raw ("HTTP 400") and envelope ("HTTP 400" inside summary).
+            let is_recoverable_400 =
+                result.starts_with("HTTP 400") || result.contains("\"HTTP 400");
             let is_error_result = result.starts_with("HTTP 4")
                 || result.starts_with("HTTP 5")
                 || result.contains("\"status\": \"error\"")
-                || result.contains("\"status\":\"error\"");
+                || result.contains("\"status\":\"error\"")
+                || result.contains("\"errors\":");
             if is_error_result {
+                // HTTP 400 is recoverable — the LLM sent bad JSON and can fix it.
+                // All other errors (401/403/404/5xx, GraphQL errors) fail immediately
+                // for http_request and transaction tools.
+                let fail_immediately = !is_recoverable_400
+                    && matches!(
+                        tc.name.as_str(),
+                        "http_request" | "sign_and_send_transaction" | "sign_message"
+                    );
+                if fail_immediately {
+                    return Err(anyhow::anyhow!(
+                        "Tool '{}' returned an error. Aborting — no retries allowed.\nError:\n{}",
+                        tc.name,
+                        truncate_tool_result(&result, MAX_ERROR_RESULT_CHARS)
+                    ));
+                }
                 let count = consecutive_errors.entry(tc.name.clone()).or_insert(0);
                 *count += 1;
                 if *count >= MAX_CONSECUTIVE_TOOL_ERRORS {

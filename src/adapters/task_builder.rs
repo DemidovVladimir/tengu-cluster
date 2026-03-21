@@ -51,7 +51,7 @@ pub(crate) async fn classify_request(
     };
 
     let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None, None).await?;
+        collect_engine_response(engine, &messages, &[], &context, None, None, None, None, None).await?;
 
     parse_route_decision(&response.text, agent_descriptions)
 }
@@ -138,7 +138,7 @@ pub(crate) async fn generate_plan(
     };
 
     let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None, None).await?;
+        collect_engine_response(engine, &messages, &[], &context, None, None, None, None, None).await?;
 
     if response.text.is_empty() {
         anyhow::bail!("Planner received empty response from engine");
