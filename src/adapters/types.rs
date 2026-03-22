@@ -5,6 +5,7 @@
 //! task/plan state machines, memory types, and chat session state.
 
 use async_trait::async_trait;
+#[cfg(feature = "telegram")]
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::RwLock;
+#[cfg(feature = "telegram")]
 use std::time::{Duration, Instant};
+#[cfg(feature = "telegram")]
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
@@ -403,22 +405,24 @@ impl RegisteredTool {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestration events
+// Legacy orchestration types (Telegram EventBus planner — to be removed)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "telegram")]
 pub(crate) type TaskId = String;
+#[cfg(feature = "telegram")]
 pub(crate) type AgentId = String;
 
-/// Token usage reported by an agent after completing a task.
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
 
-/// Describes how to modify a live plan at runtime.
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Protocol variants — constructed by agent responses at runtime.
+#[allow(dead_code)]
 pub(crate) enum PlanModification {
     AddTask {
         id: TaskId,
@@ -435,9 +439,9 @@ pub(crate) enum PlanModification {
     },
 }
 
-/// Events flowing through the orchestrator event bus.
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Protocol variants — constructed by agent responses at runtime.
+#[allow(dead_code)]
 pub(crate) enum OrchestratorEvent {
     TaskAssignment {
         task_id: TaskId,
@@ -506,11 +510,6 @@ impl AgentRole {
     pub fn label(&self) -> &str {
         &self.0
     }
-
-    /// The canonical key used for role-based routing (lowercase, underscored).
-    pub fn key(&self) -> &str {
-        &self.0
-    }
 }
 
 impl fmt::Display for AgentRole {
@@ -531,12 +530,9 @@ impl FromStr for AgentRole {
     }
 }
 
-/// Port for executing an agent task. Implemented by the adapter layer
-/// using the existing `execute_agent_task()` function.
+#[cfg(feature = "telegram")]
 #[async_trait]
 pub(crate) trait AgentTaskExecutor: Send + Sync {
-    /// Execute a task given a fully-rendered prompt.
-    /// Returns `(combined_output, tool_outcomes)`.
     async fn execute(&self, description: &str) -> Result<(String, Vec<(String, String)>), String>;
 }
 
@@ -700,6 +696,9 @@ pub(crate) struct ChatLoopState {
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
     pub last_prompt_report: Option<PromptAssemblyReport>,
+    /// Whether the pre-compaction memory flush has fired in the current compaction cycle.
+    /// Reset after compaction completes (OpenClaw-compatible).
+    pub memory_flush_triggered: bool,
 }
 
 impl ChatLoopState {
@@ -710,14 +709,15 @@ impl ChatLoopState {
         self.flow_token_usage = 0;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
+        self.memory_flush_triggered = false;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Task & Plan
+// Legacy Task & Plan (Telegram EventBus planner — to be removed)
 // ---------------------------------------------------------------------------
 
-/// Runtime status of a task within a plan.
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TaskStatus {
     Pending,
@@ -728,6 +728,7 @@ pub(crate) enum TaskStatus {
     Skipped,
 }
 
+#[cfg(feature = "telegram")]
 impl TaskStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
@@ -737,7 +738,7 @@ impl TaskStatus {
     }
 }
 
-/// A task within a plan.
+#[cfg(feature = "telegram")]
 #[derive(Debug, Clone)]
 pub(crate) struct Task {
     pub id: TaskId,
@@ -755,7 +756,7 @@ pub(crate) struct Task {
     pub last_error: Option<String>,
 }
 
-/// A mutable plan that tracks task states and supports runtime modifications.
+#[cfg(feature = "telegram")]
 #[derive(Debug)]
 pub(crate) struct Plan {
     pub goal: String,
@@ -763,6 +764,7 @@ pub(crate) struct Plan {
     pub revision: u64,
 }
 
+#[cfg(feature = "telegram")]
 impl Plan {
     pub fn new(goal: String, tasks: Vec<Task>) -> Self {
         let task_ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
@@ -961,7 +963,7 @@ impl Plan {
     }
 }
 
-/// Routing decision from the lightweight classifier.
+#[cfg(feature = "telegram")]
 pub(crate) enum RouteDecision {
     /// Request can be handled by a single agent. Contains the role key.
     SingleAgent(String),
@@ -969,7 +971,7 @@ pub(crate) enum RouteDecision {
     MultiAgent,
 }
 
-/// A single task in an execution plan (LLM output, before conversion to Task).
+#[cfg(feature = "telegram")]
 pub(crate) struct PlanTask {
     /// Unique identifier for this task (e.g. "research", "mint").
     pub id: String,
@@ -981,72 +983,14 @@ pub(crate) struct PlanTask {
     pub depends_on: Vec<String>,
 }
 
-/// Declared dependency constraints from agent config.
-/// Maps role_key -> list of role_keys it must depend on.
+#[cfg(feature = "telegram")]
 pub(crate) type RoleDependencies = HashMap<String, Vec<String>>;
 
-/// A recorded task entry for the CLI history display.
-#[derive(Debug, Clone)]
-pub(crate) struct TaskHistoryEntry {
-    pub id: String,
-    pub description: String,
-    pub role: String,
-    pub assigned_agent: Option<String>,
-    pub status: String,
-}
-
-/// Simple in-memory task history for the CLI `/tasks` command.
-pub(crate) struct TaskHistory {
-    entries: RwLock<Vec<TaskHistoryEntry>>,
-}
-
-impl TaskHistory {
-    pub fn new() -> Self {
-        Self {
-            entries: RwLock::new(Vec::new()),
-        }
-    }
-
-    /// Record a new task.
-    pub fn record(&self, id: String, description: String, role: String) {
-        self.entries
-            .write()
-            .unwrap()
-            .push(TaskHistoryEntry {
-                id,
-                description,
-                role,
-                assigned_agent: None,
-                status: "pending".into(),
-            });
-    }
-
-    /// Mark a task as assigned to an agent and in-progress.
-    pub fn assign(&self, id: &str, agent: &str) {
-        if let Some(entry) = self.entries.write().unwrap().iter_mut().find(|e| e.id == id) {
-            entry.assigned_agent = Some(agent.to_string());
-            entry.status = "in-progress".into();
-        }
-    }
-
-    /// Mark a task as completed.
-    pub fn complete(&self, id: &str) {
-        if let Some(entry) = self.entries.write().unwrap().iter_mut().find(|e| e.id == id) {
-            entry.status = "completed".into();
-        }
-    }
-
-    /// Get all recorded entries.
-    pub fn all(&self) -> Vec<TaskHistoryEntry> {
-        self.entries.read().unwrap().clone()
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Event bus
+// Legacy Event bus (Telegram planner — to be removed)
 // ---------------------------------------------------------------------------
 
-/// Bidirectional channel hub: one inbox for the orchestrator, one per agent.
+#[cfg(feature = "telegram")]
 #[derive(Debug)]
 pub(crate) struct EventBus {
     pub orchestrator_rx: mpsc::Receiver<OrchestratorEvent>,
@@ -1055,6 +999,7 @@ pub(crate) struct EventBus {
     pub agent_rxs: HashMap<AgentId, mpsc::Receiver<OrchestratorEvent>>,
 }
 
+#[cfg(feature = "telegram")]
 impl EventBus {
     /// Create a new event bus with one inbox per agent plus the orchestrator inbox.
     ///

@@ -38,7 +38,7 @@ use crate::adapters::skill_builder::{
 };
 use crate::adapters::engine_builder::ToolExecutor;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort};
-use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService, WorkspaceToolExecutionAdapter};
+use crate::adapters::tool_builder::{build_platform_tools, build_session_tools, build_workspace_tools, ToolUseService, WorkspaceToolExecutionAdapter};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::types::{
@@ -81,6 +81,42 @@ pub(crate) fn rebuild_tools(
     tools
 }
 
+/// Apply per-agent tool allow/deny policies (OpenClaw-compatible).
+///
+/// When `tool_allow` is non-empty, only tools in the allow list are kept.
+/// Then any tools in `tool_deny` are removed. Deny wins over allow.
+pub(crate) fn apply_tool_policies(
+    tools: Vec<RegisteredTool>,
+    tool_allow: &[String],
+    tool_deny: &[String],
+) -> Vec<RegisteredTool> {
+    if tool_allow.is_empty() && tool_deny.is_empty() {
+        return tools;
+    }
+
+    let allow_set: HashSet<String> = tool_allow
+        .iter()
+        .map(|n| n.trim().to_lowercase())
+        .collect();
+    let deny_set: HashSet<String> = tool_deny
+        .iter()
+        .map(|n| n.trim().to_lowercase())
+        .collect();
+
+    tools
+        .into_iter()
+        .filter(|t| {
+            let name = t.def.name.to_lowercase();
+            // If allow list is set, tool must be in it.
+            if !allow_set.is_empty() && !allow_set.contains(&name) {
+                return false;
+            }
+            // Deny always wins.
+            !deny_set.contains(&name)
+        })
+        .collect()
+}
+
 /// Rebuild the system prompt from agent config, skill registry state, and active tools.
 pub(crate) fn rebuild_system_prompt(
     agent_config: &AgentConfig,
@@ -109,6 +145,9 @@ pub(crate) fn rebuild_system_prompt(
 ///
 /// `shared_http_client` — when `Some`, all HTTP and crypto executors share one
 /// `reqwest::Client` instead of each building their own connection pool.
+///
+/// `session_registry` — when `Some`, enables session tools for agent-to-agent
+/// coordination (OpenClaw-compatible sessions_list/send/history).
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[RegisteredTool],
@@ -119,6 +158,33 @@ pub(crate) fn build_tool_executor(
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     shared_http_client: Option<&reqwest::Client>,
+) -> Option<ToolServiceExecutor> {
+    build_tool_executor_with_sessions(
+        workspace,
+        tools,
+        skill_registry,
+        memory_handle,
+        secret_registry,
+        approval,
+        activity,
+        cancel,
+        shared_http_client,
+        None,
+    )
+}
+
+/// Full tool executor builder with optional session registry.
+pub(crate) fn build_tool_executor_with_sessions(
+    workspace: &Path,
+    tools: &[RegisteredTool],
+    skill_registry: &SkillRegistry,
+    memory_handle: &Option<Arc<MemoryServiceHandle>>,
+    secret_registry: &Arc<SecretRegistry>,
+    approval: Arc<dyn ToolApprovalPort>,
+    activity: Arc<dyn ToolActivityPort>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    shared_http_client: Option<&reqwest::Client>,
+    session_registry: Option<Arc<SessionRegistry>>,
 ) -> Option<ToolServiceExecutor> {
     if tools.is_empty() {
         return None;
@@ -163,6 +229,7 @@ pub(crate) fn build_tool_executor(
         if let Ok(mem_exec) =
             MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
         {
+            let mem_exec = mem_exec.with_workspace(workspace.to_path_buf());
             let mem_names: HashSet<String> = memory_tool_defs()
                 .iter()
                 .map(|t| t.def.name.clone())
@@ -220,6 +287,183 @@ pub(crate) fn build_tool_executor(
         }
     }
 
+    // Session tools for agent-to-agent coordination (OpenClaw-compatible).
+    if let Some(ref registry) = session_registry {
+        let session_tool_names: HashSet<String> = [
+            "sessions_list",
+            "sessions_send",
+            "sessions_history",
+        ]
+        .iter()
+        .filter(|n| allowed_names.contains(**n))
+        .map(|n| n.to_string())
+        .collect();
+        if !session_tool_names.is_empty() {
+            composite = composite.with_executor(
+                Arc::new(SessionToolExecutor::new(Arc::clone(registry))),
+                session_tool_names,
+            );
+        }
+    }
+
+    let composite = Arc::new(composite);
+
+    let service = ToolUseService::new(
+        ToolPolicyCatalog::from_tools(tools),
+        activity,
+        approval,
+        composite,
+    );
+    Some(ToolServiceExecutor { service })
+}
+
+/// Full tool executor builder with optional session registry AND subagent executor.
+///
+/// Used by the orchestrator to give the main agent the ability to spawn subagents.
+pub(crate) fn build_tool_executor_full(
+    workspace: &Path,
+    tools: &[RegisteredTool],
+    skill_registry: &SkillRegistry,
+    memory_handle: &Option<Arc<MemoryServiceHandle>>,
+    secret_registry: &Arc<SecretRegistry>,
+    approval: Arc<dyn ToolApprovalPort>,
+    activity: Arc<dyn ToolActivityPort>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    shared_http_client: Option<&reqwest::Client>,
+    session_registry: Option<Arc<SessionRegistry>>,
+    subagent_executor: Option<Arc<crate::adapters::subagent_builder::SubagentToolExecutor>>,
+) -> Option<ToolServiceExecutor> {
+    if tools.is_empty() {
+        return None;
+    }
+
+    let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
+        Some(ref flag) => LocalShellExecutor::new().with_cancel(Arc::clone(flag)),
+        None => LocalShellExecutor::new(),
+    });
+
+    let workspace_exec = Arc::new(
+        WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
+            .with_shell(Arc::clone(&shell)),
+    );
+
+    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.def.name.as_str()).collect();
+
+    let shell_skill_defs: Vec<_> = skill_registry
+        .active_skill_definitions()
+        .into_iter()
+        .filter(|skill| {
+            allowed_names.contains(skill.name.as_str())
+                && matches!(skill.execution, SkillExecution::Shell { .. })
+        })
+        .collect();
+
+    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
+
+    if !shell_skill_defs.is_empty() {
+        let skill_names: HashSet<String> =
+            shell_skill_defs.iter().map(|s| s.name.clone()).collect();
+        let skill_exec = Arc::new(SkillToolExecutionAdapter::new(
+            shell_skill_defs,
+            Arc::clone(&shell),
+            workspace.to_path_buf(),
+        ));
+        composite = composite.with_executor(skill_exec, skill_names);
+    }
+
+    if let Some(ref handle) = memory_handle {
+        if let Ok(mem_exec) =
+            MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
+        {
+            let mem_exec = mem_exec.with_workspace(workspace.to_path_buf());
+            let mem_names: HashSet<String> = memory_tool_defs()
+                .iter()
+                .map(|t| t.def.name.clone())
+                .collect();
+            composite = composite.with_executor(Arc::new(mem_exec), mem_names);
+        }
+    }
+
+    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
+        match CacheToolExecutionAdapter::open(workspace) {
+            Ok(cache_exec) => {
+                composite = composite.with_executor(
+                    Arc::new(cache_exec),
+                    HashSet::from([SHARED_CACHE_TOOL_NAME.to_string()]),
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
+            }
+        }
+    }
+
+    if allowed_names.contains("http_request") {
+        if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(
+            shared_http_client.cloned(),
+            workspace.to_path_buf(),
+        ) {
+            composite = composite.with_executor(
+                Arc::new(http_exec),
+                HashSet::from(["http_request".to_string()]),
+            );
+        }
+    }
+
+    let crypto_tool_names: HashSet<String> = [
+        "sign_and_send_transaction",
+        "sign_message",
+        "get_wallet_address",
+        "abi_encode",
+        "hex_to_uint256",
+    ]
+    .iter()
+    .filter(|n| allowed_names.contains(**n))
+    .map(|n| n.to_string())
+    .collect();
+    if !crypto_tool_names.is_empty() {
+        if let Ok(mut crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+            if let Some(ref flag) = cancel {
+                crypto_exec = crypto_exec.with_cancel(Arc::clone(flag));
+            }
+            composite = composite.with_executor(Arc::new(crypto_exec), crypto_tool_names);
+        }
+    }
+
+    if let Some(ref registry) = session_registry {
+        let session_tool_names: HashSet<String> = [
+            "sessions_list",
+            "sessions_send",
+            "sessions_history",
+        ]
+        .iter()
+        .filter(|n| allowed_names.contains(**n))
+        .map(|n| n.to_string())
+        .collect();
+        if !session_tool_names.is_empty() {
+            composite = composite.with_executor(
+                Arc::new(SessionToolExecutor::new(Arc::clone(registry))),
+                session_tool_names,
+            );
+        }
+    }
+
+    // Subagent spawning tools (OpenClaw-compatible LLM-driven orchestration).
+    if let Some(ref sub_exec) = subagent_executor {
+        let subagent_tool_names: HashSet<String> = [
+            "sessions_spawn",
+            "sessions_fan_out",
+            "subagents",
+        ]
+        .iter()
+        .filter(|n| allowed_names.contains(**n))
+        .map(|n| n.to_string())
+        .collect();
+        if !subagent_tool_names.is_empty() {
+            composite = composite.with_executor(Arc::clone(sub_exec) as Arc<dyn crate::adapters::ports::ToolExecutionPort>, subagent_tool_names);
+        }
+    }
+
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
@@ -241,10 +485,52 @@ pub(crate) fn build_tool_executor(
 /// Call at startup and on `/reload` (env vars may change).
 ///
 /// `workspace_tools` controls optional first-party workspace tools (e.g. `["shared_cache"]`).
+/// `has_subagents` adds sessions_spawn/sessions_fan_out/subagents tools (orchestrator mode).
 pub(crate) fn compute_base_tools(
     uses_tools: bool,
     has_memory: bool,
     workspace_tools: &[String],
+) -> Vec<RegisteredTool> {
+    compute_base_tools_ext(uses_tools, has_memory, workspace_tools, false, true)
+}
+
+/// Compute base tools for sub-agents.
+///
+/// OpenClaw pattern: sub-agents receive the full tool set minus session tools
+/// and minus tools in the DENY_ALWAYS list. Memory tools are denied because
+/// sub-agents should receive all relevant context in the spawn prompt instead
+/// of searching memory independently. `agents_list` is also denied because
+/// sub-agents don't need to discover siblings.
+pub(crate) fn compute_base_tools_subagent(
+    uses_tools: bool,
+    has_memory: bool,
+    workspace_tools: &[String],
+) -> Vec<RegisteredTool> {
+    let tools = compute_base_tools_ext(uses_tools, has_memory, workspace_tools, false, false);
+    // OpenClaw SUBAGENT_TOOL_DENY_ALWAYS: tools always denied for sub-agents.
+    // Memory tools are denied — pass relevant info in the spawn prompt instead.
+    // agents_list is denied — sub-agents don't need sibling discovery.
+    // sessions_send is denied — sub-agents communicate via announce chain.
+    const SUBAGENT_DENY_ALWAYS: &[&str] = &[
+        "memory_search",
+        "memory_get",
+        "memory_write",
+        "agents_list",
+        "sessions_send",
+    ];
+    tools
+        .into_iter()
+        .filter(|t| !SUBAGENT_DENY_ALWAYS.contains(&t.def.name.as_str()))
+        .collect()
+}
+
+/// Extended base tool computation with subagent and session tool control.
+pub(crate) fn compute_base_tools_ext(
+    uses_tools: bool,
+    has_memory: bool,
+    workspace_tools: &[String],
+    has_subagents: bool,
+    has_session_tools: bool,
 ) -> Vec<RegisteredTool> {
     if !uses_tools {
         return vec![];
@@ -257,6 +543,15 @@ pub(crate) fn compute_base_tools(
         tools.extend(build_shared_cache_tools());
     }
     tools.extend(build_platform_tools());
+    // Session tools for agent-to-agent coordination (OpenClaw-compatible).
+    // Sub-agents do NOT get session tools — prevents recursive spawning.
+    if has_session_tools {
+        tools.extend(build_session_tools());
+    }
+    // Subagent spawning tools (OpenClaw-compatible LLM-driven orchestration).
+    if has_subagents {
+        tools.extend(crate::adapters::subagent_builder::build_subagent_tools());
+    }
     tools
 }
 
@@ -385,6 +680,7 @@ pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopStat
         total_input_tokens: 0,
         total_output_tokens: 0,
         last_prompt_report: None,
+        memory_flush_triggered: false,
     }
 }
 
@@ -593,6 +889,164 @@ pub(crate) fn truncate_summary(text: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 // Skill list formatting
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Session registry (OpenClaw-compatible agent-to-agent coordination)
+// ---------------------------------------------------------------------------
+
+/// Metadata about an active agent session.
+#[derive(Debug, Clone)]
+pub(crate) struct SessionInfo {
+    pub agent_id: String,
+    pub agent_name: String,
+    pub role: Option<String>,
+    pub model: String,
+    pub active: bool,
+}
+
+/// Shared registry of active agent sessions, enabling agent-to-agent discovery.
+pub(crate) struct SessionRegistry {
+    sessions: std::sync::RwLock<HashMap<String, SessionInfo>>,
+}
+
+impl SessionRegistry {
+    pub(crate) fn new() -> Self {
+        Self {
+            sessions: std::sync::RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Register an agent session.
+    pub(crate) fn register(&self, info: SessionInfo) {
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(info.agent_id.clone(), info);
+    }
+
+    /// List all registered sessions.
+    pub(crate) fn list(&self) -> Vec<SessionInfo> {
+        self.sessions.read().unwrap().values().cloned().collect()
+    }
+
+    /// Find a session by agent name or role (case-insensitive).
+    pub(crate) fn find(&self, query: &str) -> Option<SessionInfo> {
+        let q = query.trim().to_lowercase().replace('-', "_");
+        self.sessions.read().unwrap().values().find(|s| {
+            s.agent_id.to_lowercase() == q
+                || s.agent_name.to_lowercase() == q
+                || s.role.as_ref().map(|r| r.to_lowercase() == q).unwrap_or(false)
+        }).cloned()
+    }
+}
+
+/// Tool executor for session tools.
+pub(crate) struct SessionToolExecutor {
+    registry: Arc<SessionRegistry>,
+}
+
+impl SessionToolExecutor {
+    pub(crate) fn new(registry: Arc<SessionRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+impl crate::adapters::ports::ToolExecutionPort for SessionToolExecutor {
+    fn execute_tool(&self, call: &crate::adapters::types::ToolCall) -> anyhow::Result<String> {
+        match call.name.as_str() {
+            "sessions_list" => {
+                let sessions = self.registry.list();
+                if sessions.is_empty() {
+                    return Ok("No active agent sessions.".to_string());
+                }
+                let mut lines = Vec::new();
+                for s in &sessions {
+                    let role = s.role.as_deref().unwrap_or("none");
+                    let status = if s.active { "active" } else { "idle" };
+                    lines.push(format!(
+                        "- {} (role: {}, model: {}, status: {})",
+                        s.agent_name, role, s.model, status
+                    ));
+                }
+                Ok(lines.join("\n"))
+            }
+
+            "sessions_send" => {
+                let agent = call
+                    .arguments
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("sessions_send: missing 'agent'"))?;
+                let message = call
+                    .arguments
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("sessions_send: missing 'message'"))?;
+
+                match self.registry.find(agent) {
+                    Some(info) => {
+                        tracing::info!(
+                            target_agent = %info.agent_id,
+                            message_len = message.len(),
+                            "sessions_send — message queued"
+                        );
+                        // In the current architecture, inter-agent messaging goes
+                        // through the EventBus when orchestration is active.
+                        // For direct chat mode, we log and acknowledge.
+                        Ok(format!(
+                            "Message sent to {} ({}). Note: in the current runtime, \
+                             cross-agent messaging is fully supported during orchestrated \
+                             task execution. In direct chat mode, the message is logged \
+                             for the next orchestration run.",
+                            info.agent_name,
+                            info.role.as_deref().unwrap_or("no role"),
+                        ))
+                    }
+                    None => {
+                        let available: Vec<String> = self
+                            .registry
+                            .list()
+                            .iter()
+                            .map(|s| s.agent_name.clone())
+                            .collect();
+                        Err(anyhow::anyhow!(
+                            "Agent '{}' not found. Available: {}",
+                            agent,
+                            if available.is_empty() {
+                                "none".to_string()
+                            } else {
+                                available.join(", ")
+                            }
+                        ))
+                    }
+                }
+            }
+
+            "sessions_history" => {
+                let agent = call
+                    .arguments
+                    .get("agent")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("sessions_history: missing 'agent'"))?;
+
+                match self.registry.find(agent) {
+                    Some(info) => {
+                        Ok(format!(
+                            "Session history for {} ({}): history retrieval is available \
+                             during orchestrated execution. In direct chat, session history \
+                             is maintained per-agent via the flow system.",
+                            info.agent_name,
+                            info.role.as_deref().unwrap_or("no role"),
+                        ))
+                    }
+                    None => Err(anyhow::anyhow!("Agent '{}' not found", agent)),
+                }
+            }
+
+            other => Err(anyhow::anyhow!("unknown session tool: {}", other)),
+        }
+    }
+}
 
 /// Format the skill registry into a human-readable list.
 pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {

@@ -162,12 +162,120 @@ pub(crate) struct CompactionOutcome {
     compacted_messages: usize,
 }
 
-pub(crate) async fn maybe_compact_flow(
+/// Check whether a pre-compaction memory flush turn should fire (OpenClaw-compatible).
+///
+/// Returns `true` when the flow token usage is within `soft_threshold_tokens` of
+/// the compaction threshold AND the flush has not already fired this cycle.
+/// The caller (chat loop) is responsible for injecting the flush turn messages
+/// and running one engine turn.
+pub(crate) fn should_trigger_memory_flush(
+    flow_token_usage: u64,
+    compaction_threshold: u64,
+    soft_threshold_tokens: u32,
+    flush_already_triggered: bool,
+) -> bool {
+    if flush_already_triggered {
+        return false;
+    }
+    let soft_line = compaction_threshold.saturating_sub(soft_threshold_tokens as u64);
+    flow_token_usage >= soft_line && flow_token_usage < compaction_threshold
+}
+
+/// Build the messages for a pre-compaction memory flush turn (OpenClaw-compatible).
+///
+/// Returns (system_prompt_addition, user_prompt) to inject as a silent turn.
+/// The model should use `memory_write` to store durable notes, or respond
+/// with empty text if nothing needs saving.
+pub(crate) fn build_memory_flush_messages() -> (String, String) {
+    let system = "Session nearing compaction. Store any durable memories now. \
+        Write important decisions, preferences, facts, or context that should \
+        survive compaction to memory/YYYY-MM-DD.md using the memory_write tool. \
+        Reply with an empty message if nothing needs storing."
+        .to_string();
+    let user = "The conversation history is about to be compacted. Please \
+        review and write any lasting notes, decisions, or context to the daily \
+        memory log using memory_write. If nothing important needs saving, \
+        reply with an empty message."
+        .to_string();
+    (system, user)
+}
+
+/// Signature for the optional pre-compaction memory flush callback.
+/// Receives the compacted messages and workspace path; writes a summary to the daily log.
+pub(crate) fn pre_compaction_memory_flush(
+    workspace: &std::path::Path,
+    messages: &[Message],
+) {
+    if messages.is_empty() {
+        return;
+    }
+
+    // Build a brief summary of the compacted conversation for the daily log.
+    let mut summary_lines = Vec::new();
+    for msg in messages {
+        match msg.role {
+            Role::User => {
+                let preview = if msg.content.len() > 200 {
+                    format!("{}...", &msg.content[..200])
+                } else {
+                    msg.content.clone()
+                };
+                summary_lines.push(format!("- User: {}", preview));
+            }
+            Role::Assistant => {
+                if msg.content.len() > 50 && !msg.content.starts_with("[Flow compaction") {
+                    let preview = if msg.content.len() > 200 {
+                        format!("{}...", &msg.content[..200])
+                    } else {
+                        msg.content.clone()
+                    };
+                    summary_lines.push(format!("- Assistant: {}", preview));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if summary_lines.is_empty() {
+        return;
+    }
+
+    let content = format!(
+        "[Pre-compaction flush — {} messages preserved]\n{}",
+        messages.len(),
+        summary_lines.join("\n")
+    );
+
+    let memory_dir = workspace.join("memory");
+    if std::fs::create_dir_all(&memory_dir).is_err() {
+        return;
+    }
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Local::now().format("%H:%M").to_string();
+    let log_path = memory_dir.join(format!("{today}.md"));
+    let entry = format!("\n## {time} (compaction)\n\n{content}\n");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        use std::io::Write;
+        let _ = f.write_all(entry.as_bytes());
+        tracing::info!(
+            messages = messages.len(),
+            path = %log_path.display(),
+            "Pre-compaction memory flushed to daily log"
+        );
+    }
+}
+
+pub(crate) async fn maybe_compact_flow_with_workspace(
     flow_key: &str,
     messages: &mut Vec<Message>,
     flow_token_usage: &mut u64,
     policy: FlowCompactionPolicy,
     phase: &str,
+    workspace: Option<&std::path::Path>,
 ) -> Result<CompactionOutcome> {
     if messages.is_empty() {
         return Ok(CompactionOutcome::default());
@@ -189,6 +297,12 @@ pub(crate) async fn maybe_compact_flow(
     if !compacted_slice.iter().any(|m| matches!(m.role, Role::User)) {
         return Ok(CompactionOutcome::default());
     }
+
+    // OpenClaw-compatible: flush compacted content to daily memory log before discarding.
+    if let Some(ws) = workspace {
+        pre_compaction_memory_flush(ws, compacted_slice);
+    }
+
     let compaction_source = build_compaction_source(compacted_slice);
     let raw_summary = crate::adapters::prompt_budget::truncate_to_token_budget(
         &compaction_source,
@@ -200,11 +314,26 @@ pub(crate) async fn maybe_compact_flow(
     );
 
     let compacted_messages = compacted_slice.len();
+
+    // Preserve identifiers from the compacted conversation (OpenClaw-compatible).
+    // Extract any hex addresses, UUIDs, URLs, tx hashes, contract addresses that
+    // appear in the compacted messages so they survive compaction.
+    let preserved_ids = extract_identifiers(compacted_slice);
+    let id_block = if preserved_ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\n[Preserved identifiers: {}]",
+            preserved_ids.join(", ")
+        )
+    };
+
     let summary_message = Message {
         role: Role::Assistant,
         content: format!(
-            "[Flow compaction summary]\n{}\n\n[compacted_messages={}, phase={}]",
+            "[Flow compaction summary]\n{}{}\n\n[compacted_messages={}, phase={}]",
             summary.trim(),
+            id_block,
             compacted_messages,
             phase
         ),
@@ -250,6 +379,35 @@ fn compaction_split_index(messages: &[Message], keep_turns: usize) -> Option<usi
     }
 
     None
+}
+
+/// Extract opaque identifiers (addresses, hashes, UUIDs, URLs) from messages
+/// so they survive compaction. OpenClaw calls this "identifier preservation".
+fn extract_identifiers(messages: &[Message]) -> Vec<String> {
+    let hex_re = regex_lite::Regex::new(r"0x[0-9a-fA-F]{8,}").unwrap();
+    let uuid_re =
+        regex_lite::Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+            .unwrap();
+
+    let mut ids = std::collections::HashSet::new();
+    for msg in messages {
+        // Only extract from assistant and tool messages (user messages rarely contain IDs).
+        if !matches!(msg.role, Role::Assistant | Role::Tool) {
+            continue;
+        }
+        for cap in hex_re.find_iter(&msg.content) {
+            ids.insert(cap.as_str().to_string());
+        }
+        for cap in uuid_re.find_iter(&msg.content) {
+            ids.insert(cap.as_str().to_string());
+        }
+    }
+
+    // Cap to prevent bloated compaction headers.
+    let mut sorted: Vec<String> = ids.into_iter().collect();
+    sorted.sort();
+    sorted.truncate(20);
+    sorted
 }
 
 fn build_compaction_source(messages: &[Message]) -> String {

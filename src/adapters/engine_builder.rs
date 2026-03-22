@@ -27,12 +27,92 @@ const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 const MAX_TOOL_ROUNDS: usize = 30;
 
 /// Maximum characters kept per successful tool result.
-/// Kept small to control quadratic token growth: each result is re-sent on
-/// every subsequent tool round, so N rounds = N*(N+1)/2 * this value in input.
+/// Adaptive: capped at 30% of context window (OpenClaw-compatible), with a
+/// hard floor of 3000 and hard ceiling of 40_000 chars. The quadratic concern
+/// (N rounds = N*(N+1)/2 * this value) is mitigated by the "ok" compaction
+/// that replaces old tool results after each round.
 const MAX_TOOL_RESULT_CHARS: usize = 3_000;
 
 /// Maximum characters kept for error tool results.
 const MAX_ERROR_RESULT_CHARS: usize = 1_500;
+
+/// Compute context-aware tool result limit: 30% of context window (OpenClaw pattern).
+fn adaptive_tool_result_limit(context_window: usize) -> usize {
+    let context_chars = context_window * 4; // ~4 chars per token
+    let thirty_pct = context_chars * 30 / 100;
+    thirty_pct.clamp(MAX_TOOL_RESULT_CHARS, 40_000)
+}
+
+// ---------------------------------------------------------------------------
+// Context guard — preemptive tool result compaction (OpenClaw-compatible)
+// ---------------------------------------------------------------------------
+
+/// Safe input headroom ratio — we target 75% of context window for input.
+const CONTEXT_INPUT_HEADROOM_RATIO: f64 = 0.75;
+
+/// When context exceeds this ratio of the safe budget, trigger preemptive
+/// compaction of old tool results to free space.
+const PREEMPTIVE_OVERFLOW_RATIO: f64 = 0.9;
+
+/// Placeholder text for tool results that have been preemptively compacted.
+const TOOL_RESULT_COMPACTED_PLACEHOLDER: &str =
+    "[compacted: tool output removed to free context]";
+
+/// Estimate total character size of the message list.
+fn estimate_context_chars(messages: &[Message]) -> usize {
+    messages.iter().map(|m| {
+        let base = m.content.len();
+        let tc_size = m.tool_calls.as_ref().map_or(0, |tcs| {
+            tcs.iter().map(|tc| tc.name.len() + tc.arguments.to_string().len() + 50).sum()
+        });
+        base + tc_size + 20 // role overhead
+    }).sum()
+}
+
+/// Preemptive context guard (OpenClaw-compatible): if estimated context exceeds
+/// the safe threshold, compact old tool results in-place to free space.
+/// Returns the number of chars freed.
+fn preemptive_context_guard(messages: &mut [Message], context_window: usize) -> usize {
+    let safe_budget_chars = (context_window as f64 * 4.0 * CONTEXT_INPUT_HEADROOM_RATIO) as usize;
+    let overflow_threshold = (safe_budget_chars as f64 * PREEMPTIVE_OVERFLOW_RATIO) as usize;
+    let estimated = estimate_context_chars(messages);
+
+    if estimated <= overflow_threshold {
+        return 0;
+    }
+
+    let chars_needed = estimated - overflow_threshold;
+    let mut freed = 0usize;
+
+    // Compact oldest tool results first (FIFO order).
+    for msg in messages.iter_mut() {
+        if !matches!(msg.role, Role::Tool) {
+            continue;
+        }
+        if msg.content == "ok" || msg.content == TOOL_RESULT_COMPACTED_PLACEHOLDER {
+            continue;
+        }
+        let before = msg.content.len();
+        if before <= TOOL_RESULT_COMPACTED_PLACEHOLDER.len() {
+            continue;
+        }
+        msg.content = TOOL_RESULT_COMPACTED_PLACEHOLDER.to_string();
+        freed += before - TOOL_RESULT_COMPACTED_PLACEHOLDER.len();
+        if freed >= chars_needed {
+            break;
+        }
+    }
+
+    if freed > 0 {
+        tracing::info!(
+            estimated_chars = estimated,
+            threshold = overflow_threshold,
+            chars_freed = freed,
+            "Preemptive context guard: compacted old tool results"
+        );
+    }
+    freed
+}
 
 
 /// Maximum seconds to wait for a single stream event before treating the stream as dead.
@@ -537,6 +617,7 @@ pub(crate) async fn collect_engine_response(
     max_tool_rounds: Option<u32>,
 ) -> Result<EngineResponse> {
     let tool_rounds = max_tool_rounds.map(|v| v as usize).unwrap_or(MAX_TOOL_ROUNDS);
+    let adaptive_limit = adaptive_tool_result_limit(engine.context_window());
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
@@ -555,6 +636,13 @@ pub(crate) async fn collect_engine_response(
                 output_tokens_delta: total_output_delta,
                 tool_outcomes,
             });
+        }
+
+        // OpenClaw-compatible: preemptive context guard.
+        // Before each engine turn, check if context is getting too large.
+        // If so, proactively compact old tool results to free space.
+        if round > 0 {
+            preemptive_context_guard(&mut messages, engine.context_window());
         }
 
         let (response_text, tool_calls, input_delta, output_delta) =
@@ -703,9 +791,12 @@ pub(crate) async fn collect_engine_response(
                     });
                     continue;
                 }
+                // Only block retries for on-chain transactions (irreversible).
+                // http_request retries are allowed — agent may have fixed auth
+                // or headers between attempts (e.g., got a token via sign_message).
                 let no_retry = matches!(
                     tc.name.as_str(),
-                    "http_request" | "sign_and_send_transaction" | "sign_message"
+                    "sign_and_send_transaction"
                 );
                 if no_retry {
                     return Err(anyhow::anyhow!(
@@ -764,25 +855,31 @@ pub(crate) async fn collect_engine_response(
             };
             executed_tool_results.insert(signature, result.clone());
 
-            // HTTP 400 = client-side formatting error (malformed JSON, bad args).
-            // Return to LLM for self-correction — it can fix and retry with different args.
-            // Check both raw ("HTTP 400") and envelope ("HTTP 400" inside summary).
-            let is_recoverable_400 =
-                result.starts_with("HTTP 400") || result.contains("\"HTTP 400");
+            // HTTP error classification:
+            // - 400: client-side formatting error (bad JSON/args) → recoverable
+            // - 401/403: auth/permission error → recoverable for http_request
+            //   (agent can try different auth headers, get a new token, etc.)
+            // - 404: not found → recoverable (agent can try different URL)
+            // - 5xx: server error → fatal for http_request (server can't fix it)
+            // - Transaction/signing tools: any error is fatal (can't undo on-chain)
+            let is_recoverable_4xx =
+                result.starts_with("HTTP 4") || result.contains("\"HTTP 4");
+            let is_server_error =
+                result.starts_with("HTTP 5") || result.contains("\"HTTP 5");
             let is_error_result = result.starts_with("HTTP 4")
                 || result.starts_with("HTTP 5")
                 || result.contains("\"status\": \"error\"")
                 || result.contains("\"status\":\"error\"")
                 || result.contains("\"errors\":");
             if is_error_result {
-                // HTTP 400 is recoverable — the LLM sent bad JSON and can fix it.
-                // All other errors (401/403/404/5xx, GraphQL errors) fail immediately
-                // for http_request and transaction tools.
-                let fail_immediately = !is_recoverable_400
-                    && matches!(
-                        tc.name.as_str(),
-                        "http_request" | "sign_and_send_transaction" | "sign_message"
-                    );
+                // Transaction/signing tools: any HTTP error is fatal (can't undo).
+                // http_request: only 5xx is fatal immediately; 4xx errors are
+                // returned to the LLM so it can self-correct (fix auth, URL, body).
+                let fail_immediately = match tc.name.as_str() {
+                    "sign_and_send_transaction" | "sign_message" => true,
+                    "http_request" => is_server_error && !is_recoverable_4xx,
+                    _ => false,
+                };
                 if fail_immediately {
                     return Err(anyhow::anyhow!(
                         "Tool '{}' returned an error. Aborting — no retries allowed.\nError:\n{}",
@@ -811,9 +908,9 @@ pub(crate) async fn collect_engine_response(
             let limit = if is_error_result {
                 MAX_ERROR_RESULT_CHARS
             } else {
-                MAX_TOOL_RESULT_CHARS
+                adaptive_limit
             };
-            let content = truncate_tool_result(&result, limit);
+            let content = truncate_tool_result_smart(&result, limit);
             messages.push(Message {
                 role: Role::Tool,
                 content,
@@ -822,12 +919,25 @@ pub(crate) async fn collect_engine_response(
             });
         }
 
-        // Compact old tool results — the model already consumed them and
-        // persisted values to shared_cache. We keep the message to satisfy
-        // the API contract (every tool_call needs a result) but strip content.
+        // Two-phase tool result pruning (OpenClaw-compatible):
+        // - Round 1: soft trim — keep head+tail of previous round's tool results.
+        // - Round 2+: hard clear — replace with "ok" for all rounds before last.
         if round >= 1 {
-            for msg in &mut messages[..compact_cutoff] {
-                if matches!(msg.role, Role::Tool) && msg.content != "ok" {
+            // Previous round's results get soft trimmed (keep some context).
+            let soft_limit = 800;
+            // Everything before the previous round gets hard cleared.
+            for (idx, msg) in messages[..compact_cutoff].iter_mut().enumerate() {
+                if !matches!(msg.role, Role::Tool) || msg.content == "ok" {
+                    continue;
+                }
+                let is_recent_round = idx >= compact_cutoff.saturating_sub(30);
+                if round == 1 || is_recent_round {
+                    // Soft trim: preserve head+tail for slightly-older results.
+                    if msg.content.len() > soft_limit {
+                        msg.content = truncate_tool_result_smart(&msg.content, soft_limit);
+                    }
+                } else {
+                    // Hard clear: very old results stripped entirely.
                     msg.content = "ok".to_string();
                 }
             }
@@ -970,6 +1080,41 @@ fn truncate_tool_result(result: &str, limit: usize) -> String {
         &result[..end],
         end,
         result.len()
+    )
+}
+
+/// Smart truncation: preserves head + tail of the result (OpenClaw-compatible).
+/// Tail often contains JSON structure, error messages, or summaries that are
+/// more useful than the middle of large outputs.
+fn truncate_tool_result_smart(result: &str, limit: usize) -> String {
+    if result.len() <= limit {
+        return result.to_string();
+    }
+
+    // Reserve 70% for head, 30% for tail.
+    let head_budget = (limit * 70) / 100;
+    let tail_budget = limit - head_budget;
+
+    let mut head_end = head_budget.min(result.len());
+    while head_end > 0 && !result.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+
+    let mut tail_start = result.len().saturating_sub(tail_budget);
+    while tail_start < result.len() && !result.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+
+    // Avoid overlap.
+    if tail_start <= head_end {
+        return truncate_tool_result(result, limit);
+    }
+
+    format!(
+        "{}\n\n[... {} chars omitted ...]\n\n{}",
+        &result[..head_end],
+        tail_start - head_end,
+        &result[tail_start..]
     )
 }
 

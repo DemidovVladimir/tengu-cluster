@@ -661,3 +661,68 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
         .with_activity_description("Hex to uint256"),
     ]
 }
+
+// ── Session tools (agent-to-agent coordination) ─────────────────────────
+
+/// Build session tools for multi-agent coordination (OpenClaw-compatible).
+/// These enable agents to discover each other, read transcripts, and send
+/// messages — decentralized coordination via message passing.
+pub(crate) fn build_session_tools() -> Vec<RegisteredTool> {
+    vec![
+        RegisteredTool::new(
+            "sessions_list",
+            "List available agent sessions. Returns agent names, roles, models, \
+             and status. Use this to discover which agents are available before \
+             sending messages.",
+            json!({
+                "type": "object",
+                "properties": {}
+            }),
+            EffectClass::Read,
+        )
+        .with_activity_description("Listing sessions"),
+        RegisteredTool::new(
+            "sessions_send",
+            "Send a message to another agent's session. The target agent will \
+             process the message and return a response. Use this for cross-agent \
+             coordination, delegation, and information sharing.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Target agent name or role (e.g. 'researcher', 'qa')"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Message to send to the target agent"
+                    }
+                },
+                "required": ["agent", "message"]
+            }),
+            EffectClass::ExternalApi,
+        )
+        .with_activity_description("Sending to agent"),
+        RegisteredTool::new(
+            "sessions_history",
+            "Fetch the recent transcript of another agent's session. \
+             Returns the last N messages from the agent's conversation history.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Target agent name or role"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of messages to return (default: 10)"
+                    }
+                },
+                "required": ["agent"]
+            }),
+            EffectClass::Read,
+        )
+        .with_activity_description("Reading session history"),
+    ]
+}

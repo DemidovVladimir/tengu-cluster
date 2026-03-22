@@ -233,6 +233,14 @@ pub struct AgentConfig {
     /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
     #[serde(default)]
     pub workspace_tools: Vec<String>,
+    /// Tool allow-list: when non-empty, ONLY these tools are available to this agent.
+    /// Tool names are matched case-insensitively (OpenClaw-compatible).
+    #[serde(default)]
+    pub tool_allow: Vec<String>,
+    /// Tool deny-list: these tools are removed from the agent's tool set.
+    /// Applied after tool_allow (deny wins over allow). OpenClaw-compatible.
+    #[serde(default)]
+    pub tool_deny: Vec<String>,
 }
 
 fn default_lens() -> String {
@@ -266,6 +274,39 @@ pub struct FlowConfig {
     pub compaction_keep_turns: Option<u32>,
     #[serde(default)]
     pub compaction_summary_max_tokens: Option<u32>,
+    /// Pre-compaction memory flush: trigger a silent agentic turn before
+    /// compaction that asks the model to persist durable notes (OpenClaw-compatible).
+    #[serde(default)]
+    pub memory_flush: Option<MemoryFlushConfig>,
+}
+
+/// Pre-compaction memory flush configuration (OpenClaw-compatible).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryFlushConfig {
+    /// Whether the memory flush turn is enabled. Default: true.
+    #[serde(default = "default_memory_flush_enabled")]
+    pub enabled: bool,
+    /// Soft threshold: number of tokens before compaction at which the flush
+    /// triggers. Default: 4000 tokens before the compaction threshold.
+    #[serde(default = "default_memory_flush_soft_threshold")]
+    pub soft_threshold_tokens: u32,
+}
+
+impl Default for MemoryFlushConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_memory_flush_enabled(),
+            soft_threshold_tokens: default_memory_flush_soft_threshold(),
+        }
+    }
+}
+
+fn default_memory_flush_enabled() -> bool {
+    true
+}
+
+fn default_memory_flush_soft_threshold() -> u32 {
+    4000
 }
 
 impl Default for FlowConfig {
@@ -278,6 +319,7 @@ impl Default for FlowConfig {
             compaction_threshold_ratio: None,
             compaction_keep_turns: None,
             compaction_summary_max_tokens: None,
+            memory_flush: None,
         }
     }
 }
@@ -327,7 +369,7 @@ fn default_max_tokens() -> u64 {
     100_000
 }
 
-/// Orchestrator configuration for fleet management.
+/// Orchestrator configuration for fleet management (OpenClaw-compatible).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorConfig {
     #[serde(default = "default_orchestrator_enabled")]
@@ -336,6 +378,8 @@ pub struct OrchestratorConfig {
     pub max_retries: u32,
     pub planner_engine: Option<String>,
     pub planner_model: Option<String>,
+    #[serde(default)]
+    pub subagents: SubagentConfig,
 }
 
 impl Default for OrchestratorConfig {
@@ -345,8 +389,51 @@ impl Default for OrchestratorConfig {
             max_retries: default_max_retries(),
             planner_engine: None,
             planner_model: None,
+            subagents: SubagentConfig::default(),
         }
     }
+}
+
+/// Subagent spawning configuration (OpenClaw-compatible).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentConfig {
+    /// Maximum nesting depth for subagent spawning (1-5, default 1).
+    /// Depth 1 = flat (no nesting), depth 2 = orchestrator pattern.
+    #[serde(default = "default_max_spawn_depth")]
+    pub max_spawn_depth: u32,
+    /// Maximum active children per agent session (default 5).
+    #[serde(default = "default_max_children_per_agent")]
+    pub max_children_per_agent: u32,
+    /// Global concurrency lane cap (default 8).
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
+    /// Default timeout for sessions_spawn in seconds (0 = no timeout).
+    #[serde(default = "default_run_timeout_seconds")]
+    pub run_timeout_seconds: u32,
+}
+
+impl Default for SubagentConfig {
+    fn default() -> Self {
+        Self {
+            max_spawn_depth: default_max_spawn_depth(),
+            max_children_per_agent: default_max_children_per_agent(),
+            max_concurrent: default_max_concurrent(),
+            run_timeout_seconds: default_run_timeout_seconds(),
+        }
+    }
+}
+
+fn default_max_spawn_depth() -> u32 {
+    1
+}
+fn default_max_children_per_agent() -> u32 {
+    5
+}
+fn default_max_concurrent() -> u32 {
+    8
+}
+fn default_run_timeout_seconds() -> u32 {
+    300
 }
 
 fn default_orchestrator_enabled() -> bool {
@@ -825,6 +912,8 @@ impl Default for Config {
                 prompt_budget: PromptBudgetConfig::default(),
                 requires: vec![],
                 workspace_tools: vec![],
+                tool_allow: vec![],
+                tool_deny: vec![],
             },
         );
 

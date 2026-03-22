@@ -35,6 +35,7 @@ pub(crate) mod prune;
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod scaffold;
 pub(crate) mod shell_executor;
+pub(crate) mod subagent_builder;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram_builder;
 pub(crate) mod tui;

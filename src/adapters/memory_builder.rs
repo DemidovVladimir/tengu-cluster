@@ -44,6 +44,31 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     (dot / denom) as f32
 }
 
+/// Apply temporal decay to memory search results (OpenClaw-compatible).
+/// Recent memories get a boost; older ones get penalized.
+/// Uses exponential decay with a half-life of 30 days.
+pub(crate) fn apply_temporal_decay(results: &mut [MemorySearchResult]) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    const HALF_LIFE_SECS: f64 = 30.0 * 24.0 * 3600.0; // 30 days
+    let decay_rate = (0.5_f64).ln() / HALF_LIFE_SECS;
+
+    for result in results.iter_mut() {
+        let age_secs = now.saturating_sub(result.entry.created_at_epoch_s) as f64;
+        let decay_factor = (decay_rate * age_secs).exp() as f32;
+        // Blend: 80% similarity + 20% temporal boost.
+        result.score = result.score * 0.8 + result.score * decay_factor * 0.2;
+    }
+
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
 pub(crate) fn budget_memories(
     results: &[MemorySearchResult],
     max_tokens: usize,
@@ -138,7 +163,7 @@ impl<'a> MemoryService<'a> {
         };
         let results = self.store.search_by_vector(&embedding, fetch_k).await?;
 
-        let filtered: Vec<MemorySearchResult> = if required_metadata.is_empty() {
+        let mut filtered: Vec<MemorySearchResult> = if required_metadata.is_empty() {
             results
         } else {
             results
@@ -150,6 +175,9 @@ impl<'a> MemoryService<'a> {
                 })
                 .collect()
         };
+
+        // Apply temporal decay — recent memories rank higher (OpenClaw-compatible).
+        apply_temporal_decay(&mut filtered);
 
         let budgeted = budget_memories(&filtered, max_tokens);
         Ok(budgeted.into_iter().cloned().collect())
@@ -305,6 +333,7 @@ pub(crate) struct MemoryServiceHandle {
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
     secret_registry: Arc<SecretRegistry>,
+    workspace: Option<PathBuf>,
     fallback_runtime: Option<tokio::runtime::Runtime>,
 }
 
@@ -325,8 +354,14 @@ impl MemoryToolExecutionAdapter {
         Ok(Self {
             handle,
             secret_registry,
+            workspace: None,
             fallback_runtime,
         })
+    }
+
+    pub(crate) fn with_workspace(mut self, workspace: PathBuf) -> Self {
+        self.workspace = Some(workspace);
+        self
     }
 
     fn run_async<F, T>(&self, future: F) -> T
@@ -345,26 +380,196 @@ impl MemoryToolExecutionAdapter {
 }
 
 pub(crate) fn memory_tool_defs() -> Vec<RegisteredTool> {
-    vec![RegisteredTool::new(
-        "remember",
-        "Store a fact or insight in long-term memory for future retrieval across sessions.",
-        json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact, insight, or information to remember"
+    vec![
+        RegisteredTool::new(
+            "remember",
+            "Store a fact or insight in long-term vector memory for semantic retrieval across sessions.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The fact, insight, or information to remember"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
+                        "additionalProperties": { "type": "string" }
+                    }
                 },
-                "metadata": {
-                    "type": "object",
-                    "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
-                    "additionalProperties": { "type": "string" }
-                }
-            },
-            "required": ["content"]
-        }),
-        EffectClass::Read,
-    )]
+                "required": ["content"]
+            }),
+            EffectClass::Read,
+        ),
+        RegisteredTool::new(
+            "memory_write",
+            "Append a note to today's daily memory log (memory/YYYY-MM-DD.md) or to \
+             the curated MEMORY.md file. Use this to persist durable knowledge, decisions, \
+             or context that should survive compaction and be available in future sessions.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The text to append (markdown)"
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Where to write: 'daily' (default) appends to today's log, 'memory' appends to MEMORY.md",
+                        "enum": ["daily", "memory"]
+                    }
+                },
+                "required": ["content"]
+            }),
+            EffectClass::Write,
+        )
+        .with_activity_description("Writing to memory"),
+        RegisteredTool::new(
+            "memory_search",
+            "Mandatory recall step: semantically search long-term vector memory before \
+             answering questions about prior work, decisions, dates, people, preferences, \
+             or todos. Returns top snippets ranked by relevance with temporal decay \
+             (recent memories rank higher). Use memory_get to pull specific lines after.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language search query (e.g. 'authentication setup decisions')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 5)"
+                    }
+                },
+                "required": ["query"]
+            }),
+            EffectClass::Read,
+        )
+        .with_activity_description("Searching memory"),
+        RegisteredTool::new(
+            "memory_get",
+            "Read a memory file from the workspace with optional line range. \
+             Use after memory_search to pull only the needed lines and keep context small. \
+             Returns empty text if the file does not exist yet.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to workspace (e.g. 'MEMORY.md', 'memory/2026-03-21.md')"
+                    },
+                    "from": {
+                        "type": "integer",
+                        "description": "Start line number (1-based). If omitted, reads from the beginning."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return. If omitted, returns the whole file."
+                    }
+                },
+                "required": ["path"]
+            }),
+            EffectClass::Read,
+        )
+        .with_activity_description("Reading memory"),
+    ]
+}
+
+/// Append a timestamped entry to a daily log file.
+fn append_daily_log(workspace: &Path, content: &str) -> Result<String> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let time = chrono::Local::now().format("%H:%M").to_string();
+    let memory_dir = workspace.join("memory");
+    std::fs::create_dir_all(&memory_dir)
+        .with_context(|| format!("cannot create {}", memory_dir.display()))?;
+    let log_path = memory_dir.join(format!("{today}.md"));
+    let entry = format!("\n## {time}\n\n{content}\n");
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("cannot open {}", log_path.display()))?;
+    f.write_all(entry.as_bytes())?;
+    Ok(format!("Appended to memory/{today}.md"))
+}
+
+/// Append content to MEMORY.md.
+fn append_memory_md(workspace: &Path, content: &str) -> Result<String> {
+    let path = workspace.join("MEMORY.md");
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    f.write_all(format!("\n{content}\n").as_bytes())?;
+    Ok("Appended to MEMORY.md".to_string())
+}
+
+/// Read a memory file with optional line range (OpenClaw-compatible snippet read).
+/// `from_line` is 1-based. If omitted, reads from the beginning.
+/// `max_lines` limits the number of lines returned.
+fn read_memory_file_ranged(
+    workspace: &Path,
+    rel_path: &str,
+    from_line: Option<usize>,
+    max_lines: Option<usize>,
+) -> Result<String> {
+    let safe = rel_path.replace("..", "").replace('\\', "/");
+    let target = workspace.join(&safe);
+    if !target.exists() {
+        return Ok(String::new());
+    }
+    let content = std::fs::read_to_string(&target)
+        .with_context(|| format!("cannot read {}", target.display()))?;
+
+    match (from_line, max_lines) {
+        (None, None) => Ok(content),
+        _ => {
+            let start = from_line.unwrap_or(1).saturating_sub(1); // convert to 0-based
+            let lines: Vec<&str> = content.lines().collect();
+            let end = match max_lines {
+                Some(n) => (start + n).min(lines.len()),
+                None => lines.len(),
+            };
+            if start >= lines.len() {
+                return Ok(String::new());
+            }
+            Ok(lines[start..end].join("\n"))
+        }
+    }
+}
+
+/// Load today's and yesterday's daily log content for system prompt injection.
+pub(crate) fn load_daily_logs(workspace: &Path, max_chars: usize) -> Option<String> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let yesterday = (chrono::Local::now() - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let memory_dir = workspace.join("memory");
+
+    let mut parts = Vec::new();
+    for date in &[&yesterday, &today] {
+        let path = memory_dir.join(format!("{date}.md"));
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if !content.trim().is_empty() {
+                parts.push(format!("# Daily log {date}\n\n{content}"));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut combined = parts.join("\n\n---\n\n");
+    if combined.len() > max_chars {
+        combined.truncate(max_chars);
+        combined.push_str("\n...(truncated)");
+    }
+    Some(combined)
 }
 
 impl ToolExecutionPort for MemoryToolExecutionAdapter {
@@ -404,6 +609,97 @@ impl ToolExecutionPort for MemoryToolExecutionAdapter {
 
                 Ok(format!("Stored memory with id: {}", id))
             }
+
+            "memory_search" => {
+                let query = call
+                    .arguments
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("memory_search: missing 'query' argument"))?;
+                let limit = call
+                    .arguments
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as usize;
+
+                let service =
+                    MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
+
+                let results = self.run_async(service.recall(query, limit, 2000))?;
+
+                if results.is_empty() {
+                    Ok("No matching memories found.".to_string())
+                } else {
+                    let mut output = Vec::new();
+                    for (i, result) in results.iter().enumerate() {
+                        let meta: String = if result.entry.metadata.is_empty() {
+                            String::new()
+                        } else {
+                            let tags: Vec<String> = result
+                                .entry
+                                .metadata
+                                .iter()
+                                .map(|(k, v)| format!("{}={}", k, v))
+                                .collect();
+                            format!(" [{}]", tags.join(", "))
+                        };
+                        output.push(format!(
+                            "{}. (score: {:.2}{}) {}",
+                            i + 1,
+                            result.score,
+                            meta,
+                            result.entry.content
+                        ));
+                    }
+                    Ok(output.join("\n\n"))
+                }
+            }
+
+            "memory_write" => {
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("memory_write: no workspace configured"))?;
+                let raw_content = call
+                    .arguments
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("memory_write: missing 'content' argument"))?;
+                let content = self.secret_registry.redact(raw_content);
+                let target = call
+                    .arguments
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("daily");
+                match target {
+                    "memory" => append_memory_md(workspace, &content),
+                    _ => append_daily_log(workspace, &content),
+                }
+            }
+
+            "memory_get" => {
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("memory_get: no workspace configured"))?;
+                let path = call
+                    .arguments
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("memory_get: missing 'path' argument"))?;
+                let from_line = call
+                    .arguments
+                    .get("from")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                let max_lines = call
+                    .arguments
+                    .get("lines")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+                read_memory_file_ranged(workspace, path, from_line, max_lines)
+            }
+
             other => Err(anyhow::anyhow!("unknown memory tool: {}", other)),
         }
     }

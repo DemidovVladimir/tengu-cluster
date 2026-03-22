@@ -13,7 +13,8 @@ use anyhow::Result;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::engine_builder::{collect_engine_response, ToolExecutor, ToolResultObserver};
 use crate::adapters::flow_builder::{
-    enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
+    build_memory_flush_messages, enforce_history_turn_limit, maybe_compact_flow_with_workspace,
+    resolve_flow_key, should_trigger_memory_flush,
 };
 use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::prompt_budget::{assemble_recent_history, compute_base_input_budget};
@@ -290,12 +291,74 @@ impl<'a> ChatRuntimeService<'a> {
         state.messages.push(user_message);
         enforce_history_turn_limit(&mut state.messages, self.history_turn_limit);
 
-        let _ = maybe_compact_flow(
+        let ws = self
+            .agent_config
+            .workspace
+            .as_ref()
+            .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+
+        // OpenClaw-compatible: pre-compaction memory flush.
+        // If approaching compaction threshold and memory tools are available,
+        // run a silent agentic turn to let the model persist durable notes.
+        let memory_flush_config = self.agent_config.flow.memory_flush.clone();
+        let flush_enabled = memory_flush_config
+            .as_ref()
+            .map_or(true, |c| c.enabled);
+        let flush_soft = memory_flush_config
+            .as_ref()
+            .map_or(4000, |c| c.soft_threshold_tokens);
+        if flush_enabled
+            && self.memory_service.is_some()
+            && self.tool_executor.is_some()
+            && should_trigger_memory_flush(
+                state.flow_token_usage,
+                self.compaction_policy.threshold_tokens,
+                flush_soft,
+                state.memory_flush_triggered,
+            )
+        {
+            tracing::info!(
+                flow_tokens = state.flow_token_usage,
+                threshold = self.compaction_policy.threshold_tokens,
+                "Pre-compaction memory flush: running silent turn"
+            );
+            state.memory_flush_triggered = true;
+            let (sys_addition, user_prompt) = build_memory_flush_messages();
+
+            // Inject the flush turn: system prompt addition + user prompt.
+            let flush_context = EngineContext {
+                workspace: self.agent_config.workspace.clone(),
+                system_prompt: Some(format!("{}\n\n{}", self.system_prompt, sys_addition)),
+            };
+            let flush_messages = vec![Message {
+                role: Role::User,
+                content: user_prompt,
+                tool_call_id: None,
+                tool_calls: None,
+            }];
+            // Run a single turn with memory tools available — the model will
+            // call memory_write if it has durable notes, or reply empty.
+            let _ = collect_engine_response(
+                self.engine,
+                &flush_messages,
+                self.tools,
+                &flush_context,
+                self.tool_executor,
+                None,
+                self.cancel,
+                None,
+                Some(3), // max 3 tool rounds for the flush turn
+            )
+            .await;
+        }
+
+        let _ = maybe_compact_flow_with_workspace(
             &flow_key,
             &mut state.messages,
             &mut state.flow_token_usage,
             self.compaction_policy,
             "pre-engine",
+            ws.as_deref(),
         )
         .await;
 
@@ -428,12 +491,13 @@ impl<'a> ChatRuntimeService<'a> {
             state.messages.push(assistant_message);
             enforce_history_turn_limit(&mut state.messages, self.history_turn_limit);
 
-            let _ = maybe_compact_flow(
+            let _ = maybe_compact_flow_with_workspace(
                 &flow_key,
                 &mut state.messages,
                 &mut state.flow_token_usage,
                 self.compaction_policy,
                 "post-engine",
+                ws.as_deref(),
             )
             .await;
         }

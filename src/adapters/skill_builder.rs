@@ -130,6 +130,12 @@ struct SkillFrontmatter {
     effect_class: EffectClass,
     env_vars: Vec<SkillEnvVar>,
     commands: Vec<SkillCommand>,
+    /// Required binaries on PATH (OpenClaw-compatible gating).
+    requires_bins: Vec<String>,
+    /// Required environment variables (OpenClaw-compatible gating).
+    requires_env: Vec<String>,
+    /// OS restriction: "darwin", "linux", "windows" (empty = all).
+    os: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -159,8 +165,12 @@ struct FreshSkillEntry {
 // ===========================================================================
 
 /// Parse a skill file, trying frontmatter format first, falling back to classic.
+/// Applies OpenClaw-compatible runtime gating (os, requires_bins, requires_env).
 fn parse_skill_file(content: &str) -> Result<ParsedSkill> {
     if let Some((fm, body)) = try_parse_frontmatter(content) {
+        if !check_skill_gates(&fm) {
+            bail!("Skill '{}' gated out by runtime requirements", fm.name);
+        }
         let definition = frontmatter_to_skill_definition(&fm);
         Ok(ParsedSkill::Api {
             definition,
@@ -365,6 +375,61 @@ fn parse_policy(
 
 // --- Frontmatter parsing ---
 
+/// Check OpenClaw-compatible runtime eligibility gates.
+/// Returns `true` if the skill should be loaded.
+fn check_skill_gates(fm: &SkillFrontmatter) -> bool {
+    // OS gate.
+    if !fm.os.is_empty() {
+        let current_os = std::env::consts::OS; // "macos", "linux", "windows"
+        let matches = fm.os.iter().any(|o| {
+            let normalized = o.to_lowercase();
+            normalized == current_os
+                || (normalized == "darwin" && current_os == "macos")
+                || (normalized == "macos" && current_os == "macos")
+        });
+        if !matches {
+            tracing::debug!(
+                skill = %fm.name,
+                required_os = ?fm.os,
+                current_os,
+                "Skill gated out by OS requirement"
+            );
+            return false;
+        }
+    }
+
+    // Binary gate: all listed binaries must be on PATH.
+    for bin in &fm.requires_bins {
+        let found = std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file())
+            })
+            .unwrap_or(false);
+        if !found {
+            tracing::debug!(
+                skill = %fm.name,
+                missing_bin = %bin,
+                "Skill gated out by missing binary"
+            );
+            return false;
+        }
+    }
+
+    // Env var gate: all listed vars must be non-empty.
+    for var in &fm.requires_env {
+        if std::env::var(var).unwrap_or_default().is_empty() {
+            tracing::debug!(
+                skill = %fm.name,
+                missing_env = %var,
+                "Skill gated out by missing env var"
+            );
+            return false;
+        }
+    }
+
+    true
+}
+
 fn validate_base_url(url: &str) -> bool {
     (url.starts_with("https://") || url.starts_with("http://"))
         && !url
@@ -408,11 +473,17 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     let mut effect_class = None;
     let mut env_vars: Vec<SkillEnvVar> = Vec::new();
     let mut commands: Vec<SkillCommand> = Vec::new();
+    let mut requires_bins: Vec<String> = Vec::new();
+    let mut requires_env: Vec<String> = Vec::new();
+    let mut os: Vec<String> = Vec::new();
 
     #[derive(PartialEq)]
     enum ListBlock {
         EnvVars,
         Commands,
+        RequiresBins,
+        RequiresEnv,
+        Os,
     }
     let mut current_block: Option<ListBlock> = None;
 
@@ -450,6 +521,24 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                             });
                         }
                     }
+                    ListBlock::RequiresBins => {
+                        let item = line.trim_start_matches('-').trim();
+                        if !item.is_empty() {
+                            requires_bins.push(item.to_string());
+                        }
+                    }
+                    ListBlock::RequiresEnv => {
+                        let item = line.trim_start_matches('-').trim();
+                        if !item.is_empty() {
+                            requires_env.push(item.to_string());
+                        }
+                    }
+                    ListBlock::Os => {
+                        let item = line.trim_start_matches('-').trim();
+                        if !item.is_empty() {
+                            os.push(item.to_string());
+                        }
+                    }
                 }
                 continue;
             }
@@ -478,6 +567,24 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                         current_block = Some(ListBlock::Commands);
                     }
                 }
+                "requires_bins" | "requires-bins" => {
+                    if v.is_empty() {
+                        current_block = Some(ListBlock::RequiresBins);
+                    }
+                }
+                "requires_env" | "requires-env" => {
+                    if v.is_empty() {
+                        current_block = Some(ListBlock::RequiresEnv);
+                    }
+                }
+                "os" => {
+                    if v.is_empty() {
+                        current_block = Some(ListBlock::Os);
+                    } else {
+                        // Single-value: os: darwin
+                        os.push(v.to_string());
+                    }
+                }
                 _ => {}
             }
         }
@@ -504,6 +611,9 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             effect_class,
             env_vars,
             commands,
+            requires_bins,
+            requires_env,
+            os,
         },
         body.to_string(),
     ))
@@ -1025,16 +1135,20 @@ impl FileSystemSkillSource {
     }
 
     fn skill_directories(&self) -> Vec<PathBuf> {
-        let mut dirs = vec![
-            self.workspace.join(".tengu/skills"),
-            self.workspace.join("skills"),
-        ];
-        if let Ok(cwd) = std::env::current_dir() {
-            let global = cwd.join("skills");
-            if global != self.workspace.join("skills") {
-                dirs.push(global);
-            }
+        // Three-tier hierarchy (lowest → highest precedence, last wins):
+        //   1. Managed (~/.tengu/skills/) — shared across all agents
+        //   2. Workspace (.tengu/skills/, skills/) — per-workspace
+        let mut dirs = Vec::new();
+
+        // Managed skills (lowest precedence).
+        if let Some(home) = dirs_next::home_dir() {
+            dirs.push(home.join(".tengu/skills"));
         }
+
+        // Workspace skills (highest precedence — override managed).
+        dirs.push(self.workspace.join(".tengu/skills"));
+        dirs.push(self.workspace.join("skills"));
+
         dirs
     }
 }
@@ -1167,6 +1281,52 @@ pub(crate) fn build_system_prompt(
     build_system_prompt_with_tools(agent_config, advertise_workspace_tools, skill_contexts, &[])
 }
 
+/// Build a minimal system prompt for subagents (OpenClaw-compatible).
+/// Skips bootstrap files, daily logs, and skill catalogs to save context budget.
+pub(crate) fn build_subagent_system_prompt(
+    agent_config: &AgentConfig,
+    tools: &[ToolDef],
+) -> String {
+    let name = agent_config.identity.name.as_deref().unwrap_or("Tengu");
+    let mut parts = Vec::new();
+
+    // 1. Minimal identity + rules.
+    let preamble = format!(
+        "You are {name}, a focused sub-agent.\n\n\
+         Rules:\n\
+         - NEVER fabricate data. Report only real results from tool output.\n\
+         - Execute the task using available tools. Be thorough and concise.\n\
+         - When done, provide a clear summary of what was accomplished."
+    );
+    parts.push(preamble);
+
+    // 2. Role label.
+    if let Some(ref role_str) = agent_config.role {
+        if let Ok(role) = role_str.parse::<AgentRole>() {
+            parts.push(format!("Your role: {}.", role.label()));
+        }
+    }
+
+    // 3. Custom instructions (truncated for subagents).
+    if let Some(ref instructions) = agent_config.identity.instructions {
+        if !instructions.trim().is_empty() {
+            let truncated = truncate_to_token_budget(instructions, 1000);
+            parts.push(truncated);
+        }
+    }
+
+    // 4. Tool listing (compact).
+    if !tools.is_empty() {
+        let mut lines = vec!["# Available tools".to_string()];
+        for tool in tools {
+            lines.push(format!("- {}: {}", tool.name, tool.description));
+        }
+        parts.push(lines.join("\n"));
+    }
+
+    parts.join("\n\n")
+}
+
 /// Build system prompt with dynamic tool listing generated from ToolDef metadata.
 pub(crate) fn build_system_prompt_with_tools(
     agent_config: &AgentConfig,
@@ -1216,10 +1376,24 @@ pub(crate) fn build_system_prompt_with_tools(
         }
     }
 
-    // 4. Workspace files — IDENTITY.md, PROFILE.md, CONTEXT.md.
+    // 4. Workspace bootstrap files (OpenClaw-compatible).
+    //    Loaded every turn to provide persistent context: agent instructions,
+    //    user profile, identity, and file-based long-term memory.
     if let Some(ref workspace) = agent_config.workspace {
-        for filename in &["IDENTITY.md", "PROFILE.md", "CONTEXT.md"] {
-            let path = workspace.join(filename);
+        let ws = crate::adapters::tool_builder::expand_tilde(workspace);
+        for filename in &[
+            "AGENTS.md",
+            "SOUL.md",
+            "TOOLS.md",
+            "USER.md",
+            "IDENTITY.md",
+            "PROFILE.md",
+            "CONTEXT.md",
+            "BOOTSTRAP.md",
+            "HEARTBEAT.md",
+            "MEMORY.md",
+        ] {
+            let path = ws.join(filename);
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if !content.trim().is_empty() {
                     let truncated = truncate_to_token_budget(&content, max_file_tokens);
@@ -1235,22 +1409,88 @@ pub(crate) fn build_system_prompt_with_tools(
         }
     }
 
-    // 5. Skill context fragments.
+    // 4b. Daily memory logs (today + yesterday) — OpenClaw-compatible.
+    if let Some(ref workspace) = agent_config.workspace {
+        let ws = crate::adapters::tool_builder::expand_tilde(workspace);
+        if let Some(logs) =
+            crate::adapters::memory_builder::load_daily_logs(&ws, max_file_tokens * 4)
+        {
+            let chunk_tokens = estimate_tokens_approx_min1(&logs);
+            if total_tokens + chunk_tokens <= max_total_tokens {
+                total_tokens += chunk_tokens;
+                parts.push(logs);
+            }
+        }
+    }
+
+    // 5. Skill context — progressive disclosure (OpenClaw-compatible).
+    //    Shell skills still inject full context (they create tools).
+    //    API/doc skills use compact catalog: name + description + path.
+    //    The agent uses read_file to load full SKILL.md on demand, saving context.
+    let mut has_shell_skills = false;
+    let mut catalog_entries: Vec<String> = Vec::new();
+
     for ctx in skill_contexts {
         if ctx.trim().is_empty() {
             continue;
         }
-        let truncated = truncate_to_token_budget(ctx, max_skill_context_tokens);
-        let chunk_tokens = estimate_tokens_approx_min1(&truncated);
-        if total_tokens + chunk_tokens > max_total_tokens {
-            break;
+        // Shell skill context is short (just execution details) — inject directly.
+        // API skill context is large (full docs) — use catalog instead.
+        let is_large = estimate_tokens_approx_min1(ctx) > 200;
+        if is_large {
+            // Extract skill name from preamble "# name — API reference"
+            let name = ctx
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("# "))
+                .and_then(|l| l.split(" — ").next())
+                .unwrap_or("unknown")
+                .trim();
+            let desc_line = ctx
+                .lines()
+                .skip(1)
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim();
+            let desc_preview = if desc_line.len() > 120 {
+                format!("{}...", &desc_line[..120])
+            } else {
+                desc_line.to_string()
+            };
+            catalog_entries.push(format!(
+                "  <skill><name>{}</name><description>{}</description></skill>",
+                name, desc_preview
+            ));
+        } else {
+            has_shell_skills = true;
+            let truncated = truncate_to_token_budget(ctx, max_skill_context_tokens);
+            let chunk_tokens = estimate_tokens_approx_min1(&truncated);
+            if total_tokens + chunk_tokens > max_total_tokens {
+                break;
+            }
+            total_tokens += chunk_tokens;
+            parts.push(truncated);
         }
-        total_tokens += chunk_tokens;
-        parts.push(truncated);
     }
 
-    // 5b. Skill tool usage instructions.
-    if !skill_contexts.is_empty() {
+    // Inject compact skill catalog for API/doc skills.
+    if !catalog_entries.is_empty() {
+        let catalog = format!(
+            "<available_skills>\n{}\n</available_skills>\n\n\
+             When a task matches a skill above, use read_file to load its SKILL.md \
+             from the skills/ directory for detailed instructions. \
+             Follow the documented workflow exactly with available tools.",
+            catalog_entries.join("\n")
+        );
+        let cat_tokens = estimate_tokens_approx_min1(&catalog);
+        if total_tokens + cat_tokens <= max_total_tokens {
+            total_tokens += cat_tokens;
+            parts.push(catalog);
+        }
+    }
+
+    // 5b. Skill tool usage instructions (only for shell skills injected inline).
+    if has_shell_skills {
         let instruction = "When a skill documents a workflow, follow it exactly with the available tools. If a registered skill tool exists, call it directly. Otherwise use the generic platform tools the skill describes. Do NOT write scripts or suggest manual steps.";
         let inst_tokens = estimate_tokens_approx_min1(instruction);
         if total_tokens + inst_tokens <= max_total_tokens + max_total_tokens / 20 {
