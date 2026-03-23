@@ -36,13 +36,12 @@ use crate::adapters::chat_builder::{
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::memory_builder::MemoryService;
-use crate::adapters::ports::{ToolActivityPort, ToolApprovalPort};
-use crate::adapters::approval::AllowAllApproval;
+use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::Config;
 use crate::adapters::types::{
-    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient, RegisteredTool,
-    ToolCall,
+    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient,
+    ToolCall, ToolDef,
 };
 use crate::adapters::Engine;
 
@@ -53,8 +52,6 @@ use crate::adapters::Engine;
 /// Maximum characters per Telegram message (with safety margin).
 const TELEGRAM_MAX_LEN: usize = 4000;
 
-/// Timeout for waiting on user approval via inline keyboard.
-const APPROVAL_TIMEOUT_SECS: u64 = 60;
 
 /// How often to sweep for idle user states.
 const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -63,30 +60,47 @@ const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_s
 const IDLE_EVICTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1800);
 
 // ===========================================================================
-// TelegramPipe — low-level Telegram API wrapper
+// Helpers
 // ===========================================================================
 
-/// Map of approval_id → oneshot sender for resolving inline keyboard responses.
-type PendingApprovals = Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>;
+/// Build a fallback reply when the LLM produced no text but executed tools.
+fn build_tool_summary_fallback(tool_outcomes: &[(String, String)]) -> String {
+    let mut seen = Vec::new();
+    for (name, _) in tool_outcomes {
+        if !seen.contains(name) {
+            seen.push(name.clone());
+        }
+    }
+    format!(
+        "Done. Completed {} tool call{}: {}",
+        tool_outcomes.len(),
+        if tool_outcomes.len() == 1 { "" } else { "s" },
+        seen.join(", ")
+    )
+}
+
+// ===========================================================================
+// TelegramPipe — low-level Telegram API wrapper
+// ===========================================================================
 
 /// Telegram bot pipe backed by teloxide.
 struct TelegramPipe {
     token: String,
     shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
-    pending_approvals: Option<PendingApprovals>,
     turn_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl TelegramPipe {
-    fn with_approvals(token: String, pending: PendingApprovals, cancel: Arc<AtomicBool>) -> Self {
+    /// Create a new pipe with the given bot token and cancellation flag.
+    fn new(token: String, cancel: Arc<AtomicBool>) -> Self {
         Self {
             token,
             shutdown: Arc::new(Mutex::new(None)),
-            pending_approvals: Some(pending),
             turn_cancel: Some(cancel),
         }
     }
 
+    /// Start the teloxide dispatcher and forward incoming messages to `inbound_tx`.
     async fn connect(
         &self,
         inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
@@ -105,7 +119,6 @@ impl TelegramPipe {
         *self.shutdown.lock().await = Some(shutdown_tx);
 
         let inbound_tx = inbound_tx.clone();
-        let pending_approvals = self.pending_approvals.clone();
         let turn_cancel = self.turn_cancel.clone();
 
         tokio::spawn(async move {
@@ -277,52 +290,7 @@ impl TelegramPipe {
                     }
                 });
 
-            let callback_handler = Update::filter_callback_query().endpoint(
-                move |q: teloxide::types::CallbackQuery, bot: Bot| {
-                    let pending = pending_approvals.clone();
-                    async move {
-                        if let Some(data) = q.data {
-                            let (approved, approval_id) =
-                                if let Some(id) = data.strip_prefix("approve:") {
-                                    (true, id.to_string())
-                                } else if let Some(id) = data.strip_prefix("deny:") {
-                                    (false, id.to_string())
-                                } else {
-                                    return Ok::<(), teloxide::RequestError>(());
-                                };
-
-                            let answer_text = if approved { "Approved" } else { "Denied" };
-                            let _ = bot.answer_callback_query(&q.id).text(answer_text).await;
-
-                            if let Some(msg) = q.message {
-                                if let Some(text) = msg.regular_message().and_then(|m| m.text()) {
-                                    let status = if approved {
-                                        "✅ Approved"
-                                    } else {
-                                        "❌ Denied"
-                                    };
-                                    let _ = bot
-                                        .edit_message_text(
-                                            msg.chat().id,
-                                            msg.id(),
-                                            format!("{}\n\n{}", text, status),
-                                        )
-                                        .await;
-                                }
-                            }
-
-                            if let Some(ref p) = pending {
-                                if let Some(tx) = p.lock().unwrap().remove(&approval_id) {
-                                    let _ = tx.send(approved);
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                },
-            );
-
-            let handler = dptree::entry().branch(msg_handler).branch(callback_handler);
+            let handler = dptree::entry().branch(msg_handler);
 
             let mut dispatcher = Dispatcher::builder(bot, handler)
                 .enable_ctrlc_handler()
@@ -339,6 +307,7 @@ impl TelegramPipe {
         Ok(())
     }
 
+    /// Signal the dispatcher to shut down gracefully.
     async fn disconnect(&self) -> Result<()> {
         if let Some(tx) = self.shutdown.lock().await.take() {
             let _ = tx.send(());
@@ -346,6 +315,7 @@ impl TelegramPipe {
         Ok(())
     }
 
+    /// Send a "typing…" indicator to the target chat.
     async fn send_chat_action(&self, target: &Recipient) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::{ChatAction, ChatId};
@@ -364,51 +334,7 @@ impl TelegramPipe {
         Ok(())
     }
 
-    fn remove_pending_approval(&self, approval_id: &str) {
-        if let Some(ref pending) = self.pending_approvals {
-            pending.lock().unwrap().remove(approval_id);
-        }
-    }
-
-    async fn send_inline_approval(
-        &self,
-        target: &Recipient,
-        approval_id: &str,
-        text: &str,
-    ) -> Result<tokio::sync::oneshot::Receiver<bool>> {
-        use teloxide::prelude::*;
-        use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup};
-
-        let pending = self
-            .pending_approvals
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Approval support not configured"))?;
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        pending.lock().unwrap().insert(approval_id.to_string(), tx);
-
-        let bot = Bot::new(&self.token);
-        let chat_id: i64 = target
-            .thread_id
-            .as_deref()
-            .or(Some(&target.peer_id))
-            .unwrap()
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid chat_id"))?;
-
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback("✅ Approve", format!("approve:{}", approval_id)),
-            InlineKeyboardButton::callback("❌ Deny", format!("deny:{}", approval_id)),
-        ]]);
-
-        bot.send_message(ChatId(chat_id), text)
-            .reply_markup(keyboard)
-            .await
-            .map_err(|e| anyhow::anyhow!("send_inline_approval failed: {}", e))?;
-
-        Ok(rx)
-    }
-
+    /// Send a plain text message to the target chat.
     async fn send_text(&self, target: &Recipient, text: &str, _opts: &DeliveryOptions) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::ChatId;
@@ -474,13 +400,12 @@ type CurrentRecipient = Arc<std::sync::Mutex<Option<Recipient>>>;
 /// Telegram adapter for tool progress — logs to tracing only, no chat messages.
 struct TelegramToolActivityAdapter {
     agent_label: String,
-    tools: Vec<RegisteredTool>,
 }
 
 impl ToolActivityPort for TelegramToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
         let (title, detail) =
-            crate::adapters::tool_builder::build_tool_activity_text(call, &self.tools);
+            crate::adapters::tool_builder::build_tool_activity_text(call);
         let mut text = format!("[{}] {}", self.agent_label, title);
         if let Some(detail) = detail {
             text.push_str(": ");
@@ -497,122 +422,12 @@ impl ToolActivityPort for TelegramToolActivityAdapter {
 
 fn make_tool_activity_adapter(
     agent_label: impl Into<String>,
-    tools: &[RegisteredTool],
 ) -> Arc<dyn ToolActivityPort> {
     Arc::new(TelegramToolActivityAdapter {
         agent_label: agent_label.into(),
-        tools: tools.to_vec(),
     })
 }
 
-/// Telegram inline keyboard approval adapter.
-struct TelegramInlineApprovalAdapter {
-    pipe: Arc<TelegramPipe>,
-    current_recipient: CurrentRecipient,
-    cancel: Arc<AtomicBool>,
-}
-
-impl ToolApprovalPort for TelegramInlineApprovalAdapter {
-    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        let recipient = self
-            .current_recipient
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("No recipient set for approval"))?;
-
-        let (title, description, preview) = crate::adapters::tool_builder::build_approval_text(call);
-        let approval_id = format!("tool_{}", uuid::Uuid::new_v4().simple());
-        let mut text = format!("🔐 *{}*\n{}", title, description);
-        if !preview.is_empty() {
-            let truncated = if preview.len() > 500 {
-                let mut end = 500;
-                while end > 0 && !preview.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}…", &preview[..end])
-            } else {
-                preview
-            };
-            text.push_str(&format!("\n```\n{}\n```", truncated));
-        }
-
-        let pipe = Arc::clone(&self.pipe);
-        let aid = approval_id.clone();
-
-        tokio::task::block_in_place(move || {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async {
-                match pipe.send_inline_approval(&recipient, &aid, &text).await {
-                    Ok(rx) => {
-                        let cancel_flag = Arc::clone(&self.cancel);
-                        let cancel_check = async {
-                            loop {
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                                if cancel_flag.load(Ordering::Relaxed) {
-                                    return;
-                                }
-                            }
-                        };
-
-                        let result = tokio::select! {
-                            approval = tokio::time::timeout(
-                                std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
-                                rx,
-                            ) => {
-                                match approval {
-                                    Ok(Ok(approved)) => {
-                                        info!(tool = %call.name, approved, "Inline keyboard approval response");
-                                        if !approved {
-                                            self.cancel.store(true, Ordering::Relaxed);
-                                        }
-                                        approved
-                                    }
-                                    Ok(Err(_)) => {
-                                        warn!(tool = %call.name, "Approval channel closed — denying");
-                                        self.cancel.store(true, Ordering::Relaxed);
-                                        false
-                                    }
-                                    Err(_) => {
-                                        warn!(tool = %call.name, "Approval timed out — denying");
-                                        self.cancel.store(true, Ordering::Relaxed);
-                                        false
-                                    }
-                                }
-                            }
-                            _ = cancel_check => {
-                                info!(tool = %call.name, "Approval cancelled by /stop");
-                                false
-                            }
-                        };
-                        pipe.remove_pending_approval(&aid);
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        error!(tool = %call.name, error = %e, "Failed to send approval request — denying");
-                        Ok(false)
-                    }
-                }
-            })
-        })
-    }
-}
-
-/// Approval adapter that only prompts the user for tools in the `approve_only` set.
-struct FilteredApprovalAdapter {
-    inner: Arc<dyn ToolApprovalPort>,
-    approve_only: HashSet<String>,
-}
-
-impl ToolApprovalPort for FilteredApprovalAdapter {
-    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        if self.approve_only.contains(&call.name) {
-            self.inner.request_tool_approval(call)
-        } else {
-            Ok(true)
-        }
-    }
-}
 
 // ===========================================================================
 // Per-agent runtime state
@@ -625,10 +440,10 @@ struct TelegramAgentState {
     engine: Arc<dyn Engine>,
     engine_info: EngineInfo,
     workspace: Option<std::path::PathBuf>,
-    base_tools: Vec<RegisteredTool>,
+    base_tools: Vec<ToolDef>,
     skill_source: Option<FileSystemSkillSource>,
     skill_registry: SkillRegistry,
-    current_tools: Vec<RegisteredTool>,
+    current_tools: Vec<ToolDef>,
     current_system_prompt: String,
     advertise_workspace_tools: bool,
     history_turn_limit: usize,
@@ -649,7 +464,10 @@ struct TelegramTaskExecutor {
     secret_registry: Arc<SecretRegistry>,
     cancel: Arc<AtomicBool>,
     token_budget: Option<u32>,
-    max_tool_rounds: Option<u32>,
+    max_tool_rounds: u32,
+    max_tool_result_chars: u32,
+    stream_event_timeout_secs: u64,
+    compact_result_limit: u32,
     pipe: Arc<TelegramPipe>,
     sender: Recipient,
     agent_label: String,
@@ -713,6 +531,9 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
             Some(&self.cancel),
             self.token_budget,
             self.max_tool_rounds,
+            self.max_tool_result_chars,
+            self.stream_event_timeout_secs,
+            self.compact_result_limit,
         )
         .await;
 
@@ -729,704 +550,1610 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
 }
 
 // ===========================================================================
-// Command handlers
+// TelegramSession — shared state for the message loop
 // ===========================================================================
 
-/// Orchestrate a multi-agent goal via the event-bus architecture.
-async fn handle_team(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    goal: &str,
-    media: Option<&Vec<MediaPayload>>,
-    delivery_opts: &DeliveryOptions,
-    agent_states: &mut HashMap<String, TelegramAgentState>,
-    default_agent_id: &str,
-    agent_descriptions: &HashMap<String, String>,
-    role_to_agent: &HashMap<String, String>,
-    current_recipient: &CurrentRecipient,
-    memory_handle: &Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
-    secret_registry: &Arc<SecretRegistry>,
-    approval_adapter: &Arc<dyn ToolApprovalPort>,
-    turn_cancel: &Arc<AtomicBool>,
-    dedicated_planner_engine: Option<&dyn Engine>,
-) -> Result<()> {
-    use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
-    use crate::adapters::types::{AgentTaskExecutor, TaskStatus};
+struct TelegramSession {
+    // Infrastructure
+    pipe: Arc<TelegramPipe>,
+    turn_cancel: Arc<AtomicBool>,
+    current_recipient: CurrentRecipient,
 
-    *current_recipient.lock().unwrap() = Some(sender.clone());
+    // Config
+    config: Config,
+    memory_config: crate::adapters::config::MemoryConfig,
+    allowed_users: HashSet<String>,
+    is_multi_agent: bool,
+    base_workspaces: HashMap<String, std::path::PathBuf>,
+    delivery_opts: DeliveryOptions,
 
-    // Handle attachments.
-    let mut attachment_notes: Vec<String> = Vec::new();
-    if let Some(media) = media {
-        let ws = agent_states
-            .get(default_agent_id)
-            .and_then(|a| a.workspace.as_ref());
-        if let Some(ws) = ws {
-            let attachments_dir = ws.join(".tengu-attachments");
-            std::fs::create_dir_all(&attachments_dir).ok();
-            for m in media {
-                let fname =
-                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
-                let path = attachments_dir.join(&fname);
-                match std::fs::write(&path, &m.data) {
-                    Ok(()) => {
-                        info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for orchestration");
-                        attachment_notes.push(format!(
-                            "[Attached file: {} ({}, {} bytes)]",
-                            path.display(),
-                            m.mime_type,
-                            m.data.len()
-                        ));
+    // Agents
+    agent_states: HashMap<String, TelegramAgentState>,
+    default_agent_id: String,
+    agent_descriptions: HashMap<String, String>,
+    role_to_agent: HashMap<String, String>,
+    planner_engine: Option<Arc<dyn Engine>>,
+
+    // Services
+    memory_handle: Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
+    secret_registry: Arc<SecretRegistry>,
+
+    // Per-user mutable state
+    user_states: HashMap<String, ChatLoopState>,
+    user_state_last_active: HashMap<String, std::time::Instant>,
+    last_eviction_check: std::time::Instant,
+    user_active_agent: HashMap<String, String>,
+
+    // Routing
+    skill_command_router: SkillCommandRouter,
+    activity_log: Vec<channel_runtime::ActivityEntry>,
+}
+
+impl TelegramSession {
+    // -------------------------------------------------------------------
+    // Constructor
+    // -------------------------------------------------------------------
+
+    fn build(
+        config: Config,
+        secret_registry: Arc<SecretRegistry>,
+        rt: &tokio::runtime::Runtime,
+    ) -> Result<(Self, tokio::sync::mpsc::Receiver<InboundMessage>)> {
+        let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
+            .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN env var is required"))?;
+
+        let allowed_users = build_allowed_users(&config);
+        if allowed_users.is_empty() {
+            warn!("No allowed Telegram users configured — all messages will be rejected");
+        } else {
+            info!(count = allowed_users.len(), "Telegram allowed users loaded");
+        }
+
+        let memory_config = config.memory.clone();
+
+        let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
+            ac.workspace
+                .as_ref()
+                .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+        });
+
+        let memory_handle =
+            channel_runtime::build_memory_handle(&memory_config, rt, first_workspace.as_deref());
+        let has_memory = memory_handle.is_some();
+
+        crate::adapters::scaffold::maybe_apply_scaffold(&config);
+
+        // Build per-agent runtime state.
+        let mut agent_states: HashMap<String, TelegramAgentState> = HashMap::new();
+        let mut role_to_agent: HashMap<String, String> = HashMap::new();
+        let mut default_agent_id: Option<String> = None;
+
+        for (agent_id, agent_config) in &config.agents {
+            let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config) {
+                Ok(e) => Arc::from(e),
+                Err(e) => {
+                    warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
+                    continue;
+                }
+            };
+
+            let engine_info = EngineInfo {
+                context_window: engine.context_window(),
+                diagnostics: engine.diagnostics(),
+            };
+
+            let workspace: Option<std::path::PathBuf> = agent_config
+                .workspace
+                .as_ref()
+                .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+
+            let advertise_workspace_tools =
+                engine.supports_tool_use() && !engine.manages_own_workspace();
+            let uses_tools = advertise_workspace_tools && workspace.is_some();
+            let base_tools = channel_runtime::compute_base_tools(
+                uses_tools,
+                has_memory,
+                &agent_config.workspace_tools,
+            );
+
+            let skill_source: Option<FileSystemSkillSource> = workspace
+                .as_ref()
+                .map(|ws| FileSystemSkillSource::new(ws.clone()));
+
+            let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
+            let mut skill_registry = SkillRegistry::new(base_reserved)
+                .with_allowlist(Some(agent_config.skill_packages.clone()));
+            if let Some(ref src) = skill_source {
+                skill_registry.reload(src);
+            }
+
+            let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+            let current_system_prompt = channel_runtime::rebuild_system_prompt(
+                agent_config,
+                advertise_workspace_tools,
+                &skill_registry,
+                &current_tools,
+            );
+
+            let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
+            let compaction_policy = resolve_flow_compaction_policy(
+                &agent_config.flow,
+                agent_config.limits.max_tokens_per_flow,
+                engine.context_window(),
+                engine.max_output_tokens_per_turn() as usize,
+            );
+
+            let role = agent_config.role.clone();
+            if let Some(ref role_str) = role {
+                let role_key = role_str.trim().to_lowercase().replace('-', "_");
+                if !role_key.is_empty() {
+                    role_to_agent.insert(role_key, agent_id.clone());
+                }
+            }
+            role_to_agent.insert(agent_id.clone(), agent_id.clone());
+
+            if agent_config.default || default_agent_id.is_none() {
+                if agent_config.default {
+                    default_agent_id = Some(agent_id.clone());
+                } else if default_agent_id.is_none() {
+                    default_agent_id = Some(agent_id.clone());
+                }
+            }
+
+            info!(
+                agent_id = %agent_id,
+                role = ?role,
+                tools = current_tools.len(),
+                "Registered Telegram agent"
+            );
+
+            agent_states.insert(
+                agent_id.clone(),
+                TelegramAgentState {
+                    agent_id: agent_id.clone(),
+                    agent_config: agent_config.clone(),
+                    engine,
+                    engine_info,
+                    workspace,
+                    base_tools,
+                    skill_source,
+                    skill_registry,
+                    current_tools,
+                    current_system_prompt,
+                    advertise_workspace_tools,
+                    history_turn_limit,
+                    compaction_policy,
+                    role,
+                },
+            );
+        }
+
+        let default_agent_id =
+            default_agent_id.ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
+
+        let base_workspaces: HashMap<String, std::path::PathBuf> = agent_states
+            .iter()
+            .filter_map(|(id, a)| a.workspace.as_ref().map(|w| (id.clone(), w.clone())))
+            .collect();
+
+        // Inject team awareness into each agent's system prompt.
+        if agent_states.len() > 1 {
+            let mut team_block = String::from("\n\n## Team Members\n");
+            team_block.push_str(
+                "If a request is outside your expertise, suggest the user route to the right agent.\n",
+            );
+            team_block.push_str("Format: @role: message\n\n");
+            for state in agent_states.values() {
+                let role_key = state.role.as_deref().unwrap_or(&state.agent_id);
+                let name = state
+                    .agent_config
+                    .identity
+                    .name
+                    .as_deref()
+                    .unwrap_or(&state.agent_id);
+                team_block.push_str(&format!("- @{}: {}\n", role_key, name));
+            }
+            for state in agent_states.values_mut() {
+                state.current_system_prompt.push_str(&team_block);
+            }
+        }
+
+        // Build agent descriptions for the planner prompt.
+        let agent_descriptions: HashMap<String, String> = agent_states
+            .iter()
+            .map(|(aid, astate)| {
+                let role_key = astate.role.as_deref().unwrap_or(aid).to_string();
+                let name = astate.agent_config.identity.name.as_deref().unwrap_or(aid);
+                let instructions = astate
+                    .agent_config
+                    .identity
+                    .instructions
+                    .as_deref()
+                    .unwrap_or("AI assistant");
+                let truncated = if instructions.len() > 500 {
+                    let mut end = 500;
+                    while end > 0 && !instructions.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}…", &instructions[..end])
+                } else {
+                    instructions.to_string()
+                };
+                let mut desc = format!("{}\nInstructions: {}", name, truncated);
+                if !astate.agent_config.requires.is_empty() {
+                    desc.push_str(&format!(
+                        "\nREQUIRES (must depend on): {}",
+                        astate.agent_config.requires.join(", ")
+                    ));
+                }
+                (role_key, desc)
+            })
+            .collect();
+
+        // Build dedicated planner engine if configured.
+        let planner_engine: Option<Arc<dyn Engine>> = match (
+            config
+                .orchestrator
+                .as_ref()
+                .and_then(|o| o.planner_engine.as_ref()),
+            config
+                .orchestrator
+                .as_ref()
+                .and_then(|o| o.planner_model.as_ref()),
+        ) {
+            (Some(engine_type), Some(model)) => {
+                match crate::adapters::engine_builder::build_planner_engine(engine_type, model) {
+                    Ok(e) => {
+                        info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
+                        Some(Arc::from(e))
                     }
                     Err(e) => {
-                        warn!(error = %e, "Failed to save Telegram attachment for orchestration");
+                        warn!(error = %e, "Failed to build planner engine, falling back to default agent");
+                        None
                     }
                 }
+            }
+            _ => None,
+        };
+
+        let is_multi_agent = agent_states.len() > 1;
+
+        info!(
+            agents = agent_states.len(),
+            default = %default_agent_id,
+            planner = planner_engine.as_ref().map(|_| "dedicated").unwrap_or("default agent"),
+            "Telegram multi-agent setup complete"
+        );
+
+        let turn_cancel = Arc::new(AtomicBool::new(false));
+
+        let pipe = Arc::new(TelegramPipe::new(bot_token, Arc::clone(&turn_cancel)));
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
+        rt.block_on(pipe.connect(inbound_tx))?;
+
+        let current_recipient: CurrentRecipient = Arc::new(std::sync::Mutex::new(None));
+
+        let skill_command_router = {
+            let default_agent = agent_states.get(&default_agent_id);
+            default_agent
+                .map(|a| SkillCommandRouter::from_registry(&a.skill_registry))
+                .unwrap_or_else(|| SkillCommandRouter::from_registry(&SkillRegistry::new(vec![])))
+        };
+
+        info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
+
+        let session = TelegramSession {
+            pipe,
+            turn_cancel,
+            current_recipient,
+            config,
+            memory_config,
+            allowed_users,
+            is_multi_agent,
+            base_workspaces,
+            delivery_opts: DeliveryOptions::default(),
+            agent_states,
+            default_agent_id,
+            agent_descriptions,
+            role_to_agent,
+            planner_engine,
+            memory_handle,
+            secret_registry,
+            user_states: HashMap::new(),
+            user_state_last_active: HashMap::new(),
+            last_eviction_check: std::time::Instant::now(),
+            user_active_agent: HashMap::new(),
+            skill_command_router,
+            activity_log: Vec::new(),
+        };
+
+        Ok((session, inbound_rx))
+    }
+
+    // -------------------------------------------------------------------
+    // Main loop
+    // -------------------------------------------------------------------
+
+    fn run(
+        mut self,
+        rt: tokio::runtime::Runtime,
+        mut inbound_rx: tokio::sync::mpsc::Receiver<InboundMessage>,
+    ) -> Result<()> {
+        rt.block_on(async {
+            let ctrl_c = tokio::signal::ctrl_c();
+            tokio::pin!(ctrl_c);
+
+            loop {
+                let msg = tokio::select! {
+                    msg = inbound_rx.recv() => match msg {
+                        Some(m) => m,
+                        None => break,
+                    },
+                    _ = &mut ctrl_c => {
+                        info!("Received Ctrl+C, shutting down Telegram bot");
+                        break;
+                    }
+                };
+                self.handle_message(msg).await;
+            }
+
+            self.pipe.disconnect().await.ok();
+        });
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Message dispatch
+    // -------------------------------------------------------------------
+
+    async fn handle_message(&mut self, msg: InboundMessage) {
+        let sender_id = msg.sender.peer_id.clone();
+
+        self.evict_idle_users();
+
+        // Access control.
+        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&sender_id) {
+            warn!(sender = %sender_id, "Unauthorized Telegram user");
+            let _ = self
+                .pipe
+                .send_text(&msg.sender, "Unauthorized.", &self.delivery_opts)
+                .await;
+            return;
+        }
+
+        if msg.content.starts_with('/') {
+            self.handle_slash_command(&msg, &sender_id).await;
+        } else {
+            self.route_and_chat(msg, &sender_id).await;
+        }
+    }
+
+    fn evict_idle_users(&mut self) {
+        if self.last_eviction_check.elapsed() < EVICTION_SWEEP_INTERVAL {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let idle_keys: Vec<String> = self
+            .user_state_last_active
+            .iter()
+            .filter(|(_, &last)| now.duration_since(last) >= IDLE_EVICTION_THRESHOLD)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in &idle_keys {
+            self.user_states.remove(key);
+            self.user_state_last_active.remove(key);
+        }
+        if !idle_keys.is_empty() {
+            info!(
+                evicted = idle_keys.len(),
+                remaining = self.user_states.len(),
+                "Evicted idle user states"
+            );
+        }
+        self.last_eviction_check = now;
+    }
+
+    // -------------------------------------------------------------------
+    // Slash commands
+    // -------------------------------------------------------------------
+
+    async fn handle_slash_command(&mut self, msg: &InboundMessage, sender_id: &str) {
+        if msg.content == "/stop" || msg.content.starts_with("/stop@") {
+            self.turn_cancel.store(true, Ordering::Relaxed);
+            let _ = self
+                .pipe
+                .send_text(&msg.sender, "⏹ Stop requested.", &self.delivery_opts)
+                .await;
+            return;
+        }
+
+        if msg.content.starts_with("/team") {
+            let goal = msg.content.trim_start_matches("/team").trim();
+            if goal.is_empty() || !self.is_multi_agent {
+                let hint = if !self.is_multi_agent {
+                    "Only one agent configured — /team requires multiple agents."
+                } else {
+                    "Usage: /team <goal>\nExample: /team build a full stack Rust app"
+                };
+                let _ = self
+                    .pipe
+                    .send_text(&msg.sender, hint, &self.delivery_opts)
+                    .await;
+                return;
+            }
+            let _ = self
+                .handle_team(&msg.sender, goal, msg.media.as_ref())
+                .await;
+            return;
+        }
+
+        if msg.content.starts_with("/project") {
+            let name = msg.content.trim_start_matches("/project").trim();
+            let _ = self.handle_project(&msg.sender, name, sender_id).await;
+            return;
+        }
+
+        if msg.content == "/agents" || msg.content.starts_with("/agents@") {
+            let _ = self.handle_agents(&msg.sender).await;
+            return;
+        }
+
+        let active_aid = self
+            .user_active_agent
+            .get(sender_id)
+            .cloned()
+            .unwrap_or_else(|| self.default_agent_id.clone());
+
+        if !self.agent_states.contains_key(&active_aid) {
+            return;
+        }
+
+        if msg.content == "/reset" || msg.content.starts_with("/reset@") {
+            let _ = self.handle_reset(&msg.sender, sender_id).await;
+            return;
+        }
+
+        if msg.content == "/purge" || msg.content.starts_with("/purge@") {
+            let _ = self.handle_purge(&msg.sender, sender_id).await;
+            return;
+        }
+
+        if msg.content == "/reload" {
+            let _ = self.handle_reload(&msg.sender, &active_aid).await;
+            return;
+        }
+
+        if let SkillCommandMatch::Matched {
+            skill_name,
+            command: cmd_name,
+            args,
+        } = self.skill_command_router.route(&msg.content)
+        {
+            self.user_active_agent
+                .insert(sender_id.to_string(), active_aid.clone());
+            let _ = self
+                .handle_skill_cmd(
+                    &msg.sender, sender_id, &active_aid, &skill_name, &cmd_name, &args,
+                )
+                .await;
+            return;
+        }
+
+        // Builtin command fallback (/help, /wallet, /status, etc.).
+        let state_key = format!("{}:{}", sender_id, active_aid);
+        self.user_state_last_active
+            .insert(state_key.clone(), std::time::Instant::now());
+
+        let agent = match self.agent_states.get(&active_aid) {
+            Some(a) => a,
+            None => return,
+        };
+        let skill_cmds = self.skill_command_router.list();
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+        let cmd_result = handle_chat_command(
+            &msg.content,
+            state,
+            &agent.engine_info,
+            &agent.agent_config,
+            agent.history_turn_limit,
+            agent.compaction_policy,
+            &skill_cmds,
+        );
+        match cmd_result {
+            CommandResult::Handled(output) => {
+                let reply = output.lines.join("\n");
+                let _ = self
+                    .pipe
+                    .send_text(&msg.sender, &reply, &self.delivery_opts)
+                    .await;
+            }
+            CommandResult::NotHandled => {
+                let _ = self
+                    .pipe
+                    .send_text(
+                        &msg.sender,
+                        "Unknown command. Type /help or /agents for available commands.",
+                        &self.delivery_opts,
+                    )
+                    .await;
             }
         }
     }
 
-    let goal = if attachment_notes.is_empty() {
-        goal.to_string()
-    } else {
-        format!("{}\n{}", attachment_notes.join("\n"), goal)
-    };
+    // -------------------------------------------------------------------
+    // Chat routing + execution
+    // -------------------------------------------------------------------
 
-    pipe.send_text(sender, "Planning…", delivery_opts).await?;
+    async fn route_and_chat(&mut self, msg: InboundMessage, sender_id: &str) {
+        let (mut routed_role, user_text) =
+            channel_runtime::parse_agent_routing(&msg.content, Some(&self.role_to_agent));
 
-    let fallback_engine;
-    let planner_engine: &dyn Engine = if let Some(dedicated) = dedicated_planner_engine {
-        dedicated
-    } else {
-        match agent_states.get(default_agent_id) {
-            Some(a) => {
-                fallback_engine = a.engine.clone();
-                fallback_engine.as_ref()
+        // Multi-agent classifier routing.
+        if routed_role.is_none() && self.is_multi_agent {
+            let decision = {
+                let engine_ref: Option<&dyn Engine> =
+                    if let Some(ref dedicated) = self.planner_engine {
+                        Some(dedicated.as_ref())
+                    } else {
+                        self.agent_states
+                            .get(&self.default_agent_id)
+                            .map(|a| a.engine.as_ref())
+                    };
+                match engine_ref {
+                    Some(eng) => {
+                        crate::adapters::task_builder::classify_request(
+                            eng,
+                            &user_text,
+                            &self.agent_descriptions,
+                        )
+                        .await
+                    }
+                    None => Ok(crate::adapters::types::RouteDecision::MultiAgent),
+                }
+            };
+
+            match decision {
+                Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
+                    let orchestrator_enabled = self
+                        .config
+                        .orchestrator
+                        .as_ref()
+                        .is_some_and(|o| o.enabled);
+                    if self.role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
+                        info!(role = %role_key, "Classifier routed to single agent");
+                        routed_role = Some(role_key);
+                    } else if self.role_to_agent.contains_key(&role_key) && orchestrator_enabled {
+                        info!(role = %role_key, "Classifier routed to single agent, but orchestrator enabled — using planner");
+                        let _ = self
+                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
+                            .await;
+                        return;
+                    } else {
+                        warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
+                        let _ = self
+                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
+                            .await;
+                        return;
+                    }
+                }
+                Ok(crate::adapters::types::RouteDecision::MultiAgent) => {
+                    let _ = self
+                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
+                        .await;
+                    return;
+                }
+                Err(e) => {
+                    warn!(error = %e, "Classifier failed, falling back to planner");
+                    let _ = self
+                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
+                        .await;
+                    return;
+                }
             }
-            None => {
-                pipe.send_text(sender, "Planner engine unavailable.", delivery_opts)
+        }
+
+        // Resolve target agent.
+        let target_agent_id = if let Some(ref role_key) = routed_role {
+            match self.role_to_agent.get(role_key) {
+                Some(aid) => aid.clone(),
+                None => {
+                    let available: Vec<&str> = self
+                        .agent_states
+                        .values()
+                        .filter_map(|a| a.role.as_deref())
+                        .collect();
+                    let _ = self
+                        .pipe
+                        .send_text(
+                            &msg.sender,
+                            &format!(
+                                "Unknown agent role: {}\nAvailable: {}",
+                                role_key,
+                                available.join(", ")
+                            ),
+                            &self.delivery_opts,
+                        )
+                        .await;
+                    return;
+                }
+            }
+        } else {
+            self.default_agent_id.clone()
+        };
+
+        self.user_active_agent
+            .insert(sender_id.to_string(), target_agent_id.clone());
+
+        self.execute_chat_turn(&msg.sender, sender_id, &target_agent_id, &user_text, msg.media.as_ref())
+            .await;
+    }
+
+    async fn execute_chat_turn(
+        &mut self,
+        sender: &Recipient,
+        sender_id: &str,
+        target_agent_id: &str,
+        user_text: &str,
+        media: Option<&Vec<MediaPayload>>,
+    ) {
+        let agent = match self.agent_states.get_mut(target_agent_id) {
+            Some(a) => a,
+            None => return,
+        };
+
+        // Hot-reload skills.
+        if let Some(ref src) = agent.skill_source {
+            if agent.skill_registry.reload(src) {
+                agent.current_tools =
+                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                    &agent.agent_config,
+                    agent.advertise_workspace_tools,
+                    &agent.skill_registry,
+                    &agent.current_tools,
+                );
+            }
+        }
+
+        // Save attached files.
+        let user_content =
+            if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
+                let attachments_dir = ws.join(".tengu-attachments");
+                std::fs::create_dir_all(&attachments_dir).ok();
+
+                let mut file_notes = Vec::new();
+                for m in *media_items {
+                    let fname = sanitize_attachment_filename(
+                        m.filename.as_deref().unwrap_or("attachment"),
+                    );
+                    let path = attachments_dir.join(&fname);
+                    match std::fs::write(&path, &m.data) {
+                        Ok(()) => {
+                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
+                            file_notes.push(format!(
+                                "[Attached file: {} ({}, {} bytes)]",
+                                path.display(),
+                                m.mime_type,
+                                m.data.len()
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to save Telegram attachment");
+                        }
+                    }
+                }
+
+                if file_notes.is_empty() {
+                    user_text.to_string()
+                } else {
+                    format!("{}\n{}", file_notes.join("\n"), user_text)
+                }
+            } else {
+                user_text.to_string()
+            };
+
+        *self.current_recipient.lock().unwrap() = Some(sender.clone());
+
+        let activity_adapter = make_tool_activity_adapter(
+            agent
+                .agent_config
+                .identity
+                .name
+                .clone()
+                .unwrap_or_else(|| agent.agent_id.clone()),
+        );
+        let current_executor = agent.workspace.as_ref().and_then(|ws| {
+            channel_runtime::build_tool_executor(
+                ws,
+                &agent.current_tools,
+                &agent.skill_registry,
+                &self.memory_handle,
+                &self.secret_registry,
+                activity_adapter,
+                Some(Arc::clone(&self.turn_cancel)),
+                None,
+            )
+        });
+
+        let sanitized_executor = current_executor
+            .as_ref()
+            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
+
+        let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let observer_secrets = Arc::clone(&self.secret_registry);
+        let observer_agent_label = agent
+            .agent_config
+            .identity
+            .name
+            .clone()
+            .unwrap_or_else(|| agent.agent_id.clone());
+        let turn_tool_log_ref = Arc::clone(&turn_tool_log);
+        let tool_result_observer = move |call: &ToolCall, result: &str| {
+            if let Some(entry) = channel_runtime::format_tool_for_activity(call) {
+                turn_tool_log_ref.lock().unwrap().push(entry);
+            }
+            let redacted = observer_secrets.redact(result);
+            let mut end = redacted.len().min(1500);
+            while end < redacted.len() && !redacted.is_char_boundary(end) {
+                end -= 1;
+            }
+            let truncated = if redacted.len() > 1500 {
+                format!("{}…", &redacted[..end])
+            } else {
+                redacted
+            };
+            tracing::debug!(
+                agent = %observer_agent_label,
+                tool = %call.name,
+                result = %truncated,
+                "Telegram tool result"
+            );
+        };
+
+        self.turn_cancel.store(false, Ordering::Relaxed);
+
+        let state_key = format!("{}:{}", sender_id, target_agent_id);
+        self.user_state_last_active
+            .insert(state_key.clone(), std::time::Instant::now());
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+
+        if self.is_multi_agent {
+            let agent_label = agent
+                .agent_config
+                .identity
+                .name
+                .as_deref()
+                .unwrap_or(&agent.agent_id);
+            let _ = self
+                .pipe
+                .send_text(sender, &format!("[{}]", agent_label), &self.delivery_opts)
+                .await;
+        }
+
+        let mut turn_system_prompt = agent.current_system_prompt.clone();
+        if self.is_multi_agent && !needs_fresh_history_grounding(&user_content) {
+            let activity_ctx =
+                channel_runtime::build_activity_context(&self.activity_log, target_agent_id);
+            if !activity_ctx.is_empty() {
+                turn_system_prompt.push_str(&activity_ctx);
+            }
+        } else if self.is_multi_agent {
+            turn_system_prompt.push_str(
+                "\n\n## Grounding Rule\nFor questions about last/latest/most recent work, do not answer from Recent Team Activity. Verify against current workspace files, conversation state, or tool results first.\n",
+            );
+        }
+
+        let memory_service = self
+            .memory_handle
+            .as_ref()
+            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
+
+        let turn_tools = agent.current_tools.clone();
+        let chat_runtime = ChatRuntimeService {
+            engine: agent.engine.as_ref(),
+            agent_id: &agent.agent_id,
+            agent_config: &agent.agent_config,
+            history_turn_limit: agent.history_turn_limit,
+            compaction_policy: agent.compaction_policy,
+            system_prompt: turn_system_prompt,
+            tools: &turn_tools,
+            tool_executor: sanitized_executor
+                .as_ref()
+                .map(|e| e as &dyn ToolExecutor),
+            memory_service: memory_service.as_ref(),
+            max_recall_entries: self.memory_config.max_recall_entries,
+            max_recall_tokens: self.memory_config.max_recall_tokens,
+            tool_observer: Some(&tool_result_observer),
+            cancel: Some(&self.turn_cancel),
+        };
+
+        let _ = self.pipe.send_chat_action(sender).await;
+        let typing_pipe = Arc::clone(&self.pipe);
+        let typing_sender = sender.clone();
+        let typing_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                let _ = typing_pipe.send_chat_action(&typing_sender).await;
+            }
+        });
+
+        let result = chat_runtime.process_user_text(state, &user_content).await;
+        typing_handle.abort();
+
+        // Collect activity info before releasing agent borrow.
+        let agent_label_for_activity = agent
+            .agent_config
+            .identity
+            .name
+            .clone()
+            .unwrap_or_else(|| agent.agent_id.clone());
+        let target_agent_id_owned = target_agent_id.to_string();
+
+        match result {
+            Ok(result) => {
+                if let Some(notice) = result.system_notice {
+                    let _ = self
+                        .pipe
+                        .send_text(sender, &notice, &self.delivery_opts)
+                        .await;
+                }
+                if let Some(ref text) = result.assistant_text {
+                    let reply = self.secret_registry.redact(text);
+                    for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                        if let Err(e) =
+                            self.pipe.send_text(sender, chunk, &self.delivery_opts).await
+                        {
+                            error!(error = %e, "Failed to send Telegram reply chunk");
+                        }
+                    }
+                } else if !result.tool_outcomes.is_empty() {
+                    let fallback = build_tool_summary_fallback(&result.tool_outcomes);
+                    let reply = self.secret_registry.redact(&fallback);
+                    let _ = self
+                        .pipe
+                        .send_text(sender, &reply, &self.delivery_opts)
+                        .await;
+                }
+
+                if self.is_multi_agent {
+                    let tools_used = match Arc::try_unwrap(turn_tool_log) {
+                        Ok(mutex) => mutex.into_inner().unwrap_or_default(),
+                        Err(arc) => arc.lock().unwrap().clone(),
+                    };
+                    let response_summary = result
+                        .assistant_text
+                        .as_deref()
+                        .map(|t| {
+                            channel_runtime::truncate_summary(
+                                t,
+                                channel_runtime::MAX_ACTIVITY_SUMMARY_CHARS,
+                            )
+                        })
+                        .unwrap_or_default();
+                    if !tools_used.is_empty() || !response_summary.is_empty() {
+                        self.activity_log.push(channel_runtime::ActivityEntry {
+                            agent_label: agent_label_for_activity,
+                            agent_id: target_agent_id_owned,
+                            tools_used,
+                            response_summary,
+                            tool_outcomes: result.tool_outcomes,
+                        });
+                        if self.activity_log.len() > channel_runtime::MAX_ACTIVITY_ENTRIES {
+                            self.activity_log.drain(
+                                ..self.activity_log.len() - channel_runtime::MAX_ACTIVITY_ENTRIES,
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Engine error");
+                let _ = self
+                    .pipe
+                    .send_text(sender, &format!("Error: {}", e), &self.delivery_opts)
+                    .await;
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // /team — multi-agent orchestration via event-bus
+    // -------------------------------------------------------------------
+
+    async fn handle_team(
+        &mut self,
+        sender: &Recipient,
+        goal: &str,
+        media: Option<&Vec<MediaPayload>>,
+    ) -> Result<()> {
+        use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
+        use crate::adapters::types::{AgentTaskExecutor, TaskStatus};
+
+        *self.current_recipient.lock().unwrap() = Some(sender.clone());
+
+        // Handle attachments.
+        let mut attachment_notes: Vec<String> = Vec::new();
+        if let Some(media) = media {
+            let ws = self
+                .agent_states
+                .get(&self.default_agent_id)
+                .and_then(|a| a.workspace.as_ref());
+            if let Some(ws) = ws {
+                let attachments_dir = ws.join(".tengu-attachments");
+                std::fs::create_dir_all(&attachments_dir).ok();
+                for m in media {
+                    let fname =
+                        sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
+                    let path = attachments_dir.join(&fname);
+                    match std::fs::write(&path, &m.data) {
+                        Ok(()) => {
+                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for orchestration");
+                            attachment_notes.push(format!(
+                                "[Attached file: {} ({}, {} bytes)]",
+                                path.display(),
+                                m.mime_type,
+                                m.data.len()
+                            ));
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "Failed to save Telegram attachment for orchestration");
+                        }
+                    }
+                }
+            }
+        }
+
+        let goal = if attachment_notes.is_empty() {
+            goal.to_string()
+        } else {
+            format!("{}\n{}", attachment_notes.join("\n"), goal)
+        };
+
+        self.pipe
+            .send_text(sender, "Planning…", &self.delivery_opts)
+            .await?;
+
+        let fallback_engine;
+        let planner_engine: &dyn Engine =
+            if let Some(ref dedicated) = self.planner_engine {
+                dedicated.as_ref()
+            } else {
+                match self.agent_states.get(&self.default_agent_id) {
+                    Some(a) => {
+                        fallback_engine = a.engine.clone();
+                        fallback_engine.as_ref()
+                    }
+                    None => {
+                        self.pipe
+                            .send_text(sender, "Planner engine unavailable.", &self.delivery_opts)
+                            .await?;
+                        return Ok(());
+                    }
+                }
+            };
+
+        // Build role dependency constraints from agent configs.
+        let role_deps: crate::adapters::types::RoleDependencies = self
+            .agent_states
+            .iter()
+            .filter_map(|(_, astate)| {
+                let role_key = astate.role.as_deref()?;
+                if astate.agent_config.requires.is_empty() {
+                    return None;
+                }
+                Some((role_key.to_string(), astate.agent_config.requires.clone()))
+            })
+            .collect();
+
+        // Phase 1: Generate and validate plan.
+        let prepared = match event_orchestrator::prepare_plan(
+            &goal,
+            planner_engine,
+            &self.agent_descriptions,
+            &role_deps,
+            &self.memory_handle,
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                self.pipe
+                    .send_text(sender, &format!("Plan failed: {}", e), &self.delivery_opts)
+                    .await?;
+                return Ok(());
+            }
+        };
+
+        self.pipe
+            .send_text(sender, &prepared.summary, &self.delivery_opts)
+            .await?;
+        self.turn_cancel.store(false, Ordering::Relaxed);
+
+        // Hot-reload skills for needed agents.
+        let needed_agent_ids: Vec<String> = prepared
+            .plan
+            .tasks
+            .values()
+            .filter_map(|t| self.role_to_agent.get(&t.role).cloned())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        for agent_id in &needed_agent_ids {
+            if let Some(agent) = self.agent_states.get_mut(agent_id) {
+                if let Some(ref src) = agent.skill_source {
+                    if agent.skill_registry.reload(src) {
+                        agent.current_tools = channel_runtime::rebuild_tools(
+                            &agent.base_tools,
+                            &agent.skill_registry,
+                        );
+                        agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                            &agent.agent_config,
+                            agent.advertise_workspace_tools,
+                            &agent.skill_registry,
+                            &agent.current_tools,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Build TelegramTaskExecutor per agent.
+        let mut executors: HashMap<String, Arc<dyn AgentTaskExecutor>> = HashMap::new();
+        for agent_id in &needed_agent_ids {
+            let agent = match self.agent_states.get(agent_id) {
+                Some(a) => a,
+                None => continue,
+            };
+            let agent_label = agent
+                .agent_config
+                .identity
+                .name
+                .clone()
+                .unwrap_or_else(|| agent.agent_id.clone());
+
+            let activity_adapter = make_tool_activity_adapter(agent_label.clone());
+            let tool_executor: Option<Arc<dyn ToolExecutor>> =
+                agent.workspace.as_ref().and_then(|ws| {
+                    channel_runtime::build_tool_executor(
+                        ws,
+                        &agent.current_tools,
+                        &agent.skill_registry,
+                        &self.memory_handle,
+                        &self.secret_registry,
+                        activity_adapter,
+                        Some(Arc::clone(&self.turn_cancel)),
+                        None,
+                    )
+                    .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
+                });
+
+            executors.insert(
+                agent_id.clone(),
+                Arc::new(TelegramTaskExecutor {
+                    engine: Arc::clone(&agent.engine),
+                    tools: agent.current_tools.clone(),
+                    tool_executor,
+                    system_prompt: agent.current_system_prompt.clone(),
+                    workspace: agent.workspace.clone(),
+                    secret_registry: Arc::clone(&self.secret_registry),
+                    cancel: Arc::clone(&self.turn_cancel),
+                    token_budget: Some(agent.agent_config.limits.max_tokens_per_flow as u32),
+                    max_tool_rounds: agent.agent_config.limits.max_tool_rounds,
+                    max_tool_result_chars: agent.agent_config.limits.max_tool_result_chars,
+                    stream_event_timeout_secs: agent.agent_config.limits.stream_event_timeout_secs,
+                    compact_result_limit: agent.agent_config.limits.compact_result_limit,
+                    pipe: Arc::clone(&self.pipe),
+                    sender: sender.clone(),
+                    agent_label,
+                }),
+            );
+        }
+
+        // Phase 2: Execute plan via EventBus.
+        let workspace_name = self
+            .agent_states
+            .get(&self.default_agent_id)
+            .and_then(|a| a.workspace.as_ref())
+            .and_then(|ws| ws.file_name())
+            .map(|n| n.to_string_lossy().to_string());
+
+        // Notification channel: orchestrator sends immediate failure messages here.
+        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(16);
+        let notify_pipe = Arc::clone(&self.pipe);
+        let notify_sender = sender.clone();
+        let notify_opts = self.delivery_opts.clone();
+        let notify_handle = tokio::spawn(async move {
+            while let Some(msg) = notify_rx.recv().await {
+                let _ = notify_pipe.send_text(&notify_sender, &msg, &notify_opts).await;
+            }
+        });
+
+        let ev_config = OrchestratorConfig {
+            max_retries: 2,
+            task_timeout: std::time::Duration::from_secs(300),
+            cancel: Some(Arc::clone(&self.turn_cancel)),
+            notifications_tx: Some(notify_tx),
+            ..OrchestratorConfig::default()
+        };
+
+        let outcome = event_orchestrator::execute_plan(
+            prepared,
+            &self.role_to_agent,
+            &executors,
+            &self.memory_handle,
+            &goal,
+            workspace_name.as_deref(),
+            &ev_config,
+        )
+        .await;
+
+        // Drop config (closes notifications_tx), then drain any remaining messages.
+        drop(ev_config);
+        let _ = notify_handle.await;
+
+        // Present results.
+        match outcome {
+            Ok(plan_outcome) => {
+                let completed = plan_outcome
+                    .tasks
+                    .iter()
+                    .filter(|t| t.status == TaskStatus::Completed)
+                    .count();
+                let mut summary = format!(
+                    "Team completed — {}/{} tasks done.\n",
+                    completed,
+                    plan_outcome.tasks.len()
+                );
+                for t in &plan_outcome.tasks {
+                    let mark = match t.status {
+                        TaskStatus::Completed => "✓",
+                        TaskStatus::Failed => "✗",
+                        TaskStatus::Skipped => "⊘",
+                        _ => "?",
+                    };
+                    summary.push_str(&format!("\n{} {}", mark, t.id));
+                    if let Some(ref out) = t.output {
+                        summary.push_str(&format!(
+                            ": {}",
+                            channel_runtime::truncate_output(out, 300)
+                        ));
+                    }
+                    summary.push('\n');
+                }
+
+                let summary = self.secret_registry.redact(&summary);
+                for chunk in channel_runtime::chunk_message(&summary, TELEGRAM_MAX_LEN) {
+                    let _ = self
+                        .pipe
+                        .send_text(sender, chunk, &self.delivery_opts)
+                        .await;
+                }
+            }
+            Err(e) => {
+                self.pipe
+                    .send_text(
+                        sender,
+                        &format!("Orchestration failed: {}", e),
+                        &self.delivery_opts,
+                    )
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // /project — switch workspace to a named project subfolder
+    // -------------------------------------------------------------------
+
+    async fn handle_project(
+        &mut self,
+        sender: &Recipient,
+        name: &str,
+        sender_id: &str,
+    ) -> Result<()> {
+        if name.is_empty() {
+            let current = self
+                .agent_states
+                .get(&self.default_agent_id)
+                .and_then(|a| a.workspace.as_ref())
+                .map(|w| w.display().to_string())
+                .unwrap_or_else(|| "(no workspace)".into());
+            self.pipe
+                .send_text(
+                    sender,
+                    &format!("Current workspace: {}\n\nUsage: /project <name>", current),
+                    &self.delivery_opts,
+                )
+                .await?;
+            return Ok(());
+        }
+
+        let sanitized: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+
+        let mut created = false;
+
+        if let Some(base) = self.base_workspaces.values().next() {
+            let project_dir = base.join(&sanitized);
+            let project_template = self
+                .config
+                .scaffold
+                .as_ref()
+                .and_then(|s| s.project.as_ref());
+            let project_scaffold = crate::adapters::config::ScaffoldConfig {
+                root: project_dir.to_string_lossy().to_string(),
+                directories: project_template
+                    .map(|p| p.directories.clone())
+                    .unwrap_or_default(),
+                files: project_template
+                    .map(|p| p.files.clone())
+                    .unwrap_or_default(),
+                project: None,
+            };
+            if let Err(e) = crate::adapters::scaffold::apply_scaffold(&project_scaffold) {
+                self.pipe
+                    .send_text(
+                        sender,
+                        &format!("Scaffold failed: {}", e),
+                        &self.delivery_opts,
+                    )
                     .await?;
                 return Ok(());
             }
         }
-    };
 
-    // Build role dependency constraints from agent configs.
-    let role_deps: crate::adapters::types::RoleDependencies = agent_states
-        .iter()
-        .filter_map(|(_, astate)| {
-            let role_key = astate.role.as_deref()?;
-            if astate.agent_config.requires.is_empty() {
-                return None;
+        for (aid, agent) in self.agent_states.iter_mut() {
+            if let Some(base) = self.base_workspaces.get(aid) {
+                let project_dir = base.join(&sanitized);
+                agent.workspace = Some(project_dir);
+                agent.skill_source = agent
+                    .workspace
+                    .as_ref()
+                    .map(|ws| FileSystemSkillSource::new(ws.clone()));
+                if let Some(ref src) = agent.skill_source {
+                    agent.skill_registry.reload(src);
+                }
+                agent.current_tools =
+                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                created = true;
             }
-            Some((role_key.to_string(), astate.agent_config.requires.clone()))
-        })
-        .collect();
-
-    // Phase 1: Generate and validate plan (shared with CLI).
-    let prepared = match event_orchestrator::prepare_plan(
-        &goal,
-        planner_engine,
-        agent_descriptions,
-        &role_deps,
-        memory_handle,
-    )
-    .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            pipe.send_text(sender, &format!("Plan failed: {}", e), delivery_opts)
-                .await?;
-            return Ok(());
         }
-    };
 
-    pipe.send_text(sender, &prepared.summary, delivery_opts).await?;
-    turn_cancel.store(false, Ordering::Relaxed);
+        if created {
+            let prefix = format!("{}:", sender_id);
+            for (key, state) in self.user_states.iter_mut() {
+                if key.starts_with(&prefix) {
+                    state.reset_for_new_session();
+                }
+            }
+            let ws_display = self
+                .agent_states
+                .get(&self.default_agent_id)
+                .and_then(|a| a.workspace.as_ref())
+                .map(|w| w.display().to_string())
+                .unwrap_or_default();
+            self.pipe
+                .send_text(
+                    sender,
+                    &format!(
+                        "Project '{}' created.\nWorkspace: {}\nConversations reset.",
+                        sanitized, ws_display
+                    ),
+                    &self.delivery_opts,
+                )
+                .await?;
+        } else {
+            self.pipe
+                .send_text(sender, "No workspaces configured.", &self.delivery_opts)
+                .await?;
+        }
+        Ok(())
+    }
 
-    // Hot-reload skills for needed agents.
-    let needed_agent_ids: Vec<String> = prepared
-        .plan
-        .tasks
-        .values()
-        .filter_map(|t| role_to_agent.get(&t.role).cloned())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
+    // -------------------------------------------------------------------
+    // /agents — list available agents
+    // -------------------------------------------------------------------
 
-    for agent_id in &needed_agent_ids {
-        if let Some(agent) = agent_states.get_mut(agent_id) {
-            if let Some(ref src) = agent.skill_source {
-                if agent.skill_registry.reload(src) {
-                    agent.current_tools = channel_runtime::rebuild_tools(
-                        &agent.base_tools,
-                        &agent.skill_registry,
-                    );
-                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-                        &agent.agent_config,
-                        agent.advertise_workspace_tools,
-                        &agent.skill_registry,
-                        &agent.current_tools,
-                    );
+    async fn handle_agents(&self, sender: &Recipient) -> Result<()> {
+        let mut lines = vec!["Available agents:".to_string()];
+        for (aid, astate) in &self.agent_states {
+            let role_label = astate.role.as_deref().unwrap_or("-");
+            let is_default = if *aid == self.default_agent_id {
+                " [default]"
+            } else {
+                ""
+            };
+            let tool_count = astate.current_tools.len();
+            lines.push(format!(
+                "  {} (role: {}, {} tools){}",
+                aid, role_label, tool_count, is_default
+            ));
+        }
+        lines.push(String::new());
+        lines.push("Direct: @role: message  or  role: message".to_string());
+        lines.push("Auto:    plain messages  (plan & execute across agents)".to_string());
+        lines.push("Team:    /team <goal>     (explicit team planning command)".to_string());
+        lines.push("Project: /project <name>  (new project subfolder)".to_string());
+        lines.push("Example: @backend_engineer: add rate limiting".to_string());
+        lines.push("Example: register POI and mint the IP-NFT".to_string());
+        lines.push("Example: /team build a full stack Rust app".to_string());
+        self.pipe
+            .send_text(sender, &lines.join("\n"), &self.delivery_opts)
+            .await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // /reset — clear conversation state
+    // -------------------------------------------------------------------
+
+    async fn handle_reset(&mut self, sender: &Recipient, sender_id: &str) -> Result<()> {
+        let prefix = format!("{}:", sender_id);
+        let mut reset_count = 0usize;
+        for (key, state) in self.user_states.iter_mut() {
+            if key.starts_with(&prefix) {
+                state.reset_for_new_session();
+                reset_count += 1;
+            }
+        }
+        self.pipe
+            .send_text(
+                sender,
+                &format!(
+                    "Session reset — {} agent conversation(s) cleared.",
+                    reset_count
+                ),
+                &self.delivery_opts,
+            )
+            .await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // /purge — deep clear: conversations + memory + artifacts
+    // -------------------------------------------------------------------
+
+    async fn handle_purge(&mut self, sender: &Recipient, sender_id: &str) -> Result<()> {
+        let prefix = format!("{}:", sender_id);
+        for (key, state) in self.user_states.iter_mut() {
+            if key.starts_with(&prefix) {
+                state.reset_for_new_session();
+            }
+        }
+        let mut lines = vec!["All conversations cleared.".to_string()];
+        if let Some(ref handle) = self.memory_handle {
+            match handle.store.clear_all().await {
+                Ok(()) => lines.push("Persistent memory purged.".to_string()),
+                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+            }
+        } else {
+            lines.push("No persistent memory active.".to_string());
+        }
+
+        let ws_set: HashSet<std::path::PathBuf> = self
+            .agent_states
+            .values()
+            .filter_map(|s| s.workspace.clone())
+            .collect();
+        for ws in &ws_set {
+            for subdir in &[".tengu-tasks", ".tengu-attachments"] {
+                let p = ws.join(subdir);
+                if p.exists() {
+                    match std::fs::remove_dir_all(&p) {
+                        Ok(()) => lines.push(format!("Cleaned {}", p.display())),
+                        Err(e) => {
+                            lines.push(format!("Failed to clean {}: {}", p.display(), e))
+                        }
+                    }
                 }
             }
         }
+
+        self.pipe
+            .send_text(sender, &lines.join("\n"), &self.delivery_opts)
+            .await?;
+        Ok(())
     }
 
-    // Build TelegramTaskExecutor per agent.
-    let mut executors: HashMap<String, Arc<dyn AgentTaskExecutor>> = HashMap::new();
-    for agent_id in &needed_agent_ids {
-        let agent = match agent_states.get(agent_id) {
+    // -------------------------------------------------------------------
+    // /reload — hot-reload skills
+    // -------------------------------------------------------------------
+
+    async fn handle_reload(&mut self, sender: &Recipient, active_aid: &str) -> Result<()> {
+        let agent = match self.agent_states.get_mut(active_aid) {
             Some(a) => a,
-            None => continue,
+            None => return Ok(()),
         };
+        let mut lines = Vec::new();
+        if let Some(ref src) = agent.skill_source {
+            if agent.skill_registry.reload(src) {
+                lines.push("Skills reloaded (changes detected).".to_string());
+            } else {
+                lines.push("Skills reloaded (no changes).".to_string());
+            }
+        } else {
+            lines.push("No workspace — skills unavailable.".to_string());
+        }
+        agent.current_tools =
+            channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+        agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+            &agent.agent_config,
+            agent.advertise_workspace_tools,
+            &agent.skill_registry,
+            &agent.current_tools,
+        );
+        self.skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
+        lines.push(format!("{} tool(s) active.", agent.current_tools.len()));
+        self.pipe
+            .send_text(sender, &lines.join("\n"), &self.delivery_opts)
+            .await?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Skill slash-commands (e.g. /beach_post, /mint)
+    // -------------------------------------------------------------------
+
+    async fn handle_skill_cmd(
+        &mut self,
+        sender: &Recipient,
+        sender_id: &str,
+        active_aid: &str,
+        skill_name: &str,
+        cmd_name: &str,
+        args: &str,
+    ) -> Result<()> {
+        let injected = format!(
+            "[System: User invoked /{cmd} {args}. Follow the instructions in the ## Commands section of the {skill} skill.]",
+            cmd = cmd_name,
+            args = args,
+            skill = skill_name,
+        );
+
+        let agent = match self.agent_states.get_mut(active_aid) {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+
+        if let Some(ref src) = agent.skill_source {
+            if agent.skill_registry.reload(src) {
+                agent.current_tools =
+                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                    &agent.agent_config,
+                    agent.advertise_workspace_tools,
+                    &agent.skill_registry,
+                    &agent.current_tools,
+                );
+                self.skill_command_router =
+                    SkillCommandRouter::from_registry(&agent.skill_registry);
+            }
+        }
+
+        *self.current_recipient.lock().unwrap() = Some(sender.clone());
+
         let agent_label = agent
             .agent_config
             .identity
             .name
             .clone()
             .unwrap_or_else(|| agent.agent_id.clone());
-
-        let activity_adapter =
-            make_tool_activity_adapter(agent_label.clone(), &agent.current_tools);
-        let tool_executor: Option<Arc<dyn ToolExecutor>> =
-            agent.workspace.as_ref().and_then(|ws| {
-                channel_runtime::build_tool_executor(
-                    ws,
-                    &agent.current_tools,
-                    &agent.skill_registry,
-                    memory_handle,
-                    secret_registry,
-                    Arc::clone(approval_adapter),
-                    activity_adapter,
-                    Some(Arc::clone(turn_cancel)),
-                    None,
-                )
-                .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
-            });
-
-        executors.insert(
-            agent_id.clone(),
-            Arc::new(TelegramTaskExecutor {
-                engine: Arc::clone(&agent.engine),
-                tools: channel_runtime::tool_defs(&agent.current_tools),
-                tool_executor,
-                system_prompt: agent.current_system_prompt.clone(),
-                workspace: agent.workspace.clone(),
-                secret_registry: Arc::clone(secret_registry),
-                cancel: Arc::clone(turn_cancel),
-                token_budget: Some(agent.agent_config.limits.max_tokens_per_flow as u32),
-                max_tool_rounds: agent.agent_config.limits.max_tool_rounds,
-                pipe: Arc::clone(pipe),
-                sender: sender.clone(),
-                agent_label,
-            }),
-        );
-    }
-
-    // Phase 2: Execute plan via EventBus (shared with CLI).
-    let workspace_name = agent_states
-        .get(default_agent_id)
-        .and_then(|a| a.workspace.as_ref())
-        .and_then(|ws| ws.file_name())
-        .map(|n| n.to_string_lossy().to_string());
-
-    // Notification channel: orchestrator sends immediate failure messages here.
-    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(16);
-    let notify_pipe = Arc::clone(pipe);
-    let notify_sender = sender.clone();
-    let notify_opts = delivery_opts.clone();
-    let notify_handle = tokio::spawn(async move {
-        while let Some(msg) = notify_rx.recv().await {
-            let _ = notify_pipe.send_text(&notify_sender, &msg, &notify_opts).await;
-        }
-    });
-
-    let ev_config = OrchestratorConfig {
-        max_retries: 2,
-        task_timeout: std::time::Duration::from_secs(300),
-        cancel: Some(Arc::clone(turn_cancel)),
-        notifications_tx: Some(notify_tx),
-        ..OrchestratorConfig::default()
-    };
-
-    let outcome = event_orchestrator::execute_plan(
-        prepared,
-        role_to_agent,
-        &executors,
-        memory_handle,
-        &goal,
-        workspace_name.as_deref(),
-        &ev_config,
-    )
-    .await;
-
-    // Drop config (closes notifications_tx), then drain any remaining messages.
-    drop(ev_config);
-    let _ = notify_handle.await;
-
-    // Present results (Telegram-specific).
-    match outcome {
-        Ok(plan_outcome) => {
-            let completed = plan_outcome
-                .tasks
-                .iter()
-                .filter(|t| t.status == TaskStatus::Completed)
-                .count();
-            let mut summary = format!(
-                "Team completed — {}/{} tasks done.\n",
-                completed,
-                plan_outcome.tasks.len()
-            );
-            for t in &plan_outcome.tasks {
-                let mark = match t.status {
-                    TaskStatus::Completed => "✓",
-                    TaskStatus::Failed => "✗",
-                    TaskStatus::Skipped => "⊘",
-                    _ => "?",
-                };
-                summary.push_str(&format!("\n{} {}", mark, t.id));
-                if let Some(ref out) = t.output {
-                    summary.push_str(&format!(
-                        ": {}",
-                        channel_runtime::truncate_output(out, 300)
-                    ));
-                }
-                summary.push('\n');
-            }
-
-            let summary = secret_registry.redact(&summary);
-            for chunk in channel_runtime::chunk_message(&summary, TELEGRAM_MAX_LEN) {
-                let _ = pipe.send_text(sender, chunk, delivery_opts).await;
-            }
-        }
-        Err(e) => {
-            pipe.send_text(
-                sender,
-                &format!("Orchestration failed: {}", e),
-                delivery_opts,
-            )
-            .await?;
-        }
-    }
-
-    Ok(())
-}
-
-async fn handle_project(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    name: &str,
-    delivery_opts: &DeliveryOptions,
-    agent_states: &mut HashMap<String, TelegramAgentState>,
-    default_agent_id: &str,
-    base_workspaces: &HashMap<String, std::path::PathBuf>,
-    config: &Config,
-    user_states: &mut HashMap<String, ChatLoopState>,
-    sender_id: &str,
-) -> Result<()> {
-    if name.is_empty() {
-        let current = agent_states
-            .get(default_agent_id)
-            .and_then(|a| a.workspace.as_ref())
-            .map(|w| w.display().to_string())
-            .unwrap_or_else(|| "(no workspace)".into());
-        pipe.send_text(
-            sender,
-            &format!("Current workspace: {}\n\nUsage: /project <name>", current),
-            delivery_opts,
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let sanitized: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-
-    let mut created = false;
-
-    if let Some(base) = base_workspaces.values().next() {
-        let project_dir = base.join(&sanitized);
-        let project_template = config
-            .scaffold
-            .as_ref()
-            .and_then(|s| s.project.as_ref());
-        let project_scaffold = crate::adapters::config::ScaffoldConfig {
-            root: project_dir.to_string_lossy().to_string(),
-            directories: project_template
-                .map(|p| p.directories.clone())
-                .unwrap_or_default(),
-            files: project_template
-                .map(|p| p.files.clone())
-                .unwrap_or_default(),
-            project: None,
-        };
-        if let Err(e) = crate::adapters::scaffold::apply_scaffold(&project_scaffold) {
-            pipe.send_text(
-                sender,
-                &format!("Scaffold failed: {}", e),
-                delivery_opts,
-            )
-            .await?;
-            return Ok(());
-        }
-    }
-
-    for (aid, agent) in agent_states.iter_mut() {
-        if let Some(base) = base_workspaces.get(aid) {
-            let project_dir = base.join(&sanitized);
-            agent.workspace = Some(project_dir);
-            agent.skill_source = agent
-                .workspace
-                .as_ref()
-                .map(|ws| FileSystemSkillSource::new(ws.clone()));
-            if let Some(ref src) = agent.skill_source {
-                agent.skill_registry.reload(src);
-            }
-            agent.current_tools = channel_runtime::rebuild_tools(
-                &agent.base_tools,
-                &agent.skill_registry,
-            );
-            created = true;
-        }
-    }
-
-    if created {
-        let prefix = format!("{}:", sender_id);
-        for (key, state) in user_states.iter_mut() {
-            if key.starts_with(&prefix) {
-                state.reset_for_new_session();
-            }
-        }
-        let ws_display = agent_states
-            .get(default_agent_id)
-            .and_then(|a| a.workspace.as_ref())
-            .map(|w| w.display().to_string())
-            .unwrap_or_default();
-        pipe.send_text(
-            sender,
-            &format!(
-                "Project '{}' created.\nWorkspace: {}\nConversations reset.",
-                sanitized, ws_display
-            ),
-            delivery_opts,
-        )
-        .await?;
-    } else {
-        pipe.send_text(sender, "No workspaces configured.", delivery_opts)
-            .await?;
-    }
-    Ok(())
-}
-
-async fn handle_agents(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    agent_states: &HashMap<String, TelegramAgentState>,
-    default_agent_id: &str,
-) -> Result<()> {
-    let mut lines = vec!["Available agents:".to_string()];
-    for (aid, astate) in agent_states {
-        let role_label = astate.role.as_deref().unwrap_or("-");
-        let is_default = if *aid == *default_agent_id {
-            " [default]"
-        } else {
-            ""
-        };
-        let tool_count = astate.current_tools.len();
-        lines.push(format!(
-            "  {} (role: {}, {} tools){}",
-            aid, role_label, tool_count, is_default
-        ));
-    }
-    lines.push(String::new());
-    lines.push("Direct: @role: message  or  role: message".to_string());
-    lines.push("Auto:    plain messages  (plan & execute across agents)".to_string());
-    lines.push("Team:    /team <goal>     (explicit team planning command)".to_string());
-    lines.push("Project: /project <name>  (new project subfolder)".to_string());
-    lines.push("Example: @backend_engineer: add rate limiting".to_string());
-    lines.push("Example: register POI and mint the IP-NFT".to_string());
-    lines.push("Example: /team build a full stack Rust app".to_string());
-    pipe.send_text(sender, &lines.join("\n"), delivery_opts)
-        .await?;
-    Ok(())
-}
-
-async fn handle_reset(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    user_states: &mut HashMap<String, ChatLoopState>,
-    sender_id: &str,
-) -> Result<()> {
-    let prefix = format!("{}:", sender_id);
-    let mut reset_count = 0usize;
-    for (key, state) in user_states.iter_mut() {
-        if key.starts_with(&prefix) {
-            state.reset_for_new_session();
-            reset_count += 1;
-        }
-    }
-    pipe.send_text(
-        sender,
-        &format!(
-            "Session reset — {} agent conversation(s) cleared.",
-            reset_count
-        ),
-        delivery_opts,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn handle_purge(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    user_states: &mut HashMap<String, ChatLoopState>,
-    sender_id: &str,
-    agent_states: &HashMap<String, TelegramAgentState>,
-    memory_handle: &Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
-) -> Result<()> {
-    let prefix = format!("{}:", sender_id);
-    for (key, state) in user_states.iter_mut() {
-        if key.starts_with(&prefix) {
-            state.reset_for_new_session();
-        }
-    }
-    let mut lines = vec!["All conversations cleared.".to_string()];
-    if let Some(ref handle) = memory_handle {
-        match handle.store.clear_all().await {
-            Ok(()) => lines.push("Persistent memory purged.".to_string()),
-            Err(e) => lines.push(format!("Memory clear failed: {}", e)),
-        }
-    } else {
-        lines.push("No persistent memory active.".to_string());
-    }
-
-    let ws_set: HashSet<std::path::PathBuf> = agent_states
-        .values()
-        .filter_map(|s| s.workspace.clone())
-        .collect();
-    for ws in &ws_set {
-        for subdir in &[".tengu-tasks", ".tengu-attachments"] {
-            let p = ws.join(subdir);
-            if p.exists() {
-                match std::fs::remove_dir_all(&p) {
-                    Ok(()) => lines.push(format!("Cleaned {}", p.display())),
-                    Err(e) => lines.push(format!("Failed to clean {}: {}", p.display(), e)),
-                }
-            }
-        }
-    }
-
-    pipe.send_text(sender, &lines.join("\n"), delivery_opts)
-        .await?;
-    Ok(())
-}
-
-async fn handle_reload(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    agent: &mut TelegramAgentState,
-    skill_command_router: &mut SkillCommandRouter,
-) -> Result<()> {
-    let mut lines = Vec::new();
-    if let Some(ref src) = agent.skill_source {
-        if agent.skill_registry.reload(src) {
-            lines.push("Skills reloaded (changes detected).".to_string());
-        } else {
-            lines.push("Skills reloaded (no changes).".to_string());
-        }
-    } else {
-        lines.push("No workspace — skills unavailable.".to_string());
-    }
-    agent.current_tools = channel_runtime::rebuild_tools(
-        &agent.base_tools,
-        &agent.skill_registry,
-    );
-    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-        &agent.agent_config,
-        agent.advertise_workspace_tools,
-        &agent.skill_registry,
-        &agent.current_tools,
-    );
-    *skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
-    lines.push(format!("{} tool(s) active.", agent.current_tools.len()));
-    pipe.send_text(sender, &lines.join("\n"), delivery_opts)
-        .await?;
-    Ok(())
-}
-
-async fn handle_skill_command(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    agent: &mut TelegramAgentState,
-    skill_command_router: &mut SkillCommandRouter,
-    skill_name: &str,
-    cmd_name: &str,
-    args: &str,
-    user_states: &mut HashMap<String, ChatLoopState>,
-    user_state_last_active: &mut HashMap<String, std::time::Instant>,
-    sender_id: &str,
-    active_aid: &str,
-    current_recipient: &CurrentRecipient,
-    memory_handle: &Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
-    secret_registry: &Arc<SecretRegistry>,
-    approval_adapter: &Arc<dyn ToolApprovalPort>,
-    turn_cancel: &Arc<AtomicBool>,
-    memory_service_instance: Option<&MemoryService<'_>>,
-    memory_config: &crate::adapters::config::MemoryConfig,
-) -> Result<()> {
-    let injected = format!(
-        "[System: User invoked /{cmd} {args}. Follow the instructions in the ## Commands section of the {skill} skill.]",
-        cmd = cmd_name,
-        args = args,
-        skill = skill_name,
-    );
-
-    if let Some(ref src) = agent.skill_source {
-        if agent.skill_registry.reload(src) {
-            agent.current_tools = channel_runtime::rebuild_tools(
-                &agent.base_tools,
-                &agent.skill_registry,
-            );
-            agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-                &agent.agent_config,
-                agent.advertise_workspace_tools,
-                &agent.skill_registry,
+        let activity_adapter = make_tool_activity_adapter(agent_label);
+        let current_executor = agent.workspace.as_ref().and_then(|ws| {
+            channel_runtime::build_tool_executor(
+                ws,
                 &agent.current_tools,
-            );
-            *skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
-        }
-    }
-
-    *current_recipient.lock().unwrap() = Some(sender.clone());
-
-    let agent_label = agent
-        .agent_config
-        .identity
-        .name
-        .clone()
-        .unwrap_or_else(|| agent.agent_id.clone());
-    let activity_adapter = make_tool_activity_adapter(agent_label, &agent.current_tools);
-    let current_executor = agent.workspace.as_ref().and_then(|ws| {
-        channel_runtime::build_tool_executor(
-            ws,
-            &agent.current_tools,
-            &agent.skill_registry,
-            memory_handle,
-            secret_registry,
-            Arc::clone(approval_adapter),
-            activity_adapter,
-            Some(Arc::clone(turn_cancel)),
-            None,
-        )
-    });
-    let sanitized_executor = current_executor
-        .as_ref()
-        .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, secret_registry));
-
-    turn_cancel.store(false, Ordering::Relaxed);
-
-    let state_key = format!("{}:{}", sender_id, active_aid);
-    user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
-    let state = user_states
-        .entry(state_key)
-        .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
-
-    let _ = pipe.send_chat_action(sender).await;
-    let t_pipe = Arc::clone(pipe);
-    let t_sender = sender.clone();
-    let typing_handle = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-            let _ = t_pipe.send_chat_action(&t_sender).await;
-        }
-    });
-
-    let active_tools = channel_runtime::tool_defs(&agent.current_tools);
-    let chat_runtime = ChatRuntimeService {
-        engine: agent.engine.as_ref(),
-        agent_id: &agent.agent_id,
-        agent_config: &agent.agent_config,
-        history_turn_limit: agent.history_turn_limit,
-        compaction_policy: agent.compaction_policy,
-        system_prompt: agent.current_system_prompt.clone(),
-        tools: &active_tools,
-        tool_executor: sanitized_executor
+                &agent.skill_registry,
+                &self.memory_handle,
+                &self.secret_registry,
+                activity_adapter,
+                Some(Arc::clone(&self.turn_cancel)),
+                None,
+            )
+        });
+        let sanitized_executor = current_executor
             .as_ref()
-            .map(|e| e as &dyn ToolExecutor),
-        memory_service: memory_service_instance,
-        max_recall_entries: memory_config.max_recall_entries,
-        max_recall_tokens: memory_config.max_recall_tokens,
-        tool_observer: None,
-        cancel: Some(turn_cancel),
-    };
+            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
 
-    let result = chat_runtime.process_user_text(state, &injected).await;
-    typing_handle.abort();
+        self.turn_cancel.store(false, Ordering::Relaxed);
 
-    match result {
-        Ok(res) => {
-            if let Some(notice) = res.system_notice {
-                let _ = pipe.send_text(sender, &notice, delivery_opts).await;
+        let state_key = format!("{}:{}", sender_id, active_aid);
+        self.user_state_last_active
+            .insert(state_key.clone(), std::time::Instant::now());
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+
+        let _ = self.pipe.send_chat_action(sender).await;
+        let t_pipe = Arc::clone(&self.pipe);
+        let t_sender = sender.clone();
+        let typing_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                let _ = t_pipe.send_chat_action(&t_sender).await;
             }
-            if let Some(ref text) = res.assistant_text {
-                let reply = secret_registry.redact(text);
-                for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                    let _ = pipe.send_text(sender, chunk, delivery_opts).await;
+        });
+
+        let memory_service = self
+            .memory_handle
+            .as_ref()
+            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
+
+        let active_tools = agent.current_tools.clone();
+        let chat_runtime = ChatRuntimeService {
+            engine: agent.engine.as_ref(),
+            agent_id: &agent.agent_id,
+            agent_config: &agent.agent_config,
+            history_turn_limit: agent.history_turn_limit,
+            compaction_policy: agent.compaction_policy,
+            system_prompt: agent.current_system_prompt.clone(),
+            tools: &active_tools,
+            tool_executor: sanitized_executor
+                .as_ref()
+                .map(|e| e as &dyn ToolExecutor),
+            memory_service: memory_service.as_ref(),
+            max_recall_entries: self.memory_config.max_recall_entries,
+            max_recall_tokens: self.memory_config.max_recall_tokens,
+            tool_observer: None,
+            cancel: Some(&self.turn_cancel),
+        };
+
+        let result = chat_runtime.process_user_text(state, &injected).await;
+        typing_handle.abort();
+
+        match result {
+            Ok(res) => {
+                if let Some(notice) = res.system_notice {
+                    let _ = self
+                        .pipe
+                        .send_text(sender, &notice, &self.delivery_opts)
+                        .await;
+                }
+                if let Some(ref text) = res.assistant_text {
+                    let reply = self.secret_registry.redact(text);
+                    for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                        let _ = self
+                            .pipe
+                            .send_text(sender, chunk, &self.delivery_opts)
+                            .await;
+                    }
+                } else if !res.tool_outcomes.is_empty() {
+                    let fallback = build_tool_summary_fallback(&res.tool_outcomes);
+                    let _ = self
+                        .pipe
+                        .send_text(sender, &fallback, &self.delivery_opts)
+                        .await;
                 }
             }
+            Err(e) => {
+                let _ = self
+                    .pipe
+                    .send_text(sender, &format!("Error: {}", e), &self.delivery_opts)
+                    .await;
+            }
         }
-        Err(e) => {
-            let _ = pipe
-                .send_text(sender, &format!("Error: {}", e), delivery_opts)
-                .await;
-        }
+        Ok(())
     }
-    Ok(())
-}
-
-async fn handle_builtin_command(
-    pipe: &Arc<TelegramPipe>,
-    sender: &Recipient,
-    delivery_opts: &DeliveryOptions,
-    text: &str,
-    state: &mut ChatLoopState,
-    agent: &TelegramAgentState,
-    skill_command_router: &SkillCommandRouter,
-) -> Result<()> {
-    let skill_cmds = skill_command_router.list();
-    let cmd_result = handle_chat_command(
-        text,
-        state,
-        &agent.engine_info,
-        &agent.agent_config,
-        agent.history_turn_limit,
-        agent.compaction_policy,
-        &skill_cmds,
-    );
-    match cmd_result {
-        CommandResult::Handled(output) => {
-            let reply = output.lines.join("\n");
-            pipe.send_text(sender, &reply, delivery_opts).await?;
-        }
-        CommandResult::NotHandled => {
-            pipe.send_text(
-                sender,
-                "Unknown command. Type /help or /agents for available commands.",
-                delivery_opts,
-            )
-            .await?;
-        }
-    }
-    Ok(())
 }
 
 // ===========================================================================
@@ -1473,800 +2200,6 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         .build()
         .expect("Failed to create Telegram runtime");
 
-    let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN env var is required"))?;
-
-    let allowed_users = build_allowed_users(&config);
-    if allowed_users.is_empty() {
-        warn!("No allowed Telegram users configured — all messages will be rejected");
-    } else {
-        info!(count = allowed_users.len(), "Telegram allowed users loaded");
-    }
-
-    let memory_config = config.memory.clone();
-
-    let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
-        ac.workspace
-            .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p))
-    });
-
-    let memory_handle =
-        channel_runtime::build_memory_handle(&memory_config, &rt, first_workspace.as_deref());
-    let has_memory = memory_handle.is_some();
-
-    crate::adapters::scaffold::maybe_apply_scaffold(&config);
-
-    // Build per-agent runtime state.
-    let mut agent_states: HashMap<String, TelegramAgentState> = HashMap::new();
-    let mut role_to_agent: HashMap<String, String> = HashMap::new();
-    let mut default_agent_id: Option<String> = None;
-
-    for (agent_id, agent_config) in &config.agents {
-        let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config) {
-            Ok(e) => Arc::from(e),
-            Err(e) => {
-                warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
-                continue;
-            }
-        };
-
-        let engine_info = EngineInfo {
-            context_window: engine.context_window(),
-            diagnostics: engine.diagnostics(),
-        };
-
-        let workspace: Option<std::path::PathBuf> = agent_config
-            .workspace
-            .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p));
-
-        let advertise_workspace_tools =
-            engine.supports_tool_use() && !engine.manages_own_workspace();
-        let uses_tools = advertise_workspace_tools && workspace.is_some();
-        let base_tools = channel_runtime::compute_base_tools(
-            uses_tools,
-            has_memory,
-            &agent_config.workspace_tools,
-        );
-
-        let skill_source: Option<FileSystemSkillSource> = workspace
-            .as_ref()
-            .map(|ws| FileSystemSkillSource::new(ws.clone()));
-
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.def.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved)
-            .with_allowlist(Some(agent_config.skill_packages.clone()));
-        if let Some(ref src) = skill_source {
-            skill_registry.reload(src);
-        }
-
-        let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-        let current_system_prompt = channel_runtime::rebuild_system_prompt(
-            agent_config,
-            advertise_workspace_tools,
-            &skill_registry,
-            &current_tools,
-        );
-
-        let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
-        let compaction_policy = resolve_flow_compaction_policy(
-            &agent_config.flow,
-            agent_config.limits.max_tokens_per_flow,
-            engine.context_window(),
-            engine.max_output_tokens_per_turn() as usize,
-        );
-
-        let role = agent_config.role.clone();
-        if let Some(ref role_str) = role {
-            let role_key = role_str.trim().to_lowercase().replace('-', "_");
-            if !role_key.is_empty() {
-                role_to_agent.insert(role_key, agent_id.clone());
-            }
-        }
-        role_to_agent.insert(agent_id.clone(), agent_id.clone());
-
-        if agent_config.default || default_agent_id.is_none() {
-            if agent_config.default {
-                default_agent_id = Some(agent_id.clone());
-            } else if default_agent_id.is_none() {
-                default_agent_id = Some(agent_id.clone());
-            }
-        }
-
-        info!(
-            agent_id = %agent_id,
-            role = ?role,
-            tools = current_tools.len(),
-            "Registered Telegram agent"
-        );
-
-        agent_states.insert(
-            agent_id.clone(),
-            TelegramAgentState {
-                agent_id: agent_id.clone(),
-                agent_config: agent_config.clone(),
-                engine,
-                engine_info,
-                workspace,
-                base_tools,
-                skill_source,
-                skill_registry,
-                current_tools,
-                current_system_prompt,
-                advertise_workspace_tools,
-                history_turn_limit,
-                compaction_policy,
-                role,
-            },
-        );
-    }
-
-    let default_agent_id =
-        default_agent_id.ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
-
-    let base_workspaces: HashMap<String, std::path::PathBuf> = agent_states
-        .iter()
-        .filter_map(|(id, a)| a.workspace.as_ref().map(|w| (id.clone(), w.clone())))
-        .collect();
-
-    // Inject team awareness into each agent's system prompt.
-    if agent_states.len() > 1 {
-        let mut team_block = String::from("\n\n## Team Members\n");
-        team_block.push_str(
-            "If a request is outside your expertise, suggest the user route to the right agent.\n",
-        );
-        team_block.push_str("Format: @role: message\n\n");
-        for state in agent_states.values() {
-            let role_key = state.role.as_deref().unwrap_or(&state.agent_id);
-            let name = state
-                .agent_config
-                .identity
-                .name
-                .as_deref()
-                .unwrap_or(&state.agent_id);
-            team_block.push_str(&format!("- @{}: {}\n", role_key, name));
-        }
-        for state in agent_states.values_mut() {
-            state.current_system_prompt.push_str(&team_block);
-        }
-    }
-
-    // Build agent descriptions for the planner prompt.
-    let agent_descriptions: HashMap<String, String> = agent_states
-        .iter()
-        .map(|(aid, astate)| {
-            let role_key = astate.role.as_deref().unwrap_or(aid).to_string();
-            let name = astate.agent_config.identity.name.as_deref().unwrap_or(aid);
-            let instructions = astate
-                .agent_config
-                .identity
-                .instructions
-                .as_deref()
-                .unwrap_or("AI assistant");
-            let truncated = if instructions.len() > 500 {
-                let mut end = 500;
-                while end > 0 && !instructions.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}…", &instructions[..end])
-            } else {
-                instructions.to_string()
-            };
-            let mut desc = format!("{}\nInstructions: {}", name, truncated);
-            if !astate.agent_config.requires.is_empty() {
-                desc.push_str(&format!(
-                    "\nREQUIRES (must depend on): {}",
-                    astate.agent_config.requires.join(", ")
-                ));
-            }
-            (role_key, desc)
-        })
-        .collect();
-
-    // Build dedicated planner engine if configured.
-    let planner_engine: Option<Arc<dyn Engine>> = match (
-        config
-            .orchestrator
-            .as_ref()
-            .and_then(|o| o.planner_engine.as_ref()),
-        config
-            .orchestrator
-            .as_ref()
-            .and_then(|o| o.planner_model.as_ref()),
-    ) {
-        (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_builder::build_planner_engine(engine_type, model) {
-                Ok(e) => {
-                    info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
-                    Some(Arc::from(e))
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to build planner engine, falling back to default agent");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
-
-    info!(
-        agents = agent_states.len(),
-        default = %default_agent_id,
-        planner = planner_engine.as_ref().map(|_| "dedicated").unwrap_or("default agent"),
-        "Telegram multi-agent setup complete"
-    );
-
-    let pending_approvals: PendingApprovals = Arc::new(std::sync::Mutex::new(HashMap::new()));
-    let turn_cancel = Arc::new(AtomicBool::new(false));
-
-    let pipe = Arc::new(TelegramPipe::with_approvals(
-        bot_token,
-        Arc::clone(&pending_approvals),
-        Arc::clone(&turn_cancel),
-    ));
-    let (inbound_tx, mut inbound_rx) = tokio::sync::mpsc::channel(256);
-    rt.block_on(pipe.connect(inbound_tx))?;
-
-    let current_recipient: CurrentRecipient = Arc::new(std::sync::Mutex::new(None));
-    let approval_adapter: Arc<dyn ToolApprovalPort> = if config.telegram.tool_approvals {
-        let inner: Arc<dyn ToolApprovalPort> = Arc::new(TelegramInlineApprovalAdapter {
-            pipe: Arc::clone(&pipe),
-            current_recipient: Arc::clone(&current_recipient),
-            cancel: Arc::clone(&turn_cancel),
-        });
-        if config.telegram.approve_only.is_empty() {
-            inner
-        } else {
-            let filter: HashSet<String> =
-                config.telegram.approve_only.iter().cloned().collect();
-            info!(
-                tools = ?filter,
-                "Telegram approval filter: only these tools require approval"
-            );
-            Arc::new(FilteredApprovalAdapter {
-                inner,
-                approve_only: filter,
-            })
-        }
-    } else {
-        Arc::new(AllowAllApproval)
-    };
-
-    let memory_service_instance = memory_handle
-        .as_ref()
-        .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
-    let mut user_states: HashMap<String, ChatLoopState> = HashMap::new();
-    let mut user_state_last_active: HashMap<String, std::time::Instant> = HashMap::new();
-    let mut last_eviction_check = std::time::Instant::now();
-    let mut user_active_agent: HashMap<String, String> = HashMap::new();
-
-    let mut skill_command_router = {
-        let default_agent = agent_states.get(&default_agent_id);
-        default_agent
-            .map(|a| SkillCommandRouter::from_registry(&a.skill_registry))
-            .unwrap_or_else(|| SkillCommandRouter::from_registry(&SkillRegistry::new(vec![])))
-    };
-
-    let mut activity_log: Vec<channel_runtime::ActivityEntry> = Vec::new();
-    let is_multi_agent = agent_states.len() > 1;
-
-    info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
-
-    rt.block_on(async {
-        let delivery_opts = DeliveryOptions::default();
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
-
-        loop {
-            let msg = tokio::select! {
-                msg = inbound_rx.recv() => match msg {
-                    Some(m) => m,
-                    None => break,
-                },
-                _ = &mut ctrl_c => {
-                    info!("Received Ctrl+C, shutting down Telegram bot");
-                    break;
-                }
-            };
-
-            let sender_id = &msg.sender.peer_id;
-
-            // Periodic eviction sweep.
-            if last_eviction_check.elapsed() >= EVICTION_SWEEP_INTERVAL {
-                let now = std::time::Instant::now();
-                let idle_keys: Vec<String> = user_state_last_active
-                    .iter()
-                    .filter(|(_, &last)| now.duration_since(last) >= IDLE_EVICTION_THRESHOLD)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                for key in &idle_keys {
-                    user_states.remove(key);
-                    user_state_last_active.remove(key);
-                }
-                if !idle_keys.is_empty() {
-                    info!(
-                        evicted = idle_keys.len(),
-                        remaining = user_states.len(),
-                        "Evicted idle user states"
-                    );
-                }
-                last_eviction_check = now;
-            }
-
-            // Access control.
-            if !allowed_users.is_empty() && !allowed_users.contains(sender_id) {
-                warn!(sender = %sender_id, "Unauthorized Telegram user");
-                let _ = pipe
-                    .send_text(&msg.sender, "Unauthorized.", &delivery_opts)
-                    .await;
-                continue;
-            }
-
-            // Slash commands.
-            if msg.content.starts_with('/') {
-                if msg.content == "/stop" || msg.content.starts_with("/stop@") {
-                    turn_cancel.store(true, Ordering::Relaxed);
-                    let _ = pipe
-                        .send_text(&msg.sender, "⏹ Stop requested.", &delivery_opts)
-                        .await;
-                    continue;
-                }
-
-                if msg.content.starts_with("/team") {
-                    let goal = msg.content.trim_start_matches("/team").trim();
-                    if goal.is_empty() || !is_multi_agent {
-                        let hint = if !is_multi_agent {
-                            "Only one agent configured — /team requires multiple agents."
-                        } else {
-                            "Usage: /team <goal>\nExample: /team build a full stack Rust app"
-                        };
-                        let _ = pipe.send_text(&msg.sender, hint, &delivery_opts).await;
-                        continue;
-                    }
-                    let _ = handle_team(
-                        &pipe, &msg.sender, goal, msg.media.as_ref(),
-                        &delivery_opts, &mut agent_states, &default_agent_id,
-                        &agent_descriptions, &role_to_agent, &current_recipient,
-                        &memory_handle, &secret_registry, &approval_adapter,
-                        &turn_cancel, planner_engine.as_deref(),
-                    ).await;
-                    continue;
-                }
-
-                if msg.content.starts_with("/project") {
-                    let name = msg.content.trim_start_matches("/project").trim();
-                    let _ = handle_project(
-                        &pipe, &msg.sender, name, &delivery_opts,
-                        &mut agent_states, &default_agent_id, &base_workspaces,
-                        &config, &mut user_states, sender_id,
-                    ).await;
-                    continue;
-                }
-
-                if msg.content == "/agents" || msg.content.starts_with("/agents@") {
-                    let _ = handle_agents(
-                        &pipe, &msg.sender, &delivery_opts, &agent_states, &default_agent_id,
-                    ).await;
-                    continue;
-                }
-
-                let active_aid = user_active_agent
-                    .get(sender_id)
-                    .cloned()
-                    .unwrap_or_else(|| default_agent_id.clone());
-                let agent = match agent_states.get_mut(&active_aid) {
-                    Some(a) => a,
-                    None => continue,
-                };
-
-                if msg.content == "/reset" || msg.content.starts_with("/reset@") {
-                    let _ = handle_reset(
-                        &pipe, &msg.sender, &delivery_opts, &mut user_states, sender_id,
-                    ).await;
-                    continue;
-                }
-
-                if msg.content == "/purge" || msg.content.starts_with("/purge@") {
-                    let _ = handle_purge(
-                        &pipe, &msg.sender, &delivery_opts, &mut user_states, sender_id,
-                        &agent_states, &memory_handle,
-                    ).await;
-                    continue;
-                }
-
-                if msg.content == "/reload" {
-                    let _ = handle_reload(
-                        &pipe, &msg.sender, &delivery_opts, agent, &mut skill_command_router,
-                    ).await;
-                    continue;
-                }
-
-                if let SkillCommandMatch::Matched {
-                    skill_name,
-                    command: cmd_name,
-                    args,
-                } = skill_command_router.route(&msg.content)
-                {
-                    user_active_agent.insert(sender_id.clone(), active_aid.clone());
-                    let _ = handle_skill_command(
-                        &pipe, &msg.sender, &delivery_opts, agent,
-                        &mut skill_command_router, &skill_name, &cmd_name, &args,
-                        &mut user_states, &mut user_state_last_active,
-                        sender_id, &active_aid, &current_recipient,
-                        &memory_handle, &secret_registry, &approval_adapter,
-                        &turn_cancel,
-                        memory_service_instance.as_ref(), &memory_config,
-                    ).await;
-                    continue;
-                }
-
-                let state_key = format!("{}:{}", sender_id, active_aid);
-                user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
-                let state = user_states.entry(state_key).or_insert_with(|| {
-                    channel_runtime::create_chat_loop_state(&agent.agent_config)
-                });
-                let _ = handle_builtin_command(
-                    &pipe, &msg.sender, &delivery_opts, &msg.content,
-                    state, agent, &skill_command_router,
-                ).await;
-                continue;
-            }
-
-            // Route message to an agent.
-            let (mut routed_role, user_text) =
-                channel_runtime::parse_agent_routing(&msg.content, Some(&role_to_agent));
-
-            if routed_role.is_none() && is_multi_agent {
-                let decision = {
-                    let engine_ref: Option<&dyn Engine> =
-                        if let Some(ref dedicated) = planner_engine {
-                            Some(dedicated.as_ref())
-                        } else {
-                            agent_states.get(&default_agent_id).map(|a| a.engine.as_ref())
-                        };
-                    match engine_ref {
-                        Some(eng) => {
-                            crate::adapters::task_builder::classify_request(
-                                eng,
-                                &user_text,
-                                &agent_descriptions,
-                            )
-                            .await
-                        }
-                        None => Ok(crate::adapters::types::RouteDecision::MultiAgent),
-                    }
-                };
-
-                match decision {
-                    Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                        let orchestrator_enabled = config.orchestrator.as_ref().is_some_and(|o| o.enabled);
-                        if role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
-                            info!(role = %role_key, "Classifier routed to single agent");
-                            routed_role = Some(role_key);
-                        } else if role_to_agent.contains_key(&role_key) && orchestrator_enabled {
-                            info!(role = %role_key, "Classifier routed to single agent, but orchestrator enabled — using planner");
-                            let _ = handle_team(
-                                &pipe, &msg.sender, &user_text, msg.media.as_ref(),
-                                &delivery_opts, &mut agent_states, &default_agent_id,
-                                &agent_descriptions, &role_to_agent, &current_recipient,
-                                &memory_handle, &secret_registry, &approval_adapter,
-                                &turn_cancel, planner_engine.as_deref(),
-                            ).await;
-                            continue;
-                        } else {
-                            warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
-                            let _ = handle_team(
-                                &pipe, &msg.sender, &user_text, msg.media.as_ref(),
-                                &delivery_opts, &mut agent_states, &default_agent_id,
-                                &agent_descriptions, &role_to_agent, &current_recipient,
-                                &memory_handle, &secret_registry, &approval_adapter,
-                                &turn_cancel, planner_engine.as_deref(),
-                            ).await;
-                            continue;
-                        }
-                    }
-                    Ok(crate::adapters::types::RouteDecision::MultiAgent) => {
-                        let _ = handle_team(
-                            &pipe, &msg.sender, &user_text, msg.media.as_ref(),
-                            &delivery_opts, &mut agent_states, &default_agent_id,
-                            &agent_descriptions, &role_to_agent, &current_recipient,
-                            &memory_handle, &secret_registry, &approval_adapter,
-                            &turn_cancel, planner_engine.as_deref(),
-                        ).await;
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Classifier failed, falling back to planner");
-                        let _ = handle_team(
-                            &pipe, &msg.sender, &user_text, msg.media.as_ref(),
-                            &delivery_opts, &mut agent_states, &default_agent_id,
-                            &agent_descriptions, &role_to_agent, &current_recipient,
-                            &memory_handle, &secret_registry, &approval_adapter,
-                            &turn_cancel, planner_engine.as_deref(),
-                        ).await;
-                        continue;
-                    }
-                }
-            }
-
-            let target_agent_id = if let Some(ref role_key) = routed_role {
-                match role_to_agent.get(role_key) {
-                    Some(aid) => aid.clone(),
-                    None => {
-                        let available: Vec<&str> = agent_states.values()
-                            .filter_map(|a| a.role.as_deref())
-                            .collect();
-                        let _ = pipe
-                            .send_text(
-                                &msg.sender,
-                                &format!(
-                                    "Unknown agent role: {}\nAvailable: {}",
-                                    role_key,
-                                    available.join(", ")
-                                ),
-                                &delivery_opts,
-                            )
-                            .await;
-                        continue;
-                    }
-                }
-            } else {
-                default_agent_id.clone()
-            };
-
-            user_active_agent.insert(sender_id.clone(), target_agent_id.clone());
-
-            let agent = match agent_states.get_mut(&target_agent_id) {
-                Some(a) => a,
-                None => continue,
-            };
-
-            // Hot-reload skills.
-            if let Some(ref src) = agent.skill_source {
-                if agent.skill_registry.reload(src) {
-                    agent.current_tools = channel_runtime::rebuild_tools(
-                        &agent.base_tools,
-                        &agent.skill_registry,
-                    );
-                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-                        &agent.agent_config,
-                        agent.advertise_workspace_tools,
-                        &agent.skill_registry,
-                        &agent.current_tools,
-                    );
-                }
-            }
-
-            // Save attached files.
-            let user_content = if let (Some(ref ws), Some(ref media)) =
-                (&agent.workspace, &msg.media)
-            {
-                let attachments_dir = ws.join(".tengu-attachments");
-                std::fs::create_dir_all(&attachments_dir).ok();
-
-                let mut file_notes = Vec::new();
-                for m in media {
-                    let fname = sanitize_attachment_filename(
-                        m.filename.as_deref().unwrap_or("attachment"),
-                    );
-                    let path = attachments_dir.join(&fname);
-                    match std::fs::write(&path, &m.data) {
-                        Ok(()) => {
-                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
-                            file_notes.push(format!(
-                                "[Attached file: {} ({}, {} bytes)]",
-                                path.display(),
-                                m.mime_type,
-                                m.data.len()
-                            ));
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to save Telegram attachment");
-                        }
-                    }
-                }
-
-                if file_notes.is_empty() {
-                    user_text.clone()
-                } else {
-                    format!("{}\n{}", file_notes.join("\n"), user_text)
-                }
-            } else {
-                user_text.clone()
-            };
-
-            *current_recipient.lock().unwrap() = Some(msg.sender.clone());
-
-            let activity_adapter = make_tool_activity_adapter(
-                agent.agent_config
-                    .identity
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| agent.agent_id.clone()),
-                &agent.current_tools,
-            );
-            let current_executor =
-                agent.workspace.as_ref().and_then(|ws| {
-                    channel_runtime::build_tool_executor(
-                        ws,
-                        &agent.current_tools,
-                        &agent.skill_registry,
-                        &memory_handle,
-                        &secret_registry,
-                        Arc::clone(&approval_adapter),
-                        activity_adapter,
-                        Some(Arc::clone(&turn_cancel)),
-                        None,
-                    )
-                });
-
-            let sanitized_executor = current_executor.as_ref().map(|e| {
-                SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
-            });
-
-            let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
-                Arc::new(std::sync::Mutex::new(Vec::new()));
-
-            let observer_secrets = Arc::clone(&secret_registry);
-            let observer_agent_label = agent
-                .agent_config
-                .identity
-                .name
-                .clone()
-                .unwrap_or_else(|| agent.agent_id.clone());
-            let turn_tool_log_ref = Arc::clone(&turn_tool_log);
-            let observer_tools = channel_runtime::tool_defs(&agent.current_tools);
-            let tool_result_observer = move |call: &ToolCall, result: &str| {
-                if let Some(entry) = channel_runtime::format_tool_for_activity(call, &observer_tools) {
-                    turn_tool_log_ref.lock().unwrap().push(entry);
-                }
-                let redacted = observer_secrets.redact(result);
-                let mut end = redacted.len().min(1500);
-                while end < redacted.len() && !redacted.is_char_boundary(end) {
-                    end -= 1;
-                }
-                let truncated = if redacted.len() > 1500 {
-                    format!("{}…", &redacted[..end])
-                } else {
-                    redacted
-                };
-                tracing::debug!(
-                    agent = %observer_agent_label,
-                    tool = %call.name,
-                    result = %truncated,
-                    "Telegram tool result"
-                );
-            };
-
-            turn_cancel.store(false, Ordering::Relaxed);
-
-            let state_key = format!("{}:{}", sender_id, target_agent_id);
-            user_state_last_active.insert(state_key.clone(), std::time::Instant::now());
-            let state = user_states.entry(state_key).or_insert_with(|| {
-                channel_runtime::create_chat_loop_state(&agent.agent_config)
-            });
-
-            if is_multi_agent {
-                let agent_label = agent.agent_config.identity.name.as_deref()
-                    .unwrap_or(&agent.agent_id);
-                let _ = pipe
-                    .send_text(
-                        &msg.sender,
-                        &format!("[{}]", agent_label),
-                        &delivery_opts,
-                    )
-                    .await;
-            }
-
-            let mut turn_system_prompt = agent.current_system_prompt.clone();
-            if is_multi_agent && !needs_fresh_history_grounding(&user_content) {
-                let activity_ctx =
-                    channel_runtime::build_activity_context(&activity_log, &target_agent_id);
-                if !activity_ctx.is_empty() {
-                    turn_system_prompt.push_str(&activity_ctx);
-                }
-            } else if is_multi_agent {
-                turn_system_prompt.push_str(
-                    "\n\n## Grounding Rule\nFor questions about last/latest/most recent work, do not answer from Recent Team Activity. Verify against current workspace files, conversation state, or tool results first.\n",
-                );
-            }
-
-            let turn_tools = channel_runtime::tool_defs(&agent.current_tools);
-            let chat_runtime = ChatRuntimeService {
-                engine: agent.engine.as_ref(),
-                agent_id: &agent.agent_id,
-                agent_config: &agent.agent_config,
-                history_turn_limit: agent.history_turn_limit,
-                compaction_policy: agent.compaction_policy,
-                system_prompt: turn_system_prompt,
-                tools: &turn_tools,
-                tool_executor: sanitized_executor
-                    .as_ref()
-                    .map(|e| e as &dyn ToolExecutor),
-                memory_service: memory_service_instance.as_ref(),
-                max_recall_entries: memory_config.max_recall_entries,
-                max_recall_tokens: memory_config.max_recall_tokens,
-                tool_observer: Some(&tool_result_observer),
-                cancel: Some(&turn_cancel),
-            };
-
-            let _ = pipe.send_chat_action(&msg.sender).await;
-            let typing_pipe = Arc::clone(&pipe);
-            let typing_sender = msg.sender.clone();
-            let typing_handle = tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-                    let _ = typing_pipe.send_chat_action(&typing_sender).await;
-                }
-            });
-
-            let result = chat_runtime.process_user_text(state, &user_content).await;
-            typing_handle.abort();
-
-            match result {
-                Ok(result) => {
-                    if let Some(notice) = result.system_notice {
-                        let _ = pipe.send_text(&msg.sender, &notice, &delivery_opts).await;
-                    }
-                    if let Some(ref text) = result.assistant_text {
-                        let reply = secret_registry.redact(text);
-                        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                            if let Err(e) =
-                                pipe.send_text(&msg.sender, chunk, &delivery_opts).await
-                            {
-                                error!(error = %e, "Failed to send Telegram reply chunk");
-                            }
-                        }
-                    }
-
-                    if is_multi_agent {
-                        let tools_used = match Arc::try_unwrap(turn_tool_log) {
-                            Ok(mutex) => mutex.into_inner().unwrap_or_default(),
-                            Err(arc) => arc.lock().unwrap().clone(),
-                        };
-                        let response_summary = result
-                            .assistant_text
-                            .as_deref()
-                            .map(|t| channel_runtime::truncate_summary(t, channel_runtime::MAX_ACTIVITY_SUMMARY_CHARS))
-                            .unwrap_or_default();
-                        let label = agent
-                            .agent_config
-                            .identity
-                            .name
-                            .clone()
-                            .unwrap_or_else(|| agent.agent_id.clone());
-                        if !tools_used.is_empty() || !response_summary.is_empty() {
-                            activity_log.push(channel_runtime::ActivityEntry {
-                                agent_label: label,
-                                agent_id: target_agent_id.clone(),
-                                tools_used,
-                                response_summary,
-                                tool_outcomes: result.tool_outcomes,
-                            });
-                            if activity_log.len() > channel_runtime::MAX_ACTIVITY_ENTRIES {
-                                activity_log
-                                    .drain(..activity_log.len() - channel_runtime::MAX_ACTIVITY_ENTRIES);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!(error = %e, "Engine error");
-                    let _ = pipe
-                        .send_text(
-                            &msg.sender,
-                            &format!("Error: {}", e),
-                            &delivery_opts,
-                        )
-                        .await;
-                }
-            }
-        }
-
-        pipe.disconnect().await.ok();
-    });
-
-    Ok(())
+    let (session, inbound_rx) = TelegramSession::build(config, secret_registry, &rt)?;
+    session.run(rt, inbound_rx)
 }

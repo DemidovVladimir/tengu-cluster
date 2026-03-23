@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -68,40 +68,6 @@ pub struct ToolDef {
     pub description: String,
     /// JSON Schema of accepted parameters.
     pub parameters: serde_json::Value,
-    /// Optional policy metadata used by runtime governance/approval checks.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy: Option<ToolPolicyMetadata>,
-}
-
-/// Coarse risk level assigned to a tool definition.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum ToolRiskLevel {
-    /// Read-only or low-impact operations.
-    #[default]
-    Low,
-    /// Potentially mutating operations with bounded impact.
-    Medium,
-    /// High-impact operations (for example shell or external side effects).
-    High,
-}
-
-/// Runtime tool-governance metadata attached to tool definitions.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ToolPolicyMetadata {
-    /// Declared tool risk tier.
-    pub risk_level: ToolRiskLevel,
-    /// Whether this tool requires explicit approval by default.
-    pub requires_approval: bool,
-}
-
-impl Default for ToolPolicyMetadata {
-    fn default() -> Self {
-        Self {
-            risk_level: ToolRiskLevel::Low,
-            requires_approval: false,
-        }
-    }
 }
 
 /// Provider/model metadata published to runtime.
@@ -311,94 +277,20 @@ impl FromStr for Lens {
 }
 
 // ---------------------------------------------------------------------------
-// Capability — tool effect classification and registration
+// Tool definition helpers
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EffectClass {
-    Read,
-    Write,
-    ExternalApi,
-    ChainTx,
-    ShellExec,
-}
-
-impl EffectClass {
-    pub(crate) fn requires_approval(self) -> bool {
-        !matches!(self, Self::Read)
-    }
-
-    pub(crate) fn risk_level(self) -> ToolRiskLevel {
-        match self {
-            Self::Read => ToolRiskLevel::Low,
-            Self::Write => ToolRiskLevel::Medium,
-            Self::ExternalApi => ToolRiskLevel::Medium,
-            Self::ChainTx | Self::ShellExec => ToolRiskLevel::High,
-        }
-    }
-}
-
-impl FromStr for EffectClass {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "read" => Ok(Self::Read),
-            "write" => Ok(Self::Write),
-            "external_api" | "external-api" => Ok(Self::ExternalApi),
-            "chain_tx" | "chain-tx" => Ok(Self::ChainTx),
-            "shell_exec" | "shell-exec" => Ok(Self::ShellExec),
-            other => Err(format!("unknown effect class '{}'", other)),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ToolRuntimeMetadata {
-    pub required_secrets: Vec<String>,
-    pub activity_description: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RegisteredTool {
-    pub def: ToolDef,
-    pub effect_class: EffectClass,
-    pub metadata: ToolRuntimeMetadata,
-}
-
-impl RegisteredTool {
+impl ToolDef {
     pub(crate) fn new(
         name: &str,
         description: &str,
         parameters: serde_json::Value,
-        effect_class: EffectClass,
     ) -> Self {
         Self {
-            def: ToolDef {
-                name: name.into(),
-                description: description.into(),
-                parameters,
-                policy: Some(ToolPolicyMetadata {
-                    risk_level: effect_class.risk_level(),
-                    requires_approval: effect_class.requires_approval(),
-                }),
-            },
-            effect_class,
-            metadata: ToolRuntimeMetadata::default(),
+            name: name.into(),
+            description: description.into(),
+            parameters,
         }
-    }
-
-    pub(crate) fn with_required_secrets(mut self, required_secrets: &[&str]) -> Self {
-        self.metadata.required_secrets = required_secrets.iter().map(|s| s.to_string()).collect();
-        self
-    }
-
-    pub(crate) fn with_activity_description(
-        mut self,
-        activity_description: impl Into<String>,
-    ) -> Self {
-        self.metadata.activity_description = Some(activity_description.into());
-        self
     }
 }
 
@@ -541,97 +433,24 @@ pub(crate) trait AgentTaskExecutor: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Tool results & policy
+// Tool allow-list
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ToolResultStatus {
-    #[default]
-    Ok,
-    Error,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct ToolResultEnvelope {
-    pub tool_name: String,
-    #[serde(default)]
-    pub status: ToolResultStatus,
-    #[serde(default)]
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub artifacts: BTreeMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub ids: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub urls: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub hashes: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub raw_response: Option<serde_json::Value>,
-}
-
-impl ToolResultEnvelope {
-    pub(crate) fn ok(tool_name: &str, summary: impl Into<String>) -> Self {
-        Self {
-            tool_name: tool_name.to_string(),
-            status: ToolResultStatus::Ok,
-            summary: summary.into(),
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn with_id(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.ids.insert(key.into(), value.into());
-        self
-    }
-
-    pub(crate) fn with_raw_response(mut self, value: serde_json::Value) -> Self {
-        self.raw_response = Some(value);
-        self
-    }
-
-    pub(crate) fn to_json_string(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string(self)?)
-    }
-}
-
-pub(crate) fn parse_tool_result_envelope(text: &str) -> Option<ToolResultEnvelope> {
-    serde_json::from_str(text).ok()
-}
-
-/// Catalog of tool policies keyed by tool name.
+/// Simple set of allowed tool names.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ToolPolicyCatalog {
-    policies: HashMap<String, bool>,
+pub(crate) struct ToolAllowList {
+    allowed: HashSet<String>,
 }
 
-impl ToolPolicyCatalog {
-    /// Build a catalog from the tool definitions exposed to the model.
-    pub(crate) fn from_tools(tools: &[RegisteredTool]) -> Self {
-        let mut policies = HashMap::new();
-        for tool in tools {
-            let requires_approval = tool
-                .def
-                .policy
-                .as_ref()
-                .map(|policy| policy.requires_approval)
-                .unwrap_or_else(|| tool.effect_class.requires_approval());
-            policies.insert(tool.def.name.clone(), requires_approval);
+impl ToolAllowList {
+    pub(crate) fn from_tools(tools: &[ToolDef]) -> Self {
+        Self {
+            allowed: tools.iter().map(|t| t.name.clone()).collect(),
         }
-        Self { policies }
     }
 
     pub(crate) fn is_allowed(&self, tool_name: &str) -> bool {
-        self.policies.contains_key(tool_name)
-    }
-
-    /// Whether a tool call should require interactive user approval.
-    pub(crate) fn requires_approval(&self, tool_name: &str) -> bool {
-        self.policies
-            .get(tool_name)
-            .copied()
-            .unwrap_or(true)
+        self.allowed.contains(tool_name)
     }
 }
 
@@ -1089,20 +908,3 @@ impl EventBus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn effect_class_maps_to_approval() {
-        assert!(!EffectClass::Read.requires_approval());
-        assert!(EffectClass::Write.requires_approval());
-        assert!(EffectClass::ExternalApi.requires_approval());
-        assert!(EffectClass::ChainTx.requires_approval());
-        assert!(EffectClass::ShellExec.requires_approval());
-    }
-}

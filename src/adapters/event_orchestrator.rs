@@ -554,6 +554,7 @@ async fn summarize_for_downstream(
         tool_calls: None,
     }];
 
+    let defaults = crate::adapters::config::LimitsConfig::default();
     let response = collect_engine_response(
         planner,
         &messages,
@@ -566,7 +567,10 @@ async fn summarize_for_downstream(
         None,
         None,
         Some(2000),
-        None,
+        defaults.max_tool_rounds,
+        defaults.max_tool_result_chars,
+        defaults.stream_event_timeout_secs,
+        defaults.compact_result_limit,
     )
     .await
     .map_err(|e| format!("Tier 2 summarization failed: {e}"))?;

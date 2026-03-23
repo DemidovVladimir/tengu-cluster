@@ -18,11 +18,11 @@ use crate::adapters::chat_builder::{handle_chat_command, CommandResult, EngineIn
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::memory_builder::MemoryService;
-use crate::adapters::ports::{ToolActivityPort, ToolApprovalPort};
+use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use app::{BubbleRole, ChatRequest, SkillCommand};
 use crate::adapters::config::{Config, RuntimeProfile};
-use crate::adapters::types::{RegisteredTool, ToolCall};
+use crate::adapters::types::{ToolCall, ToolDef};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -51,8 +51,8 @@ struct CursiveToolActivityAdapter {
 
 impl ToolActivityPort for CursiveToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        let tool_name = call.name.clone();
-        let detail = crate::adapters::tool_builder::summarize_tool_args(&call.arguments);
+        let (tool_name, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+        let detail = detail.unwrap_or_default();
 
         let cb = self.cb_sink.clone();
         let _ = cb.send(Box::new(move |siv: &mut Cursive| {
@@ -61,25 +61,6 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
     }
 }
 
-/// TUI adapter for interactive tool approval prompts.
-struct CursiveToolApprovalAdapter {
-    cb_sink: cursive::CbSink,
-}
-
-impl ToolApprovalPort for CursiveToolApprovalAdapter {
-    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        let (title, description, preview) = crate::adapters::tool_builder::build_approval_text(call);
-
-        let (confirm_tx, confirm_rx) = mpsc::channel::<bool>();
-        let cb = self.cb_sink.clone();
-        let _ = cb.send(Box::new(move |siv: &mut Cursive| {
-            view::show_tool_confirmation(siv, &title, &description, &preview, confirm_tx);
-        }));
-
-        // Block the engine thread until the user responds.
-        Ok(confirm_rx.recv().unwrap_or(false))
-    }
-}
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
 pub fn run_tui(
@@ -180,7 +161,7 @@ pub fn run_tui(
             .as_ref()
             .map(|ws| FileSystemSkillSource::new(ws.clone()));
 
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.def.name.clone()).collect();
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
         let mut skill_registry = SkillRegistry::new(base_reserved)
             .with_allowlist(Some(engine_agent_config.skill_packages.clone()));
 
@@ -191,15 +172,12 @@ pub fn run_tui(
         let mut skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
 
         // Create channel-specific port adapters once, share via Arc.
-        let approval: Arc<dyn ToolApprovalPort> = Arc::new(CursiveToolApprovalAdapter {
-            cb_sink: cb_sink.clone(),
-        });
         let activity: Arc<dyn ToolActivityPort> = Arc::new(CursiveToolActivityAdapter {
             cb_sink: cb_sink.clone(),
         });
 
         let mut tools_dirty = true;
-        let mut current_tools: Vec<RegisteredTool> = vec![];
+        let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_executor: Option<channel_runtime::ToolServiceExecutor> = None;
         let mut current_system_prompt = system_prompt;
 
@@ -301,7 +279,6 @@ pub fn run_tui(
                                 &skill_registry,
                                 &memory_handle,
                                 &secret_registry,
-                                Arc::clone(&approval),
                                 Arc::clone(&activity),
                                 None,
                                 None,
@@ -373,7 +350,6 @@ pub fn run_tui(
                                     &skill_registry,
                                     &memory_handle,
                                     &secret_registry,
-                                    Arc::clone(&approval),
                                     Arc::clone(&activity),
                                     None,
                                     None,
@@ -393,7 +369,7 @@ pub fn run_tui(
                             let sanitized_executor = current_executor.as_ref().map(|e| {
                                 SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                             });
-                            let tool_defs = channel_runtime::tool_defs(&current_tools);
+                            let tool_defs = current_tools.clone();
 
                             let chat_runtime = ChatRuntimeService {
                                 engine: engine.as_ref(),
@@ -496,7 +472,6 @@ pub fn run_tui(
                                 &skill_registry,
                                 &memory_handle,
                                 &secret_registry,
-                                Arc::clone(&approval),
                                 Arc::clone(&activity),
                                 None,
                                 None,
@@ -518,7 +493,7 @@ pub fn run_tui(
                         let sanitized_executor = current_executor.as_ref().map(|e| {
                             SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                         });
-                        let tool_defs = channel_runtime::tool_defs(&current_tools);
+                        let tool_defs = current_tools.clone();
 
                         let chat_runtime = ChatRuntimeService {
                             engine: engine.as_ref(),

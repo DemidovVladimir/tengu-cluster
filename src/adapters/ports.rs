@@ -2,7 +2,7 @@
 //!
 //! Concrete implementations live alongside these traits in `src/adapters/`.
 //!
-//! Sync ports: `ToolActivityPort`, `ToolApprovalPort`,
+//! Sync ports: `ToolActivityPort`,
 //!   `ToolExecutionPort`, `SkillSourcePort`, `ShellExecutionPort`.
 //! Async ports (Pin<Box<Future>>): `EmbeddingPort`, `MemoryStorePort`.
 
@@ -14,11 +14,6 @@ use crate::adapters::types::{MemoryEntry, MemorySearchResult, ToolCall};
 /// Output port for publishing tool activity events to the UI/log layer.
 pub(crate) trait ToolActivityPort: Send + Sync {
     fn publish_tool_activity(&self, call: &ToolCall);
-}
-
-/// Input port for obtaining user approval before running sensitive tools.
-pub(crate) trait ToolApprovalPort: Send + Sync {
-    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool>;
 }
 
 /// Output port for executing tool calls against a concrete infrastructure.

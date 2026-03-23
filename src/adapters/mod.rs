@@ -7,7 +7,6 @@ pub mod types;
 pub use types::{Engine, EngineContext, EngineDiagnostics};
 
 pub(crate) mod agent_builder;
-pub(crate) mod approval;
 pub(crate) mod chat_builder;
 pub(crate) mod memory_builder;
 pub(crate) mod secret_builder;

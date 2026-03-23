@@ -49,14 +49,6 @@ enum Commands {
         #[command(subcommand)]
         action: SecretAction,
     },
-    /// Inspect or manage the shared workspace cache.
-    Cache {
-        #[command(subcommand)]
-        action: CacheAction,
-        /// Workspace directory (required — the cache is workspace-local)
-        #[arg(long)]
-        workspace: String,
-    },
     /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
     Prune {
         /// Also prune workspace-local state for this sandbox
@@ -68,30 +60,6 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
-enum CacheAction {
-    /// List cache entries (optionally filtered by namespace)
-    List {
-        /// Namespace to filter by (omit to show all)
-        namespace: Option<String>,
-    },
-    /// Get a single cache entry
-    Get {
-        /// Namespace
-        namespace: String,
-        /// Key
-        key: String,
-    },
-    /// Delete a single cache entry
-    Delete {
-        /// Namespace
-        namespace: String,
-        /// Key
-        key: String,
-    },
-    /// Show cache statistics
-    Stats,
-}
 
 #[derive(Subcommand)]
 enum SecretAction {
@@ -256,24 +224,6 @@ async fn main() -> Result<()> {
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
-        }
-        Commands::Cache { action, workspace } => {
-            let ws = adapters::tool_builder::expand_tilde(std::path::Path::new(&workspace));
-            match action {
-                CacheAction::List { namespace } => {
-                    adapters::cache_tool_executor::cli_cache_list(&ws, namespace.as_deref())?;
-                }
-                CacheAction::Get { namespace, key } => {
-                    adapters::cache_tool_executor::cli_cache_get(&ws, &namespace, &key)?;
-                }
-                CacheAction::Delete { namespace, key } => {
-                    adapters::cache_tool_executor::cli_cache_delete(&ws, &namespace, &key)?;
-                }
-                CacheAction::Stats => {
-                    adapters::cache_tool_executor::cli_cache_stats(&ws)?;
-                }
-            }
-            Ok(())
         }
         Commands::Prune { sandbox, yes } => {
             let (workspaces, scaffold_dirs): (Vec<PathBuf>, Vec<String>) =

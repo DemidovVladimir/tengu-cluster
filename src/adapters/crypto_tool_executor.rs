@@ -4,7 +4,6 @@
 //! reusable platform primitives that any skill can compose.
 
 use crate::adapters::ports::ToolExecutionPort;
-use crate::adapters::types::ToolResultEnvelope;
 use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Address, I256, U256};
 use anyhow::{bail, Context, Result};
@@ -105,29 +104,16 @@ impl CryptoToolExecutionAdapter {
                 let receipt = wait_for_receipt(&client, &tx_hash, cancel.as_ref()).await?;
                 let status_hex = receipt["status"].as_str().unwrap_or("0x0");
                 let confirmed = status_hex == "0x1";
-                let summary = if confirmed {
-                    format!("Transaction confirmed: {}", tx_hash)
-                } else {
-                    format!("Transaction reverted: {}", tx_hash)
-                };
-                let envelope = ToolResultEnvelope::ok("sign_and_send_transaction", &summary)
-                    .with_id("tx_hash", &tx_hash)
-                    .with_id("chain_id", chain_id.to_string())
-                    .with_id("to", &to)
-                    .with_raw_response(json!({
-                        "tx_hash": tx_hash,
-                        "confirmed": confirmed,
-                        "status": if confirmed { "success" } else { "reverted" },
-                        "receipt": receipt
-                    }));
-                envelope.to_json_string()
+                let status_str = if confirmed { "confirmed" } else { "reverted" };
+                Ok(format!(
+                    "tx_hash: {} | status: {} | chain: {} | to: {}",
+                    tx_hash, status_str, chain_id, to
+                ))
             } else {
-                let envelope =
-                    ToolResultEnvelope::ok("sign_and_send_transaction", "Transaction submitted")
-                        .with_id("tx_hash", &tx_hash)
-                        .with_id("chain_id", chain_id.to_string())
-                        .with_id("to", &to);
-                envelope.to_json_string()
+                Ok(format!(
+                    "tx_hash: {} | status: submitted | chain: {} | to: {}",
+                    tx_hash, chain_id, to
+                ))
             }
         })
     }
@@ -145,13 +131,7 @@ impl CryptoToolExecutionAdapter {
         self.run_async(async move {
             let signature = privy_personal_sign(&client, &message).await?;
             let address = privy_wallet_address(&client).await?;
-            let envelope = ToolResultEnvelope::ok(
-                "sign_message",
-                format!("Message signed by {}", address),
-            )
-            .with_id("signature", &signature)
-            .with_id("signer", &address);
-            envelope.to_json_string()
+            Ok(format!("signature: {} | signer: {}", signature, address))
         })
     }
 
@@ -159,12 +139,7 @@ impl CryptoToolExecutionAdapter {
         let client = self.client.clone();
         self.run_async(async move {
             let address = privy_wallet_address(&client).await?;
-            let envelope = ToolResultEnvelope::ok(
-                "get_wallet_address",
-                format!("Wallet address: {}", address),
-            )
-            .with_id("address", &address);
-            envelope.to_json_string()
+            Ok(format!("address: {}", address))
         })
     }
 
@@ -181,12 +156,7 @@ impl CryptoToolExecutionAdapter {
             .ok_or_else(|| anyhow::anyhow!("abi_encode: missing 'args' array"))?;
 
         let calldata = abi_encode_function_call(signature, args)?;
-        let envelope = ToolResultEnvelope::ok(
-            "abi_encode",
-            format!("Encoded {}", signature),
-        )
-        .with_id("calldata", &calldata);
-        envelope.to_json_string()
+        Ok(format!("calldata: {}", calldata))
     }
 
     fn execute_hex_to_uint256(call: &ToolCall) -> Result<String> {
@@ -198,11 +168,7 @@ impl CryptoToolExecutionAdapter {
         let stripped = hex.strip_prefix("0x").unwrap_or(hex);
         let value = U256::from_str_radix(stripped, 16)
             .map_err(|e| anyhow::anyhow!("hex_to_uint256: invalid hex — {e}"))?;
-        let decimal = value.to_string();
-        let envelope = ToolResultEnvelope::ok("hex_to_uint256", &decimal)
-            .with_id("decimal", &decimal)
-            .with_id("hex", hex);
-        envelope.to_json_string()
+        Ok(value.to_string())
     }
 }
 

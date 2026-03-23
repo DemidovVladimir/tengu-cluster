@@ -12,8 +12,7 @@ use crate::adapters::engine_builder::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
 use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
-use crate::adapters::ports::{ToolActivityPort, ToolApprovalPort};
-use crate::adapters::approval::DenyByDefaultApproval;
+use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -46,7 +45,10 @@ struct AgentRuntime {
     /// Per-task token budget (input + output). Derived from agent's
     /// `limits.max_tokens_per_flow` — caps runaway orchestrated tasks.
     task_token_budget: Option<u32>,
-    max_tool_rounds: Option<u32>,
+    max_tool_rounds: u32,
+    max_tool_result_chars: u32,
+    stream_event_timeout_secs: u64,
+    compact_result_limit: u32,
 }
 
 /// Adapter implementing `AgentTaskExecutor` for real agent runtimes.
@@ -107,7 +109,6 @@ pub(crate) async fn boot_orchestrator(
     // (role_key, agent_id, engine_id) for banner display.
     let mut agent_list: Vec<(String, String, String)> = Vec::new();
 
-    let deny_approval: Arc<dyn ToolApprovalPort> = Arc::new(DenyByDefaultApproval);
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(LogToolActivity);
 
     // Shared HTTP client across all agents — eliminates redundant connection pools.
@@ -157,7 +158,7 @@ pub(crate) async fn boot_orchestrator(
             );
             let skill_source = FileSystemSkillSource::new(ws.clone());
             let base_reserved: Vec<String> =
-                base_tools.iter().map(|t| t.def.name.clone()).collect();
+                base_tools.iter().map(|t| t.name.clone()).collect();
             let mut skill_registry = SkillRegistry::new(base_reserved)
                 .with_allowlist(Some(agent_config.skill_packages.clone()));
             skill_registry.reload(&skill_source);
@@ -170,14 +171,13 @@ pub(crate) async fn boot_orchestrator(
                 &skill_registry,
                 &current_tools,
             );
-            let tool_defs = channel_runtime::tool_defs(&current_tools);
+            let tool_defs = current_tools.clone();
             let tool_executor = channel_runtime::build_tool_executor(
                 ws,
                 &current_tools,
                 &skill_registry,
                 &memory_handle,
                 &secret_registry,
-                deny_approval.clone(),
                 log_activity.clone(),
                 None,
                 shared_http_client.as_ref(),
@@ -210,6 +210,9 @@ pub(crate) async fn boot_orchestrator(
                 workspace,
                 task_token_budget: Some(agent_config.limits.max_tokens_per_flow as u32),
                 max_tool_rounds: agent_config.limits.max_tool_rounds,
+                max_tool_result_chars: agent_config.limits.max_tool_result_chars,
+                stream_event_timeout_secs: agent_config.limits.stream_event_timeout_secs,
+                compact_result_limit: agent_config.limits.compact_result_limit,
             }),
         );
 
@@ -552,6 +555,9 @@ async fn execute_agent_task(
         None,
         runtime.task_token_budget,
         runtime.max_tool_rounds,
+        runtime.max_tool_result_chars,
+        runtime.stream_event_timeout_secs,
+        runtime.compact_result_limit,
     )
     .await?;
 

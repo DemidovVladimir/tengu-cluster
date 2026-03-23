@@ -37,12 +37,12 @@ use crate::adapters::skill_builder::{
     self, SkillExecution, SkillRegistry, SkillStatus, SkillToolExecutionAdapter,
 };
 use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort};
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort};
 use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService, WorkspaceToolExecutionAdapter};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::types::{
-    ChatLoopState, Lens, RegisteredTool, ToolCall, ToolDef, ToolPolicyCatalog,
+    ChatLoopState, Lens, ToolAllowList, ToolCall, ToolDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -67,15 +67,11 @@ impl ToolExecutor for ToolServiceExecutor {
 // Tool, executor, and prompt rebuilding
 // ---------------------------------------------------------------------------
 
-pub(crate) fn tool_defs(tools: &[RegisteredTool]) -> Vec<crate::adapters::types::ToolDef> {
-    tools.iter().map(|tool| tool.def.clone()).collect()
-}
-
 /// Merge base platform tools with active skill tools.
 pub(crate) fn rebuild_tools(
-    base_tools: &[RegisteredTool],
+    base_tools: &[ToolDef],
     skill_registry: &SkillRegistry,
-) -> Vec<RegisteredTool> {
+) -> Vec<ToolDef> {
     let mut tools = base_tools.to_vec();
     tools.extend(skill_registry.active_tools());
     tools
@@ -86,7 +82,7 @@ pub(crate) fn rebuild_system_prompt(
     agent_config: &AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    tools: &[RegisteredTool],
+    tools: &[ToolDef],
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
@@ -97,7 +93,7 @@ pub(crate) fn rebuild_system_prompt(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
-        &tool_defs(tools),
+        tools,
     )
 }
 
@@ -111,11 +107,10 @@ pub(crate) fn rebuild_system_prompt(
 /// `reqwest::Client` instead of each building their own connection pool.
 pub(crate) fn build_tool_executor(
     workspace: &Path,
-    tools: &[RegisteredTool],
+    tools: &[ToolDef],
     skill_registry: &SkillRegistry,
     memory_handle: &Option<Arc<MemoryServiceHandle>>,
     secret_registry: &Arc<SecretRegistry>,
-    approval: Arc<dyn ToolApprovalPort>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     shared_http_client: Option<&reqwest::Client>,
@@ -134,7 +129,7 @@ pub(crate) fn build_tool_executor(
             .with_shell(Arc::clone(&shell)),
     );
 
-    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.def.name.as_str()).collect();
+    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
     // Shell skills create named tools; API skills are documentation-only.
     let shell_skill_defs: Vec<_> = skill_registry
@@ -165,7 +160,7 @@ pub(crate) fn build_tool_executor(
         {
             let mem_names: HashSet<String> = memory_tool_defs()
                 .iter()
-                .map(|t| t.def.name.clone())
+                .map(|t| t.name.clone())
                 .collect();
             composite = composite.with_executor(Arc::new(mem_exec), mem_names);
         }
@@ -223,9 +218,8 @@ pub(crate) fn build_tool_executor(
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
-        ToolPolicyCatalog::from_tools(tools),
+        ToolAllowList::from_tools(tools),
         activity,
-        approval,
         composite,
     );
     Some(ToolServiceExecutor { service })
@@ -245,7 +239,7 @@ pub(crate) fn compute_base_tools(
     uses_tools: bool,
     has_memory: bool,
     workspace_tools: &[String],
-) -> Vec<RegisteredTool> {
+) -> Vec<ToolDef> {
     if !uses_tools {
         return vec![];
     }
@@ -516,24 +510,22 @@ pub(crate) struct ActivityEntry {
 }
 
 /// Format a tool call for the activity log.
-/// Only tools that require approval (mutations) are interesting for other agents.
+/// Read-only tools (read_file, list_directory, etc.) are not interesting for other agents.
 pub(crate) fn format_tool_for_activity(
     call: &ToolCall,
-    tools: &[ToolDef],
 ) -> Option<String> {
-    let tool_def = tools.iter().find(|t| t.name == call.name);
-    let requires_approval = tool_def
-        .and_then(|t| t.policy.as_ref())
-        .map(|p| p.requires_approval)
-        .unwrap_or(false);
-
-    if !requires_approval {
+    let read_only = matches!(
+        call.name.as_str(),
+        "read_file" | "list_directory" | "get_wallet_address" | "abi_encode" | "hex_to_uint256"
+    );
+    if read_only {
         return None;
     }
 
-    let summary = crate::adapters::tool_builder::summarize_tool_args(&call.arguments);
-    let truncated = truncate_summary(&summary, 80);
-    Some(format!("{}: {}", call.name, truncated))
+    let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+    let detail_str = detail.unwrap_or_default();
+    let truncated = truncate_summary(&detail_str, 80);
+    Some(format!("{}: {}", title, truncated))
 }
 
 /// Build a context block summarising what OTHER agents have done recently.

@@ -21,7 +21,7 @@ approve_only = ["sign_and_send_transaction"]
 enabled = true
 max_retries = 2
 planner_engine = "openrouter"
-planner_model = "anthropic/claude-sonnet-4"
+planner_model = "anthropic/claude-sonnet-4.6"
 
 # --- Scaffold ---
 # Root workspace with working directories created at startup.
@@ -39,45 +39,52 @@ content = """# DeSci Project
 - `poi/` — Proof of Invention registration
 - `mint/` — Minting metadata and logs
 - `create_molecule/` — Molecule project creation
-- `uploads/` — Molecule data room uploads
+- `uploads/` — Molecule data room uploads with s3 link upload
 - `posts/` — Beach.science post records
 """
 
 [agents.aura]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "anthropic/claude-sonnet-4.6"
 role = "aura"
 default = true
 requires = []
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "beach-science", "privy"]
+workspace_tools = ["shared_cache"]
 
 [agents.aura.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
 max_tokens_per_flow = 5_000_000
+# Full pipeline is ~40+ tool calls (phases 0-7 + Beach posting). Default 30 is not enough.
+max_tool_rounds = 100
+# Timeout for individual stream events from OpenRouter (default 120).
+stream_event_timeout_secs = 120
+# Max chars per tool result before adaptive truncation kicks in (default 300_000).
+max_tool_result_chars = 300_000
+# Max chars for compacted tool results during 2-phase pruning (default 200).
+compact_result_limit = 50_000
 
 [agents.aura.identity]
 name = "Aura DeSci Agent"
-instructions = """You are the single DeSci agent handling the ENTIRE pipeline: document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
+instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
+
+## RULES
+- NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
+- NEVER guess or fabricate URLs, contract addresses, or function signatures. Follow the aura-orchestrator skill EXACTLY.
+- Use `shared_cache` to persist ALL critical IDs (reservation_id, wallet_address, tx hashes, service tokens) so they survive context compaction.
+- POI registration is an HTTP API call, NOT a smart contract call. Follow the skill.
 
 ## You have those capabilities, which need to be executed sequentially as one continuous flow without stopping or reporting intermediate progress:
+0. Wallet Setup — verify Privy agentic wallet exists, create one with a policy if not (follow aura-orchestrator skill Phase 0)
 1. POI Registration
 2. IP-NFT Minting 
 3. Authenticate — follow molecule-auth skill
 4. Create project — follow molecule-project skill
-5. Upload file — follow molecule-upload skill (3-step: initiate → S3 PUT → finalize)
-6. Create announcement — follow molecule-announcement skill
-7. Extract title, key_findings, ipnft_symbol, ipnft_uid, and project_url from the previous steps.
-8. Compose a Beach.science hypothesis post with:
-   - Core hypothesis and findings
-   - Clickable Markdown links: [View on Molecule]({project_url})
-     If project_url is not available, construct it as: https://testnet.molecule.xyz/ipnfts/{ipnftTokenId}
-     where ipnftTokenId is the decimal reservation/token ID (numeric only, NOT the full ipnft_uid with contract prefix).
-9. POST to Beach.science API using http_request as documented in beach-science skill
-   - Authenticate with auth_bearer_env="BEACH_API_KEY"
-   - Use return_body=true to capture the post URL from the response
-10. Save result to posts/beach_post_result.txt
-11. Transfer the minted IP-NFT from the Privy agentic wallet to the owner's personal wallet and add the owner as a Molecule project co-owner
+5. Upload files to created project — follow molecule-upload skill
+6. Create announcement in project — follow molecule-announcement skill
+7. Transfer NFT to owner's wallet and add them as co-owner — follow aura-orchestrator skill
+8. Post to Beach.science with project details and IPNFT metadata — follow beach-science skill
 
 """
 

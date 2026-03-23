@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::adapters::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{
-    EffectClass, MemoryEntry, MemorySearchResult, RegisteredTool, ToolCall,
+    MemoryEntry, MemorySearchResult, ToolCall, ToolDef,
 };
 
 // ---------------------------------------------------------------------------
@@ -344,10 +344,10 @@ impl MemoryToolExecutionAdapter {
     }
 }
 
-pub(crate) fn memory_tool_defs() -> Vec<RegisteredTool> {
-    vec![RegisteredTool::new(
+pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
+    vec![ToolDef::new(
         "remember",
-        "Store a fact or insight in long-term memory for future retrieval across sessions.",
+        "Store a fact in long-term memory.",
         json!({
             "type": "object",
             "properties": {
@@ -363,7 +363,6 @@ pub(crate) fn memory_tool_defs() -> Vec<RegisteredTool> {
             },
             "required": ["content"]
         }),
-        EffectClass::Read,
     )]
 }
 

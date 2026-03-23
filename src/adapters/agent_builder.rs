@@ -1,48 +1,12 @@
 //! Agent primitives for fleet orchestration: worker loop and artifact extraction.
 
 use crate::adapters::types::{
-    parse_tool_result_envelope, AgentId, AgentTaskExecutor, OrchestratorEvent, TokenUsage,
+    AgentId, AgentTaskExecutor, OrchestratorEvent, TokenUsage,
 };
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-
-// ---------------------------------------------------------------------------
-// Artifact extraction
-// ---------------------------------------------------------------------------
-
-/// Extract structured artifacts from tool outcomes using the existing
-/// `parse_tool_result_envelope()` parser.
-pub(crate) fn extract_artifacts(tool_outcomes: &[(String, String)]) -> HashMap<String, Value> {
-    let mut artifacts = HashMap::new();
-    for (name, result) in tool_outcomes {
-        if let Some(envelope) = parse_tool_result_envelope(result) {
-            tracing::trace!(
-                tool = %name,
-                artifact_keys = envelope.artifacts.len(),
-                ids = envelope.ids.len(),
-                urls = envelope.urls.len(),
-                hashes = envelope.hashes.len(),
-                "extract_artifacts — parsed envelope from tool"
-            );
-            for (key, value) in envelope.artifacts {
-                artifacts.insert(format!("{name}.{key}"), value);
-            }
-            for (key, value) in &envelope.ids {
-                artifacts.insert(format!("{name}.id.{key}"), Value::String(value.clone()));
-            }
-            for (key, value) in &envelope.urls {
-                artifacts.insert(format!("{name}.url.{key}"), Value::String(value.clone()));
-            }
-            for (key, value) in &envelope.hashes {
-                artifacts.insert(format!("{name}.hash.{key}"), Value::String(value.clone()));
-            }
-        }
-    }
-    artifacts
-}
 
 // ---------------------------------------------------------------------------
 // Worker loop
@@ -93,7 +57,6 @@ pub(crate) async fn agent_worker(
                 match executor.execute(&description).await {
                     Ok((output, tool_outcomes)) => {
                         let duration = exec_start.elapsed();
-                        let artifacts = extract_artifacts(&tool_outcomes);
                         let output_preview = if output.len() > 300 {
                             format!("{}...[{} chars]", &output[..300], output.len())
                         } else {
@@ -106,8 +69,6 @@ pub(crate) async fn agent_worker(
                             output_len = output.len(),
                             output_preview = %output_preview,
                             tool_outcomes_count = tool_outcomes.len(),
-                            artifact_count = artifacts.len(),
-                            artifact_keys = ?artifacts.keys().collect::<Vec<_>>(),
                             "agent_worker — task completed successfully"
                         );
                         let _ = outbox
@@ -115,7 +76,7 @@ pub(crate) async fn agent_worker(
                                 task_id,
                                 agent_id: agent_id.clone(),
                                 output,
-                                artifacts,
+                                artifacts: HashMap::new(),
                                 token_usage: TokenUsage::default(),
                                 duration,
                                 correlation_id,

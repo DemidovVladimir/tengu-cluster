@@ -13,7 +13,7 @@ use crate::adapters::ports::{ShellExecutionPort, SkillSourcePort, ToolExecutionP
 use crate::adapters::prompt_budget::truncate_to_token_budget;
 use crate::adapters::token::estimate_tokens_approx_min1;
 use crate::adapters::types::{
-    AgentRole, EffectClass, RegisteredTool, ToolCall, ToolDef,
+    ToolCall, ToolDef,
 };
 
 // ===========================================================================
@@ -25,10 +25,8 @@ use crate::adapters::types::{
 pub(crate) struct SkillDefinition {
     pub name: String,
     pub description: String,
-    pub activity_description: Option<String>,
     pub parameters: Vec<SkillParameter>,
     pub execution: SkillExecution,
-    pub effect_class: EffectClass,
 }
 
 #[derive(Debug, Clone)]
@@ -125,9 +123,7 @@ enum ParsedSkill {
 struct SkillFrontmatter {
     name: String,
     description: String,
-    activity_description: Option<String>,
     base_url: String,
-    effect_class: EffectClass,
     env_vars: Vec<SkillEnvVar>,
     commands: Vec<SkillCommand>,
 }
@@ -211,23 +207,13 @@ fn parse_skill_markdown(content: &str) -> Result<SkillDefinition> {
         .ok_or_else(|| anyhow::anyhow!("Missing '## Execution' section"))
         .and_then(|lines| extract_fenced_code(lines))?;
 
-    let default_effect_class = EffectClass::ShellExec;
-    let (effect_class, activity_description) =
-        if let Some(policy_lines) = sections.get("policy") {
-            parse_policy(policy_lines, default_effect_class)
-        } else {
-            (default_effect_class, None)
-        };
-
     Ok(SkillDefinition {
         name,
         description,
-        activity_description,
         parameters,
         execution: SkillExecution::Shell {
             template: execution_template,
         },
-        effect_class,
     })
 }
 
@@ -332,36 +318,6 @@ fn extract_fenced_code(lines: &[&str]) -> Result<String> {
     Ok(code.join("\n").trim().to_string())
 }
 
-fn parse_policy(
-    lines: &[&str],
-    default_effect_class: EffectClass,
-) -> (EffectClass, Option<String>) {
-    let mut effect_class = default_effect_class;
-    let mut activity_description = None;
-
-    for line in lines {
-        let trimmed = line.trim().trim_start_matches("- ");
-        if let Some((key, value)) = trimmed.split_once(':') {
-            let k = key.trim().to_lowercase();
-            let v = value.trim().to_lowercase();
-            match k.as_str() {
-                "effect_class" | "effect-class" => {
-                    if let Ok(parsed) = v.parse::<EffectClass>() {
-                        effect_class = parsed;
-                    }
-                }
-                "activity_description" | "activity-description" => {
-                    let raw = value.trim();
-                    if !raw.is_empty() {
-                        activity_description = Some(raw.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    (effect_class, activity_description)
-}
 
 // --- Frontmatter parsing ---
 
@@ -403,9 +359,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
 
     let mut name = None;
     let mut description = None;
-    let mut activity_description = None;
     let mut base_url = None;
-    let mut effect_class = None;
     let mut env_vars: Vec<SkillEnvVar> = Vec::new();
     let mut commands: Vec<SkillCommand> = Vec::new();
 
@@ -463,11 +417,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             match k {
                 "name" => name = Some(v.to_string()),
                 "description" => description = Some(v.to_string()),
-                "activity_description" | "activity-description" => {
-                    activity_description = Some(v.to_string())
-                }
                 "base_url" | "homepage" => base_url = Some(v.to_string()),
-                "effect_class" | "effect-class" => effect_class = Some(v.to_string()),
                 "env_vars" => {
                     if v.is_empty() {
                         current_block = Some(ListBlock::EnvVars);
@@ -491,17 +441,11 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
         return None;
     }
 
-    let effect_class = effect_class
-        .and_then(|value| value.parse::<EffectClass>().ok())
-        .unwrap_or(EffectClass::ExternalApi);
-
     Some((
         SkillFrontmatter {
             name: normalized_name,
             description: description.unwrap_or_default(),
-            activity_description,
             base_url,
-            effect_class,
             env_vars,
             commands,
         },
@@ -513,7 +457,6 @@ fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
     SkillDefinition {
         name: fm.name.clone(),
         description: fm.description.clone(),
-        activity_description: fm.activity_description.clone(),
         parameters: vec![
             SkillParameter {
                 name: "method".into(),
@@ -548,7 +491,6 @@ fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
         execution: SkillExecution::Api(ApiExecution {
             base_url: fm.base_url.clone(),
         }),
-        effect_class: fm.effect_class,
     }
 }
 
@@ -601,10 +543,10 @@ fn validate_skill(skill: &SkillDefinition, reserved: &[&str]) -> Result<()> {
 }
 
 // ===========================================================================
-// Conversion — SkillDefinition → RegisteredTool
+// Conversion — SkillDefinition → ToolDef
 // ===========================================================================
 
-fn skill_to_registered_tool(skill: &SkillDefinition) -> RegisteredTool {
+fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
 
@@ -632,18 +574,7 @@ fn skill_to_registered_tool(skill: &SkillDefinition) -> RegisteredTool {
         "required": required,
     });
 
-    let tool = RegisteredTool::new(
-        &skill.name,
-        &skill.description,
-        parameters,
-        skill.effect_class,
-    );
-
-    if let Some(activity_description) = &skill.activity_description {
-        tool.with_activity_description(activity_description.clone())
-    } else {
-        tool
-    }
+    ToolDef::new(&skill.name, &skill.description, parameters)
 }
 
 // ===========================================================================
@@ -868,15 +799,15 @@ impl SkillRegistry {
         true
     }
 
-    /// Tool registrations for active shell skills only.
-    pub(crate) fn active_tools(&self) -> Vec<RegisteredTool> {
+    /// Tool definitions for active shell skills only.
+    pub(crate) fn active_tools(&self) -> Vec<ToolDef> {
         self.entries
             .values()
             .filter(|e| {
                 e.status == SkillStatus::Active
                     && matches!(e.definition.execution, SkillExecution::Shell { .. })
             })
-            .map(|e| skill_to_registered_tool(&e.definition))
+            .map(|e| skill_to_tool_def(&e.definition))
             .collect()
     }
 
@@ -1185,23 +1116,16 @@ pub(crate) fn build_system_prompt_with_tools(
 
     // 1. Default preamble.
     let preamble = format!(
-        "You are {name}, an AI assistant.\n\n\
-         CRITICAL RULES:\n\
-         - NEVER fabricate data. Do not invent transaction hashes, URLs, IDs, addresses, \
-         block numbers, or any other identifiers. If you do not have real data from a tool \
-         call result, say so.\n\
-         - NEVER present fictional output as if a command succeeded. If you did not execute \
-         an action via a tool, do not claim it happened.\n\
-         - When asked to perform an action, use the available tools \
-         to actually execute it. Report only real results from tool output."
+        "You are {name}. Use tools to execute actions. Never fabricate data."
     );
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
     // 2. Role label.
     if let Some(ref role_str) = agent_config.role {
-        if let Ok(role) = role_str.parse::<AgentRole>() {
-            let fragment = format!("Your role: {}.", role.label());
+        let role = role_str.trim().to_lowercase().replace('-', "_");
+        if !role.is_empty() {
+            let fragment = format!("Your role: {}.", role);
             total_tokens += estimate_tokens_approx_min1(&fragment);
             parts.push(fragment);
         }
@@ -1249,54 +1173,24 @@ pub(crate) fn build_system_prompt_with_tools(
         parts.push(truncated);
     }
 
-    // 5b. Skill tool usage instructions.
-    if !skill_contexts.is_empty() {
-        let instruction = "When a skill documents a workflow, follow it exactly with the available tools. If a registered skill tool exists, call it directly. Otherwise use the generic platform tools the skill describes. Do NOT write scripts or suggest manual steps.";
-        let inst_tokens = estimate_tokens_approx_min1(instruction);
-        if total_tokens + inst_tokens <= max_total_tokens + max_total_tokens / 20 {
-            total_tokens += inst_tokens;
-            parts.push(instruction.to_string());
+    // 6. Workspace tools listing.
+    if advertise_workspace_tools && agent_config.workspace.is_some() && !tools.is_empty() {
+        let mut lines = vec!["# Tools".to_string()];
+        for tool in tools {
+            let params = tool
+                .parameters
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            lines.push(format!("- {}({})", tool.name, params));
         }
-    }
-
-    // 6. Workspace tools description.
-    if advertise_workspace_tools && agent_config.workspace.is_some() {
-        let tools_note = if tools.is_empty() {
-            "# Workspace\n\nYou have workspace access. Paths are relative to root. Use tools to execute actions directly — never create scripts for the user."
-                .to_string()
-        } else {
-            let mut lines = vec!["# Workspace tools".to_string()];
-            for tool in tools {
-                let params = tool
-                    .parameters
-                    .get("required")
-                    .and_then(|r| r.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_default();
-                let approval = tool
-                    .policy
-                    .as_ref()
-                    .map(|p| {
-                        if p.requires_approval {
-                            " [approval]"
-                        } else {
-                            ""
-                        }
-                    })
-                    .unwrap_or("");
-                lines.push(format!(
-                    "- {}({}): {}{}",
-                    tool.name, params, tool.description, approval
-                ));
-            }
-            lines.push("Paths relative to workspace root. Read before answering about files. Execute actions directly — never create scripts.".to_string());
-            lines.join("\n")
-        };
+        let tools_note = lines.join("\n");
         let tools_tokens = estimate_tokens_approx_min1(&tools_note);
         if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
             parts.push(tools_note);

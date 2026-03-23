@@ -301,13 +301,19 @@ pub struct LimitsConfig {
     pub max_cost_per_flow: Option<f64>,
     #[serde(default)]
     pub warn_at_cost: Option<f64>,
-    #[serde(default)]
-    pub context_window_override: Option<u32>,
+    #[serde(default = "default_context_window")]
+    pub context_window: u32,
     #[serde(default)]
     pub max_output_tokens_per_turn: Option<u32>,
-    /// Maximum tool-call round-trips per engine turn. Defaults to 30 if not set.
-    #[serde(default)]
-    pub max_tool_rounds: Option<u32>,
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+    #[serde(default = "default_max_tool_result_chars")]
+    pub max_tool_result_chars: u32,
+    #[serde(default = "default_stream_event_timeout_secs")]
+    pub stream_event_timeout_secs: u64,
+    /// Max chars for compacted (old-round) tool results. Defaults to 200.
+    #[serde(default = "default_compact_result_limit")]
+    pub compact_result_limit: u32,
 }
 
 impl Default for LimitsConfig {
@@ -316,11 +322,30 @@ impl Default for LimitsConfig {
             max_tokens_per_flow: default_max_tokens(),
             max_cost_per_flow: None,
             warn_at_cost: None,
-            context_window_override: None,
+            context_window: default_context_window(),
             max_output_tokens_per_turn: None,
-            max_tool_rounds: None,
+            max_tool_rounds: default_max_tool_rounds(),
+            max_tool_result_chars: default_max_tool_result_chars(),
+            stream_event_timeout_secs: default_stream_event_timeout_secs(),
+            compact_result_limit: default_compact_result_limit(),
         }
     }
+}
+
+fn default_context_window() -> u32 {
+    1_000_000
+}
+fn default_max_tool_rounds() -> u32 {
+    70
+}
+fn default_max_tool_result_chars() -> u32 {
+    300_000
+}
+fn default_stream_event_timeout_secs() -> u64 {
+    120
+}
+fn default_compact_result_limit() -> u32 {
+    200
 }
 
 fn default_max_tokens() -> u64 {
@@ -715,13 +740,11 @@ impl Config {
                 ));
             }
         }
-        if let (Some(context), Some(output)) = (
-            agent.limits.context_window_override,
-            agent.limits.max_output_tokens_per_turn,
-        ) {
+        if let Some(output) = agent.limits.max_output_tokens_per_turn {
+            let context = agent.limits.context_window;
             if output > context {
                 errors.push(format!(
-                    "agents.{}.limits.max_output_tokens_per_turn cannot exceed context_window_override",
+                    "agents.{}.limits.max_output_tokens_per_turn cannot exceed context_window",
                     agent_id
                 ));
             }
@@ -854,13 +877,13 @@ mod tests {
     fn validate_rejects_output_cap_above_context_override() {
         let mut config = Config::default();
         let main = config.agents.get_mut("main").expect("main agent");
-        main.limits.context_window_override = Some(4_096);
+        main.limits.context_window = 4_096;
         main.limits.max_output_tokens_per_turn = Some(8_192);
 
         let err = config.validate().expect_err("expected validation error");
         assert!(err
             .to_string()
-            .contains("cannot exceed context_window_override"));
+            .contains("cannot exceed context_window"));
     }
 
     #[test]

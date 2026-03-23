@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use futures::stream;
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::pin::Pin;
 use tracing::{debug, error};
 
@@ -16,30 +15,6 @@ use crate::adapters::types::{Message, ModelInfo, Role, StreamEvent, ToolCall, To
 use crate::adapters::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Sensible fallback when no override is provided and we cannot query the model.
-const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
-
-/// Maximum number of tool-call round-trips before forcing a text response.
-const MAX_TOOL_ROUNDS: usize = 30;
-
-/// Maximum characters kept per successful tool result.
-/// Kept small to control quadratic token growth: each result is re-sent on
-/// every subsequent tool round, so N rounds = N*(N+1)/2 * this value in input.
-const MAX_TOOL_RESULT_CHARS: usize = 3_000;
-
-/// Maximum characters kept for error tool results.
-const MAX_ERROR_RESULT_CHARS: usize = 1_500;
-
-
-/// Maximum seconds to wait for a single stream event before treating the stream as dead.
-const STREAM_EVENT_TIMEOUT_SECS: u64 = 120;
-
-/// Number of consecutive HTTP error results from the same tool before abort.
-const MAX_CONSECUTIVE_TOOL_ERRORS: usize = 3;
 
 // ---------------------------------------------------------------------------
 // Factory — build engines from config
@@ -47,7 +22,8 @@ const MAX_CONSECUTIVE_TOOL_ERRORS: usize = 3;
 
 /// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
 pub(crate) fn build_planner_engine(_engine_type: &str, model: &str) -> Result<Box<dyn Engine>> {
-    build_openrouter_engine(model, None)
+    let defaults = crate::adapters::config::LimitsConfig::default();
+    build_openrouter_engine(model, defaults.context_window as usize)
 }
 
 /// Build configured engine instance for one agent.
@@ -55,17 +31,13 @@ pub(crate) fn build_engine(
     _agent_id: &str,
     agent_config: &crate::adapters::config::AgentConfig,
 ) -> Result<Box<dyn Engine>> {
-    let context_window_override = agent_config
-        .limits
-        .context_window_override
-        .map(|value| value.max(1) as usize);
-
-    build_openrouter_engine(&agent_config.model, context_window_override)
+    let context_window = agent_config.limits.context_window.max(1) as usize;
+    build_openrouter_engine(&agent_config.model, context_window)
 }
 
 fn build_openrouter_engine(
     model: &str,
-    context_window_override: Option<usize>,
+    context_window: usize,
 ) -> Result<Box<dyn Engine>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is required"))?;
@@ -75,7 +47,7 @@ fn build_openrouter_engine(
         &base_url,
         model,
         &api_key,
-        context_window_override,
+        context_window,
     )))
 }
 
@@ -167,11 +139,9 @@ impl OpenRouterEngine {
         base_url: &str,
         model: &str,
         api_key: &str,
-        context_window_override: Option<usize>,
+        context_window: usize,
     ) -> Self {
-        let context_window_tokens = context_window_override
-            .filter(|v| *v > 0)
-            .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        let context_window_tokens = context_window;
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
@@ -534,15 +504,19 @@ pub(crate) async fn collect_engine_response(
     tool_observer: Option<ToolResultObserver<'_>>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     token_budget: Option<u32>,
-    max_tool_rounds: Option<u32>,
+    max_tool_rounds: u32,
+    max_tool_result_chars: u32,
+    stream_event_timeout_secs: u64,
+    compact_result_limit: u32,
 ) -> Result<EngineResponse> {
-    let tool_rounds = max_tool_rounds.map(|v| v as usize).unwrap_or(MAX_TOOL_ROUNDS);
+    let tool_rounds = max_tool_rounds as usize;
+    let result_chars_limit = max_tool_result_chars as usize;
+    let stream_timeout = stream_event_timeout_secs;
+    let compact_limit = compact_result_limit as usize;
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
     let mut tool_outcomes: Vec<(String, String)> = Vec::new();
-    let mut executed_tool_results: HashMap<String, String> = HashMap::new();
-    let mut consecutive_errors: HashMap<String, usize> = HashMap::new();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -558,7 +532,7 @@ pub(crate) async fn collect_engine_response(
         }
 
         let (response_text, tool_calls, input_delta, output_delta) =
-            run_single_engine_turn(engine, &messages, tools, context, cancel).await?;
+            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout).await?;
 
         total_input_delta += input_delta;
         total_output_delta += output_delta;
@@ -569,9 +543,8 @@ pub(crate) async fn collect_engine_response(
                 tracing::warn!(
                     total_tokens = total,
                     budget,
-                    pending_tool_calls = tool_calls.len(),
                     round,
-                    "Token budget exceeded — stopping tool loop (increase max_tokens_per_flow to allow more rounds)"
+                    "Token budget exceeded — stopping tool loop"
                 );
                 return Ok(EngineResponse {
                     text: response_text,
@@ -583,7 +556,7 @@ pub(crate) async fn collect_engine_response(
         }
 
         if tool_calls.is_empty() || tool_executor.is_none() || tools.is_empty() {
-            // If the model was truncated mid-response, auto-continue.
+            // Auto-continue on truncated output.
             if tool_calls.is_empty()
                 && !tools.is_empty()
                 && round < tool_rounds - 1
@@ -602,7 +575,7 @@ pub(crate) async fn collect_engine_response(
                 });
                 messages.push(Message {
                     role: Role::User,
-                    content: "Your output was truncated. Continue from where you left off, using tool calls to execute the remaining steps.".to_string(),
+                    content: "Your output was truncated. Continue from where you left off.".to_string(),
                     tool_call_id: None,
                     tool_calls: None,
                 });
@@ -638,182 +611,17 @@ pub(crate) async fn collect_engine_response(
                     tool_outcomes,
                 });
             }
-            let signature = tool_call_signature(tc);
-            if let Some(previous_result) = executed_tool_results.get(&signature) {
-                let is_idempotent = matches!(
-                    tc.name.as_str(),
-                    "list_directory"
-                        | "read_file"
-                        | "get_wallet_address"
-                        | "write_file"
-                        | "shared_cache"
-                        | "recall"
-                );
-                if is_idempotent {
-                    tracing::info!(
-                        tool = %tc.name,
-                        "Duplicate idempotent tool call — returning cached result"
-                    );
-                    let content = format!(
-                        "[CACHED — identical call already executed this turn. Use the result below; do not retry.]\n{}",
-                        truncate_tool_result(previous_result, MAX_TOOL_RESULT_CHARS)
-                    );
-                    messages.push(Message {
-                        role: Role::Tool,
-                        content,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_calls: None,
-                    });
-                    continue;
-                }
-                let previous_was_error = previous_result.contains("\"status\":\"error\"")
-                    || previous_result.contains("\"status\": \"error\"")
-                    || previous_result.contains("\"errors\":")
-                    || previous_result.starts_with("HTTP 4")
-                    || previous_result.starts_with("HTTP 5");
-                if !previous_was_error {
-                    // Hard-abort only for tools that are truly dangerous to re-execute
-                    // (e.g. sending on-chain transactions). For http_request and others,
-                    // return the cached result so the model can continue without
-                    // losing all work done so far.
-                    let is_dangerous = matches!(
-                        tc.name.as_str(),
-                        "sign_and_send_transaction"
-                    );
-                    if is_dangerous {
-                        return Err(anyhow::anyhow!(
-                            "Tool '{}' was requested multiple times with identical arguments in the same turn. Aborting to prevent unintended retries.\nPrevious result:\n{}",
-                            tc.name,
-                            truncate_tool_result(previous_result, MAX_ERROR_RESULT_CHARS)
-                        ));
-                    }
-                    tracing::warn!(
-                        tool = %tc.name,
-                        "Duplicate non-idempotent tool call — returning cached result instead of aborting"
-                    );
-                    let note = format!(
-                        "[NOTE: This exact call was already executed successfully. Returning previous result. Do not retry.]\n{}",
-                        truncate_tool_result(previous_result, MAX_TOOL_RESULT_CHARS)
-                    );
-                    messages.push(Message {
-                        role: Role::Tool,
-                        content: note,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_calls: None,
-                    });
-                    continue;
-                }
-                let no_retry = matches!(
-                    tc.name.as_str(),
-                    "http_request" | "sign_and_send_transaction" | "sign_message"
-                );
-                if no_retry {
-                    return Err(anyhow::anyhow!(
-                        "Tool '{}' failed and must not be retried. Previous error:\n{}",
-                        tc.name,
-                        truncate_tool_result(previous_result, MAX_ERROR_RESULT_CHARS)
-                    ));
-                }
-                tracing::info!(
-                    tool = %tc.name,
-                    "Duplicate tool call after error — allowing retry"
-                );
-            }
+
             let result = match executor.execute(tc) {
                 Ok(output) => output,
-                Err(e) => {
-                    // Executor errors (bad args, connection refused, etc.) are
-                    // recoverable — return the error to the LLM so it can self-correct.
-                    // HTTP *response* errors (4xx/5xx) are handled separately below
-                    // via is_error_result and are fatal for http_request/transactions.
-                    let is_non_fatal = matches!(
-                        tc.name.as_str(),
-                        "read_file"
-                            | "list_directory"
-                            | "get_wallet_address"
-                            | "run_command"
-                            | "http_request"
-                            | "sign_and_send_transaction"
-                            | "sign_message"
-                    );
-                    if is_non_fatal {
-                        tracing::warn!(
-                            tool = %tc.name,
-                            error = %e,
-                            "Non-fatal tool error — returning to LLM as result"
-                        );
-                        format!("ERROR: {}", e)
-                    } else {
-                        tracing::error!(tool = %tc.name, error = %e, "Tool execution failed");
-                        let assistant_context = if response_text.trim().is_empty() {
-                            String::new()
-                        } else {
-                            format!(
-                                "\nAssistant context before failure:\n{}",
-                                truncate_tool_result(&response_text, MAX_ERROR_RESULT_CHARS)
-                            )
-                        };
-                        return Err(anyhow::anyhow!(
-                            "Tool '{}' failed: {}{}",
-                            tc.name,
-                            e,
-                            assistant_context
-                        ));
-                    }
-                }
+                Err(e) => format!("ERROR: {}", e),
             };
-            executed_tool_results.insert(signature, result.clone());
-
-            // HTTP 400 = client-side formatting error (malformed JSON, bad args).
-            // Return to LLM for self-correction — it can fix and retry with different args.
-            // Check both raw ("HTTP 400") and envelope ("HTTP 400" inside summary).
-            let is_recoverable_400 =
-                result.starts_with("HTTP 400") || result.contains("\"HTTP 400");
-            let is_error_result = result.starts_with("HTTP 4")
-                || result.starts_with("HTTP 5")
-                || result.contains("\"status\": \"error\"")
-                || result.contains("\"status\":\"error\"")
-                || result.contains("\"errors\":");
-            if is_error_result {
-                // HTTP 400 is recoverable — the LLM sent bad JSON and can fix it.
-                // All other errors (401/403/404/5xx, GraphQL errors) fail immediately
-                // for http_request and transaction tools.
-                let fail_immediately = !is_recoverable_400
-                    && matches!(
-                        tc.name.as_str(),
-                        "http_request" | "sign_and_send_transaction" | "sign_message"
-                    );
-                if fail_immediately {
-                    return Err(anyhow::anyhow!(
-                        "Tool '{}' returned an error. Aborting — no retries allowed.\nError:\n{}",
-                        tc.name,
-                        truncate_tool_result(&result, MAX_ERROR_RESULT_CHARS)
-                    ));
-                }
-                let count = consecutive_errors.entry(tc.name.clone()).or_insert(0);
-                *count += 1;
-                if *count >= MAX_CONSECUTIVE_TOOL_ERRORS {
-                    return Err(anyhow::anyhow!(
-                        "Tool '{}' returned {} consecutive errors. Aborting to prevent token drain.\nLast error:\n{}",
-                        tc.name,
-                        count,
-                        truncate_tool_result(&result, MAX_ERROR_RESULT_CHARS)
-                    ));
-                }
-            } else {
-                consecutive_errors.remove(&tc.name);
-            }
 
             if let Some(observer) = &tool_observer {
                 observer(tc, &result);
             }
             tool_outcomes.push((tc.name.clone(), result.clone()));
-            let limit = if is_error_result {
-                MAX_ERROR_RESULT_CHARS
-            } else {
-                MAX_TOOL_RESULT_CHARS
-            };
-            let content = truncate_tool_result(&result, limit);
+            let content = truncate_tool_result(&result, result_chars_limit);
             messages.push(Message {
                 role: Role::Tool,
                 content,
@@ -822,13 +630,16 @@ pub(crate) async fn collect_engine_response(
             });
         }
 
-        // Compact old tool results — the model already consumed them and
-        // persisted values to shared_cache. We keep the message to satisfy
-        // the API contract (every tool_call needs a result) but strip content.
+        // Compact old tool results to manage context size.
+        // Keep a short summary instead of "ok" so the model remembers
+        // what happened (hashes, IDs, status) and doesn't repeat steps.
         if round >= 1 {
             for msg in &mut messages[..compact_cutoff] {
-                if matches!(msg.role, Role::Tool) && msg.content != "ok" {
-                    msg.content = "ok".to_string();
+                if matches!(msg.role, Role::Tool) {
+                    let compacted = compact_tool_result(&msg.content, compact_limit);
+                    if compacted != msg.content {
+                        msg.content = compacted;
+                    }
                 }
             }
         }
@@ -836,7 +647,7 @@ pub(crate) async fn collect_engine_response(
 
     // Exhaust all rounds — force a text response.
     let (response_text, _, input_delta, output_delta) =
-        run_single_engine_turn(engine, &messages, &[], context, cancel).await?;
+        run_single_engine_turn(engine, &messages, &[], context, cancel, stream_timeout).await?;
     total_input_delta += input_delta;
     total_output_delta += output_delta;
 
@@ -855,6 +666,7 @@ async fn run_single_engine_turn(
     tools: &[ToolDef],
     context: &EngineContext,
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    stream_event_timeout_secs: u64,
 ) -> Result<(String, Vec<ToolCall>, u32, u32)> {
     let mut stream = engine.run(messages, tools, context).await?;
 
@@ -873,7 +685,7 @@ async fn run_single_engine_turn(
             break;
         }
         let event = match tokio::time::timeout(
-            std::time::Duration::from_secs(STREAM_EVENT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(stream_event_timeout_secs),
             stream.next(),
         )
         .await
@@ -883,7 +695,7 @@ async fn run_single_engine_turn(
             Err(_) => {
                 return Err(anyhow::anyhow!(
                     "Engine stream timed out — no data for {}s",
-                    STREAM_EVENT_TIMEOUT_SECS
+                    stream_event_timeout_secs
                 ));
             }
         };
@@ -937,15 +749,6 @@ async fn run_single_engine_turn(
         &mut pending_tool_args,
     );
 
-    // Fallback: parse XML tool calls from response text.
-    if tool_calls.is_empty() {
-        let xml_calls = extract_xml_tool_calls(&response_text);
-        if !xml_calls.is_empty() {
-            tool_calls = xml_calls;
-            response_text = strip_xml_tool_calls(&response_text);
-        }
-    }
-
     let mut input_delta: u32 = 0;
     let mut output_delta: u32 = 0;
     apply_turn_usage_to_session_totals(&mut input_delta, &mut output_delta, turn_usage_snapshot);
@@ -954,14 +757,40 @@ async fn run_single_engine_turn(
 }
 
 // ---------------------------------------------------------------------------
+// Tool result compaction
+// ---------------------------------------------------------------------------
+
+/// Compact a tool result for older rounds. Preserves the first line (which
+/// typically contains key outputs like tx hashes, addresses, status) and
+/// truncates the rest. Results already short enough are returned unchanged.
+fn compact_tool_result(content: &str, limit: usize) -> String {
+    if content.len() <= limit {
+        return content.to_string();
+    }
+
+    // Take the first line — most tool results put key info there.
+    let first_line = content.lines().next().unwrap_or(content);
+    if first_line.len() <= limit {
+        return first_line.to_string();
+    }
+
+    // First line itself is too long — truncate it.
+    let mut end = limit;
+    while end > 0 && !first_line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &first_line[..end])
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn truncate_tool_result(result: &str, limit: usize) -> String {
-    if result.len() <= limit {
+fn truncate_tool_result(result: &str, max_chars: usize) -> String {
+    if result.len() <= max_chars {
         return result.to_string();
     }
-    let mut end = limit;
+    let mut end = max_chars;
     while end > 0 && !result.is_char_boundary(end) {
         end -= 1;
     }
@@ -971,38 +800,6 @@ fn truncate_tool_result(result: &str, limit: usize) -> String {
         end,
         result.len()
     )
-}
-
-fn tool_call_signature(call: &ToolCall) -> String {
-    format!("{}:{}", call.name, canonicalize_json(&call.arguments))
-}
-
-fn canonicalize_json(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null
-        | serde_json::Value::Bool(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => value.to_string(),
-        serde_json::Value::Array(items) => {
-            let rendered: Vec<String> = items.iter().map(canonicalize_json).collect();
-            format!("[{}]", rendered.join(","))
-        }
-        serde_json::Value::Object(map) => {
-            let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
-            keys.sort_unstable();
-            let rendered: Vec<String> = keys
-                .into_iter()
-                .map(|key| {
-                    format!(
-                        "{}:{}",
-                        serde_json::Value::String(key.to_string()),
-                        canonicalize_json(&map[key])
-                    )
-                })
-                .collect();
-            format!("{{{}}}", rendered.join(","))
-        }
-    }
 }
 
 fn flush_pending_tool_call(
@@ -1021,92 +818,4 @@ fn flush_pending_tool_call(
         });
         pending_args.clear();
     }
-}
-
-fn extract_xml_tool_calls(text: &str) -> Vec<ToolCall> {
-    const OPEN: &str = "<tool_call>";
-    const CLOSE: &str = "</tool_call>";
-    const ARG_KEY_OPEN: &str = "<arg_key>";
-    const ARG_KEY_CLOSE: &str = "</arg_key>";
-    const ARG_VAL_OPEN: &str = "<arg_value>";
-    const ARG_VAL_CLOSE: &str = "</arg_value>";
-
-    let mut calls = Vec::new();
-    let mut search_from = 0;
-
-    while let Some(start) = text[search_from..].find(OPEN) {
-        let abs_start = search_from + start;
-        let inner_start = abs_start + OPEN.len();
-
-        let Some(end) = text[inner_start..].find(CLOSE) else {
-            break;
-        };
-        let inner = &text[inner_start..inner_start + end];
-        search_from = inner_start + end + CLOSE.len();
-
-        let (tool_name, args_section) = match inner.find(ARG_KEY_OPEN) {
-            Some(pos) => (inner[..pos].trim(), &inner[pos..]),
-            None => (inner.trim(), ""),
-        };
-
-        if tool_name.is_empty() {
-            continue;
-        }
-
-        let mut args = serde_json::Map::new();
-        let mut arg_cursor = 0;
-        while let Some(k_start) = args_section[arg_cursor..].find(ARG_KEY_OPEN) {
-            let k_inner = arg_cursor + k_start + ARG_KEY_OPEN.len();
-            let Some(k_end) = args_section[k_inner..].find(ARG_KEY_CLOSE) else {
-                break;
-            };
-            let key = &args_section[k_inner..k_inner + k_end];
-            let after_key = k_inner + k_end + ARG_KEY_CLOSE.len();
-
-            let Some(v_offset) = args_section[after_key..].find(ARG_VAL_OPEN) else {
-                break;
-            };
-            let v_inner = after_key + v_offset + ARG_VAL_OPEN.len();
-            let Some(v_end) = args_section[v_inner..].find(ARG_VAL_CLOSE) else {
-                break;
-            };
-            let value = &args_section[v_inner..v_inner + v_end];
-
-            args.insert(
-                key.to_string(),
-                serde_json::Value::String(value.to_string()),
-            );
-            arg_cursor = v_inner + v_end + ARG_VAL_CLOSE.len();
-        }
-
-        calls.push(ToolCall {
-            id: format!("xmlcall_{}", calls.len()),
-            name: tool_name.to_string(),
-            arguments: serde_json::Value::Object(args),
-        });
-    }
-
-    calls
-}
-
-fn strip_xml_tool_calls(text: &str) -> String {
-    const OPEN: &str = "<tool_call>";
-    const CLOSE: &str = "</tool_call>";
-
-    let mut result = String::with_capacity(text.len());
-    let mut cursor = 0;
-
-    while let Some(start) = text[cursor..].find(OPEN) {
-        result.push_str(&text[cursor..cursor + start]);
-        let after_open = cursor + start + OPEN.len();
-        match text[after_open..].find(CLOSE) {
-            Some(end) => cursor = after_open + end + CLOSE.len(),
-            None => {
-                result.push_str(&text[cursor + start..]);
-                return result.trim().to_string();
-            }
-        }
-    }
-    result.push_str(&text[cursor..]);
-    result.trim().to_string()
 }

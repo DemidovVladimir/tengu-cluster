@@ -2,6 +2,7 @@
 //!
 //! Consolidates task model, live plan, planner, and storage into a single module.
 
+use crate::adapters::config::LimitsConfig;
 use crate::adapters::engine_builder::collect_engine_response;
 use crate::adapters::types::{Message, PlanTask, Role, RoleDependencies, RouteDecision};
 use crate::adapters::{Engine, EngineContext};
@@ -50,8 +51,11 @@ pub(crate) async fn classify_request(
         system_prompt: Some(system),
     };
 
-    let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None, None, None).await?;
+    let defaults = LimitsConfig::default();
+    let response = collect_engine_response(
+        engine, &messages, &[], &context, None, None, None, None,
+        defaults.max_tool_rounds, defaults.max_tool_result_chars, defaults.stream_event_timeout_secs, defaults.compact_result_limit,
+    ).await?;
 
     parse_route_decision(&response.text, agent_descriptions)
 }
@@ -137,8 +141,11 @@ pub(crate) async fn generate_plan(
         system_prompt: Some(system),
     };
 
-    let response =
-        collect_engine_response(engine, &messages, &[], &context, None, None, None, None, None).await?;
+    let defaults = LimitsConfig::default();
+    let response = collect_engine_response(
+        engine, &messages, &[], &context, None, None, None, None,
+        defaults.max_tool_rounds, defaults.max_tool_result_chars, defaults.stream_event_timeout_secs, defaults.compact_result_limit,
+    ).await?;
 
     if response.text.is_empty() {
         anyhow::bail!("Planner received empty response from engine");

@@ -407,7 +407,10 @@ impl<'a> ChatRuntimeService<'a> {
             self.tool_observer,
             self.cancel,
             None, // chat runtime has its own flow-level budget enforcement
-            None,
+            self.agent_config.limits.max_tool_rounds,
+            self.agent_config.limits.max_tool_result_chars,
+            self.agent_config.limits.stream_event_timeout_secs,
+            self.agent_config.limits.compact_result_limit,
         )
         .await?;
 

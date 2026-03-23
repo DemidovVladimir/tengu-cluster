@@ -2,7 +2,6 @@
 
 use crate::adapters::tool_builder::validate_path;
 use crate::adapters::ports::ToolExecutionPort;
-use crate::adapters::types::{ToolResultEnvelope, ToolResultStatus};
 use anyhow::{bail, Context, Result};
 use reqwest::Method;
 use std::path::PathBuf;
@@ -127,9 +126,23 @@ impl ToolExecutionPort for HttpToolExecutionAdapter {
                 }
                 Some((bytes, filename)) => {
                     // Raw body upload (e.g. S3 presigned PUT).
-                    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
-                        req = req.header("Content-Type", mime_from_filename(&filename));
-                    }
+                    let content_type = if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+                        let mime = mime_from_filename(&filename);
+                        req = req.header("Content-Type", &mime);
+                        mime
+                    } else {
+                        headers.iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_default()
+                    };
+                    tracing::debug!(
+                        url = %url,
+                        file = %filename,
+                        size = bytes.len(),
+                        content_type = %content_type,
+                        "S3 raw body upload"
+                    );
                     req.header("Content-Length", bytes.len().to_string())
                         .body(bytes).send().await?
                 }
@@ -163,37 +176,16 @@ async fn format_response(url: &str, response: reqwest::Response, return_body: bo
 
     // On success without return_body, skip reading the response entirely.
     if status.is_success() && !return_body {
-        let envelope = ToolResultEnvelope {
-            tool_name: "http_request".to_string(),
-            status: ToolResultStatus::Ok,
-            summary: format!("HTTP {} {}", status.as_u16(), url),
-            ..Default::default()
-        };
-        return envelope.to_json_string().map_err(|e| e.into());
+        return Ok(format!("HTTP {} {}", status.as_u16(), url));
     }
 
-    let resp_headers = format_response_headers(&response);
     let body_text = response.text().await.unwrap_or_default();
-    let body_json: serde_json::Value = serde_json::from_str(&body_text)
-        .unwrap_or_else(|_| serde_json::Value::String(body_text));
 
-    let mut envelope = ToolResultEnvelope {
-        tool_name: "http_request".to_string(),
-        status: if status.is_success() { ToolResultStatus::Ok } else { ToolResultStatus::Error },
-        summary: format!("HTTP {} {}", status.as_u16(), url),
-        ..Default::default()
-    };
-    envelope.raw_response = Some(if status.is_success() {
-        body_json
+    if status.is_success() {
+        Ok(format!("HTTP {} {}\n{}", status.as_u16(), url, body_text))
     } else {
-        serde_json::json!({
-            "status": status.as_u16(),
-            "url": url,
-            "headers": resp_headers,
-            "body": body_json,
-        })
-    });
-    envelope.to_json_string().map_err(|e| e.into())
+        Ok(format!("HTTP {} {}\n{}", status.as_u16(), url, body_text))
+    }
 }
 
 enum ResolvedAuth {
@@ -285,18 +277,3 @@ fn mime_from_filename(filename: &str) -> String {
     }
 }
 
-fn format_response_headers(response: &reqwest::Response) -> String {
-    let mut lines = Vec::new();
-    for (key, value) in response.headers() {
-        if let Ok(v) = value.to_str() {
-            let k = key.as_str().to_lowercase();
-            if matches!(
-                k.as_str(),
-                "content-type" | "location" | "x-request-id" | "retry-after" | "www-authenticate"
-            ) {
-                lines.push(format!("{}: {}", key, v));
-            }
-        }
-    }
-    lines.join("\n")
-}

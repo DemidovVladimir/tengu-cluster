@@ -1,9 +1,9 @@
 //! Tool infrastructure: definitions, UI helpers, execution service, workspace
 //! primitives, and path utilities.
 
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort, ToolExecutionPort};
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolExecutionPort};
 use crate::adapters::types::{
-    EffectClass, RegisteredTool, ToolCall, ToolPolicyCatalog,
+    ToolAllowList, ToolCall, ToolDef,
 };
 use anyhow::{bail, Result};
 use serde_json::json;
@@ -70,46 +70,11 @@ pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
 
 // ── UI helpers ──────────────────────────────────────────────────────────
 
-/// Maximum number of characters to show in the approval preview.
-const PREVIEW_MAX_CHARS: usize = 300;
-
-/// Build title, description, and preview text for a tool approval dialog.
-pub(crate) fn build_approval_text(call: &ToolCall) -> (String, String, String) {
-    let title = prettify_tool_name(&call.name);
-
-    // API-style tools: show "POST /v1/wallets/{id}/rpc" instead of raw JSON.
-    let method = call.arguments.get("method").and_then(|v| v.as_str());
-    let path = call.arguments.get("path").and_then(|v| v.as_str());
-    if let (Some(method), Some(path)) = (method, path) {
-        let description = format!("{} {}", method.to_uppercase(), path);
-        let body = call
-            .arguments
-            .get("body")
-            .and_then(|v| v.as_str())
-            .unwrap_or("{}");
-        let preview = if body.trim() == "{}" || body.trim().is_empty() {
-            String::new()
-        } else {
-            truncate_detail(body, PREVIEW_MAX_CHARS)
-        };
-        return (title, description, preview);
-    }
-
-    let description = format!("Allow '{}' to run?", call.name);
-    let preview = format_args_preview(&call.arguments);
-    (title, description, preview)
-}
-
 pub(crate) fn build_tool_activity_text(
     call: &ToolCall,
-    tools: &[RegisteredTool],
 ) -> (String, Option<String>) {
-    let title = tools
-        .iter()
-        .find(|tool| tool.def.name == call.name)
-        .and_then(|tool| tool.metadata.activity_description.clone())
-        .unwrap_or_else(|| prettify_tool_name(&call.name));
-    let detail = summarize_tool_args(&call.arguments);
+    let title = prettify_tool_name(&call.name);
+    let detail = summarize_tool_args_for(&call.name, &call.arguments);
     let detail = if detail.is_empty() {
         None
     } else {
@@ -119,7 +84,35 @@ pub(crate) fn build_tool_activity_text(
 }
 
 /// Build a short human-readable summary of tool arguments for activity lines.
-pub(crate) fn summarize_tool_args(args: &serde_json::Value) -> String {
+///
+/// Tool-aware: uses the tool name to pick the most informative arguments
+/// (e.g. URL for http_request, destination for sign_and_send_transaction).
+fn summarize_tool_args_for(tool_name: &str, args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(m) if !m.is_empty() => m,
+        _ => return String::new(),
+    };
+
+    match tool_name {
+        "http_request" => {
+            let method = obj.get("method").and_then(|v| v.as_str()).unwrap_or("?");
+            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{} {}", method, truncate_detail(url, 100))
+        }
+        "sign_and_send_transaction" => {
+            let to = obj.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            let chain = obj.get("chain_id").and_then(|v| v.as_u64());
+            match chain {
+                Some(id) => format!("to={} chain={}", to, id),
+                None => format!("to={}", to),
+            }
+        }
+        _ => summarize_tool_args(args),
+    }
+}
+
+/// Generic argument summary fallback for tools without special handling.
+fn summarize_tool_args(args: &serde_json::Value) -> String {
     let obj = match args.as_object() {
         Some(m) if !m.is_empty() => m,
         _ => return String::new(),
@@ -153,31 +146,6 @@ pub(crate) fn summarize_tool_args(args: &serde_json::Value) -> String {
     parts.join(" ")
 }
 
-fn format_args_preview(args: &serde_json::Value) -> String {
-    let obj = match args.as_object() {
-        Some(m) if !m.is_empty() => m,
-        _ => return String::new(),
-    };
-
-    let mut out = String::new();
-    for (k, v) in obj {
-        let s = match v.as_str() {
-            Some(s) => s,
-            None => continue,
-        };
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        let line = format!("{}: {}", k, s);
-        let remaining = PREVIEW_MAX_CHARS.saturating_sub(out.len());
-        if remaining == 0 {
-            break;
-        }
-        out.push_str(&truncate_detail(&line, remaining));
-    }
-    out
-}
-
 /// Convert "run_command" → "Run Command".
 fn prettify_tool_name(name: &str) -> String {
     name.split('_')
@@ -209,23 +177,20 @@ fn truncate_detail(s: &str, max: usize) -> String {
 /// Service for the "execute tool call" use case.
 #[derive(Clone)]
 pub(crate) struct ToolUseService {
-    policies: ToolPolicyCatalog,
+    allow_list: ToolAllowList,
     activity: Arc<dyn ToolActivityPort>,
-    approval: Arc<dyn ToolApprovalPort>,
     execution: Arc<dyn ToolExecutionPort>,
 }
 
 impl ToolUseService {
     pub(crate) fn new(
-        policies: ToolPolicyCatalog,
+        allow_list: ToolAllowList,
         activity: Arc<dyn ToolActivityPort>,
-        approval: Arc<dyn ToolApprovalPort>,
         execution: Arc<dyn ToolExecutionPort>,
     ) -> Self {
         Self {
-            policies,
+            allow_list,
             activity,
-            approval,
             execution,
         }
     }
@@ -233,27 +198,12 @@ impl ToolUseService {
     pub(crate) fn execute(&self, call: &ToolCall) -> Result<String> {
         self.activity.publish_tool_activity(call);
 
-        if !self.policies.is_allowed(&call.name) {
+        if !self.allow_list.is_allowed(&call.name) {
             anyhow::bail!("Tool '{}' is not available to this agent.", call.name);
-        }
-
-        let needs_approval =
-            self.policies.requires_approval(&call.name) && !is_read_only_call(call);
-        if needs_approval && !self.approval.request_tool_approval(call)? {
-            anyhow::bail!("Tool execution denied by user.");
         }
 
         self.execution.execute_tool(call)
     }
-}
-
-/// A tool call is read-only if it carries a `method` argument equal to "GET".
-fn is_read_only_call(call: &ToolCall) -> bool {
-    call.arguments
-        .get("method")
-        .and_then(|v| v.as_str())
-        .map(|m| m.eq_ignore_ascii_case("GET"))
-        .unwrap_or(false)
 }
 
 // ── Workspace tool execution ────────────────────────────────────────────
@@ -442,25 +392,21 @@ fn path_only_schema(path_description: &str) -> serde_json::Value {
 }
 
 /// Build the set of workspace tool definitions to pass to engine.run().
-pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
+pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
     vec![
-        RegisteredTool::new(
+        ToolDef::new(
             "read_file",
-            "Read the contents of a file in the workspace. Supports text files and PDF documents — PDF text is extracted automatically.",
+            "Read a file.",
             path_only_schema("File path relative to the workspace root"),
-            EffectClass::Read,
-        )
-        .with_activity_description("Reading file"),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "list_directory",
-            "List files and directories at a path in the workspace.",
+            "List directory contents.",
             path_only_schema("Directory path relative to the workspace root. Use '.' for the root."),
-            EffectClass::Read,
-        )
-        .with_activity_description("Listing directory"),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "write_file",
-            "Write content to a file in the workspace. Creates parent directories if needed.",
+            "Write content to a file.",
             json!({
                 "type": "object",
                 "properties": {
@@ -475,12 +421,10 @@ pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["path", "content"]
             }),
-            EffectClass::Write,
-        )
-        .with_activity_description("Writing file"),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "run_command",
-            "Execute a shell command in the workspace directory and return its output. Use this to run scripts, install packages, call APIs, compile code, or perform any action the user requests. Always prefer executing commands directly over creating script files.",
+            "Run a shell command.",
             json!({
                 "type": "object",
                 "properties": {
@@ -491,21 +435,18 @@ pub(crate) fn build_workspace_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["command"]
             }),
-            EffectClass::ShellExec,
-        )
-        .with_activity_description("Running command"),
+        ),
     ]
 }
 
 // ── Platform tool definitions ───────────────────────────────────────────
 
 /// Build the set of platform-level primitive tools.
-pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
+pub(crate) fn build_platform_tools() -> Vec<ToolDef> {
     vec![
-        RegisteredTool::new(
+        ToolDef::new(
             "http_request",
-            "Make an HTTP request to an external API. Supports JSON and multipart/form-data \
-             (file upload). Use this to interact with any REST API documented in active skills.",
+            "Make an HTTP request.",
             json!({
                 "type": "object",
                 "properties": {
@@ -553,13 +494,10 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["url", "method"]
             }),
-            EffectClass::ExternalApi,
-        )
-        .with_activity_description("HTTP request"),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "sign_and_send_transaction",
-            "Sign and send an EVM transaction using the configured Privy agentic wallet. \
-             Waits for the receipt and returns tx hash + status.",
+            "Sign and send an EVM transaction via Privy wallet.",
             json!({
                 "type": "object",
                 "properties": {
@@ -586,13 +524,10 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["to"]
             }),
-            EffectClass::ChainTx,
-        )
-        .with_activity_description("Signing transaction")
-        .with_required_secrets(&["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "sign_message",
-            "Sign a message using the configured Privy agentic wallet. Returns the signature.",
+            "Sign a message via Privy wallet.",
             json!({
                 "type": "object",
                 "properties": {
@@ -603,26 +538,18 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["message"]
             }),
-            EffectClass::ChainTx,
-        )
-        .with_activity_description("Signing message")
-        .with_required_secrets(&["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "get_wallet_address",
-            "Get the address of the configured Privy agentic wallet.",
+            "Get Privy wallet address.",
             json!({
                 "type": "object",
                 "properties": {}
             }),
-            EffectClass::Read,
-        )
-        .with_activity_description("Getting wallet address")
-        .with_required_secrets(&["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "abi_encode",
-            "ABI-encode an EVM function call. Returns 0x-prefixed hex calldata for use \
-             with sign_and_send_transaction. Handles address, uint256, string, bytes, \
-             bool, and nested types.",
+            "ABI-encode an EVM function call.",
             json!({
                 "type": "object",
                 "properties": {
@@ -638,14 +565,10 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["function_signature", "args"]
             }),
-            EffectClass::Read,
-        )
-        .with_activity_description("ABI-encoding calldata"),
-        RegisteredTool::new(
+        ),
+        ToolDef::new(
             "hex_to_uint256",
-            "Convert a 0x-prefixed hex string to a decimal uint256 string. \
-             Use this to derive reservation IDs from merkle roots or convert \
-             any bytes32 / hex value to its decimal representation.",
+            "Convert hex to decimal uint256.",
             json!({
                 "type": "object",
                 "properties": {
@@ -656,8 +579,6 @@ pub(crate) fn build_platform_tools() -> Vec<RegisteredTool> {
                 },
                 "required": ["hex"]
             }),
-            EffectClass::Read,
-        )
-        .with_activity_description("Hex to uint256"),
+        ),
     ]
 }
