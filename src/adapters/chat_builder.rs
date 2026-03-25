@@ -236,6 +236,8 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    /// Tools to expose via MCP bridge (Claude Code engine only).
+    pub bridge_tools: Option<&'a [ToolDef]>,
 }
 
 pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
@@ -397,6 +399,7 @@ impl<'a> ChatRuntimeService<'a> {
         let context = EngineContext {
             workspace: self.agent_config.workspace.clone(),
             system_prompt: Some(self.system_prompt.clone()),
+            bridge_tools: self.bridge_tools.map(|t| t.to_vec()),
         };
         let resp = collect_engine_response(
             self.engine,

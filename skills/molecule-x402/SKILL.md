@@ -1,20 +1,20 @@
 ---
 name: molecule-x402
-description: Execute paid Molecule Labs mutations via x402 payment protocol. USDC on Base, no API key needed. Supports project creation, file uploads, announcements, and ownership management.
-homepage: https://staging.graphql.api.molecule.xyz/graphql
+description: Execute paid Molecule Labs mutations via x402 payment protocol. molUSDC on Base, no API key needed. Supports project creation, file uploads, announcements, and ownership management.
+homepage: https://staging.graphql.api.molecule.xyz/graphql/x402/labs/
 metadata: {"openclaw":{"emoji":"💊","requires":{"env":["X402_GATEWAY_URL","PRIVY_APP_ID","PRIVY_APP_SECRET","PRIVY_WALLET_ID"]}}}
 ---
 
 # Molecule x402
 
 Pay-per-call access to Molecule Labs write mutations via the [x402 HTTP payment protocol](https://github.com/coinbase/x402).
-Uses USDC on Base -- no Molecule API key or service token required.
+Uses molUSDC on Base -- no Molecule API key or service token required.
 
 ---
 
 ## When to Use
 
-Use this skill when you do NOT have `MOLECULE_API_KEY`. Each mutation costs USDC.
+Use this skill when you do NOT have `MOLECULE_API_KEY`. Each mutation costs molUSDC.
 If you have `MOLECULE_API_KEY`, use the standard molecule skills instead (molecule-auth, molecule-project, molecule-upload, molecule-announcement) -- they are free and simpler.
 
 ---
@@ -23,21 +23,21 @@ If you have `MOLECULE_API_KEY`, use the standard molecule skills instead (molecu
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `X402_GATEWAY_URL` | Yes | x402 gateway base URL (CDK output, e.g. `https://<id>.execute-api.<region>.amazonaws.com/prod`) |
+| `X402_GATEWAY_URL` | Yes | x402 gateway base URL |
 | `PRIVY_APP_ID` | Yes | Privy app identifier |
 | `PRIVY_APP_SECRET` | Yes | Privy app secret |
-| `PRIVY_WALLET_ID` | Yes | Privy wallet ID -- wallet must hold USDC on the target network |
+| `PRIVY_WALLET_ID` | Yes | Privy wallet ID -- wallet must hold molUSDC on the target network |
 
 ---
 
 ## Network Configuration
 
-| Environment | Network (CAIP-2) | Chain ID | USDC Contract |
+| Environment | Network (CAIP-2) | Chain ID | molUSDC Contract |
 |-------------|-----------------|----------|---------------|
-| Staging | `eip155:84532` | 84532 | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| Production | `eip155:8453` | 8453 | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Staging | `eip155:84532` | 84532 | `0xd8edB90d690429Affe425cC7594Da1cb93CE80fc` |
+| Production | `eip155:8453` | 84532 | `0xd8edB90d690429Affe425cC7594Da1cb93CE80fc` |
 
-USDC EIP-712 domain: `name="USD Coin"`, `version="2"`
+molUSDC EIP-712 domain: `name="molUSDC"`, `version="2"`
 
 ---
 
@@ -45,7 +45,7 @@ USDC EIP-712 domain: `name="USD Coin"`, `version="2"`
 
 | Mutation | Description |
 |----------|-------------|
-| `createProject` | Create data room for IP-NFT |
+| `createProject` | Create molecule project for IP-NFT |
 | `initiateCreateOrUpdateFileV2` | Start file upload (get presigned URL) |
 | `finishCreateOrUpdateFileV2` | Finalize file upload |
 | `createAnnouncementV2` | Post project announcement |
@@ -53,7 +53,7 @@ USDC EIP-712 domain: `name="USD Coin"`, `version="2"`
 | `generateServiceToken` | Generate long-lived service token |
 | `addProjectOwner` | Add project co-owner |
 
-Prices are set server-side per mutation (default ~$1.00 USDC). The exact price is returned in the 402 response.
+Prices are set server-side per mutation (default ~1.00 molUSDC). The exact price is returned in the 402 response.
 
 ---
 
@@ -96,7 +96,7 @@ Result:
     "scheme": "exact",
     "network": "eip155:84532",
     "amount": "1000000",
-    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "asset": "0xd8edB90d690429Affe425cC7594Da1cb93CE80fc",
     "payTo": "0x...",
     "maxTimeoutSeconds": 60
   }]
@@ -105,8 +105,8 @@ Result:
 
 Extract from `accepts[0]`:
 - `network` -- CAIP-2 chain identifier (e.g. `eip155:84532`)
-- `amount` -- USDC in smallest unit (6 decimals: `1000000` = $1.00)
-- `asset` -- USDC contract address
+- `amount` -- molUSDC in smallest unit (6 decimals: `1000000` = $1.00)
+- `asset` -- molUSDC contract address
 - `payTo` -- payment recipient address
 - `maxTimeoutSeconds` -- deadline offset in seconds
 
@@ -138,7 +138,7 @@ Save as `valid_before`.
 
 Extract chain ID from the network string (e.g. `eip155:84532` -> `84532`).
 
-Sign the USDC TransferWithAuthorization via Privy wallet RPC:
+Sign the molUSDC TransferWithAuthorization via Privy wallet RPC:
 
 ```
 http_request:
@@ -365,7 +365,7 @@ These follow the same x402 payment flow. GraphQL schemas available via Molecule 
 | Response | Meaning | Action |
 |----------|---------|--------|
 | 402 (no payment sent) | Expected first response | Decode `payment-required` header, sign, retry |
-| 402 (payment sent) | Payment verification failed | Check USDC balance, signature correctness, nonce freshness |
+| 402 (payment sent) | Payment verification failed | Check molUSDC balance, signature correctness, nonce freshness |
 | 400 `"Mutation not enabled"` | Not in x402 whitelist | Verify mutation name spelling |
 | 400 `"Missing query"` | Body format wrong | Include `query` field with GraphQL mutation string |
 | 400 `"Path mutation does not match"` | URL/query mismatch | URL path mutation name must match the GraphQL top-level field |
@@ -376,10 +376,10 @@ These follow the same x402 payment flow. GraphQL schemas available via Molecule 
 ## Guardrails
 
 - Never hardcode wallet secrets in commands -- use environment variables (`$PRIVY_APP_ID`, etc.)
-- Verify the wallet has sufficient USDC balance before starting payment flow
+- Verify the wallet has sufficient molUSDC balance before starting payment flow
 - Always validate mutation name is in the supported list before calling
 - S3 upload (step B of file upload) is direct -- do NOT send x402 payment for S3 PUT
-- The `amount` in 402 response is in USDC smallest unit (6 decimals): `1000000` = $1.00
+- The `amount` in 402 response is in molUSDC smallest unit (6 decimals): `1000000` = $1.00
 - Escape user-supplied values in JSON before embedding in curl `-d` arguments -- replace `\` with `\\`, `"` with `\"`, and newlines with `\n`
 - Settlement only occurs after successful mutation execution -- no pay-and-fail scenario
 - Do not modify or fabricate GraphQL response data -- return results faithfully

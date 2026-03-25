@@ -197,9 +197,10 @@ pub struct EngineDiagnostics {
 }
 
 pub struct EngineContext {
-    #[allow(dead_code)] // Set by adapters, read by future engine impls.
     pub workspace: Option<std::path::PathBuf>,
     pub system_prompt: Option<String>,
+    /// Tools to expose via MCP bridge (used by Claude Code engine).
+    pub bridge_tools: Option<Vec<ToolDef>>,
 }
 
 #[async_trait]

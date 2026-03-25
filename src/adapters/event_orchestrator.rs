@@ -562,6 +562,7 @@ async fn summarize_for_downstream(
         &EngineContext {
             workspace: None,
             system_prompt: None,
+            bridge_tools: None,
         },
         None,
         None,

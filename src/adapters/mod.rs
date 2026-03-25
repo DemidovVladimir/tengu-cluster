@@ -22,12 +22,15 @@ pub(crate) mod flow_builder;
 pub(crate) mod prompt_budget;
 // --- adapters ---
 pub(crate) mod cache_tool_executor;
+#[cfg(feature = "claude_code")]
+pub(crate) mod claude_code_engine;
 pub(crate) mod channel_runtime;
 pub(crate) mod composite_tool_executor;
 pub(crate) mod crypto_tool_executor;
 pub(crate) mod embedding;
 pub(crate) mod engine_builder;
 pub(crate) mod http_tool_executor;
+pub(crate) mod mcp_bridge;
 pub(crate) mod orchestrator;
 pub(crate) mod prune;
 #[cfg(feature = "qdrant")]

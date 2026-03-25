@@ -37,15 +37,16 @@ pdf-extract = "0.10"
 regex = "1"
 alloy = { version = "1", features = ["full"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+tokio-stream = "0.1"
+tempfile = "3"
 qdrant-client = { version = "1.14", optional = true }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 dptree = { version = "0.3", optional = true }
-
 [features]
 default = ["openrouter", "telegram"]
 telegram = ["teloxide", "dptree"]
 openrouter = []
 qdrant = ["qdrant-client"]
+claude_code = []
 
 [dev-dependencies]
-tempfile = "3"

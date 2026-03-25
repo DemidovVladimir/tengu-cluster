@@ -254,6 +254,26 @@ pub(crate) fn compute_base_tools(
     tools
 }
 
+/// Compute the full bridge tool set for engines that manage their own workspace.
+///
+/// Unlike `compute_base_tools`, this ALWAYS returns all tools (workspace + platform +
+/// memory + cache) regardless of engine capabilities. Used to populate the MCP bridge
+/// when a Claude Code engine needs access to Tengu-native tools.
+pub(crate) fn compute_bridge_tools(
+    has_memory: bool,
+    workspace_tools: &[String],
+) -> Vec<ToolDef> {
+    let mut tools = build_workspace_tools();
+    if has_memory {
+        tools.extend(memory_tool_defs());
+    }
+    if workspace_tools.iter().any(|t| t == "shared_cache") {
+        tools.extend(build_shared_cache_tools());
+    }
+    tools.extend(build_platform_tools());
+    tools
+}
+
 // ---------------------------------------------------------------------------
 // Memory subsystem initialization
 // ---------------------------------------------------------------------------

@@ -141,3 +141,31 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #
 # [agents.backend.limits]
 # max_tokens_per_flow = 100_000
+
+# --- Claude Code Backend ---
+# Run agents powered by your Claude Code subscription instead of API tokens.
+# Requires: cargo build --features claude_code
+# Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
+# Claude loads your CLAUDE.md, skills, MCP servers — everything from the workspace.
+# Tengu-native tools (http_request, crypto, cache) are bridged via MCP.
+# See docs/engine-backends.md for details.
+
+# [claude_code]
+# cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
+
+# [agents.editor]
+# engine = "claude_code"
+# model = "claude-sonnet-4-20250514"
+# workspace = "~/projects/my-app"
+# skill_packages = ["my-skill"]
+# workspace_tools = ["shared_cache"]
+#
+# [agents.editor.claude_code]
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell
+#
+# [agents.editor.identity]
+# name = "Editor Agent"
+# instructions = "You are a coding assistant with full workspace access."
+#
+# [agents.editor.limits]
+# max_tokens_per_flow = 5_000_000

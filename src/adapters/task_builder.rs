@@ -49,6 +49,7 @@ pub(crate) async fn classify_request(
     let context = EngineContext {
         workspace: None,
         system_prompt: Some(system),
+        bridge_tools: None,
     };
 
     let defaults = LimitsConfig::default();
@@ -139,6 +140,7 @@ pub(crate) async fn generate_plan(
     let context = EngineContext {
         workspace: None,
         system_prompt: Some(system),
+        bridge_tools: None,
     };
 
     let defaults = LimitsConfig::default();

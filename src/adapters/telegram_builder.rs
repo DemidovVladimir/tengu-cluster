@@ -441,14 +441,26 @@ struct TelegramAgentState {
     engine_info: EngineInfo,
     workspace: Option<std::path::PathBuf>,
     base_tools: Vec<ToolDef>,
+    bridge_base_tools: Vec<ToolDef>,
     skill_source: Option<FileSystemSkillSource>,
     skill_registry: SkillRegistry,
     current_tools: Vec<ToolDef>,
+    current_bridge_tools: Vec<ToolDef>,
     current_system_prompt: String,
     advertise_workspace_tools: bool,
     history_turn_limit: usize,
     compaction_policy: crate::adapters::types::FlowCompactionPolicy,
     role: Option<String>,
+}
+
+impl TelegramAgentState {
+    /// Rebuild bridge tools from bridge_base_tools + skill registry.
+    fn rebuild_bridge_tools(&mut self) {
+        if !self.bridge_base_tools.is_empty() {
+            self.current_bridge_tools =
+                channel_runtime::rebuild_tools(&self.bridge_base_tools, &self.skill_registry);
+        }
+    }
 }
 
 // ===========================================================================
@@ -514,6 +526,7 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
         let context = crate::adapters::EngineContext {
             workspace: self.workspace.clone(),
             system_prompt: Some(self.system_prompt.clone()),
+            bridge_tools: None,
         };
 
         let sanitized = self
@@ -629,7 +642,7 @@ impl TelegramSession {
         let mut default_agent_id: Option<String> = None;
 
         for (agent_id, agent_config) in &config.agents {
-            let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config) {
+            let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
                 Ok(e) => Arc::from(e),
                 Err(e) => {
                     warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
@@ -649,12 +662,22 @@ impl TelegramSession {
 
             let advertise_workspace_tools =
                 engine.supports_tool_use() && !engine.manages_own_workspace();
+            let manages_workspace = engine.manages_own_workspace();
             let uses_tools = advertise_workspace_tools && workspace.is_some();
             let base_tools = channel_runtime::compute_base_tools(
                 uses_tools,
                 has_memory,
                 &agent_config.workspace_tools,
             );
+            let bridge_base_tools: Vec<ToolDef> =
+                if manages_workspace && workspace.is_some() {
+                    channel_runtime::compute_bridge_tools(
+                        has_memory,
+                        &agent_config.workspace_tools,
+                    )
+                } else {
+                    vec![]
+                };
 
             let skill_source: Option<FileSystemSkillSource> = workspace
                 .as_ref()
@@ -668,6 +691,11 @@ impl TelegramSession {
             }
 
             let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+            let current_bridge_tools: Vec<ToolDef> = if manages_workspace {
+                channel_runtime::rebuild_tools(&bridge_base_tools, &skill_registry)
+            } else {
+                vec![]
+            };
             let current_system_prompt = channel_runtime::rebuild_system_prompt(
                 agent_config,
                 advertise_workspace_tools,
@@ -704,6 +732,8 @@ impl TelegramSession {
                 agent_id = %agent_id,
                 role = ?role,
                 tools = current_tools.len(),
+                bridge_tools = current_bridge_tools.len(),
+                manages_workspace = manages_workspace,
                 "Registered Telegram agent"
             );
 
@@ -716,9 +746,11 @@ impl TelegramSession {
                     engine_info,
                     workspace,
                     base_tools,
+                    bridge_base_tools,
                     skill_source,
                     skill_registry,
                     current_tools,
+                    current_bridge_tools,
                     current_system_prompt,
                     advertise_workspace_tools,
                     history_turn_limit,
@@ -802,7 +834,7 @@ impl TelegramSession {
                 .and_then(|o| o.planner_model.as_ref()),
         ) {
             (Some(engine_type), Some(model)) => {
-                match crate::adapters::engine_builder::build_planner_engine(engine_type, model) {
+                match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
                     Ok(e) => {
                         info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
                         Some(Arc::from(e))
@@ -1209,6 +1241,7 @@ impl TelegramSession {
             if agent.skill_registry.reload(src) {
                 agent.current_tools =
                     channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.rebuild_bridge_tools();
                 agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                     &agent.agent_config,
                     agent.advertise_workspace_tools,
@@ -1373,6 +1406,7 @@ impl TelegramSession {
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: Some(&tool_result_observer),
             cancel: Some(&self.turn_cancel),
+            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
         };
 
         let _ = self.pipe.send_chat_action(sender).await;
@@ -1420,6 +1454,12 @@ impl TelegramSession {
                     let _ = self
                         .pipe
                         .send_text(sender, &reply, &self.delivery_opts)
+                        .await;
+                } else {
+                    warn!("Engine returned empty response — no text, no tool outcomes");
+                    let _ = self
+                        .pipe
+                        .send_text(sender, "(Engine returned no response)", &self.delivery_opts)
                         .await;
                 }
 
@@ -1595,6 +1635,7 @@ impl TelegramSession {
                             &agent.base_tools,
                             &agent.skill_registry,
                         );
+                        agent.rebuild_bridge_tools();
                         agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                             &agent.agent_config,
                             agent.advertise_workspace_tools,
@@ -1834,6 +1875,7 @@ impl TelegramSession {
                 }
                 agent.current_tools =
                     channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.rebuild_bridge_tools();
                 created = true;
             }
         }
@@ -1995,6 +2037,7 @@ impl TelegramSession {
         }
         agent.current_tools =
             channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+        agent.rebuild_bridge_tools();
         agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
             &agent.agent_config,
             agent.advertise_workspace_tools,
@@ -2038,6 +2081,7 @@ impl TelegramSession {
             if agent.skill_registry.reload(src) {
                 agent.current_tools =
                     channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.rebuild_bridge_tools();
                 agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
                     &agent.agent_config,
                     agent.advertise_workspace_tools,
@@ -2116,6 +2160,7 @@ impl TelegramSession {
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: None,
             cancel: Some(&self.turn_cancel),
+            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
         };
 
         let result = chat_runtime.process_user_text(state, &injected).await;

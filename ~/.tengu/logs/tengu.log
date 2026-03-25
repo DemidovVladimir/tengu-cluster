@@ -1,2 +1,0 @@
-2026-03-01T14:18:07.106731Z  INFO tengu_cluster: Config file not found; using built-in defaults path=~/.tengu/config.toml
-2026-03-01T14:18:07.116024Z  INFO tengu_core::config::profile: Auto-detected runtime profile arch=aarch64 ram_mb=16384 available_mb=0 cores=10 gpu=true profile=Minimal

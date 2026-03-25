@@ -1,35 +1,36 @@
-# Tengu Cluster — DeSci Sandbox
-# Multi-agent team for Decentralized Science workflows:
-# PDF research → IPNFT minting → Molecule project → Beach.science publishing.
-# Run with: tengu orchestrate --sandbox desci
-# Or Telegram: tengu telegram --sandbox desci
+# Tengu Cluster — DeSci Sandbox (Claude Code Backend)
+# Same DeSci workflow as sandboxes/aura, but powered by Claude Code CLI
+# instead of OpenRouter API tokens. Uses your Claude subscription.
+#
+# Prerequisites:
+#   - Claude Code CLI installed and authenticated (`claude --version`)
+#   - cargo build --features claude_code
+#
+# Run with: tengu telegram --sandbox aura-claude
+# Or TUI:   tengu chat --config sandboxes/aura-claude/config.toml
 
-runtime_profile = "cloud"
+runtime_profile = "desktop"
 
 [hub]
 bind = "127.0.0.1"
-port = 7071
+port = 7072
+
+[claude_code]
+cli_path = "claude"
+timeout_secs = 120
 
 [memory]
-enabled = true
+enabled = false  # Memory embeddings still require OPENROUTER_API_KEY
 
 [telegram]
 tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
 
-[orchestrator]
-enabled = true
-max_retries = 2
-planner_engine = "openrouter"
-planner_model = "anthropic/claude-sonnet-4.6"
-
 # --- Scaffold ---
-# Root workspace with working directories created at startup.
 [scaffold]
 root = "~/aura-workspace"
 directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
 
-# Per-project template: applied by /project <name> inside {root}/{name}/
 [scaffold.project]
 directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
 
@@ -44,25 +45,23 @@ content = """# DeSci Project
 """
 
 [agents.aura]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4.6"
+engine = "claude_code"
+model = "sonnet"
 role = "aura"
 default = true
 requires = []
 workspace = "~/aura-workspace"
-skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy"]
+skill_packages = ["aura-orchestrator", "beach-science", "privy"]
 workspace_tools = ["shared_cache"]
 
+[agents.aura.claude_code]
+builtin_tools_profile = "editor_shell"
+
 [agents.aura.limits]
-# Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
-max_tokens_per_flow = 3_000_000
-# Full pipeline is ~40+ tool calls (phases 0-7 + Beach posting). Default 30 is not enough.
+max_tokens_per_flow = 5_000_000
 max_tool_rounds = 100
-# Timeout for individual stream events from OpenRouter (default 120).
 stream_event_timeout_secs = 120
-# Max chars per tool result before adaptive truncation kicks in (default 300_000).
 max_tool_result_chars = 300_000
-# Max chars for compacted tool results during 2-phase pruning (default 200).
 compact_result_limit = 50_000
 
 [agents.aura.identity]
@@ -78,13 +77,13 @@ instructions = """You are the single DeSci agent handling the ENTIRE pipeline: w
 
 ## You have those capabilities, which need to be executed sequentially as one continuous flow without stopping or reporting intermediate progress:
 0. Wallet Setup — verify Privy agentic wallet exists, create one with a policy if not (follow aura-orchestrator skill Phase 0)
-1. POI Registration — follow aura-orchestrator skill Phase 1
-2. IP-NFT Minting — follow aura-orchestrator skill Phase 2
-3. Create project — follow molecule-x402 skill x402 payment flow for createProject
-4. Upload files to created project — follow molecule-x402 skill x402 payment flow for initiateCreateOrUpdateFileV2, upload to S3, then finishCreateOrUpdateFileV2
-5. Create announcement in project — follow molecule-x402 skill x402 payment flow for createAnnouncementV2
-6. Transfer NFT to owner's wallet and add them as co-owner — follow aura-orchestrator skill Phase 6
-7. Post to Beach.science with project details and IPNFT metadata — follow beach-science skill use BEACH_API_KEY=beach_OTUeOlNFz6Jjv9_qaDTQ8XdNrYw2vqUV
+1. POI Registration
+2. IP-NFT Minting
+3. Authenticate — follow molecule-auth skill
+4. Create project — follow molecule-x402 skill
+5. Upload files to created project — follow molecule-x402 skill
+6. Create announcement in project — follow molecule-x402 skill
+7. Transfer NFT to owner's wallet and add them as co-owner — follow aura-orchestrator skill
+8. Post to Beach.science with project details and IPNFT metadata — follow beach-science skill use BEACH_API_KEY=beach_OTUeOlNFz6Jjv9_qaDTQ8XdNrYw2vqUV
 
 """
-

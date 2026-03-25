@@ -132,7 +132,7 @@ pub(crate) async fn boot_orchestrator(
         };
 
         // Build engine.
-        let engine = match build_engine(agent_id, agent_config) {
+        let engine = match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
@@ -270,7 +270,7 @@ pub(crate) async fn boot_orchestrator(
         orch.and_then(|o| o.planner_model.as_ref()),
     ) {
         (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_builder::build_planner_engine(engine_type, model) {
+            match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
                 Ok(e) => {
                     tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
                     Some(e)
@@ -541,6 +541,7 @@ async fn execute_agent_task(
     let context = EngineContext {
         workspace: runtime.workspace.clone(),
         system_prompt: Some(runtime.system_prompt.clone()),
+        bridge_tools: None,
     };
 
     let sanitized = SanitizedToolExecutor::new(runtime.tool_executor.as_ref(), secret_registry);

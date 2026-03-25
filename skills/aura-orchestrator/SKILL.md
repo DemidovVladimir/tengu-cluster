@@ -355,174 +355,63 @@ shared_cache: { "operation": "put", "namespace": "molecule", "key": "ipnft_symbo
 shared_cache: { "operation": "put", "namespace": "molecule", "key": "metadata_cid", "value": "<metadataCid>" }
 ```
 
-## Phase 3: Molecule Authentication
+## Phases 3–6: Create Project, Upload File, Create Announcement (via x402)
 
-Acquire a service token before creating the project if token is not available from cache.
+These phases use the **molecule-x402** skill for all Molecule mutations. No API key or service token is needed — payment is handled via x402 molUSDC transfers.
 
-Cached service token can be found:
+**Follow the molecule-x402 skill EXACTLY for each mutation below.** Each mutation requires the full 7-step x402 payment flow (send request → get 402 → decode → sign → build payment header → retry with payment).
 
+### Phase 3: Create Molecule Project
+
+Retrieve `reservationId` from cache if not in context:
 ```
-shared_cache: { "operation": "get", "namespace": "molecule", "key": "service_token" }
-```
-
-### Step 11 — Get wallet address
-
-```
-get_wallet_address
-```
-
-(Use the same wallet address from Phase 2 if already obtained.)
-
-### Step 12 — Get sign-in message
-
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
-  body: {"query": "query GetServiceSignInMessage($walletAddress: String!, $serviceName: String!) { getServiceSignInMessage(walletAddress: $walletAddress, serviceName: $serviceName) { message } }", "variables": {"walletAddress": "<wallet_address>", "serviceName": "tengu-agent"}}
-  return_body: true
-```
-
-### Step 13 — Sign the message
-
-```
-sign_message:
-  message: <message from step 12 response>
-```
-
-### Step 14 — Exchange for service token
-
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
-  body: {"query": "mutation GenerateServiceToken($serviceName: String!, $expiresIn: String!, $walletAddress: String!, $messageSignature: String!) { generateServiceToken(serviceName: $serviceName, expiresIn: $expiresIn, walletAddress: $walletAddress, messageSignature: $messageSignature) { token } }", "variables": {"serviceName": "tengu-agent", "expiresIn": "720h", "walletAddress": "<wallet_address>", "messageSignature": "<signature from step 13>"}}
-  return_body: true
-```
-
-Extract `data.generateServiceToken.token` as `serviceToken`.
-Save to `uploads/service_token.txt`.
-
-Cache service token:
-
-```
-shared_cache: { "operation": "put", "namespace": "molecule", "key": "service_token", "value": "<serviceToken>" }
-```
-
-## Phase 4: Create Molecule Project
-
-### Step 15 — Create Molecule project
-
-Validate if reservationId is available from context, if not retrieve it from cache:
-``` 
 shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation_id" }
 ```
 
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "x-service-token": "<serviceToken>", "Content-Type": "application/json"}
-  body: {"query": "mutation CreateProject($input: CreateProjectInput!) { createProject(input: $input) { isSuccess message error { message code retryable } project { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } } }", "variables": {"input": {"ipnftSymbol": "<ipnft_symbol>", "ipnftTokenId": "<reservationId as decimal string>", "ipnftUid": "<ipnft_uid>", "ipnftAddress": "0x152B444e60C526fe4434C721561a077269FcF61a"}}}
-  return_body: true
-```
+Use the molecule-x402 `createProject` mutation with:
+- `ipnftSymbol`: `<symbol>`
+- `ipnftTokenId`: `<reservationId as decimal string>`
+- `ipnftUid`: `<ipnft_uid>` (format: `0x152B444e60C526fe4434C721561a077269FcF61a_{reservationId}`)
+- `ipnftAddress`: `0x152B444e60C526fe4434C721561a077269FcF61a`
 
-Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId as decimal string}`
+Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId}`
 
-Save to `uploads/create_project_result.json`.
+### Phase 4: Upload File to Data Room
 
-## Phase 5: Upload File to Data Room
-
-### Step 16 — Wait for data room provisioning
-
+**Wait 30 seconds** after project creation — data room provisioning is async:
 ```
 run_command:
   command: sleep 30
 ```
 
-Data room provisioning is asynchronous — 30 seconds is required.
-
-### Step 17 — Get file size
-
+Get file size:
 ```
 run_command:
   command: wc -c < <path-to-pdf>
 ```
 
-Save the output as `file_size_bytes` (trim whitespace).
+Then follow molecule-x402 **File Upload (3-step workflow)**:
+- **Step A** — `initiateCreateOrUpdateFileV2` (x402 paid) with `ipnftUid`, `contentType: "application/pdf"`, `contentLength`
+- **Step B** — Upload to S3 using the returned `uploadUrl` and `headers` (direct PUT, no x402)
+- **Step C** — `finishCreateOrUpdateFileV2` (x402 paid) with `uploadToken`, `path`, `accessLevel: "PUBLIC"`, `changeBy: <wallet_address>`
 
-### Step 18 — Initiate upload
+Save `datasetId` and `contentHash` from Step C.
 
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "x-service-token": "<serviceToken>", "Content-Type": "application/json"}
-  body: {"query": "mutation InitiateCreateOrUpdateFileV2($ipnftUid: String!, $contentType: String!, $contentLength: Int!) { initiateCreateOrUpdateFileV2(ipnftUid: $ipnftUid, contentType: $contentType, contentLength: $contentLength) { uploadToken uploadUrl uploadUrlExpiry method headers { key value } useMultipart isSuccess error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "contentType": "application/pdf", "contentLength": <file_size_bytes as integer>}}
-  return_body: true
-```
+### Phase 5: Create Announcement
 
-Extract from `data.initiateCreateOrUpdateFileV2`:
-- `uploadToken`
-- `uploadUrl`
-- `method` (usually "PUT")
-- `headers` array of `{key, value}` pairs
+Use the molecule-x402 `createAnnouncementV2` mutation with:
+- `ipnftUid`: `<ipnft_uid>`
+- `headline`: `<title>`
+- `body`: `<markdown body with hypothesis, methodology, key findings, and significance>`
+- `attachments`: `["<datasetId from upload>"]`
 
-If no `uploadUrl` is returned, stop and report the error.
-
-### Step 19 — Upload to S3
-
-Use the EXACT `uploadUrl` from step 18. Include ALL headers from step 18.
-
-```
-http_request:
-  url: <uploadUrl from step 18>
-  method: PUT
-  headers: {<all key:value pairs from step 18 headers>, "Content-Type": "application/pdf"}
-  file_path: <path-to-pdf>
-```
-
-### Step 20 — Finalize upload
-
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "x-service-token": "<serviceToken>", "Content-Type": "application/json"}
-  body: {"query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $ref: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, ref: $ref, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "uploadToken": "<uploadToken from step 18>", "path": "<filename>", "accessLevel": "PUBLIC", "changeBy": "<wallet_address>", "description": "<file description>"}}
-  return_body: true
-```
-
-Extract:
-- `datasetId` — the `did:odf:...` dataset ID
-- `contentHash`
-
-Save to `uploads/upload_result.json`.
-
-## Phase 6: Create Announcement
-
-### Step 21 — Post announcement
-
-Get `ipnft_uid` and `datasetId` from step 20 if not available terminate  and report the error:
-
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "x-service-token": "<serviceToken>", "Content-Type": "application/json"}
-  body: {"query": "mutation CreateAnnouncementV2($ipnftUid: String!, $headline: String!, $body: String!, $attachments: [String!]) { createAnnouncementV2(ipnftUid: $ipnftUid, headline: $headline, body: $body, attachments: $attachments) { isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "headline": "<title>", "body": "<markdown body with hypothesis, methodology, key findings, and significance>", "attachments": ["<datasetId from step 20>"]}}
-  return_body: true
-```
-
-## Phase 7: NFT Transfer and Co-Ownership
+## Phase 6: NFT Transfer and Co-Ownership
 
 Transfer the minted IP-NFT to the owner's personal wallet and add them as a project co-owner.
 
 **Skip this phase entirely** if `EVM_WALLET_ADDRESS` is not set or equals the agent's `wallet_address`.
 
-### Step 22 — Check owner wallet
+### Step A — Check owner wallet
 
 The owner wallet address is: `0xa2eC2967Da7bC51494F8a5427B9784Cb5a05cD3c`
 
@@ -530,7 +419,7 @@ If this equals `wallet_address`, skip to Output — no transfer needed.
 
 Save as `owner_wallet`.
 
-### Step 23 — ABI-encode ERC-721 transfer
+### Step B — ABI-encode ERC-721 transfer
 
 ```
 abi_encode:
@@ -543,7 +432,7 @@ abi_encode:
 
 Save `calldata`.
 
-### Step 24 — Transfer IP-NFT on-chain
+### Step C — Transfer IP-NFT on-chain
 
 ```
 sign_and_send_transaction:
@@ -554,16 +443,11 @@ sign_and_send_transaction:
 
 Save `transfer_tx_hash`.
 
-### Step 25 — Add owner as project co-owner
+### Step D — Add owner as project co-owner
 
-```
-http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
-  method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "x-service-token": "<serviceToken>", "Content-Type": "application/json"}
-  body: {"query": "mutation AddCollaborator($ipnftUid: String!, $walletAddress: String!, $role: String!) { addCollaborator(ipnftUid: $ipnftUid, walletAddress: $walletAddress, role: $role) { isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "walletAddress": "<owner_wallet>", "role": "co-owner"}}
-  return_body: true
-``` -->
+Use the molecule-x402 `addProjectOwner` mutation with:
+- `ipnftUid`: `<ipnft_uid>`
+- `walletAddress`: `<owner_wallet>`
 
 ## Output
 

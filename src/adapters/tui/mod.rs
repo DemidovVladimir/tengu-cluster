@@ -77,7 +77,7 @@ pub fn run_tui(
         .map(|(id, ac)| (id.clone(), ac.clone()))
         .ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
 
-    let engine = build_engine(&agent_id, &agent_config)?;
+    let engine = build_engine(&agent_id, &agent_config, config.claude_code.as_ref())?;
 
     // Capture engine metadata for slash commands (before moving engine to thread)
     let engine_info = EngineInfo {
@@ -150,11 +150,23 @@ pub fn run_tui(
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_handle.is_some();
+        let manages_workspace = engine.manages_own_workspace();
         let mut base_tools = channel_runtime::compute_base_tools(
             uses_tools,
             has_memory,
             &engine_agent_config.workspace_tools,
         );
+        // For engines that manage their own workspace (claude_code), build bridge
+        // tools so Tengu-native tools are still accessible via MCP bridge.
+        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> =
+            if manages_workspace && workspace.is_some() {
+                channel_runtime::compute_bridge_tools(
+                    has_memory,
+                    &engine_agent_config.workspace_tools,
+                )
+            } else {
+                vec![]
+            };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> = workspace
@@ -178,6 +190,7 @@ pub fn run_tui(
 
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
+        let mut current_bridge_tools: Vec<ToolDef> = vec![];
         let mut current_executor: Option<channel_runtime::ToolServiceExecutor> = None;
         let mut current_system_prompt = system_prompt;
 
@@ -360,6 +373,12 @@ pub fn run_tui(
                                     &skill_registry,
                                     &current_tools,
                                 );
+                                if manages_workspace {
+                                    current_bridge_tools = channel_runtime::rebuild_tools(
+                                        &bridge_base_tools,
+                                        &skill_registry,
+                                    );
+                                }
                             }
                             tools_dirty = false;
                         }
@@ -387,6 +406,7 @@ pub fn run_tui(
                                 max_recall_tokens: memory_config.max_recall_tokens,
                                 tool_observer: None,
                                 cancel: None,
+                                bridge_tools: if current_bridge_tools.is_empty() { None } else { Some(&current_bridge_tools) },
                             };
 
                             match chat_runtime
@@ -511,6 +531,7 @@ pub fn run_tui(
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
                             cancel: None,
+                            bridge_tools: None,
                         };
 
                         match chat_runtime

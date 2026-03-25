@@ -131,6 +131,9 @@ pub struct Config {
 
     #[serde(default)]
     pub scaffold: Option<ScaffoldConfig>,
+
+    #[serde(default)]
+    pub claude_code: Option<ClaudeCodeConfig>,
 }
 
 fn default_profile() -> String {
@@ -201,7 +204,6 @@ fn default_debounce_ms() -> u64 {
 
 /// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default)]
     pub default: bool,
@@ -233,6 +235,9 @@ pub struct AgentConfig {
     /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
     #[serde(default)]
     pub workspace_tools: Vec<String>,
+    /// Per-agent Claude Code configuration (only used when engine = "claude_code").
+    #[serde(default)]
+    pub claude_code: Option<AgentClaudeCodeConfig>,
 }
 
 fn default_lens() -> String {
@@ -420,6 +425,51 @@ pub struct ProjectScaffold {
 pub struct ScaffoldFile {
     pub path: String,
     pub content: String,
+}
+
+/// Global Claude Code backend configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeConfig {
+    #[serde(default = "default_cli_path")]
+    pub cli_path: String,
+    #[serde(default = "default_claude_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ClaudeCodeConfig {
+    fn default() -> Self {
+        Self {
+            cli_path: default_cli_path(),
+            timeout_secs: default_claude_timeout_secs(),
+        }
+    }
+}
+
+fn default_cli_path() -> String {
+    "claude".to_string()
+}
+
+fn default_claude_timeout_secs() -> u64 {
+    120
+}
+
+/// Per-agent Claude Code configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentClaudeCodeConfig {
+    #[serde(default = "default_builtin_tools_profile")]
+    pub builtin_tools_profile: String,
+}
+
+impl Default for AgentClaudeCodeConfig {
+    fn default() -> Self {
+        Self {
+            builtin_tools_profile: default_builtin_tools_profile(),
+        }
+    }
+}
+
+fn default_builtin_tools_profile() -> String {
+    "editor_shell".to_string()
 }
 
 /// Persistent vector memory configuration.
@@ -680,7 +730,21 @@ impl Config {
     fn validate_agent(agent_id: &str, agent: &AgentConfig, errors: &mut ValidationErrors) {
         errors.require(!agent_id.trim().is_empty(), "agent id cannot be empty");
         errors.require_nonempty(&format!("agents.{agent_id}.engine"), &agent.engine);
+        errors.require_one_of(
+            &format!("agents.{agent_id}.engine"),
+            &agent.engine,
+            &["openrouter", "claude_code"],
+        );
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
+        if agent.engine == "claude_code" {
+            if let Some(ref cc) = agent.claude_code {
+                errors.require_one_of(
+                    &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
+                    &cc.builtin_tools_profile,
+                    &["none", "read_only", "editor", "editor_shell"],
+                );
+            }
+        }
         errors.require_one_of(
             &format!("agents.{agent_id}.default_lens"),
             &agent.default_lens,
@@ -832,8 +896,8 @@ impl Default for Config {
             "main".to_string(),
             AgentConfig {
                 default: true,
-                engine: "ollama".to_string(),
-                model: "llama3.2".to_string(),
+                engine: "openrouter".to_string(),
+                model: "anthropic/claude-sonnet-4-20250514".to_string(),
                 workspace: None,
                 default_lens: "eco".to_string(),
                 identity: IdentityConfig {
@@ -848,6 +912,7 @@ impl Default for Config {
                 prompt_budget: PromptBudgetConfig::default(),
                 requires: vec![],
                 workspace_tools: vec![],
+                claude_code: None,
             },
         );
 
@@ -859,6 +924,7 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             scaffold: None,
+            claude_code: None,
         }
     }
 }
@@ -887,17 +953,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_legacy_agent_fields() {
-        let raw = r#"
-[agents.main]
-default = true
-engine = "ollama"
-model = "llama3.2"
-skills = ["search"]
-allowed_tools = ["read_file"]
-"#;
+    fn validate_rejects_unknown_engine() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "ollama".to_string();
 
-        let err = toml::from_str::<Config>(raw).expect_err("legacy agent fields should fail");
-        assert!(err.to_string().contains("unknown field"));
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("engine must be one of"));
+    }
+
+    #[test]
+    fn validate_accepts_claude_code_engine() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "claude_code".to_string();
+        main.claude_code = Some(AgentClaudeCodeConfig {
+            builtin_tools_profile: "editor_shell".to_string(),
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_bad_claude_profile() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "claude_code".to_string();
+        main.claude_code = Some(AgentClaudeCodeConfig {
+            builtin_tools_profile: "dangerous".to_string(),
+        });
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("builtin_tools_profile must be one of"));
     }
 }

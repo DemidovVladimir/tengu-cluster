@@ -58,6 +58,8 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Run MCP bridge server (stdio). Used as a subprocess by Claude Code engine.
+    McpBridge,
 }
 
 
@@ -79,9 +81,22 @@ enum SecretAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load .env first (highest priority after shell env), then vault.
-    // This way .env values are never redacted, while vault-only secrets are.
+    // Load .env first (highest priority after shell env), then parse CLI so we can
+    // special-case subprocess modes that must keep stdout protocol-clean.
     dotenvy::dotenv().ok();
+    let cli = Cli::parse();
+
+    if matches!(cli.command, Some(Commands::McpBridge)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return adapters::mcp_bridge::run_mcp_bridge();
+    }
 
     let tengu_home = resolve_tengu_home();
     let secrets_path = tengu_home.join("secrets.vault");
@@ -122,8 +137,6 @@ async fn main() -> Result<()> {
     }
     let secret_registry = std::sync::Arc::new(secret_registry);
 
-    let cli = Cli::parse();
-
     // In TUI mode, persist logs to file only so interactive output stays clean.
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat));
@@ -147,8 +160,8 @@ async fn main() -> Result<()> {
             .init();
     } else if is_telegram {
         use tracing_subscriber::layer::SubscriberExt;
-        let filter = tracing_subscriber::EnvFilter::from_default_env()
-            .add_directive("tengu=info".parse().unwrap());
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=info"));
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
         let log_file = std::fs::OpenOptions::new()
@@ -274,6 +287,9 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+        Commands::McpBridge => {
+            adapters::mcp_bridge::run_mcp_bridge()
+        }
         Commands::Secret { action } => {
             let path = secret_builder::secrets_file_path(&resolve_tengu_home());
             match action {
@@ -325,7 +341,7 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
             ac.model,
             if ac.default { " [default]" } else { "" }
         );
-        match build_engine(id, ac) {
+        match build_engine(id, ac, config.claude_code.as_ref()) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(
@@ -350,7 +366,7 @@ fn run_doctor(config: &Config) {
 
     println!("  Backend diagnostics:");
     for (id, ac) in &config.agents {
-        match build_engine(id, ac) {
+        match build_engine(id, ac, config.claude_code.as_ref()) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(

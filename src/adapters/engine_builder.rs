@@ -21,18 +21,80 @@ use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 // ---------------------------------------------------------------------------
 
 /// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
-pub(crate) fn build_planner_engine(_engine_type: &str, model: &str) -> Result<Box<dyn Engine>> {
-    let defaults = crate::adapters::config::LimitsConfig::default();
-    build_openrouter_engine(model, defaults.context_window as usize)
+pub(crate) fn build_planner_engine(
+    engine_type: &str,
+    model: &str,
+    claude_code_config: Option<&crate::adapters::config::ClaudeCodeConfig>,
+) -> Result<Box<dyn Engine>> {
+    match engine_type {
+        "claude_code" => {
+            #[cfg(feature = "claude_code")]
+            {
+                let cc = claude_code_config
+                    .cloned()
+                    .unwrap_or_default();
+                let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
+                Ok(Box::new(
+                    crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
+                        std::path::PathBuf::from(&cc.cli_path),
+                        crate::adapters::claude_code_engine::BuiltinToolsProfile::ReadOnly,
+                        model_opt,
+                        cc.timeout_secs,
+                    ),
+                ))
+            }
+            #[cfg(not(feature = "claude_code"))]
+            {
+                let _ = (model, claude_code_config);
+                anyhow::bail!("claude_code engine requires --features claude_code")
+            }
+        }
+        _ => {
+            let defaults = crate::adapters::config::LimitsConfig::default();
+            build_openrouter_engine(model, defaults.context_window as usize)
+        }
+    }
 }
 
 /// Build configured engine instance for one agent.
 pub(crate) fn build_engine(
     _agent_id: &str,
     agent_config: &crate::adapters::config::AgentConfig,
+    claude_code_config: Option<&crate::adapters::config::ClaudeCodeConfig>,
 ) -> Result<Box<dyn Engine>> {
-    let context_window = agent_config.limits.context_window.max(1) as usize;
-    build_openrouter_engine(&agent_config.model, context_window)
+    match agent_config.engine.as_str() {
+        "claude_code" => {
+            #[cfg(feature = "claude_code")]
+            {
+                let cc = claude_code_config
+                    .cloned()
+                    .unwrap_or_default();
+                let profile = agent_config
+                    .claude_code
+                    .as_ref()
+                    .map(|c| c.builtin_tools_profile.as_str())
+                    .unwrap_or("editor_shell");
+                let model_opt = if agent_config.model.is_empty() { None } else { Some(agent_config.model.clone()) };
+                Ok(Box::new(
+                    crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
+                        std::path::PathBuf::from(&cc.cli_path),
+                        crate::adapters::claude_code_engine::BuiltinToolsProfile::from_str(profile),
+                        model_opt,
+                        cc.timeout_secs,
+                    ),
+                ))
+            }
+            #[cfg(not(feature = "claude_code"))]
+            {
+                let _ = claude_code_config;
+                anyhow::bail!("claude_code engine requires --features claude_code")
+            }
+        }
+        _ => {
+            let context_window = agent_config.limits.context_window.max(1) as usize;
+            build_openrouter_engine(&agent_config.model, context_window)
+        }
+    }
 }
 
 fn build_openrouter_engine(
@@ -678,6 +740,8 @@ async fn run_single_engine_turn(
     let mut pending_tool_args = String::new();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
+    let cancel_poll_secs: u64 = 2;
+    let mut idle_secs: u64 = 0;
 
     loop {
         if is_cancelled() {
@@ -685,18 +749,25 @@ async fn run_single_engine_turn(
             break;
         }
         let event = match tokio::time::timeout(
-            std::time::Duration::from_secs(stream_event_timeout_secs),
+            std::time::Duration::from_secs(cancel_poll_secs),
             stream.next(),
         )
         .await
         {
-            Ok(Some(event)) => event,
+            Ok(Some(event)) => {
+                idle_secs = 0;
+                event
+            }
             Ok(None) => break,
             Err(_) => {
-                return Err(anyhow::anyhow!(
-                    "Engine stream timed out — no data for {}s",
-                    stream_event_timeout_secs
-                ));
+                idle_secs += cancel_poll_secs;
+                if idle_secs >= stream_event_timeout_secs {
+                    return Err(anyhow::anyhow!(
+                        "Engine stream timed out — no data for {}s",
+                        stream_event_timeout_secs
+                    ));
+                }
+                continue;
             }
         };
         match event {
