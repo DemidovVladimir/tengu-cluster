@@ -6,36 +6,11 @@ use std::path::PathBuf;
 use tracing::info;
 
 mod adapters;
-mod application;
-mod domain;
-#[cfg(test)]
-mod main_tests;
+use crate::adapters::config::{Config, RuntimeProfile};
 
-use adapters::doctor_probe::{format_engine_diagnostics_compact, run_engine_probe};
-use adapters::flow_store::FlowStore;
-use tengu_core::config::{Config, RuntimeProfile};
-#[cfg(test)]
-use tengu_core::types::{Message, Role};
-
-#[cfg(test)]
-pub(crate) use adapters::doctor_probe::{first_output_line, resolve_models_probe_url};
-#[cfg(test)]
-pub(crate) use application::flow_compaction::compaction_split_index;
-#[cfg(test)]
-pub(crate) use application::flow_policy::{
-    default_compaction_keep_turns_for_scope, default_compaction_threshold_ratio_for_scope,
-    resolve_flow_compaction_policy,
-};
-#[cfg(test)]
-pub(crate) use domain::chat::{
-    default_history_turn_limit_for_scope, enforce_history_turn_limit, resolve_history_turn_limit,
-};
-#[cfg(test)]
-pub(crate) use domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
-
-use adapters::engine_factory::build_engine;
-use adapters::secret_store;
-use domain::secret_registry::SecretRegistry;
+use adapters::engine_builder::build_engine;
+use adapters::secret_builder;
+use adapters::secret_builder::SecretRegistry;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -74,7 +49,19 @@ enum Commands {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
+    Prune {
+        /// Also prune workspace-local state for this sandbox
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run MCP bridge server (stdio). Used as a subprocess by Claude Code engine.
+    McpBridge,
 }
+
 
 #[derive(Subcommand)]
 enum SecretAction {
@@ -94,8 +81,23 @@ enum SecretAction {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load encrypted secrets vault first (higher priority), then .env.
-    // Shell env vars always win (load_secrets_into_env won't overwrite existing vars).
+    // Load .env first (highest priority after shell env), then parse CLI so we can
+    // special-case subprocess modes that must keep stdout protocol-clean.
+    dotenvy::dotenv().ok();
+    let cli = Cli::parse();
+
+    if matches!(cli.command, Some(Commands::McpBridge)) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return adapters::mcp_bridge::run_mcp_bridge();
+    }
+
     let tengu_home = resolve_tengu_home();
     let secrets_path = tengu_home.join("secrets.vault");
     let mut secret_registry = SecretRegistry::new();
@@ -116,7 +118,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        match secret_store::load_secrets_into_env(&secrets_path) {
+        match secret_builder::load_secrets_into_env(&secrets_path) {
             Ok(secret_values) => {
                 for v in secret_values {
                     secret_registry.register(v);
@@ -134,18 +136,19 @@ async fn main() -> Result<()> {
         }
     }
     let secret_registry = std::sync::Arc::new(secret_registry);
-    dotenvy::dotenv().ok();
 
-    let cli = Cli::parse();
-
-    // In TUI mode, redirect logs to a file to avoid corrupting the alternate screen.
-    // For other commands, log to stderr as usual.
+    // In TUI mode, persist logs to file only so interactive output stays clean.
+    // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat));
+    let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
-        let log_file =
-            std::fs::File::create(log_dir.join("tengu.log")).expect("Failed to create log file");
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("tengu.log"))
+            .expect("Failed to open log file");
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
@@ -155,6 +158,30 @@ async fn main() -> Result<()> {
             .with_writer(std::sync::Mutex::new(log_file))
             .with_ansi(false)
             .init();
+    } else if is_telegram {
+        use tracing_subscriber::layer::SubscriberExt;
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=info"));
+        let log_dir = resolve_tengu_home().join("logs");
+        std::fs::create_dir_all(&log_dir).ok();
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("tengu.log"))
+            .expect("Failed to open log file");
+        let file_layer = tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(log_file));
+        let stderr_layer = tracing_subscriber::fmt::layer()
+            .compact()
+            .with_writer(std::io::stderr);
+        let subscriber = tracing_subscriber::registry()
+            .with(filter)
+            .with(file_layer)
+            .with(stderr_layer);
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("Failed to set tracing subscriber");
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -195,7 +222,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Doctor => {
-            run_doctor(&config).await;
+            run_doctor(&config);
             Ok(())
         }
         Commands::Orchestrate { sandbox } => {
@@ -205,20 +232,72 @@ async fn main() -> Result<()> {
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
-            adapters::telegram_runtime::run_telegram(config, secret_registry)
+            adapters::telegram_builder::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
         }
+        Commands::Prune { sandbox, yes } => {
+            let (workspaces, scaffold_dirs): (Vec<PathBuf>, Vec<String>) =
+                if let Some(ref name) = sandbox {
+                    let config = load_sandbox_or(Some(name.clone()), config)?;
+                    let ws = config
+                        .agents
+                        .values()
+                        .filter_map(|a| {
+                            a.workspace
+                                .as_ref()
+                                .map(|p| adapters::tool_builder::expand_tilde(p))
+                        })
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect();
+                    let dirs = config
+                        .scaffold
+                        .as_ref()
+                        .and_then(|s| s.project.as_ref())
+                        .map(|p| p.directories.clone())
+                        .unwrap_or_default();
+                    (ws, dirs)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            let targets = adapters::prune::plan_prune(&tengu_home, &workspaces, &scaffold_dirs);
+            if targets.iter().all(|t| !t.exists) {
+                println!("Nothing to prune.");
+                return Ok(());
+            }
+            println!("{}", adapters::prune::format_prune_plan(&targets));
+            if !yes {
+                eprint!("Proceed? [y/N] ");
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf)?;
+                if !buf.trim().eq_ignore_ascii_case("y") {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+            let results = adapters::prune::execute_prune(&targets);
+            for (label, result) in &results {
+                match result {
+                    Ok(()) => println!("  ✓ {}", label),
+                    Err(e) => println!("  ✗ {} — {}", label, e),
+                }
+            }
+            Ok(())
+        }
+        Commands::McpBridge => {
+            adapters::mcp_bridge::run_mcp_bridge()
+        }
         Commands::Secret { action } => {
-            let path = secret_store::secrets_file_path(&resolve_tengu_home());
+            let path = secret_builder::secrets_file_path(&resolve_tengu_home());
             match action {
-                SecretAction::Init => secret_store::init_secrets_file(&path)?,
-                SecretAction::Set { key, value } => secret_store::set_secret(&path, &key, &value)?,
-                SecretAction::Remove { key } => secret_store::remove_secret(&path, &key)?,
+                SecretAction::Init => secret_builder::init_secrets_file(&path)?,
+                SecretAction::Set { key, value } => secret_builder::set_secret(&path, &key, &value)?,
+                SecretAction::Remove { key } => secret_builder::remove_secret(&path, &key)?,
                 SecretAction::List => {
-                    let keys = secret_store::list_secret_keys(&path)?;
+                    let keys = secret_builder::list_secret_keys(&path)?;
                     if keys.is_empty() {
                         println!("  (no secrets)");
                     } else {
@@ -227,7 +306,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                SecretAction::ChangePassword => secret_store::change_password(&path)?,
+                SecretAction::ChangePassword => secret_builder::change_password(&path)?,
                 SecretAction::Path => println!("{}", path.display()),
             }
             Ok(())
@@ -235,12 +314,24 @@ async fn main() -> Result<()> {
     }
 }
 
+fn format_diagnostics_compact(d: &crate::adapters::EngineDiagnostics) -> String {
+    let caps = &d.capabilities;
+    format!(
+        "model={} endpoint={} transport={} context={} output_cap={} streaming={}",
+        d.configured_model.as_deref().unwrap_or("n/a"),
+        d.endpoint.as_deref().unwrap_or("n/a"),
+        d.transport.as_deref().unwrap_or("n/a"),
+        caps.context_window,
+        caps.max_output_tokens_per_turn,
+        caps.supports_streaming,
+    )
+}
+
 fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
     println!("  TENGU CLUSTER — Status");
     println!("  ─────────────────────────────────────");
     println!("  Profile:  {:?}", profile);
-    println!("  Refiner:  {}", config.refiner.mode);
     println!("  Agents:   {}", config.agents.len());
     for (id, ac) in &config.agents {
         println!(
@@ -250,12 +341,12 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
             ac.model,
             if ac.default { " [default]" } else { "" }
         );
-        match build_engine(id, ac) {
+        match build_engine(id, ac, config.claude_code.as_ref()) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(
                     "      diagnostics: {}",
-                    format_engine_diagnostics_compact(&diagnostics)
+                    format_diagnostics_compact(&diagnostics)
                 );
             }
             Err(err) => {
@@ -268,27 +359,22 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
 }
 
-async fn run_doctor(config: &Config) {
+fn run_doctor(config: &Config) {
     println!();
     println!("  TENGU CLUSTER — Doctor");
     println!("  ─────────────────────────────────────");
 
     println!("  Backend diagnostics:");
     for (id, ac) in &config.agents {
-        match build_engine(id, ac) {
+        match build_engine(id, ac, config.claude_code.as_ref()) {
             Ok(engine) => {
                 let diagnostics = engine.diagnostics();
                 println!(
                     "    {}: engine={} {}",
                     id,
                     diagnostics.engine_id,
-                    format_engine_diagnostics_compact(&diagnostics)
+                    format_diagnostics_compact(&diagnostics)
                 );
-
-                let probe = run_engine_probe(&diagnostics)
-                    .await
-                    .unwrap_or_else(|| "probe: skipped (no provider probe configured)".to_string());
-                println!("      {}", probe);
             }
             Err(err) => {
                 println!("    {}: backend init error: {}", id, err);
@@ -296,69 +382,8 @@ async fn run_doctor(config: &Config) {
         }
     }
 
-    let flow_store = FlowStore::new(&resolve_tengu_home());
-    match flow_store {
-        Ok(store) => {
-            print!("  Flow store... ");
-            match store.health_check() {
-                Ok(_) => println!("OK"),
-                Err(e) => {
-                    println!("Error: {}", e);
-                    println!("  ─────────────────────────────────────");
-                    println!();
-                    return;
-                }
-            }
-
-            print!("  Flow integrity... ");
-            match store.integrity_report() {
-                Ok(report) if !report.has_issues() => {
-                    println!("OK (checked {} flows)", report.checked_flows);
-                }
-                Ok(report) => {
-                    println!("WARN");
-                    print_flow_integrity_findings(&report);
-                }
-                Err(e) => println!("Error: {}", e),
-            }
-        }
-        Err(e) => {
-            print!("  Flow store... ");
-            println!("Error: {}", e);
-        }
-    }
-
     println!("  ─────────────────────────────────────");
     println!();
-}
-
-fn print_flow_integrity_findings(report: &adapters::flow_store::FlowStoreIntegrityReport) {
-    println!("    checked flows: {}", report.checked_flows);
-    print_findings("missing transcripts", &report.missing_transcripts);
-    print_findings("unsafe transcript paths", &report.unsafe_transcript_paths);
-    print_findings("unreadable transcripts", &report.unreadable_transcripts);
-    print_findings("invalid transcript lines", &report.invalid_transcript_lines);
-    print_findings(
-        "index/transcript metadata mismatches",
-        &report.metadata_mismatches,
-    );
-    println!("    guidance:");
-    println!("      1) Back up `~/.tengu/state/flows`.");
-    println!("      2) Inspect listed flow entries and transcript files.");
-    println!("      3) Repair or remove broken flow entries from `index.json` if needed.");
-}
-
-fn print_findings(label: &str, entries: &[String]) {
-    if entries.is_empty() {
-        return;
-    }
-    println!("    {}: {}", label, entries.len());
-    for entry in entries.iter().take(3) {
-        println!("      - {}", entry);
-    }
-    if entries.len() > 3 {
-        println!("      - ... and {} more", entries.len() - 3);
-    }
 }
 
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.

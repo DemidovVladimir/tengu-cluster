@@ -10,29 +10,19 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_factory::build_engine;
-use crate::adapters::flow_store::FlowStore;
-use crate::adapters::skill_source::FileSystemSkillSource;
-use crate::adapters::system_prompt;
-use crate::adapters::workspace_tools;
-use crate::application::chat_commands::{self, CommandResult, EngineInfo};
-use crate::application::chat_runtime::{ChatRuntimeService, ChatTurnResult};
-use crate::application::engine_runtime::{SanitizedToolExecutor, ToolExecutor};
-use crate::application::flow_policy::resolve_flow_compaction_policy;
-use crate::application::memory_service::MemoryService;
-use crate::application::ports::{ToolActivityPort, ToolApprovalPort};
-use crate::application::skill_registry::SkillRegistry;
-use crate::application::skill_commands::{SkillCommandMatch, SkillCommandRouter};
-use crate::domain::chat::resolve_history_turn_limit;
-use crate::domain::skill::SkillStatus;
-use crate::domain::secret_registry::SecretRegistry;
-use crate::resolve_tengu_home;
+use crate::adapters::engine_builder::build_engine;
+use crate::adapters::skill_builder::{
+    self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
+};
+use crate::adapters::chat_builder::{handle_chat_command, CommandResult, EngineInfo, ChatRuntimeService, ChatTurnResult};
+use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
+use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
+use crate::adapters::memory_builder::MemoryService;
+use crate::adapters::ports::ToolActivityPort;
+use crate::adapters::secret_builder::SecretRegistry;
 use app::{BubbleRole, ChatRequest, SkillCommand};
-use tengu_core::config::{Config, RuntimeProfile};
-use tengu_core::types::{ToolCall, ToolDef};
-use tengu_core::Refiner;
-use tengu_optimizer::{NoopRefiner, RuleRefiner};
-
+use crate::adapters::config::{Config, RuntimeProfile};
+use crate::adapters::types::{ToolCall, ToolDef};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -51,12 +41,8 @@ fn disable_terminal_mouse_capture() -> Result<()> {
 
 /// Wrapper to send `Box<dyn Engine>` to the engine thread.
 /// Safe because the engine is only ever accessed from the single engine thread.
-struct SendEngine(Box<dyn tengu_core::Engine>);
+struct SendEngine(Box<dyn crate::adapters::Engine>);
 unsafe impl Send for SendEngine {}
-
-/// Wrapper to send `Box<dyn Refiner>` to the engine thread.
-struct SendRefiner(Box<dyn Refiner>);
-unsafe impl Send for SendRefiner {}
 
 /// TUI adapter for publishing tool activity lines.
 struct CursiveToolActivityAdapter {
@@ -65,8 +51,8 @@ struct CursiveToolActivityAdapter {
 
 impl ToolActivityPort for CursiveToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        let tool_name = call.name.clone();
-        let detail = crate::adapters::tool_ui::summarize_tool_args(&call.arguments);
+        let (tool_name, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+        let detail = detail.unwrap_or_default();
 
         let cb = self.cb_sink.clone();
         let _ = cb.send(Box::new(move |siv: &mut Cursive| {
@@ -75,25 +61,6 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
     }
 }
 
-/// TUI adapter for interactive tool approval prompts.
-struct CursiveToolApprovalAdapter {
-    cb_sink: cursive::CbSink,
-}
-
-impl ToolApprovalPort for CursiveToolApprovalAdapter {
-    fn request_tool_approval(&self, call: &ToolCall) -> Result<bool> {
-        let (title, description, preview) = crate::adapters::tool_ui::build_approval_text(call);
-
-        let (confirm_tx, confirm_rx) = mpsc::channel::<bool>();
-        let cb = self.cb_sink.clone();
-        let _ = cb.send(Box::new(move |siv: &mut Cursive| {
-            view::show_tool_confirmation(siv, &title, &description, &preview, confirm_tx);
-        }));
-
-        // Block the engine thread until the user responds.
-        Ok(confirm_rx.recv().unwrap_or(false))
-    }
-}
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
 pub fn run_tui(
@@ -110,12 +77,7 @@ pub fn run_tui(
         .map(|(id, ac)| (id.clone(), ac.clone()))
         .ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
 
-    let refiner: Box<dyn Refiner> = match config.refiner.mode.as_str() {
-        "rules" => Box::new(RuleRefiner::new()),
-        _ => Box::new(NoopRefiner),
-    };
-
-    let engine = build_engine(&agent_id, &agent_config)?;
+    let engine = build_engine(&agent_id, &agent_config, config.claude_code.as_ref())?;
 
     // Capture engine metadata for slash commands (before moving engine to thread)
     let engine_info = EngineInfo {
@@ -123,7 +85,6 @@ pub fn run_tui(
         diagnostics: engine.diagnostics(),
     };
 
-    let _flow_store = FlowStore::new(&resolve_tengu_home())?;
     let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
     let compaction_policy = resolve_flow_compaction_policy(
         &agent_config.flow,
@@ -136,7 +97,7 @@ pub fn run_tui(
     // Build initial system prompt without skill contexts — the engine thread will rebuild
     // with actual skills on the first turn (tools_dirty = true).
     let system_prompt =
-        system_prompt::build_system_prompt(&agent_config, advertise_workspace_tools, &[]);
+        skill_builder::build_system_prompt(&agent_config, advertise_workspace_tools, &[]);
 
     // Channel: UI → Engine thread
     let (request_tx, request_rx) = mpsc::channel::<ChatRequest>();
@@ -162,7 +123,6 @@ pub fn run_tui(
     // Spawn engine thread
     let cb_sink = siv.cb_sink().clone();
     let send_engine = SendEngine(engine);
-    let send_refiner = SendRefiner(refiner);
     let engine_agent_id = agent_id.clone();
     let engine_agent_config = agent_config.clone();
     let secret_registry_clone = Arc::clone(&secret_registry);
@@ -175,37 +135,38 @@ pub fn run_tui(
             .expect("Failed to create tokio runtime for engine thread");
 
         let engine = send_engine.0;
-        let refiner = send_refiner.0;
-        let flow_store = match FlowStore::new(&resolve_tengu_home()) {
-            Ok(fs) => fs,
-            Err(e) => {
-                let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
-                    view::hide_thinking(siv);
-                    view::push_bubble(siv, BubbleRole::System, &format!("Flow store error: {}", e));
-                }));
-                return;
-            }
-        };
 
         // Resolve workspace path (expand tilde)
         let workspace: Option<PathBuf> = engine_agent_config
             .workspace
             .as_ref()
-            .map(|p| workspace_tools::expand_tilde(p));
+            .map(|p| crate::adapters::tool_builder::expand_tilde(p));
 
         // Build memory subsystem if enabled.
-        let memory_handle = channel_runtime::build_memory_handle(&memory_config, &rt);
+        let memory_handle =
+            channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
 
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_handle.is_some();
-
+        let manages_workspace = engine.manages_own_workspace();
         let mut base_tools = channel_runtime::compute_base_tools(
             uses_tools,
             has_memory,
-            engine_agent_config.allowed_tools.as_deref(),
+            &engine_agent_config.workspace_tools,
         );
+        // For engines that manage their own workspace (claude_code), build bridge
+        // tools so Tengu-native tools are still accessible via MCP bridge.
+        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> =
+            if manages_workspace && workspace.is_some() {
+                channel_runtime::compute_bridge_tools(
+                    has_memory,
+                    &engine_agent_config.workspace_tools,
+                )
+            } else {
+                vec![]
+            };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> = workspace
@@ -213,7 +174,8 @@ pub fn run_tui(
             .map(|ws| FileSystemSkillSource::new(ws.clone()));
 
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved);
+        let mut skill_registry = SkillRegistry::new(base_reserved)
+            .with_allowlist(Some(engine_agent_config.skill_packages.clone()));
 
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
@@ -222,15 +184,13 @@ pub fn run_tui(
         let mut skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
 
         // Create channel-specific port adapters once, share via Arc.
-        let approval: Arc<dyn ToolApprovalPort> = Arc::new(CursiveToolApprovalAdapter {
-            cb_sink: cb_sink.clone(),
-        });
         let activity: Arc<dyn ToolActivityPort> = Arc::new(CursiveToolActivityAdapter {
             cb_sink: cb_sink.clone(),
         });
 
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
+        let mut current_bridge_tools: Vec<ToolDef> = vec![];
         let mut current_executor: Option<channel_runtime::ToolServiceExecutor> = None;
         let mut current_system_prompt = system_prompt;
 
@@ -299,7 +259,7 @@ pub fn run_tui(
                         let new_base = channel_runtime::compute_base_tools(
                             uses_tools,
                             has_memory,
-                            engine_agent_config.allowed_tools.as_deref(),
+                            &engine_agent_config.workspace_tools,
                         );
                         let env_changed = new_base.len() != base_tools.len();
                         base_tools = new_base;
@@ -322,15 +282,19 @@ pub fn run_tui(
 
                         // Always force a full rebuild to pick up env + skill changes.
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                            current_tools = channel_runtime::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                            );
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
                                 &memory_handle,
                                 &secret_registry,
-                                Arc::clone(&approval),
                                 Arc::clone(&activity),
+                                None,
+                                None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -373,26 +337,35 @@ pub fn run_tui(
                             skill = skill_name,
                         );
                         // Don't respond via response_tx — instead drop into a chat turn.
-                        let _ = response_tx.send(format!("Running /{} {}…", cmd_name, args).trim().to_string());
+                        let _ = response_tx.send(
+                            format!("Running /{} {}…", cmd_name, args)
+                                .trim()
+                                .to_string(),
+                        );
 
                         // Hot-reload + rebuild if dirty.
                         if let Some(ref src) = skill_source {
                             if skill_registry.reload(src) {
                                 tools_dirty = true;
-                                skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
+                                skill_command_router =
+                                    SkillCommandRouter::from_registry(&skill_registry);
                             }
                         }
                         if tools_dirty {
                             if let Some(ref ws) = workspace {
-                                current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                                current_tools = channel_runtime::rebuild_tools(
+                                    &base_tools,
+                                    &skill_registry,
+                                );
                                 current_executor = channel_runtime::build_tool_executor(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
                                     &memory_handle,
                                     &secret_registry,
-                                    Arc::clone(&approval),
                                     Arc::clone(&activity),
+                                    None,
+                                    None,
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
@@ -400,6 +373,12 @@ pub fn run_tui(
                                     &skill_registry,
                                     &current_tools,
                                 );
+                                if manages_workspace {
+                                    current_bridge_tools = channel_runtime::rebuild_tools(
+                                        &bridge_base_tools,
+                                        &skill_registry,
+                                    );
+                                }
                             }
                             tools_dirty = false;
                         }
@@ -409,17 +388,16 @@ pub fn run_tui(
                             let sanitized_executor = current_executor.as_ref().map(|e| {
                                 SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                             });
+                            let tool_defs = current_tools.clone();
 
                             let chat_runtime = ChatRuntimeService {
                                 engine: engine.as_ref(),
-                                refiner: refiner.as_ref(),
-                                flow_store: &flow_store,
                                 agent_id: &engine_agent_id,
                                 agent_config: &engine_agent_config,
                                 history_turn_limit,
                                 compaction_policy,
                                 system_prompt: current_system_prompt.clone(),
-                                tools: &current_tools,
+                                tools: &tool_defs,
                                 tool_executor: sanitized_executor
                                     .as_ref()
                                     .map(|e| e as &dyn ToolExecutor),
@@ -428,6 +406,7 @@ pub fn run_tui(
                                 max_recall_tokens: memory_config.max_recall_tokens,
                                 tool_observer: None,
                                 cancel: None,
+                                bridge_tools: if current_bridge_tools.is_empty() { None } else { Some(&current_bridge_tools) },
                             };
 
                             match chat_runtime
@@ -471,7 +450,7 @@ pub fn run_tui(
                     }
 
                     let skill_cmds = skill_command_router.list();
-                    let result = chat_commands::handle_chat_command(
+                    let result = handle_chat_command(
                         &text,
                         &mut runtime_state,
                         &engine_info,
@@ -495,22 +474,27 @@ pub fn run_tui(
                     if let Some(ref src) = skill_source {
                         if skill_registry.reload(src) {
                             tools_dirty = true;
-                            skill_command_router = SkillCommandRouter::from_registry(&skill_registry);
+                            skill_command_router =
+                                SkillCommandRouter::from_registry(&skill_registry);
                         }
                     }
 
                     // Rebuild tools/executor/prompt when dirty.
                     if tools_dirty {
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                            current_tools = channel_runtime::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                            );
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
                                 &memory_handle,
                                 &secret_registry,
-                                Arc::clone(&approval),
                                 Arc::clone(&activity),
+                                None,
+                                None,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -529,17 +513,16 @@ pub fn run_tui(
                         let sanitized_executor = current_executor.as_ref().map(|e| {
                             SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
                         });
+                        let tool_defs = current_tools.clone();
 
                         let chat_runtime = ChatRuntimeService {
                             engine: engine.as_ref(),
-                            refiner: refiner.as_ref(),
-                            flow_store: &flow_store,
                             agent_id: &engine_agent_id,
                             agent_config: &engine_agent_config,
                             history_turn_limit,
                             compaction_policy,
                             system_prompt: current_system_prompt.clone(),
-                            tools: &current_tools,
+                            tools: &tool_defs,
                             tool_executor: sanitized_executor
                                 .as_ref()
                                 .map(|e| e as &dyn ToolExecutor),
@@ -548,6 +531,7 @@ pub fn run_tui(
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
                             cancel: None,
+                            bridge_tools: None,
                         };
 
                         match chat_runtime
@@ -559,6 +543,7 @@ pub fn run_tui(
                                 system_notice,
                                 total_input_tokens,
                                 total_output_tokens,
+                                ..
                             }) => {
                                 let memory_stats = if let Some(ref h) = memory_handle {
                                     let count = h.store.entry_count().await;

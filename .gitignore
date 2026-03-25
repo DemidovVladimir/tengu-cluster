@@ -7,3 +7,4 @@ secrets.env
 *.vault
 .tengu-attachments
 /hypothesis
+lastrun.md

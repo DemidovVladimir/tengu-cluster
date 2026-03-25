@@ -1,79 +1,79 @@
 # Tengu Cluster
 
-Model-agnostic AI agent fleet runtime in Rust. Single binary, zero dependencies.
-
-## What It Does
-
-- **Single-agent chat** — talk to any AI model from your terminal with persistent history
-- **Multi-agent fleet** — run specialized agents (QA, backend, integration) as a coordinated team
-- **Any model, one key** — use [OpenRouter](https://openrouter.ai) to access Claude, GPT, Gemini, Llama, Mistral, DeepSeek and hundreds more behind one API key
-- **Custom skills** — define tools as markdown files, agents execute them during conversation
-- **Telegram channel** — chat with your agent from your phone, with inline keyboard approval for dangerous tools
-- **Persistent memory** — cross-session vector memory with automatic recall (disk or Qdrant)
-- **Token budget gates** — per-flow token limits with 80% warning threshold and hard cutoff
+A composable multi-agent runtime built in Rust. Single binary, two engine backends, plug-and-play skills.
 
 ## Quickstart
 
-### Docker (recommended)
+### Prerequisites
+
+- **Rust** 1.75+ ([rustup.rs](https://rustup.rs))
+- An **OpenRouter** API key ([openrouter.ai](https://openrouter.ai)) — or a Claude Code CLI subscription
+
+### Build & Run
 
 ```bash
 git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
-make setup          # creates .env and config.toml from templates
-nano .env           # set OPENROUTER_API_KEY (or other API keys)
-make up             # start tengu
-```
-
-### Native
-
-```bash
 cargo build
+
+# Set up secrets vault
+cargo run -- secret init                              # prompts for master password
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # store your API key
+
+# Create config
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
-cargo run -- secret init                              # prompts for master password
-cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # prompts for master password
+
+# Start chatting
 cargo run -- chat
 ```
 
-### One-liner (cloud/VPS)
+The default config uses `nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter (free tier). Change `model` in config to use any of 200+ models on OpenRouter.
+
+### With Claude Code Backend
+
+Use your Claude subscription instead of API tokens:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
+# Install Claude Code CLI: https://docs.anthropic.com/en/docs/claude-code
+claude --version  # must be installed and authenticated
+
+# Build with Claude Code support
+cargo build --features claude_code
+
+# Set engine in config:
+# [agents.main]
+# engine = "claude_code"
+# model = "claude-sonnet-4-20250514"
 ```
 
-The default config uses `anthropic/claude-sonnet-4` via OpenRouter. Change the model with one line:
+## Engine Backends
 
-```toml
-[agents.main]
-default = true
-engine = "openrouter"
-model = "openai/gpt-4o"    # or google/gemini-2.5-pro, meta-llama/llama-4-maverick, etc.
-```
+| Backend | Config | Cost | Feature Flag |
+|---------|--------|------|-------------|
+| **OpenRouter** | `engine = "openrouter"` | Pay-per-token | `openrouter` (default) |
+| **Claude Code** | `engine = "claude_code"` | Claude subscription | `claude_code` (opt-in) |
 
-See the [Quickstart Guide](docs/QUICKSTART.md) for the full walkthrough.
+OpenRouter gives access to Anthropic, OpenAI, Google, Meta, DeepSeek, etc. behind one API key. Claude Code runs agents through your local `claude` CLI with native workspace tools + Tengu tools bridged via MCP.
 
-## Supported Backends
+You can mix backends in the same config — some agents on OpenRouter, others on Claude Code.
 
-| Engine | API Key | Model Format |
-|--------|---------|-------------|
-| **OpenRouter** (recommended) | `OPENROUTER_API_KEY` | `provider/model` (e.g. `anthropic/claude-sonnet-4`) |
-| **Anthropic** | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
-| **OpenAI** | `OPENAI_API_KEY` | `gpt-4o` |
-| **Ollama** | (none, local) | `llama3.2` |
-| **Hugging Face** | `HF_TOKEN` | `org/model:variant` |
-| **Claude Code** | (subprocess) | `claude-sonnet-4-5-20250929` |
-
-## Commands
+## CLI Commands
 
 ```bash
-cargo run -- chat             # Interactive chat (default)
-cargo run -- telegram         # Telegram bot
-cargo run -- orchestrate      # Multi-agent fleet
-cargo run -- status           # Show config summary
-cargo run -- doctor           # Check backend connectivity
-cargo run -- secret init      # Create encrypted secrets vault
-cargo run -- secret set K V   # Store a secret
-cargo run -- secret list      # List stored secret keys
-cargo run -- secret remove K  # Remove a secret
+cargo run -- chat                        # Interactive TUI chat (default)
+cargo run -- telegram                    # Telegram bot
+cargo run -- telegram --sandbox aura     # Telegram with sandbox config
+cargo run -- orchestrate                 # Multi-agent fleet
+cargo run -- orchestrate --sandbox aura  # Fleet with sandbox config
+cargo run -- status                      # Show config summary
+cargo run -- doctor                      # Check backend connectivity
+cargo run -- secret init                 # Create encrypted secrets vault
+cargo run -- secret set KEY VALUE        # Store a secret
+cargo run -- secret list                 # List stored secret keys
+cargo run -- secret remove KEY           # Remove a secret
+cargo run -- prune                       # Remove cached/ephemeral state
+cargo run -- prune --sandbox aura        # Also clean workspace state
+cargo run --features claude_code,telegram -- telegram --sandbox aura-claude # Run with claude subscription
 ```
 
 ### Chat Commands
@@ -89,207 +89,183 @@ cargo run -- secret remove K  # Remove a secret
 | `/purge` | Clear conversation + wipe persistent memory |
 | `/reload` | Re-read env vars + re-scan skills |
 | `/skills` | List discovered skills |
-| `/enable N` / `/disable N` | Enable/disable a skill |
-| `/team <goal>` | Plan & execute goal across multiple agents (Telegram) |
-| `/project <name>` | Create new project subfolder in workspace (Telegram) |
-| `/agents` | List available agents and roles (Telegram) |
-| `/wallet` | Show Privy wallet address and balance (Telegram) |
-| `/wallet status` | Show wallet ID, address, balance, and policy (Telegram) |
 
-## Built-In Workspace Primitives
+## Concepts
 
-When an agent has `workspace` configured, four built-in primitives are available automatically:
+| Concept | What It Is |
+|---------|-----------|
+| **Agent** | An LLM-backed actor with a role, identity, and permissions. Defined in config. |
+| **Tool** | A platform primitive (read_file, write_file, list_directory, run_command, http_request, crypto, memory, cache). |
+| **Skill** | Domain knowledge packaged as a markdown file. Drop into `skills/` — no code changes. |
+| **Capability** | A permission gating which tools an agent can use. |
 
-| Primitive | Risk | Approval | Description |
-|-----------|------|----------|-------------|
-| `read_file` | Low | No | Read file contents (text and PDF) |
-| `list_directory` | Low | No | List files and directories |
-| `write_file` | Medium | Yes | Write content to file |
-| `run_command` | High | Yes | Execute shell command in workspace |
+Skills compose platform tools into domain workflows. Adding a new skill = drop a file. Adding a new agent = add config.
 
-These are the stable foundation — all skills and external tools interact with the workspace through these primitives. When memory is enabled, the memory subsystem registers its own `remember` tool automatically.
+## Skills
 
-Tools marked "Yes" for approval require user confirmation before execution — via dialog in TUI mode, or inline keyboard buttons in Telegram mode. Approval dialogs are generated generically from tool metadata (risk level, description), not hardcoded per tool name.
+Define domain workflows as `skills/<name>/SKILL.md` files. Two formats:
+
+**Documentation skills** — workflow reference injected into agent prompt, agent uses platform tools (http_request, crypto, etc.) to execute:
+```markdown
+---
+name: my-api
+description: My external API workflow
+---
+# API Documentation
+Full reference here...
+```
+
+**Shell skills** — named tools with execution templates:
+```markdown
+# test_runner
+Run the project test suite.
+## Parameters
+- `filter` (string, optional): test name filter
+## Execution
+\```bash
+cargo test {{filter}} 2>&1
+\```
+```
+
+Load per agent with `skill_packages = ["skill-name"]` in config.
 
 ## Multi-Agent Fleet
 
-Run specialized agents as a coordinated team. Roles are fully dynamic — any string works:
+Configure specialized agents as a team:
 
 ```toml
 [orchestrator]
 enabled = true
 
-[agents.qa]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
-role = "qa"
-allowed_tools = ["read_file", "list_directory", "run_command"]
+[agents.researcher]
+engine = "claude_code"
+model = "claude-sonnet-4-20250514"
+role = "researcher"
+workspace = "~/research"
 
-[agents.qa.identity]
-name = "QA Agent"
-instructions = "You review code, run tests, and verify correctness."
+[agents.researcher.identity]
+name = "Researcher"
+instructions = "You research topics and write summaries."
 
-[agents.backend]
+[agents.coder]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4"
+model = "anthropic/claude-sonnet-4.6"
 role = "backend_engineer"
-allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
+workspace = "~/project"
 
-[agents.backend.identity]
-name = "Backend Engineer"
-instructions = "You write server code, design APIs, and manage databases."
+[agents.coder.identity]
+name = "Coder"
+instructions = "You write server code and APIs."
 ```
 
 ```bash
 cargo run -- orchestrate
-
-# Or use a sandbox config for domain-specific teams:
-cargo run -- orchestrate --sandbox webstudio
-cargo run -- telegram --sandbox webstudio
-cargo run -- telegram --sandbox desci
 ```
 
-Tasks flow through: **Pending -> InProgress -> Completed** (with automatic retry on failure). Use `allowed_tools` to restrict which workspace tools each agent can access.
+The main agent decides when to spawn subagents via tools (`sessions_spawn`, `sessions_fan_out`). No static DAG — the LLM drives orchestration.
 
-In Telegram, use `/team <goal>` to decompose a goal into tasks with dependency tracking. Independent tasks run in parallel batches; dependent tasks wait for their prerequisites. Use `/project <name>` to create isolated project subfolders within the workspace without restarting.
+## Sandboxes
 
-See the [Fleet Orchestration Guide](docs/FLEET.md), [Sandboxes Guide](docs/SANDBOXES.md) for full setup.
+Domain-specific team configs in `sandboxes/<name>/config.toml`:
 
-## Custom Skills
+| Sandbox | Backend | Description |
+|---------|---------|-------------|
+| `aura` | OpenRouter | DeSci pipeline (research, mint, publish) |
+| `aura-claude` | Claude Code | Same pipeline, Claude subscription |
 
-Define tools as `skills/*.md` files. Two formats are supported:
-
-**Classic skills** — shell command tools with parameters:
-
-```markdown
-# test_runner
-
-Run the project test suite.
-
-## Parameters
-- `filter` (string, optional): test name filter
-
-## Execution
 ```bash
-cargo test {{filter}} 2>&1
-```
-```
-
-**API skills** — YAML frontmatter wrapping API docs, auto-generates a curl-based tool:
-
-```markdown
----
-name: my-api
-description: My external API
-homepage: https://api.example.com
----
-
-# API Documentation
-
-Full API reference here — injected into the agent's system prompt.
+cargo run --features claude_code,telegram -- telegram --sandbox aura-claude
 ```
 
-Agents call these tools during conversation. Restrict skills per agent with `skills = ["tool1", "tool2"]`.
+## Telegram Bot
 
-See the [Skills Guide](docs/SKILLS.md) for the full format and examples.
+```bash
+# Build with Telegram support (on by default)
+cargo build --features telegram
 
-## Standalone Tools
+# Set bot token (get from @BotFather)
+cargo run -- secret set TELEGRAM_BOT_TOKEN "your-token"
 
-The `tools/` directory contains standalone infrastructure that agents use via skills and primitives — no code changes to tengu-cluster required:
+# Add your user ID to config:
+# [telegram]
+# enabled = true
+# allowed_users = ["YOUR_USER_ID"]
 
-| Tool | Description |
-|------|-------------|
-| `tools/tengu-relay` | Cloudflare Worker — API key injection proxy for Molecule/POI/Beach Science (planned rewrite, currently legacy KV bridge) |
+cargo run -- telegram
+```
 
-On-chain operations use **Privy agentic wallets** — server-side wallets controlled by the agent with policy-based guardrails. No wallet page or relay needed for signing.
+In multi-agent mode: plain messages are orchestrated across the team, `@role: message` targets a specific agent.
 
 ## Deployment
 
-Deploy anywhere with Docker Compose. GPU acceleration is supported via Ollama.
+Deploy with Docker Compose:
 
 ```bash
-make up              # API backends only (OpenRouter, Anthropic, etc.)
-make up-gpu          # + Ollama with NVIDIA GPU (CUDA)
-make up-full         # + Ollama GPU + Qdrant vector memory
-make up-cpu          # + Ollama (CPU only)
-make down            # stop everything
-make logs            # tail logs
-make doctor          # run diagnostics
+make setup       # creates .env and config.toml
+make up          # start tengu
+make down        # stop
+make logs        # tail logs
 ```
 
-**GPU support:**
-- **NVIDIA CUDA** — `docker compose --profile ollama-gpu up -d` passes GPU to Ollama via `nvidia-container-toolkit`
-- **Apple Metal** — install Ollama natively (`brew install ollama`), set `OLLAMA_HOST=http://host.docker.internal:11434`
-
-**Cloud provisioning** — use `deploy/cloud-init.yml` with Hetzner, AWS, DigitalOcean, or any cloud-init provider:
-
-```bash
-hcloud server create --name tengu --type cx22 --image ubuntu-24.04 \
-  --user-data-from-file deploy/cloud-init.yml --ssh-key my-key
-```
-
-See the [Deployment Guide](docs/DEPLOYMENT.md) for full setup, GPU configuration, cloud provisioning, and production checklist.
-
-## Token Budget Gates
-
-Each conversation flow has a configurable token limit (`max_tokens_per_flow`, default: 100,000). The system enforces two thresholds:
-
-- **80% warning**: a notice is sent to the user showing current usage and remaining budget
-- **100% hard limit**: further requests are blocked with a message to use `/reset`
-
-```toml
-[agents.main.limits]
-max_tokens_per_flow = 100_000
-```
-
-## Documentation
-
-| Guide | What It Covers |
-|-------|---------------|
-| [Quickstart](docs/QUICKSTART.md) | Installation, first config, first chat, next steps |
-| [Deployment](docs/DEPLOYMENT.md) | Docker, Docker Compose, GPU (CUDA/Metal), cloud provisioning, production checklist |
-| [Configuration Reference](docs/CONFIGURATION.md) | Every config field, env var, default value, and validation rule |
-| [Skills Guide](docs/SKILLS.md) | Skill file format, parameters, execution, policy, per-agent filtering |
-| [Fleet Orchestration](docs/FLEET.md) | Multi-agent setup, roles, task lifecycle, parallel execution |
-| [Sandboxes](docs/SANDBOXES.md) | Domain-specific multi-agent teams, per-agent tool restrictions |
-| [Wallet & Signing](docs/WALLET.md) | Privy agentic wallets, policy setup, on-chain transaction signing |
-| [DeSci Guide](docs/GUIDE_DESCI.md) | End-to-end IP-NFT minting with aura-orchestrator and Privy wallets |
-| [Architecture](ARCHITECTURE.md) | Hexagonal architecture rules and project structure |
+See `docker-compose.yml`, `Dockerfile`, and `deploy/` for cloud provisioning.
 
 ## Feature Flags
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `openrouter` | on | OpenRouter unified API |
-| `anthropic` | on | Anthropic/Claude |
-| `openai` | on | OpenAI |
-| `ollama` | on | Ollama local models |
-| `claude-code` | on | Claude Code subprocess |
-| `huggingface` | off | Hugging Face Inference Providers |
+| `openrouter` | on | OpenRouter API backend |
 | `telegram` | on | Telegram bot channel |
-| `qdrant` | off | Qdrant vector store for RAG memory |
+| `claude_code` | off | Claude Code CLI backend |
+| `qdrant` | off | Qdrant vector store for memory |
 
 ```bash
-# Build with Qdrant vector store
-cargo build --features qdrant
-
-# Build with all features
-cargo build --all-features
+cargo build --features claude_code,telegram    # Claude Code + Telegram
+cargo build --all-features                     # everything
 ```
+
+## Configuration
+
+See `config.example.toml` for a fully commented reference. Key sections:
+
+- `[agents.<id>]` — engine, model, workspace, skills, limits, identity
+- `[orchestrator]` — fleet orchestration
+- `[memory]` — persistent vector memory (requires `OPENROUTER_API_KEY` for embeddings)
+- `[telegram]` — bot adapter
+- `[claude_code]` — Claude Code CLI settings
+- `[scaffold]` — workspace directory templates
+
+## Documentation
+
+Detailed docs live in the `docs/` folder:
+
+| Doc | What It Covers |
+|-----|---------------|
+| [Architecture](docs/architecture.md) | System overview, core loop, module map |
+| [Engine Backends](docs/engine-backends.md) | OpenRouter vs Claude Code comparison |
+| [Configuration](docs/configuration.md) | Full config reference |
+| [Skills](docs/skills.md) | Skill types, loading, cross-engine compatibility |
+| [MCP Bridge](docs/mcp-bridge.md) | How Tengu tools reach Claude Code |
 
 ## Architecture
 
-This project uses **hexagonal architecture** as a **mandatory** requirement. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full rules.
+Flat module structure — all code in `src/adapters/` + `src/main.rs`. No sub-crates.
 
-- `src/domain/` — pure business rules, no I/O
-- `src/application/` — use-case orchestration via ports
-- `src/adapters/` — infrastructure implementations
-
-## Development
-
-```bash
-cargo fmt --all
-cargo test --workspace
 ```
-
-Architecture guardrails are enforced by `tests/hex_architecture_enforcement.rs`.
+src/
+  main.rs                      # CLI entry point
+  adapters/
+    config.rs                  # TOML config, validation
+    types.rs                   # Engine trait, Message, StreamEvent
+    engine_builder.rs          # Engine factory + OpenRouter impl
+    claude_code_engine.rs      # Claude Code engine (feature-gated)
+    mcp_bridge.rs              # MCP stdio server for tool bridging
+    chat_builder.rs            # Per-turn runtime (memory, prompt, history)
+    channel_runtime.rs         # Shared channel adapter logic
+    tool_builder.rs            # Tool definitions + workspace executor
+    skill_builder.rs           # Skill parsing and registry
+    memory_builder.rs          # Memory service + disk store
+    orchestrator.rs            # Multi-agent fleet orchestrator
+    telegram_builder.rs        # Telegram bot adapter
+    tui/mod.rs                 # Terminal UI adapter
+    ...
+```

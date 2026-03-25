@@ -1,389 +1,462 @@
 ---
 name: aura-orchestrator
-description: DeSci lab automation — IPNFT minting, project creation, file uploads, and announcements via Molecule GraphQL API with Privy agentic wallet for on-chain transactions and signing.
-homepage: https://staging.graphql.api.molecule.xyz/graphql
-headers:
-  x-api-key: $MOLECULE_API_KEY
-env_vars:
-  - PRIVY_APP_ID
-  - PRIVY_APP_SECRET
-  - PRIVY_WALLET_ID
-  - MOLECULE_API_KEY
-  - MOLECULE_LABS_URL
-  - MOLECULE_CLIENT_URL
-  - POI_API_KEY
+description: End-to-end DeSci molecule — POI registration, IP-NFT minting, Molecule authentication, project creation, file upload, and announcement. Single-agent sequential execution.
+homepage: https://testnet.molecule.xyz
 ---
 
-# Aura Orchestrator: DeSci Lab Automation
+# Aura Orchestrator
 
-**Important:** Base URL already points to the GraphQL endpoint. Use `path: ""`. Never append `/graphql`.
-**Execution order:** Step 0 (Wallet) → WF1 (Mint) → Service Token → WF2 (Project) → WF3 (Upload) / WF4 (Announcement)
+Complete DeSci molecule executed as one continuous sequence of tool calls.
+Do NOT stop, report progress, or output text between steps — execute ALL steps as one uninterrupted flow.
 
-### When to use `aura_orchestrator` tool vs `run_command` with curl
+**IMPORTANT RULES:**
+- POI registration is an **HTTP API call** (`http_request`), NOT a smart contract call. Do NOT use `abi_encode` or `sign_and_send_transaction` for POI.
+- Use `read_file` for PDFs — it has built-in PDF text extraction. NEVER use python, pip, pdftotext, or any shell tools for PDF reading.
+- Use `shared_cache` to persist all critical molecule values (IDs, hashes, tokens). If you need a value from an earlier step, retrieve it from cache.
+- Follow every URL, contract address, and function signature in this document EXACTLY. Do NOT guess or fabricate alternatives.
 
-| Use `aura_orchestrator` tool | Use `run_command` with curl |
-|------------------------------|----------------------------|
-| Step 3a: generateAssignmentAgreement | Step 0: Privy wallet (different URL + auth) |
-| Step 3b: generateImageUploadUrl | Step 1: POI registration (different URL + auth) |
-| Step 3c: uploadMetadataWithImageKey | Step 2: POI on-chain via Privy |
-| Step 3d: getTermsMessage | Step 3b: PUT image to S3 presigned URL |
-| Step 3f: signoffMetadata | Step 3e: Sign terms via Privy |
-| Query operations (list/get/search) | Step 3g: Mint on-chain via Privy |
-| | Service Token Acquisition (Steps A-C) |
-| | Workflows 2-4 (need `x-service-token` header) |
+## Required Environment Variables if not available terminate with an error and instructions on how to set them. These are needed for wallet management, authentication, and NFT transfer.
 
-**Rule:** Use `aura_orchestrator` tool ONLY for Molecule GraphQL mutations/queries that need just `x-api-key`. Use `run_command` with curl for everything else — Privy calls, POI API, S3 uploads, and any call needing `x-service-token`. Do NOT try to route Privy or POI calls through the `aura_orchestrator` tool — it only knows the Molecule GraphQL endpoint.
+| Variable | Description |
+|----------|-------------|
+| `PRIVY_APP_ID` | Privy app identifier — used by `auth_basic_user_env` for wallet management |
+| `PRIVY_APP_SECRET` | Privy secret key — used by `auth_basic_pass_env` for wallet management |
+| `PRIVY_WALLET_ID` | Privy wallet ID (auto-detected or set after wallet creation) |
+| `EVM_WALLET_ADDRESS` | Owner's personal wallet address for NFT transfer (optional — skip transfer if not set) |
 
-## Required User Inputs (Workflow 1 — Mint)
+**Note:** Molecule URLs, API keys, and POI keys are hardcoded in tool call examples below — no env var expansion needed.
 
-**BEFORE starting any workflow, validate that ALL required fields are provided by the user. If ANY field is missing, ASK the user — do NOT invent, guess, or hallucinate values. Proceeding with fabricated data wastes tokens and produces invalid on-chain state.**
+## Input
 
-| Field | Rules | Example |
-|-------|-------|---------|
-| **name** | Non-empty, max 100 chars | `"Novel Protein Folding Method"` |
-| **description** | Non-empty | `"Computational method for membrane proteins"` |
-| **symbol** | 3-5 alphanumeric UPPERCASE | `"PROT1"` |
-| **organization** | Non-empty | `"DeSci Research Lab"` |
-| **research_lead.name** | Non-empty | `"Jane Doe"` |
-| **research_lead.email** | Valid email format | `"jane@example.com"` |
-| **topic** | Non-empty | `"Computational Biology"` |
-| **cover image** | Attached file (PNG/JPG) | user attachment |
-| **document** | Attached file (PDF/image) for POI | user attachment |
+- A research PDF file in the workspace (e.g. `.tengu-attachments/document.pdf`)
+- An optional cover image (PNG/JPG) in `.tengu-attachments/`
+- Title, description, symbol, organization, lead name, lead email, topic — derived from the research document
 
-**Fail-fast checklist** — run before Step 1:
-1. All 7 text fields present? If not → list missing fields, ask user, STOP.
-2. `symbol` matches `^[A-Z0-9]{3,5}$`? If not → tell user the rules, STOP.
-3. `research_lead.email` is valid email? If not → ask user to correct, STOP.
-4. Cover image attached? If not → ask user, STOP.
-5. Document for POI attached? If not → ask user, STOP.
+## Phase 0: Wallet Setup
 
-**Never fill in defaults like `"Tengu Research Labs"` or `"agent@tengu.dev"`. These are the user's legal/identity fields.**
+Before starting the molecule, verify that a Privy agentic wallet is available. If available respond with the wallet address. If not, create a new wallet with a restrictive policy and respond with the new wallet address and instructions to set `PRIVY_WALLET_ID` for future use.
 
-## Reference
+### Step 0a — Check for existing wallet
 
-**Env vars:** `PRIVY_APP_ID`/`PRIVY_APP_SECRET`/`PRIVY_WALLET_ID` (on-chain ops) | `MOLECULE_API_KEY` (`x-api-key` header) | `MOLECULE_LABS_URL` (GraphQL endpoint) | `MOLECULE_CLIENT_URL` (links) | `POI_API_KEY` (`Authorization: Bearer`)
-**Constants:** Sepolia `11155111`, CAIP-2 `eip155:11155111`, IPNFT `0x152B444e60C526fe4434C721561a077269FcF61a`, Mint `0.001 ETH` (`1000000000000000` wei), `ipnftUid` = `{contract}_{tokenId}`, link = `${MOLECULE_CLIENT_URL}/ipnfts/{tokenId}`
-**Not required:** `EVM_PRIVATE_KEY`, `EVM_RPC_URL`, `MOLECULE_SERVICE_TOKEN`, `TENGU_RELAY_URL`, `TENGU_WALLET_SESSION`.
-**Privy base:** `curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" -H "privy-app-id: $PRIVY_APP_ID" -H "Content-Type: application/json"`
-- **Send tx:** `method: "eth_sendTransaction"`, `caip2: "eip155:11155111"`, `params.transaction: {to, data, value}`
-- **Sign msg:** `method: "personal_sign"`, `params.message: "0x<hex>"` — hex-encode: `echo -n "text" | xxd -p | tr -d '\n' | sed 's/^/0x/'`
-
----
-
-## Step 0: Resolve Wallet Address
-```bash
-curl -s -X GET "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID"
 ```
-Save `address` as `WALLET_ADDRESS` — used for `connectedWalletAddress`, `minter`, `to`, `changeBy`.
-
-## Service Token Acquisition (for Workflows 2-4)
-
-**Step A** — get sign-in message:
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -d '{
-    "query": "query GetServiceSignInMessage($walletAddress: String!, $serviceName: String!) { getServiceSignInMessage(walletAddress: $walletAddress, serviceName: $serviceName) }",
-    "variables": { "walletAddress": "WALLET_ADDRESS", "serviceName": "tengu-agent" }
-  }'
+get_wallet_address
 ```
-**Step B** — sign with Privy:
-```bash
-HEX_MSG=$(echo -n 'THE_MESSAGE_FROM_STEP_A' | xxd -p | tr -d '\n' | sed 's/^/0x/')
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d "{\"method\": \"personal_sign\", \"params\": {\"message\": \"$HEX_MSG\"}}"
+
+If this succeeds, the wallet is configured. Save the returned `address` as `wallet_address` and proceed to Phase 1.
+
+If this fails (missing `PRIVY_WALLET_ID`), check for existing wallets via Privy API.
+
+### Step 0b — List existing wallets
+
 ```
-**Step C** — exchange for token (valid 180 days):
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -d '{
-    "query": "mutation GenerateServiceToken($serviceName: String!, $walletAddress: String!, $messageSignature: String!) { generateServiceToken(serviceName: $serviceName, walletAddress: $walletAddress, messageSignature: $messageSignature) { token metadata { tokenId expiresAt serviceName } } }",
-    "variables": { "serviceName": "tengu-agent", "walletAddress": "WALLET_ADDRESS", "messageSignature": "SIGNATURE_FROM_STEP_B" }
-  }'
+http_request:
+  url: https://api.privy.io/v1/wallets?chain_type=ethereum
+  method: GET
+  auth_basic_user_env: PRIVY_APP_ID
+  auth_basic_pass_env: PRIVY_APP_SECRET
+  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4"}
+  return_body: true
 ```
-Save `token` as `SERVICE_TOKEN`.
 
----
+If the response contains wallets, use the first one. Save `id` as `wallet_id` and `address` as `wallet_address`. Report to the user: `Set PRIVY_WALLET_ID=<wallet_id> to enable platform crypto tools.`
 
-## Workflow 1: Mint an IP-NFT
+If no wallets exist, create one.
 
-Three mandatory stages. Each depends on the previous. **If any step fails, STOP and report.**
+### Step 0c — Create a policy
 
-### Step 1: Register POI
-**`-F` MUST use `=@` syntax — `files=@path`. Missing `=` causes curl error.**
-```bash
-curl -X POST https://testnet.molecule.xyz/api/v1/inventions \
-  -H "Authorization: Bearer $POI_API_KEY" \
-  -H "Content-Type: multipart/form-data" \
-  -F "files=@/absolute/path/to/document.pdf"
 ```
-Save: `data.transaction.to` (contract), `data.transaction.data` (calldata), `data.proof.tree[0]` (merkle root).
-
-### Step 2: Submit POI on-chain (Privy)
-```bash
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "caip2": "eip155:11155111",
-    "params": {
-      "transaction": {
-        "to": "<transaction.to from Step 1>",
-        "data": "<transaction.data from Step 1>",
-        "value": "0"
-      }
-    }
-  }'
+http_request:
+  url: https://api.privy.io/v1/policies
+  method: POST
+  auth_basic_user_env: PRIVY_APP_ID
+  auth_basic_pass_env: PRIVY_APP_SECRET
+  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4", "Content-Type": "application/json"}
+  body: {"version": "1.0", "name": "DeSci agent policy", "chain_type": "ethereum", "rules": [{"name": "Sepolia only", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "chain_id", "operator": "eq", "value": "11155111"}], "action": "ALLOW"}, {"name": "Max 0.01 ETH per tx", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "10000000000000000"}], "action": "ALLOW"}]}
+  return_body: true
 ```
-Save `data.hash` as `TX_HASH`. Compute `RESERVATION_ID`: `printf "%d\n" <transaction.data from Step 1>`. Carry forward `MERKLE_ROOT` = `data.proof.tree[0]` from Step 1.
 
-### Step 3: Mint the IP-NFT
+Save `id` as `policy_id`.
 
-#### 3a: Generate assignment agreement
-```graphql
-mutation GenerateAssignmentAgreement($projectData: AWSJSON!) {
-  generateAssignmentAgreement(projectData: $projectData) {
-    agreementCid agreementContentHash isSuccess
-    error { message code retryable }
-  }
-}
+### Step 0d — Create a wallet
+
 ```
-`projectData` is a JSON string:
+http_request:
+  url: https://api.privy.io/v1/wallets
+  method: POST
+  auth_basic_user_env: PRIVY_APP_ID
+  auth_basic_pass_env: PRIVY_APP_SECRET
+  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4", "Content-Type": "application/json"}
+  body: {"chain_type": "ethereum", "policy_ids": ["<policy_id>"]}
+  return_body: true
+```
+
+Save `id` as `wallet_id` and `address` as `wallet_address`.
+
+Report to the user: wallet created at `<wallet_address>` with ID `<wallet_id>`. The user must set `PRIVY_WALLET_ID=<wallet_id>` in the environment for platform crypto tools (`sign_and_send_transaction`, `sign_message`) to function.
+
+Save wallet details to `mint/wallet_info.json`.
+
+## Phase 1: POI Registration
+
+Register the research PDF as a Proof of Invention.
+
+**CRITICAL**: Use the EXACT URL below. Do NOT guess, modify, or construct alternative POI URLs.
+
+```
+http_request:
+  url: https://testnet.molecule.xyz/api/v1/inventions
+  method: POST
+  headers: {"Authorization": "Bearer 65063adcc7ced918b041c2de9d0ef7521838737894d93755bc84b610b751b5de"}
+  file_path: <path-to-pdf>
+  file_field_name: files
+  return_body: true
+```
+
+If failed, stop and report the error. 
+
+The field name MUST be `files` (plural). The URL MUST be exactly `https://testnet.molecule.xyz/api/v1/inventions` — no other endpoint exists for POI.
+
+Extract from the response:
+- `data.transaction.to` → `poi_to`
+- `data.transaction.data` → `poi_data`
+- `data.proof.tree[0]` → `merkle_root` (this is a 0x-prefixed hex hash, e.g. `0x35554760...`)
+
+Save the full response to `mint/metadata/poi_result.json`.
+
+Immediately cache POI outputs:
+
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "poi_to", "value": "<poi_to>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "poi_data", "value": "<poi_data>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "merkle_root", "value": "<merkle_root>" }
+```
+
+## ID Chain (critical — read before Phase 2)
+
+The `merkle_root` from POI drives ALL subsequent IDs:
+
+1. `reservationId` = `hex_to_uint256(merkle_root)` — a large decimal number (NOT 1, NOT a small number)
+2. `reservationId` IS the `token_id` / `ipnftId` / `ipnftTokenId` — these are ALL the same value
+3. `ipnft_uid` = `0x152B444e60C526fe4434C721561a077269FcF61a_{reservationId}` (contract address + underscore + decimal token ID)
+4. The Molecule project URL = `https://testnet.molecule.xyz/ipnfts/{reservationId}`
+
+If `reservationId` is a small number like 1 or 0, something went wrong in Phase 1. Stop and report the error.
+
+Cache it in `shared_cache` immediately and use it for ALL subsequent steps in the molecule. 
+```shared_cache: { "operation": "put", "namespace": "molecule", "key": "reservation_id", "value": "<reservationId>" }```
+
+Wait for 60 seconds to ensure POI transaction is indexed and the merkle root is available for the next phase.
+
+## Phase 2: IP-NFT Minting (10 steps)
+
+### Step 1 — Anchor POI on-chain
+
+```
+sign_and_send_transaction:
+  to: <poi_to>
+  data: <poi_data>
+  chain_id: 11155111
+```
+
+Save `tx_hash` as `poi_tx_hash`.
+
+Derive the `reservationId` from the `merkle_root` and send back to the user for validation:
+
+```
+hex_to_uint256:
+  hex: <merkle_root>
+```
+
+The returned decimal is the `reservationId`. This MUST be a large number (typically 50+ digits). Use it as `ipnftId` in ALL subsequent steps.
+
+Cache critical IDs immediately:
+
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "reservation_id", "value": "<reservationId>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "poi_tx_hash", "value": "<poi_tx_hash>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "wallet_address", "value": "<wallet_address>" }
+```
+
+If you lose context of the reservationId at any point, retrieve it:
+
+```
+shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation_id" }
+```
+
+### Step 2 — Generate assignment agreement
+
+```
+http_request:
+  url: https://staging.graphql.api.molecule.xyz/graphql
+  method: POST
+  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  body: {"query": "mutation GenerateAssignmentAgreement($projectData: AWSJSON!) { generateAssignmentAgreement(projectData: $projectData) { agreementCid agreementContentHash isSuccess error { message code retryable } } }", "variables": {"projectData": "<JSON-encoded string, see below>"}}
+  return_body: true
+```
+
+`projectData` is a **JSON-encoded string** containing:
 ```json
 {
-  "projectData": "{\"project\":{\"name\":\"PROJECT_NAME\",\"description\":\"DESC\",\"initialSymbol\":\"SYM\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2},\"organization\":\"ORG\",\"research_lead\":{\"name\":\"LEAD_NAME\",\"email\":\"LEAD_EMAIL\"},\"topic\":\"TOPIC\"},\"connectedWalletAddress\":\"WALLET_ADDRESS\",\"agreementType\":\"POI_ASSIGNMENT\",\"chainId\":11155111,\"ipnftId\":\"RESERVATION_ID\",\"poiLocation\":{\"chainId\":11155111,\"transactionHash\":\"TX_HASH\"},\"merkleRootHash\":\"MERKLE_ROOT\"}"
+  "project": {
+    "name": "<title>",
+    "description": "<description>",
+    "initialSymbol": "<symbol>",
+    "funding_amount": {"value": 0, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
+    "organization": "<organization>",
+    "research_lead": {"name": "<lead_name>", "email": "<lead_email>"},
+    "topic": "<topic>"
+  },
+  "connectedWalletAddress": "<wallet_address>",
+  "agreementType": "POI_ASSIGNMENT",
+  "chainId": 11155111,
+  "ipnftId": "<reservationId as decimal string>",
+  "poiLocation": {"chainId": 11155111, "transactionHash": "<poi_tx_hash>"},
+  "merkleRootHash": "<merkle_root>"
 }
 ```
-**Field rules:** `name` max 100 chars | `initialSymbol` 3-5 alphanumeric uppercase | `research_lead.email` valid email | `funding_amount` needs `value`(int), `currency`(`"USD"`), `currency_type`(`"ISO4217"`), `decimals`(`2`) | `organization`/`research_lead.name`/`topic` non-empty | `connectedWalletAddress` `0x`-prefixed 42-char | `agreementType` = `"POI_ASSIGNMENT"` | `chainId` = `11155111` | `ipnftId` decimal uint256 NOT hex | `poiLocation.transactionHash` `0x`-prefixed 66-char | `merkleRootHash` = `data.proof.tree[0]`
-
-**CRITICAL — generateAssignmentAgreement troubleshooting** (if `INTERNAL_ERROR` + `retryable: true`):
-1. `name` ≤ 100 chars, `initialSymbol` 3-5 alphanumeric
-2. `research_lead.email` is valid email format
-3. `RESERVATION_ID` is decimal uint256 from Step 2 (NOT hex)
-4. `TX_HASH` is POI submission tx hash from Step 2
-5. `MERKLE_ROOT` is `data.proof.tree[0]` from Step 1
-6. If all correct → save response to `mint/diagnostics/error.json`, STOP, report to user. API is down.
-DO NOT retry with "different parameters" — either fields are wrong or API is down.
 
 Save `agreementCid` and `agreementContentHash`.
 
-#### 3b: Upload cover image
-```graphql
-mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) {
-  generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) {
-    uploadUrl key isSuccess
-    error { message code retryable }
-  }
-}
-```
-Variables: `{"filename": "cover.png", "contentType": "image/png", "ipnftId": "RESERVATION_ID"}`
-```bash
-curl -X PUT "UPLOAD_URL" -H "Content-Type: image/png" --data-binary @cover.png
-```
-Save `key` as `IMAGE_KEY`.
+### Step 3 — Get image upload URL
 
-#### 3c: Upload metadata
-```graphql
-mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ipnftId: String!) {
-  uploadMetadataWithImageKey(metadata: $metadata, imageKey: $imageKey, ipnftId: $ipnftId) {
-    metadataCid metadataUrl isSuccess
-    error { message code retryable }
-  }
-}
 ```
-`metadata` is a **JSON string** with the exact structure below. Do NOT add or remove top-level keys. Do NOT put `symbol` at the top level — it goes inside `properties`.
+http_request:
+  url: https://staging.graphql.api.molecule.xyz/graphql
+  method: POST
+  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  body: {"query": "mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) { generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) { uploadUrl key isSuccess error { message code retryable } } }", "variables": {"filename": "cover.png", "contentType": "image/png", "ipnftId": "<reservationId>"}}
+  return_body: true
+```
+
+Save `uploadUrl` and `key` (image key).
+
+### Step 4 — Upload cover image
+
+If a cover image exists in `.tengu-attachments/`, upload it. Otherwise skip.
+
+```
+http_request:
+  url: <uploadUrl from step 3>
+  method: PUT
+  headers: {"Content-Type": "image/png"}
+  file_path: <path to image>
+```
+
+### Step 5 — Upload metadata
+
+```
+http_request:
+  url: https://staging.graphql.api.molecule.xyz/graphql
+  method: POST
+  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  body: {"query": "mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ipnftId: String!) { uploadMetadataWithImageKey(metadata: $metadata, imageKey: $imageKey, ipnftId: $ipnftId) { metadataCid metadataUrl isSuccess error { message code retryable } } }", "variables": {"metadata": "<JSON-encoded string, see below>", "imageKey": "<key from step 3>", "ipnftId": "<reservationId>"}}
+  return_body: true
+```
+
+`metadata` is a **JSON-encoded string**:
 ```json
 {
-  "metadata": "{\"name\":\"PROJECT_NAME\",\"description\":\"DESC\",\"external_url\":\"MOLECULE_CLIENT_URL/ipnfts/RESERVATION_ID\",\"properties\":{\"symbol\":\"SYM\",\"organization\":\"ORG\",\"research_lead\":{\"name\":\"LEAD_NAME\",\"email\":\"LEAD_EMAIL\"},\"topic\":\"TOPIC\",\"funding_amount\":{\"value\":0,\"currency\":\"USD\",\"currency_type\":\"ISO4217\",\"decimals\":2}},\"terms_signature\":\"AGREEMENT_CONTENT_HASH_FROM_3A\",\"agreements\":[{\"type\":\"POI_ASSIGNMENT\",\"cid\":\"AGREEMENT_CID_FROM_3A\",\"contentHash\":\"AGREEMENT_CONTENT_HASH_FROM_3A\"}]}",
-  "imageKey": "IMAGE_KEY_FROM_3B",
-  "ipnftId": "RESERVATION_ID"
+  "name": "<title>",
+  "description": "<description>",
+  "external_url": "https://testnet.molecule.xyz",
+  "terms_signature": "placeholder",
+  "properties": {
+    "agreements": [{"content_hash": "<agreementContentHash>", "mime_type": "application/json", "type": "POI_ASSIGNMENT", "url": "ipfs://<agreementCid>"}],
+    "initial_symbol": "<symbol>",
+    "project_details": {
+      "funding_amount": {"value": 0, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
+      "organization": "<organization>",
+      "research_lead": {"name": "<lead_name>", "email": "<lead_email>"},
+      "topic": "<topic>"
+    }
+  }
 }
 ```
-**Field mapping:**
-- `name`, `description` → user-provided (from Required Inputs)
-- `properties.symbol` → user-provided `symbol` (NOT top-level — API rejects top-level `symbol`)
-- `properties.organization`, `properties.research_lead`, `properties.topic` → user-provided
-- `properties.funding_amount` → `{value: 0, currency: "USD", currency_type: "ISO4217", decimals: 2}`
-- `terms_signature` → `agreementContentHash` from Step 3a
-- `agreements[0].cid` → `agreementCid` from Step 3a
-- `agreements[0].contentHash` → `agreementContentHash` from Step 3a
-- `external_url` → `${MOLECULE_CLIENT_URL}/ipnfts/${RESERVATION_ID}`
-- `imageKey` → `key` from Step 3b
-- `ipnftId` → `RESERVATION_ID` (decimal string)
-
-**If this mutation fails with `MISSING_PARAMETERS` or `INVALID_PARAMETERS`, save the full error to `mint/diagnostics/metadata_error.json` and STOP. Do NOT guess alternative structures — report the exact error to the user.**
 
 Save `metadataCid`.
 
-#### 3d: Get terms message
-```graphql
-query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) {
-  getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) {
-    message digest isSuccess
-    error { message code retryable }
-  }
-}
+### Step 6 — Get terms message
+
 ```
-Variables: `{"metadataCid": "METADATA_CID", "minter": "WALLET_ADDRESS", "chainId": 11155111}`. Save `message`.
-
-#### 3e: Sign terms (Privy)
-```bash
-HEX_MSG=$(echo -n 'TERMS_MESSAGE_FROM_3d' | xxd -p | tr -d '\n' | sed 's/^/0x/')
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d "{\"method\": \"personal_sign\", \"params\": {\"message\": \"$HEX_MSG\"}}"
+http_request:
+  url: https://staging.graphql.api.molecule.xyz/graphql
+  method: POST
+  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  body: {"query": "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }", "variables": {"metadataCid": "<metadataCid from step 5>", "minter": "<wallet_address>", "chainId": 11155111}}
+  return_body: true
 ```
-Save `data.signature`.
 
-#### 3f: Sign off metadata
-```graphql
-mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) {
-  signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) {
-    authorization isSuccess
-    error { message code retryable }
-  }
-}
+Save `message` from the response.
+
+### Step 7 — Sign terms
+
 ```
-Variables: `{"ipnftId": "RESERVATION_ID", "tokenURI": "ipfs://METADATA_CID", "chainId": 11155111, "minter": "WALLET_ADDRESS", "to": "WALLET_ADDRESS", "termsSignature": "SIGNATURE_FROM_3e"}`. Save `authorization`.
-
-#### 3g: Mint on-chain (Privy)
-ABI-encode with `cast`:
-```bash
-cast calldata "mintReservation(address,uint256,string,string,bytes)" \
-  WALLET_ADDRESS RESERVATION_ID "ipfs://METADATA_CID" "SYMBOL" AUTHORIZATION_HEX
+sign_message:
+  message: <message from step 6>
 ```
-Send via Privy:
-```bash
-curl -s -X POST "https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc" \
-  --user "$PRIVY_APP_ID:$PRIVY_APP_SECRET" \
-  -H "privy-app-id: $PRIVY_APP_ID" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "eth_sendTransaction",
-    "caip2": "eip155:11155111",
-    "params": {
-      "transaction": {
-        "to": "0x152B444e60C526fe4434C721561a077269FcF61a",
-        "data": "<ABI-encoded calldata>",
-        "value": "1000000000000000"
-      }
-    }
-  }'
+
+Save `signature`.
+
+### Step 8 — Sign off metadata (get authorization)
+
 ```
-Save `data.hash` as `MINT_TX`. **Done!** URL: `${MOLECULE_CLIENT_URL}/ipnfts/RESERVATION_ID`
-
----
-
-## Workflow 2: Create Project (Data Room)
-
-**After WF1. Requires service token.**
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -H "x-service-token: SERVICE_TOKEN" \
-  -d '{
-    "query": "mutation CreateProject($input: CreateProjectInput!) { createProject(input: $input) { isSuccess message error { message code retryable } project { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } } }",
-    "variables": { "input": { "ipnftSymbol": "SYM1", "ipnftTokenId": "RESERVATION_ID_AS_STRING" } }
-  }'
+http_request:
+  url: https://staging.graphql.api.molecule.xyz/graphql
+  method: POST
+  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  body: {"query": "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }", "variables": {"ipnftId": "<reservationId>", "tokenURI": "ipfs://<metadataCid>", "chainId": 11155111, "minter": "<wallet_address>", "to": "<wallet_address>", "termsSignature": "<signature from step 7>"}}
+  return_body: true
 ```
-Save `ipnftUid` — needed for file uploads and announcements.
 
----
+Save `authorization`.
 
-## Workflow 3: File Upload
+### Step 9 — ABI-encode the mint call
 
-Three-phase presigned upload. **After WF2. Requires service token.**
-
-**Step 1 — Initiate:**
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -H "x-service-token: SERVICE_TOKEN" \
-  -d '{
-    "query": "mutation InitiateCreateOrUpdateFileV2($ipnftUid: String!, $contentType: String!, $contentLength: Int!) { initiateCreateOrUpdateFileV2(ipnftUid: $ipnftUid, contentType: $contentType, contentLength: $contentLength) { uploadToken uploadUrl uploadUrlExpiry method headers { key value } useMultipart isSuccess error { message code retryable } } }",
-    "variables": { "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42", "contentType": "application/pdf", "contentLength": 381846 }
-  }'
 ```
-Save `uploadToken`, `uploadUrl`, `headers`.
-
-**Step 2 — Upload bytes:** `curl -X PUT "UPLOAD_URL" -H "HEADER_KEY: HEADER_VALUE" --data-binary @file.pdf` (include all headers from step 1)
-
-**Step 3 — Finalize:**
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -H "x-service-token: SERVICE_TOKEN" \
-  -d '{
-    "query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $ref: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, ref: $ref, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }",
-    "variables": { "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42", "uploadToken": "TOKEN_FROM_STEP_1", "path": "research-data.pdf", "accessLevel": "PUBLIC", "changeBy": "0xWallet", "description": "Initial research dataset", "tags": ["research", "data"], "categories": ["research"] }
-  }'
+abi_encode:
+  function_signature: "mintReservation(address,uint256,string,string,bytes)"
+  args:
+    - <wallet_address>
+    - <reservationId as decimal string>
+    - ipfs://<metadataCid>
+    - <symbol>
+    - <authorization from step 8>
 ```
-New version: use `ref` (existing `datasetId`) instead of `path`. Access levels: `PUBLIC` | `HOLDERS` | `ADMIN`. Save `datasetId`.
 
----
+Save `calldata`.
 
-## Workflow 4: Create Announcement
+### Step 10 — Mint IP-NFT on-chain
 
-**After WF2. Requires service token.**
-```bash
-curl -s -X POST "$MOLECULE_LABS_URL" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MOLECULE_API_KEY" \
-  -H "x-service-token: SERVICE_TOKEN" \
-  -d '{
-    "query": "mutation CreateAnnouncementV2($ipnftUid: String!, $headline: String!, $body: String!, $attachments: [String!]) { createAnnouncementV2(ipnftUid: $ipnftUid, headline: $headline, body: $body, attachments: $attachments) { isSuccess message error { message code retryable } } }",
-    "variables": { "ipnftUid": "0x152B444e60C526fe4434C721561a077269FcF61a_42", "headline": "Research Milestone: Phase 1 Complete", "body": "Phase 1 complete.\n\n## Key Results\n- Dataset validated\n- Hypothesis supported", "attachments": ["DATASET_ID_FROM_FILE_UPLOAD"] }
-  }'
 ```
-Body supports Markdown.
+sign_and_send_transaction:
+  to: 0x152B444e60C526fe4434C721561a077269FcF61a
+  data: <calldata from step 9>
+  value: 1000000000000000
+  chain_id: 11155111
+```
 
----
+The mint fee is 0.001 ETH (1000000000000000 wei).
 
-## Query Operations
+Save to `mint/metadata/mint_result.json`:
+- `reservation_id` (the large decimal from hex_to_uint256 — this IS the token_id)
+- `poi_tx_hash`
+- `mint_tx_hash`
+- `metadata_cid`
+- `ipnft_symbol`
+- `contract_address`: `0x152B444e60C526fe4434C721561a077269FcF61a`
+- `ipnft_uid`: `0x152B444e60C526fe4434C721561a077269FcF61a_{reservation_id}`
 
-Use `aura_orchestrator` tool (only `x-api-key` needed).
+Cache mint results:
 
-**List projects:** `query ProjectsV2 { projectsV2 { projects { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } isSuccess error { message code } } }`
-**Get project + data room:** `query ProjectWithDataRoomAndFilesV2($ipnftUid: String!) { projectWithDataRoomAndFilesV2(ipnftUid: $ipnftUid) { isSuccess project { ipnftUid ipnftSymbol } dataRoom { files { datasetId name contentType accessLevel description tags categories versions { version contentHash createdAt } } } } }`
-**Get activity:** `query ProjectActivityV2($ipnftUid: String!) { projectActivityV2(ipnftUid: $ipnftUid) { isSuccess activities { type timestamp headline body attachments } } }`
-**Search:** `query SearchLabs($query: String!) { searchLabs(query: $query) { isSuccess results { ipnftUid ipnftSymbol } } }`
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "mint_tx_hash", "value": "<mint_tx_hash>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "ipnft_uid", "value": "<ipnft_uid>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "ipnft_symbol", "value": "<symbol>" }
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "metadata_cid", "value": "<metadataCid>" }
+```
 
----
+## Phases 3–6: Create Project, Upload File, Create Announcement (via x402)
 
-## Error Handling
+These phases use the **molecule-x402** skill for all Molecule mutations. No API key or service token is needed — payment is handled via x402 molUSDC transfers.
 
-All responses include `isSuccess`. On failure: `{"error": {"message": "...", "code": "...", "retryable": true|false}}`
+**Follow the molecule-x402 skill EXACTLY for each mutation below.** Each mutation requires the full 7-step x402 payment flow (send request → get 402 → decode → sign → build payment header → retry with payment).
 
-**Decision tree:**
-1. `AUTH_FAILED` → `MOLECULE_API_KEY` wrong. STOP.
-2. `SERVICE_AUTH_FAILED` → Re-run Service Token Acquisition (A-C), retry.
-3. `MISSING_PARAMETERS` → Fix payload. Do NOT retry same request.
-4. `INVALID_IPNFT_UID` → Must be `{contractAddress}_{tokenId}`. Fix.
-5. `NOT_FOUND` → Prior step incomplete. Verify.
-6. `INTERNAL_ERROR` + `retryable: false` → Save to `mint/diagnostics/error.json`. STOP.
-7. `INTERNAL_ERROR` + `retryable: true` → Per-mutation diagnostics below.
+### Phase 3: Create Molecule Project
 
-**Per-mutation diagnostics (`INTERNAL_ERROR` retryable):**
-- **`generateAssignmentAgreement`**: (1) `name` ≤ 100 chars, `initialSymbol` 3-5 alphanumeric (2) `email` valid format (3) `RESERVATION_ID` decimal uint256 NOT hex (4) `TX_HASH` is POI tx hash (5) `MERKLE_ROOT` is `tree[0]`. If all correct → API down. Save response, STOP. DO NOT retry with "different parameters".
-- **`uploadMetadataWithImageKey`**: (1) `imageKey` must match `key` from `generateImageUploadUrl`, PUT must have returned 200 (2) `symbol` must be inside `properties`, NOT at top level (3) `terms_signature` = `agreementContentHash` from 3a (4) `properties` object must exist with `symbol`, `organization`, `research_lead`, `topic`, `funding_amount` (5) Do NOT guess alternative structures — save error to `mint/diagnostics/metadata_error.json`, STOP, report to user.
-- **`signoffMetadata`**: `tokenURI` = `ipfs://CID` (not bare CID), `termsSignature` full `0x`-prefixed, `minter`/`to` = `WALLET_ADDRESS`.
-- **`initiateCreateOrUpdateFileV2`**: `contentLength` exact byte count. `ipnftUid` uses underscore.
-- **`finishCreateOrUpdateFileV2`**: `uploadToken` from same session. If URL expired, re-run from initiate.
+Retrieve `reservationId` from cache if not in context:
+```
+shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation_id" }
+```
 
-**On-chain (Privy):** `POLICY_VIOLATION` → check limits, STOP | `INSUFFICIENT_FUNDS` → fund wallet, STOP | `INVALID_TRANSACTION` → re-check ABI | `Transaction reverted` → wrong params, no retry | `reserve()` NOT idempotent — wastes gas.
-**Presigned URL expiry:** Re-run initiate/generate step. Do NOT retry PUT with old URL.
+Use the molecule-x402 `createProject` mutation with:
+- `ipnftSymbol`: `<symbol>`
+- `ipnftTokenId`: `<reservationId as decimal string>`
+- `ipnftUid`: `<ipnft_uid>` (format: `0x152B444e60C526fe4434C721561a077269FcF61a_{reservationId}`)
+- `ipnftAddress`: `0x152B444e60C526fe4434C721561a077269FcF61a`
+
+Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId}`
+
+### Phase 4: Upload File to Data Room
+
+**Wait 30 seconds** after project creation — data room provisioning is async:
+```
+run_command:
+  command: sleep 30
+```
+
+Get file size:
+```
+run_command:
+  command: wc -c < <path-to-pdf>
+```
+
+Then follow molecule-x402 **File Upload (3-step workflow)**:
+- **Step A** — `initiateCreateOrUpdateFileV2` (x402 paid) with `ipnftUid`, `contentType: "application/pdf"`, `contentLength`
+- **Step B** — Upload to S3 using the returned `uploadUrl` and `headers` (direct PUT, no x402)
+- **Step C** — `finishCreateOrUpdateFileV2` (x402 paid) with `uploadToken`, `path`, `accessLevel: "PUBLIC"`, `changeBy: <wallet_address>`
+
+Save `datasetId` and `contentHash` from Step C.
+
+### Phase 5: Create Announcement
+
+Use the molecule-x402 `createAnnouncementV2` mutation with:
+- `ipnftUid`: `<ipnft_uid>`
+- `headline`: `<title>`
+- `body`: `<markdown body with hypothesis, methodology, key findings, and significance>`
+- `attachments`: `["<datasetId from upload>"]`
+
+## Phase 6: NFT Transfer and Co-Ownership
+
+Transfer the minted IP-NFT to the owner's personal wallet and add them as a project co-owner.
+
+**Skip this phase entirely** if `EVM_WALLET_ADDRESS` is not set or equals the agent's `wallet_address`.
+
+### Step A — Check owner wallet
+
+The owner wallet address is: `0xa2eC2967Da7bC51494F8a5427B9784Cb5a05cD3c`
+
+If this equals `wallet_address`, skip to Output — no transfer needed.
+
+Save as `owner_wallet`.
+
+### Step B — ABI-encode ERC-721 transfer
+
+```
+abi_encode:
+  function_signature: "safeTransferFrom(address,address,uint256)"
+  args:
+    - <wallet_address>
+    - <owner_wallet>
+    - <token_id as decimal string>
+```
+
+Save `calldata`.
+
+### Step C — Transfer IP-NFT on-chain
+
+```
+sign_and_send_transaction:
+  to: 0x152B444e60C526fe4434C721561a077269FcF61a
+  data: <calldata from step 23>
+  chain_id: 11155111
+```
+
+Save `transfer_tx_hash`.
+
+### Step D — Add owner as project co-owner
+
+Use the molecule-x402 `addProjectOwner` mutation with:
+- `ipnftUid`: `<ipnft_uid>`
+- `walletAddress`: `<owner_wallet>`
+
+## Output
+
+Final results to report:
+- `ipnft_uid`: `{contract_address}_{token_id}`
+- `poi_tx_hash`
+- `mint_tx_hash`
+- `project_url`: `https://testnet.molecule.xyz/ipnfts/{ipnftTokenId}`
+- `datasetId` from upload
+- Announcement success status
+- `transfer_tx_hash` (if transfer was performed)
+- Co-owner addition status (if transfer was performed)

@@ -18,10 +18,6 @@ auth_mode = "token"
 [hub.reload]
 mode = "hybrid"
 
-# Refiner: "off" | "rules" | "local" | "remote"
-[refiner]
-mode = "off"
-
 # --- Default Agent ---
 # OpenRouter is recommended: one API key for all providers, one bill.
 # Set OPENROUTER_API_KEY in your environment.
@@ -33,6 +29,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
+# workspace_tools = ["shared_cache"]  # Optional first-party workspace tools
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -42,17 +39,8 @@ default_lens = "eco"
 # model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
 # model = "deepseek/deepseek-chat-v3"        # DeepSeek V3 (cheapest)
 
-# Alternative: direct provider engines (requires provider-specific API key)
-# engine = "anthropic"
-# model = "claude-sonnet-4-20250514"
-# engine = "openai"
-# model = "gpt-4o-mini"
-# engine = "ollama"
-# model = "llama3.2"
-# engine = "huggingface"
-# model = "THUDM/GLM-4.7:fastest"
-# engine = "claude-code"
-# model = "claude-sonnet-4-5-20250929"
+# All models are accessed through OpenRouter — one API key, one bill.
+# Browse available models at https://openrouter.ai/models
 
 [agents.main.identity]
 name = "Tengu"
@@ -109,22 +97,23 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
 # Run with: tengu orchestrate
 # Use sandboxes for domain-specific teams: tengu orchestrate --sandbox webstudio
-# See docs/SANDBOXES.md for details.
+# See tengu/Sandboxes.md for details.
 
 # [orchestrator]
 # enabled = true
-# max_retries = 3
+# max_retries = 0
+# planner_engine = "openrouter"         # Dedicated engine for task planning/classification
+# planner_model = "google/gemini-2.5-flash"  # Cheaper/faster model for planning (default: uses default agent's model)
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
-# Use allowed_tools to restrict workspace tools per agent.
+# Use skill_packages for workflow docs/tools.
 
 # [agents.qa]
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "qa"
-# allowed_tools = ["read_file", "list_directory", "run_command"]
-# skills = ["search", "test_runner"]
+# skill_packages = ["search", "test_runner"]
 #
 # [agents.qa.identity]
 # name = "QA Agent"
@@ -141,7 +130,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "backend_engineer"
-# allowed_tools = ["read_file", "list_directory", "write_file", "run_command"]
 #
 # [agents.backend.identity]
 # name = "Backend Engineer"
@@ -153,3 +141,31 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #
 # [agents.backend.limits]
 # max_tokens_per_flow = 100_000
+
+# --- Claude Code Backend ---
+# Run agents powered by your Claude Code subscription instead of API tokens.
+# Requires: cargo build --features claude_code
+# Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
+# Claude loads your CLAUDE.md, skills, MCP servers — everything from the workspace.
+# Tengu-native tools (http_request, crypto, cache) are bridged via MCP.
+# See docs/engine-backends.md for details.
+
+# [claude_code]
+# cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
+
+# [agents.editor]
+# engine = "claude_code"
+# model = "claude-sonnet-4-20250514"
+# workspace = "~/projects/my-app"
+# skill_packages = ["my-skill"]
+# workspace_tools = ["shared_cache"]
+#
+# [agents.editor.claude_code]
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell
+#
+# [agents.editor.identity]
+# name = "Editor Agent"
+# instructions = "You are a coding assistant with full workspace access."
+#
+# [agents.editor.limits]
+# max_tokens_per_flow = 5_000_000

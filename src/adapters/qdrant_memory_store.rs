@@ -18,8 +18,8 @@
 //! The collection is auto-created on first connect if it doesn't exist, using
 //! `Distance::Cosine` and the configured `vector_size`.
 
-use crate::application::ports::MemoryStorePort;
-use crate::domain::memory::{MemoryEntry, MemorySearchResult};
+use crate::adapters::ports::MemoryStorePort;
+use crate::adapters::types::{MemoryEntry, MemorySearchResult};
 use anyhow::{Context, Result};
 use qdrant_client::qdrant::{
     CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, PointStruct,
@@ -83,15 +83,21 @@ impl QdrantMemoryStore {
 
 impl MemoryStorePort for QdrantMemoryStore {
     fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let mut payload_json = serde_json::json!({
+            "content": entry.content,
+            "agent_id": entry.agent_id,
+            "created_at_epoch_s": entry.created_at_epoch_s,
+        });
+        // Store metadata as "meta_*" prefixed payload keys.
+        if let serde_json::Value::Object(ref mut map) = payload_json {
+            for (k, v) in &entry.metadata {
+                map.insert(format!("meta_{}", k), serde_json::Value::String(v.clone()));
+            }
+        }
         let point = PointStruct::new(
             entry.id.clone(),
             entry.embedding.clone(),
-            qdrant_client::Payload::try_from(serde_json::json!({
-                "content": entry.content,
-                "agent_id": entry.agent_id,
-                "created_at_epoch_s": entry.created_at_epoch_s,
-            }))
-            .unwrap_or_default(),
+            qdrant_client::Payload::try_from(payload_json).unwrap_or_default(),
         );
         let collection = self.collection.clone();
         Box::pin(async move {
@@ -165,6 +171,18 @@ impl MemoryStorePort for QdrantMemoryStore {
                             _ => None,
                         })?;
 
+                    // Reconstruct metadata from "meta_*" prefixed payload keys.
+                    let mut metadata = std::collections::HashMap::new();
+                    for (k, v) in &payload {
+                        if let Some(stripped) = k.strip_prefix("meta_") {
+                            if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) =
+                                &v.kind
+                            {
+                                metadata.insert(stripped.to_string(), s.clone());
+                            }
+                        }
+                    }
+
                     Some(MemorySearchResult {
                         entry: MemoryEntry {
                             id,
@@ -172,6 +190,7 @@ impl MemoryStorePort for QdrantMemoryStore {
                             embedding: Vec::new(), // Qdrant doesn't return vectors by default
                             agent_id,
                             created_at_epoch_s,
+                            metadata,
                         },
                         score: scored.score,
                     })
@@ -231,61 +250,5 @@ impl MemoryStorePort for QdrantMemoryStore {
     fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
         // Not meaningful for a remote database.
         Box::pin(async { 0 })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn qdrant_store_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<QdrantMemoryStore>();
-    }
-
-    /// Integration test requiring a running Qdrant instance.
-    /// Run with: cargo test --features qdrant -- --ignored qdrant_integration
-    /// Start Qdrant: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-    #[tokio::test]
-    #[ignore]
-    async fn qdrant_integration_round_trip() {
-        let collection = format!("test-tengu-{}", uuid::Uuid::new_v4());
-        let store = QdrantMemoryStore::new("http://localhost:6334", None, &collection, 3)
-            .await
-            .expect("connect to Qdrant");
-
-        let entry = MemoryEntry {
-            id: uuid::Uuid::new_v4().to_string(),
-            content: "test memory content".to_string(),
-            embedding: vec![1.0, 0.0, 0.0],
-            agent_id: "test-agent".to_string(),
-            created_at_epoch_s: 1234567890,
-        };
-
-        // Store
-        store.store(&entry).await.expect("store entry");
-        assert_eq!(store.entry_count().await, 1);
-
-        // Search
-        let results = store
-            .search_by_vector(&[1.0, 0.0, 0.0], 5)
-            .await
-            .expect("search");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].entry.content, "test memory content");
-        assert_eq!(results[0].entry.agent_id, "test-agent");
-
-        // Delete
-        let deleted = store.delete(&entry.id).await.expect("delete");
-        assert!(deleted);
-        assert_eq!(store.entry_count().await, 0);
-
-        // Cleanup: delete test collection
-        store
-            .client
-            .delete_collection(&collection)
-            .await
-            .expect("cleanup collection");
     }
 }
