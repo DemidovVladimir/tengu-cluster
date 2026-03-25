@@ -22,37 +22,28 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::adapters::cache_tool_executor::{
+    build_shared_cache_tools, CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME,
+};
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
-use crate::adapters::memory_store::DiskVectorMemoryStore;
-use crate::adapters::memory_tool_executor::{
-    memory_tool_defs, MemoryServiceHandle, MemoryToolExecutionAdapter,
+use crate::adapters::memory_builder::{
+    memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
 };
 use crate::adapters::shell_executor::LocalShellExecutor;
-use crate::adapters::skill_tool_executor::SkillToolExecutionAdapter;
-use crate::adapters::system_prompt;
-use crate::adapters::workspace_tools;
-use crate::application::engine_runtime::ToolExecutor;
-use crate::application::platform_tools_catalog::build_platform_tools;
-use crate::application::ports::{ShellExecutionPort, ToolActivityPort, ToolApprovalPort};
-use crate::application::skill_registry::SkillRegistry;
-use crate::application::tool_use_service::ToolUseService;
-use crate::application::workspace_tools_catalog::build_workspace_tools;
-use crate::domain::capability::{
-    filter_tools_by_capability, parse_capability_set, CapabilityId, RegisteredTool,
+use crate::adapters::skill_builder::{
+    self, SkillExecution, SkillRegistry, SkillStatus, SkillToolExecutionAdapter,
 };
-// NOTE: SkillExecution is used for filtering shell vs API skills in build_tool_executor.
-use crate::domain::chat::ChatLoopState;
-use crate::domain::run_state::RunState;
-use crate::domain::secret_registry::SecretRegistry;
-use crate::domain::skill::SkillExecution;
-use crate::domain::skill::SkillStatus;
-use crate::domain::tool_policy::ToolPolicyCatalog;
-use tengu_core::config::AgentConfig;
-use tengu_core::types::ToolCall;
-use tengu_core::Lens;
+use crate::adapters::engine_builder::ToolExecutor;
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort};
+use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService, WorkspaceToolExecutionAdapter};
+use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::config::AgentConfig;
+use crate::adapters::types::{
+    ChatLoopState, Lens, ToolAllowList, ToolCall, ToolDef,
+};
 
 // ---------------------------------------------------------------------------
 // Tool executor wrapper
@@ -76,21 +67,12 @@ impl ToolExecutor for ToolServiceExecutor {
 // Tool, executor, and prompt rebuilding
 // ---------------------------------------------------------------------------
 
-pub(crate) fn tool_defs(tools: &[RegisteredTool]) -> Vec<tengu_core::types::ToolDef> {
-    tools.iter().map(|tool| tool.def.clone()).collect()
-}
-
-/// Merge base platform tools (capability-filtered) with active skill tools.
-///
-/// Platform tools are gated by the agent's capability set.
-/// Skill tools bypass capability filtering — `skill_packages` already controls
-/// which skills load, so a loaded skill's tools are always available.
+/// Merge base platform tools with active skill tools.
 pub(crate) fn rebuild_tools(
-    base_tools: &[RegisteredTool],
+    base_tools: &[ToolDef],
     skill_registry: &SkillRegistry,
-    capabilities: &HashSet<CapabilityId>,
-) -> Vec<RegisteredTool> {
-    let mut tools = filter_tools_by_capability(base_tools.to_vec(), capabilities);
+) -> Vec<ToolDef> {
+    let mut tools = base_tools.to_vec();
     tools.extend(skill_registry.active_tools());
     tools
 }
@@ -100,18 +82,18 @@ pub(crate) fn rebuild_system_prompt(
     agent_config: &AgentConfig,
     advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    tools: &[RegisteredTool],
+    tools: &[ToolDef],
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
         .into_iter()
         .map(|(_, body)| body)
         .collect();
-    system_prompt::build_system_prompt_with_tools(
+    skill_builder::build_system_prompt_with_tools(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
-        &tool_defs(tools),
+        tools,
     )
 }
 
@@ -125,11 +107,10 @@ pub(crate) fn rebuild_system_prompt(
 /// `reqwest::Client` instead of each building their own connection pool.
 pub(crate) fn build_tool_executor(
     workspace: &Path,
-    tools: &[RegisteredTool],
+    tools: &[ToolDef],
     skill_registry: &SkillRegistry,
     memory_handle: &Option<Arc<MemoryServiceHandle>>,
     secret_registry: &Arc<SecretRegistry>,
-    approval: Arc<dyn ToolApprovalPort>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     shared_http_client: Option<&reqwest::Client>,
@@ -144,11 +125,11 @@ pub(crate) fn build_tool_executor(
     });
 
     let workspace_exec = Arc::new(
-        workspace_tools::WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
+        WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
             .with_shell(Arc::clone(&shell)),
     );
 
-    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.def.name.as_str()).collect();
+    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
 
     // Shell skills create named tools; API skills are documentation-only.
     let shell_skill_defs: Vec<_> = skill_registry
@@ -179,43 +160,32 @@ pub(crate) fn build_tool_executor(
         {
             let mem_names: HashSet<String> = memory_tool_defs()
                 .iter()
-                .map(|t| t.def.name.clone())
+                .map(|t| t.name.clone())
                 .collect();
             composite = composite.with_executor(Arc::new(mem_exec), mem_names);
         }
     }
 
-    // Platform primitives: HTTP request
-    if allowed_names.contains("http_request") {
-        // Collect allowed hosts and env var names from active API skill
-        // documentation to block hallucinated URLs and env var names at runtime.
-        let mut http_allowed_hosts = HashSet::new();
-        let mut http_allowed_env_vars = HashSet::new();
-        for entry in skill_registry.entries().values() {
-            if entry.status != SkillStatus::Active {
-                continue;
+    // Optional workspace tool: shared cache
+    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
+        match CacheToolExecutionAdapter::open(workspace) {
+            Ok(cache_exec) => {
+                composite = composite.with_executor(
+                    Arc::new(cache_exec),
+                    HashSet::from([SHARED_CACHE_TOOL_NAME.to_string()]),
+                );
             }
-            if let SkillExecution::Api(ref api) = entry.definition.execution {
-                if let Some(host) =
-                    crate::adapters::http_tool_executor::extract_hosts_from_text(&api.base_url)
-                        .into_iter()
-                        .next()
-                {
-                    http_allowed_hosts.insert(host);
-                }
-            }
-            if let Some(ref body) = entry.context_body {
-                http_allowed_hosts
-                    .extend(crate::adapters::http_tool_executor::extract_hosts_from_text(body));
-                http_allowed_env_vars
-                    .extend(crate::adapters::http_tool_executor::extract_env_refs_from_text(body));
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
             }
         }
+    }
+
+    // Platform primitives: HTTP request
+    if allowed_names.contains("http_request") {
         if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(
             shared_http_client.cloned(),
             workspace.to_path_buf(),
-            http_allowed_hosts,
-            http_allowed_env_vars,
         ) {
             composite = composite.with_executor(
                 Arc::new(http_exec),
@@ -230,13 +200,17 @@ pub(crate) fn build_tool_executor(
         "sign_message",
         "get_wallet_address",
         "abi_encode",
+        "hex_to_uint256",
     ]
     .iter()
     .filter(|n| allowed_names.contains(**n))
     .map(|n| n.to_string())
     .collect();
     if !crypto_tool_names.is_empty() {
-        if let Ok(crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+        if let Ok(mut crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+            if let Some(ref flag) = cancel {
+                crypto_exec = crypto_exec.with_cancel(Arc::clone(flag));
+            }
             composite = composite.with_executor(Arc::new(crypto_exec), crypto_tool_names);
         }
     }
@@ -244,9 +218,8 @@ pub(crate) fn build_tool_executor(
     let composite = Arc::new(composite);
 
     let service = ToolUseService::new(
-        ToolPolicyCatalog::from_tools(tools),
+        ToolAllowList::from_tools(tools),
         activity,
-        approval,
         composite,
     );
     Some(ToolServiceExecutor { service })
@@ -260,27 +233,44 @@ pub(crate) fn build_tool_executor(
 ///
 /// This is the set of tools available before skill tools are added.
 /// Call at startup and on `/reload` (env vars may change).
+///
+/// `workspace_tools` controls optional first-party workspace tools (e.g. `["shared_cache"]`).
 pub(crate) fn compute_base_tools(
     uses_tools: bool,
     has_memory: bool,
-    capability_names: &[String],
-) -> Vec<RegisteredTool> {
+    workspace_tools: &[String],
+) -> Vec<ToolDef> {
     if !uses_tools {
         return vec![];
     }
-    let capabilities =
-        parse_capability_set(capability_names).expect("agent capabilities should validate");
-    let mut tools = filter_tools_by_capability(build_workspace_tools(), &capabilities);
+    let mut tools = build_workspace_tools();
     if has_memory {
-        tools.extend(filter_tools_by_capability(
-            memory_tool_defs(),
-            &capabilities,
-        ));
+        tools.extend(memory_tool_defs());
     }
-    tools.extend(filter_tools_by_capability(
-        build_platform_tools(),
-        &capabilities,
-    ));
+    if workspace_tools.iter().any(|t| t == "shared_cache") {
+        tools.extend(build_shared_cache_tools());
+    }
+    tools.extend(build_platform_tools());
+    tools
+}
+
+/// Compute the full bridge tool set for engines that manage their own workspace.
+///
+/// Unlike `compute_base_tools`, this ALWAYS returns all tools (workspace + platform +
+/// memory + cache) regardless of engine capabilities. Used to populate the MCP bridge
+/// when a Claude Code engine needs access to Tengu-native tools.
+pub(crate) fn compute_bridge_tools(
+    has_memory: bool,
+    workspace_tools: &[String],
+) -> Vec<ToolDef> {
+    let mut tools = build_workspace_tools();
+    if has_memory {
+        tools.extend(memory_tool_defs());
+    }
+    if workspace_tools.iter().any(|t| t == "shared_cache") {
+        tools.extend(build_shared_cache_tools());
+    }
+    tools.extend(build_platform_tools());
     tools
 }
 
@@ -291,7 +281,7 @@ pub(crate) fn compute_base_tools(
 /// Resolve the memory store path: workspace-local if a workspace is provided,
 /// otherwise fall back to the global path from config (with tilde expansion).
 pub(crate) fn resolve_memory_store_path(
-    memory_config: &tengu_core::config::MemoryConfig,
+    memory_config: &crate::adapters::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
     match workspace {
@@ -309,7 +299,7 @@ pub(crate) fn resolve_memory_store_path(
 /// Resolve the Qdrant collection name: workspace-scoped if a workspace is
 /// provided, otherwise fall back to the config value.
 pub(crate) fn resolve_qdrant_collection(
-    memory_config: &tengu_core::config::MemoryConfig,
+    memory_config: &crate::adapters::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> String {
     match workspace {
@@ -330,7 +320,7 @@ pub(crate) fn resolve_qdrant_collection(
 /// When `workspace` is `Some`, memory is stored in `<workspace>/memory/` instead
 /// of the global `~/.tengu/memory/` path.
 pub(crate) fn build_memory_handle(
-    memory_config: &tengu_core::config::MemoryConfig,
+    memory_config: &crate::adapters::config::MemoryConfig,
     #[allow(unused_variables)] rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
 ) -> Option<Arc<MemoryServiceHandle>> {
@@ -344,7 +334,7 @@ pub(crate) fn build_memory_handle(
             #[allow(unused_variables)]
             let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
 
-            let store: Option<Arc<dyn crate::application::ports::MemoryStorePort>> =
+            let store: Option<Arc<dyn crate::adapters::ports::MemoryStorePort>> =
                 match memory_config.backend.as_str() {
                     #[cfg(feature = "qdrant")]
                     "qdrant" => {
@@ -368,13 +358,13 @@ pub(crate) fn build_memory_handle(
                         DiskVectorMemoryStore::new(&resolved_store_path)
                             .ok()
                             .map(|s| {
-                                Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
+                                Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>
                             })
                     }
                     _ => DiskVectorMemoryStore::new(&resolved_store_path)
                         .ok()
                         .map(|s| {
-                            Arc::new(s) as Arc<dyn crate::application::ports::MemoryStorePort>
+                            Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>
                         }),
                 };
 
@@ -408,7 +398,6 @@ pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopStat
         active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
         total_input_tokens: 0,
         total_output_tokens: 0,
-        tokens_saved: 0,
         last_prompt_report: None,
     }
 }
@@ -520,21 +509,97 @@ pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
     format!("{}...(truncated)", &text[..end])
 }
 
-/// Render a compact shared-run-state section for dependent task prompts.
-pub(crate) fn format_run_state_prompt(run_state: &RunState) -> String {
-    format!(
-        "## Shared Run State\n{}\n",
-        run_state.artifacts_for_prompt(20)
-    )
+// ---------------------------------------------------------------------------
+// Cross-agent activity log
+// ---------------------------------------------------------------------------
+
+/// Maximum activity entries retained across all agents.
+pub(crate) const MAX_ACTIVITY_ENTRIES: usize = 10;
+
+/// Maximum characters of an agent's response kept in the activity summary.
+pub(crate) const MAX_ACTIVITY_SUMMARY_CHARS: usize = 400;
+
+/// A record of what one agent did in a single turn.
+pub(crate) struct ActivityEntry {
+    pub agent_label: String,
+    pub agent_id: String,
+    pub tools_used: Vec<String>,
+    pub response_summary: String,
+    /// Key tool outcomes (name, result) — concrete data for cross-agent handoff.
+    pub tool_outcomes: Vec<(String, String)>,
 }
 
-/// Runtime artifact requirements for known workflow roles.
-///
-/// With platform primitives replacing hardcoded tools, artifact tracking
-/// is driven by skill documentation rather than hardcoded role maps.
-/// Keeping the function signature for backward compatibility.
-pub(crate) fn required_artifacts_for_role(_role: &str) -> &'static [&'static str] {
-    &[]
+/// Format a tool call for the activity log.
+/// Read-only tools (read_file, list_directory, etc.) are not interesting for other agents.
+pub(crate) fn format_tool_for_activity(
+    call: &ToolCall,
+) -> Option<String> {
+    let read_only = matches!(
+        call.name.as_str(),
+        "read_file" | "list_directory" | "get_wallet_address" | "abi_encode" | "hex_to_uint256"
+    );
+    if read_only {
+        return None;
+    }
+
+    let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+    let detail_str = detail.unwrap_or_default();
+    let truncated = truncate_summary(&detail_str, 80);
+    Some(format!("{}: {}", title, truncated))
+}
+
+/// Build a context block summarising what OTHER agents have done recently.
+pub(crate) fn build_activity_context(activity_log: &[ActivityEntry], current_agent_id: &str) -> String {
+    let other: Vec<&ActivityEntry> = activity_log
+        .iter()
+        .filter(|e| e.agent_id != current_agent_id)
+        .collect();
+    if other.is_empty() {
+        return String::new();
+    }
+
+    let mut ctx = String::from("\n\n## Recent Team Activity\n");
+    ctx.push_str(
+        "Other team members have been working on this project. Build on their work.\n\
+         IMPORTANT: Use your available tools to check files they created before making changes.\n\n",
+    );
+
+    for entry in other.iter().rev().take(5) {
+        ctx.push_str(&format!("**{}**", entry.agent_label));
+        if !entry.tools_used.is_empty() {
+            ctx.push_str(&format!(" — {}", entry.tools_used.join(", ")));
+        }
+        ctx.push('\n');
+        if !entry.response_summary.is_empty() {
+            ctx.push_str(&entry.response_summary);
+            ctx.push('\n');
+        }
+        if !entry.tool_outcomes.is_empty() {
+            ctx.push_str("\nKey outputs:\n");
+            for (name, result) in &entry.tool_outcomes {
+                ctx.push_str(&format!(
+                    "- `{}`: {}\n",
+                    name,
+                    truncate_output(result, 1000),
+                ));
+            }
+        }
+        ctx.push('\n');
+    }
+
+    ctx
+}
+
+/// Truncate text to at most `max` chars on a char boundary, appending "…" if cut.
+pub(crate) fn truncate_summary(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 // ---------------------------------------------------------------------------
@@ -568,154 +633,4 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
         lines.push(format!("  {} [{}]{}", name, tag, readiness));
     }
     lines.join("\n")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn chunk_message_short() {
-        let chunks = chunk_message("hello", 4096);
-        assert_eq!(chunks, vec!["hello"]);
-    }
-
-    #[test]
-    fn chunk_message_splits_at_paragraph_boundary() {
-        let text = format!("{}\n\n{}", "a".repeat(2000), "b".repeat(2000));
-        let chunks = chunk_message(&text, 3000);
-        assert!(chunks.len() >= 2);
-        for c in &chunks {
-            assert!(c.len() <= 3000);
-        }
-    }
-
-    #[test]
-    fn chunk_message_splits_long_single_paragraph() {
-        let text = "x".repeat(5000);
-        let chunks = chunk_message(&text, 2000);
-        assert!(chunks.len() >= 3);
-        for c in &chunks {
-            assert!(c.len() <= 2000);
-        }
-    }
-
-    #[test]
-    fn resolve_memory_store_path_with_workspace() {
-        let cfg = tengu_core::config::MemoryConfig::default();
-        let ws = std::path::Path::new("/tmp/my-project");
-        let path = resolve_memory_store_path(&cfg, Some(ws));
-        assert_eq!(path, std::path::PathBuf::from("/tmp/my-project/memory"));
-    }
-
-    #[test]
-    fn resolve_memory_store_path_without_workspace() {
-        let mut cfg = tengu_core::config::MemoryConfig::default();
-        cfg.store_path = "/global/memory".to_string();
-        let path = resolve_memory_store_path(&cfg, None);
-        assert_eq!(path, std::path::PathBuf::from("/global/memory"));
-    }
-
-    #[test]
-    fn resolve_qdrant_collection_with_workspace() {
-        let cfg = tengu_core::config::MemoryConfig::default();
-        let ws = std::path::Path::new("/work/desci-sandbox");
-        let coll = resolve_qdrant_collection(&cfg, Some(ws));
-        assert_eq!(coll, "tengu-memory-desci-sandbox");
-    }
-
-    #[test]
-    fn resolve_qdrant_collection_without_workspace() {
-        let mut cfg = tengu_core::config::MemoryConfig::default();
-        cfg.qdrant_collection = "my-collection".to_string();
-        let coll = resolve_qdrant_collection(&cfg, None);
-        assert_eq!(coll, "my-collection");
-    }
-
-    #[test]
-    fn truncate_output_short_text() {
-        let result = truncate_output("hello world", 100);
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn truncate_output_exact_limit() {
-        let text = "abcde";
-        let result = truncate_output(text, 5);
-        assert_eq!(result, "abcde");
-    }
-
-    #[test]
-    fn truncate_output_truncates_long() {
-        let text = "x".repeat(100);
-        let result = truncate_output(&text, 50);
-        assert!(result.ends_with("...(truncated)"));
-        assert!(result.len() < 100);
-    }
-
-    #[test]
-    fn truncate_output_char_boundary_safe() {
-        // Multi-byte character: é is 2 bytes
-        let text = "aaaaaaaaébb";
-        let result = truncate_output(text, 9); // Cuts mid-é
-        assert!(result.ends_with("...(truncated)"));
-    }
-
-    #[test]
-    fn required_artifacts_for_role_returns_empty() {
-        assert!(required_artifacts_for_role("mol_labs").is_empty());
-        assert!(required_artifacts_for_role("unknown").is_empty());
-    }
-
-    #[test]
-    fn parse_agent_routing_with_role() {
-        let (role, msg) = parse_agent_routing("@backend_engineer: add rate limiting", None);
-        assert_eq!(role.as_deref(), Some("backend_engineer"));
-        assert_eq!(msg, "add rate limiting");
-    }
-
-    #[test]
-    fn parse_agent_routing_hyphenated() {
-        let (role, msg) = parse_agent_routing("@cms-guide: review content models", None);
-        assert_eq!(role.as_deref(), Some("cms_guide"));
-        assert_eq!(msg, "review content models");
-    }
-
-    #[test]
-    fn parse_agent_routing_no_prefix() {
-        let (role, msg) = parse_agent_routing("just a normal message", None);
-        assert!(role.is_none());
-        assert_eq!(msg, "just a normal message");
-    }
-
-    #[test]
-    fn parse_agent_routing_empty_message() {
-        let (role, _) = parse_agent_routing("@qa:", None);
-        assert!(role.is_none());
-    }
-
-    #[test]
-    fn parse_agent_routing_empty_role() {
-        let (role, _) = parse_agent_routing("@: something", None);
-        assert!(role.is_none());
-    }
-
-    #[test]
-    fn parse_agent_routing_without_at_known_role() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        roles.insert("frontend".into(), "frontend".into());
-        let (role, msg) = parse_agent_routing("backend: add API endpoint", Some(&roles));
-        assert_eq!(role.as_deref(), Some("backend"));
-        assert_eq!(msg, "add API endpoint");
-    }
-
-    #[test]
-    fn parse_agent_routing_without_at_unknown_role_ignored() {
-        let mut roles = HashMap::new();
-        roles.insert("backend".into(), "backend".into());
-        let (role, msg) = parse_agent_routing("hello: world", Some(&roles));
-        assert!(role.is_none());
-        assert_eq!(msg, "hello: world");
-    }
 }

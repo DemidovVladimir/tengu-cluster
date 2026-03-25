@@ -1,0 +1,988 @@
+//! TOML-backed runtime configuration schema and runtime profile helpers.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use sysinfo::System;
+use tracing::info;
+
+// ---------------------------------------------------------------------------
+// Runtime profile
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeProfile {
+    /// High-resource environment (cloud GPU/large RAM).
+    Cloud,
+    /// Typical desktop/laptop environment.
+    Desktop,
+    /// Constrained environment (SBC/VPS/low-RAM).
+    Minimal,
+}
+
+#[derive(Debug, Clone)]
+pub struct SystemCapabilities {
+    pub total_ram_mb: u64,
+    pub available_ram_mb: u64,
+    pub cpu_cores: usize,
+    pub arch: String,
+    pub has_gpu: bool,
+}
+
+impl SystemCapabilities {
+    pub fn detect() -> Self {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        let total_ram_mb = sys.total_memory() / (1024 * 1024);
+        let available_ram_mb = sys.available_memory() / (1024 * 1024);
+        let cpu_cores = sys.cpus().len();
+        let arch = std::env::consts::ARCH.to_string();
+
+        let has_gpu = Self::detect_gpu();
+
+        Self {
+            total_ram_mb,
+            available_ram_mb,
+            cpu_cores,
+            arch,
+            has_gpu,
+        }
+    }
+
+    pub fn recommended_profile(&self) -> RuntimeProfile {
+        match (self.available_ram_mb, self.has_gpu) {
+            (ram, true) if ram > 16_000 => RuntimeProfile::Cloud,
+            (ram, _) if ram > 4_000 => RuntimeProfile::Desktop,
+            _ => RuntimeProfile::Minimal,
+        }
+    }
+
+    fn detect_gpu() -> bool {
+        if let Ok(hint) = std::env::var("TENGU_GPU_HINT") {
+            let normalized = hint.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "none" | "cpu" | "off" | "false" => return false,
+                "gpu" | "cuda" | "metal" | "mps" | "on" | "true" => return true,
+                _ => {}
+            }
+        }
+
+        if std::env::var("CUDA_VISIBLE_DEVICES").is_ok() {
+            return true;
+        }
+
+        if cfg!(target_os = "macos") && std::env::consts::ARCH == "aarch64" {
+            return true;
+        }
+        false
+    }
+}
+
+impl RuntimeProfile {
+    pub fn resolve(configured: Option<&str>) -> Self {
+        match configured {
+            Some("cloud") => RuntimeProfile::Cloud,
+            Some("desktop") => RuntimeProfile::Desktop,
+            Some("minimal") => RuntimeProfile::Minimal,
+            _ => {
+                let caps = SystemCapabilities::detect();
+                let profile = caps.recommended_profile();
+                info!(
+                    arch = %caps.arch,
+                    ram_mb = caps.total_ram_mb,
+                    available_mb = caps.available_ram_mb,
+                    cores = caps.cpu_cores,
+                    gpu = caps.has_gpu,
+                    profile = ?profile,
+                    "Auto-detected runtime profile"
+                );
+                profile
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Configuration schema
+// ---------------------------------------------------------------------------
+
+/// Root configuration object loaded from `config.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    #[serde(default = "default_profile")]
+    pub runtime_profile: String,
+
+    #[serde(default)]
+    pub hub: HubConfig,
+
+    #[serde(default)]
+    pub agents: HashMap<String, AgentConfig>,
+
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorConfig>,
+
+    #[serde(default)]
+    pub memory: MemoryConfig,
+
+    #[serde(default)]
+    pub telegram: TelegramConfig,
+
+    #[serde(default)]
+    pub scaffold: Option<ScaffoldConfig>,
+
+    #[serde(default)]
+    pub claude_code: Option<ClaudeCodeConfig>,
+}
+
+fn default_profile() -> String {
+    "auto".to_string()
+}
+
+/// Hub runtime/network configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubConfig {
+    #[serde(default = "default_bind")]
+    pub bind: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
+    #[serde(default = "default_auth_mode")]
+    pub auth_mode: String,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    #[serde(default)]
+    pub reload: ReloadConfig,
+}
+
+impl Default for HubConfig {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+            port: default_port(),
+            auth_mode: default_auth_mode(),
+            auth_token: None,
+            reload: ReloadConfig::default(),
+        }
+    }
+}
+
+fn default_bind() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_port() -> u16 {
+    7070
+}
+fn default_auth_mode() -> String {
+    "token".to_string()
+}
+
+/// Hot-reload behavior for runtime configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReloadConfig {
+    #[serde(default = "default_reload_mode")]
+    pub mode: String,
+    #[serde(default = "default_debounce_ms")]
+    pub debounce_ms: u64,
+}
+
+impl Default for ReloadConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_reload_mode(),
+            debounce_ms: default_debounce_ms(),
+        }
+    }
+}
+
+fn default_reload_mode() -> String {
+    "hybrid".to_string()
+}
+fn default_debounce_ms() -> u64 {
+    300
+}
+
+/// Per-agent runtime configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    #[serde(default)]
+    pub default: bool,
+    pub engine: String,
+    pub model: String,
+    #[serde(default)]
+    pub workspace: Option<PathBuf>,
+    #[serde(default = "default_lens")]
+    pub default_lens: String,
+    #[serde(default)]
+    pub identity: IdentityConfig,
+    #[serde(default)]
+    pub flow: FlowConfig,
+    #[serde(default)]
+    pub limits: LimitsConfig,
+    #[serde(default)]
+    pub lens: LensConfig,
+    /// Fleet orchestration role (qa|backend_engineer|integration_master).
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Optional workflow/document packages loaded into the prompt and tool registry.
+    #[serde(default)]
+    pub skill_packages: Vec<String>,
+    #[serde(default)]
+    pub prompt_budget: PromptBudgetConfig,
+    /// Roles this agent depends on — tasks for this agent must follow tasks from these roles.
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
+    #[serde(default)]
+    pub workspace_tools: Vec<String>,
+    /// Per-agent Claude Code configuration (only used when engine = "claude_code").
+    #[serde(default)]
+    pub claude_code: Option<AgentClaudeCodeConfig>,
+}
+
+fn default_lens() -> String {
+    "eco".to_string()
+}
+
+/// Optional identity metadata used for prompts/UI.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdentityConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Free-form instructions injected into the system prompt.
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+/// Flow/session behavior (scope and reset strategy).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowConfig {
+    #[serde(default = "default_scope")]
+    pub scope: String,
+    #[serde(default = "default_reset_mode")]
+    pub reset_mode: String,
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_minutes: u32,
+    #[serde(default)]
+    pub max_history_turns: Option<u32>,
+    #[serde(default)]
+    pub compaction_threshold_ratio: Option<f32>,
+    #[serde(default)]
+    pub compaction_keep_turns: Option<u32>,
+    #[serde(default)]
+    pub compaction_summary_max_tokens: Option<u32>,
+}
+
+impl Default for FlowConfig {
+    fn default() -> Self {
+        Self {
+            scope: default_scope(),
+            reset_mode: default_reset_mode(),
+            idle_timeout_minutes: default_idle_timeout(),
+            max_history_turns: None,
+            compaction_threshold_ratio: None,
+            compaction_keep_turns: None,
+            compaction_summary_max_tokens: None,
+        }
+    }
+}
+
+fn default_scope() -> String {
+    "per-sender".to_string()
+}
+fn default_reset_mode() -> String {
+    "idle".to_string()
+}
+fn default_idle_timeout() -> u32 {
+    30
+}
+
+/// Hard limits applied to flow lifecycle and budgeting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LimitsConfig {
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens_per_flow: u64,
+    #[serde(default)]
+    pub max_cost_per_flow: Option<f64>,
+    #[serde(default)]
+    pub warn_at_cost: Option<f64>,
+    #[serde(default = "default_context_window")]
+    pub context_window: u32,
+    #[serde(default)]
+    pub max_output_tokens_per_turn: Option<u32>,
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+    #[serde(default = "default_max_tool_result_chars")]
+    pub max_tool_result_chars: u32,
+    #[serde(default = "default_stream_event_timeout_secs")]
+    pub stream_event_timeout_secs: u64,
+    /// Max chars for compacted (old-round) tool results. Defaults to 200.
+    #[serde(default = "default_compact_result_limit")]
+    pub compact_result_limit: u32,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_tokens_per_flow: default_max_tokens(),
+            max_cost_per_flow: None,
+            warn_at_cost: None,
+            context_window: default_context_window(),
+            max_output_tokens_per_turn: None,
+            max_tool_rounds: default_max_tool_rounds(),
+            max_tool_result_chars: default_max_tool_result_chars(),
+            stream_event_timeout_secs: default_stream_event_timeout_secs(),
+            compact_result_limit: default_compact_result_limit(),
+        }
+    }
+}
+
+fn default_context_window() -> u32 {
+    1_000_000
+}
+fn default_max_tool_rounds() -> u32 {
+    70
+}
+fn default_max_tool_result_chars() -> u32 {
+    300_000
+}
+fn default_stream_event_timeout_secs() -> u64 {
+    120
+}
+fn default_compact_result_limit() -> u32 {
+    200
+}
+
+fn default_max_tokens() -> u64 {
+    100_000
+}
+
+/// Orchestrator configuration for fleet management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrchestratorConfig {
+    #[serde(default = "default_orchestrator_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    pub planner_engine: Option<String>,
+    pub planner_model: Option<String>,
+}
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_orchestrator_enabled(),
+            max_retries: default_max_retries(),
+            planner_engine: None,
+            planner_model: None,
+        }
+    }
+}
+
+fn default_orchestrator_enabled() -> bool {
+    false
+}
+fn default_max_retries() -> u32 {
+    3
+}
+
+/// Telegram bot adapter configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TelegramConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    #[serde(default)]
+    pub tool_approvals: bool,
+    #[serde(default)]
+    pub approve_only: Vec<String>,
+}
+
+/// Workspace scaffold — auto-creates directories and seed files on startup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaffoldConfig {
+    pub root: String,
+    #[serde(default)]
+    pub directories: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<ScaffoldFile>,
+    #[serde(default)]
+    pub project: Option<ProjectScaffold>,
+}
+
+/// Template for per-project scaffolding (applied by `/project <name>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectScaffold {
+    #[serde(default)]
+    pub directories: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<ScaffoldFile>,
+}
+
+/// A file to seed into the workspace during scaffold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScaffoldFile {
+    pub path: String,
+    pub content: String,
+}
+
+/// Global Claude Code backend configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeCodeConfig {
+    #[serde(default = "default_cli_path")]
+    pub cli_path: String,
+    #[serde(default = "default_claude_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ClaudeCodeConfig {
+    fn default() -> Self {
+        Self {
+            cli_path: default_cli_path(),
+            timeout_secs: default_claude_timeout_secs(),
+        }
+    }
+}
+
+fn default_cli_path() -> String {
+    "claude".to_string()
+}
+
+fn default_claude_timeout_secs() -> u64 {
+    120
+}
+
+/// Per-agent Claude Code configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentClaudeCodeConfig {
+    #[serde(default = "default_builtin_tools_profile")]
+    pub builtin_tools_profile: String,
+}
+
+impl Default for AgentClaudeCodeConfig {
+    fn default() -> Self {
+        Self {
+            builtin_tools_profile: default_builtin_tools_profile(),
+        }
+    }
+}
+
+fn default_builtin_tools_profile() -> String {
+    "editor_shell".to_string()
+}
+
+/// Persistent vector memory configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
+    #[serde(default = "default_max_recall_entries")]
+    pub max_recall_entries: usize,
+    #[serde(default = "default_max_recall_tokens")]
+    pub max_recall_tokens: usize,
+    #[serde(default = "default_store_path")]
+    pub store_path: String,
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
+    #[serde(default = "default_memory_backend")]
+    pub backend: String,
+    #[serde(default = "default_qdrant_url")]
+    pub qdrant_url: String,
+    #[serde(default)]
+    pub qdrant_api_key: Option<String>,
+    #[serde(default = "default_qdrant_collection")]
+    pub qdrant_collection: String,
+    #[serde(default = "default_vector_size")]
+    pub vector_size: u64,
+}
+
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            embedding_model: default_embedding_model(),
+            max_recall_entries: default_max_recall_entries(),
+            max_recall_tokens: default_max_recall_tokens(),
+            store_path: default_store_path(),
+            embedding_provider: default_embedding_provider(),
+            backend: default_memory_backend(),
+            qdrant_url: default_qdrant_url(),
+            qdrant_api_key: None,
+            qdrant_collection: default_qdrant_collection(),
+            vector_size: default_vector_size(),
+        }
+    }
+}
+
+fn default_embedding_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+fn default_max_recall_entries() -> usize {
+    5
+}
+fn default_max_recall_tokens() -> usize {
+    600
+}
+fn default_store_path() -> String {
+    "~/.tengu/memory/".to_string()
+}
+fn default_embedding_provider() -> String {
+    "openrouter".to_string()
+}
+
+fn default_memory_backend() -> String {
+    "disk".to_string()
+}
+
+fn default_qdrant_url() -> String {
+    "http://localhost:6334".to_string()
+}
+
+fn default_qdrant_collection() -> String {
+    "tengu-memory".to_string()
+}
+
+fn default_vector_size() -> u64 {
+    1536
+}
+
+/// System prompt token budget configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptBudgetConfig {
+    #[serde(default = "default_max_file_tokens")]
+    pub max_file_tokens: usize,
+    #[serde(default = "default_max_skill_context_tokens")]
+    pub max_skill_context_tokens: usize,
+    #[serde(default = "default_max_total_tokens")]
+    pub max_total_tokens: usize,
+}
+
+impl Default for PromptBudgetConfig {
+    fn default() -> Self {
+        Self {
+            max_file_tokens: default_max_file_tokens(),
+            max_skill_context_tokens: default_max_skill_context_tokens(),
+            max_total_tokens: default_max_total_tokens(),
+        }
+    }
+}
+
+fn default_max_file_tokens() -> usize {
+    2000
+}
+fn default_max_skill_context_tokens() -> usize {
+    4000
+}
+fn default_max_total_tokens() -> usize {
+    8000
+}
+
+/// Lens-specific retrieval and budgeting parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LensConfig {
+    #[serde(default = "default_eco_max")]
+    pub eco_max_tokens: u32,
+    #[serde(default = "default_threshold")]
+    pub standard_threshold: f32,
+    #[serde(default = "default_budget")]
+    pub precise_budget: f32,
+}
+
+impl Default for LensConfig {
+    fn default() -> Self {
+        Self {
+            eco_max_tokens: default_eco_max(),
+            standard_threshold: default_threshold(),
+            precise_budget: default_budget(),
+        }
+    }
+}
+
+fn default_eco_max() -> u32 {
+    100
+}
+fn default_threshold() -> f32 {
+    0.7
+}
+fn default_budget() -> f32 {
+    0.5
+}
+
+/// Aggregates config validation issues.
+#[derive(Debug, Default)]
+struct ValidationErrors {
+    issues: Vec<String>,
+}
+
+impl ValidationErrors {
+    fn push(&mut self, message: impl Into<String>) {
+        self.issues.push(message.into());
+    }
+
+    fn require(&mut self, condition: bool, message: impl Into<String>) {
+        if !condition {
+            self.push(message);
+        }
+    }
+
+    fn require_nonempty(&mut self, path: &str, value: &str) {
+        self.require(!value.trim().is_empty(), format!("{path} cannot be empty"));
+    }
+
+    fn require_one_of(&mut self, path: &str, value: &str, allowed: &[&str]) {
+        let normalized = value.trim();
+        if allowed.contains(&normalized) {
+            return;
+        }
+        self.push(format!(
+            "{path} must be one of {} (got '{}')",
+            allowed.join("|"),
+            value
+        ));
+    }
+
+    fn require_positive_opt_u32(&mut self, path: &str, value: Option<u32>) {
+        if matches!(value, Some(0)) {
+            self.push(format!("{path} must be greater than 0 when set"));
+        }
+    }
+
+    fn require_positive_opt_f64(&mut self, path: &str, value: Option<f64>) {
+        if let Some(v) = value {
+            if v <= 0.0 {
+                self.push(format!("{path} must be greater than 0 when set"));
+            }
+        }
+    }
+
+    fn into_vec(self) -> Vec<String> {
+        self.issues
+    }
+}
+
+impl Config {
+    /// Load config from path and apply `${ENV_VAR}` substitution.
+    pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        let content = std::fs::read_to_string(path)?;
+        let content = Self::substitute_env_vars(&content)?;
+        let config: Config = toml::from_str(&content)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate cross-field configuration invariants.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let errors = self.validation_errors();
+        if errors.is_empty() {
+            return Ok(());
+        }
+
+        let message = format!(
+            "Config validation failed ({} issue{}):\n{}",
+            errors.len(),
+            if errors.len() == 1 { "" } else { "s" },
+            errors
+                .iter()
+                .map(|entry| format!("- {}", entry))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        Err(anyhow::anyhow!(message))
+    }
+
+    fn validation_errors(&self) -> Vec<String> {
+        let mut errors = ValidationErrors::default();
+
+        errors.require_one_of(
+            "runtime_profile",
+            &self.runtime_profile,
+            &["auto", "cloud", "desktop", "minimal"],
+        );
+        errors.require_nonempty("hub.bind", &self.hub.bind);
+        errors.require(self.hub.port > 0, "hub.port must be greater than 0");
+        errors.require_one_of("hub.auth_mode", &self.hub.auth_mode, &["token", "open"]);
+        errors.require_one_of(
+            "hub.reload.mode",
+            &self.hub.reload.mode,
+            &["hybrid", "hot", "restart", "off"],
+        );
+
+        errors.require(
+            !self.agents.is_empty(),
+            "at least one agent must be configured",
+        );
+
+        let default_count = self.agents.values().filter(|agent| agent.default).count();
+        if default_count > 1 {
+            errors.push("only one agent can have default=true");
+        }
+
+        self.agents.iter().for_each(|(agent_id, agent)| {
+            Self::validate_agent(agent_id, agent, &mut errors);
+        });
+
+        errors.into_vec()
+    }
+
+    fn validate_agent(agent_id: &str, agent: &AgentConfig, errors: &mut ValidationErrors) {
+        errors.require(!agent_id.trim().is_empty(), "agent id cannot be empty");
+        errors.require_nonempty(&format!("agents.{agent_id}.engine"), &agent.engine);
+        errors.require_one_of(
+            &format!("agents.{agent_id}.engine"),
+            &agent.engine,
+            &["openrouter", "claude_code"],
+        );
+        errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
+        if agent.engine == "claude_code" {
+            if let Some(ref cc) = agent.claude_code {
+                errors.require_one_of(
+                    &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
+                    &cc.builtin_tools_profile,
+                    &["none", "read_only", "editor", "editor_shell"],
+                );
+            }
+        }
+        errors.require_one_of(
+            &format!("agents.{agent_id}.default_lens"),
+            &agent.default_lens,
+            &["eco", "standard", "precise"],
+        );
+
+        errors.require_one_of(
+            &format!("agents.{agent_id}.flow.scope"),
+            &agent.flow.scope,
+            &["main", "per-group", "per-pipe-sender", "per-sender"],
+        );
+        errors.require_one_of(
+            &format!("agents.{agent_id}.flow.reset_mode"),
+            &agent.flow.reset_mode,
+            &["idle", "manual", "time"],
+        );
+        if let Some(value) = agent.flow.compaction_threshold_ratio {
+            if !(0.0..=1.0).contains(&value) || value == 0.0 {
+                errors.push(format!(
+                    "agents.{}.flow.compaction_threshold_ratio must be within (0.0, 1.0]",
+                    agent_id
+                ));
+            }
+        }
+        errors.require_positive_opt_u32(
+            &format!("agents.{agent_id}.flow.max_history_turns"),
+            agent.flow.max_history_turns,
+        );
+        errors.require_positive_opt_u32(
+            &format!("agents.{agent_id}.flow.compaction_keep_turns"),
+            agent.flow.compaction_keep_turns,
+        );
+        errors.require_positive_opt_u32(
+            &format!("agents.{agent_id}.flow.compaction_summary_max_tokens"),
+            agent.flow.compaction_summary_max_tokens,
+        );
+
+        errors.require(
+            agent.limits.max_tokens_per_flow > 0,
+            format!("agents.{agent_id}.limits.max_tokens_per_flow must be greater than 0"),
+        );
+        errors.require_positive_opt_f64(
+            &format!("agents.{agent_id}.limits.max_cost_per_flow"),
+            agent.limits.max_cost_per_flow,
+        );
+        errors.require_positive_opt_f64(
+            &format!("agents.{agent_id}.limits.warn_at_cost"),
+            agent.limits.warn_at_cost,
+        );
+        if let (Some(max_cost), Some(warn_cost)) =
+            (agent.limits.max_cost_per_flow, agent.limits.warn_at_cost)
+        {
+            if warn_cost > max_cost {
+                errors.push(format!(
+                    "agents.{}.limits.warn_at_cost cannot exceed max_cost_per_flow",
+                    agent_id
+                ));
+            }
+        }
+        if let Some(output) = agent.limits.max_output_tokens_per_turn {
+            let context = agent.limits.context_window;
+            if output > context {
+                errors.push(format!(
+                    "agents.{}.limits.max_output_tokens_per_turn cannot exceed context_window",
+                    agent_id
+                ));
+            }
+        }
+
+        if let Some(ref role) = agent.role {
+            errors.require(
+                !role.trim().is_empty(),
+                format!("agents.{agent_id}.role cannot be empty when set"),
+            );
+        }
+
+        errors.require(
+            agent.lens.eco_max_tokens > 0,
+            format!("agents.{agent_id}.lens.eco_max_tokens must be greater than 0"),
+        );
+        if !(0.0..=1.0).contains(&agent.lens.standard_threshold) {
+            errors.push(format!(
+                "agents.{}.lens.standard_threshold must be within [0.0, 1.0]",
+                agent_id
+            ));
+        }
+        if !(0.0..=1.0).contains(&agent.lens.precise_budget) {
+            errors.push(format!(
+                "agents.{}.lens.precise_budget must be within [0.0, 1.0]",
+                agent_id
+            ));
+        }
+
+        let pb = &agent.prompt_budget;
+        let pb_prefix = format!("agents.{agent_id}.prompt_budget");
+        errors.require(
+            pb.max_file_tokens > 0,
+            format!("{pb_prefix}.max_file_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_skill_context_tokens > 0,
+            format!("{pb_prefix}.max_skill_context_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_total_tokens > 0,
+            format!("{pb_prefix}.max_total_tokens must be greater than 0"),
+        );
+        errors.require(
+            pb.max_file_tokens <= pb.max_total_tokens,
+            format!("{pb_prefix}.max_file_tokens cannot exceed max_total_tokens"),
+        );
+        errors.require(
+            pb.max_skill_context_tokens <= pb.max_total_tokens,
+            format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
+        );
+
+        let valid_workspace_tools = ["shared_cache"];
+        for wt in &agent.workspace_tools {
+            if !valid_workspace_tools.contains(&wt.as_str()) {
+                errors.push(format!(
+                    "agents.{agent_id}.workspace_tools: unknown tool '{}' (valid: {})",
+                    wt,
+                    valid_workspace_tools.join(", ")
+                ));
+            }
+        }
+    }
+
+    fn substitute_env_vars(content: &str) -> anyhow::Result<String> {
+        let mut result = content.to_string();
+        let re = regex_lite::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+
+        for cap in re.captures_iter(content) {
+            let full_match = cap.get(0).unwrap().as_str();
+            let var_name = &cap[1];
+            if let Ok(value) = std::env::var(var_name) {
+                result = result.replace(full_match, &value);
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let mut agents = HashMap::new();
+        agents.insert(
+            "main".to_string(),
+            AgentConfig {
+                default: true,
+                engine: "openrouter".to_string(),
+                model: "anthropic/claude-sonnet-4-20250514".to_string(),
+                workspace: None,
+                default_lens: "eco".to_string(),
+                identity: IdentityConfig {
+                    name: Some("Tengu".to_string()),
+                    instructions: None,
+                },
+                flow: FlowConfig::default(),
+                limits: LimitsConfig::default(),
+                lens: LensConfig::default(),
+                role: None,
+                skill_packages: vec![],
+                prompt_budget: PromptBudgetConfig::default(),
+                requires: vec![],
+                workspace_tools: vec![],
+                claude_code: None,
+            },
+        );
+
+        Self {
+            runtime_profile: "auto".to_string(),
+            hub: HubConfig::default(),
+            agents,
+            orchestrator: None,
+            memory: MemoryConfig::default(),
+            telegram: TelegramConfig::default(),
+            scaffold: None,
+            claude_code: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_default_config() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_output_cap_above_context_override() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.limits.context_window = 4_096;
+        main.limits.max_output_tokens_per_turn = Some(8_192);
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("cannot exceed context_window"));
+    }
+
+    #[test]
+    fn validate_rejects_unknown_engine() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "ollama".to_string();
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("engine must be one of"));
+    }
+
+    #[test]
+    fn validate_accepts_claude_code_engine() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "claude_code".to_string();
+        main.claude_code = Some(AgentClaudeCodeConfig {
+            builtin_tools_profile: "editor_shell".to_string(),
+        });
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_bad_claude_profile() {
+        let mut config = Config::default();
+        let main = config.agents.get_mut("main").expect("main agent");
+        main.engine = "claude_code".to_string();
+        main.claude_code = Some(AgentClaudeCodeConfig {
+            builtin_tools_profile: "dangerous".to_string(),
+        });
+
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err.to_string().contains("builtin_tools_profile must be one of"));
+    }
+}

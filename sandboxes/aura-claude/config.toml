@@ -1,0 +1,89 @@
+# Tengu Cluster — DeSci Sandbox (Claude Code Backend)
+# Same DeSci workflow as sandboxes/aura, but powered by Claude Code CLI
+# instead of OpenRouter API tokens. Uses your Claude subscription.
+#
+# Prerequisites:
+#   - Claude Code CLI installed and authenticated (`claude --version`)
+#   - cargo build --features claude_code
+#
+# Run with: tengu telegram --sandbox aura-claude
+# Or TUI:   tengu chat --config sandboxes/aura-claude/config.toml
+
+runtime_profile = "desktop"
+
+[hub]
+bind = "127.0.0.1"
+port = 7072
+
+[claude_code]
+cli_path = "claude"
+timeout_secs = 120
+
+[memory]
+enabled = false  # Memory embeddings still require OPENROUTER_API_KEY
+
+[telegram]
+tool_approvals = true
+approve_only = ["sign_and_send_transaction"]
+
+# --- Scaffold ---
+[scaffold]
+root = "~/aura-workspace"
+directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
+
+[scaffold.project]
+directories = ["research", "research/summaries", "mint", "mint/metadata", "uploads", "posts"]
+
+[[scaffold.project.files]]
+path = "README.md"
+content = """# DeSci Project
+- `poi/` — Proof of Invention registration
+- `mint/` — Minting metadata and logs
+- `create_molecule/` — Molecule project creation
+- `uploads/` — Molecule data room uploads with s3 link upload
+- `posts/` — Beach.science post records
+"""
+
+[agents.aura]
+engine = "claude_code"
+model = "sonnet"
+role = "aura"
+default = true
+requires = []
+workspace = "~/aura-workspace"
+skill_packages = ["aura-orchestrator", "beach-science", "privy"]
+workspace_tools = ["shared_cache"]
+
+[agents.aura.claude_code]
+builtin_tools_profile = "editor_shell"
+
+[agents.aura.limits]
+max_tokens_per_flow = 5_000_000
+max_tool_rounds = 100
+stream_event_timeout_secs = 120
+max_tool_result_chars = 300_000
+compact_result_limit = 50_000
+
+[agents.aura.identity]
+name = "Aura DeSci Agent"
+instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
+
+## RULES
+- NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
+- NEVER guess or fabricate URLs, contract addresses, or function signatures. Follow the aura-orchestrator skill EXACTLY.
+- Use `shared_cache` to persist ALL critical IDs (reservation_id, wallet_address, tx hashes, service tokens) so they survive context compaction.
+- POI registration is an HTTP API call, NOT a smart contract call. Follow the skill.
+- Use x402 payment flow for all Molecule mutations, including project creation, file uploads, announcements, and ownership management. Follow the molecule-x402 skill.
+
+## You have those capabilities, which need to be executed sequentially as one continuous flow without stopping or reporting intermediate progress:
+0. Wallet Setup — verify Privy agentic wallet exists, create one with a policy if not (follow aura-orchestrator skill Phase 0)
+1. POI Registration
+2. IP-NFT Minting
+3. Authenticate — follow molecule-auth skill
+4. Create project — follow molecule-x402 skill
+5. Upload files to created project — follow molecule-x402 skill
+6. Create announcement in project — follow molecule-x402 skill
+7. Transfer NFT to owner's wallet and add them as co-owner — follow aura-orchestrator skill
+8. Post to Beach.science with project details and IPNFT metadata — follow beach-science skill use BEACH_API_KEY=beach_OTUeOlNFz6Jjv9_qaDTQ8XdNrYw2vqUV
+
+"""

@@ -8,7 +8,7 @@
 //! `recall` (embed query before similarity search), ensuring that stored
 //! vectors and query vectors always share the same embedding space.
 
-use crate::application::ports::EmbeddingPort;
+use crate::adapters::ports::EmbeddingPort;
 use anyhow::{Context, Result};
 use std::future::Future;
 use std::pin::Pin;

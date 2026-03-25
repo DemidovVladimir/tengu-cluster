@@ -6,7 +6,7 @@ use cursive::theme::{BaseColor, BorderStyle, Color, Effect, Palette, PaletteColo
 use cursive::traits::*;
 use cursive::utils::markup::StyledString;
 use cursive::view::ScrollStrategy;
-use cursive::views::{Dialog, EditView, LinearLayout, NamedView, ScrollView, TextView};
+use cursive::views::{EditView, LinearLayout, NamedView, ScrollView, TextView};
 use cursive::Cursive;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -398,44 +398,3 @@ pub fn push_tool_activity(siv: &mut Cursive, tool_name: &str, detail: &str) {
     scroll_chat_to_bottom(siv);
 }
 
-/// Show a tool confirmation dialog. Sends `true` (allow) or `false` (deny)
-/// back through the provided sender.
-pub fn show_tool_confirmation(
-    siv: &mut Cursive,
-    title: &str,
-    description: &str,
-    preview: &str,
-    response_tx: mpsc::Sender<bool>,
-) {
-    let preview_text = if preview.len() > 200 {
-        let mut end = 200;
-        while end > 0 && !preview.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &preview[..end])
-    } else {
-        preview.to_string()
-    };
-
-    let body = if preview_text.is_empty() {
-        description.to_string()
-    } else {
-        format!("{}\n\n{}", description, preview_text)
-    };
-
-    let tx_allow = response_tx.clone();
-    let tx_deny = response_tx;
-
-    let dialog = Dialog::text(body)
-        .title(title)
-        .button("Allow", move |s| {
-            let _ = tx_allow.send(true);
-            s.pop_layer();
-        })
-        .button("Deny", move |s| {
-            let _ = tx_deny.send(false);
-            s.pop_layer();
-        });
-
-    siv.add_layer(dialog);
-}

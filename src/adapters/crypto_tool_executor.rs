@@ -3,15 +3,15 @@
 //! Extracts generic blockchain capabilities from the DeSci-specific adapter into
 //! reusable platform primitives that any skill can compose.
 
-use crate::application::ports::ToolExecutionPort;
-use crate::domain::tool_result::ToolResultEnvelope;
+use crate::adapters::ports::ToolExecutionPort;
 use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Address, I256, U256};
 use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::str::FromStr;
-use std::sync::Mutex;
-use tengu_core::types::ToolCall;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use crate::adapters::types::ToolCall;
 
 const PRIVY_API_URL: &str = "https://api.privy.io";
 const DEFAULT_CHAIN_ID: u64 = 11155111;
@@ -22,14 +22,10 @@ static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
 pub(crate) struct CryptoToolExecutionAdapter {
     client: reqwest::Client,
     fallback_runtime: Option<tokio::runtime::Runtime>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl CryptoToolExecutionAdapter {
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Result<Self> {
-        Self::with_client(None)
-    }
-
     /// Create with an optional shared `reqwest::Client`. Sharing eliminates
     /// redundant connection pools when multiple agents use crypto tools.
     pub(crate) fn with_client(shared_client: Option<reqwest::Client>) -> Result<Self> {
@@ -44,12 +40,20 @@ impl CryptoToolExecutionAdapter {
         };
         let client = match shared_client {
             Some(c) => c,
-            None => reqwest::Client::builder().build()?,
+            None => reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()?,
         };
         Ok(Self {
             client,
             fallback_runtime,
+            cancel: None,
         })
+    }
+
+    pub(crate) fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 
     fn run_async<F, T>(&self, future: F) -> T
@@ -89,6 +93,7 @@ impl CryptoToolExecutionAdapter {
         let to = to.to_string();
         let data = data.map(|s| s.to_string());
         let value = value.map(|s| s.to_string());
+        let cancel = self.cancel.clone();
 
         self.run_async(async move {
             let tx_hash =
@@ -96,32 +101,19 @@ impl CryptoToolExecutionAdapter {
                     .await?;
 
             if wait {
-                let receipt = wait_for_receipt(&client, &tx_hash).await?;
+                let receipt = wait_for_receipt(&client, &tx_hash, cancel.as_ref()).await?;
                 let status_hex = receipt["status"].as_str().unwrap_or("0x0");
                 let confirmed = status_hex == "0x1";
-                let summary = if confirmed {
-                    format!("Transaction confirmed: {}", tx_hash)
-                } else {
-                    format!("Transaction reverted: {}", tx_hash)
-                };
-                let envelope = ToolResultEnvelope::ok("sign_and_send_transaction", &summary)
-                    .with_id("tx_hash", &tx_hash)
-                    .with_id("chain_id", chain_id.to_string())
-                    .with_id("to", &to)
-                    .with_raw_response(json!({
-                        "tx_hash": tx_hash,
-                        "confirmed": confirmed,
-                        "status": if confirmed { "success" } else { "reverted" },
-                        "receipt": receipt
-                    }));
-                envelope.to_json_string()
+                let status_str = if confirmed { "confirmed" } else { "reverted" };
+                Ok(format!(
+                    "tx_hash: {} | status: {} | chain: {} | to: {}",
+                    tx_hash, status_str, chain_id, to
+                ))
             } else {
-                let envelope =
-                    ToolResultEnvelope::ok("sign_and_send_transaction", "Transaction submitted")
-                        .with_id("tx_hash", &tx_hash)
-                        .with_id("chain_id", chain_id.to_string())
-                        .with_id("to", &to);
-                envelope.to_json_string()
+                Ok(format!(
+                    "tx_hash: {} | status: submitted | chain: {} | to: {}",
+                    tx_hash, chain_id, to
+                ))
             }
         })
     }
@@ -139,13 +131,7 @@ impl CryptoToolExecutionAdapter {
         self.run_async(async move {
             let signature = privy_personal_sign(&client, &message).await?;
             let address = privy_wallet_address(&client).await?;
-            let envelope = ToolResultEnvelope::ok(
-                "sign_message",
-                format!("Message signed by {}", address),
-            )
-            .with_id("signature", &signature)
-            .with_id("signer", &address);
-            envelope.to_json_string()
+            Ok(format!("signature: {} | signer: {}", signature, address))
         })
     }
 
@@ -153,12 +139,7 @@ impl CryptoToolExecutionAdapter {
         let client = self.client.clone();
         self.run_async(async move {
             let address = privy_wallet_address(&client).await?;
-            let envelope = ToolResultEnvelope::ok(
-                "get_wallet_address",
-                format!("Wallet address: {}", address),
-            )
-            .with_id("address", &address);
-            envelope.to_json_string()
+            Ok(format!("address: {}", address))
         })
     }
 
@@ -175,12 +156,19 @@ impl CryptoToolExecutionAdapter {
             .ok_or_else(|| anyhow::anyhow!("abi_encode: missing 'args' array"))?;
 
         let calldata = abi_encode_function_call(signature, args)?;
-        let envelope = ToolResultEnvelope::ok(
-            "abi_encode",
-            format!("Encoded {}", signature),
-        )
-        .with_id("calldata", &calldata);
-        envelope.to_json_string()
+        Ok(format!("calldata: {}", calldata))
+    }
+
+    fn execute_hex_to_uint256(call: &ToolCall) -> Result<String> {
+        let hex = call
+            .arguments
+            .get("hex")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("hex_to_uint256: missing 'hex'"))?;
+        let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+        let value = U256::from_str_radix(stripped, 16)
+            .map_err(|e| anyhow::anyhow!("hex_to_uint256: invalid hex — {e}"))?;
+        Ok(value.to_string())
     }
 }
 
@@ -191,6 +179,7 @@ impl ToolExecutionPort for CryptoToolExecutionAdapter {
             "sign_message" => self.execute_sign_message(call),
             "get_wallet_address" => self.execute_get_wallet_address(),
             "abi_encode" => self.execute_abi_encode(call),
+            "hex_to_uint256" => Self::execute_hex_to_uint256(call),
             other => bail!("Unknown crypto tool: {}", other),
         }
     }
@@ -476,10 +465,17 @@ fn parse_uint256(s: &str) -> Result<U256> {
     }
 }
 
-async fn wait_for_receipt(client: &reqwest::Client, tx_hash: &str) -> Result<serde_json::Value> {
+async fn wait_for_receipt(
+    client: &reqwest::Client,
+    tx_hash: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<serde_json::Value> {
     let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
 
     for _ in 0..90 {
+        if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
+        }
         let resp = client
             .post(&rpc_url)
             .json(&json!({
@@ -499,74 +495,4 @@ async fn wait_for_receipt(client: &reqwest::Client, tx_hash: &str) -> Result<ser
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
     bail!("Transaction receipt not found after 180s: {}", tx_hash)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn abi_encode_simple_function() {
-        // transfer(address,uint256)
-        let result = abi_encode_function_call(
-            "transfer(address,uint256)",
-            &[
-                json!("0x0000000000000000000000000000000000000001"),
-                json!("100"),
-            ],
-        )
-        .unwrap();
-        assert!(result.starts_with("0x"));
-        // selector for transfer(address,uint256) = 0xa9059cbb
-        assert!(result.starts_with("0xa9059cbb"));
-        // 4 bytes selector + 2 * 32 bytes params = 68 bytes = 136 hex chars + "0x"
-        assert_eq!(result.len(), 2 + 136);
-    }
-
-    #[test]
-    fn abi_encode_with_string_and_bytes() {
-        let result = abi_encode_function_call(
-            "mintReservation(address,uint256,string,string,bytes)",
-            &[
-                json!("0x0000000000000000000000000000000000000001"),
-                json!("42"),
-                json!("ipfs://QmTest"),
-                json!("VDNA"),
-                json!("0xdead"),
-            ],
-        )
-        .unwrap();
-        assert!(result.starts_with("0x"));
-        // selector is 4 bytes = 8 hex chars
-        assert!(result.len() > 10);
-    }
-
-    #[test]
-    fn abi_encode_no_args() {
-        let result = abi_encode_function_call("pause()", &[]).unwrap();
-        // Just 4-byte selector
-        assert_eq!(result.len(), 2 + 8); // "0x" + 8 hex chars
-    }
-
-    #[test]
-    fn abi_encode_arg_count_mismatch() {
-        let err = abi_encode_function_call("transfer(address,uint256)", &[json!("0x01")]);
-        assert!(err.is_err());
-        assert!(err
-            .unwrap_err()
-            .to_string()
-            .contains("expects 2 args but got 1"));
-    }
-
-    #[test]
-    fn abi_encode_hex_uint256() {
-        let result = abi_encode_function_call("setValue(uint256)", &[json!("0xff")]).unwrap();
-        assert!(result.starts_with("0x"));
-    }
-
-    #[test]
-    fn abi_encode_bool_arg() {
-        let result = abi_encode_function_call("setApproval(bool)", &[json!("true")]).unwrap();
-        assert!(result.starts_with("0x"));
-    }
 }

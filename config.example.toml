@@ -18,10 +18,6 @@ auth_mode = "token"
 [hub.reload]
 mode = "hybrid"
 
-# Refiner: "off" | "rules" | "local" | "remote"
-[refiner]
-mode = "off"
-
 # --- Default Agent ---
 # OpenRouter is recommended: one API key for all providers, one bill.
 # Set OPENROUTER_API_KEY in your environment.
@@ -33,6 +29,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
+# workspace_tools = ["shared_cache"]  # Optional first-party workspace tools
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -42,17 +39,8 @@ default_lens = "eco"
 # model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
 # model = "deepseek/deepseek-chat-v3"        # DeepSeek V3 (cheapest)
 
-# Alternative: direct provider engines (requires provider-specific API key)
-# engine = "anthropic"
-# model = "claude-sonnet-4-20250514"
-# engine = "openai"
-# model = "gpt-4o-mini"
-# engine = "ollama"
-# model = "llama3.2"
-# engine = "huggingface"
-# model = "THUDM/GLM-4.7:fastest"
-# engine = "claude-code"
-# model = "claude-sonnet-4-5-20250929"
+# All models are accessed through OpenRouter — one API key, one bill.
+# Browse available models at https://openrouter.ai/models
 
 [agents.main.identity]
 name = "Tengu"
@@ -119,23 +107,12 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
-# Use capabilities for hard permissions and skill_packages for workflow docs/tools.
-#
-# Available capabilities:
-#   workspace.read, workspace.list, workspace.write, workspace.shell — file + shell
-#   http.request           — generic HTTP client (any REST API via skills)
-#   crypto.sign_tx         — EVM transaction signing via Privy wallet
-#   crypto.sign_message    — message signing via Privy wallet
-#   crypto.wallet_address  — read wallet address
-#   crypto.abi_encode      — ABI-encode EVM function calls into calldata
-#   memory.write           — persist memory entries
-#   DeSci workflows should be modeled as skills over the generic HTTP/crypto tools
+# Use skill_packages for workflow docs/tools.
 
 # [agents.qa]
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "qa"
-# capabilities = ["workspace.read", "workspace.list", "workspace.shell", "skill.search", "skill.test_runner"]
 # skill_packages = ["search", "test_runner"]
 #
 # [agents.qa.identity]
@@ -153,7 +130,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "nvidia/nemotron-3-super-120b-a12b:free"
 # role = "backend_engineer"
-# capabilities = ["workspace.read", "workspace.list", "workspace.write", "workspace.shell"]
 #
 # [agents.backend.identity]
 # name = "Backend Engineer"
@@ -165,3 +141,31 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #
 # [agents.backend.limits]
 # max_tokens_per_flow = 100_000
+
+# --- Claude Code Backend ---
+# Run agents powered by your Claude Code subscription instead of API tokens.
+# Requires: cargo build --features claude_code
+# Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
+# Claude loads your CLAUDE.md, skills, MCP servers — everything from the workspace.
+# Tengu-native tools (http_request, crypto, cache) are bridged via MCP.
+# See docs/engine-backends.md for details.
+
+# [claude_code]
+# cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
+
+# [agents.editor]
+# engine = "claude_code"
+# model = "claude-sonnet-4-20250514"
+# workspace = "~/projects/my-app"
+# skill_packages = ["my-skill"]
+# workspace_tools = ["shared_cache"]
+#
+# [agents.editor.claude_code]
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell
+#
+# [agents.editor.identity]
+# name = "Editor Agent"
+# instructions = "You are a coding assistant with full workspace access."
+#
+# [agents.editor.limits]
+# max_tokens_per_flow = 5_000_000

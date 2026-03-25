@@ -56,6 +56,10 @@ pub fn plan_prune(
             ws.join(".tengu-attachments"),
             format!("attachments ({ws_display})"),
         );
+        push(
+            ws.join("storage"),
+            format!("storage agent data ({ws_display})"),
+        );
 
         // Scaffold project output directories — pipeline artifacts that go stale between runs.
         // Only add top-level dirs; skip subdirs already covered by a parent (e.g. mint/metadata under mint/).

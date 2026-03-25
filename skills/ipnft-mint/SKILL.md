@@ -8,19 +8,19 @@ homepage: https://sepolia.etherscan.io
 
 10-step workflow using `sign_and_send_transaction`, `abi_encode`, `sign_message`, and `http_request`.
 
+IMPORTANT: Execute ALL 10 steps in sequence using tool calls. Do NOT stop mid-pipeline, report progress, or output text until every step is complete.
+
+## Required Environment Variables
+
+| Variable | Usage |
+|---|---|
+| `MOLECULE_LABS_URL` | Molecule GraphQL endpoint (steps 2-3, 5-6, 8) |
+| `MOLECULE_API_KEY` | x-api-key header for Molecule GraphQL |
+| `MOLECULE_CLIENT_URL` | Molecule frontend URL (for metadata external_url) |
+
 ## Input
 
-Read `mint/metadata/poi_result.json`. The POI response has this structure:
-```json
-{
-  "data": {
-    "transaction": { "to": "0x...", "data": "0x..." },
-    "proof": { "tree": ["0x...merkle_root..."] }
-  }
-}
-```
-
-Extract:
+These values come from the orchestrator context (provided by the upstream POI registration task) or from `mint/metadata/poi_result.json`:
 - `data.transaction.to` → use as `to` in step 1
 - `data.transaction.data` → use as `data` in step 1
 - `data.proof.tree[0]` → this is the `merkle_root`
@@ -38,7 +38,14 @@ sign_and_send_transaction:
 
 Save the `tx_hash` from the response as `poi_tx_hash`.
 
-Derive the `reservationId` from `merkle_root` (which is `data.proof.tree[0]`): strip the `0x` prefix, interpret the 32-byte hex value as a big-endian uint256, convert to a decimal string. Use that decimal string as both the reservation ID and the `ipnftId` in all subsequent steps. Do not cast the entire `transaction_data` blob to uint256.
+Derive the `reservationId` from `merkle_root` (which is `data.proof.tree[0]`) using `hex_to_uint256`:
+
+```
+hex_to_uint256:
+  hex: <merkle_root, e.g. "0xe6f7...728c">
+```
+
+The returned `decimal` value is the reservation ID. Use it as both the reservation ID and the `ipnftId` in all subsequent steps. Do not cast the entire `transaction_data` blob to uint256.
 
 ## Step 2 — Generate assignment agreement
 
@@ -48,6 +55,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 GraphQL mutation:
@@ -90,6 +98,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -124,6 +133,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -166,6 +176,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -197,6 +208,7 @@ http_request:
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: <GraphQL below>
+  return_body: true
 ```
 
 ```graphql
@@ -256,10 +268,4 @@ Save to `mint/metadata/mint_result.json`:
 
 The `ipnft_uid` for downstream steps is: `{contract_address}_{token_id}`
 
-## Environment Variables
-
-| Variable | Usage |
-|---|---|
-| `MOLECULE_LABS_URL` | Molecule GraphQL endpoint (steps 2-3, 5-6, 8) |
-| `MOLECULE_API_KEY` | x-api-key header for Molecule GraphQL |
-| `MOLECULE_CLIENT_URL` | Molecule frontend URL (for metadata external_url) |
+The orchestrator will automatically forward these values to downstream tasks via context.
