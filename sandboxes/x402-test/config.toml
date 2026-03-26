@@ -39,7 +39,7 @@ role = "x402"
 default = true
 requires = []
 workspace = "~/x402-test-workspace"
-skill_packages = ["x402-hello", "privy"]
+skill_packages = ["x402-hello", "privy", "molecule-x402", "aura-orchestrator"]
 workspace_tools = ["shared_cache"]
 
 [agents.x402.claude_code]

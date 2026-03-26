@@ -9,11 +9,15 @@ homepage: https://testnet.molecule.xyz
 Complete DeSci molecule executed as one continuous sequence of tool calls.
 Do NOT stop, report progress, or output text between steps — execute ALL steps as one uninterrupted flow.
 
-**IMPORTANT RULES:**
+**SUPER IMPORTANT RULES:**
 - POI registration is an **HTTP API call** (`http_request`), NOT a smart contract call. Do NOT use `abi_encode` or `sign_and_send_transaction` for POI.
 - Use `read_file` for PDFs — it has built-in PDF text extraction. NEVER use python, pip, pdftotext, or any shell tools for PDF reading.
 - Use `shared_cache` to persist all critical molecule values (IDs, hashes, tokens). If you need a value from an earlier step, retrieve it from cache.
 - Follow every URL, contract address, and function signature in this document EXACTLY. Do NOT guess or fabricate alternatives.
+- NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
+- NEVER guess or fabricate URLs, contract addresses, or function signatures. Follow the aura-orchestrator skill EXACTLY.
+- Use x402 payment flow for all Molecule mutations, including project creation, file uploads, announcements, and ownership management. Follow the molecule-x402 skill.
+- Phases executed sequentially without stopping or reporting intermediate progress.
 
 ## Required Environment Variables if not available terminate with an error and instructions on how to set them. These are needed for wallet management, authentication, and NFT transfer.
 
@@ -357,7 +361,7 @@ shared_cache: { "operation": "put", "namespace": "molecule", "key": "metadata_ci
 
 ## Phases 3–6: Create Project, Upload File, Create Announcement (via x402)
 
-These phases use the **molecule-x402** skill for all Molecule mutations. No API key or service token is needed — payment is handled via x402 molUSDC transfers.
+These phases use the **molecule-x402** skill for all Molecule mutations. No API key or service token is needed — payment is handled via x402 USDC transfers.
 
 **Follow the molecule-x402 skill EXACTLY for each mutation below.** Each mutation requires the full 7-step x402 payment flow (send request → get 402 → decode → sign → build payment header → retry with payment).
 
