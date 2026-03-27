@@ -146,10 +146,10 @@ The `merkle_root` from POI drives ALL subsequent IDs:
 
 If `reservationId` is a small number like 1 or 0, something went wrong in Phase 1. Stop and report the error.
 
-Cache it in `shared_cache` immediately and use it for ALL subsequent steps in the molecule. 
+Cache it in `shared_cache` immediately and use it for ALL subsequent steps in the molecule.
 ```shared_cache: { "operation": "put", "namespace": "molecule", "key": "reservation_id", "value": "<reservationId>" }```
 
-Wait for 60 seconds to ensure POI transaction is indexed and the merkle root is available for the next phase.
+Proceed immediately to Phase 2 — the merkle root is already in the POI response, no waiting needed.
 
 ## Phase 2: IP-NFT Minting (10 steps)
 
@@ -359,33 +359,108 @@ shared_cache: { "operation": "put", "namespace": "molecule", "key": "ipnft_symbo
 shared_cache: { "operation": "put", "namespace": "molecule", "key": "metadata_cid", "value": "<metadataCid>" }
 ```
 
-## Phases 3–6: Create Project, Upload File, Create Announcement (via x402)
+## x402 Payment Flow (used by ALL mutations in Phases 3–6)
 
-These phases use the **molecule-x402** skill for all Molecule mutations. No API key or service token is needed — payment is handled via x402 USDC transfers.
+Every Molecule mutation below uses x402 payment. No API key or service token needed — USDC on Base pays per call.
 
-**Follow the molecule-x402 skill EXACTLY for each mutation below.** Each mutation requires the full 7-step x402 payment flow (send request → get 402 → decode → sign → build payment header → retry with payment).
+**Required env vars:** `X402_GATEWAY_URL`, `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID`
 
-### Phase 3: Create Molecule Project
+Each mutation follows this 7-step flow. Substitute `<mutation_name>`, `<query>`, and `<variables>` per mutation.
+
+**Step P1 — Send request, get 402 challenge:**
+```
+run_command:
+  command: curl -sS -i -X POST "$X402_GATEWAY_URL/x402/labs/<mutation_name>" -H "Content-Type: application/json" -d '<JSON body with query and variables>'
+```
+Look for the `payment-required` header (base64-encoded) in the response.
+
+**Step P2 — Decode payment requirements:**
+```
+run_command:
+  command: echo '<payment-required header value>' | base64 -D
+```
+Extract from `accepts[0]`: `network`, `amount`, `asset`, `payTo`, `maxTimeoutSeconds`, `extra.name`, `extra.version`.
+
+**Step P3 — Get wallet address** (reuse from Phase 0 if cached).
+
+**Step P4 — Generate nonce, validAfter, validBefore:**
+```
+run_command:
+  command: NOW=$(date +%s) && echo "0x$(openssl rand -hex 32)" && echo $(( NOW - 600 )) && echo $(( NOW + <maxTimeoutSeconds> ))
+```
+Line 1: `nonce`, Line 2: `valid_after`, Line 3: `valid_before`.
+
+**Step P5 — Sign EIP-712 TransferWithAuthorization:**
+
+Extract chain ID from network string (e.g. `eip155:84532` → `84532`). Use `primary_type` (snake_case), do NOT include `caip2`.
+
+```
+http_request:
+  url: https://api.privy.io/v1/wallets/$PRIVY_WALLET_ID/rpc
+  method: POST
+  auth_basic_user_env: PRIVY_APP_ID
+  auth_basic_pass_env: PRIVY_APP_SECRET
+  headers: {"privy-app-id": "$PRIVY_APP_ID", "Content-Type": "application/json"}
+  body: {"method": "eth_signTypedData_v4", "params": {"typed_data": {"types": {"EIP712Domain": [{"name": "name", "type": "string"}, {"name": "version", "type": "string"}, {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"}], "TransferWithAuthorization": [{"name": "from", "type": "address"}, {"name": "to", "type": "address"}, {"name": "value", "type": "uint256"}, {"name": "validAfter", "type": "uint256"}, {"name": "validBefore", "type": "uint256"}, {"name": "nonce", "type": "bytes32"}]}, "primary_type": "TransferWithAuthorization", "domain": {"name": "<extra.name>", "version": "<extra.version>", "chainId": <chain_id>, "verifyingContract": "<asset>"}, "message": {"from": "<wallet_address>", "to": "<payTo>", "value": "<amount>", "validAfter": "<valid_after>", "validBefore": "<valid_before>", "nonce": "<nonce>"}}}}
+  return_body: true
+```
+Extract `data.signature`.
+
+**Step P6 — Build and encode payment header:**
+
+All `authorization` fields MUST be strings. The `accepted` field MUST be the full `accepts[0]` object from step P2 (including `scheme`, `network`, `amount`, `asset`, `payTo`, `maxTimeoutSeconds`, `extra`). The `resource` field MUST be the `resource` object from step P2. Construct JSON:
+```json
+{"x402Version":2,"resource":{"url":"<resource.url from P2>","description":"<resource.description from P2>","mimeType":"<resource.mimeType from P2>"},"accepted":{"scheme":"exact","network":"<network>","amount":"<amount>","asset":"<asset>","payTo":"<payTo>","maxTimeoutSeconds":<maxTimeoutSeconds>,"extra":{"name":"<extra.name>","version":"<extra.version>"}},"payload":{"signature":"<signature>","authorization":{"from":"<wallet_address>","to":"<payTo>","value":"<amount>","validAfter":"<valid_after>","validBefore":"<valid_before>","nonce":"<nonce>"}}}
+```
+Base64 encode:
+```
+run_command:
+  command: printf '%s' '<payment JSON no whitespace>' | base64 | tr -d '\n'
+```
+
+**Step P7 — Retry with payment:**
+
+**CRITICAL: The header MUST be `PAYMENT-SIGNATURE`. Do NOT use `X-PAYMENT` — the x402 server only reads `PAYMENT-SIGNATURE`.**
+```
+run_command:
+  command: curl -sS -X POST "$X402_GATEWAY_URL/x402/labs/<mutation_name>" -H "Content-Type: application/json" -H "PAYMENT-SIGNATURE: <payment_header>" -d '<same JSON body as P1>'
+```
+
+---
+
+## Phase 3: Create Molecule Project (via x402)
+
+**Wait 90 seconds** after minting — on-chain ownership needs time to propagate to the AccessResolver:
+```
+run_command:
+  command: sleep 90
+```
 
 Retrieve `reservationId` from cache if not in context:
 ```
 shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation_id" }
 ```
 
-Use the molecule-x402 `createProject` mutation with:
-- `ipnftSymbol`: `<symbol>`
-- `ipnftTokenId`: `<reservationId as decimal string>`
-- `ipnftUid`: `<ipnft_uid>` (format: `0x152B444e60C526fe4434C721561a077269FcF61a_{reservationId}`)
-- `ipnftAddress`: `0x152B444e60C526fe4434C721561a077269FcF61a`
+**Mutation name:** `createProject`
+**URL path:** `/x402/labs/createProject`
+**Body:**
+```json
+{"query": "mutation CreateProject($input: CreateProjectInput!) { createProject(input: $input) { isSuccess message error { message code retryable } project { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } } }", "variables": {"input": {"ipnftSymbol": "<symbol>", "ipnftTokenId": "<reservationId as decimal string>"}}}
+```
 
-Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId}`
+Run the full x402 payment flow (steps P1–P7) with this mutation. Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId}`
 
-### Phase 4: Upload File to Data Room
+Cache:
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "project_url", "value": "<project_url>" }
+```
 
-**Wait 30 seconds** after project creation — data room provisioning is async:
+## Phase 4: Upload File to Data Room
+
+**Wait 90 seconds** after project creation — data room provisioning is async:
 ```
 run_command:
-  command: sleep 30
+  command: sleep 90
 ```
 
 Get file size:
@@ -394,20 +469,54 @@ run_command:
   command: wc -c < <path-to-pdf>
 ```
 
-Then follow molecule-x402 **File Upload (3-step workflow)**:
-- **Step A** — `initiateCreateOrUpdateFileV2` (x402 paid) with `ipnftUid`, `contentType: "application/pdf"`, `contentLength`
-- **Step B** — Upload to S3 using the returned `uploadUrl` and `headers` (direct PUT, no x402)
-- **Step C** — `finishCreateOrUpdateFileV2` (x402 paid) with `uploadToken`, `path`, `accessLevel: "PUBLIC"`, `changeBy: <wallet_address>`
+### Step A — Initiate upload (x402 paid)
 
-Save `datasetId` and `contentHash` from Step C.
+**Mutation name:** `initiateCreateOrUpdateFileV2`
+**URL path:** `/x402/labs/initiateCreateOrUpdateFileV2`
+**Body:**
+```json
+{"query": "mutation InitiateCreateOrUpdateFileV2($ipnftUid: String!, $contentType: String!, $contentLength: Int!) { initiateCreateOrUpdateFileV2(ipnftUid: $ipnftUid, contentType: $contentType, contentLength: $contentLength) { uploadToken uploadUrl uploadUrlExpiry method headers { key value } useMultipart isSuccess error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "contentType": "application/pdf", "contentLength": <file_size_in_bytes>}}
+```
 
-### Phase 5: Create Announcement
+Run full x402 payment flow (P1–P7). Extract: `uploadToken`, `uploadUrl`, `method`, `headers`.
 
-Use the molecule-x402 `createAnnouncementV2` mutation with:
-- `ipnftUid`: `<ipnft_uid>`
-- `headline`: `<title>`
-- `body`: `<markdown body with hypothesis, methodology, key findings, and significance>`
-- `attachments`: `["<datasetId from upload>"]`
+### Step B — Upload to S3 (direct, NO x402 payment)
+
+Use the EXACT `uploadUrl` and ALL `headers` from Step A:
+```
+http_request:
+  url: <uploadUrl from step A>
+  method: <method from step A, usually PUT>
+  headers: {<all key:value pairs from step A headers>, "Content-Type": "application/pdf"}
+  file_path: <path-to-file>
+```
+
+### Step C — Finalize upload (x402 paid)
+
+**Mutation name:** `finishCreateOrUpdateFileV2`
+**URL path:** `/x402/labs/finishCreateOrUpdateFileV2`
+**Body:**
+```json
+{"query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "uploadToken": "<from step A>", "path": "<filename>", "accessLevel": "PUBLIC", "changeBy": "<wallet_address>", "description": "<file description>"}}
+```
+
+Run full x402 payment flow (P1–P7). Extract: `datasetId` (format: `did:odf:...`), `contentHash`.
+
+Cache:
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "dataset_id", "value": "<datasetId>" }
+```
+
+## Phase 5: Create Announcement (via x402)
+
+**Mutation name:** `createAnnouncementV2`
+**URL path:** `/x402/labs/createAnnouncementV2`
+**Body:**
+```json
+{"query": "mutation CreateAnnouncementV2($ipnftUid: String!, $headline: String!, $body: String!, $attachments: [String!]) { createAnnouncementV2(ipnftUid: $ipnftUid, headline: $headline, body: $body, attachments: $attachments) { isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "headline": "<title>", "body": "<markdown body>", "attachments": ["<datasetId from upload>"]}}
+```
+
+Run full x402 payment flow (P1–P7).
 
 ## Phase 6: NFT Transfer and Co-Ownership
 
@@ -441,17 +550,22 @@ Save `calldata`.
 ```
 sign_and_send_transaction:
   to: 0x152B444e60C526fe4434C721561a077269FcF61a
-  data: <calldata from step 23>
+  data: <calldata from step B>
   chain_id: 11155111
 ```
 
 Save `transfer_tx_hash`.
 
-### Step D — Add owner as project co-owner
+### Step D — Add owner as project co-owner (via x402)
 
-Use the molecule-x402 `addProjectOwner` mutation with:
-- `ipnftUid`: `<ipnft_uid>`
-- `walletAddress`: `<owner_wallet>`
+**Mutation name:** `addProjectOwner`
+**URL path:** `/x402/labs/addProjectOwner`
+**Body:**
+```json
+{"query": "mutation AddProjectOwner($ipnftUid: String!, $walletAddress: String!) { addProjectOwner(ipnftUid: $ipnftUid, walletAddress: $walletAddress) { isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "walletAddress": "<owner_wallet>"}}
+```
+
+Run full x402 payment flow (P1–P7).
 
 ## Output
 

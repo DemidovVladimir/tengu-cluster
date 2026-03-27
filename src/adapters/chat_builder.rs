@@ -400,6 +400,8 @@ impl<'a> ChatRuntimeService<'a> {
             workspace: self.agent_config.workspace.clone(),
             system_prompt: Some(self.system_prompt.clone()),
             bridge_tools: self.bridge_tools.map(|t| t.to_vec()),
+            max_tool_rounds: Some(self.agent_config.limits.max_tool_rounds),
+            max_mcp_result_chars: Some(self.agent_config.limits.max_mcp_result_chars),
         };
         let resp = collect_engine_response(
             self.engine,

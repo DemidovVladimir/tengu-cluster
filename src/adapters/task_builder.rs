@@ -50,6 +50,8 @@ pub(crate) async fn classify_request(
         workspace: None,
         system_prompt: Some(system),
         bridge_tools: None,
+        max_tool_rounds: None,
+        max_mcp_result_chars: None,
     };
 
     let defaults = LimitsConfig::default();
@@ -141,6 +143,8 @@ pub(crate) async fn generate_plan(
         workspace: None,
         system_prompt: Some(system),
         bridge_tools: None,
+        max_tool_rounds: None,
+        max_mcp_result_chars: None,
     };
 
     let defaults = LimitsConfig::default();

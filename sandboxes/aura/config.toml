@@ -57,13 +57,15 @@ workspace_tools = ["shared_cache"]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
 max_tokens_per_flow = 3_000_000
 # Full pipeline is ~40+ tool calls (phases 0-7 + Beach posting). Default 30 is not enough.
-max_tool_rounds = 100
-# Timeout for individual stream events from OpenRouter (default 120).
-stream_event_timeout_secs = 120
+max_tool_rounds = 120
+stream_event_timeout_secs = 720
 # Max chars per tool result before adaptive truncation kicks in (default 300_000).
-max_tool_result_chars = 300_000
+max_tool_result_chars = 10_000
 # Max chars for compacted tool results during 2-phase pruning (default 200).
 compact_result_limit = 50_000
+# Max chars per MCP bridge tool result returned to Claude Code CLI (default 50_000).
+# Prevents unbounded context growth — Claude Code has no per-turn compaction.
+max_mcp_result_chars = 10_000
 
 [agents.aura.identity]
 name = "Aura DeSci Agent"

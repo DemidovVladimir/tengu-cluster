@@ -527,6 +527,8 @@ impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
             workspace: self.workspace.clone(),
             system_prompt: Some(self.system_prompt.clone()),
             bridge_tools: None,
+            max_tool_rounds: Some(self.max_tool_rounds),
+            max_mcp_result_chars: None,
         };
 
         let sanitized = self

@@ -117,6 +117,7 @@ impl ClaudeCodeEngine {
         tengu_bin: &str,
         workspace: &std::path::Path,
         bridge_tools: &[ToolDef],
+        max_mcp_result_chars: u32,
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
         serde_json::json!({
@@ -126,7 +127,8 @@ impl ClaudeCodeEngine {
                     "args": ["mcp-bridge"],
                     "env": {
                         "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
-                        "TENGU_BRIDGE_TOOLS": tools_json
+                        "TENGU_BRIDGE_TOOLS": tools_json,
+                        "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
                     }
                 }
             }
@@ -142,6 +144,7 @@ impl ClaudeCodeEngine {
 fn process_ndjson_line(
     line: &str,
     emitted_text: &mut bool,
+    tool_call_count: &mut u32,
 ) -> Vec<StreamEvent> {
     let json: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -198,6 +201,7 @@ fn process_ndjson_line(
                                 }
                             }
                             "tool_use" => {
+                                *tool_call_count += 1;
                                 let name = block
                                     .get("name")
                                     .and_then(|v| v.as_str())
@@ -220,6 +224,7 @@ fn process_ndjson_line(
                                 debug!(
                                     tool = %name,
                                     input = %input_summary,
+                                    tool_call_count = *tool_call_count,
                                     "Claude Code tool call"
                                 );
                             }
@@ -492,7 +497,8 @@ impl Engine for ClaudeCodeEngine {
                     .unwrap_or_else(|_| PathBuf::from("tengu"))
                     .to_string_lossy()
                     .to_string();
-                let config = Self::build_mcp_config_json(&tengu_bin, ws, bridge_tools);
+                let mcp_limit = context.max_mcp_result_chars.unwrap_or(50_000);
+                let config = Self::build_mcp_config_json(&tengu_bin, ws, bridge_tools, mcp_limit);
                 let mut tmp = tempfile::NamedTempFile::new()?;
                 serde_json::to_writer(&mut tmp, &config)?;
                 cmd.arg("--mcp-config").arg(tmp.path());
@@ -536,6 +542,7 @@ impl Engine for ClaudeCodeEngine {
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from Claude CLI"))?;
 
         let timeout_secs = self.timeout_secs;
+        let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
 
         // Spawn async reader task that processes NDJSON lines and emits StreamEvents
@@ -546,20 +553,27 @@ impl Engine for ClaudeCodeEngine {
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
             let mut emitted_text = false;
+            let mut tool_call_count: u32 = 0;
             let idle_timeout = Duration::from_secs(timeout_secs);
 
             let mut timed_out = false;
+            let mut tool_limit_hit = false;
             loop {
                 match tokio::time::timeout(idle_timeout, lines.next_line()).await {
                     Ok(Ok(Some(line))) => {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        let events = process_ndjson_line(&line, &mut emitted_text);
+                        let events = process_ndjson_line(&line, &mut emitted_text, &mut tool_call_count);
                         for event in events {
                             if tx.send(event).await.is_err() {
                                 break;
                             }
+                        }
+                        // Enforce max tool rounds — kill subprocess if exceeded
+                        if tool_call_count > max_tool_rounds {
+                            tool_limit_hit = true;
+                            break;
                         }
                     }
                     Ok(Ok(None)) => break, // EOF
@@ -574,7 +588,23 @@ impl Engine for ClaudeCodeEngine {
                 }
             }
 
-            if timed_out {
+            if tool_limit_hit {
+                error!(
+                    tool_call_count,
+                    max_tool_rounds,
+                    "Claude Code max tool rounds exceeded — killing subprocess"
+                );
+                let _ = child.kill().await;
+                let _ = tx
+                    .send(StreamEvent::Error {
+                        message: format!(
+                            "Max tool rounds exceeded ({} calls, limit {}). \
+                             The agent may be stuck in a retry loop.",
+                            tool_call_count, max_tool_rounds
+                        ),
+                    })
+                    .await;
+            } else if timed_out {
                 error!(timeout_secs, "Claude CLI idle timeout — killing subprocess");
                 let _ = child.kill().await;
                 let _ = tx

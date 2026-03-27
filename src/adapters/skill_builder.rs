@@ -1167,7 +1167,17 @@ pub(crate) fn build_system_prompt_with_tools(
         let truncated = truncate_to_token_budget(ctx, max_skill_context_tokens);
         let chunk_tokens = estimate_tokens_approx_min1(&truncated);
         if total_tokens + chunk_tokens > max_total_tokens {
-            break;
+            // Extract skill name from context (first line often has "# SkillName")
+            let skill_hint = ctx.lines().next().unwrap_or("<unknown>").trim();
+            tracing::warn!(
+                skill = %skill_hint,
+                total_tokens,
+                chunk_tokens,
+                max_total_tokens,
+                "Skill context DROPPED — system prompt budget exhausted. \
+                 Increase prompt_budget.max_total_tokens to include this skill."
+            );
+            continue; // warn for ALL dropped skills, don't break early
         }
         total_tokens += chunk_tokens;
         parts.push(truncated);

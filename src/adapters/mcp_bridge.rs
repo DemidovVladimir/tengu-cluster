@@ -18,8 +18,11 @@ use tracing::{debug, info, warn};
 use crate::adapters::cache_tool_executor::{CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
+use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
+use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter};
 use crate::adapters::ports::ToolExecutionPort;
+use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::tool_builder::{build_tool_activity_text, WorkspaceToolExecutionAdapter};
 use crate::adapters::types::{ToolCall, ToolDef};
@@ -111,6 +114,11 @@ pub fn run_mcp_bridge() -> Result<()> {
         Err(_) => vec![],
     };
 
+    let max_result_chars: usize = std::env::var("TENGU_BRIDGE_MAX_RESULT_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MAX_MCP_RESULT_CHARS);
+
     let executor = build_bridge_executor(&workspace, &tools);
     let mcp_tools: Vec<McpToolDef> = tools.iter().map(McpToolDef::from).collect();
 
@@ -160,7 +168,7 @@ pub fn run_mcp_bridge() -> Result<()> {
             "initialize" => handle_initialize(id),
             "notifications/initialized" => continue, // notification, no response
             "tools/list" => handle_tools_list(id, &mcp_tools),
-            "tools/call" => handle_tools_call(id, &request.params, executor.as_ref()),
+            "tools/call" => handle_tools_call(id, &request.params, executor.as_ref(), max_result_chars),
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
             _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
         };
@@ -206,6 +214,7 @@ fn handle_tools_call(
     id: serde_json::Value,
     params: &serde_json::Value,
     executor: &dyn ToolExecutionPort,
+    max_result_chars: usize,
 ) -> JsonRpcResponse {
     let tool_name = params
         .get("name")
@@ -233,16 +242,18 @@ fn handle_tools_call(
 
     match executor.execute_tool(&call) {
         Ok(result) => {
+            let truncated = truncate_mcp_result(&result, max_result_chars);
             debug!(
                 tool = %call.name,
                 elapsed_ms = started_at.elapsed().as_millis(),
                 result_len = result.len(),
+                truncated = truncated.len() < result.len(),
                 "MCP tool call completed"
             );
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
-                    "content": [{ "type": "text", "text": result }],
+                    "content": [{ "type": "text", "text": truncated }],
                     "isError": false
                 }),
             )
@@ -263,6 +274,33 @@ fn handle_tools_call(
             )
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// MCP result truncation — prevents unbounded context growth in Claude Code.
+// ---------------------------------------------------------------------------
+
+/// Maximum characters per MCP tool result returned to Claude CLI.
+/// The Claude Code engine has no per-turn compaction (unlike the OpenRouter
+/// engine's 2-phase pruning), so every byte here stays in context for the
+/// entire session.  50 000 chars ≈ ~12 500 tokens — enough for any useful
+/// response while preventing schema-introspection blowup.
+const MAX_MCP_RESULT_CHARS: usize = 50_000;
+
+fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
+    if result.len() <= max_chars {
+        return result.to_string();
+    }
+    let mut end = max_chars;
+    while end > 0 && !result.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n[truncated — showing {} of {} chars]",
+        &result[..end],
+        end,
+        result.len()
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +355,32 @@ fn build_bridge_executor(workspace: &std::path::Path, tools: &[ToolDef]) -> Arc<
                 Arc::new(cache_exec),
                 HashSet::from([SHARED_CACHE_TOOL_NAME.to_string()]),
             );
+        }
+    }
+
+    // Memory (remember)
+    if allowed_names.contains("remember") {
+        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
+            let embedding = Arc::new(OpenRouterEmbeddingAdapter::new(
+                api_key,
+                "openai/text-embedding-3-small".to_string(),
+            ));
+            let memory_dir = workspace.join("memory");
+            if let Ok(store) = DiskVectorMemoryStore::new(&memory_dir) {
+                let handle = Arc::new(MemoryServiceHandle {
+                    embedding,
+                    store: Arc::new(store),
+                });
+                let secret_registry = Arc::new(SecretRegistry::new());
+                if let Ok(mem_exec) = MemoryToolExecutionAdapter::new(handle, secret_registry) {
+                    composite = composite.with_executor(
+                        Arc::new(mem_exec),
+                        HashSet::from(["remember".to_string()]),
+                    );
+                }
+            }
+        } else {
+            warn!("remember tool requested but OPENROUTER_API_KEY not set — skipping");
         }
     }
 

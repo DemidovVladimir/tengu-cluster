@@ -73,7 +73,7 @@ Example output:
 ```
 HTTP/2 402
 content-type: application/json
-payment-required: eyJ4NDAyVmVyc2lvbiI6MSwi...
+payment-required: eyJ4NDAyVmVyc2lvbiI6Miwi...
 
 {"isSuccess":false,"message":"Payment required"}
 ```
@@ -90,7 +90,13 @@ run_command:
 Result:
 ```json
 {
-  "x402Version": 1,
+  "x402Version": 2,
+  "error": "Payment required",
+  "resource": {
+    "url": "https://...",
+    "description": "x402 payment for createProject",
+    "mimeType": ""
+  },
   "accepts": [{
     "scheme": "exact",
     "network": "eip155:84532",
@@ -102,6 +108,8 @@ Result:
   }]
 }
 ```
+
+Save the entire `accepts[0]` object as `accepted` and the `resource` object as `resource` -- both are needed in step 6.
 
 Extract from `accepts[0]`:
 - `network` -- CAIP-2 chain identifier (e.g. `eip155:84532`)
@@ -193,15 +201,30 @@ Extract `data.signature` from the response.
 
 ### Step 6: Build and encode payment header
 
-Construct the payment payload JSON.
+Construct the v2 payment payload JSON.
 
-**IMPORTANT:** All fields in `authorization` MUST be **strings** (matching the `@x402/core` SDK).
+**IMPORTANT:**
+- All fields in `authorization` MUST be **strings** -- decimal for numeric values, 0x-prefixed hex for nonce.
+- The `accepted` field MUST be the full `accepts[0]` object from step 2 (including `scheme`, `network`, `amount`, `asset`, `payTo`, `maxTimeoutSeconds`, `extra`).
+- The `resource` field MUST be the `resource` object from step 2.
 
 ```json
 {
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "<network>",
+  "x402Version": 2,
+  "resource": {
+    "url": "<resource.url from step 2>",
+    "description": "<resource.description from step 2>",
+    "mimeType": "<resource.mimeType from step 2>"
+  },
+  "accepted": {
+    "scheme": "exact",
+    "network": "<network>",
+    "amount": "<amount>",
+    "asset": "<asset>",
+    "payTo": "<payTo>",
+    "maxTimeoutSeconds": <maxTimeoutSeconds>,
+    "extra": {"name": "<extra.name>", "version": "<extra.version>"}
+  },
   "payload": {
     "signature": "<signature>",
     "authorization": {
@@ -226,9 +249,11 @@ Save as `payment_header`.
 
 ### Step 7: Retry with payment -- get result
 
+**CRITICAL: The header MUST be `PAYMENT-SIGNATURE`. Do NOT use `X-PAYMENT` or `Payment` -- the x402 server only reads `PAYMENT-SIGNATURE`.**
+
 ```
 run_command:
-  command: curl -sS -X POST "$X402_GATEWAY_URL/x402/labs/<mutation_name>" -H "Content-Type: application/json" -H "X-PAYMENT: <payment_header>" -d '<same JSON body as step 1>'
+  command: curl -sS -X POST "$X402_GATEWAY_URL/x402/labs/<mutation_name>" -H "Content-Type: application/json" -H "PAYMENT-SIGNATURE: <payment_header>" -d '<same JSON body as step 1>'
 ```
 
 Response: HTTP 200 with standard Molecule GraphQL response body.
@@ -248,9 +273,7 @@ Response: HTTP 200 with standard Molecule GraphQL response body.
   "variables": {
     "input": {
       "ipnftSymbol": "<symbol>",
-      "ipnftTokenId": "<token_id as decimal string>",
-      "ipnftUid": "<contract_address>_<token_id>",
-      "ipnftAddress": "0x152B444e60C526fe4434C721561a077269FcF61a"
+      "ipnftTokenId": "<token_id as decimal string>"
     }
   }
 }
@@ -369,6 +392,7 @@ These follow the same x402 payment flow. GraphQL schemas available via Molecule 
 |----------|---------|--------|
 | 402 (no payment sent) | Expected first response | Decode `payment-required` header, sign, retry |
 | 402 with `invalid_exact_evm_payload_signature` | Wrong EIP-712 domain or field types | Verify domain name matches `extra.name` from 402 response, all authorization fields are strings |
+| 402 `"Payment verification failed"` | Payload format wrong or signature invalid | Verify v2 format: `accepted` field present with full payment requirements, `resource` field present, header is `PAYMENT-SIGNATURE` (not `X-PAYMENT`) |
 | 402 (payment sent, other error) | Payment verification failed | Check USDC balance, signature correctness, nonce freshness |
 | 400 `"Mutation not enabled"` | Not in x402 whitelist | Verify mutation name spelling |
 | 400 `"Missing query"` | Body format wrong | Include `query` field with GraphQL mutation string |

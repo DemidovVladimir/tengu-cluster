@@ -201,6 +201,13 @@ pub struct EngineContext {
     pub system_prompt: Option<String>,
     /// Tools to expose via MCP bridge (used by Claude Code engine).
     pub bridge_tools: Option<Vec<ToolDef>>,
+    /// Maximum tool call rounds before killing the session.
+    /// Enforced inside the Claude Code NDJSON reader (the outer
+    /// `collect_engine_response` loop already caps OpenRouter rounds).
+    pub max_tool_rounds: Option<u32>,
+    /// Maximum chars per MCP bridge tool result. Passed to the bridge
+    /// subprocess via `TENGU_BRIDGE_MAX_RESULT_CHARS`.
+    pub max_mcp_result_chars: Option<u32>,
 }
 
 #[async_trait]

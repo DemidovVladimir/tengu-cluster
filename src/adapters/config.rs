@@ -319,6 +319,11 @@ pub struct LimitsConfig {
     /// Max chars for compacted (old-round) tool results. Defaults to 200.
     #[serde(default = "default_compact_result_limit")]
     pub compact_result_limit: u32,
+    /// Max chars per MCP bridge tool result returned to Claude Code CLI.
+    /// Prevents unbounded context growth in the Claude Code engine which
+    /// has no per-turn compaction. Defaults to 50 000 (~12.5K tokens).
+    #[serde(default = "default_max_mcp_result_chars")]
+    pub max_mcp_result_chars: u32,
 }
 
 impl Default for LimitsConfig {
@@ -333,6 +338,7 @@ impl Default for LimitsConfig {
             max_tool_result_chars: default_max_tool_result_chars(),
             stream_event_timeout_secs: default_stream_event_timeout_secs(),
             compact_result_limit: default_compact_result_limit(),
+            max_mcp_result_chars: default_max_mcp_result_chars(),
         }
     }
 }
@@ -351,6 +357,9 @@ fn default_stream_event_timeout_secs() -> u64 {
 }
 fn default_compact_result_limit() -> u32 {
     200
+}
+fn default_max_mcp_result_chars() -> u32 {
+    50_000
 }
 
 fn default_max_tokens() -> u64 {
@@ -574,10 +583,10 @@ fn default_max_file_tokens() -> usize {
     2000
 }
 fn default_max_skill_context_tokens() -> usize {
-    4000
+    16000
 }
 fn default_max_total_tokens() -> usize {
-    8000
+    32000
 }
 
 /// Lens-specific retrieval and budgeting parameters.

@@ -542,6 +542,8 @@ async fn execute_agent_task(
         workspace: runtime.workspace.clone(),
         system_prompt: Some(runtime.system_prompt.clone()),
         bridge_tools: None,
+        max_tool_rounds: Some(runtime.max_tool_rounds),
+        max_mcp_result_chars: None,
     };
 
     let sanitized = SanitizedToolExecutor::new(runtime.tool_executor.as_ref(), secret_registry);

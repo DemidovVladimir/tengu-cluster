@@ -563,6 +563,8 @@ async fn summarize_for_downstream(
             workspace: None,
             system_prompt: None,
             bridge_tools: None,
+            max_tool_rounds: None,
+            max_mcp_result_chars: None,
         },
         None,
         None,
