@@ -75,12 +75,13 @@ pub(crate) fn build_engine(
                     .map(|c| c.builtin_tools_profile.as_str())
                     .unwrap_or("editor_shell");
                 let model_opt = if agent_config.model.is_empty() { None } else { Some(agent_config.model.clone()) };
+                let timeout = agent_config.limits.stream_event_timeout_secs;
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
                         crate::adapters::claude_code_engine::BuiltinToolsProfile::from_str(profile),
                         model_opt,
-                        cc.timeout_secs,
+                        timeout,
                     ),
                 ))
             }

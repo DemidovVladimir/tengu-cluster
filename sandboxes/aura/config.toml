@@ -50,7 +50,7 @@ role = "aura"
 default = true
 requires = []
 workspace = "~/aura-workspace"
-skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy"]
+skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
 
 [agents.aura.limits]
