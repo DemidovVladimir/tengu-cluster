@@ -78,7 +78,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 - Bridge re-creates executors per invocation (no shared state with parent)
 - Memory tools (`remember`, `memory_search`) not bridged (require embedding API)
-- `memory_write` and `memory_get` could be bridged (file-based) but are not in v1
+- `memory_write` and `memory_get` could be bridged (file-based) but are not yet
 - Secret redaction not yet applied to tool results in the bridge path
 
 ## Related

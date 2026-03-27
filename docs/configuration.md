@@ -4,6 +4,27 @@ Tengu is configured via a single TOML file. Default location: `~/.tengu/config.t
 
 See `config.example.toml` in the repo root for a commented reference.
 
+## Initial Setup
+
+```bash
+# 1. Create encrypted secrets vault
+tengu secret init                              # prompts for master password
+
+# 2. Store API keys
+tengu secret set OPENROUTER_API_KEY sk-or-...  # required for OpenRouter engine
+tengu secret set TELEGRAM_BOT_TOKEN 123:ABC-.. # required for Telegram bot
+
+# 3. Create config
+mkdir -p ~/.tengu
+cp config.example.toml ~/.tengu/config.toml
+
+# 4. Run
+tengu chat                                     # interactive TUI
+tengu telegram                                 # Telegram bot
+```
+
+To skip the master password prompt, set `TENGU_MASTER_PASSWORD` env var.
+
 ## Root Sections
 
 | Section | Purpose |
@@ -120,12 +141,30 @@ backend = "disk"              # "disk" | "qdrant" (requires --features qdrant)
 
 Memory embeddings require `OPENROUTER_API_KEY` regardless of engine backend.
 
+## Telegram
+
+```toml
+[telegram]
+enabled = true
+allowed_users = ["123456789"]    # Telegram user IDs (get from @userinfobot)
+```
+
+Set `TELEGRAM_BOT_TOKEN` in the secrets vault or as an env var. Get a token from @BotFather on Telegram.
+
 ## Secrets
 
-Store API keys encrypted:
+Store API keys encrypted in `~/.tengu/secrets.vault`:
+
 ```bash
-tengu secret init
-tengu secret set OPENROUTER_API_KEY sk-or-...
+tengu secret init                  # create vault + set master password
+tengu secret set KEY VALUE         # store a secret
+tengu secret list                  # list stored keys
+tengu secret remove KEY            # remove a secret
+```
+
+Skip the interactive password prompt with:
+```bash
+export TENGU_MASTER_PASSWORD="your-password"
 ```
 
 ## Sandboxes
@@ -135,6 +174,36 @@ Domain-specific configurations in `sandboxes/<name>/config.toml`:
 ```bash
 tengu telegram --sandbox aura           # OpenRouter-backed DeSci
 tengu telegram --sandbox aura-claude    # Claude Code-backed DeSci
+```
+
+## Feature Flags
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `openrouter` | on | OpenRouter API backend |
+| `telegram` | on | Telegram bot channel |
+| `claude_code` | off | Claude Code CLI backend |
+| `qdrant` | off | Qdrant vector store for memory |
+
+```bash
+cargo build                              # default: openrouter + telegram
+cargo build --features claude_code       # + Claude Code backend
+cargo build --all-features               # everything
+```
+
+## Reset / Fresh Start
+
+```bash
+rm -rf ~/.tengu              # remove all config, secrets, logs, and state
+tengu chat                   # starts with built-in defaults
+```
+
+Selective cleanup:
+
+```bash
+rm -rf ~/.tengu/state        # session state only
+rm -rf ~/.tengu/logs         # logs only
+tengu prune                  # remove cached/ephemeral state (keeps config & secrets)
 ```
 
 ## Validation

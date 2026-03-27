@@ -9,41 +9,98 @@ A composable multi-agent runtime built in Rust. Single binary, two engine backen
 - **Rust** 1.75+ ([rustup.rs](https://rustup.rs))
 - An **OpenRouter** API key ([openrouter.ai](https://openrouter.ai)) — or a Claude Code CLI subscription
 
-### Build & Run
+### 1. Build
 
 ```bash
 git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
 cargo build
+```
 
-# Set up secrets vault
-cargo run -- secret init                              # prompts for master password
-cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # store your API key
+### 2. Set Up Master Password & Secrets
 
-# Create config
+Tengu uses an encrypted vault (`~/.tengu/secrets.vault`) to store API keys and tokens. Initialize it first:
+
+```bash
+cargo run -- secret init                  # creates vault, prompts for a master password
+```
+
+You'll be asked for this password each time Tengu starts. To skip the prompt, set the env var instead:
+
+```bash
+export TENGU_MASTER_PASSWORD="your-password"
+```
+
+Store your API keys in the vault:
+
+```bash
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...   # required for OpenRouter engine
+```
+
+### 3. Create Config
+
+```bash
 mkdir -p ~/.tengu
 cp config.example.toml ~/.tengu/config.toml
+```
 
-# Start chatting
+### 4. Start Chatting
+
+```bash
 cargo run -- chat
 ```
 
 The default config uses `nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter (free tier). Change `model` in config to use any of 200+ models on OpenRouter.
 
-### With Claude Code Backend
+### Setting Up Telegram
 
-Use your Claude subscription instead of API tokens:
+```bash
+# Build with Telegram support
+cargo build --features telegram
+
+# Store your bot token (get one from @BotFather on Telegram)
+cargo run -- secret set TELEGRAM_BOT_TOKEN "123456:ABC-..."
+
+# Add your Telegram user ID to ~/.tengu/config.toml:
+# [telegram]
+# enabled = true
+# allowed_users = ["YOUR_USER_ID"]
+
+# Run the bot
+cargo run -- telegram
+```
+
+In multi-agent mode, use `@role: message` to target a specific agent, or send plain messages for automatic routing.
+
+### Setting Up Claude Code Backend
+
+Use your Claude subscription instead of per-token API costs:
 
 ```bash
 # Install Claude Code CLI: https://docs.anthropic.com/en/docs/claude-code
-claude --version  # must be installed and authenticated
+claude --version   # must be installed and authenticated
 
 # Build with Claude Code support
 cargo build --features claude_code
 
-# Set engine in config:
+# Set engine in ~/.tengu/config.toml:
 # [agents.main]
 # engine = "claude_code"
 # model = "claude-sonnet-4-20250514"
+```
+
+### Reset / Fresh Start
+
+```bash
+rm -rf ~/.tengu              # remove all config, secrets, logs, and state
+cargo run -- chat            # starts with built-in defaults
+```
+
+To selectively clean:
+
+```bash
+rm -rf ~/.tengu/state        # session state only
+rm -rf ~/.tengu/logs         # logs only
+cargo run -- prune           # remove cached/ephemeral state (keeps config & secrets)
 ```
 
 ## Engine Backends
@@ -196,18 +253,128 @@ cargo run -- telegram
 
 In multi-agent mode: plain messages are orchestrated across the team, `@role: message` targets a specific agent.
 
-## Deployment
+## Installation
 
-Deploy with Docker Compose:
+### Native (recommended for development)
 
 ```bash
-make setup       # creates .env and config.toml
-make up          # start tengu
-make down        # stop
-make logs        # tail logs
+git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
+cargo build                          # default features: openrouter + telegram
+cargo build --all-features           # all features: openrouter + telegram + claude_code + qdrant
 ```
 
-See `docker-compose.yml`, `Dockerfile`, and `deploy/` for cloud provisioning.
+The binary is at `target/debug/tengu` (or `target/release/tengu` with `--release`). Add it to your PATH or run via `cargo run --`.
+
+### Docker
+
+```bash
+git clone https://github.com/user/tengu-cluster.git && cd tengu-cluster
+make setup       # creates .env and config.toml from examples
+make build       # build Docker image
+```
+
+### One-Liner (VPS)
+
+Installs Docker, clones the repo, and configures everything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
+```
+
+### Cloud-Init (Hetzner, DigitalOcean, AWS, etc.)
+
+Provision a VPS with tengu pre-installed:
+
+```bash
+hcloud server create \
+  --name tengu \
+  --type cx22 \
+  --image ubuntu-24.04 \
+  --user-data-from-file deploy/cloud-init.yml \
+  --ssh-key my-key
+```
+
+Then SSH in, edit `.env` and `config.toml`, and run `make up`.
+
+## Running in Production
+
+### Docker Compose (recommended)
+
+```bash
+# Edit config
+nano .env                            # set OPENROUTER_API_KEY, TELEGRAM_BOT_TOKEN
+nano config.toml                     # configure agents, memory, telegram
+
+# Start
+make up                              # OpenRouter + Telegram
+make up-qdrant                       # + Qdrant vector memory
+
+# Operate
+make logs                            # tail logs
+make status                          # show running services
+make doctor                          # run diagnostics
+make down                            # stop all
+make clean                           # stop + delete all data volumes
+```
+
+The Docker image runs `tengu telegram` by default. Override with:
+
+```bash
+docker compose run tengu chat        # interactive TUI
+docker compose run tengu orchestrate # multi-agent fleet
+docker compose run tengu doctor      # diagnostics
+```
+
+### Native Binary
+
+```bash
+# First time: set up secrets and config
+cargo run -- secret init                              # create vault, set master password
+cargo run -- secret set OPENROUTER_API_KEY sk-or-...  # store API key
+cargo run -- secret set TELEGRAM_BOT_TOKEN 123:ABC-.. # store bot token
+mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
+
+# Run
+cargo run -- chat                                     # interactive TUI
+cargo run -- telegram                                 # Telegram bot
+cargo run -- telegram --sandbox aura                  # Telegram with sandbox config
+cargo run -- orchestrate                              # multi-agent fleet
+cargo run -- status                                   # show config summary
+cargo run -- doctor                                   # check connectivity
+```
+
+To skip the master password prompt on startup, set the env var:
+
+```bash
+export TENGU_MASTER_PASSWORD="your-password"
+```
+
+### Systemd Service (native binary on a server)
+
+```ini
+# /etc/systemd/system/tengu.service
+[Unit]
+Description=Tengu Cluster
+After=network.target
+
+[Service]
+Type=simple
+User=tengu
+WorkingDirectory=/opt/tengu-cluster
+Environment=TENGU_MASTER_PASSWORD=your-password
+Environment=RUST_LOG=tengu=info
+ExecStart=/opt/tengu-cluster/target/release/tengu telegram
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now tengu
+sudo journalctl -u tengu -f          # tail logs
+```
 
 ## Feature Flags
 

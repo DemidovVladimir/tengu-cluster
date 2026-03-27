@@ -16,7 +16,7 @@ Do NOT stop, report progress, or output text between steps — execute ALL steps
 - Follow every URL, contract address, and function signature in this document EXACTLY. Do NOT guess or fabricate alternatives.
 - NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
 - NEVER guess or fabricate URLs, contract addresses, or function signatures. Follow the aura-orchestrator skill EXACTLY.
-- Use x402 payment flow for all Molecule mutations, including project creation, file uploads, announcements, and ownership management. Follow the molecule-x402 skill.
+- Use x402 payment flow for all Molecule mutations, including project creation, file uploads, announcements, and ownership management. Follow the x402 Payment Flow section below (steps P1–P7).
 - Phases executed sequentially without stopping or reporting intermediate progress.
 
 ## Required Environment Variables if not available terminate with an error and instructions on how to set them. These are needed for wallet management, authentication, and NFT transfer.

@@ -1,21 +1,8 @@
 # Tengu Cluster — Docker Compose
 #
 # Usage:
-#   docker compose up -d                              # API-only (OpenRouter/Anthropic/OpenAI)
-#   docker compose --profile ollama up -d             # + local Ollama (CPU)
-#   docker compose --profile ollama-gpu up -d         # + local Ollama (NVIDIA GPU)
+#   docker compose up -d                              # Default (OpenRouter + Telegram)
 #   docker compose --profile qdrant up -d             # + Qdrant vector memory
-#   docker compose --profile full up -d               # Ollama GPU + Qdrant
-#   docker compose --profile full-cpu up -d           # Ollama CPU + Qdrant
-#
-# GPU (NVIDIA):
-#   Requires nvidia-container-toolkit installed on host.
-#   Install: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
-#
-# GPU (Apple Metal):
-#   Docker cannot passthrough Metal. Install Ollama natively:
-#     brew install ollama && ollama serve
-#   Then set OLLAMA_HOST=http://host.docker.internal:11434 in .env
 #
 # Config:
 #   1. cp .env.example .env && edit .env (set API keys)
@@ -29,7 +16,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        FEATURES: "${TENGU_FEATURES:-ollama,anthropic,openai,openrouter,claude-code,telegram}"
+        FEATURES: "${TENGU_FEATURES:-openrouter,telegram}"
     image: tengu-cluster:latest
     container_name: tengu
     restart: unless-stopped
@@ -50,50 +37,9 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      ollama:
-        condition: service_started
-        required: false
-      ollama-gpu:
-        condition: service_started
-        required: false
       qdrant:
         condition: service_started
         required: false
-
-  # ── Ollama (CPU) ──────────────────────────────────────────────
-  ollama:
-    image: ollama/ollama:latest
-    container_name: tengu-ollama
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    profiles:
-      - ollama
-      - full-cpu
-
-  # ── Ollama (NVIDIA GPU) ──────────────────────────────────────
-  ollama-gpu:
-    image: ollama/ollama:latest
-    container_name: tengu-ollama-gpu
-    restart: unless-stopped
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    profiles:
-      - ollama-gpu
-      - full
 
   # ── Qdrant Vector DB ─────────────────────────────────────────
   qdrant:
@@ -107,10 +53,7 @@ services:
       - qdrant-data:/qdrant/storage
     profiles:
       - qdrant
-      - full
-      - full-cpu
 
 volumes:
   tengu-data:
-  ollama-data:
   qdrant-data:

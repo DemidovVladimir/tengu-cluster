@@ -5,30 +5,20 @@ WORKDIR /usr/src/tengu
 
 # Copy manifests first for layer caching
 COPY Cargo.toml Cargo.lock ./
-COPY crates/tengu-core/Cargo.toml crates/tengu-core/Cargo.toml
-COPY crates/tengu-backends/Cargo.toml crates/tengu-backends/Cargo.toml
-COPY crates/tengu-channels/Cargo.toml crates/tengu-channels/Cargo.toml
-COPY crates/tengu-optimizer/Cargo.toml crates/tengu-optimizer/Cargo.toml
 
-# Create stub lib.rs for dependency caching
-RUN mkdir -p src crates/tengu-core/src crates/tengu-backends/src crates/tengu-channels/src crates/tengu-optimizer/src \
-    && echo "fn main() {}" > src/main.rs \
-    && echo "pub fn stub() {}" > crates/tengu-core/src/lib.rs \
-    && echo "pub fn stub() {}" > crates/tengu-backends/src/lib.rs \
-    && echo "pub fn stub() {}" > crates/tengu-channels/src/lib.rs \
-    && echo "pub fn stub() {}" > crates/tengu-optimizer/src/lib.rs
+# Create stub main.rs for dependency caching
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
-ARG FEATURES="ollama,anthropic,openai,openrouter,claude-code,telegram"
+ARG FEATURES="openrouter,telegram"
 RUN cargo build --release --features "${FEATURES}" 2>/dev/null || true
 
-# Copy real source
+# Copy real source + skills
 COPY src src
-COPY crates crates
+COPY skills skills
 
-# Touch source files to invalidate the stub build
-RUN touch src/main.rs crates/tengu-core/src/lib.rs crates/tengu-backends/src/lib.rs \
-    crates/tengu-channels/src/lib.rs crates/tengu-optimizer/src/lib.rs
+# Touch source to invalidate the stub build
+RUN touch src/main.rs
 
 # Build the real binary
 RUN cargo build --release --features "${FEATURES}"
@@ -45,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/tengu/target/release/tengu-cluster /usr/local/bin/tengu
+COPY --from=builder /usr/src/tengu/target/release/tengu /usr/local/bin/tengu
 
 # Copy skills directory (API skill definitions)
 COPY skills /opt/tengu/skills

@@ -6,8 +6,8 @@
 #
 # Options (env vars):
 #   TENGU_DIR        Install directory       (default: ./tengu-cluster)
-#   TENGU_PROFILE    Compose profile         (default: none — API only)
-#                    Options: ollama, ollama-gpu, qdrant, full, full-cpu
+#   TENGU_PROFILE    Compose profile         (default: none — OpenRouter + Telegram only)
+#                    Options: qdrant
 #   TENGU_BRANCH     Git branch to clone     (default: main)
 #   SKIP_DOCKER      Skip Docker install     (default: false)
 #   SKIP_START       Skip starting services  (default: false)
@@ -51,32 +51,6 @@ detect_os() {
     info "Detected: $OS/$ARCH"
 }
 
-# ── Detect GPU ──────────────────────────────────────────────────
-detect_gpu() {
-    GPU_TYPE="none"
-
-    if [ "$OS" = "macos" ] && [ "$ARCH" = "arm64" ]; then
-        GPU_TYPE="metal"
-        ok "Apple Silicon detected — Metal GPU acceleration available"
-        ok "For local inference, install Ollama natively: brew install ollama"
-        return
-    fi
-
-    if command -v nvidia-smi &>/dev/null; then
-        GPU_TYPE="cuda"
-        GPU_INFO="$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'unknown')"
-        ok "NVIDIA GPU detected: $GPU_INFO"
-        return
-    fi
-
-    if [ -d /dev/dri ] && ls /dev/dri/renderD* &>/dev/null 2>&1; then
-        warn "GPU device found at /dev/dri but no NVIDIA driver detected"
-        warn "AMD/Intel GPUs are not yet supported for Ollama acceleration"
-    fi
-
-    info "No GPU detected — will use CPU for local inference"
-}
-
 # ── Install Docker ──────────────────────────────────────────────
 install_docker() {
     if command -v docker &>/dev/null; then
@@ -111,33 +85,6 @@ install_docker() {
     fi
 }
 
-# ── Install NVIDIA Container Toolkit ────────────────────────────
-install_nvidia_toolkit() {
-    if [ "$GPU_TYPE" != "cuda" ]; then
-        return
-    fi
-
-    if dpkg -l nvidia-container-toolkit &>/dev/null 2>&1; then
-        ok "NVIDIA Container Toolkit already installed"
-        return
-    fi
-
-    info "Installing NVIDIA Container Toolkit..."
-    if [ "$OS" = "linux" ]; then
-        distribution=$(. /etc/os-release; echo "$ID$VERSION_ID") 2>/dev/null || distribution="ubuntu22.04"
-        curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-            sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-        curl -s -L "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | \
-            sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-            sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq nvidia-container-toolkit
-        sudo nvidia-ctk runtime configure --runtime=docker
-        sudo systemctl restart docker
-        ok "NVIDIA Container Toolkit installed and configured"
-    fi
-}
-
 # ── Clone / Update Repo ────────────────────────────────────────
 setup_repo() {
     if [ -d "$TENGU_DIR/.git" ]; then
@@ -149,7 +96,6 @@ setup_repo() {
         info "Cloning tengu-cluster..."
         git clone --branch "$TENGU_BRANCH" --depth 1 \
             https://github.com/user/tengu-cluster.git "$TENGU_DIR" 2>/dev/null || {
-            # If the repo URL fails (placeholder), just create the directory
             warn "Could not clone repo — using local copy"
             if [ ! -d "$TENGU_DIR" ]; then
                 err "Directory $TENGU_DIR does not exist and clone failed"
@@ -171,35 +117,6 @@ configure() {
         cp config.example.toml config.toml
         info "Created config.toml from template"
     fi
-
-    # Auto-select profile based on GPU if not specified
-    if [ -z "$TENGU_PROFILE" ]; then
-        case "$GPU_TYPE" in
-            cuda)
-                TENGU_PROFILE="ollama-gpu"
-                info "Auto-selected profile: ollama-gpu (NVIDIA GPU detected)"
-                ;;
-            metal)
-                info "Apple Metal detected — use native Ollama for GPU inference"
-                info "Run: brew install ollama && ollama serve"
-                info "Then set OLLAMA_HOST=http://host.docker.internal:11434 in .env"
-                ;;
-        esac
-    fi
-
-    # Set GPU hint in .env
-    case "$GPU_TYPE" in
-        cuda)
-            if ! grep -q "^TENGU_GPU_HINT=" .env 2>/dev/null; then
-                echo "TENGU_GPU_HINT=cuda" >> .env
-            fi
-            ;;
-        metal)
-            if ! grep -q "^TENGU_GPU_HINT=" .env 2>/dev/null; then
-                echo "TENGU_GPU_HINT=metal" >> .env
-            fi
-            ;;
-    esac
 
     ok "Configuration ready"
     echo ""
@@ -237,13 +154,11 @@ summary() {
     ok "Tengu Cluster installed successfully"
     echo ""
     echo "  Directory:  $(pwd)"
-    echo "  Profile:    ${TENGU_PROFILE:-default (API only)}"
-    echo "  GPU:        $GPU_TYPE"
+    echo "  Profile:    ${TENGU_PROFILE:-default (OpenRouter + Telegram)}"
     echo ""
     echo "  Commands:"
-    echo "    make up           Start (API backends)"
-    echo "    make up-gpu       Start with Ollama + NVIDIA GPU"
-    echo "    make up-full      Start full stack (Ollama GPU + Qdrant)"
+    echo "    make up           Start tengu"
+    echo "    make up-qdrant    Start tengu + Qdrant vector memory"
     echo "    make logs         View logs"
     echo "    make doctor       Run diagnostics"
     echo "    make down         Stop all"
@@ -264,9 +179,7 @@ main() {
     echo ""
 
     detect_os
-    detect_gpu
     install_docker
-    install_nvidia_toolkit
     setup_repo
     configure
     start_services

@@ -1,10 +1,10 @@
 # Tengu Cluster — Makefile
 #
 # Quick start:  make setup && make up
-# With GPU:     make up-gpu
-# Full stack:   make up-full
+# With Qdrant:  make up-qdrant
+# Native build: make native
 
-.PHONY: help setup build up down up-gpu up-full up-cpu logs status \
+.PHONY: help setup build up down up-qdrant logs status \
         doctor clean pull native native-release
 
 COMPOSE := docker compose
@@ -28,26 +28,14 @@ build: ## Build tengu Docker image
 pull: ## Pull latest base images
 	$(COMPOSE) pull
 
-up: ## Start tengu (API backends only)
+up: ## Start tengu (OpenRouter + Telegram)
 	$(COMPOSE) up -d
 
-up-gpu: ## Start tengu + Ollama with NVIDIA GPU
-	$(COMPOSE) --profile ollama-gpu up -d
-
-up-cpu: ## Start tengu + Ollama (CPU only)
-	$(COMPOSE) --profile ollama up -d
-
-up-full: ## Start tengu + Ollama GPU + Qdrant
-	$(COMPOSE) --profile full up -d
-
-up-full-cpu: ## Start tengu + Ollama CPU + Qdrant
-	$(COMPOSE) --profile full-cpu up -d
-
-up-qdrant: ## Start tengu + Qdrant (no Ollama)
-	$(COMPOSE) --profile qdrant up -d
+up-qdrant: ## Start tengu + Qdrant vector memory
+	TENGU_FEATURES=openrouter,telegram,qdrant $(COMPOSE) --profile qdrant up -d
 
 down: ## Stop all services
-	$(COMPOSE) --profile full --profile full-cpu --profile ollama --profile ollama-gpu --profile qdrant down
+	$(COMPOSE) --profile qdrant down
 
 logs: ## Tail tengu logs
 	$(COMPOSE) logs -f tengu
@@ -61,14 +49,14 @@ doctor: ## Run tengu diagnostics
 clean: ## Stop all and remove volumes (destructive)
 	@echo "This will delete all data volumes. Press Ctrl+C to cancel."
 	@sleep 3
-	$(COMPOSE) --profile full --profile full-cpu --profile ollama --profile ollama-gpu --profile qdrant down -v
+	$(COMPOSE) --profile qdrant down -v
 
 # ── Native Build ────────────────────────────────────────────────
-native: ## Build locally with cargo (debug)
+native: ## Build locally with cargo (debug, default features)
 	$(CARGO) build
 
 native-release: ## Build locally with cargo (release, all features)
-	$(CARGO) build --release
+	$(CARGO) build --release --all-features
 
 native-qdrant: ## Build locally with qdrant feature
 	$(CARGO) build --release --features qdrant

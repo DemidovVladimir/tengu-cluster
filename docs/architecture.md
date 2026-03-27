@@ -22,8 +22,8 @@ Tengu supports two engine backends, selectable per agent via `engine = "..."` in
 
 | Backend | Transport | Tool Loop | Workspace | Feature Flag |
 |---------|-----------|-----------|-----------|-------------|
-| [[engine-openrouter\|OpenRouter]] | HTTP JSON | Tengu outer loop | Tengu tools | `openrouter` (default) |
-| [[engine-claude-code\|Claude Code]] | CLI subprocess | Claude internal | Claude native + MCP bridge | `claude_code` |
+| [[engine-backends#OpenRouter|OpenRouter]] | HTTP JSON | Tengu outer loop | Tengu tools | `openrouter` (default) |
+| [[engine-backends#Claude Code|Claude Code]] | CLI subprocess | Claude internal | Claude native + MCP bridge | `claude_code` |
 
 See [[engine-backends]] for detailed comparison.
 
@@ -57,21 +57,68 @@ Passed to every `engine.run()` call:
 
 ## Module Map
 
+### Core
 | Module | Purpose |
 |--------|---------|
 | `config.rs` | TOML config schema, validation |
 | `types.rs` | Engine trait, Message, ToolCall, StreamEvent, EngineContext |
+| `ports.rs` | Port traits for dependency inversion |
+
+### Engines
+| Module | Purpose |
+|--------|---------|
 | `engine_builder.rs` | Engine factory + OpenRouter implementation |
 | `claude_code_engine.rs` | Claude Code engine (feature-gated) |
 | `mcp_bridge.rs` | Stdio MCP server for tool bridging |
+
+### Runtime
+| Module | Purpose |
+|--------|---------|
 | `chat_builder.rs` | ChatRuntimeService — per-turn orchestration |
-| `channel_runtime.rs` | Shared logic for all channel adapters |
+| `channel_runtime.rs` | Shared logic for all channel adapters (tool assembly, session registry) |
+| `flow_builder.rs` | Flow/session management |
+| `prompt_budget.rs` | Token budget calculation |
+| `token.rs` | Token counting utilities |
+| `usage.rs` | Usage/cost tracking |
+
+### Tools
+| Module | Purpose |
+|--------|---------|
 | `tool_builder.rs` | Tool definitions + workspace executor |
+| `composite_tool_executor.rs` | Composite executor dispatching to sub-executors |
+| `http_tool_executor.rs` | `http_request` tool executor |
+| `crypto_tool_executor.rs` | Crypto tools (sign, wallet, ABI encode) |
+| `cache_tool_executor.rs` | `shared_cache` tool executor (SQLite) |
+| `shell_executor.rs` | Shell command execution |
 | `skill_builder.rs` | Skill parsing, registry, system prompt building |
-| `memory_builder.rs` | Memory types, service, disk store |
+
+### Memory
+| Module | Purpose |
+|--------|---------|
+| `memory_builder.rs` | Memory types, service, disk store, tool defs |
+| `embedding.rs` | Embedding generation (OpenRouter API) |
+| `qdrant_memory_store.rs` | Qdrant vector store backend (feature-gated) |
+
+### Channel Adapters
+| Module | Purpose |
+|--------|---------|
+| `tui/mod.rs` | Terminal UI adapter (cursive) |
 | `telegram_builder.rs` | Telegram bot adapter |
-| `tui/mod.rs` | Terminal UI adapter |
-| `orchestrator.rs` | Multi-agent fleet orchestrator |
+
+### Orchestration
+| Module | Purpose |
+|--------|---------|
+| `orchestrator.rs` | Multi-agent fleet orchestrator (CLI) |
+| `event_orchestrator.rs` | Event-based orchestrator (Telegram) |
+| `agent_builder.rs` | Agent worker loop (Telegram) |
+| `task_builder.rs` | Task/plan management (Telegram) |
+
+### Infrastructure
+| Module | Purpose |
+|--------|---------|
+| `secret_builder.rs` | Encrypted secrets vault (AES-256-GCM) |
+| `scaffold.rs` | Workspace directory scaffolding |
+| `prune.rs` | State/cache cleanup |
 
 ## Related
 - [[engine-backends]] — detailed engine comparison

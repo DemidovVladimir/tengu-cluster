@@ -11,20 +11,12 @@
 #     --user-data-from-file deploy/cloud-init.yml \
 #     --ssh-key my-key
 #
-# Usage (Hetzner GPU):
-#   hcloud server create \
-#     --name tengu-gpu \
-#     --type gx11 \
-#     --image ubuntu-24.04 \
-#     --user-data-from-file deploy/cloud-init.yml \
-#     --ssh-key my-key
-#
 # After provisioning:
 #   ssh root@<ip>
 #   cd /opt/tengu-cluster
 #   nano .env                # set API keys
 #   nano config.toml         # customize agents
-#   make up                  # or: make up-gpu
+#   make up
 
 package_update: true
 package_upgrade: true
@@ -42,22 +34,6 @@ runcmd:
   # Docker
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
-
-  # NVIDIA GPU support (auto-detect)
-  - |
-    if lspci | grep -qi nvidia; then
-      echo "NVIDIA GPU detected — installing container toolkit"
-      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-        gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-      curl -s -L "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list" | \
-        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-        tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-      apt-get update -qq
-      apt-get install -y -qq nvidia-container-toolkit
-      nvidia-ctk runtime configure --runtime=docker
-      systemctl restart docker
-      echo "TENGU_GPU_HINT=cuda" >> /opt/tengu-cluster/.env
-    fi
 
   # Clone tengu-cluster
   - git clone --depth 1 https://github.com/user/tengu-cluster.git /opt/tengu-cluster
@@ -108,7 +84,6 @@ write_files:
       ║           /opt/tengu-cluster/config.toml         ║
       ║                                                  ║
       ║  Start:   cd /opt/tengu-cluster && make up       ║
-      ║  GPU:     cd /opt/tengu-cluster && make up-gpu   ║
       ║  Logs:    make logs                              ║
       ║  Status:  make status                            ║
       ╚══════════════════════════════════════════════════╝

@@ -10,7 +10,8 @@ Skills are portable, cross-platform workflow documents that compose Tengu's [[ar
 |------|--------------|-------------|
 | **Documentation** (frontmatter) | No | Compact XML catalog in system prompt; agent reads SKILL.md on demand |
 | **Shell** (classic) | Yes | Named tools with execution templates, injected inline |
-| **API** | No | Documentation-only (describes API endpoints for agent to use with `http_request`) |
+
+API skills are documentation-only — they describe API endpoints for the agent to use with `http_request`. They do not create tools.
 
 ## Loading
 
@@ -25,9 +26,9 @@ Agents select skills via `skill_packages` in [[configuration]]:
 skill_packages = ["aura-orchestrator", "beach-science"]
 ```
 
-## Skills with Claude Code
+## Cross-Engine Compatibility
 
-Skills work with both [[engine-backends]]:
+Skills work identically with both [[engine-backends]]:
 
 ### OpenRouter
 - Skill tools are registered in Tengu's tool loop
@@ -40,7 +41,7 @@ Skills work with both [[engine-backends]]:
 - Agent calls MCP tools by name (same names as the Tengu tools the skill references)
 - Claude's native tools (Read, Write, Bash) also available alongside MCP tools
 
-The skill document references Tengu tool names like `http_request`, `sign_and_send_transaction`, `shared_cache`. These exact names are registered as MCP tools in the bridge, so skill instructions work unchanged.
+The skill document references Tengu tool names like `http_request`, `sign_and_send_transaction`, `shared_cache`. These exact names are registered as MCP tools in the bridge, so skill instructions work unchanged across engines.
 
 ## Frontmatter
 
@@ -55,12 +56,28 @@ os: ["linux", "macos"]      # optional: OS filter
 ---
 ```
 
-## Example: aura-orchestrator
+Gating metadata (`requires_bins`, `requires_env`, `os`) is evaluated at load time. Skills that fail gating checks are silently skipped.
 
-A documentation skill that orchestrates a 7-phase DeSci pipeline:
+## Example: Documentation Skill
+
+`skills/aura-orchestrator/SKILL.md` — a documentation skill that orchestrates a 7-phase DeSci pipeline:
 - References `http_request`, `sign_and_send_transaction`, `abi_encode`, `sign_message`, `get_wallet_address`, `shared_cache`, `read_file`, `run_command`
 - Works on OpenRouter (Tengu tool loop) and Claude Code (MCP bridge)
-- See `skills/aura-orchestrator/SKILL.md`
+
+## Example: Shell Skill
+
+```markdown
+# test_runner
+Run the project test suite.
+## Parameters
+- `filter` (string, optional): test name filter
+## Execution
+\```bash
+cargo test {{filter}} 2>&1
+\```
+```
+
+Shell skills create named tools that execute templates with parameter substitution. They are injected inline into the tool list.
 
 ## Related
 - [[architecture]] — where skills fit in the system

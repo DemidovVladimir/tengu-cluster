@@ -1,6 +1,6 @@
 # Engine Backends
 
-Tengu supports multiple engine backends. Each agent selects its backend via `engine = "..."` in [[configuration]]. Backends are plug-and-play — switching an agent between backends requires only a config change.
+Tengu supports two engine backends. Each agent selects its backend via `engine = "..."` in [[configuration]]. Backends are plug-and-play — switching an agent between backends requires only a config change.
 
 ## OpenRouter (`engine = "openrouter"`)
 
@@ -8,7 +8,7 @@ Tengu supports multiple engine backends. Each agent selects its backend via `eng
 **Feature flag:** `openrouter` (default)
 **File:** `src/adapters/engine_builder.rs`
 
-The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, etc.).
+The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
 
 ### How it works
 1. `Engine::run()` sends an HTTP request to OpenRouter `/v1/chat/completions`
@@ -21,6 +21,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 - `supports_tool_use()` = `true` — tool definitions passed to model
 - One API key (`OPENROUTER_API_KEY`) for all models
 - Pay-per-token pricing
+- Browse models at [openrouter.ai/models](https://openrouter.ai/models)
 
 ## Claude Code (`engine = "claude_code"`)
 
