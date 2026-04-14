@@ -506,6 +506,12 @@ pub struct MemoryConfig {
     pub qdrant_collection: String,
     #[serde(default = "default_vector_size")]
     pub vector_size: u64,
+    /// Persistent store: chunk size in characters for file vectorization.
+    #[serde(default = "default_persistent_store_chunk_size")]
+    pub persistent_store_chunk_size: usize,
+    /// Persistent store: overlap in characters between consecutive chunks.
+    #[serde(default = "default_persistent_store_chunk_overlap")]
+    pub persistent_store_chunk_overlap: usize,
 }
 
 impl Default for MemoryConfig {
@@ -522,6 +528,8 @@ impl Default for MemoryConfig {
             qdrant_api_key: None,
             qdrant_collection: default_qdrant_collection(),
             vector_size: default_vector_size(),
+            persistent_store_chunk_size: default_persistent_store_chunk_size(),
+            persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
         }
     }
 }
@@ -556,6 +564,14 @@ fn default_qdrant_collection() -> String {
 
 fn default_vector_size() -> u64 {
     1536
+}
+
+fn default_persistent_store_chunk_size() -> usize {
+    1000
+}
+
+fn default_persistent_store_chunk_overlap() -> usize {
+    200
 }
 
 /// System prompt token budget configuration.
@@ -870,7 +886,7 @@ impl Config {
             format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
         );
 
-        let valid_workspace_tools = ["shared_cache"];
+        let valid_workspace_tools = ["shared_cache", "persistent_store"];
         for wt in &agent.workspace_tools {
             if !valid_workspace_tools.contains(&wt.as_str()) {
                 errors.push(format!(

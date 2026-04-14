@@ -1310,6 +1310,7 @@ impl TelegramSession {
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
                 None,
+                Some(&self.memory_config),
             )
         });
 
@@ -1675,6 +1676,7 @@ impl TelegramSession {
                         activity_adapter,
                         Some(Arc::clone(&self.turn_cancel)),
                         None,
+                        Some(&self.memory_config),
                     )
                     .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
                 });
@@ -2114,6 +2116,7 @@ impl TelegramSession {
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
                 None,
+                Some(&self.memory_config),
             )
         });
         let sanitized_executor = current_executor

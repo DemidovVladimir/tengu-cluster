@@ -34,6 +34,8 @@ sha2 = "0.10"
 rpassword = "7"
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 pdf-extract = "0.10"
+calamine = "0.26"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 regex = "1"
 alloy = { version = "1", features = ["full"] }
 rusqlite = { version = "0.39", features = ["bundled"] }

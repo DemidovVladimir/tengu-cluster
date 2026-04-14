@@ -25,6 +25,9 @@ use anyhow::Result;
 use crate::adapters::cache_tool_executor::{
     build_shared_cache_tools, CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME,
 };
+use crate::adapters::persistent_store_executor::{
+    build_persistent_store_tools, PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME,
+};
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
@@ -114,6 +117,7 @@ pub(crate) fn build_tool_executor(
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     shared_http_client: Option<&reqwest::Client>,
+    memory_config: Option<&crate::adapters::config::MemoryConfig>,
 ) -> Option<ToolServiceExecutor> {
     if tools.is_empty() {
         return None;
@@ -178,6 +182,36 @@ pub(crate) fn build_tool_executor(
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
             }
+        }
+    }
+
+    // Optional workspace tool: persistent store
+    if allowed_names.contains(PERSISTENT_STORE_TOOL_NAME) {
+        if let Some(ref handle) = memory_handle {
+            let chunk_size = memory_config
+                .map(|mc| mc.persistent_store_chunk_size)
+                .unwrap_or(1000);
+            let chunk_overlap = memory_config
+                .map(|mc| mc.persistent_store_chunk_overlap)
+                .unwrap_or(200);
+            match PersistentStoreExecutor::new(
+                workspace.to_path_buf(),
+                Arc::clone(handle),
+                chunk_size,
+                chunk_overlap,
+            ) {
+                Ok(ps_exec) => {
+                    composite = composite.with_executor(
+                        Arc::new(ps_exec),
+                        HashSet::from([PERSISTENT_STORE_TOOL_NAME.to_string()]),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init persistent store, tool disabled");
+                }
+            }
+        } else {
+            tracing::warn!("persistent_store requires memory to be enabled, tool disabled");
         }
     }
 
@@ -250,6 +284,9 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(build_shared_cache_tools());
     }
+    if workspace_tools.iter().any(|t| t == "persistent_store") {
+        tools.extend(build_persistent_store_tools());
+    }
     tools.extend(build_platform_tools());
     tools
 }
@@ -269,6 +306,9 @@ pub(crate) fn compute_bridge_tools(
     }
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(build_shared_cache_tools());
+    }
+    if workspace_tools.iter().any(|t| t == "persistent_store") {
+        tools.extend(build_persistent_store_tools());
     }
     tools.extend(build_platform_tools());
     tools

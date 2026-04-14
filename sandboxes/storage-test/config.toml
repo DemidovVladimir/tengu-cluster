@@ -1,0 +1,52 @@
+# Tengu Cluster — Storage Test Sandbox
+# Test persistent_store tool: file storage + vector indexing.
+# Run with: tengu telegram --sandbox storage-test
+# Or TUI:   tengu tui --sandbox storage-test
+
+runtime_profile = "auto"
+
+[hub]
+bind = "127.0.0.1"
+port = 7072
+
+[memory]
+enabled = true
+# Chunking parameters for persistent_store
+persistent_store_chunk_size = 1000
+persistent_store_chunk_overlap = 200
+
+[telegram]
+tool_approvals = false
+
+[scaffold]
+root = "~/storage-test-workspace"
+directories = ["uploads", "documents"]
+
+[agents.storage]
+engine = "claude_code"
+model = "sonnet"
+default = true
+workspace = "~/storage-test-workspace"
+workspace_tools = ["persistent_store"]
+
+[agents.storage.identity]
+name = "Storage Agent"
+instructions = """You are a storage assistant. You can store files, search stored files by semantic query, list all stored files, and delete files.
+
+When the user sends a file or asks you to store something:
+1. Use persistent_store with operation "store" and the file_path
+2. Optionally provide a description to improve search quality
+
+When the user asks to find something:
+1. Use persistent_store with operation "search" and a query
+
+Available operations: store, search, list, delete."""
+
+[agents.storage.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 30
+
+[agents.storage.limits]
+max_tokens_per_flow = 500_000
+max_tool_rounds = 30

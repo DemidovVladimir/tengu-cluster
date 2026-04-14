@@ -181,6 +181,7 @@ pub(crate) async fn boot_orchestrator(
                 log_activity.clone(),
                 None,
                 shared_http_client.as_ref(),
+                Some(&config.memory),
             )
             .map(|executor| Arc::new(executor) as Arc<dyn ToolExecutor>)
             .unwrap_or_else(|| Arc::new(NoopRuntimeToolExecutor));

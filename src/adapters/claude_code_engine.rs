@@ -120,16 +120,24 @@ impl ClaudeCodeEngine {
         max_mcp_result_chars: u32,
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
+        let mut env = serde_json::json!({
+            "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
+            "TENGU_BRIDGE_TOOLS": tools_json,
+            "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
+        });
+        // Forward persistent store chunk config if set in the parent process.
+        if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_SIZE") {
+            env["TENGU_PERSISTENT_STORE_CHUNK_SIZE"] = serde_json::Value::String(v);
+        }
+        if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP") {
+            env["TENGU_PERSISTENT_STORE_CHUNK_OVERLAP"] = serde_json::Value::String(v);
+        }
         serde_json::json!({
             "mcpServers": {
                 "tengu-tools": {
                     "command": tengu_bin,
                     "args": ["mcp-bridge"],
-                    "env": {
-                        "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
-                        "TENGU_BRIDGE_TOOLS": tools_json,
-                        "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
-                    }
+                    "env": env
                 }
             }
         })

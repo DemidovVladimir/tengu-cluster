@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::adapters::cache_tool_executor::{CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME};
+use crate::adapters::persistent_store_executor::{PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME};
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
@@ -358,29 +359,78 @@ fn build_bridge_executor(workspace: &std::path::Path, tools: &[ToolDef]) -> Arc<
         }
     }
 
+    // Memory handle — shared by `remember` and `persistent_store`
+    let needs_memory = allowed_names.contains("remember")
+        || allowed_names.contains(PERSISTENT_STORE_TOOL_NAME);
+
+    let memory_handle: Option<Arc<MemoryServiceHandle>> = if needs_memory {
+        match std::env::var("OPENROUTER_API_KEY") {
+            Ok(api_key) => {
+                let embedding = Arc::new(OpenRouterEmbeddingAdapter::new(
+                    api_key,
+                    "openai/text-embedding-3-small".to_string(),
+                ));
+                let memory_dir = workspace.join("memory");
+                DiskVectorMemoryStore::new(&memory_dir)
+                    .ok()
+                    .map(|store| {
+                        Arc::new(MemoryServiceHandle {
+                            embedding,
+                            store: Arc::new(store),
+                        })
+                    })
+            }
+            Err(_) => {
+                warn!("Memory tools requested but OPENROUTER_API_KEY not set — skipping");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Memory (remember)
     if allowed_names.contains("remember") {
-        if let Ok(api_key) = std::env::var("OPENROUTER_API_KEY") {
-            let embedding = Arc::new(OpenRouterEmbeddingAdapter::new(
-                api_key,
-                "openai/text-embedding-3-small".to_string(),
-            ));
-            let memory_dir = workspace.join("memory");
-            if let Ok(store) = DiskVectorMemoryStore::new(&memory_dir) {
-                let handle = Arc::new(MemoryServiceHandle {
-                    embedding,
-                    store: Arc::new(store),
-                });
-                let secret_registry = Arc::new(SecretRegistry::new());
-                if let Ok(mem_exec) = MemoryToolExecutionAdapter::new(handle, secret_registry) {
+        if let Some(ref handle) = memory_handle {
+            let secret_registry = Arc::new(SecretRegistry::new());
+            if let Ok(mem_exec) =
+                MemoryToolExecutionAdapter::new(Arc::clone(handle), secret_registry)
+            {
+                composite = composite.with_executor(
+                    Arc::new(mem_exec),
+                    HashSet::from(["remember".to_string()]),
+                );
+            }
+        }
+    }
+
+    // Persistent store
+    if allowed_names.contains(PERSISTENT_STORE_TOOL_NAME) {
+        if let Some(ref handle) = memory_handle {
+            let chunk_size: usize = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000);
+            let chunk_overlap: usize = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200);
+            match PersistentStoreExecutor::new(
+                workspace.to_path_buf(),
+                Arc::clone(handle),
+                chunk_size,
+                chunk_overlap,
+            ) {
+                Ok(ps_exec) => {
                     composite = composite.with_executor(
-                        Arc::new(mem_exec),
-                        HashSet::from(["remember".to_string()]),
+                        Arc::new(ps_exec),
+                        HashSet::from([PERSISTENT_STORE_TOOL_NAME.to_string()]),
                     );
                 }
+                Err(e) => {
+                    warn!(error = %e, "Failed to init persistent store in MCP bridge");
+                }
             }
-        } else {
-            warn!("remember tool requested but OPENROUTER_API_KEY not set — skipping");
         }
     }
 

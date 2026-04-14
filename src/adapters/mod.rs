@@ -22,6 +22,7 @@ pub(crate) mod flow_builder;
 pub(crate) mod prompt_budget;
 // --- adapters ---
 pub(crate) mod cache_tool_executor;
+pub(crate) mod persistent_store_executor;
 #[cfg(feature = "claude_code")]
 pub(crate) mod claude_code_engine;
 pub(crate) mod channel_runtime;

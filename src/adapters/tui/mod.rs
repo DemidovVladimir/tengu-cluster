@@ -295,6 +295,7 @@ pub fn run_tui(
                                 Arc::clone(&activity),
                                 None,
                                 None,
+                                Some(&memory_config),
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -366,6 +367,7 @@ pub fn run_tui(
                                     Arc::clone(&activity),
                                     None,
                                     None,
+                                    Some(&memory_config),
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
@@ -495,6 +497,7 @@ pub fn run_tui(
                                 Arc::clone(&activity),
                                 None,
                                 None,
+                                Some(&memory_config),
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,

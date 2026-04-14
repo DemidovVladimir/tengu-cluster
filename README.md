@@ -436,3 +436,5 @@ src/
     tui/mod.rs                 # Terminal UI adapter
     ...
 ```
+
+<!-- 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 -->
