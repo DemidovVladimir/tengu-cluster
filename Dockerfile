@@ -1,5 +1,5 @@
 # ---- Builder Stage ----
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.91-bookworm AS builder
 
 WORKDIR /usr/src/tengu
 

@@ -922,7 +922,7 @@ impl Default for Config {
             AgentConfig {
                 default: true,
                 engine: "openrouter".to_string(),
-                model: "anthropic/claude-sonnet-4-20250514".to_string(),
+                model: "anthropic/claude-sonnet-4.5".to_string(),
                 workspace: None,
                 default_lens: "eco".to_string(),
                 identity: IdentityConfig {
