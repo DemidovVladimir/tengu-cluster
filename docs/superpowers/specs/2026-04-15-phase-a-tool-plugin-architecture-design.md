@@ -17,6 +17,8 @@ There is no single concept of "a tool." Tools are whatever an executor file happ
 
 ## 2. Goal
 
+**0. Implements the "hands" principle of `docs/architecture.md`** (see `2026-04-15-phase-0-doctrine-design.md`): tools are the only way the LLM touches the world; tools are gateable (`CapabilityId`) *and* scopeable (`ToolScope`); MCP extends hands without touching Rust. The no-compromise corollary applies: if this phase is tempted to encode *policy* (retry strategy, output formatting, delegation rules) in Rust, that code is a skill, not Rust.
+
 Replace the executor-per-domain model with:
 
 1. A **per-tool trait** — each tool is a small, independently-testable unit.
@@ -93,6 +95,7 @@ pub(crate) struct ToolCtx<'a> {
     pub activity:  &'a dyn crate::adapters::ports::ToolActivityPort,
     pub memory:    &'a crate::adapters::memory_builder::MemoryService,
     pub skills:    &'a crate::adapters::skill_builder::SkillCatalog,
+    pub scope:     &'a crate::adapters::ports::ToolScope,  // Phase 0 doctrine §2
 }
 
 /// Construction-time context passed to every `ToolPlugin::tools`.
@@ -107,10 +110,15 @@ pub(crate) struct PluginCtx<'a> {
     pub cache:     Arc<crate::adapters::cache_tool_executor::CacheDb>,
     pub memory:    Arc<crate::adapters::memory_builder::MemoryService>,
     pub skills:    Arc<crate::adapters::skill_builder::SkillCatalog>,
+    /// Per-agent, per-tool scope map. Outer key = agent name, inner key = tool name.
+    /// Built from `AgentConfig.scopes` + `[default_scopes]` (see Phase 0 doctrine §2.4).
+    pub scopes:    Arc<std::collections::HashMap<String, std::collections::HashMap<String, crate::adapters::ports::ToolScope>>>,
 }
 ```
 
 **Why borrowed `ToolCtx<'_>` instead of `Arc<Ctx>`:** every tool call already happens under an active chat turn that owns these handles. Borrowing removes a layer of refcount traffic and documents that tools should not retain context across calls. Tool impls stay lifetime-free because they hold no context fields.
+
+**On `scope` in `ToolCtx`:** built per-tool-call by the registry from `PluginCtx.scopes` (via current agent name + tool name lookup). Every tool enforces it on the first line of `execute` via `ctx.scope.check_*()`. See `2026-04-15-phase-0-doctrine-design.md` §2 for the `ToolScope` type, the enforcement rule, and the default-deny config contract. Relationship to `CapabilityId`: `CapabilityId` is the coarse gate (does this tool exist at all?), `ToolScope` is the fine gate (what can it touch when it runs?). Both are kept; see Phase 0 §2.5 for the mapping.
 
 ### 4.2 Registries
 
@@ -468,7 +476,11 @@ command = ["uvx", "mcp-server-filesystem", "--root", "/workspace"]
 - **Schema drift.** The manifest is fetched once at boot. A future follow-up can re-fetch on failure if it becomes a pain point; not in scope for A10.
 - **Capability gating.** All MCP tools share `CapabilityId::McpExternal`. Agents can opt out by not enabling that capability — same mechanism as other tool capabilities.
 
-### 4.9 Config shape
+### 4.9 Scope enforcement lint
+
+The Phase 0 PR P0-7 lands a CI integration test `tests/scope_lint.rs` that is **dormant** until Phase A starts. The test greps every tool file under `src/adapters/plugins/**/*.rs` and asserts the first non-comment, non-argument-parsing line of each `execute` body is a call to `ctx.scope.check_*()`. When Phase A's A1 lands the first migrated tool, the test goes active for that tool; each subsequent A-series PR widens coverage automatically. A tool that forgets the check fails CI with a clear message pointing at the file. Grep-based and crude, but it is the cheapest way to enforce the doctrine uniformly without a procedural macro. No false-negative risk is acceptable: the lint is the single mechanism that makes "tools are scopeable" a hard guarantee instead of a convention.
+
+### 4.10 Config shape
 
 New section in `config.toml`:
 
@@ -517,6 +529,8 @@ Strict incremental, one plugin per PR. Each step compiles, passes tests, and lea
 | A10 | `McpPlugin` — inbound MCP client (see §4.8). `src/adapters/mcp/protocol.rs` factored out of `mcp_bridge.rs` and shared between inbound/outbound. `McpClient` (stdio + http transports), `McpProxyTool`, config loader. Added to the match arm in `PluginRegistry::from_config`. | new plugins/mcp/, mcp/protocol.rs | +300 | low-med (depends on remote-server reliability, which the plugin tolerates — see §4.8.4) |
 
 **Expected cumulative delta:** ~−2 400 net LOC (adds ~400 in A0 + ~300 in A10 for new MCP client functionality, subtracts ~3 100 across A1–A9 including the MCP bridge rewrite). No single PR touches more than two files substantively besides the plugin it introduces. A10 is **additive functionality** — it ships new capability (inbound MCP) rather than removing LOC, and counts positively for the project even though its LOC signature is positive.
+
+**Per-tool scope enforcement adds ~5 LOC per tool** (a single `ctx.scope.check_*()` call as the first line of each `execute` body), already counted in each A-series PR's delta. The `ToolScope` type, config schema, and dormant CI lint are all landed in Phase 0; the A-series PRs flip the lint from dormant to active, tool by tool, as they migrate.
 
 ## 6. Error handling
 

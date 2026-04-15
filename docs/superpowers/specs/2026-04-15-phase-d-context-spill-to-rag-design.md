@@ -23,6 +23,8 @@ The Rust core does not need to keep enforcing context-size limits. It needs to k
 
 ## 2. Goal
 
+**0. Implements the "brain" principle of `docs/architecture.md`** (see `2026-04-15-phase-0-doctrine-design.md`): context assembly is the Rust core's load-bearing job, and brain overflow becomes lossless (spill to RAG) rather than lossy (truncation). The core decides what enters and leaves the context window; it does not decide what the LLM does with it. The no-compromise corollary applies: if this phase is tempted to encode *policy* (what to summarize, what to prioritize, when to fetch) in Rust, that is skill territory — see the §5.3 orchestration-skill addition.
+
 Replace **context-size caps** (not loop-safety caps) with **lazy context**. When a turn's live tokens would exceed a configurable soft threshold (default 60% of the engine's context window), spill the oldest eligible items into a session-scoped RAG namespace and replace them in-context with a short summary plus a ref. The model can `context_fetch(ref)` to get any spilled item back, or `memory_search(scope="session")` to find content by meaning. A single hard ceiling at 10× the context window refuses further work with a clear "use `/clear` or `/new`" system error — that ceiling is the only absolute cost cap that remains.
 
 **Expected Rust LOC delta:** approximately net-neutral, slightly positive (roughly −600 deletions from pruning / truncation / history-budgeting code and roughly +620 additions for the spill service, `context_fetch` tool, scope plumbing, and engine integration). The value of Phase D is not in deleting code — it is in replacing *lossy* code with *lossless* code at roughly the same footprint.
@@ -48,6 +50,8 @@ Replace **context-size caps** (not loop-safety caps) with **lazy context**. When
 ## 4. Architecture
 
 ### 4.1 The 60% / 10× budget model
+
+Every knob in this section is a "what enters the brain" knob, not a "what the LLM does" knob — the latter is skill territory (Phase 0 doctrine §1.1, principle 2). The spill threshold, the hard cap, the summary model, the chunk size: these are all substrate-level decisions about brain assembly, and they stay in Rust. What the LLM does with a `[previously-seen]` placeholder is governed by the orchestration skill (§5.3), not by code.
 
 Each engine already exposes `context_window_tokens` (`engine_builder.rs:320`). Phase D adds three configuration knobs, all with sensible defaults:
 

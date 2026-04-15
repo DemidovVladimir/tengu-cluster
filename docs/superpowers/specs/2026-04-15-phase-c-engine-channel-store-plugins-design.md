@@ -21,6 +21,8 @@ Each extension point has its own ad-hoc pattern. None of them use the plugin + r
 
 ## 2. Goal
 
+**0. Implements the "skeleton" principle of `docs/architecture.md`** (see `2026-04-15-phase-0-doctrine-design.md`): engines, channels, stores, and embedders are plugins on the same pattern as tools, so adding a new backend is a one-file change — the harness stays user-alignable at the substrate level. The no-compromise corollary applies: if this phase is tempted to add Rust code that encodes a retry, backoff, or routing policy that a user might want to tune, that code is a skill, not Rust.
+
 Apply the Phase A plugin pattern uniformly to engines, channels, memory stores, and embedders. Feature flags collapse to a single `#[cfg]` per `match` arm in each registry — the same place the tool plugins live. Adding a new backend becomes a one-file, one-config-entry change, identical in shape to adding a tool plugin.
 
 **Expected LOC delta:** ~−800 to −1 200 (feature-flag scatter consolidates, construction sites dedupe). Depends on how much fat the OpenRouter + ClaudeCode engine implementations shed once they share a common registry lifecycle — to be measured during the detailed spec pass.
@@ -48,6 +50,8 @@ pub(crate) trait EnginePlugin: Send + Sync {
 Impls: `OpenRouterEnginePlugin`, `ClaudeCodeEnginePlugin`, future `OpenAiEnginePlugin`, `GeminiEnginePlugin`, `LocalLlamaCppEnginePlugin`.
 
 `Engine` itself is the existing trait in `types.rs` — unchanged. The plugin layer is just how engines are *constructed*, not how they're *called*.
+
+**Engines do not carry a `ToolScope`.** Scope is per-tool, not per-engine (see Phase 0 doctrine §2). An engine sees the `ToolRegistry` built with per-agent scopes already applied; it does not make scope decisions of its own.
 
 Config:
 
@@ -88,6 +92,10 @@ pub(crate) struct ChannelCtx<'a> {
     pub tools:    &'a ToolRegistry,     // from Phase A
     pub plugins:  &'a PluginRegistry,   // from Phase A
     pub engines:  &'a EngineRegistry,   // from §4.1
+    /// Per-agent, per-tool scope map — the channel passes this through
+    /// when it opens a session so the tools seen by that session have
+    /// the right `ToolScope` bound in. Shape from Phase 0 §2.4.
+    pub scopes:   &'a std::collections::HashMap<String, std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
     pub shutdown: tokio_util::sync::CancellationToken,
 }
 ```

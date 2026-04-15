@@ -27,6 +27,8 @@ Path 2 is strictly simpler, proven on the CLI, and matches how every modern LLM 
 
 ## 2. Goal
 
+**0. Implements the "logic" principle of `docs/architecture.md`** (see `2026-04-15-phase-0-doctrine-design.md`): all orchestration policy moves out of Rust and into `skills/orchestration/`. The `skill-creator` + `skill-eval` meta-loop (installed in Phase 0) is what makes this evolvable — the user can re-author or measure the orchestration skill without filing a Rust PR. The no-compromise corollary applies: if this phase is tempted to add Rust code that encodes a retry, delegation, or decomposition strategy, that code is a skill, not Rust.
+
 **Move orchestration out of Rust and into a skill.** The Rust core keeps only the primitives (`sessions_spawn`, `sessions_fan_out`, `subagents`, `memory_write`, `memory_get`, etc.) and becomes a thin substrate for skill-driven behaviour. The *policy* for how to decompose requests, delegate to subagents, handle failures, and track progress moves into `skills/orchestration/SKILL.md`, which is loaded through the existing `SkillCatalog` (Phase A §4.6) and injected into every main-agent system prompt.
 
 **Install meta-tooling so orchestration evolves without code changes.** Copy `skill-creator` from `anthropics/skills` (verbatim, per the project's "skills are portable, never modified by the platform" rule) and use it to author the `orchestration` skill and a new `skill-cleaner` skill. `skill-creator` itself covers create / modify / eval / benchmark, so the meta-skill set collapses to two skills, not four.
@@ -41,6 +43,7 @@ Path 2 is strictly simpler, proven on the CLI, and matches how every modern LLM 
 - **Channel plugin trait.** That is Phase C. However, B3 is **deliberately shaped** so Phase C can lift Telegram + CLI into a `ChannelPlugin` trait with zero rewriting — see §11.1.
 - **CLI changes.** Path 2 is already the target; the CLI barely moves.
 - **Engine / channel / store plugins.** Phase C.
+- **Skill-creator installation.** Moved to Phase 0 (see `2026-04-15-phase-0-doctrine-design.md` §3). Phase B assumes `skill-creator` and `skill-eval` are already on disk.
 
 ## 4. Architecture
 
@@ -155,13 +158,11 @@ If a subagent is running and you realize you gave wrong instructions, call `suba
 
 The description is deliberately "pushy" per skill-creator's guidance to combat under-triggering. The body stays under 500 lines and uses only primitives that already exist in Rust today — no new tool, no new plumbing.
 
-### 4.3 `skill-creator` (upstream, verbatim copy)
+### 4.3 `skill-creator` (already installed in Phase 0)
 
-Source: `github.com/anthropics/skills/skills/skill-creator`. Covers create, modify, eval, and benchmark of skills. Bundled scripts (eval-viewer, description-improver) run under the existing `run_command` primitive when skill-creator needs them.
+**Moved to Phase 0.** See `2026-04-15-phase-0-doctrine-design.md` §3. Phase B starts with `skill-creator` already on disk, hash-pinned against upstream, and with the companion `skill-eval` skill available. Phase B's work in this area is now content-only: author `skills/orchestration/SKILL.md` using the already-installed `skill-creator` as a co-author in the implementation session.
 
-Installed under `skills/skill-creator/` at the workspace tier so it's picked up by the three-tier skill hierarchy (`~/.tengu/skills/` → `.tengu/skills/` → `skills/`). Because it's a documentation skill, Phase A's `SkillCatalog` loads its frontmatter into the main agent's system prompt automatically.
-
-**Portability constraint from project memory — "skills are portable, must never be modified by the platform"**: skill-creator is copied exactly as upstream ships it, zero edits. If it references tools tengu-cluster doesn't provide, we don't patch the skill; we either (a) add the missing primitive to Rust (rare — skill-creator uses common shell + file tools that already exist), or (b) accept that those features degrade gracefully when the tool is absent.
+The portability constraint (`skills are portable, must never be modified by the platform`) is enforced by the Phase 0 CI hash check; Phase B inherits that guarantee.
 
 ### 4.4 `skill-cleaner` (new, authored via skill-creator)
 
@@ -216,8 +217,8 @@ Strictly sequential. Phase B cannot start until Phase A has shipped through A9 (
 
 | # | PR | What lands | LOC Δ | Risk |
 |---|---|---|---|---|
-| B1 | Copy `skill-creator` verbatim from `anthropics/skills` into `skills/skill-creator/`. Add a CI check that the copy's hash matches upstream, so accidental edits get flagged. | `skills/skill-creator/` | 0 Rust, +skill content | none |
-| B2 | Author `skills/orchestration/SKILL.md` (co-authored with skill-creator in an implementation session; content matches the draft in §4.2, refined through skill-creator's test/eval loop). | `skills/orchestration/` | 0 Rust | low (content quality) |
+| B1 | **[moved to Phase 0 — see P0-5 / P0-6]** `skill-creator` and `skill-eval` are already installed when Phase B starts. | — | — | — |
+| B2 | Author `skills/orchestration/SKILL.md` using the already-installed `skill-creator` (content matches the draft in §4.2, refined through `skill-eval`'s feedback loop). | `skills/orchestration/` | 0 Rust | low (content quality) |
 | B3 | Telegram migration — replace `TelegramTaskExecutor` dispatch with `channel_runtime` session. Add `parse_at_mention`. Preserve keyboard, `/stop`, attachments, redaction. | `telegram_builder.rs` | −400 | **high** (parity) |
 | B4 | Delete `event_orchestrator.rs`, `agent_builder.rs`, `task_builder.rs`. | 3 files | −1 700 | low (all callers migrated in B3) |
 | B5 | Delete dead types from `types.rs`. | `types.rs` | −200 | low (leaf module; compilation catches strays) |
@@ -244,7 +245,7 @@ B4–B6 are pure deletions of already-dead code once B3 ships.
 
 ### 5.2 Ordering rationale
 
-- B1 before B2: `skill-creator` must exist before we co-author `orchestration` through it.
+- B1 is a no-op row (moved to Phase 0); `skill-creator` and `skill-eval` are on disk before Phase B starts.
 - B2 before B3: the orchestration skill must be in place so the main agent, when Telegram sessions start, has the playbook in its system prompt.
 - B3 before B4: Telegram must stop calling the legacy orchestrator before we can delete it.
 - B4 before B5: dead-type cleanup needs the files that reference the types to be gone first.
