@@ -1,10 +1,10 @@
-# Phase A — Orchestration Collapse (skill-driven)
+# Phase B — Orchestration Collapse (skill-driven)
 
 **Status:** Design, pending approval
 **Date:** 2026-04-15
-**Depends on:** Phase B (tool plugin architecture) must be complete and landed
+**Depends on:** Phase A (tool plugin architecture) must be complete and landed
 **Blocks:** Phase C (engine/channel/store plugins)
-**Supersedes:** the earlier Rust-plugin version of Phase A — the `TasksPlugin` + `PlanPlugin` approach is dropped in favour of moving orchestration into a skill.
+**Supersedes:** the earlier Rust-plugin version of Phase B — the `TasksPlugin` + `PlanPlugin` approach is dropped in favour of moving orchestration into a skill.
 
 ---
 
@@ -27,26 +27,26 @@ Path 2 is strictly simpler, proven on the CLI, and matches how every modern LLM 
 
 ## 2. Goal
 
-**Move orchestration out of Rust and into a skill.** The Rust core keeps only the primitives (`sessions_spawn`, `sessions_fan_out`, `subagents`, `memory_write`, `memory_get`, etc.) and becomes a thin substrate for skill-driven behaviour. The *policy* for how to decompose requests, delegate to subagents, handle failures, and track progress moves into `skills/orchestration/SKILL.md`, which is loaded through the existing `SkillCatalog` (Phase B §4.6) and injected into every main-agent system prompt.
+**Move orchestration out of Rust and into a skill.** The Rust core keeps only the primitives (`sessions_spawn`, `sessions_fan_out`, `subagents`, `memory_write`, `memory_get`, etc.) and becomes a thin substrate for skill-driven behaviour. The *policy* for how to decompose requests, delegate to subagents, handle failures, and track progress moves into `skills/orchestration/SKILL.md`, which is loaded through the existing `SkillCatalog` (Phase A §4.6) and injected into every main-agent system prompt.
 
 **Install meta-tooling so orchestration evolves without code changes.** Copy `skill-creator` from `anthropics/skills` (verbatim, per the project's "skills are portable, never modified by the platform" rule) and use it to author the `orchestration` skill and a new `skill-cleaner` skill. `skill-creator` itself covers create / modify / eval / benchmark, so the meta-skill set collapses to two skills, not four.
 
-**Expected Rust LOC delta: ~−2 450 (A3 −400 + A4 −1 700 + A5 −200 + A6 −150). New Rust code: ≈ 0.** The playbook is prose, not code.
+**Expected Rust LOC delta: ~−2 450 (B3 −400 + B4 −1 700 + B5 −200 + B6 −150). New Rust code: ≈ 0.** The playbook is prose, not code.
 
 ## 3. Non-goals
 
-- **New Rust features.** Phase A is a deletion + skill authoring exercise. Any new capability that tempts us toward adding Rust code is out of scope.
+- **New Rust features.** Phase B is a deletion + skill authoring exercise. Any new capability that tempts us toward adding Rust code is out of scope.
 - **Hard DAG enforcement.** Confirmed with the user: no current workflow needs a state-machine guarantee that task B cannot start until task A completes. If such a workflow appears later, a narrow Rust `plan_tool` can be added for *that* workflow — not pre-built speculatively.
 - **Telegram adapter rewrite.** The adapter stays; only its orchestration path changes. Multi-agent routing (`@role: message`), inline-keyboard approvals, `/stop` cancellation, `/wallet`, file attachments, secret redaction, typing indicator, `/agents` — all preserved.
-- **Channel plugin trait.** That is Phase C. However, A3 is **deliberately shaped** so Phase C can lift Telegram + CLI into a `ChannelPlugin` trait with zero rewriting — see §11.1.
+- **Channel plugin trait.** That is Phase C. However, B3 is **deliberately shaped** so Phase C can lift Telegram + CLI into a `ChannelPlugin` trait with zero rewriting — see §11.1.
 - **CLI changes.** Path 2 is already the target; the CLI barely moves.
 - **Engine / channel / store plugins.** Phase C.
 
 ## 4. Architecture
 
-### 4.1 Rust surface after Phase A
+### 4.1 Rust surface after Phase B
 
-The Rust core exposes exactly these tool primitives (grouped under Phase B plugins — see the B spec for the plugin layout):
+The Rust core exposes exactly these tool primitives (grouped under Phase A plugins — see the A spec for the plugin layout):
 
 - **Workspace**: `read_file`, `list_directory`, `write_file`, `run_command`
 - **Network**: `http_request`
@@ -57,13 +57,13 @@ The Rust core exposes exactly these tool primitives (grouped under Phase B plugi
 - **Shared cache**: `shared_cache` (opt-in per agent)
 - **MCP bridge**: arbitrary external tools declared outside the binary via MCP
 
-Plus the skill loader, the engine, and the channel layer. **No orchestration tools live in Rust after Phase A.** `plan_*`, `tasks_*`, `classify_*`, `dispatch_*` — none of them exist as tools; all their behaviour is instructed via the orchestration skill.
+Plus the skill loader, the engine, and the channel layer. **No orchestration tools live in Rust after Phase B.** `plan_*`, `tasks_*`, `classify_*`, `dispatch_*` — none of them exist as tools; all their behaviour is instructed via the orchestration skill.
 
 This matches other modern harnesses that expose generic tool-calling + MCP for custom tools and leave policy to skills and system prompts.
 
 ### 4.2 The `orchestration` skill
 
-A documentation skill (no execution template; no tools generated). Loaded by `SkillPlugin` (Phase B §4.6) into `SkillCatalog`; its compact XML catalog entry is injected into every main-agent system prompt via the engine's prompt assembly. The full `SKILL.md` body is pulled on-demand when the main agent decides the skill applies, following the three-tier progressive-disclosure pattern (~100 tokens catalog, <500 lines body, optional bundled references/scripts).
+A documentation skill (no execution template; no tools generated). Loaded by `SkillPlugin` (Phase A §4.6) into `SkillCatalog`; its compact XML catalog entry is injected into every main-agent system prompt via the engine's prompt assembly. The full `SKILL.md` body is pulled on-demand when the main agent decides the skill applies, following the three-tier progressive-disclosure pattern (~100 tokens catalog, <500 lines body, optional bundled references/scripts).
 
 **Draft `skills/orchestration/SKILL.md`** — concrete starting point for implementation:
 
@@ -159,7 +159,7 @@ The description is deliberately "pushy" per skill-creator's guidance to combat u
 
 Source: `github.com/anthropics/skills/skills/skill-creator`. Covers create, modify, eval, and benchmark of skills. Bundled scripts (eval-viewer, description-improver) run under the existing `run_command` primitive when skill-creator needs them.
 
-Installed under `skills/skill-creator/` at the workspace tier so it's picked up by the three-tier skill hierarchy (`~/.tengu/skills/` → `.tengu/skills/` → `skills/`). Because it's a documentation skill, Phase B's `SkillCatalog` loads its frontmatter into the main agent's system prompt automatically.
+Installed under `skills/skill-creator/` at the workspace tier so it's picked up by the three-tier skill hierarchy (`~/.tengu/skills/` → `.tengu/skills/` → `skills/`). Because it's a documentation skill, Phase A's `SkillCatalog` loads its frontmatter into the main agent's system prompt automatically.
 
 **Portability constraint from project memory — "skills are portable, must never be modified by the platform"**: skill-creator is copied exactly as upstream ships it, zero edits. If it references tools tengu-cluster doesn't provide, we don't patch the skill; we either (a) add the missing primitive to Rust (rare — skill-creator uses common shell + file tools that already exist), or (b) accept that those features degrade gracefully when the tool is absent.
 
@@ -212,23 +212,23 @@ No replacements added. The state that orchestration needs now lives in the LLM's
 
 ## 5. Migration plan
 
-Strictly sequential. Phase A cannot start until Phase B has shipped through B9 (the `SkillCatalog` path must exist so the orchestration skill's frontmatter reaches the main-agent system prompt).
+Strictly sequential. Phase B cannot start until Phase A has shipped through A9 (the `SkillCatalog` path must exist so the orchestration skill's frontmatter reaches the main-agent system prompt).
 
 | # | PR | What lands | LOC Δ | Risk |
 |---|---|---|---|---|
-| A1 | Copy `skill-creator` verbatim from `anthropics/skills` into `skills/skill-creator/`. Add a CI check that the copy's hash matches upstream, so accidental edits get flagged. | `skills/skill-creator/` | 0 Rust, +skill content | none |
-| A2 | Author `skills/orchestration/SKILL.md` (co-authored with skill-creator in an implementation session; content matches the draft in §4.2, refined through skill-creator's test/eval loop). | `skills/orchestration/` | 0 Rust | low (content quality) |
-| A3 | Telegram migration — replace `TelegramTaskExecutor` dispatch with `channel_runtime` session. Add `parse_at_mention`. Preserve keyboard, `/stop`, attachments, redaction. | `telegram_builder.rs` | −400 | **high** (parity) |
-| A4 | Delete `event_orchestrator.rs`, `agent_builder.rs`, `task_builder.rs`. | 3 files | −1 700 | low (all callers migrated in A3) |
-| A5 | Delete dead types from `types.rs`. | `types.rs` | −200 | low (leaf module; compilation catches strays) |
-| A6 | Config cleanup — remove legacy orchestration config structs from `config.rs`. | `config.rs` | −150 | low |
-| A7 (follow-up, optional) | Author `skills/skill-cleaner/` via `skill-creator`. Not on the Phase A critical path; can land after A6. | `skills/skill-cleaner/` | 0 Rust | none |
+| B1 | Copy `skill-creator` verbatim from `anthropics/skills` into `skills/skill-creator/`. Add a CI check that the copy's hash matches upstream, so accidental edits get flagged. | `skills/skill-creator/` | 0 Rust, +skill content | none |
+| B2 | Author `skills/orchestration/SKILL.md` (co-authored with skill-creator in an implementation session; content matches the draft in §4.2, refined through skill-creator's test/eval loop). | `skills/orchestration/` | 0 Rust | low (content quality) |
+| B3 | Telegram migration — replace `TelegramTaskExecutor` dispatch with `channel_runtime` session. Add `parse_at_mention`. Preserve keyboard, `/stop`, attachments, redaction. | `telegram_builder.rs` | −400 | **high** (parity) |
+| B4 | Delete `event_orchestrator.rs`, `agent_builder.rs`, `task_builder.rs`. | 3 files | −1 700 | low (all callers migrated in B3) |
+| B5 | Delete dead types from `types.rs`. | `types.rs` | −200 | low (leaf module; compilation catches strays) |
+| B6 | Config cleanup — remove legacy orchestration config structs from `config.rs`. | `config.rs` | −150 | low |
+| B7 (follow-up, optional) | Author `skills/skill-cleaner/` via `skill-creator`. Not on the Phase B critical path; can land after B6. | `skills/skill-cleaner/` | 0 Rust | none |
 
-**Cumulative Rust LOC delta:** approximately −2 450 removed, ≈ 0 added. The dominant value comes from A3–A6. A1, A2, A7 are content work, not Rust.
+**Cumulative Rust LOC delta:** approximately −2 450 removed, ≈ 0 added. The dominant value comes from B3–B6. B1, B2, B7 are content work, not Rust.
 
-### 5.1 The A3 risk in detail
+### 5.1 The B3 risk in detail
 
-A3 is the only step where runtime behaviour can drift. Mitigations:
+B3 is the only step where runtime behaviour can drift. Mitigations:
 
 1. **Feature-flag gate.** A new `telegram_use_channel_runtime` flag defaults to `true`; can be flipped to `false` for one release to revert. Removed in the release after.
 2. **Parity test matrix.** For each legacy Telegram scenario, a smoke test exercises the new path:
@@ -238,37 +238,37 @@ A3 is the only step where runtime behaviour can drift. Mitigations:
    - Inline-keyboard approval gates a crypto transaction.
    - File upload is attached to the main agent's context.
    - Secret redaction fires on a fake API key in an LLM response.
-3. **Staged rollout.** A3 ships on a branch and runs against a test bot for 48 h before merge.
+3. **Staged rollout.** B3 ships on a branch and runs against a test bot for 48 h before merge.
 
-A4–A6 are pure deletions of already-dead code once A3 ships.
+B4–B6 are pure deletions of already-dead code once B3 ships.
 
 ### 5.2 Ordering rationale
 
-- A1 before A2: `skill-creator` must exist before we co-author `orchestration` through it.
-- A2 before A3: the orchestration skill must be in place so the main agent, when Telegram sessions start, has the playbook in its system prompt.
-- A3 before A4: Telegram must stop calling the legacy orchestrator before we can delete it.
-- A4 before A5: dead-type cleanup needs the files that reference the types to be gone first.
-- A7 optional and parallelizable: skill-cleaner is a quality-of-life addition, not a dependency.
+- B1 before B2: `skill-creator` must exist before we co-author `orchestration` through it.
+- B2 before B3: the orchestration skill must be in place so the main agent, when Telegram sessions start, has the playbook in its system prompt.
+- B3 before B4: Telegram must stop calling the legacy orchestrator before we can delete it.
+- B4 before B5: dead-type cleanup needs the files that reference the types to be gone first.
+- B7 optional and parallelizable: skill-cleaner is a quality-of-life addition, not a dependency.
 
 ## 6. Error handling and edge cases
 
 - **Subagent failure.** The orchestration skill (§4.2 "Failure handling") instructs the main agent how to react. No central retry coordinator. The `is_retryable()` heuristic from `agent_builder.rs` is not replaced — the main LLM makes the retry decision with full context, which is strictly more informed than a regex match on error strings.
-- **Global token budget.** Per-session counter already tracked in `channel_runtime.rs`. Phase B §4.1 plumbs subagent token usage back through the activity publisher, so the session counter aggregates across the whole tree. No change needed in Phase A.
-- **Cancellation.** `/stop` flips a `CancellationToken` owned by the channel session. `sessions_spawn` and `sessions_fan_out` accept the token (Phase B `ToolCtx` carries it) and propagate it into subagents. One uniform cancellation model.
+- **Global token budget.** Per-session counter already tracked in `channel_runtime.rs`. Phase A §4.1 plumbs subagent token usage back through the activity publisher, so the session counter aggregates across the whole tree. No change needed in Phase B.
+- **Cancellation.** `/stop` flips a `CancellationToken` owned by the channel session. `sessions_spawn` and `sessions_fan_out` accept the token (Phase A `ToolCtx` carries it) and propagate it into subagents. One uniform cancellation model.
 - **Structured output extraction (`RESEARCH_OUTPUT:` regex).** Deleted — not replaced. The main agent reads raw subagent output and picks what matters for the next step. This was a workaround for the legacy path's inability to let one agent read another's full output.
 
 ## 7. Testing strategy
 
-- **Unit tests** — n/a for skill content beyond frontmatter-parse tests (Phase B's `SkillPlugin` already has those).
-- **Skill eval** — use `skill-creator`'s eval loop to test the `orchestration` skill against a fixed prompt set (produced during A2):
+- **Unit tests** — n/a for skill content beyond frontmatter-parse tests (Phase A's `SkillPlugin` already has those).
+- **Skill eval** — use `skill-creator`'s eval loop to test the `orchestration` skill against a fixed prompt set (produced during B2):
   - "research paper X then mint it as an IP token" → expect sequential spawn(researcher) + spawn(minter).
   - "fetch the latest prices for A, B, C" → expect parallel fan-out.
   - "what's 2+2?" → expect direct answer, no spawn.
   - "my trade failed with HTTP 503" → expect retry of the same call, not decomposition.
   - "the deploy broke, check logs, restart, verify" → expect sequential multi-step with progress notes in the daily log.
 - **Telegram parity matrix** (§5.1).
-- **Regression sweep** — CLI smoke tests must produce byte-identical output before and after Phase A on fixed prompts + seeds (CLI path does not change; any drift is a regression).
-- **Test-bot 48 h run** for A3.
+- **Regression sweep** — CLI smoke tests must produce byte-identical output before and after Phase B on fixed prompts + seeds (CLI path does not change; any drift is a regression).
+- **Test-bot 48 h run** for B3.
 
 ## 8. Risks and mitigations
 
@@ -277,34 +277,34 @@ A4–A6 are pure deletions of already-dead code once A3 ships.
 | Orchestration skill under-triggers; main agent fails to delegate when it should | skill-creator's description-improver script optimizes the frontmatter `description` for triggering accuracy. Re-run after any skill content change. |
 | Orchestration skill over-triggers; main agent delegates trivial one-step questions | Eval set includes explicit "don't orchestrate" cases (e.g. "what's 2+2?"). skill-creator's variance analysis catches over-triggering. |
 | Telegram behavioural parity — legacy path had subtle ordering guarantees (e.g. failures always before summary) | Parity test matrix in §5.1; explicit ordering contract documented in `channel_runtime.rs::Session::stream_output`. |
-| Users relied on implicit Tier 2 summarization of long outputs | No auto summarizer in Phase A. If real-world use reveals a gap, the orchestration skill tells the main agent to summarize inline — or, failing that, add an explicit `summarize` tool. No hidden behaviour restored. |
+| Users relied on implicit Tier 2 summarization of long outputs | No auto summarizer in Phase B. If real-world use reveals a gap, the orchestration skill tells the main agent to summarize inline — or, failing that, add an explicit `summarize` tool. No hidden behaviour restored. |
 | `classify_request` routing was doing something non-obviously useful | Unlikely — `@role:` is preserved via `parse_at_mention`. For implicit routing, the main agent has the full team roster in its system prompt and decides per-message with full context. At worst one added round-trip; at best more accurate. |
 | Deleting types in `types.rs` breaks unrelated code that imported them | Compilation catches it. `types.rs` is a leaf module. |
-| Skills drift from upstream skill-creator | CI check on A1 verifies the `skill-creator` hash matches upstream. An upstream update triggers a re-copy PR, not an inline edit. |
+| Skills drift from upstream skill-creator | CI check on B1 verifies the `skill-creator` hash matches upstream. An upstream update triggers a re-copy PR, not an inline edit. |
 | Hard DAG enforcement required by a future workflow | Confirmed not needed today. If it appears, add a narrow `plan_tool` for that specific workflow — don't pre-build speculatively. |
 
 ## 9. Open questions
 
 - **Should `orchestration` skill recommend writing a daily-log entry on every run, or only when wall-clock exceeds a threshold?** Leaning on "only when > 30s" to keep the log clean. Tunable via skill content — no code change.
-- **Does `skill-cleaner` need a sandbox mode (report only, never archive)?** Probably yes as the default; destructive action requires explicit user confirmation. Decide during A7 authoring.
-- **Should we install other useful upstream skills as part of A1 (e.g. `doc-coauthoring`, `mcp-builder`)?** Out of scope for Phase A; can be a follow-up content PR.
+- **Does `skill-cleaner` need a sandbox mode (report only, never archive)?** Probably yes as the default; destructive action requires explicit user confirmation. Decide during B7 authoring.
+- **Should we install other useful upstream skills as part of B1 (e.g. `doc-coauthoring`, `mcp-builder`)?** Out of scope for Phase B; can be a follow-up content PR.
 
-## 10. Dependencies on Phase B
+## 10. Dependencies on Phase A
 
-Phase A cannot start without:
-- `ToolPlugin` trait and `ToolRegistry` (from B0).
-- `SubagentsPlugin` exposing `sessions_spawn`, `sessions_fan_out`, `subagents` as first-class tools (from B7).
-- `ToolCtx` carrying `&SubagentRegistry`, cancellation, and activity publisher (from B0).
-- `SkillPlugin` + `SkillCatalog` — the documentation-skill loader that injects the orchestration skill's frontmatter into the main-agent system prompt (from B8).
-- `channel_runtime.rs` wired through `PluginRegistry` (from B0).
+Phase B cannot start without:
+- `ToolPlugin` trait and `ToolRegistry` (from A0).
+- `SubagentsPlugin` exposing `sessions_spawn`, `sessions_fan_out`, `subagents` as first-class tools (from A7).
+- `ToolCtx` carrying `&SubagentRegistry`, cancellation, and activity publisher (from A0).
+- `SkillPlugin` + `SkillCatalog` — the documentation-skill loader that injects the orchestration skill's frontmatter into the main-agent system prompt (from A8).
+- `channel_runtime.rs` wired through `PluginRegistry` (from A0).
 
 Without those, the `orchestration` skill has nothing to plug into and Telegram's new path has no uniform tool registry to call through.
 
-## 11. What the Rust core looks like after Phase A
+## 11. What the Rust core looks like after Phase B
 
 Approximate line counts (adapters/ only, excluding tests):
 
-| Module | Before Phase A | After Phase A |
+| Module | Before Phase B | After Phase B |
 |---|---:|---:|
 | `event_orchestrator.rs` | 1 149 | — (deleted) |
 | `agent_builder.rs` | 130 | — (deleted) |
@@ -313,9 +313,9 @@ Approximate line counts (adapters/ only, excluding tests):
 | `types.rs` | 918 | ~720 |
 | `config.rs` | 1 013 | ~860 |
 | `orchestrator.rs` | 629 | 629 |
-| `subagent_builder.rs` | existing | unchanged + slimmed by Phase B |
+| `subagent_builder.rs` | existing | unchanged + slimmed by Phase A |
 | `channel_runtime.rs` | 676 | ~700 (small growth for Telegram session path) |
-| **adapters/ total** | ~15 000 (pre Phase B) | ~10 000 (post Phase B + A) |
+| **adapters/ total** | ~15 000 (pre Phase A) | ~10 000 (post Phase A + B) |
 
 And the skills tree:
 
@@ -323,7 +323,7 @@ And the skills tree:
 |---|---|
 | `skills/orchestration/` | new (§4.2) |
 | `skills/skill-creator/` | new — verbatim upstream copy (§4.3) |
-| `skills/skill-cleaner/` | new — authored via skill-creator (§4.4), A7 |
+| `skills/skill-cleaner/` | new — authored via skill-creator (§4.4), B7 |
 | `skills/aura-orchestrator/` | existing |
 | `skills/beach-science/` | existing |
 | `skills/molecule-x402/` | existing |
@@ -334,7 +334,7 @@ And the skills tree:
 
 Today Telegram is structurally coupled to the legacy orchestrator — `telegram_builder.rs` reaches into `event_orchestrator.rs`, owns its own `TelegramTaskExecutor`, and bypasses the session lifecycle that CLI goes through. The two channels share almost no shape. That coupling is the blocker for making channels pluggable.
 
-A3 breaks it: after the migration, **Telegram and CLI both drop through `channel_runtime.rs` via the same `open_session` → `send_user_message` → `stream_output` flow**. They become indistinguishable in shape, differing only in how they read input (Telegram API webhook vs stdin) and how they stream output (Telegram `sendMessage` vs terminal write).
+B3 breaks it: after the migration, **Telegram and CLI both drop through `channel_runtime.rs` via the same `open_session` → `send_user_message` → `stream_output` flow**. They become indistinguishable in shape, differing only in how they read input (Telegram API webhook vs stdin) and how they stream output (Telegram `sendMessage` vs terminal write).
 
 Once they're shaped the same way, Phase C's `ChannelPlugin` trait is **pure extraction**, not rewriting. The trait (sketched in the Phase C stub spec) looks like:
 
@@ -355,7 +355,7 @@ This means that adding future messengers — Slack, Discord, Matrix, SMTP/IMAP m
 - Add the name to `PluginRegistry::channel_from_name` match arm.
 - Add a `[[channels]] name = "slack"` entry in `config.toml`.
 
-Four edits, one file, no touching existing channels. **That's the trajectory A3 is explicitly paving the way for.** See `2026-04-15-phase-c-engine-channel-store-plugins-design.md` for the full sketch.
+Four edits, one file, no touching existing channels. **That's the trajectory B3 is explicitly paving the way for.** See `2026-04-15-phase-c-engine-channel-store-plugins-design.md` for the full sketch.
 
 ## 12. Out of scope reminder
 

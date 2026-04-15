@@ -1,9 +1,9 @@
-# Phase B — Tool Plugin Architecture
+# Phase A — Tool Plugin Architecture
 
 **Status:** Design, pending approval
 **Date:** 2026-04-15
 **Depends on:** Nothing (foundation)
-**Blocks:** Phase A (orchestration collapse), Phase C (engine/channel/store plugins)
+**Blocks:** Phase B (orchestration collapse), Phase C (engine/channel/store plugins)
 
 ---
 
@@ -31,8 +31,8 @@ Expected LOC delta: **~−2 400 net** (~−3 100 gross across deletions includin
 ## 3. Non-goals
 
 - **Engine/channel/store plugins** — that is Phase C, built on this foundation but out of scope here.
-- **Orchestration changes** — Phase A. The legacy event-bus orchestration paths (`event_orchestrator.rs`, `agent_builder.rs`, `task_builder.rs`, `TelegramTaskExecutor`) remain intact throughout Phase B; they simply call through the new `ToolRegistry` instead of `CompositeToolExecutor`. Tool dispatch is replaced; orchestration dispatch is not.
-- **New tools** — this is a refactor, not a feature. Every tool that exists today must still exist after Phase B with the same name, schema, and behaviour.
+- **Orchestration changes** — Phase B. The legacy event-bus orchestration paths (`event_orchestrator.rs`, `agent_builder.rs`, `task_builder.rs`, `TelegramTaskExecutor`) remain intact throughout Phase A; they simply call through the new `ToolRegistry` instead of `CompositeToolExecutor`. Tool dispatch is replaced; orchestration dispatch is not.
+- **New tools** — this is a refactor, not a feature. Every tool that exists today must still exist after Phase A with the same name, schema, and behaviour.
 - **Runtime plugin loading (.so / WASM)** — plugin registration remains compile-time. Config decides *which* of the compiled-in plugins are instantiated.
 
 ## 4. Architecture
@@ -320,7 +320,7 @@ Net effect on `skill_builder.rs`: drops from 1211 LOC to ~300 (SkillPlugin + Ski
 
 ### 4.7 Retire `ToolExecutionPort`; modernize two other ports
 
-`ports.rs` has six traits today. Phase B touches three of them; the other three are unchanged.
+`ports.rs` has six traits today. Phase A touches three of them; the other three are unchanged.
 
 | Trait | Fate |
 |---|---|
@@ -352,16 +352,16 @@ pub(crate) trait MemoryStorePort: Send + Sync {
 
 `DiskVectorMemoryStore` and `QdrantMemoryStore` rewrite `fn store(&self, …) -> Pin<Box<dyn Future<…>>>` to `async fn store(&self, …) -> Result<()>` — mechanical, no behavioural change.
 
-**Important clarification for callers of `mcp_bridge.rs`:** Today the bridge imports every executor adapter type directly and threads them through JSON-RPC handlers. After B9 the bridge instead constructs one `ToolRegistry` from `PluginRegistry` and calls `registry.invoke(&call, &ctx)` per incoming MCP request. The file shrinks from 438 LOC to ~250 LOC and becomes trivially correct (one dispatch site, not seven). See B10 below for the complementary *inbound* MCP story.
+**Important clarification for callers of `mcp_bridge.rs`:** Today the bridge imports every executor adapter type directly and threads them through JSON-RPC handlers. After A9 the bridge instead constructs one `ToolRegistry` from `PluginRegistry` and calls `registry.invoke(&call, &ctx)` per incoming MCP request. The file shrinks from 438 LOC to ~250 LOC and becomes trivially correct (one dispatch site, not seven). See A10 below for the complementary *inbound* MCP story.
 
 ### 4.8 `McpPlugin` — inbound MCP client (custom tools without Rust)
 
 Two distinct MCP concepts exist, and the project previously had only one of them:
 
-| Direction | What it does | Status before Phase B | Status after Phase B |
+| Direction | What it does | Status before Phase A | Status after Phase A |
 |---|---|---|---|
 | **Outbound MCP server** (`mcp_bridge.rs`) | Exposes Tengu tools over JSON-RPC so external MCP clients (e.g. Claude Code CLI) can call them. | Exists, 438 LOC, implements `ToolExecutionPort` via 7 adapter types. | Still exists, ~250 LOC, dispatches through `ToolRegistry`. |
-| **Inbound MCP client** (new `McpPlugin`) | Connects to external MCP servers at boot, imports their tool manifests, surfaces each remote tool as a callable `Tool` inside the agent's kit. This is the "custom tools via MCP like other harnesses" hook. | **Did not exist.** | **New first-class deliverable (B10).** |
+| **Inbound MCP client** (new `McpPlugin`) | Connects to external MCP servers at boot, imports their tool manifests, surfaces each remote tool as a callable `Tool` inside the agent's kit. This is the "custom tools via MCP like other harnesses" hook. | **Did not exist.** | **New first-class deliverable (A10).** |
 
 The inbound `McpPlugin` is the piece that makes *custom tools without writing Rust* real. Adding a new tool becomes:
 
@@ -465,7 +465,7 @@ command = ["uvx", "mcp-server-filesystem", "--root", "/workspace"]
 
 - **Connection failure at boot.** `McpPlugin::tools()` logs and skips a server whose `connect()` or `list_tools()` fails, rather than aborting registry construction. The other plugins still load. A health-check tool (`mcp_servers` — lists connection status) is included for debugging.
 - **Remote tool failure at call time.** `McpProxyTool::execute` surfaces the MCP error directly to the LLM. The LLM decides whether to retry or switch strategies, same as any other tool error.
-- **Schema drift.** The manifest is fetched once at boot. A future follow-up can re-fetch on failure if it becomes a pain point; not in scope for B10.
+- **Schema drift.** The manifest is fetched once at boot. A future follow-up can re-fetch on failure if it becomes a pain point; not in scope for A10.
 - **Capability gating.** All MCP tools share `CapabilityId::McpExternal`. Agents can opt out by not enabling that capability — same mechanism as other tool capabilities.
 
 ### 4.9 Config shape
@@ -496,7 +496,7 @@ name = "skill"
 packages = ["x402", "desci"]
 ```
 
-The `skill_packages`, `workspace_tools`, and per-executor config options that currently sit on `AgentConfig` merge into these plugin entries. `config.rs` shrinks meaningfully as a side effect (not counted in Phase B's −3 k LOC estimate, since some of that work bleeds into Phase C).
+The `skill_packages`, `workspace_tools`, and per-executor config options that currently sit on `AgentConfig` merge into these plugin entries. `config.rs` shrinks meaningfully as a side effect (not counted in Phase A's ~−2 400 net LOC estimate, since some of that work bleeds into Phase C).
 
 ## 5. Migration plan
 
@@ -504,19 +504,19 @@ Strict incremental, one plugin per PR. Each step compiles, passes tests, and lea
 
 | # | PR | Touches | LOC Δ | Risk |
 |---|---|---|---|---|
-| B0 | Foundation — add `tool_plugin.rs`, registries, `LegacyExecutorAsPlugin` bridge. Wire `PluginRegistry` into `orchestrator.rs` + `channel_runtime.rs` behind the bridge (bridge still delegates to `CompositeToolExecutor`). | new module, 2 wiring points | +400 | low |
-| B1 | Convert `workspace` — read_file, list_directory, write_file, run_command. Delete workspace-tool code from `tool_builder.rs`. | 4 tool files, tool_builder.rs | −150 | low |
-| B2 | Convert `http` — HttpRequestTool + secret resolution helpers. Delete `http_tool_executor.rs`. | http_tool_executor.rs, new plugin | −200 | low |
-| B3 | Convert `crypto` — 4 tools + Privy client holder. Delete `crypto_tool_executor.rs`. | crypto_tool_executor.rs, new plugin | −350 | med (EVM test coverage) |
-| B4 | Convert `cache` — SharedCacheTool. Delete `cache_tool_executor.rs`. | cache_tool_executor.rs, new plugin | −100 | low |
-| B5 | Convert `memory` — remember/search/write/get. Delete `persistent_store_executor.rs`. `MemoryService` stays. | persistent_store_executor.rs, new plugin | −500 | med (Qdrant feature flag moves) |
-| B6 | Convert `shell` — trivially empty (absorbed by workspace.run_command). Delete `shell_executor.rs`. | shell_executor.rs | −80 | none |
-| B7 | Convert `subagents` — Spawn/FanOut/Sessions tools. Delete subagent tool-dispatch code from `subagent_builder.rs` (the `AgentRuntime` + `SubagentRegistry` stay). Drop the `block_in_place + block_on` hack. | subagent_builder.rs | −200 | low |
-| B8 | `SkillPlugin` + `SkillCatalog` + `SkillShellTool`. `skill_builder.rs` retains parser + catalog only. | skill_builder.rs | −900 | med (biggest single shrink) |
-| B9 | Final cleanup — delete `CompositeToolExecutor`, `ToolExecutionPort`, the legacy bridge. Modernize `EmbeddingPort` + `MemoryStorePort` to `#[async_trait]`. Rewrite `mcp_bridge.rs` (outbound MCP server) to dispatch through `ToolRegistry` instead of 7 adapter types — ~−190 LOC shrink there. Shrink `tool_builder.rs` to registry plumbing only. | composite_tool_executor.rs, ports.rs, tool_builder.rs, mcp_bridge.rs | −600 | low |
-| B10 | `McpPlugin` — inbound MCP client (see §4.8). `src/adapters/mcp/protocol.rs` factored out of `mcp_bridge.rs` and shared between inbound/outbound. `McpClient` (stdio + http transports), `McpProxyTool`, config loader. Added to the match arm in `PluginRegistry::from_config`. | new plugins/mcp/, mcp/protocol.rs | +300 | low-med (depends on remote-server reliability, which the plugin tolerates — see §4.8.4) |
+| A0 | Foundation — add `tool_plugin.rs`, registries, `LegacyExecutorAsPlugin` bridge. Wire `PluginRegistry` into `orchestrator.rs` + `channel_runtime.rs` behind the bridge (bridge still delegates to `CompositeToolExecutor`). | new module, 2 wiring points | +400 | low |
+| A1 | Convert `workspace` — read_file, list_directory, write_file, run_command. Delete workspace-tool code from `tool_builder.rs`. | 4 tool files, tool_builder.rs | −150 | low |
+| A2 | Convert `http` — HttpRequestTool + secret resolution helpers. Delete `http_tool_executor.rs`. | http_tool_executor.rs, new plugin | −200 | low |
+| A3 | Convert `crypto` — 4 tools + Privy client holder. Delete `crypto_tool_executor.rs`. | crypto_tool_executor.rs, new plugin | −350 | med (EVM test coverage) |
+| A4 | Convert `cache` — SharedCacheTool. Delete `cache_tool_executor.rs`. | cache_tool_executor.rs, new plugin | −100 | low |
+| A5 | Convert `memory` — remember/search/write/get. Delete `persistent_store_executor.rs`. `MemoryService` stays. | persistent_store_executor.rs, new plugin | −500 | med (Qdrant feature flag moves) |
+| A6 | Convert `shell` — trivially empty (absorbed by workspace.run_command). Delete `shell_executor.rs`. | shell_executor.rs | −80 | none |
+| A7 | Convert `subagents` — Spawn/FanOut/Sessions tools. Delete subagent tool-dispatch code from `subagent_builder.rs` (the `AgentRuntime` + `SubagentRegistry` stay). Drop the `block_in_place + block_on` hack. | subagent_builder.rs | −200 | low |
+| A8 | `SkillPlugin` + `SkillCatalog` + `SkillShellTool`. `skill_builder.rs` retains parser + catalog only. | skill_builder.rs | −900 | med (biggest single shrink) |
+| A9 | Final cleanup — delete `CompositeToolExecutor`, `ToolExecutionPort`, the legacy bridge. Modernize `EmbeddingPort` + `MemoryStorePort` to `#[async_trait]`. Rewrite `mcp_bridge.rs` (outbound MCP server) to dispatch through `ToolRegistry` instead of 7 adapter types — ~−190 LOC shrink there. Shrink `tool_builder.rs` to registry plumbing only. | composite_tool_executor.rs, ports.rs, tool_builder.rs, mcp_bridge.rs | −600 | low |
+| A10 | `McpPlugin` — inbound MCP client (see §4.8). `src/adapters/mcp/protocol.rs` factored out of `mcp_bridge.rs` and shared between inbound/outbound. `McpClient` (stdio + http transports), `McpProxyTool`, config loader. Added to the match arm in `PluginRegistry::from_config`. | new plugins/mcp/, mcp/protocol.rs | +300 | low-med (depends on remote-server reliability, which the plugin tolerates — see §4.8.4) |
 
-**Expected cumulative delta:** ~−2 400 net LOC (adds ~400 in B0 + ~300 in B10 for new MCP client functionality, subtracts ~3 100 across B1–B9 including the MCP bridge rewrite). No single PR touches more than two files substantively besides the plugin it introduces. B10 is **additive functionality** — it ships new capability (inbound MCP) rather than removing LOC, and counts positively for the project even though its LOC signature is positive.
+**Expected cumulative delta:** ~−2 400 net LOC (adds ~400 in A0 + ~300 in A10 for new MCP client functionality, subtracts ~3 100 across A1–A9 including the MCP bridge rewrite). No single PR touches more than two files substantively besides the plugin it introduces. A10 is **additive functionality** — it ships new capability (inbound MCP) rather than removing LOC, and counts positively for the project even though its LOC signature is positive.
 
 ## 6. Error handling
 
@@ -529,7 +529,7 @@ Per-tool invariants (schema validation, arg parsing) use `serde_json::from_value
 - **Per-tool unit tests** become trivial: construct the tool, fab a `ToolCtx` with a tempdir workspace and stub handles, assert output. This is the single largest testability win — today, testing an HTTP tool requires standing up a composite executor + capability set + secrets.
 - **Plugin-level tests** verify that `tools()` yields the expected count + names under a given `PluginCtx`.
 - **Registry tests** verify name collisions are rejected and capability filtering works.
-- **Regression guard** during migration: a golden test that instantiates the full registry from the default config and asserts the set of tool names is identical to the pre-migration set. Runs in CI on every B-series PR.
+- **Regression guard** during migration: a golden test that instantiates the full registry from the default config and asserts the set of tool names is identical to the pre-migration set. Runs in CI on every A-series PR.
 
 ## 8. Risks and mitigations
 
@@ -539,16 +539,16 @@ Per-tool invariants (schema validation, arg parsing) use `serde_json::from_value
 | `ToolCtx` lifetime ergonomics become painful (e.g., a tool wants to spawn its own task and outlive the borrow) | `ToolCtx` carries `Arc` handles under the hood; a tool that needs to detach can clone an `Arc` into its spawned task. |
 | `#[async_trait]` allocates `BoxFuture` per call | Negligible vs. LLM latency. Profiled at < 0.1 % of tool-call wall time in tests. |
 | Feature-flag matrix (qdrant off, telegram off, claude_code on) breaks the registry | `PluginRegistry::from_config` `match` arms are `#[cfg]`-gated. CI already builds the matrix; add one job asserting `ToolRegistry::build` succeeds under each. |
-| Skill dispatch change (unified path) surfaces latent bugs in the legacy parallel path that nobody noticed | Ship B8 only after B0–B7 land and are exercised for a day or two. |
+| Skill dispatch change (unified path) surfaces latent bugs in the legacy parallel path that nobody noticed | Ship A8 only after A0–A7 land and are exercised for a day or two. |
 
 ## 9. Open questions
 
 - **Tool output truncation.** Today the engine does adaptive truncation in its tool loop. Keep it there, or move to `Tool::execute`? *Decision: keep in the engine's tool loop. Per-tool truncation would fragment the policy.*
 - **Per-tool streaming output.** Not needed today; no tool streams. If it becomes needed later, add a second method `execute_streaming(&self, …) -> impl Stream` without breaking existing impls.
-- **~~MCP-bridge tools~~.** *Resolved.* Inbound MCP client (`McpPlugin`, §4.8) is now a first-class B10 deliverable. Outbound `mcp_bridge.rs` is rewritten to dispatch through `ToolRegistry` in B9. Both directions are covered in Phase B.
+- **~~MCP-bridge tools~~.** *Resolved.* Inbound MCP client (`McpPlugin`, §4.8) is now a first-class A10 deliverable. Outbound `mcp_bridge.rs` is rewritten to dispatch through `ToolRegistry` in A9. Both directions are covered in Phase A.
 
 ## 10. Out of scope reminder
 
-- Orchestration — Phase A. The legacy `CompositeToolExecutor` is still wired via `LegacyExecutorAsPlugin` bridge during Phase B transit; the bridge dies in B9.
+- Orchestration — Phase B. The legacy `CompositeToolExecutor` is still wired via `LegacyExecutorAsPlugin` bridge during Phase A transit; the bridge dies in A9.
 - Engine / channel / store plugins — Phase C.
 - New tools, new skills, new integrations — not in this spec.
