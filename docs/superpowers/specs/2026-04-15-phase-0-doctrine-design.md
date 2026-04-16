@@ -171,19 +171,19 @@ Phase 0 installs the two skills that make the harness self-adapting, **before** 
 
 ### 3.1 What lands in Phase 0
 
-**`skills/skill-creator/`** — verbatim copy of `anthropics/skills/skill-creator`, zero edits, per the existing `feedback_skills_portable.md` memory. Content covers create, modify, and a basic eval harness. A CI check hashes the directory and compares against a pinned upstream hash; drift triggers a re-copy PR, not an inline edit.
+**`skills/skill-creator/`** — tengu-native authored skill (not an upstream verbatim copy). **Revised from initial spec:** the original plan called for copying `anthropics/skills/skill-creator` verbatim with a CI hash check, but that skill bundles Python tooling (`init_skill.py`, description-improver) as mandatory steps. Tengu's skill-execution surface is `run_command` + workspace tools — pulling in a Python dependency for a doctrine-layer skill contradicts the "single binary, zero dependencies" project ethos. Content covers skill anatomy, frontmatter, naming, the three-tier hierarchy, and the create/modify workflow using only workspace primitives. **No CI hash check** — the skill is authored and maintained in-tree.
 
 **`skills/skill-eval/`** — a new authored skill. Phase B's existing spec implicitly assumed eval capability lived inside `skill-creator`, but the user-facing lifecycle is different: `skill-creator` is invoked when *creating or modifying* behaviour, `skill-eval` is invoked when *measuring* whether existing skills still work. Independent triggers call for independent skills.
 
-`skill-eval`'s job:
+`skill-eval`'s Phase 0 job — **structural checks only**:
 
 - Walk the three-tier skill hierarchy (`~/.tengu/skills/` → `.tengu/skills/` → `skills/`).
-- For each skill, replay a small fixed prompt set against the current main agent. The prompt set is configured either in the skill's own `SKILL.md` under an `evals:` frontmatter key, or in a sibling `evals.yaml` file next to `SKILL.md`.
-- Compare model outputs to expected outcomes in one of three modes: exact-match, regex, or LLM-judge.
-- Report drift: which skills passed, which failed, which are silently un-triggered (the "dead skill" signal — skill present but no prompt triggered it, which suggests either a bad description or a no-longer-needed skill).
-- Recommend action per skill: keep, revise (via `skill-creator`), or archive.
+- Gating checks: verify `requires_bins`, `requires_env`, `os` from each skill's frontmatter against the runtime.
+- Drift checks: scan the skill body for references to tools, files, or capabilities that no longer exist.
+- Dead-skill detection: flag skills that no agent config lists in `skill_packages`.
+- Report per skill: keep / keep (conditional) / revise / archive.
 
-`skill-eval` is a documentation skill (frontmatter + `SKILL.md` body) plus one bundled script (Python or bash, ~150 LOC) invoked via `run_command`. It does not execute automatically; it runs when the user or an agent explicitly triggers it.
+`skill-eval` is a pure documentation skill (frontmatter + `SKILL.md` body, no bundled script). **Revised from initial spec:** the original plan called for a bundled Python or bash eval-runner (~150 LOC) that replays prompts and judges outputs. That scope is superseded by Phase E's `tengu align` CLI + `alignment_runner.rs` — fixture-driven replay as a first-class Rust subcommand, not a per-skill script. Phase E is what closes the "measure drift" loop; Phase 0's `skill-eval` handles the simpler structural drift that doesn't need prompt replay.
 
 ### 3.2 The evolution loop
 
@@ -296,8 +296,8 @@ Phase 0 is mostly content plus a small foundational code landing. It must ship b
 | **P0-2** | **Phase spec alignment.** Apply §4 of this spec — the A/B/C/D reframing deltas. One commit, four files. No code. | four existing phase spec files | ~+40 docs each | none |
 | **P0-3** | **`ToolScope` type + enforcement helpers.** Add `ToolScope` struct to `src/adapters/ports.rs` (final placement decided during implementation planning — `types.rs` is an acceptable alternative). Add `check_fs_read`, `check_fs_write`, `check_net_host`, `check_env_read`, `check_shell_bin`, `check_wallet` methods. Unit tests for each check. No caller wiring yet — the type exists, unused, ready for Phase A's A0 to consume. | `ports.rs` (or `types.rs`), new unit tests | +180 code, +120 tests | **low** |
 | **P0-4** | **Config schema for scopes.** Extend `AgentConfig` with `scopes: HashMap<String, ToolScope>` and an optional top-level `[default_scopes]` block. Deserialization tests on sample `config.toml` snippets. Still no caller wiring — Phase A's A0 plumbs this into `PluginCtx` / `ToolCtx`. | `config.rs`, config tests | +100 code, +60 tests | low |
-| **P0-5** | **`skill-creator` install.** Copy `anthropics/skills/skill-creator` verbatim into `skills/skill-creator/`. Add a CI check that hashes the directory and compares against a pinned upstream hash (same mechanism previously planned for Phase B's B1). | `skills/skill-creator/`, new CI job | 0 Rust, +skill content | none |
-| **P0-6** | **`skill-eval` authoring.** Author `skills/skill-eval/SKILL.md` + bundled eval-runner script (Python or bash, ~150 LOC). Use the now-installed `skill-creator` as a co-author in the implementation session. Include a minimal eval set that runs on every skill currently in the repo and reports. | `skills/skill-eval/` | 0 Rust, +skill content | low (content quality) |
+| **P0-5** | **`skill-creator` authoring.** Author `skills/skill-creator/SKILL.md` as a tengu-native documentation skill (see §3.1 for why not an upstream verbatim copy). Content covers skill anatomy, frontmatter, three-tier hierarchy, create/modify workflow. **No CI hash check** — the skill is maintained in-tree, not pinned against upstream. | `skills/skill-creator/` | 0 Rust, +skill content | none |
+| **P0-6** | **`skill-eval` authoring.** Author `skills/skill-eval/SKILL.md` as a structural-check skill (gating, drift, dead-skill detection) — no bundled eval-runner script. **Revised scope:** prompt-replay / fixture-driven evaluation is Phase E's `tengu align` CLI, not Phase 0's responsibility. | `skills/skill-eval/` | 0 Rust, +skill content | low (content quality) |
 | **P0-7** | **Scope enforcement lint test** (§4.1 Delta 5). Add an integration test file that fails CI if a tool's `execute` body does not begin with a `ctx.scope.check_*()` call. The test currently passes trivially because no tools are migrated yet; it **becomes active** as Phase A converts tools. | `tests/scope_lint.rs` | +60 tests | none |
 
 ### 5.2 Ordering and dependencies
@@ -316,7 +316,7 @@ No PR in Phase 0 touches legacy orchestration, engine assembly, existing tools, 
 - **+160 docs** (P0-2 — four phase spec deltas, ~40 lines each)
 - **+280 code** (P0-3 + P0-4 — `ToolScope` type and config schema)
 - **+240 tests** (P0-3 + P0-4 + P0-7 — unit tests, config tests, scope lint)
-- **+content** (P0-5 + P0-6 — `skill-creator` copy and new `skill-eval` skill)
+- **+content** (P0-5 + P0-6 — tengu-native `skill-creator` and new `skill-eval` skill)
 - **Net Rust code delta: +280** (additive, no deletions — deletions come in Phase A as tools get scoped-and-migrated)
 
 ### 5.4 Out of scope
@@ -351,16 +351,16 @@ After Phase 0 lands:
 - `docs/architecture.md` states the heart/brain/hands/skills doctrine with the no-compromise corollary. Every phase spec (A, B, C, D) references it in its Goal section.
 - `ToolScope` exists in `src/adapters/ports.rs`, with unit tests for every `check_*` method. The type is not yet used by any tool — but Phase A's A0 can consume it in its first commit without waiting for any other change.
 - `AgentConfig` supports `scopes: HashMap<String, ToolScope>` and a `[default_scopes]` fallback block. The schema round-trips through `serde` with deserialization tests.
-- `skills/skill-creator/` is present on disk, hash-pinned against upstream, verified by CI.
-- `skills/skill-eval/` is present, runs via `run_command`, and reports on every skill currently in the repo. Its first eval pass serves as the doctrine-alignment smoke test.
+- `skills/skill-creator/` is present on disk as a tengu-native documentation skill. (Revised from initial spec — no upstream hash pin; see §3.1.)
+- `skills/skill-eval/` is present and runs structural checks (gating, drift, dead-skill detection) on every skill currently in the repo. Prompt-replay evaluation is deferred to Phase E's `tengu align`. (Revised scope — see §3.1.)
 - A dormant scope-enforcement CI lint is wired into the pipeline, waiting for Phase A to light it up.
 - No line in `engine_builder.rs`, `channel_runtime.rs`, `subagent_builder.rs`, `telegram_builder.rs`, `chat_builder.rs`, `memory_builder.rs`, or `skill_builder.rs` has changed. Phase A starts on exactly the codebase it expected, plus one type, one config field, two skills, and a doctrine.
 
 ## 9. Dependencies
 
 - **Upstream:** none. Phase 0 is the new foundation.
-- **Downstream:** Phase A (directly), Phases B / C / D (transitively via the doctrine alignment deltas).
-- **External:** `anthropics/skills/skill-creator` at a pinned commit. CI check is the drift guard.
+- **Downstream:** Phase A (directly), Phases B / C / D (transitively via the doctrine alignment deltas), Phase E (for the prompt-replay evaluation loop originally scoped to P0-6).
+- **External:** none. `skill-creator` is tengu-native; no upstream sync required. (Revised from initial spec — see §3.1.)
 
 ## 10. Guardrail
 
