@@ -8,15 +8,21 @@ Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `
 
 ## Doctrine
 
-The Rust core exists to serve four principles. Violating any of them is a doctrine violation that blocks the PR.
+The Rust core exists to serve three principles. Violating any of them is a doctrine violation that blocks the PR.
 
 ### 1. LLM is the heart
 
 It consumes tokens and emits tokens. It has no behaviour of its own — no memory, no goals, no identity, no plans. Anything that looks like "the agent did X because..." is really "the context instructed the LLM, and the LLM produced X." The Rust core never hard-codes behaviour that belongs to the model.
 
-### 2. Context is the brain
+### 2. Context and skills are the brain
 
-Everything the LLM knows on a given turn lives in the context window: system prompt, bootstrap files (AGENTS.md, MEMORY.md, daily logs, identity files), tool definitions, skill catalog entries, transcript history, pending tool results. The Rust core's job is **brain assembly** — deciding what goes into the context, how much, in what order, and what to do when it overflows (Phase D's RAG spill). The core does not decide what the brain does with that context.
+Everything the LLM knows on a given turn lives in the context window: system prompt, bootstrap files (AGENTS.md, MEMORY.md, daily logs, identity files), tool definitions, skill catalog entries, transcript history, pending tool results.
+
+Skills are how policy reaches the brain — any strategy, workflow, playbook, plan, or "how the agent decides what to do" is a skill, and each skill materializes into context via frontmatter catalog entries (compact) and body text (loaded on demand). Orchestration. Decomposition. Delegation. Failure handling. Progress tracking. Even meta-behaviour like "how to write new skills" is a skill (`skill-creator`).
+
+The Rust core's job is **brain assembly** — deciding which skills + bootstrap + transcript enter the context, in what order, at what compression, and what to do when the window overflows (Phase D's RAG spill). The core does not decide what the brain does with that context.
+
+Skills evolve through `skill-creator` (create), `skill-eval` (measure), and `skill-improver` (propose edits from align reports — Phase E). The harness gets closer to the user over time because the brain does, not because the core does.
 
 ### 3. Tools and MCP are the hands and senses
 
@@ -26,10 +32,6 @@ They are the only way the LLM touches the world. A tool reads a file, writes a f
 - **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny)
 
 MCP servers extend the hands without touching Rust. Adding a tool never requires adding Rust code beyond a new plugin file or a new `[[mcp_servers]]` entry.
-
-### 4. Skills are the logic
-
-Anything that looks like a strategy, a workflow, a plan, a playbook, or "how the agent decides what to do" is a skill, not Rust. Orchestration. Decomposition. Delegation. Failure handling. Progress tracking. Even meta-behaviour like "how to write new skills" is a skill (`skill-creator`). The harness evolves because skills evolve — authored, evaluated, and retired by `skill-creator` and `skill-eval`. The Rust core ships the minimum substrate that lets skills do their job and stays out of the way.
 
 ### The no-compromise corollary
 
