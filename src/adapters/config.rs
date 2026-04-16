@@ -927,6 +927,7 @@ impl Config {
     /// Resolve the effective ToolScope for a given agent + tool.
     /// Per-agent scopes override default_scopes wholesale (not field-merged).
     /// Returns None if neither agent nor default_scopes has an entry.
+    #[allow(dead_code)] // Phase A wires this into tool registry construction
     pub fn resolve_scope(&self, agent_name: &str, tool_name: &str) -> Option<ToolScope> {
         if let Some(agent) = self.agents.get(agent_name) {
             if let Some(scope) = agent.scopes.get(tool_name) {

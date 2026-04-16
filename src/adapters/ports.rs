@@ -122,6 +122,7 @@ pub(crate) struct ToolScope {
     pub wallets: Vec<String>,
 }
 
+#[allow(dead_code)] // Phase A wires these into ToolCtx
 impl ToolScope {
     pub(crate) fn check_fs_read(&self, path: &Path) -> anyhow::Result<PathBuf> {
         self.check_fs(path, "read")
