@@ -1,6 +1,61 @@
 # Architecture
 
+> Every phase spec (A, B, C, D) references this document. Every PR is reviewed against it.
+
 Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `src/main.rs` — flat structure, no sub-crates.
+
+---
+
+## Doctrine
+
+The Rust core exists to serve four principles. Violating any of them is a doctrine violation that blocks the PR.
+
+### 1. LLM is the heart
+
+It consumes tokens and emits tokens. It has no behaviour of its own — no memory, no goals, no identity, no plans. Anything that looks like "the agent did X because..." is really "the context instructed the LLM, and the LLM produced X." The Rust core never hard-codes behaviour that belongs to the model.
+
+### 2. Context is the brain
+
+Everything the LLM knows on a given turn lives in the context window: system prompt, bootstrap files (AGENTS.md, MEMORY.md, daily logs, identity files), tool definitions, skill catalog entries, transcript history, pending tool results. The Rust core's job is **brain assembly** — deciding what goes into the context, how much, in what order, and what to do when it overflows (Phase D's RAG spill). The core does not decide what the brain does with that context.
+
+### 3. Tools and MCP are the hands and senses
+
+They are the only way the LLM touches the world. A tool reads a file, writes a file, runs a command, signs a transaction, calls an HTTP API, spawns a subagent. Tools are:
+
+- **Gateable** — the user decides which tools exist for each agent (`ToolAllowList`, today built from tool definitions)
+- **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny)
+
+MCP servers extend the hands without touching Rust. Adding a tool never requires adding Rust code beyond a new plugin file or a new `[[mcp_servers]]` entry.
+
+### 4. Skills are the logic
+
+Anything that looks like a strategy, a workflow, a plan, a playbook, or "how the agent decides what to do" is a skill, not Rust. Orchestration. Decomposition. Delegation. Failure handling. Progress tracking. Even meta-behaviour like "how to write new skills" is a skill (`skill-creator`). The harness evolves because skills evolve — authored, evaluated, and retired by `skill-creator` and `skill-eval`. The Rust core ships the minimum substrate that lets skills do their job and stays out of the way.
+
+### The no-compromise corollary
+
+If work during any phase is tempted to add Rust code that encodes *policy* — when to delegate, how to retry, what to prioritize, how to format output, when to ask for clarification — that code is a skill, not Rust. The test is: *does a non-engineer user need to change this behaviour by editing a markdown file, or by filing a PR?* If the answer is "markdown file," it's a skill.
+
+This rule is the single sentence every PR reviewer checks against. A violation is not a style issue; it is a doctrine violation and blocks the PR.
+
+---
+
+## Tool Access Control
+
+Two mechanisms coexist. They answer different questions:
+
+| Question | Mechanism | Where |
+|----------|-----------|-------|
+| Does this tool exist at all for this agent? | `ToolAllowList` (coarse, binary) | `src/adapters/types.rs` |
+| When the tool runs, what can it touch? | `ToolScope` (fine, default-deny) | `src/adapters/ports.rs` |
+
+Order of checks:
+1. Tool not in allow-list → tool is not registered. Done.
+2. Tool in allow-list, no scope entry → tool is not registered (same effect as #1).
+3. Tool in allow-list, scope present → tool is registered with that scope.
+
+At runtime, every tool's execute body calls `scope.check_*()` as its first line.
+
+---
 
 ## Core Loop
 
