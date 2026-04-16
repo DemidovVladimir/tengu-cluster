@@ -7,7 +7,7 @@
 //! Async ports (Pin<Box<Future>>): `EmbeddingPort`, `MemoryStorePort`.
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -93,7 +93,7 @@ pub(crate) trait MemoryStorePort: Send + Sync {
 ///
 /// This type is defined by Phase 0 and consumed by Phase A's `ToolCtx`.
 /// Subject to refinement during Phase A if additional fields are needed.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ToolScope {
     /// Allowed filesystem roots. Every fs-touching tool must reject
     /// paths that, after canonicalization, do not start with one of these.

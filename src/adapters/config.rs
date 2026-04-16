@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use sysinfo::System;
 use tracing::info;
 
+use crate::adapters::ports::ToolScope;
+
 // ---------------------------------------------------------------------------
 // Runtime profile
 // ---------------------------------------------------------------------------
@@ -134,6 +136,11 @@ pub struct Config {
 
     #[serde(default)]
     pub claude_code: Option<ClaudeCodeConfig>,
+
+    /// Fallback scopes applied when an agent has no per-tool scope entry.
+    /// Per-agent scopes override default_scopes wholesale (not field-merged).
+    #[serde(default)]
+    pub default_scopes: HashMap<String, ToolScope>,
 }
 
 fn default_profile() -> String {
@@ -235,6 +242,10 @@ pub struct AgentConfig {
     /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
     #[serde(default)]
     pub workspace_tools: Vec<String>,
+    /// Per-tool scope restrictions (default-deny). Key = tool name.
+    /// See `ToolScope` in `ports.rs` for field definitions.
+    #[serde(default)]
+    pub scopes: HashMap<String, ToolScope>,
     /// Per-agent Claude Code configuration (only used when engine = "claude_code").
     #[serde(default)]
     pub claude_code: Option<AgentClaudeCodeConfig>,
@@ -912,6 +923,18 @@ impl Config {
 
         Ok(result)
     }
+
+    /// Resolve the effective ToolScope for a given agent + tool.
+    /// Per-agent scopes override default_scopes wholesale (not field-merged).
+    /// Returns None if neither agent nor default_scopes has an entry.
+    pub fn resolve_scope(&self, agent_name: &str, tool_name: &str) -> Option<ToolScope> {
+        if let Some(agent) = self.agents.get(agent_name) {
+            if let Some(scope) = agent.scopes.get(tool_name) {
+                return Some(scope.clone());
+            }
+        }
+        self.default_scopes.get(tool_name).cloned()
+    }
 }
 
 impl Default for Config {
@@ -937,6 +960,7 @@ impl Default for Config {
                 prompt_budget: PromptBudgetConfig::default(),
                 requires: vec![],
                 workspace_tools: vec![],
+                scopes: HashMap::new(),
                 claude_code: None,
             },
         );
@@ -950,6 +974,7 @@ impl Default for Config {
             telegram: TelegramConfig::default(),
             scaffold: None,
             claude_code: None,
+            default_scopes: HashMap::new(),
         }
     }
 }
@@ -1009,5 +1034,137 @@ mod tests {
 
         let err = config.validate().expect_err("expected validation error");
         assert!(err.to_string().contains("builtin_tools_profile must be one of"));
+    }
+
+    #[test]
+    fn existing_config_no_scopes_parses() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+            [hub]
+            bind = "127.0.0.1"
+            port = 7070
+            auth_mode = "token"
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        assert!(config.validate().is_ok());
+        assert!(config.agents["main"].scopes.is_empty());
+        assert!(config.default_scopes.is_empty());
+    }
+
+    #[test]
+    fn agent_scopes_roundtrip() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+
+            [agents.main.scopes.write_file]
+            fs_roots = ["./research", "./drafts"]
+
+            [agents.main.scopes.http_request]
+            net_hosts = ["api.linear.app", "*.anthropic.com"]
+            env_reads = ["LINEAR_API_KEY"]
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        let scopes = &config.agents["main"].scopes;
+        assert_eq!(scopes["write_file"].fs_roots.len(), 2);
+        assert_eq!(scopes["http_request"].net_hosts.len(), 2);
+        assert_eq!(scopes["http_request"].env_reads.len(), 1);
+    }
+
+    #[test]
+    fn default_scopes_roundtrip() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+
+            [default_scopes.read_file]
+            fs_roots = ["./"]
+
+            [default_scopes.run_command]
+            shell_bins = ["git", "rg", "cargo"]
+            fs_roots = ["./"]
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(config.default_scopes["read_file"].fs_roots.len(), 1);
+        assert_eq!(config.default_scopes["run_command"].shell_bins.len(), 3);
+    }
+
+    #[test]
+    fn resolve_scope_agent_overrides_default() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [default_scopes.write_file]
+            fs_roots = ["./global"]
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+
+            [agents.main.scopes.write_file]
+            fs_roots = ["./agent-specific"]
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        let scope = config.resolve_scope("main", "write_file").unwrap();
+        assert_eq!(scope.fs_roots.len(), 1);
+        assert_eq!(scope.fs_roots[0].to_str().unwrap(), "./agent-specific");
+    }
+
+    #[test]
+    fn resolve_scope_falls_back_to_default() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [default_scopes.read_file]
+            fs_roots = ["./"]
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        let scope = config.resolve_scope("main", "read_file").unwrap();
+        assert_eq!(scope.fs_roots.len(), 1);
+    }
+
+    #[test]
+    fn resolve_scope_none_when_absent() {
+        let config = Config::default();
+        assert!(config.resolve_scope("main", "write_file").is_none());
+    }
+
+    #[test]
+    fn validate_passes_with_scopes() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [default_scopes.read_file]
+            fs_roots = ["./"]
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4.5"
+
+            [agents.main.scopes.write_file]
+            fs_roots = ["./research"]
+        "#;
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        assert!(config.validate().is_ok());
     }
 }
