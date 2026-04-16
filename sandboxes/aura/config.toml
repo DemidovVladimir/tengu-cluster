@@ -21,7 +21,7 @@ approve_only = ["sign_and_send_transaction"]
 enabled = true
 max_retries = 2
 planner_engine = "claude_code"
-planner_model = "opus"
+planner_model = "sonnet"
 
 # --- Scaffold ---
 # Root workspace with working directories created at startup.

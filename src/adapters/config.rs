@@ -946,7 +946,7 @@ impl Default for Config {
             AgentConfig {
                 default: true,
                 engine: "openrouter".to_string(),
-                model: "anthropic/claude-sonnet-4.5".to_string(),
+                model: "anthropic/claude-sonnet-4.6".to_string(),
                 workspace: None,
                 default_lens: "eco".to_string(),
                 identity: IdentityConfig {
@@ -1049,7 +1049,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
         "#;
         let config: Config = toml::from_str(toml_str).expect("should parse");
         assert!(config.validate().is_ok());
@@ -1065,7 +1065,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
 
             [agents.main.scopes.write_file]
             fs_roots = ["./research", "./drafts"]
@@ -1089,7 +1089,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
 
             [default_scopes.read_file]
             fs_roots = ["./"]
@@ -1114,7 +1114,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
 
             [agents.main.scopes.write_file]
             fs_roots = ["./agent-specific"]
@@ -1136,7 +1136,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
         "#;
         let config: Config = toml::from_str(toml_str).expect("should parse");
         let scope = config.resolve_scope("main", "read_file").unwrap();
@@ -1160,7 +1160,7 @@ mod tests {
             [agents.main]
             default = true
             engine = "openrouter"
-            model = "anthropic/claude-sonnet-4.5"
+            model = "anthropic/claude-sonnet-4.6"
 
             [agents.main.scopes.write_file]
             fs_roots = ["./research"]
