@@ -1,7 +1,17 @@
 ---
 name: aura-orchestrator
 description: End-to-end DeSci molecule — POI registration, IP-NFT minting, Molecule authentication, project creation, file upload, and announcement. Single-agent sequential execution.
-homepage: https://testnet.molecule.xyz
+env_vars:
+  - MOLECULE_CLIENT_URL
+  - MOLECULE_LABS_URL
+  - IPNFT_CONTRACT_ADDRESS
+  - X402_GATEWAY_URL
+  - EVM_WALLET_ADDRESS
+  - PRIVY_APP_ID
+  - PRIVY_APP_SECRET
+  - PRIVY_WALLET_ID
+  - POI_API_KEY
+  - MOLECULE_API_KEY
 ---
 
 # Aura Orchestrator
@@ -28,7 +38,7 @@ Do NOT stop, report progress, or output text between steps — execute ALL steps
 | `PRIVY_WALLET_ID` | Privy wallet ID (auto-detected or set after wallet creation) |
 | `EVM_WALLET_ADDRESS` | Owner's personal wallet address for NFT transfer (optional — skip transfer if not set) |
 
-**Note:** Molecule URLs, API keys, and POI keys are hardcoded in tool call examples below — no env var expansion needed.
+**Note:** Skill examples reference environment variables by name. URLs and public constants (client URL, GraphQL endpoint, IPNFT contract address) are rendered into the prompt at skill-load time from `.env`. API keys and secrets stay as literal `$VAR` placeholders and are expanded by `http_request` at call time. Switching between staging and production is a `.env` edit only — never modify the skill body for environment changes.
 
 ## Input
 
@@ -58,7 +68,7 @@ http_request:
   method: GET
   auth_basic_user_env: PRIVY_APP_ID
   auth_basic_pass_env: PRIVY_APP_SECRET
-  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4"}
+  headers: {"privy-app-id": "$PRIVY_APP_ID"}
   return_body: true
 ```
 
@@ -74,7 +84,7 @@ http_request:
   method: POST
   auth_basic_user_env: PRIVY_APP_ID
   auth_basic_pass_env: PRIVY_APP_SECRET
-  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4", "Content-Type": "application/json"}
+  headers: {"privy-app-id": "$PRIVY_APP_ID", "Content-Type": "application/json"}
   body: {"version": "1.0", "name": "DeSci agent policy", "chain_type": "ethereum", "rules": [{"name": "Sepolia only", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "chain_id", "operator": "eq", "value": "11155111"}], "action": "ALLOW"}, {"name": "Max 0.01 ETH per tx", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "10000000000000000"}], "action": "ALLOW"}]}
   return_body: true
 ```
@@ -89,7 +99,7 @@ http_request:
   method: POST
   auth_basic_user_env: PRIVY_APP_ID
   auth_basic_pass_env: PRIVY_APP_SECRET
-  headers: {"privy-app-id": "cmiumj4d503bxl50bky6htiu4", "Content-Type": "application/json"}
+  headers: {"privy-app-id": "$PRIVY_APP_ID", "Content-Type": "application/json"}
   body: {"chain_type": "ethereum", "policy_ids": ["<policy_id>"]}
   return_body: true
 ```
@@ -108,9 +118,9 @@ Register the research PDF as a Proof of Invention.
 
 ```
 http_request:
-  url: https://testnet.molecule.xyz/api/v1/inventions
+  url: $MOLECULE_CLIENT_URL/api/v1/inventions
   method: POST
-  headers: {"Authorization": "Bearer 65063adcc7ced918b041c2de9d0ef7521838737894d93755bc84b610b751b5de"}
+  headers: {"Authorization": "Bearer $POI_API_KEY"}
   file_path: <path-to-pdf>
   file_field_name: files
   return_body: true
@@ -118,7 +128,7 @@ http_request:
 
 If failed, stop and report the error. 
 
-The field name MUST be `files` (plural). The URL MUST be exactly `https://testnet.molecule.xyz/api/v1/inventions` — no other endpoint exists for POI.
+The field name MUST be `files` (plural). The URL MUST be exactly `$MOLECULE_CLIENT_URL/api/v1/inventions` — no other endpoint exists for POI.
 
 Extract from the response:
 - `data.transaction.to` → `poi_to`
@@ -141,8 +151,8 @@ The `merkle_root` from POI drives ALL subsequent IDs:
 
 1. `reservationId` = `hex_to_uint256(merkle_root)` — a large decimal number (NOT 1, NOT a small number)
 2. `reservationId` IS the `token_id` / `ipnftId` / `ipnftTokenId` — these are ALL the same value
-3. `ipnft_uid` = `0x152B444e60C526fe4434C721561a077269FcF61a_{reservationId}` (contract address + underscore + decimal token ID)
-4. The Molecule project URL = `https://testnet.molecule.xyz/ipnfts/{reservationId}`
+3. `ipnft_uid` = `$IPNFT_CONTRACT_ADDRESS_{reservationId}` (contract address + underscore + decimal token ID)
+4. The Molecule project URL = `$MOLECULE_CLIENT_URL/ipnfts/{reservationId}`
 
 If `reservationId` is a small number like 1 or 0, something went wrong in Phase 1. Stop and report the error.
 
@@ -191,9 +201,9 @@ shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation
 
 ```
 http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
+  url: $MOLECULE_LABS_URL
   method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: {"query": "mutation GenerateAssignmentAgreement($projectData: AWSJSON!) { generateAssignmentAgreement(projectData: $projectData) { agreementCid agreementContentHash isSuccess error { message code retryable } } }", "variables": {"projectData": "<JSON-encoded string, see below>"}}
   return_body: true
 ```
@@ -225,9 +235,9 @@ Save `agreementCid` and `agreementContentHash`.
 
 ```
 http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
+  url: $MOLECULE_LABS_URL
   method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: {"query": "mutation GenerateImageUploadUrl($filename: String!, $contentType: String!, $ipnftId: String!) { generateImageUploadUrl(filename: $filename, contentType: $contentType, ipnftId: $ipnftId) { uploadUrl key isSuccess error { message code retryable } } }", "variables": {"filename": "cover.png", "contentType": "image/png", "ipnftId": "<reservationId>"}}
   return_body: true
 ```
@@ -250,9 +260,9 @@ http_request:
 
 ```
 http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
+  url: $MOLECULE_LABS_URL
   method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: {"query": "mutation UploadMetadataWithImageKey($metadata: AWSJSON!, $imageKey: String!, $ipnftId: String!) { uploadMetadataWithImageKey(metadata: $metadata, imageKey: $imageKey, ipnftId: $ipnftId) { metadataCid metadataUrl isSuccess error { message code retryable } } }", "variables": {"metadata": "<JSON-encoded string, see below>", "imageKey": "<key from step 3>", "ipnftId": "<reservationId>"}}
   return_body: true
 ```
@@ -262,7 +272,7 @@ http_request:
 {
   "name": "<title>",
   "description": "<description>",
-  "external_url": "https://testnet.molecule.xyz",
+  "external_url": "$MOLECULE_CLIENT_URL",
   "terms_signature": "placeholder",
   "properties": {
     "agreements": [{"content_hash": "<agreementContentHash>", "mime_type": "application/json", "type": "POI_ASSIGNMENT", "url": "ipfs://<agreementCid>"}],
@@ -283,9 +293,9 @@ Save `metadataCid`.
 
 ```
 http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
+  url: $MOLECULE_LABS_URL
   method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: {"query": "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }", "variables": {"metadataCid": "<metadataCid from step 5>", "minter": "<wallet_address>", "chainId": 11155111}}
   return_body: true
 ```
@@ -305,9 +315,9 @@ Save `signature`.
 
 ```
 http_request:
-  url: https://staging.graphql.api.molecule.xyz/graphql
+  url: $MOLECULE_LABS_URL
   method: POST
-  headers: {"x-api-key": "da2-4sq3iynscza43pyhx2jrt6jmji", "Content-Type": "application/json"}
+  headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
   body: {"query": "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }", "variables": {"ipnftId": "<reservationId>", "tokenURI": "ipfs://<metadataCid>", "chainId": 11155111, "minter": "<wallet_address>", "to": "<wallet_address>", "termsSignature": "<signature from step 7>"}}
   return_body: true
 ```
@@ -333,7 +343,7 @@ Save `calldata`.
 
 ```
 sign_and_send_transaction:
-  to: 0x152B444e60C526fe4434C721561a077269FcF61a
+  to: $IPNFT_CONTRACT_ADDRESS
   data: <calldata from step 9>
   value: 1000000000000000
   chain_id: 11155111
@@ -347,8 +357,8 @@ Save to `mint/metadata/mint_result.json`:
 - `mint_tx_hash`
 - `metadata_cid`
 - `ipnft_symbol`
-- `contract_address`: `0x152B444e60C526fe4434C721561a077269FcF61a`
-- `ipnft_uid`: `0x152B444e60C526fe4434C721561a077269FcF61a_{reservation_id}`
+- `contract_address`: `$IPNFT_CONTRACT_ADDRESS`
+- `ipnft_uid`: `$IPNFT_CONTRACT_ADDRESS_{reservation_id}`
 
 Cache mint results:
 
@@ -448,7 +458,7 @@ shared_cache: { "operation": "get", "namespace": "molecule", "key": "reservation
 {"query": "mutation CreateProject($input: CreateProjectInput!) { createProject(input: $input) { isSuccess message error { message code retryable } project { ipnftUid ipnftSymbol ipnftAddress ipnftTokenId } } }", "variables": {"input": {"ipnftSymbol": "<symbol>", "ipnftTokenId": "<reservationId as decimal string>"}}}
 ```
 
-Run the full x402 payment flow (steps P1–P7) with this mutation. Extract project URL: `https://testnet.molecule.xyz/ipnfts/{reservationId}`
+Run the full x402 payment flow (steps P1–P7) with this mutation. Extract project URL: `$MOLECULE_CLIENT_URL/ipnfts/{reservationId}`
 
 Cache:
 ```
@@ -526,7 +536,7 @@ Transfer the minted IP-NFT to the owner's personal wallet and add them as a proj
 
 ### Step A — Check owner wallet
 
-The owner wallet address is: `0xa2eC2967Da7bC51494F8a5427B9784Cb5a05cD3c`
+The owner wallet address is: `$EVM_WALLET_ADDRESS`
 
 If this equals `wallet_address`, skip to Output — no transfer needed.
 
@@ -549,7 +559,7 @@ Save `calldata`.
 
 ```
 sign_and_send_transaction:
-  to: 0x152B444e60C526fe4434C721561a077269FcF61a
+  to: $IPNFT_CONTRACT_ADDRESS
   data: <calldata from step B>
   chain_id: 11155111
 ```
@@ -573,7 +583,7 @@ Final results to report:
 - `ipnft_uid`: `{contract_address}_{token_id}`
 - `poi_tx_hash`
 - `mint_tx_hash`
-- `project_url`: `https://testnet.molecule.xyz/ipnfts/{ipnftTokenId}`
+- `project_url`: `$MOLECULE_CLIENT_URL/ipnfts/{ipnftTokenId}`
 - `datasetId` from upload
 - Announcement success status
 - `transfer_tx_hash` (if transfer was performed)

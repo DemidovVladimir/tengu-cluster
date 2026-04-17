@@ -1,7 +1,6 @@
 ---
 name: molecule-x402
 description: Execute paid Molecule Labs mutations via x402 payment protocol. USDC on Base, no API key needed. Supports project creation, file uploads, announcements, and ownership management.
-homepage: https://324xn8739l.execute-api.eu-central-2.amazonaws.com/prod/
 env_vars:
   - X402_GATEWAY_URL
   - PRIVY_APP_ID

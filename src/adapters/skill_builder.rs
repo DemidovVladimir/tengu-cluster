@@ -165,15 +165,64 @@ struct FreshSkillEntry {
 fn parse_skill_file(content: &str) -> Result<ParsedSkill> {
     if let Some((fm, body)) = try_parse_frontmatter(content) {
         let definition = frontmatter_to_skill_definition(&fm);
+        let context_body = expand_safe_env_in_body(&body, &fm.env_vars);
         Ok(ParsedSkill::Api {
             definition,
-            context_body: body,
+            context_body,
             env_vars: fm.env_vars,
             commands: fm.commands,
         })
     } else {
         parse_skill_markdown(content).map(ParsedSkill::Classic)
     }
+}
+
+/// Return true when `name` is safe to expand into skill context — i.e. the var
+/// name doesn't match common secret-naming conventions. Secrets stay as literal
+/// `$VAR` references in the system prompt; `http_request` expands them at call
+/// time inside the tool dispatch path, where redaction still applies.
+fn is_env_var_safe(name: &str) -> bool {
+    const SECRET_SUBSTRINGS: &[&str] = &["KEY", "SECRET", "TOKEN", "PASSWORD", "PASS"];
+    let upper = name.to_ascii_uppercase();
+    !SECRET_SUBSTRINGS.iter().any(|pat| upper.contains(pat))
+}
+
+/// Expand `$VAR` and `${VAR}` references in a skill's body, restricted to vars
+/// that (a) appear in the skill's frontmatter `env_vars:` list and (b) do not
+/// match a secret-name heuristic. Everything else is left as literal text.
+///
+/// This lets a skill say `$MOLECULE_LABS_URL` in its documentation and have it
+/// rendered to the live env value when the system prompt is assembled — so the
+/// same skill works under staging and production configs. Secret values never
+/// enter the system prompt.
+fn expand_safe_env_in_body(body: &str, declared: &[SkillEnvVar]) -> String {
+    let allowed: HashSet<&str> = declared
+        .iter()
+        .filter(|v| is_env_var_safe(&v.name))
+        .map(|v| v.name.as_str())
+        .collect();
+    if allowed.is_empty() {
+        return body.to_string();
+    }
+
+    // `${VAR}` (braced) or `$VAR` (bare). Identifier must be uppercase/underscore
+    // — matches the project's convention and avoids matching `$1`, `$result`, etc.
+    let re = regex::Regex::new(r"\$\{([A-Z][A-Z0-9_]*)\}|\$([A-Z][A-Z0-9_]*)")
+        .expect("static regex must compile");
+    re.replace_all(body, |caps: &regex::Captures| {
+        let name = caps
+            .get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str())
+            .unwrap_or("");
+        if allowed.contains(name) {
+            if let Ok(val) = std::env::var(name) {
+                return val;
+            }
+        }
+        caps.get(0).unwrap().as_str().to_string()
+    })
+    .into_owned()
 }
 
 fn parse_skill_markdown(content: &str) -> Result<SkillDefinition> {
@@ -1178,6 +1227,58 @@ mod tests {
             }
             other => panic!("expected ParsedSkill::Api (frontmatter path), got {:?}", other),
         }
+    }
+
+    #[test]
+    fn expand_safe_env_replaces_allowed_vars() {
+        std::env::set_var("TEST_SKILL_SAFE_URL", "https://example.test");
+        let declared = vec![SkillEnvVar {
+            name: "TEST_SKILL_SAFE_URL".into(),
+            required: false,
+        }];
+        let body = "Call $TEST_SKILL_SAFE_URL and also ${TEST_SKILL_SAFE_URL}/api";
+        let expanded = expand_safe_env_in_body(body, &declared);
+        assert_eq!(
+            expanded,
+            "Call https://example.test and also https://example.test/api"
+        );
+        std::env::remove_var("TEST_SKILL_SAFE_URL");
+    }
+
+    #[test]
+    fn expand_safe_env_leaves_secret_names_untouched() {
+        std::env::set_var("TEST_SKILL_SECRET_KEY", "should-not-leak");
+        let declared = vec![SkillEnvVar {
+            name: "TEST_SKILL_SECRET_KEY".into(),
+            required: false,
+        }];
+        let body = "header: Bearer $TEST_SKILL_SECRET_KEY";
+        let expanded = expand_safe_env_in_body(body, &declared);
+        // Secret-named var was filtered out by is_env_var_safe — left literal.
+        assert_eq!(expanded, body);
+        assert!(!expanded.contains("should-not-leak"));
+        std::env::remove_var("TEST_SKILL_SECRET_KEY");
+    }
+
+    #[test]
+    fn expand_safe_env_skips_undeclared_vars() {
+        std::env::set_var("TEST_SKILL_UNDECLARED", "nope");
+        let declared: Vec<SkillEnvVar> = Vec::new();
+        let body = "See $TEST_SKILL_UNDECLARED";
+        let expanded = expand_safe_env_in_body(body, &declared);
+        assert_eq!(expanded, body);
+        std::env::remove_var("TEST_SKILL_UNDECLARED");
+    }
+
+    #[test]
+    fn is_env_var_safe_filters_secret_patterns() {
+        assert!(is_env_var_safe("MOLECULE_LABS_URL"));
+        assert!(is_env_var_safe("IPNFT_CONTRACT_ADDRESS"));
+        assert!(is_env_var_safe("PRIVY_WALLET_ID"));
+        assert!(!is_env_var_safe("PRIVY_APP_SECRET"));
+        assert!(!is_env_var_safe("MOLECULE_API_KEY"));
+        assert!(!is_env_var_safe("HF_TOKEN"));
+        assert!(!is_env_var_safe("SOME_PASSWORD"));
     }
 
     #[test]
