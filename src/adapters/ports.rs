@@ -168,7 +168,7 @@ impl ToolScope {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or(bin);
-        if self.shell_bins.iter().any(|b| b == basename) {
+        if self.shell_bins.iter().any(|b| b == "*" || b == basename) {
             return Ok(());
         }
         anyhow::bail!(

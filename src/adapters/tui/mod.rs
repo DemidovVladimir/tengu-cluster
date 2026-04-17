@@ -191,7 +191,7 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<channel_runtime::ToolServiceExecutor> = None;
+        let mut current_executor: Option<crate::adapters::tool_plugin::PluginToolExecutor> = None;
         let mut current_system_prompt = system_prompt;
 
         let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);
@@ -296,6 +296,7 @@ pub fn run_tui(
                                 None,
                                 None,
                                 Some(&memory_config),
+                                &engine_agent_config,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -368,6 +369,7 @@ pub fn run_tui(
                                     None,
                                     None,
                                     Some(&memory_config),
+                                    &engine_agent_config,
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
@@ -498,6 +500,7 @@ pub fn run_tui(
                                 None,
                                 None,
                                 Some(&memory_config),
+                                &engine_agent_config,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,

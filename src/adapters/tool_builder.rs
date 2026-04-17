@@ -175,6 +175,10 @@ fn truncate_detail(s: &str, max: usize) -> String {
 // ── Execution service ───────────────────────────────────────────────────
 
 /// Service for the "execute tool call" use case.
+///
+/// Retained during the Phase A migration for the legacy bridge path; the new
+/// channel adapters now build `PluginToolExecutor` directly.
+#[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct ToolUseService {
     allow_list: ToolAllowList,
@@ -182,6 +186,7 @@ pub(crate) struct ToolUseService {
     execution: Arc<dyn ToolExecutionPort>,
 }
 
+#[allow(dead_code)]
 impl ToolUseService {
     pub(crate) fn new(
         allow_list: ToolAllowList,

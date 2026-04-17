@@ -29,34 +29,37 @@ use crate::adapters::cache_tool_executor::{
 use crate::adapters::persistent_store_executor::{
     build_persistent_store_tools, PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME,
 };
-use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
 use crate::adapters::memory_builder::{
     memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
 };
+use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{
     self, SkillExecution, SkillRegistry, SkillStatus, SkillToolExecutionAdapter,
 };
 use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort};
-use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService, WorkspaceToolExecutionAdapter};
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolExecutionPort, ToolScope};
+use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService};
+use crate::adapters::tool_plugin::{LegacyToolBridge, PluginCtx, PluginToolExecutor, ToolRegistry};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::types::{
-    ChatLoopState, Lens, ToolAllowList, ToolCall, ToolDef,
+    ChatLoopState, Lens, ToolCall, ToolDef,
 };
 
 // ---------------------------------------------------------------------------
-// Tool executor wrapper
+// Tool executor wrapper (legacy — kept until A9 completes the migration)
 // ---------------------------------------------------------------------------
 
 /// Thin wrapper around `ToolUseService` implementing the `ToolExecutor` trait.
 ///
-/// Shared across all channel adapters — eliminates the need for each channel
-/// to define its own executor type.
+/// Still used by non-plugin code paths (e.g. MCP bridge) during the Phase A
+/// migration. Channel adapters now receive a `PluginToolExecutor` from
+/// `build_tool_executor`.
+#[allow(dead_code)]
 pub(crate) struct ToolServiceExecutor {
     service: ToolUseService,
 }
@@ -102,14 +105,17 @@ pub(crate) fn rebuild_system_prompt(
     )
 }
 
-/// Build the composite tool executor from workspace, skill, and memory executors.
+/// Build the plugin-backed tool executor from workspace, skill, and memory executors.
 ///
-/// The `approval` and `activity` ports are channel-specific — each channel adapter
-/// provides its own implementations (e.g., TUI dialogs, Telegram inline keyboards,
-/// Slack interactive messages).
+/// The `activity` port is channel-specific — each channel adapter provides its own
+/// implementation (TUI dialogs, Telegram inline keyboards, Slack messages, etc.).
 ///
 /// `shared_http_client` — when `Some`, all HTTP and crypto executors share one
 /// `reqwest::Client` instead of each building their own connection pool.
+///
+/// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Workspace tools are
+/// registered via `WorkspacePlugin`; every other tool is wrapped through
+/// `LegacyToolBridge` (to be removed in A9 as each domain migrates to a plugin).
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
@@ -120,7 +126,8 @@ pub(crate) fn build_tool_executor(
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     shared_http_client: Option<&reqwest::Client>,
     memory_config: Option<&crate::adapters::config::MemoryConfig>,
-) -> Option<ToolServiceExecutor> {
+    agent_config: &AgentConfig,
+) -> Option<PluginToolExecutor> {
     if tools.is_empty() {
         return None;
     }
@@ -130,45 +137,75 @@ pub(crate) fn build_tool_executor(
         None => LocalShellExecutor::new(),
     });
 
-    let workspace_exec = Arc::new(
-        WorkspaceToolExecutionAdapter::new(workspace.to_path_buf())
-            .with_shell(Arc::clone(&shell)),
-    );
+    let http_client = shared_http_client.cloned().unwrap_or_else(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    });
 
-    let allowed_names: HashSet<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+    let allowed_names: HashSet<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
+
+    let mut registry = ToolRegistry::new();
+
+    // Workspace plugin (new-style). Registers read_file, list_directory, write_file, run_command.
+    let plugin_ctx = PluginCtx {
+        workspace,
+        config: agent_config,
+        http: http_client.clone(),
+        shell: Arc::clone(&shell),
+        memory: memory_handle.clone(),
+        secret_registry: Arc::clone(secret_registry),
+    };
+    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        &WorkspacePlugin,
+        &plugin_ctx,
+        &allowed_list,
+    )) {
+        tracing::warn!(error = %e, "Failed to register workspace plugin");
+    }
 
     // Shell skills create named tools; API skills are documentation-only.
     let shell_skill_defs: Vec<_> = skill_registry
         .active_skill_definitions()
         .into_iter()
         .filter(|skill| {
-            allowed_names.contains(skill.name.as_str())
+            allowed_names.contains(&skill.name)
                 && matches!(skill.execution, SkillExecution::Shell { .. })
         })
         .collect();
 
-    let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
-
     if !shell_skill_defs.is_empty() {
-        let skill_names: HashSet<String> =
-            shell_skill_defs.iter().map(|s| s.name.clone()).collect();
-        let skill_exec = Arc::new(SkillToolExecutionAdapter::new(
+        let skill_tool_defs: Vec<ToolDef> = skill_registry
+            .active_tools()
+            .into_iter()
+            .filter(|def| shell_skill_defs.iter().any(|s| s.name == def.name))
+            .collect();
+        let skill_exec: Arc<dyn ToolExecutionPort> = Arc::new(SkillToolExecutionAdapter::new(
             shell_skill_defs,
             Arc::clone(&shell),
             workspace.to_path_buf(),
         ));
-        composite = composite.with_executor(skill_exec, skill_names);
+        for def in skill_tool_defs {
+            registry.register_tool(Arc::new(LegacyToolBridge::new(def, Arc::clone(&skill_exec))));
+        }
     }
 
-    if let Some(ref handle) = memory_handle {
+    // Memory tools (remember)
+    if let Some(handle) = memory_handle.as_ref() {
         if let Ok(mem_exec) =
             MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
         {
-            let mem_names: HashSet<String> = memory_tool_defs()
-                .iter()
-                .map(|t| t.name.clone())
-                .collect();
-            composite = composite.with_executor(Arc::new(mem_exec), mem_names);
+            let mem_exec_arc: Arc<dyn ToolExecutionPort> = Arc::new(mem_exec);
+            for def in memory_tool_defs() {
+                if allowed_names.contains(&def.name) {
+                    registry.register_tool(Arc::new(LegacyToolBridge::new(
+                        def,
+                        Arc::clone(&mem_exec_arc),
+                    )));
+                }
+            }
         }
     }
 
@@ -176,10 +213,13 @@ pub(crate) fn build_tool_executor(
     if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
         match CacheToolExecutionAdapter::open(workspace) {
             Ok(cache_exec) => {
-                composite = composite.with_executor(
-                    Arc::new(cache_exec),
-                    HashSet::from([SHARED_CACHE_TOOL_NAME.to_string()]),
-                );
+                let cache_exec_arc: Arc<dyn ToolExecutionPort> = Arc::new(cache_exec);
+                for def in build_shared_cache_tools() {
+                    registry.register_tool(Arc::new(LegacyToolBridge::new(
+                        def,
+                        Arc::clone(&cache_exec_arc),
+                    )));
+                }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
@@ -189,7 +229,7 @@ pub(crate) fn build_tool_executor(
 
     // Optional workspace tool: persistent store
     if allowed_names.contains(PERSISTENT_STORE_TOOL_NAME) {
-        if let Some(ref handle) = memory_handle {
+        if let Some(handle) = memory_handle.as_ref() {
             let chunk_size = memory_config
                 .map(|mc| mc.persistent_store_chunk_size)
                 .unwrap_or(1000);
@@ -203,10 +243,13 @@ pub(crate) fn build_tool_executor(
                 chunk_overlap,
             ) {
                 Ok(ps_exec) => {
-                    composite = composite.with_executor(
-                        Arc::new(ps_exec),
-                        HashSet::from([PERSISTENT_STORE_TOOL_NAME.to_string()]),
-                    );
+                    let ps_arc: Arc<dyn ToolExecutionPort> = Arc::new(ps_exec);
+                    for def in build_persistent_store_tools() {
+                        registry.register_tool(Arc::new(LegacyToolBridge::new(
+                            def,
+                            Arc::clone(&ps_arc),
+                        )));
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to init persistent store, tool disabled");
@@ -217,48 +260,88 @@ pub(crate) fn build_tool_executor(
         }
     }
 
-    // Platform primitives: HTTP request
+    // Platform primitives: HTTP request + crypto signing — every non-workspace
+    // platform tool is routed through the LegacyToolBridge until its own plugin
+    // lands (A2, A3).
+    let platform_defs = build_platform_tools();
+
     if allowed_names.contains("http_request") {
         if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(
             shared_http_client.cloned(),
             workspace.to_path_buf(),
         ) {
-            composite = composite.with_executor(
-                Arc::new(http_exec),
-                HashSet::from(["http_request".to_string()]),
-            );
+            let http_arc: Arc<dyn ToolExecutionPort> = Arc::new(http_exec);
+            if let Some(def) = platform_defs.iter().find(|d| d.name == "http_request") {
+                registry.register_tool(Arc::new(LegacyToolBridge::new(
+                    def.clone(),
+                    Arc::clone(&http_arc),
+                )));
+            }
         }
     }
 
-    // Platform primitives: crypto signing + ABI encoding
-    let crypto_tool_names: HashSet<String> = [
+    let crypto_tool_names: [&str; 5] = [
         "sign_and_send_transaction",
         "sign_message",
         "get_wallet_address",
         "abi_encode",
         "hex_to_uint256",
-    ]
-    .iter()
-    .filter(|n| allowed_names.contains(**n))
-    .map(|n| n.to_string())
-    .collect();
-    if !crypto_tool_names.is_empty() {
-        if let Ok(mut crypto_exec) = CryptoToolExecutionAdapter::with_client(shared_http_client.cloned()) {
+    ];
+    let needs_crypto = crypto_tool_names.iter().any(|n| allowed_names.contains(*n));
+    if needs_crypto {
+        if let Ok(mut crypto_exec) =
+            CryptoToolExecutionAdapter::with_client(shared_http_client.cloned())
+        {
             if let Some(ref flag) = cancel {
                 crypto_exec = crypto_exec.with_cancel(Arc::clone(flag));
             }
-            composite = composite.with_executor(Arc::new(crypto_exec), crypto_tool_names);
+            let crypto_arc: Arc<dyn ToolExecutionPort> = Arc::new(crypto_exec);
+            for name in &crypto_tool_names {
+                if !allowed_names.contains(*name) {
+                    continue;
+                }
+                if let Some(def) = platform_defs.iter().find(|d| d.name == *name) {
+                    registry.register_tool(Arc::new(LegacyToolBridge::new(
+                        def.clone(),
+                        Arc::clone(&crypto_arc),
+                    )));
+                }
+            }
         }
     }
 
-    let composite = Arc::new(composite);
+    // Per-tool scope map: permissive by default during A1 — pre-migration
+    // behaviour did not gate tools via ToolScope. Per-agent scope wiring arrives
+    // alongside the remaining plugin migrations.
+    let default_scope = permissive_scope(workspace);
+    let mut scopes: HashMap<String, ToolScope> = HashMap::new();
+    for name in registry.tool_names() {
+        scopes.insert(name, default_scope.clone());
+    }
 
-    let service = ToolUseService::new(
-        ToolAllowList::from_tools(tools),
+    Some(PluginToolExecutor {
+        registry,
+        workspace: workspace.to_path_buf(),
+        shell: Arc::clone(&shell),
+        http: http_client,
+        memory: memory_handle.clone(),
+        secret_registry: Arc::clone(secret_registry),
         activity,
-        composite,
-    );
-    Some(ToolServiceExecutor { service })
+        scopes,
+    })
+}
+
+/// Build a permissive `ToolScope` that preserves pre-migration behaviour:
+/// the workspace root is writable, any host is reachable, and any binary is
+/// runnable. Phase A tasks tighten this once each plugin ships.
+fn permissive_scope(workspace: &Path) -> ToolScope {
+    ToolScope {
+        fs_roots: vec![workspace.to_path_buf()],
+        net_hosts: vec!["*".to_string()],
+        env_reads: Vec::new(),
+        shell_bins: vec!["*".to_string()],
+        wallets: Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -675,4 +758,86 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
         lines.push(format!("  {} [{}]{}", name, tag, readiness));
     }
     lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Golden registry test — asserts the LLM-facing tool surface is unchanged.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod golden_tests {
+    use super::*;
+    use crate::adapters::config::Config;
+    use crate::adapters::types::ToolCall;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    struct StubActivity;
+    impl ToolActivityPort for StubActivity {
+        fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    /// Assert that the set of registered tool names equals the pre-migration set
+    /// when building a default-configured executor with every opt-in tool enabled.
+    /// `persistent_store` is excluded because it requires a live embedding API.
+    #[test]
+    fn tool_names_match_pre_migration_surface() {
+        let tmp = TempDir::new().unwrap();
+
+        // Compute the same base-tool list the channel adapters use at startup.
+        let mut tools = build_workspace_tools();
+        tools.extend(memory_tool_defs());
+        tools.extend(build_shared_cache_tools());
+        tools.extend(build_platform_tools());
+
+        let config = Config::default();
+        let agent_config = config.agents.get("main").unwrap();
+        let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+        let activity: Arc<dyn ToolActivityPort> = Arc::new(StubActivity);
+        let secret_registry = Arc::new(SecretRegistry::new());
+
+        let executor = build_tool_executor(
+            tmp.path(),
+            &tools,
+            &skill_registry,
+            &None, // memory_handle: omit — `remember` is wired through memory_tool_defs anyway.
+            &secret_registry,
+            activity,
+            None,
+            None,
+            None,
+            agent_config,
+        )
+        .expect("executor");
+
+        let names: HashSet<String> = executor.registry.tool_names().into_iter().collect();
+
+        let mut expected: HashSet<String> = [
+            "read_file",
+            "list_directory",
+            "write_file",
+            "run_command",
+            "http_request",
+            "sign_and_send_transaction",
+            "sign_message",
+            "get_wallet_address",
+            "abi_encode",
+            "hex_to_uint256",
+            "shared_cache",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // `remember` requires a memory handle — only present when memory is enabled.
+        // `persistent_store` requires memory too and is opt-in.
+        if names.contains("remember") {
+            expected.insert("remember".to_string());
+        }
+
+        assert_eq!(
+            names, expected,
+            "tool surface drift: registry has {:?}, expected {:?}",
+            names, expected
+        );
+    }
 }

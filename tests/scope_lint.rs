@@ -1,11 +1,8 @@
-//! Scope enforcement lint — structural placeholder.
+//! Scope enforcement lint.
 //!
-//! This test will assert that every tool's `execute` body begins with a
-//! `ctx.scope.check_*()` call once Phase A introduces `ToolCtx`. Until then,
-//! it verifies the test infrastructure works by reading source files.
-//!
-//! Phase A's first PR activates the real lint by uncommenting the pattern
-//! check below and adding the first scoped tool.
+//! Asserts that every `Tool::execute` body under `src/adapters/plugins/`
+//! begins with a `ctx.scope.check_*()` call. This prevents new tools from
+//! shipping without explicit scope gating.
 
 use std::fs;
 use std::path::Path;
@@ -50,49 +47,45 @@ fn can_read_all_adapter_sources() {
     }
 }
 
-// ==========================================================================
-// Phase A activation: uncomment the test below when the first tool is
-// migrated to use ToolCtx with scope enforcement.
-// ==========================================================================
-//
-// #[test]
-// fn every_tool_execute_checks_scope() {
-//     use regex::Regex;
-//
-//     let adapters_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters");
-//     let files = collect_rs_files(&adapters_dir);
-//
-//     // Pattern: find `fn execute(` inside an impl block, then check the body
-//     // contains `scope.check_` within the next ~10 lines.
-//     let execute_re = Regex::new(r"fn execute\s*\(").unwrap();
-//     let scope_check_re = Regex::new(r"scope\.check_").unwrap();
-//
-//     let mut violations = Vec::new();
-//
-//     for file in &files {
-//         let content = fs::read_to_string(file).unwrap();
-//         for (i, line) in content.lines().enumerate() {
-//             if execute_re.is_match(line) {
-//                 // Look at the next 10 lines for a scope check
-//                 let window: String = content.lines()
-//                     .skip(i)
-//                     .take(10)
-//                     .collect::<Vec<_>>()
-//                     .join("\n");
-//                 if !scope_check_re.is_match(&window) {
-//                     violations.push(format!(
-//                         "{}:{} — execute() without scope.check_*()",
-//                         file.display(),
-//                         i + 1
-//                     ));
-//                 }
-//             }
-//         }
-//     }
-//
-//     assert!(
-//         violations.is_empty(),
-//         "Tools missing scope enforcement:\n{}",
-//         violations.join("\n")
-//     );
-// }
+#[test]
+fn every_tool_execute_checks_scope() {
+    use regex::Regex;
+
+    let plugins_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins");
+    let files = collect_rs_files(&plugins_dir);
+
+    // Pattern: find `fn execute(` inside an impl block, then check the body
+    // contains `scope.check_` within the next ~10 lines.
+    let execute_re = Regex::new(r"fn execute\s*\(").unwrap();
+    let scope_check_re = Regex::new(r"scope\.check_").unwrap();
+
+    let mut violations = Vec::new();
+
+    for file in &files {
+        let content = fs::read_to_string(file).unwrap();
+        for (i, line) in content.lines().enumerate() {
+            if execute_re.is_match(line) {
+                // Look at the next 10 lines for a scope check.
+                let window: String = content
+                    .lines()
+                    .skip(i)
+                    .take(10)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !scope_check_re.is_match(&window) {
+                    violations.push(format!(
+                        "{}:{} — execute() without scope.check_*()",
+                        file.display(),
+                        i + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "Tools missing scope enforcement:\n{}",
+        violations.join("\n")
+    );
+}

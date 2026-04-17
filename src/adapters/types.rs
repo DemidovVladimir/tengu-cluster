@@ -445,11 +445,13 @@ pub(crate) trait AgentTaskExecutor: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Simple set of allowed tool names.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolAllowList {
     allowed: HashSet<String>,
 }
 
+#[allow(dead_code)]
 impl ToolAllowList {
     pub(crate) fn from_tools(tools: &[ToolDef]) -> Self {
         Self {
