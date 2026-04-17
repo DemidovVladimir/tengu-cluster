@@ -510,6 +510,16 @@ impl Engine for ClaudeCodeEngine {
                 let mut tmp = tempfile::NamedTempFile::new()?;
                 serde_json::to_writer(&mut tmp, &config)?;
                 cmd.arg("--mcp-config").arg(tmp.path());
+
+                // --tools only allowlists BUILT-IN tools; MCP tools need --allowedTools.
+                // Without this, the tengu-tools server spawns but its tools are silently
+                // denied at call time and never appear in the session init manifest.
+                let mcp_tool_args: Vec<String> = bridge_tools
+                    .iter()
+                    .map(|t| format!("mcp__tengu-tools__{}", t.name))
+                    .collect();
+                cmd.arg("--allowedTools").args(&mcp_tool_args);
+
                 Some(tmp)
             } else {
                 None
