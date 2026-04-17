@@ -571,8 +571,9 @@ async fn execute_agent_task(
 
 struct NoopRuntimeToolExecutor;
 
+#[async_trait::async_trait]
 impl ToolExecutor for NoopRuntimeToolExecutor {
-    fn execute(&self, call: &ToolCall) -> Result<String> {
+    async fn execute(&self, call: &ToolCall) -> Result<String> {
         anyhow::bail!("No tools available (agent has no workspace): {}", call.name)
     }
 }

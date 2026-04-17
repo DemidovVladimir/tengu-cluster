@@ -33,11 +33,13 @@ pub(crate) mod engine_builder;
 pub(crate) mod http_tool_executor;
 pub(crate) mod mcp_bridge;
 pub(crate) mod orchestrator;
+pub(crate) mod plugins;
 pub(crate) mod prune;
 #[cfg(feature = "qdrant")]
 pub(crate) mod qdrant_memory_store;
 pub(crate) mod scaffold;
 pub(crate) mod shell_executor;
+pub(crate) mod tool_plugin;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram_builder;
 pub(crate) mod tui;

@@ -21,6 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use async_trait::async_trait;
 
 use crate::adapters::cache_tool_executor::{
     build_shared_cache_tools, CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME,
@@ -60,8 +61,9 @@ pub(crate) struct ToolServiceExecutor {
     service: ToolUseService,
 }
 
+#[async_trait]
 impl ToolExecutor for ToolServiceExecutor {
-    fn execute(&self, call: &ToolCall) -> Result<String> {
+    async fn execute(&self, call: &ToolCall) -> Result<String> {
         self.service.execute(call)
     }
 }
