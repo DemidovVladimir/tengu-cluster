@@ -169,6 +169,27 @@ pub(crate) struct PluginToolExecutor {
     pub subagents: Option<Arc<SubagentRegistry>>,
 }
 
+impl PluginToolExecutor {
+    /// Return tool definitions registered in the executor but NOT in `already_advertised`.
+    ///
+    /// Used to surface dynamically-discovered plugin tools (currently: MCP proxy tools
+    /// with `{server}.{tool}` names) to the LLM. The static plugins (workspace, http,
+    /// crypto, cache, memory, skill, subagents) contribute tool defs via their own
+    /// `tool_defs()` helpers which the caller already includes; this method returns
+    /// only the extras.
+    pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
+        let known: std::collections::HashSet<&str> = already_advertised
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        self.registry
+            .definitions()
+            .into_iter()
+            .filter(|def| !known.contains(def.name.as_str()))
+            .collect()
+    }
+}
+
 #[async_trait]
 impl ToolExecutor for PluginToolExecutor {
     async fn execute(&self, call: &ToolCall) -> Result<String> {
@@ -192,5 +213,78 @@ impl ToolExecutor for PluginToolExecutor {
 
         let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
         Ok(output.text)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::secret_builder::SecretRegistry;
+    use crate::adapters::shell_executor::LocalShellExecutor;
+    use serde_json::Value;
+
+    struct StubTool {
+        def: ToolDef,
+    }
+
+    #[async_trait]
+    impl Tool for StubTool {
+        fn definition(&self) -> &ToolDef {
+            &self.def
+        }
+        async fn execute(&self, _args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+            Ok(ToolOutput::from(String::new()))
+        }
+    }
+
+    struct StubActivity;
+    impl ToolActivityPort for StubActivity {
+        fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    fn make_executor(defs: Vec<ToolDef>) -> PluginToolExecutor {
+        let mut registry = ToolRegistry::new();
+        for def in defs {
+            registry.register_tool(Arc::new(StubTool { def }));
+        }
+        PluginToolExecutor {
+            registry,
+            workspace: std::path::PathBuf::from("."),
+            shell: Arc::new(LocalShellExecutor::new()),
+            http: reqwest::Client::new(),
+            memory: None,
+            secret_registry: Arc::new(SecretRegistry::new()),
+            activity: Arc::new(StubActivity),
+            scopes: HashMap::new(),
+            subagents: None,
+        }
+    }
+
+    #[test]
+    fn additional_tool_defs_returns_only_unadvertised_tools() {
+        let static_def = ToolDef::new("workspace.read", "desc", serde_json::json!({}));
+        let dynamic_def = ToolDef::new("github.create_issue", "desc", serde_json::json!({}));
+        let exec = make_executor(vec![static_def.clone(), dynamic_def.clone()]);
+
+        // Caller already advertises only the static tool.
+        let already = vec![static_def.clone()];
+        let extras = exec.additional_tool_defs(&already);
+
+        assert_eq!(extras.len(), 1, "expected exactly one extra tool");
+        assert_eq!(extras[0].name, "github.create_issue");
+    }
+
+    #[test]
+    fn additional_tool_defs_empty_when_all_known() {
+        let a = ToolDef::new("a", "desc", serde_json::json!({}));
+        let b = ToolDef::new("b", "desc", serde_json::json!({}));
+        let exec = make_executor(vec![a.clone(), b.clone()]);
+
+        let already = vec![a, b];
+        assert!(exec.additional_tool_defs(&already).is_empty());
     }
 }

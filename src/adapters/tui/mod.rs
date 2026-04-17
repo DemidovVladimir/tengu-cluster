@@ -301,6 +301,12 @@ pub fn run_tui(
                                 None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
                             );
+                            if let Some(ref exec) = current_executor {
+                                let extra = exec.additional_tool_defs(&current_tools);
+                                if !extra.is_empty() {
+                                    current_tools.extend(extra);
+                                }
+                            }
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
                                 advertise_workspace_tools,
@@ -376,6 +382,12 @@ pub fn run_tui(
                                     None, // subagents: A7 wires via orchestrator path only.
                                     &mcp_servers,
                                 );
+                                if let Some(ref exec) = current_executor {
+                                    let extra = exec.additional_tool_defs(&current_tools);
+                                    if !extra.is_empty() {
+                                        current_tools.extend(extra);
+                                    }
+                                }
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
                                     advertise_workspace_tools,
@@ -509,6 +521,12 @@ pub fn run_tui(
                                 None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
                             );
+                            if let Some(ref exec) = current_executor {
+                                let extra = exec.additional_tool_defs(&current_tools);
+                                if !extra.is_empty() {
+                                    current_tools.extend(extra);
+                                }
+                            }
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
                                 advertise_workspace_tools,

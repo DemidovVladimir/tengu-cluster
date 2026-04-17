@@ -404,6 +404,12 @@ async fn build_bridge_executor(
 
     let mut registry = ToolRegistry::new();
 
+    // NOTE: the outbound bridge deliberately does NOT register the inbound
+    // `McpPlugin`. External Claude Code clients are their own host with their
+    // own MCP server access; re-advertising tengu's inbound MCP manifest here
+    // would cause name collisions and confusing double-hop routing.
+    // See `channel_runtime::build_tool_executor` for the inbound-only wiring.
+
     // Workspace plugin — read_file, list_directory, write_file, run_command.
     if let Err(e) = registry
         .register_plugin(&WorkspacePlugin, &plugin_ctx, &allowed_list)

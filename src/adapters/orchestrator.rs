@@ -201,8 +201,8 @@ pub(crate) async fn boot_orchestrator(
                 &skill_registry,
                 &current_tools,
             );
-            let tool_defs = current_tools.clone();
-            let tool_executor = channel_runtime::build_tool_executor(
+            let mut tool_defs = current_tools.clone();
+            let tool_executor = match channel_runtime::build_tool_executor(
                 ws,
                 &current_tools,
                 &skill_registry,
@@ -215,9 +215,16 @@ pub(crate) async fn boot_orchestrator(
                 agent_config,
                 subagent_registry.clone(),
                 &config.mcp_servers,
-            )
-            .map(|executor| Arc::new(executor) as Arc<dyn ToolExecutor>)
-            .unwrap_or_else(|| Arc::new(NoopRuntimeToolExecutor));
+            ) {
+                Some(executor) => {
+                    let extra = executor.additional_tool_defs(&tool_defs);
+                    if !extra.is_empty() {
+                        tool_defs.extend(extra);
+                    }
+                    Arc::new(executor) as Arc<dyn ToolExecutor>
+                }
+                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+            };
 
             (prompt, tool_defs, tool_executor)
         } else {

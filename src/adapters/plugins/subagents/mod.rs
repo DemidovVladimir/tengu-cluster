@@ -150,7 +150,7 @@ impl SubagentRuntime for ProductionSubagentRuntime {
                 crate::adapters::skill_builder::FileSystemSkillSource::new(ws.clone());
             skill_registry.reload(&skill_source);
 
-            let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+            let mut current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
             let prompt = channel_runtime::rebuild_system_prompt(
                 agent_config,
                 true,
@@ -173,9 +173,16 @@ impl SubagentRuntime for ProductionSubagentRuntime {
                 None, // subagents not yet nested
                 &self.config.mcp_servers,
             );
-            let tool_exec: Arc<dyn ToolExecutor> = executor_opt
-                .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
-                .unwrap_or_else(|| Arc::new(NoopRuntimeToolExecutor));
+            let tool_exec: Arc<dyn ToolExecutor> = match executor_opt {
+                Some(e) => {
+                    let extra = e.additional_tool_defs(&current_tools);
+                    if !extra.is_empty() {
+                        current_tools.extend(extra);
+                    }
+                    Arc::new(e) as Arc<dyn ToolExecutor>
+                }
+                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+            };
             (prompt, current_tools, tool_exec)
         } else {
             let prompt =

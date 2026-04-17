@@ -1316,6 +1316,12 @@ impl TelegramSession {
                 &self.config.mcp_servers,
             )
         });
+        if let Some(ref exec) = current_executor {
+            let extra = exec.additional_tool_defs(&agent.current_tools);
+            if !extra.is_empty() {
+                agent.current_tools.extend(extra);
+            }
+        }
 
         let sanitized_executor = current_executor
             .as_ref()
@@ -1668,6 +1674,7 @@ impl TelegramSession {
                 .unwrap_or_else(|| agent.agent_id.clone());
 
             let activity_adapter = make_tool_activity_adapter(agent_label.clone());
+            let mut turn_tools = agent.current_tools.clone();
             let tool_executor: Option<Arc<dyn ToolExecutor>> =
                 agent.workspace.as_ref().and_then(|ws| {
                     channel_runtime::build_tool_executor(
@@ -1684,14 +1691,20 @@ impl TelegramSession {
                         None, // subagents: wired by orchestrator path only for A7.
                         &self.config.mcp_servers,
                     )
-                    .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
+                    .map(|e| {
+                        let extra = e.additional_tool_defs(&turn_tools);
+                        if !extra.is_empty() {
+                            turn_tools.extend(extra);
+                        }
+                        Arc::new(e) as Arc<dyn ToolExecutor>
+                    })
                 });
 
             executors.insert(
                 agent_id.clone(),
                 Arc::new(TelegramTaskExecutor {
                     engine: Arc::clone(&agent.engine),
-                    tools: agent.current_tools.clone(),
+                    tools: turn_tools,
                     tool_executor,
                     system_prompt: agent.current_system_prompt.clone(),
                     workspace: agent.workspace.clone(),
@@ -2128,6 +2141,12 @@ impl TelegramSession {
                 &self.config.mcp_servers,
             )
         });
+        if let Some(ref exec) = current_executor {
+            let extra = exec.additional_tool_defs(&agent.current_tools);
+            if !extra.is_empty() {
+                agent.current_tools.extend(extra);
+            }
+        }
         let sanitized_executor = current_executor
             .as_ref()
             .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
