@@ -20,7 +20,10 @@ use crate::adapters::persistent_store_executor::{PersistentStoreExecutor, PERSIS
 use crate::adapters::composite_tool_executor::CompositeToolExecutionAdapter;
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
-use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
+// NOTE(A2): HTTP executor no longer available here — http_request migrated to
+// `plugins::http::HttpPlugin` and `http_tool_executor.rs` was deleted.
+// TODO(A9): rewrite `build_bridge_executor` to use the plugin registry so the
+// MCP bridge regains http_request support.
 use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter};
 use crate::adapters::ports::ToolExecutionPort;
 use crate::adapters::secret_builder::SecretRegistry;
@@ -320,15 +323,11 @@ fn build_bridge_executor(workspace: &std::path::Path, tools: &[ToolDef]) -> Arc<
 
     let mut composite = CompositeToolExecutionAdapter::new(workspace_exec);
 
-    // HTTP
-    if allowed_names.contains("http_request") {
-        if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(None, workspace.to_path_buf()) {
-            composite = composite.with_executor(
-                Arc::new(http_exec),
-                HashSet::from(["http_request".to_string()]),
-            );
-        }
-    }
+    // HTTP — TODO(A9): re-wire via plugin registry. The A2 migration deleted
+    // the sync `HttpToolExecutionAdapter` in favour of `plugins::http::HttpPlugin`,
+    // so the MCP bridge currently has no http_request backing. Bridge callers
+    // will receive "no executor registered for tool 'http_request'" until the
+    // bridge is rewritten in A9.
 
     // Crypto
     let crypto_tool_names: HashSet<String> = [

@@ -134,6 +134,13 @@ impl ToolScope {
 
     pub(crate) fn check_net_host(&self, host: &str) -> anyhow::Result<()> {
         for pattern in &self.net_hosts {
+            // `"*"` is an allow-any wildcard — used by the A1 migration-window
+            // `permissive_scope` to preserve pre-Phase-A behaviour where http
+            // access was ungated. Mirrors the `check_shell_bin` wildcard.
+            // TODO(A9): drop once per-agent net_hosts land.
+            if pattern == "*" {
+                return Ok(());
+            }
             if pattern == host {
                 return Ok(());
             }
@@ -371,6 +378,16 @@ mod tests {
     fn net_empty_rejects_all() {
         let scope = ToolScope::default();
         assert!(scope.check_net_host("anything.com").is_err());
+    }
+
+    #[test]
+    fn net_wildcard_allows_any_host() {
+        let scope = ToolScope {
+            net_hosts: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(scope.check_net_host("api.example.com").is_ok());
+        assert!(scope.check_net_host("raw-host").is_ok());
     }
 
     #[test]

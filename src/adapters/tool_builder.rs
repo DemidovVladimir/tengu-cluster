@@ -451,59 +451,12 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
 // ── Platform tool definitions ───────────────────────────────────────────
 
 /// Build the set of platform-level primitive tools.
+///
+/// `http_request` was moved to `plugins::http::HttpPlugin` in A2 — its `ToolDef`
+/// now lives inside `HttpRequestTool`. The remaining crypto tools migrate to
+/// their own plugin in A3.
 pub(crate) fn build_platform_tools() -> Vec<ToolDef> {
     vec![
-        ToolDef::new(
-            "http_request",
-            "Make an HTTP request.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "Full URL. Supports $ENV_VAR (e.g. $MOLECULE_LABS_URL or https://api.example.com/v1/resource)"
-                    },
-                    "method": {
-                        "type": "string",
-                        "description": "HTTP method",
-                        "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]
-                    },
-                    "headers": {
-                        "type": "string",
-                        "description": "JSON object of request headers. Use $ENV_VAR for secrets, e.g. {\"Authorization\": \"Bearer $BEACH_API_KEY\"}"
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Request body — JSON string for application/json, or raw text"
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "Workspace-relative path for multipart/form-data file upload"
-                    },
-                    "file_field_name": {
-                        "type": "string",
-                        "description": "Form field name for the uploaded file (default: \"file\")"
-                    },
-                    "auth_bearer_env": {
-                        "type": "string",
-                        "description": "Env var name for Bearer token auth (e.g. \"BEACH_API_KEY\")"
-                    },
-                    "auth_basic_user_env": {
-                        "type": "string",
-                        "description": "Env var name for Basic auth username (e.g. \"PRIVY_APP_ID\")"
-                    },
-                    "auth_basic_pass_env": {
-                        "type": "string",
-                        "description": "Env var name for Basic auth password (e.g. \"PRIVY_APP_SECRET\")"
-                    },
-                    "return_body": {
-                        "type": "boolean",
-                        "description": "If true, include the response body in the result. Default false — only status is returned on success. Set to true when you need data from the response (e.g. upload URLs, created resource IDs). Errors always include the body."
-                    }
-                },
-                "required": ["url", "method"]
-            }),
-        ),
         ToolDef::new(
             "sign_and_send_transaction",
             "Sign and send an EVM transaction via Privy wallet.",

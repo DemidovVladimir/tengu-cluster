@@ -31,10 +31,10 @@ use crate::adapters::persistent_store_executor::{
 };
 use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
-use crate::adapters::http_tool_executor::HttpToolExecutionAdapter;
 use crate::adapters::memory_builder::{
     memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
 };
+use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{
@@ -265,25 +265,19 @@ pub(crate) fn build_tool_executor(
         }
     }
 
-    // Platform primitives: HTTP request + crypto signing — every non-workspace
-    // platform tool is routed through the LegacyToolBridge until its own plugin
-    // lands (A2, A3).
-    let platform_defs = build_platform_tools();
-
-    if allowed_names.contains("http_request") {
-        if let Ok(http_exec) = HttpToolExecutionAdapter::with_client(
-            shared_http_client.cloned(),
-            workspace.to_path_buf(),
-        ) {
-            let http_arc: Arc<dyn ToolExecutionPort> = Arc::new(http_exec);
-            if let Some(def) = platform_defs.iter().find(|d| d.name == "http_request") {
-                registry.register_tool(Arc::new(LegacyToolBridge::new(
-                    def.clone(),
-                    Arc::clone(&http_arc),
-                )));
-            }
-        }
+    // HTTP plugin (A2). Registers `http_request`.
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        &HttpPlugin,
+        &plugin_ctx,
+        &allowed_list,
+    )) {
+        tracing::warn!(error = %e, "Failed to register http plugin — http_request unavailable");
     }
+
+    // Platform primitives: crypto signing — routed through the LegacyToolBridge
+    // until its own plugin lands (A3).
+    let platform_defs = build_platform_tools();
 
     let crypto_tool_names: [&str; 5] = [
         "sign_and_send_transaction",
@@ -337,14 +331,15 @@ pub(crate) fn build_tool_executor(
 }
 
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
-/// the workspace root is writable, any host is reachable, and any binary is
-/// runnable. Phase A tasks tighten this once each plugin ships.
+/// the workspace root is writable, any host is reachable, any binary is
+/// runnable, and any env var is readable. Phase A tasks tighten this once
+/// each plugin ships.
 // TODO(A9): replace with per-agent scope once config-scopes land
 fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
         net_hosts: vec!["*".to_string()],
-        env_reads: Vec::new(),
+        env_reads: vec!["*".to_string()],
         shell_bins: vec!["*".to_string()],
         wallets: Vec::new(),
     }
@@ -378,6 +373,7 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(build_persistent_store_tools());
     }
+    tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(build_platform_tools());
     tools
 }
@@ -401,6 +397,7 @@ pub(crate) fn compute_bridge_tools(
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(build_persistent_store_tools());
     }
+    tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(build_platform_tools());
     tools
 }
@@ -794,6 +791,7 @@ mod golden_tests {
         let mut tools = build_workspace_tools();
         tools.extend(memory_tool_defs());
         tools.extend(build_shared_cache_tools());
+        tools.extend(crate::adapters::plugins::http::tool_defs());
         tools.extend(build_platform_tools());
 
         let config = Config::default();
