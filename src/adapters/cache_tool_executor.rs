@@ -1,48 +1,27 @@
+//! Shared workspace cache — legacy migration-window code.
+//!
+//! TODO(A9): delete once `mcp_bridge` is rewritten to dispatch through `ToolRegistry`.
+//! The new `plugins::cache::SharedCacheTool` is used by `channel_runtime::build_tool_executor`;
+//! this file exists only to back the MCP bridge path until A9.
+//!
 //! Shared workspace cache backed by SQLite.
 //!
 //! Provides a `shared_cache` tool with operations: get, put, delete, list.
 //! Data is stored at `<workspace>/.tengu/cache.db`.
 
 use crate::adapters::ports::ToolExecutionPort;
-use crate::adapters::types::{ToolCall, ToolDef};
+use crate::adapters::types::ToolCall;
 use anyhow::{bail, Result};
 use rusqlite::Connection;
-use serde_json::json;
 use std::path::Path;
 use std::sync::Mutex;
 
 /// Reserved tool name — skills cannot shadow this.
+///
+/// Re-exported for `mcp_bridge.rs`. The plugin defines its own copy of this
+/// constant under `plugins::cache`; both stay in lockstep until A9 drops this
+/// module entirely.
 pub(crate) const SHARED_CACHE_TOOL_NAME: &str = "shared_cache";
-
-pub(crate) fn build_shared_cache_tools() -> Vec<ToolDef> {
-    vec![ToolDef::new(
-        SHARED_CACHE_TOOL_NAME,
-        "Shared workspace cache for data exchange between agents.",
-        json!({
-            "type": "object",
-            "properties": {
-                "operation": {
-                    "type": "string",
-                    "enum": ["get", "put", "delete", "list"],
-                    "description": "Cache operation to perform"
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Namespace for key isolation"
-                },
-                "key": {
-                    "type": "string",
-                    "description": "Cache key (required for get, put, delete)"
-                },
-                "value": {
-                    "type": "string",
-                    "description": "JSON string value to store (required for put)"
-                }
-            },
-            "required": ["operation", "namespace"]
-        }),
-    )]
-}
 
 const CREATE_TABLE: &str = "
 CREATE TABLE IF NOT EXISTS cache_entries (

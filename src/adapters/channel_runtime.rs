@@ -23,9 +23,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::adapters::cache_tool_executor::{
-    build_shared_cache_tools, CacheToolExecutionAdapter, SHARED_CACHE_TOOL_NAME,
-};
 use crate::adapters::persistent_store_executor::{
     build_persistent_store_tools, PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME,
 };
@@ -33,6 +30,7 @@ use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::memory_builder::{
     memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
 };
+use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::workspace::WorkspacePlugin;
@@ -214,21 +212,16 @@ pub(crate) fn build_tool_executor(
         }
     }
 
-    // Optional workspace tool: shared cache
+    // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
+    // it (i.e. the agent's `workspace_tools` opt-in list).
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        match CacheToolExecutionAdapter::open(workspace) {
-            Ok(cache_exec) => {
-                let cache_exec_arc: Arc<dyn ToolExecutionPort> = Arc::new(cache_exec);
-                for def in build_shared_cache_tools() {
-                    registry.register_tool(Arc::new(LegacyToolBridge::new(
-                        def,
-                        Arc::clone(&cache_exec_arc),
-                    )));
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
-            }
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &CachePlugin,
+            &plugin_ctx,
+            &allowed_list,
+        )) {
+            tracing::warn!(error = %e, "Failed to register cache plugin — shared_cache unavailable");
         }
     }
 
@@ -347,7 +340,7 @@ pub(crate) fn compute_base_tools(
         tools.extend(memory_tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "shared_cache") {
-        tools.extend(build_shared_cache_tools());
+        tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(build_persistent_store_tools());
@@ -372,7 +365,7 @@ pub(crate) fn compute_bridge_tools(
         tools.extend(memory_tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "shared_cache") {
-        tools.extend(build_shared_cache_tools());
+        tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(build_persistent_store_tools());
@@ -771,7 +764,7 @@ mod golden_tests {
         // Compute the same base-tool list the channel adapters use at startup.
         let mut tools = build_workspace_tools();
         tools.extend(memory_tool_defs());
-        tools.extend(build_shared_cache_tools());
+        tools.extend(crate::adapters::plugins::cache::tool_defs());
         tools.extend(crate::adapters::plugins::http::tool_defs());
         tools.extend(crate::adapters::plugins::crypto::tool_defs());
         tools.extend(build_platform_tools());
