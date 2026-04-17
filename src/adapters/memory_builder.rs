@@ -1,19 +1,14 @@
-//! Unified memory subsystem: types, disk store, service, and tool executor.
+//! Unified memory subsystem: types, disk store, and service.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use serde_json::json;
+use async_trait::async_trait;
 
-use crate::adapters::ports::{EmbeddingPort, MemoryStorePort, ToolExecutionPort};
-use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::types::{
-    MemoryEntry, MemorySearchResult, ToolCall, ToolDef,
-};
+use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
+use crate::adapters::types::{MemoryEntry, MemorySearchResult};
 
 // ---------------------------------------------------------------------------
 // Pure functions
@@ -206,215 +201,87 @@ impl DiskVectorMemoryStore {
     }
 }
 
+#[async_trait]
 impl MemoryStorePort for DiskVectorMemoryStore {
-    fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        let entry = entry.clone();
-        Box::pin(async move {
-            let mut entries = self
-                .entries
-                .write()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-            entries.push(entry);
-            self.flush(&entries)
-        })
+    async fn store(&self, entry: &MemoryEntry) -> Result<()> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        entries.push(entry.clone());
+        self.flush(&entries)
     }
 
-    fn search_by_vector(
+    async fn search_by_vector(
         &self,
         embedding: &[f32],
         top_k: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>> {
-        let embedding = embedding.to_vec();
-        Box::pin(async move {
-            let entries = self
-                .entries
-                .read()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+    ) -> Result<Vec<MemorySearchResult>> {
+        let entries = self
+            .entries
+            .read()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
 
-            let mut scored: Vec<MemorySearchResult> = entries
-                .iter()
-                .map(|entry| {
-                    let score = cosine_similarity(&entry.embedding, &embedding);
-                    MemorySearchResult {
-                        entry: entry.clone(),
-                        score,
-                    }
-                })
-                .collect();
+        let mut scored: Vec<MemorySearchResult> = entries
+            .iter()
+            .map(|entry| {
+                let score = cosine_similarity(&entry.embedding, embedding);
+                MemorySearchResult {
+                    entry: entry.clone(),
+                    score,
+                }
+            })
+            .collect();
 
-            scored.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            scored.truncate(top_k);
-            Ok(scored)
-        })
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(top_k);
+        Ok(scored)
     }
 
-    fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-        let id = id.to_string();
-        Box::pin(async move {
-            let mut entries = self
-                .entries
-                .write()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-            let before = entries.len();
-            entries.retain(|e| e.id != id);
-            let deleted = entries.len() < before;
-            if deleted {
-                self.flush(&entries)?;
-            }
-            Ok(deleted)
-        })
+    async fn delete(&self, id: &str) -> Result<bool> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        let before = entries.len();
+        entries.retain(|e| e.id != id);
+        let deleted = entries.len() < before;
+        if deleted {
+            self.flush(&entries)?;
+        }
+        Ok(deleted)
     }
 
-    fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            let mut entries = self
-                .entries
-                .write()
-                .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-            entries.clear();
-            self.flush(&entries)
-        })
+    async fn clear_all(&self) -> Result<()> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        entries.clear();
+        self.flush(&entries)
     }
 
-    fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
-        Box::pin(async move { self.entries.read().map(|e| e.len()).unwrap_or(0) })
+    async fn entry_count(&self) -> usize {
+        self.entries.read().map(|e| e.len()).unwrap_or(0)
     }
 
-    fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
-        Box::pin(async move {
-            std::fs::metadata(&self.store_path)
-                .map(|m| m.len())
-                .unwrap_or(0)
-        })
+    async fn storage_bytes(&self) -> u64 {
+        std::fs::metadata(&self.store_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
     }
 }
 
 // ---------------------------------------------------------------------------
-// MemoryServiceHandle — shared by MemoryPlugin and the legacy tool executor.
+// MemoryServiceHandle — shared handle used by the memory plugin and any caller
+// that needs direct access to the embedding + store ports.
 // ---------------------------------------------------------------------------
 
 pub(crate) struct MemoryServiceHandle {
     pub embedding: Arc<dyn EmbeddingPort>,
     pub store: Arc<dyn MemoryStorePort>,
-}
-
-// ---------------------------------------------------------------------------
-// Legacy tool executor adapter — kept for the MCP bridge until A9.
-//
-// TODO(A9): delete `MemoryToolExecutionAdapter`, `memory_tool_defs`, and
-// `run_async` once `mcp_bridge` dispatches through `ToolRegistry`. The
-// channel-runtime path has moved to `plugins::memory::MemoryPlugin`, which is
-// natively async and does not need a `block_in_place` bridge.
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)] // used only by mcp_bridge in the current migration window
-pub(crate) struct MemoryToolExecutionAdapter {
-    handle: Arc<MemoryServiceHandle>,
-    secret_registry: Arc<SecretRegistry>,
-    fallback_runtime: Option<tokio::runtime::Runtime>,
-}
-
-impl MemoryToolExecutionAdapter {
-    pub(crate) fn new(
-        handle: Arc<MemoryServiceHandle>,
-        secret_registry: Arc<SecretRegistry>,
-    ) -> Result<Self> {
-        let fallback_runtime = if tokio::runtime::Handle::try_current().is_ok() {
-            None
-        } else {
-            Some(
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?,
-            )
-        };
-        Ok(Self {
-            handle,
-            secret_registry,
-            fallback_runtime,
-        })
-    }
-
-    fn run_async<F, T>(&self, future: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(future))
-        } else {
-            self.fallback_runtime
-                .as_ref()
-                .expect("no tokio runtime available")
-                .block_on(future)
-        }
-    }
-}
-
-#[allow(dead_code)] // used only by mcp_bridge in the current migration window
-pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
-    vec![ToolDef::new(
-        "remember",
-        "Store a fact in long-term memory.",
-        json!({
-            "type": "object",
-            "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The fact, insight, or information to remember"
-                },
-                "metadata": {
-                    "type": "object",
-                    "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
-                    "additionalProperties": { "type": "string" }
-                }
-            },
-            "required": ["content"]
-        }),
-    )]
-}
-
-impl ToolExecutionPort for MemoryToolExecutionAdapter {
-    fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        match call.name.as_str() {
-            "remember" => {
-                let raw_content = call
-                    .arguments
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("remember: missing 'content' argument"))?;
-                let content = self.secret_registry.redact(raw_content);
-                let content = content.as_str();
-
-                let agent_id = call
-                    .arguments
-                    .get("agent_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("default");
-
-                let metadata: HashMap<String, String> = call
-                    .arguments
-                    .get("metadata")
-                    .and_then(|v| v.as_object())
-                    .map(|obj| {
-                        obj.iter()
-                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let service =
-                    MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
-
-                let id =
-                    self.run_async(service.remember_with_metadata(content, agent_id, metadata))?;
-
-                Ok(format!("Stored memory with id: {}", id))
-            }
-            other => Err(anyhow::anyhow!("unknown memory tool: {}", other)),
-        }
-    }
 }

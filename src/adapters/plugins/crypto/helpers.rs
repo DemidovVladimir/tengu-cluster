@@ -16,8 +16,9 @@ pub(crate) const DEFAULT_CHAIN_ID: u64 = 11155111;
 pub(crate) const DEFAULT_SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
 
 /// Canonical wallet label used for scope checks during the migration window.
-/// Until per-agent wallet allow-lists land in Phase A9 / B, all crypto tools
-/// share this single label and the `permissive_scope` grants it.
+/// Until per-agent wallet allow-lists land in Phase B, all crypto tools share
+/// this single label and the `permissive_scope` grants it.
+// TODO(Phase B): replace with per-agent wallet allow-lists.
 pub(crate) const DEFAULT_WALLET_LABEL: &str = "default";
 
 /// Process-wide cache of the Privy wallet address to avoid hitting the API once

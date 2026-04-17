@@ -20,9 +20,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
-use async_trait::async_trait;
-
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
@@ -34,36 +31,11 @@ use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
-use crate::adapters::engine_builder::ToolExecutor;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
-use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService};
 use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::AgentConfig;
-use crate::adapters::types::{
-    ChatLoopState, Lens, ToolCall, ToolDef,
-};
-
-// ---------------------------------------------------------------------------
-// Tool executor wrapper (legacy — kept until A9 completes the migration)
-// ---------------------------------------------------------------------------
-
-/// Thin wrapper around `ToolUseService` implementing the `ToolExecutor` trait.
-///
-/// Still used by non-plugin code paths (e.g. MCP bridge) during the Phase A
-/// migration. Channel adapters now receive a `PluginToolExecutor` from
-/// `build_tool_executor`.
-#[allow(dead_code)]
-pub(crate) struct ToolServiceExecutor {
-    service: ToolUseService,
-}
-
-#[async_trait]
-impl ToolExecutor for ToolServiceExecutor {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
-        self.service.execute(call)
-    }
-}
+use crate::adapters::types::{ChatLoopState, Lens, ToolCall, ToolDef};
 
 // ---------------------------------------------------------------------------
 // Tool, executor, and prompt rebuilding
@@ -107,9 +79,9 @@ pub(crate) fn rebuild_system_prompt(
 /// `shared_http_client` — when `Some`, all HTTP and crypto executors share one
 /// `reqwest::Client` instead of each building their own connection pool.
 ///
-/// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Workspace tools are
-/// registered via `WorkspacePlugin`; every other tool is wrapped through
-/// `LegacyToolBridge` (to be removed in A9 as each domain migrates to a plugin).
+/// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Every tool is
+/// backed by a domain plugin (workspace, http, crypto, cache, memory, skill,
+/// subagents).
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
@@ -154,7 +126,7 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
         subagents: subagents.clone(),
     };
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
         &WorkspacePlugin,
         &plugin_ctx,
@@ -170,7 +142,7 @@ pub(crate) fn build_tool_executor(
     // Skill plugin (A8). Registers one `SkillShellTool` per active shell skill.
     // Documentation / API skills stay in the system-prompt path and do not
     // create tools.
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let skill_plugin = SkillPlugin::from_registry(skill_registry);
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
         &skill_plugin,
@@ -183,7 +155,7 @@ pub(crate) fn build_tool_executor(
     // Memory plugin (A5). Registers `remember` when memory is enabled, plus
     // `persistent_store` when listed in `workspace_tools`. The plugin itself
     // gates on `ctx.memory.is_some()`.
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let ps_chunk_size = memory_config
         .map(|mc| mc.persistent_store_chunk_size)
         .unwrap_or(1000);
@@ -201,7 +173,7 @@ pub(crate) fn build_tool_executor(
 
     // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
     // it (i.e. the agent's `workspace_tools` opt-in list).
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
         if let Err(e) = futures::executor::block_on(registry.register_plugin(
             &CachePlugin,
@@ -213,7 +185,7 @@ pub(crate) fn build_tool_executor(
     }
 
     // HTTP plugin (A2). Registers `http_request`.
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
         &HttpPlugin,
         &plugin_ctx,
@@ -224,7 +196,7 @@ pub(crate) fn build_tool_executor(
 
     // Crypto plugin (A3). Registers sign_and_send_transaction, sign_message,
     // get_wallet_address, abi_encode, hex_to_uint256.
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let crypto_plugin = CryptoPlugin::new(cancel.clone());
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
         &crypto_plugin,
@@ -236,7 +208,7 @@ pub(crate) fn build_tool_executor(
 
     // Subagents plugin (A7). Only registers tools when a SubagentRegistry is
     // provided — callers pass `Some` when `config.orchestrator.enabled`.
-    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if subagents.is_some() {
         if let Err(e) = futures::executor::block_on(registry.register_plugin(
             &SubagentsPlugin,
@@ -284,7 +256,7 @@ pub(crate) fn compute_subagent_tools() -> Vec<ToolDef> {
 /// runnable, any env var is readable, and the canonical wallet label is
 /// granted so the crypto plugin's `check_wallet` guard succeeds. Phase A
 /// tasks tighten this once each plugin ships.
-// TODO(A9): replace with per-agent scope once config-scopes land
+// TODO(Phase B): replace with per-agent scope once config-scopes land
 fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
@@ -313,7 +285,7 @@ pub(crate) fn compute_base_tools(
     if !uses_tools {
         return vec![];
     }
-    let mut tools = build_workspace_tools();
+    let mut tools = crate::adapters::plugins::workspace::tool_defs();
     if has_memory {
         tools.extend(crate::adapters::plugins::memory::tool_defs());
     }
@@ -325,7 +297,6 @@ pub(crate) fn compute_base_tools(
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
-    tools.extend(build_platform_tools());
     tools
 }
 
@@ -338,7 +309,7 @@ pub(crate) fn compute_bridge_tools(
     has_memory: bool,
     workspace_tools: &[String],
 ) -> Vec<ToolDef> {
-    let mut tools = build_workspace_tools();
+    let mut tools = crate::adapters::plugins::workspace::tool_defs();
     if has_memory {
         tools.extend(crate::adapters::plugins::memory::tool_defs());
     }
@@ -350,7 +321,6 @@ pub(crate) fn compute_bridge_tools(
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
-    tools.extend(build_platform_tools());
     tools
 }
 
@@ -740,12 +710,11 @@ mod golden_tests {
         let tmp = TempDir::new().unwrap();
 
         // Compute the same base-tool list the channel adapters use at startup.
-        let mut tools = build_workspace_tools();
+        let mut tools = crate::adapters::plugins::workspace::tool_defs();
         tools.extend(crate::adapters::plugins::memory::tool_defs());
         tools.extend(crate::adapters::plugins::cache::tool_defs());
         tools.extend(crate::adapters::plugins::http::tool_defs());
         tools.extend(crate::adapters::plugins::crypto::tool_defs());
-        tools.extend(build_platform_tools());
 
         let config = Config::default();
         let agent_config = config.agents.get("main").unwrap();

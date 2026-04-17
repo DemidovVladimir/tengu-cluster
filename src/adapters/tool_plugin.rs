@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::adapters::memory_builder::MemoryServiceHandle;
 use crate::adapters::plugins::subagents::SubagentRegistry;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolExecutionPort, ToolScope};
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{ToolCall, ToolDef};
 
@@ -146,40 +146,6 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| anyhow::anyhow!("unknown tool '{}'", name))?;
         tool.execute(args, ctx).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Legacy bridge — wraps sync ToolExecutionPort as async Tool
-// ---------------------------------------------------------------------------
-
-/// Adapts an old sync executor + tool definition into the new async Tool trait.
-/// Used during incremental migration (A1–A8). Deleted in A9.
-pub(crate) struct LegacyToolBridge {
-    def: ToolDef,
-    executor: Arc<dyn ToolExecutionPort>,
-}
-
-impl LegacyToolBridge {
-    pub(crate) fn new(def: ToolDef, executor: Arc<dyn ToolExecutionPort>) -> Self {
-        Self { def, executor }
-    }
-}
-
-#[async_trait]
-impl Tool for LegacyToolBridge {
-    fn definition(&self) -> &ToolDef {
-        &self.def
-    }
-
-    async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
-        let call = ToolCall {
-            id: String::new(),
-            name: self.def.name.clone(),
-            arguments: args.clone(),
-        };
-        let result = self.executor.execute_tool(&call)?;
-        Ok(ToolOutput::from(result))
     }
 }
 

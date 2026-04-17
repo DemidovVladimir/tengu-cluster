@@ -321,7 +321,7 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String)>> 
 /// `env_reads` list is empty will reject the expansion (default-deny).
 /// The A1 migration-window `permissive_scope` leaves `env_reads` empty, so
 /// tools that expand `$VAR` must opt in explicitly via agent config.
-// TODO(A9): revisit once per-agent env_reads are wired into permissive_scope.
+// TODO(Phase B): revisit once per-agent env_reads are wired into permissive_scope.
 fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<String> {
     let mut out = String::new();
     let bytes = input.as_bytes();

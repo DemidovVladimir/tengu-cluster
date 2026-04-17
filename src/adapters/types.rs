@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -438,31 +438,6 @@ pub(crate) trait AgentTaskExecutor: Send + Sync {
     /// Execute a task given a fully-rendered prompt.
     /// Returns `(combined_output, tool_outcomes)`.
     async fn execute(&self, description: &str) -> Result<(String, Vec<(String, String)>), String>;
-}
-
-// ---------------------------------------------------------------------------
-// Tool allow-list
-// ---------------------------------------------------------------------------
-
-/// Simple set of allowed tool names.
-// TODO(A9): remove once ToolUseService is deleted
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ToolAllowList {
-    allowed: HashSet<String>,
-}
-
-#[allow(dead_code)]
-impl ToolAllowList {
-    pub(crate) fn from_tools(tools: &[ToolDef]) -> Self {
-        Self {
-            allowed: tools.iter().map(|t| t.name.clone()).collect(),
-        }
-    }
-
-    pub(crate) fn is_allowed(&self, tool_name: &str) -> bool {
-        self.allowed.contains(tool_name)
-    }
 }
 
 // ---------------------------------------------------------------------------

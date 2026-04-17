@@ -627,8 +627,6 @@ mod tests {
     use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
     use crate::adapters::plugins::workspace::test_support::TestHarness;
     use crate::adapters::ports::{EmbeddingPort, MemoryStorePort, ToolScope};
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -636,13 +634,11 @@ mod tests {
     /// text-embedding-3-small's 1536). No network I/O — safe for unit tests.
     struct StubEmbedder;
 
+    #[async_trait]
     impl EmbeddingPort for StubEmbedder {
-        fn embed(
-            &self,
-            texts: &[&str],
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + '_>> {
+        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
             let n = texts.len();
-            Box::pin(async move { Ok(vec![vec![0.0f32; 8]; n]) })
+            Ok(vec![vec![0.0f32; 8]; n])
         }
     }
 

@@ -12,9 +12,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde_json::json;
 use std::sync::Arc;
 
-use crate::adapters::memory_builder::MemoryServiceHandle;
 use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
 use crate::adapters::types::ToolDef;
 
@@ -22,7 +22,71 @@ pub(crate) mod persistent_store;
 pub(crate) mod remember;
 
 pub(crate) use persistent_store::{PersistentStoreTool, PERSISTENT_STORE_TOOL_NAME};
-pub(crate) use remember::RememberTool;
+pub(crate) use remember::{RememberTool, REMEMBER_TOOL_NAME};
+
+/// ToolDef for `remember` — kept in sync with the schema in
+/// `remember::RememberTool::new`.
+pub(crate) fn remember_def() -> ToolDef {
+    ToolDef::new(
+        REMEMBER_TOOL_NAME,
+        "Store a fact in long-term memory.",
+        json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The fact, insight, or information to remember"
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
+                    "additionalProperties": { "type": "string" }
+                }
+            },
+            "required": ["content"]
+        }),
+    )
+}
+
+/// ToolDef for `persistent_store` — kept in sync with the schema in
+/// `persistent_store::PersistentStoreTool::new`.
+pub(crate) fn persistent_store_def() -> ToolDef {
+    ToolDef::new(
+        PERSISTENT_STORE_TOOL_NAME,
+        "Persistent file store with vector search. Store files, search by semantic query, list or delete stored files.",
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["store", "search", "list", "delete"],
+                    "description": "Operation to perform"
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the file to store (required for store). Relative to workspace or absolute."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Human description of the file content (optional for store, improves search quality)"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Semantic search query (required for search)"
+                },
+                "file_id": {
+                    "type": "string",
+                    "description": "File ID to delete (required for delete)"
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max results to return for search (default: 5)"
+                }
+            },
+            "required": ["operation"]
+        }),
+    )
+}
 
 /// Tool definitions advertised by the memory plugin's always-on tools.
 ///
@@ -31,80 +95,12 @@ pub(crate) use remember::RememberTool;
 /// inclusion by whether memory is enabled. `persistent_store` is opt-in per
 /// agent via `workspace_tools` and has its own separate `tool_defs()` below.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    // Building a throwaway tool reuses the schema source of truth. We never
-    // execute against the handle — `definition()` does not touch it.
-    //
-    // We need a valid `MemoryServiceHandle` to construct the tool; use a
-    // dummy one since `definition()` never dereferences it.
-    let dummy = dummy_handle();
-    vec![RememberTool::new(dummy).definition().clone()]
+    vec![remember_def()]
 }
 
 /// Tool definitions for the opt-in `persistent_store` tool.
 pub(crate) fn persistent_store_tool_defs() -> Vec<ToolDef> {
-    let dummy = dummy_handle();
-    vec![
-        PersistentStoreTool::new(std::path::PathBuf::from("/"), dummy, 1000, 200)
-            .definition()
-            .clone(),
-    ]
-}
-
-/// Construct a no-op `MemoryServiceHandle` for schema inspection paths that
-/// never touch the embedding / store ports. The `ToolDef` stored on each tool
-/// is independent of the handle, so this keeps `tool_defs()` infallible.
-fn dummy_handle() -> Arc<MemoryServiceHandle> {
-    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
-    use crate::adapters::types::{MemoryEntry, MemorySearchResult};
-    use std::future::Future;
-    use std::pin::Pin;
-
-    struct NoopEmbed;
-    impl EmbeddingPort for NoopEmbed {
-        fn embed(
-            &self,
-            _texts: &[&str],
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + '_>> {
-            Box::pin(async { Ok(vec![]) })
-        }
-    }
-
-    struct NoopStore;
-    impl MemoryStorePort for NoopStore {
-        fn store(
-            &self,
-            _entry: &MemoryEntry,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn search_by_vector(
-            &self,
-            _embedding: &[f32],
-            _top_k: usize,
-        ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>> {
-            Box::pin(async { Ok(vec![]) })
-        }
-        fn delete(
-            &self,
-            _id: &str,
-        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>> {
-            Box::pin(async { Ok(false) })
-        }
-        fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>> {
-            Box::pin(async { 0 })
-        }
-        fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>> {
-            Box::pin(async { 0 })
-        }
-    }
-
-    Arc::new(MemoryServiceHandle {
-        embedding: Arc::new(NoopEmbed),
-        store: Arc::new(NoopStore),
-    })
+    vec![persistent_store_def()]
 }
 
 /// Plugin grouping memory tools.
@@ -166,7 +162,56 @@ impl ToolPlugin for MemoryPlugin {
 mod tests {
     use super::*;
     use crate::adapters::config::Config;
+    use crate::adapters::memory_builder::MemoryServiceHandle;
+    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
+    use crate::adapters::types::{MemoryEntry, MemorySearchResult};
     use tempfile::TempDir;
+
+    /// Test-only no-op memory handle used to exercise plugin gating without a
+    /// real embedding backend or vector store.
+    fn dummy_handle() -> Arc<MemoryServiceHandle> {
+        struct NoopEmbed;
+
+        #[async_trait]
+        impl EmbeddingPort for NoopEmbed {
+            async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+                Ok(vec![])
+            }
+        }
+
+        struct NoopStore;
+
+        #[async_trait]
+        impl MemoryStorePort for NoopStore {
+            async fn store(&self, _entry: &MemoryEntry) -> Result<()> {
+                Ok(())
+            }
+            async fn search_by_vector(
+                &self,
+                _embedding: &[f32],
+                _top_k: usize,
+            ) -> Result<Vec<MemorySearchResult>> {
+                Ok(vec![])
+            }
+            async fn delete(&self, _id: &str) -> Result<bool> {
+                Ok(false)
+            }
+            async fn clear_all(&self) -> Result<()> {
+                Ok(())
+            }
+            async fn entry_count(&self) -> usize {
+                0
+            }
+            async fn storage_bytes(&self) -> u64 {
+                0
+            }
+        }
+
+        Arc::new(MemoryServiceHandle {
+            embedding: Arc::new(NoopEmbed),
+            store: Arc::new(NoopStore),
+        })
+    }
 
     #[tokio::test]
     async fn memory_plugin_returns_empty_when_memory_disabled() {

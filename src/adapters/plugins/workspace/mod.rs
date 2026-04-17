@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
+use crate::adapters::types::ToolDef;
 
 pub(crate) mod list_directory;
 pub(crate) mod read_file;
@@ -22,6 +23,18 @@ pub(crate) use list_directory::ListDirectoryTool;
 pub(crate) use read_file::ReadFileTool;
 pub(crate) use run_command::RunCommandTool;
 pub(crate) use write_file::WriteFileTool;
+
+/// Tool definitions advertised by the workspace plugin — used by
+/// `channel_runtime::compute_base_tools`/`compute_bridge_tools` to populate
+/// the agent-facing tool list before instantiating the registry.
+pub(crate) fn tool_defs() -> Vec<ToolDef> {
+    vec![
+        ReadFileTool::new().definition().clone(),
+        ListDirectoryTool::new().definition().clone(),
+        WriteFileTool::new().definition().clone(),
+        RunCommandTool::new().definition().clone(),
+    ]
+}
 
 /// Plugin grouping the four workspace primitive tools.
 pub(crate) struct WorkspacePlugin;

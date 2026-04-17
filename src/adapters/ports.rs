@@ -2,25 +2,18 @@
 //!
 //! Concrete implementations live alongside these traits in `src/adapters/`.
 //!
-//! Sync ports: `ToolActivityPort`,
-//!   `ToolExecutionPort`, `SkillSourcePort`, `ShellExecutionPort`.
-//! Async ports (Pin<Box<Future>>): `EmbeddingPort`, `MemoryStorePort`.
+//! Sync ports: `ToolActivityPort`, `SkillSourcePort`, `ShellExecutionPort`.
+//! Async ports (`#[async_trait]`): `EmbeddingPort`, `MemoryStorePort`.
 
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use crate::adapters::types::{MemoryEntry, MemorySearchResult, ToolCall};
 
 /// Output port for publishing tool activity events to the UI/log layer.
 pub(crate) trait ToolActivityPort: Send + Sync {
     fn publish_tool_activity(&self, call: &ToolCall);
-}
-
-/// Output port for executing tool calls against a concrete infrastructure.
-pub(crate) trait ToolExecutionPort: Send + Sync {
-    fn execute_tool(&self, call: &ToolCall) -> Result<String>;
 }
 
 /// Port for discovering skill.md files from the workspace.
@@ -41,11 +34,9 @@ pub(crate) trait ShellExecutionPort: Send + Sync {
 /// (e.g. 1536 for `text-embedding-3-small`). Both `remember` and `recall`
 /// operations use the same port instance so query and stored vectors always
 /// share the same embedding space.
+#[async_trait]
 pub(crate) trait EmbeddingPort: Send + Sync {
-    fn embed(
-        &self,
-        texts: &[&str],
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Vec<f32>>>> + Send + '_>>;
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
 }
 
 /// Port for persistent vector memory storage and retrieval.
@@ -59,29 +50,30 @@ pub(crate) trait EmbeddingPort: Send + Sync {
 /// The `store` method persists a pre-embedded `MemoryEntry` (embedding vector
 /// already attached). The `search_by_vector` method accepts a query embedding
 /// and returns the top-k closest entries scored by cosine similarity.
+#[async_trait]
 pub(crate) trait MemoryStorePort: Send + Sync {
     /// Persist a memory entry (content + pre-computed embedding vector).
-    fn store(&self, entry: &MemoryEntry) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+    async fn store(&self, entry: &MemoryEntry) -> Result<()>;
 
     /// Find the `top_k` entries closest to `embedding` by cosine similarity.
-    fn search_by_vector(
+    async fn search_by_vector(
         &self,
         embedding: &[f32],
         top_k: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<MemorySearchResult>>> + Send + '_>>;
+    ) -> Result<Vec<MemorySearchResult>>;
 
     /// Delete a memory entry by its UUID. Returns `true` if it existed.
     #[allow(dead_code)] // used in tests and /purge flow
-    fn delete(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + '_>>;
+    async fn delete(&self, id: &str) -> Result<bool>;
 
     /// Delete all stored entries, resetting the store to empty.
-    fn clear_all(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+    async fn clear_all(&self) -> Result<()>;
 
     /// Total number of stored entries.
-    fn entry_count(&self) -> Pin<Box<dyn Future<Output = usize> + Send + '_>>;
+    async fn entry_count(&self) -> usize;
 
     /// Approximate storage size in bytes (meaningful for disk, returns 0 for remote stores).
-    fn storage_bytes(&self) -> Pin<Box<dyn Future<Output = u64> + Send + '_>>;
+    async fn storage_bytes(&self) -> u64;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +129,7 @@ impl ToolScope {
             // `"*"` is an allow-any wildcard — used by the A1 migration-window
             // `permissive_scope` to preserve pre-Phase-A behaviour where http
             // access was ungated. Mirrors the `check_shell_bin` wildcard.
-            // TODO(A9): drop once per-agent net_hosts land.
+            // TODO(Phase B): drop once per-agent net_hosts land.
             if pattern == "*" {
                 return Ok(());
             }
