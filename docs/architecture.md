@@ -28,8 +28,8 @@ Skills evolve through `skill-creator` (create), `skill-eval` (measure), and `ski
 
 They are the only way the LLM touches the world. A tool reads a file, writes a file, runs a command, signs a transaction, calls an HTTP API, spawns a subagent. Tools are:
 
-- **Gateable** — the user decides which tools exist for each agent (`ToolAllowList`, today built from tool definitions)
-- **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny)
+- **Gateable** — the user decides which tools exist for each agent. The per-agent tool list is computed in `channel_runtime::compute_base_tools` + skill tools + (when enabled) `compute_subagent_tools`, and passed to `build_tool_executor` as its allow-list. Tools whose names are not in the list are not registered.
+- **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny). Every registered tool gets a per-agent scope entry; every `Tool::execute` body calls `scope.check_*()` as its first logic line, enforced structurally by `tests/scope_lint.rs`.
 
 MCP servers extend the hands without touching Rust. Adding a tool never requires adding Rust code beyond a new plugin file or a new `[[mcp_servers]]` entry.
 
@@ -47,15 +47,15 @@ Two mechanisms coexist. They answer different questions:
 
 | Question | Mechanism | Where |
 |----------|-----------|-------|
-| Does this tool exist at all for this agent? | `ToolAllowList` (coarse, binary) | `src/adapters/types.rs` |
+| Does this tool exist at all for this agent? | Allow-list derived from the `tools` slice passed to `build_tool_executor` (coarse, binary) | `src/adapters/channel_runtime.rs` |
 | When the tool runs, what can it touch? | `ToolScope` (fine, default-deny) | `src/adapters/ports.rs` |
 
 Order of checks:
-1. Tool not in allow-list → tool is not registered. Done.
-2. Tool in allow-list, no scope entry → tool is not registered (same effect as #1).
-3. Tool in allow-list, scope present → tool is registered with that scope.
+1. Tool not in allow-list → plugin registration skips it; tool is not callable. Done.
+2. Tool in allow-list → plugin registers it; `PluginToolExecutor` gives it a scope entry.
+3. At call time, `Tool::execute`'s first logic line is `ctx.scope.check_*()` — enforced by `tests/scope_lint.rs`. Tools that legitimately have no resource access (e.g. `abi_encode`) declare this with a `// scope: pure-compute` annotation.
 
-At runtime, every tool's execute body calls `scope.check_*()` as its first line.
+The allow-list lives in the `tools` list the caller builds and passes in; `ToolAllowList` as a type was removed in Phase A when the registry replaced the old `ToolUseService`. `ToolScope` is the per-agent fine-grained gate (see [[configuration#Scopes]]).
 
 ---
 
@@ -108,9 +108,19 @@ Passed to every `engine.run()` call:
 - `bridge_tools` — tool definitions for the [[mcp-bridge]] (Claude Code only)
 
 ### Tool Assembly (`src/adapters/channel_runtime.rs`)
-- `compute_base_tools()` — workspace + platform + memory + cache tools for the outer loop
-- `compute_bridge_tools()` — same set but for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — composite executor wiring workspace, HTTP, crypto, cache, skill executors
+- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache plugins for the outer loop
+- `compute_subagent_tools()` — subagent-spawn tool defs, added when the orchestrator is enabled
+- `compute_bridge_tools()` — tool defs for the MCP bridge when `manages_own_workspace = true`
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+
+### Plugin Architecture (`src/adapters/plugins/`, `src/adapters/tool_plugin.rs`)
+
+Every tool is a small struct implementing the async `Tool` trait. Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, activity port, and subagent registry.
+
+- **Static plugins** (tool defs known at compile time): `workspace`, `http`, `crypto`, `cache`, `memory`, `skill`, `subagents`
+- **Dynamic plugin** (tool defs discovered at boot): `mcp` — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}.{tool_name}`
+
+Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and register it in `channel_runtime::build_tool_executor`. No changes to the engine loop, no new executor plumbing.
 
 ## Module Map
 
@@ -141,13 +151,19 @@ Passed to every `engine.run()` call:
 ### Tools
 | Module | Purpose |
 |--------|---------|
-| `tool_builder.rs` | Tool definitions + workspace executor |
-| `composite_tool_executor.rs` | Composite executor dispatching to sub-executors |
-| `http_tool_executor.rs` | `http_request` tool executor |
-| `crypto_tool_executor.rs` | Crypto tools (sign, wallet, ABI encode) |
-| `cache_tool_executor.rs` | `shared_cache` tool executor (SQLite) |
-| `shell_executor.rs` | Shell command execution |
-| `skill_builder.rs` | Skill parsing, registry, system prompt building |
+| `tool_plugin.rs` | `Tool` / `ToolPlugin` traits, `ToolRegistry`, `PluginToolExecutor`, `ToolCtx`, `PluginCtx` |
+| `plugins/workspace/` | `read_file`, `list_directory`, `write_file`, `run_command` |
+| `plugins/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
+| `plugins/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
+| `plugins/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
+| `plugins/memory/` | `remember` + `persistent_store` (chunked RAG, opt-in via `workspace_tools`) |
+| `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
+| `plugins/subagents/` | `sessions_spawn`, `sessions_fan_out`, `subagents` — registered when orchestrator is enabled |
+| `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
+| `tool_builder.rs` | Path validation + tool-activity UI helpers (no executors) |
+| `shell_executor.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
+| `skill_builder.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `plugins/skill/`) |
+| `mcp_bridge.rs` | Outbound stdio MCP server (exposes Tengu tools to external Claude Code) |
 
 ### Memory
 | Module | Purpose |
