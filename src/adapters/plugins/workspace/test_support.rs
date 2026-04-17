@@ -70,6 +70,7 @@ impl TestHarness {
             memory: None,
             secret_registry: &self.secrets,
             activity: self.activity.as_ref(),
+            subagents: None,
         }
     }
 }

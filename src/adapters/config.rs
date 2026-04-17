@@ -384,6 +384,11 @@ pub struct OrchestratorConfig {
     pub enabled: bool,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Maximum number of subagents that may be running concurrently when
+    /// the orchestrator is enabled. Used by the subagents plugin (A7) to
+    /// bound `sessions_spawn` / `sessions_fan_out`.
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
     pub planner_engine: Option<String>,
     pub planner_model: Option<String>,
 }
@@ -393,6 +398,7 @@ impl Default for OrchestratorConfig {
         Self {
             enabled: default_orchestrator_enabled(),
             max_retries: default_max_retries(),
+            max_concurrent: default_max_concurrent(),
             planner_engine: None,
             planner_model: None,
         }
@@ -404,6 +410,9 @@ fn default_orchestrator_enabled() -> bool {
 }
 fn default_max_retries() -> u32 {
     3
+}
+fn default_max_concurrent() -> usize {
+    4
 }
 
 /// Telegram bot adapter configuration.

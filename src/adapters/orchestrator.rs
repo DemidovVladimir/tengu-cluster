@@ -117,6 +117,31 @@ pub(crate) async fn boot_orchestrator(
         .build()
         .ok();
 
+    // Build the shared subagent registry now that we know the orchestrator is
+    // enabled. Every agent in the fleet gets the same Arc so they share one
+    // concurrency budget when spawning sibling subagents.
+    let subagent_registry: Option<Arc<crate::adapters::plugins::subagents::SubagentRegistry>> = {
+        use crate::adapters::plugins::subagents::{
+            ProductionSubagentRuntime, SubagentRegistry, SubagentRuntime,
+        };
+        let http = shared_http_client
+            .clone()
+            .unwrap_or_else(reqwest::Client::new);
+        let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
+            Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new());
+        let runtime: Arc<dyn SubagentRuntime> = Arc::new(ProductionSubagentRuntime {
+            config: Arc::new(config.clone()),
+            http,
+            shell,
+            memory: memory_handle.clone(),
+            secret_registry: Arc::clone(&secret_registry),
+        });
+        Some(Arc::new(SubagentRegistry::new(
+            orch_config.max_concurrent,
+            runtime,
+        )))
+    };
+
     // Register agents with roles, build engines and tool executors.
     for (agent_id, agent_config) in &config.agents {
         let role_str = match &agent_config.role {
@@ -151,11 +176,16 @@ pub(crate) async fn boot_orchestrator(
             Vec<ToolDef>,
             Arc<dyn ToolExecutor>,
         ) = if let Some(ref ws) = workspace {
-            let base_tools = channel_runtime::compute_base_tools(
+            let mut base_tools = channel_runtime::compute_base_tools(
                 true,
                 memory_handle.is_some(),
                 &agent_config.workspace_tools,
             );
+            // Advertise subagent tools when orchestrator is enabled. Keeps
+            // the default non-orchestrator surface unchanged (golden test).
+            if subagent_registry.is_some() {
+                base_tools.extend(channel_runtime::compute_subagent_tools());
+            }
             let skill_source = FileSystemSkillSource::new(ws.clone());
             let base_reserved: Vec<String> =
                 base_tools.iter().map(|t| t.name.clone()).collect();
@@ -183,6 +213,7 @@ pub(crate) async fn boot_orchestrator(
                 shared_http_client.as_ref(),
                 Some(&config.memory),
                 agent_config,
+                subagent_registry.clone(),
             )
             .map(|executor| Arc::new(executor) as Arc<dyn ToolExecutor>)
             .unwrap_or_else(|| Arc::new(NoopRuntimeToolExecutor));

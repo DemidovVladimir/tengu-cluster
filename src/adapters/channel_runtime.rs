@@ -29,6 +29,7 @@ use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
+use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{
@@ -121,6 +122,7 @@ pub(crate) fn build_tool_executor(
     shared_http_client: Option<&reqwest::Client>,
     memory_config: Option<&crate::adapters::config::MemoryConfig>,
     agent_config: &AgentConfig,
+    subagents: Option<Arc<SubagentRegistry>>,
 ) -> Option<PluginToolExecutor> {
     if tools.is_empty() {
         return None;
@@ -151,6 +153,7 @@ pub(crate) fn build_tool_executor(
         shell: Arc::clone(&shell),
         memory: memory_handle.clone(),
         secret_registry: Arc::clone(secret_registry),
+        subagents: subagents.clone(),
     };
     // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
@@ -245,6 +248,19 @@ pub(crate) fn build_tool_executor(
         tracing::warn!(error = %e, "Failed to register crypto plugin — crypto tools unavailable");
     }
 
+    // Subagents plugin (A7). Only registers tools when a SubagentRegistry is
+    // provided — callers pass `Some` when `config.orchestrator.enabled`.
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    if subagents.is_some() {
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &SubagentsPlugin,
+            &plugin_ctx,
+            &allowed_list,
+        )) {
+            tracing::warn!(error = %e, "Failed to register subagents plugin — sessions_spawn/fan_out/subagents unavailable");
+        }
+    }
+
     // Per-tool scope map: permissive by default during A1 — pre-migration
     // behaviour did not gate tools via ToolScope. Per-agent scope wiring arrives
     // alongside the remaining plugin migrations.
@@ -263,7 +279,18 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,
+        subagents,
     })
+}
+
+/// Tool definitions advertised by the subagents plugin.
+///
+/// Channel adapters call this when the orchestrator is enabled so the
+/// three subagent tools appear in the LLM-facing tool list. Keeping the
+/// helper separate from `compute_base_tools` keeps the default surface
+/// untouched for users without orchestration configured.
+pub(crate) fn compute_subagent_tools() -> Vec<ToolDef> {
+    crate::adapters::plugins::subagents::tool_defs()
 }
 
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
@@ -751,6 +778,7 @@ mod golden_tests {
             None,
             None,
             agent_config,
+            None, // subagents: golden test simulates orchestrator-disabled default.
         )
         .expect("executor");
 
