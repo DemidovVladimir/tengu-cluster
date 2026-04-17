@@ -30,8 +30,8 @@ pub(crate) mod composite_tool_executor;
 pub(crate) mod crypto_tool_executor;
 pub(crate) mod embedding;
 pub(crate) mod engine_builder;
-// `http_tool_executor` deleted in A2 — http_request now lives in
-// `plugins::http::HttpPlugin`. MCP bridge regains it in A9.
+// TODO(A9): delete once mcp_bridge uses ToolRegistry (HttpPlugin owns the channel_runtime path)
+pub(crate) mod http_tool_executor;
 pub(crate) mod mcp_bridge;
 pub(crate) mod orchestrator;
 pub(crate) mod plugins;
