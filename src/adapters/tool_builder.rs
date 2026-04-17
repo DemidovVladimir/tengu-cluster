@@ -453,94 +453,15 @@ pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
 /// Build the set of platform-level primitive tools.
 ///
 /// `http_request` was moved to `plugins::http::HttpPlugin` in A2 — its `ToolDef`
-/// now lives inside `HttpRequestTool`. The remaining crypto tools migrate to
-/// their own plugin in A3.
+/// now lives inside `HttpRequestTool`. The crypto tools moved to
+/// `plugins::crypto::CryptoPlugin` in A3 — their `ToolDef`s now live in the
+/// plugin and are advertised via `plugins::crypto::tool_defs()`.
+///
+/// This function will be deleted in A9 once `mcp_bridge.rs` is rewritten to
+/// dispatch through `ToolRegistry`. Returning an empty vec preserves the
+/// current call shape for `channel_runtime::compute_base_tools` /
+/// `compute_bridge_tools` without a structural refactor.
+// TODO(A9): delete once mcp_bridge uses ToolRegistry
 pub(crate) fn build_platform_tools() -> Vec<ToolDef> {
-    vec![
-        ToolDef::new(
-            "sign_and_send_transaction",
-            "Sign and send an EVM transaction via Privy wallet.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "to": {
-                        "type": "string",
-                        "description": "Destination address (0x-prefixed)"
-                    },
-                    "data": {
-                        "type": "string",
-                        "description": "Transaction calldata (0x-prefixed hex)"
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Value in wei (decimal string, default: \"0\")"
-                    },
-                    "chain_id": {
-                        "type": "integer",
-                        "description": "Chain ID (default: 11155111 = Sepolia)"
-                    },
-                    "wait_for_receipt": {
-                        "type": "boolean",
-                        "description": "Wait for confirmation (default: true)"
-                    }
-                },
-                "required": ["to"]
-            }),
-        ),
-        ToolDef::new(
-            "sign_message",
-            "Sign a message via Privy wallet.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "The message to sign"
-                    }
-                },
-                "required": ["message"]
-            }),
-        ),
-        ToolDef::new(
-            "get_wallet_address",
-            "Get Privy wallet address.",
-            json!({
-                "type": "object",
-                "properties": {}
-            }),
-        ),
-        ToolDef::new(
-            "abi_encode",
-            "ABI-encode an EVM function call.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "function_signature": {
-                        "type": "string",
-                        "description": "Solidity function signature, e.g. 'mintReservation(address,uint256,string,string,bytes)'"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Arguments as strings: address='0x...', uint256=decimal or '0x' hex, bytes='0x...' hex, string=plain text, bool='true'/'false'"
-                    }
-                },
-                "required": ["function_signature", "args"]
-            }),
-        ),
-        ToolDef::new(
-            "hex_to_uint256",
-            "Convert hex to decimal uint256.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "hex": {
-                        "type": "string",
-                        "description": "0x-prefixed hex string (e.g. '0xe6f7...728c')"
-                    }
-                },
-                "required": ["hex"]
-            }),
-        ),
-    ]
+    Vec::new()
 }

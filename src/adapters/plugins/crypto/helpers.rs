@@ -1,15 +1,8 @@
-//! Crypto tool executor — legacy migration-window code.
+// src/adapters/plugins/crypto/helpers.rs
+//! Shared Privy + ABI helpers used by the crypto plugin tools.
 //!
-//! TODO(A9): delete once `mcp_bridge` is rewritten to dispatch through `ToolRegistry`.
-//! The new `plugins::crypto::*Tool` types are used by `channel_runtime::build_tool_executor`;
-//! this file exists only to back the MCP bridge path until A9.
-//!
-//! Crypto tool executor — EVM transaction signing and message signing via Privy.
-//!
-//! Extracts generic blockchain capabilities from the DeSci-specific adapter into
-//! reusable platform primitives that any skill can compose.
+//! Lift-and-shift from `crypto_tool_executor.rs` — behaviour preserved exactly.
 
-use crate::adapters::ports::ToolExecutionPort;
 use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Address, I256, U256};
 use anyhow::{bail, Context, Result};
@@ -17,189 +10,21 @@ use serde_json::json;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use crate::adapters::types::ToolCall;
 
-const PRIVY_API_URL: &str = "https://api.privy.io";
-const DEFAULT_CHAIN_ID: u64 = 11155111;
-const DEFAULT_SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+pub(crate) const PRIVY_API_URL: &str = "https://api.privy.io";
+pub(crate) const DEFAULT_CHAIN_ID: u64 = 11155111;
+pub(crate) const DEFAULT_SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
 
-static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
+/// Canonical wallet label used for scope checks during the migration window.
+/// Until per-agent wallet allow-lists land in Phase A9 / B, all crypto tools
+/// share this single label and the `permissive_scope` grants it.
+pub(crate) const DEFAULT_WALLET_LABEL: &str = "default";
 
-pub(crate) struct CryptoToolExecutionAdapter {
-    client: reqwest::Client,
-    fallback_runtime: Option<tokio::runtime::Runtime>,
-    cancel: Option<Arc<AtomicBool>>,
-}
+/// Process-wide cache of the Privy wallet address to avoid hitting the API once
+/// per `sign_message` / `get_wallet_address` call.
+pub(crate) static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
 
-impl CryptoToolExecutionAdapter {
-    /// Create with an optional shared `reqwest::Client`. Sharing eliminates
-    /// redundant connection pools when multiple agents use crypto tools.
-    pub(crate) fn with_client(shared_client: Option<reqwest::Client>) -> Result<Self> {
-        let fallback_runtime = if tokio::runtime::Handle::try_current().is_ok() {
-            None
-        } else {
-            Some(
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?,
-            )
-        };
-        let client = match shared_client {
-            Some(c) => c,
-            None => reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()?,
-        };
-        Ok(Self {
-            client,
-            fallback_runtime,
-            cancel: None,
-        })
-    }
-
-    // TODO(A9): only the mcp_bridge code path still uses `with_client(None)`,
-    // which does not thread a cancel flag. Kept for API compatibility during the
-    // migration window; deleted alongside the rest of this file in A9.
-    #[allow(dead_code)]
-    pub(crate) fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    fn run_async<F, T>(&self, future: F) -> T
-    where
-        F: std::future::Future<Output = T>,
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            tokio::task::block_in_place(|| handle.block_on(future))
-        } else {
-            self.fallback_runtime
-                .as_ref()
-                .expect("no tokio runtime available")
-                .block_on(future)
-        }
-    }
-
-    fn execute_sign_and_send(&self, call: &ToolCall) -> Result<String> {
-        let to = call
-            .arguments
-            .get("to")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("sign_and_send_transaction: missing 'to'"))?;
-        let data = call.arguments.get("data").and_then(|v| v.as_str());
-        let value = call.arguments.get("value").and_then(|v| v.as_str());
-        let chain_id = call
-            .arguments
-            .get("chain_id")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_CHAIN_ID);
-        let wait = call
-            .arguments
-            .get("wait_for_receipt")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let client = self.client.clone();
-        let to = to.to_string();
-        let data = data.map(|s| s.to_string());
-        let value = value.map(|s| s.to_string());
-        let cancel = self.cancel.clone();
-
-        self.run_async(async move {
-            let tx_hash =
-                privy_send_transaction(&client, &to, data.as_deref(), value.as_deref(), chain_id)
-                    .await?;
-
-            if wait {
-                let receipt = wait_for_receipt(&client, &tx_hash, cancel.as_ref()).await?;
-                let status_hex = receipt["status"].as_str().unwrap_or("0x0");
-                let confirmed = status_hex == "0x1";
-                let status_str = if confirmed { "confirmed" } else { "reverted" };
-                Ok(format!(
-                    "tx_hash: {} | status: {} | chain: {} | to: {}",
-                    tx_hash, status_str, chain_id, to
-                ))
-            } else {
-                Ok(format!(
-                    "tx_hash: {} | status: submitted | chain: {} | to: {}",
-                    tx_hash, chain_id, to
-                ))
-            }
-        })
-    }
-
-    fn execute_sign_message(&self, call: &ToolCall) -> Result<String> {
-        let message = call
-            .arguments
-            .get("message")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("sign_message: missing 'message'"))?;
-
-        let client = self.client.clone();
-        let message = message.to_string();
-
-        self.run_async(async move {
-            let signature = privy_personal_sign(&client, &message).await?;
-            let address = privy_wallet_address(&client).await?;
-            Ok(format!("signature: {} | signer: {}", signature, address))
-        })
-    }
-
-    fn execute_get_wallet_address(&self) -> Result<String> {
-        let client = self.client.clone();
-        self.run_async(async move {
-            let address = privy_wallet_address(&client).await?;
-            Ok(format!("address: {}", address))
-        })
-    }
-
-    fn execute_abi_encode(&self, call: &ToolCall) -> Result<String> {
-        let signature = call
-            .arguments
-            .get("function_signature")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("abi_encode: missing 'function_signature'"))?;
-        let args = call
-            .arguments
-            .get("args")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("abi_encode: missing 'args' array"))?;
-
-        let calldata = abi_encode_function_call(signature, args)?;
-        Ok(format!("calldata: {}", calldata))
-    }
-
-    fn execute_hex_to_uint256(call: &ToolCall) -> Result<String> {
-        let hex = call
-            .arguments
-            .get("hex")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("hex_to_uint256: missing 'hex'"))?;
-        let stripped = hex.strip_prefix("0x").unwrap_or(hex);
-        let value = U256::from_str_radix(stripped, 16)
-            .map_err(|e| anyhow::anyhow!("hex_to_uint256: invalid hex — {e}"))?;
-        Ok(value.to_string())
-    }
-}
-
-impl ToolExecutionPort for CryptoToolExecutionAdapter {
-    fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        match call.name.as_str() {
-            "sign_and_send_transaction" => self.execute_sign_and_send(call),
-            "sign_message" => self.execute_sign_message(call),
-            "get_wallet_address" => self.execute_get_wallet_address(),
-            "abi_encode" => self.execute_abi_encode(call),
-            "hex_to_uint256" => Self::execute_hex_to_uint256(call),
-            other => bail!("Unknown crypto tool: {}", other),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Privy API helpers
-// ---------------------------------------------------------------------------
-
-async fn privy_wallet_address(client: &reqwest::Client) -> Result<String> {
+pub(crate) async fn privy_wallet_address(client: &reqwest::Client) -> Result<String> {
     if let Some(cached) = WALLET_ADDRESS_CACHE.lock().unwrap().as_ref() {
         return Ok(cached.clone());
     }
@@ -231,7 +56,7 @@ async fn privy_wallet_address(client: &reqwest::Client) -> Result<String> {
     Ok(address)
 }
 
-async fn privy_send_transaction(
+pub(crate) async fn privy_send_transaction(
     client: &reqwest::Client,
     to: &str,
     data: Option<&str>,
@@ -281,7 +106,10 @@ async fn privy_send_transaction(
         .map(String::from)
 }
 
-async fn privy_personal_sign(client: &reqwest::Client, message: &str) -> Result<String> {
+pub(crate) async fn privy_personal_sign(
+    client: &reqwest::Client,
+    message: &str,
+) -> Result<String> {
     let app_id = std::env::var("PRIVY_APP_ID")
         .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
     let app_secret = std::env::var("PRIVY_APP_SECRET")
@@ -317,6 +145,38 @@ async fn privy_personal_sign(client: &reqwest::Client, message: &str) -> Result<
     Ok(format!("0x{}", alloy::primitives::hex::encode(sig_bytes)))
 }
 
+pub(crate) async fn wait_for_receipt(
+    client: &reqwest::Client,
+    tx_hash: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<serde_json::Value> {
+    let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
+
+    for _ in 0..90 {
+        if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
+        }
+        let resp = client
+            .post(&rpc_url)
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "method": "eth_getTransactionReceipt",
+                "params": [tx_hash],
+                "id": 1
+            }))
+            .send()
+            .await?;
+        let body: serde_json::Value = resp.json().await?;
+        if let Some(result) = body.get("result") {
+            if !result.is_null() {
+                return Ok(result.clone());
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    bail!("Transaction receipt not found after 180s: {}", tx_hash)
+}
+
 // ---------------------------------------------------------------------------
 // ABI encoding
 // ---------------------------------------------------------------------------
@@ -327,7 +187,10 @@ async fn privy_personal_sign(client: &reqwest::Client, message: &str) -> Result<
 ///   signature: "mintReservation(address,uint256,string,string,bytes)"
 ///   args: ["0xAbC...", "42", "ipfs://Qm...", "VDNA", "0xdead"]
 ///   → 0x-prefixed hex calldata (selector + encoded params)
-fn abi_encode_function_call(signature: &str, args: &[serde_json::Value]) -> Result<String> {
+pub(crate) fn abi_encode_function_call(
+    signature: &str,
+    args: &[serde_json::Value],
+) -> Result<String> {
     let open = signature
         .find('(')
         .ok_or_else(|| anyhow::anyhow!("abi_encode: missing '(' in function_signature"))?;
@@ -467,42 +330,10 @@ fn json_arg_to_sol_value(
 }
 
 /// Parse a decimal or 0x-prefixed hex string into U256.
-fn parse_uint256(s: &str) -> Result<U256> {
+pub(crate) fn parse_uint256(s: &str) -> Result<U256> {
     if let Some(hex) = s.strip_prefix("0x") {
         U256::from_str_radix(hex, 16).context("invalid hex uint256")
     } else {
         U256::from_str_radix(s, 10).context("invalid decimal uint256")
     }
-}
-
-async fn wait_for_receipt(
-    client: &reqwest::Client,
-    tx_hash: &str,
-    cancel: Option<&Arc<AtomicBool>>,
-) -> Result<serde_json::Value> {
-    let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
-
-    for _ in 0..90 {
-        if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
-            bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
-        }
-        let resp = client
-            .post(&rpc_url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "method": "eth_getTransactionReceipt",
-                "params": [tx_hash],
-                "id": 1
-            }))
-            .send()
-            .await?;
-        let body: serde_json::Value = resp.json().await?;
-        if let Some(result) = body.get("result") {
-            if !result.is_null() {
-                return Ok(result.clone());
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-    bail!("Transaction receipt not found after 180s: {}", tx_hash)
 }

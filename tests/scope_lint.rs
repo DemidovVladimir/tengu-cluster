@@ -55,9 +55,12 @@ fn every_tool_execute_checks_scope() {
     let files = collect_rs_files(&plugins_dir);
 
     // Pattern: find `fn execute(` inside an impl block, then check the body
-    // contains `scope.check_` within the next ~10 lines.
+    // contains `scope.check_` within the next ~10 lines. A `// scope: pure-compute`
+    // annotation on the first 10 lines exempts tools that have no external side
+    // effects (no fs/net/shell/wallet access) — e.g. `abi_encode`, `hex_to_uint256`.
     let execute_re = Regex::new(r"fn execute\s*\(").unwrap();
     let scope_check_re = Regex::new(r"scope\.check_").unwrap();
+    let pure_compute_re = Regex::new(r"//\s*scope:\s*pure-compute").unwrap();
 
     let mut violations = Vec::new();
 
@@ -72,9 +75,9 @@ fn every_tool_execute_checks_scope() {
                     .take(10)
                     .collect::<Vec<_>>()
                     .join("\n");
-                if !scope_check_re.is_match(&window) {
+                if !scope_check_re.is_match(&window) && !pure_compute_re.is_match(&window) {
                     violations.push(format!(
-                        "{}:{} — execute() without scope.check_*()",
+                        "{}:{} — execute() without scope.check_*() or `// scope: pure-compute`",
                         file.display(),
                         i + 1
                     ));

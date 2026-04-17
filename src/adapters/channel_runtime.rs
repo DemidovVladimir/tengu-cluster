@@ -29,11 +29,11 @@ use crate::adapters::cache_tool_executor::{
 use crate::adapters::persistent_store_executor::{
     build_persistent_store_tools, PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME,
 };
-use crate::adapters::crypto_tool_executor::CryptoToolExecutionAdapter;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::memory_builder::{
     memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
 };
+use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
@@ -275,38 +275,16 @@ pub(crate) fn build_tool_executor(
         tracing::warn!(error = %e, "Failed to register http plugin — http_request unavailable");
     }
 
-    // Platform primitives: crypto signing — routed through the LegacyToolBridge
-    // until its own plugin lands (A3).
-    let platform_defs = build_platform_tools();
-
-    let crypto_tool_names: [&str; 5] = [
-        "sign_and_send_transaction",
-        "sign_message",
-        "get_wallet_address",
-        "abi_encode",
-        "hex_to_uint256",
-    ];
-    let needs_crypto = crypto_tool_names.iter().any(|n| allowed_names.contains(*n));
-    if needs_crypto {
-        if let Ok(mut crypto_exec) =
-            CryptoToolExecutionAdapter::with_client(shared_http_client.cloned())
-        {
-            if let Some(ref flag) = cancel {
-                crypto_exec = crypto_exec.with_cancel(Arc::clone(flag));
-            }
-            let crypto_arc: Arc<dyn ToolExecutionPort> = Arc::new(crypto_exec);
-            for name in &crypto_tool_names {
-                if !allowed_names.contains(*name) {
-                    continue;
-                }
-                if let Some(def) = platform_defs.iter().find(|d| d.name == *name) {
-                    registry.register_tool(Arc::new(LegacyToolBridge::new(
-                        def.clone(),
-                        Arc::clone(&crypto_arc),
-                    )));
-                }
-            }
-        }
+    // Crypto plugin (A3). Registers sign_and_send_transaction, sign_message,
+    // get_wallet_address, abi_encode, hex_to_uint256.
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    let crypto_plugin = CryptoPlugin::new(cancel.clone());
+    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        &crypto_plugin,
+        &plugin_ctx,
+        &allowed_list,
+    )) {
+        tracing::warn!(error = %e, "Failed to register crypto plugin — crypto tools unavailable");
     }
 
     // Per-tool scope map: permissive by default during A1 — pre-migration
@@ -332,8 +310,9 @@ pub(crate) fn build_tool_executor(
 
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
 /// the workspace root is writable, any host is reachable, any binary is
-/// runnable, and any env var is readable. Phase A tasks tighten this once
-/// each plugin ships.
+/// runnable, any env var is readable, and the canonical wallet label is
+/// granted so the crypto plugin's `check_wallet` guard succeeds. Phase A
+/// tasks tighten this once each plugin ships.
 // TODO(A9): replace with per-agent scope once config-scopes land
 fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
@@ -341,7 +320,7 @@ fn permissive_scope(workspace: &Path) -> ToolScope {
         net_hosts: vec!["*".to_string()],
         env_reads: vec!["*".to_string()],
         shell_bins: vec!["*".to_string()],
-        wallets: Vec::new(),
+        wallets: vec![crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string()],
     }
 }
 
@@ -374,6 +353,7 @@ pub(crate) fn compute_base_tools(
         tools.extend(build_persistent_store_tools());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
+    tools.extend(crate::adapters::plugins::crypto::tool_defs());
     tools.extend(build_platform_tools());
     tools
 }
@@ -398,6 +378,7 @@ pub(crate) fn compute_bridge_tools(
         tools.extend(build_persistent_store_tools());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
+    tools.extend(crate::adapters::plugins::crypto::tool_defs());
     tools.extend(build_platform_tools());
     tools
 }
@@ -792,6 +773,7 @@ mod golden_tests {
         tools.extend(memory_tool_defs());
         tools.extend(build_shared_cache_tools());
         tools.extend(crate::adapters::plugins::http::tool_defs());
+        tools.extend(crate::adapters::plugins::crypto::tool_defs());
         tools.extend(build_platform_tools());
 
         let config = Config::default();
