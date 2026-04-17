@@ -294,7 +294,7 @@ impl MemoryStorePort for DiskVectorMemoryStore {
 }
 
 // ---------------------------------------------------------------------------
-// Tool executor adapter
+// MemoryServiceHandle — shared by MemoryPlugin and the legacy tool executor.
 // ---------------------------------------------------------------------------
 
 pub(crate) struct MemoryServiceHandle {
@@ -302,6 +302,16 @@ pub(crate) struct MemoryServiceHandle {
     pub store: Arc<dyn MemoryStorePort>,
 }
 
+// ---------------------------------------------------------------------------
+// Legacy tool executor adapter — kept for the MCP bridge until A9.
+//
+// TODO(A9): delete `MemoryToolExecutionAdapter`, `memory_tool_defs`, and
+// `run_async` once `mcp_bridge` dispatches through `ToolRegistry`. The
+// channel-runtime path has moved to `plugins::memory::MemoryPlugin`, which is
+// natively async and does not need a `block_in_place` bridge.
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)] // used only by mcp_bridge in the current migration window
 pub(crate) struct MemoryToolExecutionAdapter {
     handle: Arc<MemoryServiceHandle>,
     secret_registry: Arc<SecretRegistry>,
@@ -344,6 +354,7 @@ impl MemoryToolExecutionAdapter {
     }
 }
 
+#[allow(dead_code)] // used only by mcp_bridge in the current migration window
 pub(crate) fn memory_tool_defs() -> Vec<ToolDef> {
     vec![ToolDef::new(
         "remember",

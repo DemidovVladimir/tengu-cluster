@@ -23,16 +23,12 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::adapters::persistent_store_executor::{
-    build_persistent_store_tools, PersistentStoreExecutor, PERSISTENT_STORE_TOOL_NAME,
-};
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
-use crate::adapters::memory_builder::{
-    memory_tool_defs, DiskVectorMemoryStore, MemoryServiceHandle, MemoryToolExecutionAdapter,
-};
+use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
+use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{
@@ -195,21 +191,23 @@ pub(crate) fn build_tool_executor(
         }
     }
 
-    // Memory tools (remember)
-    if let Some(handle) = memory_handle.as_ref() {
-        if let Ok(mem_exec) =
-            MemoryToolExecutionAdapter::new(Arc::clone(handle), Arc::clone(secret_registry))
-        {
-            let mem_exec_arc: Arc<dyn ToolExecutionPort> = Arc::new(mem_exec);
-            for def in memory_tool_defs() {
-                if allowed_names.contains(&def.name) {
-                    registry.register_tool(Arc::new(LegacyToolBridge::new(
-                        def,
-                        Arc::clone(&mem_exec_arc),
-                    )));
-                }
-            }
-        }
+    // Memory plugin (A5). Registers `remember` when memory is enabled, plus
+    // `persistent_store` when listed in `workspace_tools`. The plugin itself
+    // gates on `ctx.memory.is_some()`.
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    let ps_chunk_size = memory_config
+        .map(|mc| mc.persistent_store_chunk_size)
+        .unwrap_or(1000);
+    let ps_chunk_overlap = memory_config
+        .map(|mc| mc.persistent_store_chunk_overlap)
+        .unwrap_or(200);
+    let memory_plugin = MemoryPlugin::new(ps_chunk_size, ps_chunk_overlap);
+    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        &memory_plugin,
+        &plugin_ctx,
+        &allowed_list,
+    )) {
+        tracing::warn!(error = %e, "Failed to register memory plugin — remember/persistent_store unavailable");
     }
 
     // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
@@ -222,39 +220,6 @@ pub(crate) fn build_tool_executor(
             &allowed_list,
         )) {
             tracing::warn!(error = %e, "Failed to register cache plugin — shared_cache unavailable");
-        }
-    }
-
-    // Optional workspace tool: persistent store
-    if allowed_names.contains(PERSISTENT_STORE_TOOL_NAME) {
-        if let Some(handle) = memory_handle.as_ref() {
-            let chunk_size = memory_config
-                .map(|mc| mc.persistent_store_chunk_size)
-                .unwrap_or(1000);
-            let chunk_overlap = memory_config
-                .map(|mc| mc.persistent_store_chunk_overlap)
-                .unwrap_or(200);
-            match PersistentStoreExecutor::new(
-                workspace.to_path_buf(),
-                Arc::clone(handle),
-                chunk_size,
-                chunk_overlap,
-            ) {
-                Ok(ps_exec) => {
-                    let ps_arc: Arc<dyn ToolExecutionPort> = Arc::new(ps_exec);
-                    for def in build_persistent_store_tools() {
-                        registry.register_tool(Arc::new(LegacyToolBridge::new(
-                            def,
-                            Arc::clone(&ps_arc),
-                        )));
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to init persistent store, tool disabled");
-                }
-            }
-        } else {
-            tracing::warn!("persistent_store requires memory to be enabled, tool disabled");
         }
     }
 
@@ -337,13 +302,13 @@ pub(crate) fn compute_base_tools(
     }
     let mut tools = build_workspace_tools();
     if has_memory {
-        tools.extend(memory_tool_defs());
+        tools.extend(crate::adapters::plugins::memory::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
-        tools.extend(build_persistent_store_tools());
+        tools.extend(persistent_store_tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
@@ -362,13 +327,13 @@ pub(crate) fn compute_bridge_tools(
 ) -> Vec<ToolDef> {
     let mut tools = build_workspace_tools();
     if has_memory {
-        tools.extend(memory_tool_defs());
+        tools.extend(crate::adapters::plugins::memory::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
-        tools.extend(build_persistent_store_tools());
+        tools.extend(persistent_store_tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
@@ -763,7 +728,7 @@ mod golden_tests {
 
         // Compute the same base-tool list the channel adapters use at startup.
         let mut tools = build_workspace_tools();
-        tools.extend(memory_tool_defs());
+        tools.extend(crate::adapters::plugins::memory::tool_defs());
         tools.extend(crate::adapters::plugins::cache::tool_defs());
         tools.extend(crate::adapters::plugins::http::tool_defs());
         tools.extend(crate::adapters::plugins::crypto::tool_defs());
@@ -779,7 +744,7 @@ mod golden_tests {
             tmp.path(),
             &tools,
             &skill_registry,
-            &None, // memory_handle: omit — `remember` is wired through memory_tool_defs anyway.
+            &None, // memory_handle: omit — `remember` is only registered by MemoryPlugin when ctx.memory is Some.
             &secret_registry,
             activity,
             None,

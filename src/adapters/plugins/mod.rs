@@ -4,4 +4,5 @@
 pub(crate) mod cache;
 pub(crate) mod crypto;
 pub(crate) mod http;
+pub(crate) mod memory;
 pub(crate) mod workspace;
