@@ -178,6 +178,7 @@ fn truncate_detail(s: &str, max: usize) -> String {
 ///
 /// Retained during the Phase A migration for the legacy bridge path; the new
 /// channel adapters now build `PluginToolExecutor` directly.
+// TODO(A9): remove alongside CompositeToolExecutionAdapter and ToolExecutionPort
 #[allow(dead_code)]
 #[derive(Clone)]
 pub(crate) struct ToolUseService {
@@ -213,6 +214,7 @@ impl ToolUseService {
 
 // ── Workspace tool execution ────────────────────────────────────────────
 
+// TODO(A9): delete once mcp_bridge uses ToolRegistry
 pub(crate) struct WorkspaceToolExecutionAdapter {
     workspace: PathBuf,
     shell: Option<Arc<dyn ShellExecutionPort>>,
@@ -247,6 +249,7 @@ impl WorkspaceToolExecutionAdapter {
     }
 }
 
+// TODO(A9): delete once mcp_bridge uses ToolRegistry
 fn execute_workspace_tool(workspace: &Path, call: &ToolCall) -> Result<String> {
     match call.name.as_str() {
         "read_file" => {
@@ -397,6 +400,7 @@ fn path_only_schema(path_description: &str) -> serde_json::Value {
 }
 
 /// Build the set of workspace tool definitions to pass to engine.run().
+// TODO(A9): delete once mcp_bridge uses ToolRegistry
 pub(crate) fn build_workspace_tools() -> Vec<ToolDef> {
     vec![
         ToolDef::new(

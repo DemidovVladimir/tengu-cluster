@@ -158,12 +158,17 @@ pub(crate) fn build_tool_executor(
         memory: memory_handle.clone(),
         secret_registry: Arc::clone(secret_registry),
     };
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
         &WorkspacePlugin,
         &plugin_ctx,
         &allowed_list,
     )) {
-        tracing::warn!(error = %e, "Failed to register workspace plugin");
+        // Fail closed: if the workspace plugin can't register, return None so
+        // callers treat this agent as having no tools rather than handing the
+        // LLM a registry missing its advertised workspace primitives.
+        tracing::error!(error = %e, "Failed to register workspace plugin — returning no executor");
+        return None;
     }
 
     // Shell skills create named tools; API skills are documentation-only.
@@ -334,6 +339,7 @@ pub(crate) fn build_tool_executor(
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
 /// the workspace root is writable, any host is reachable, and any binary is
 /// runnable. Phase A tasks tighten this once each plugin ships.
+// TODO(A9): replace with per-agent scope once config-scopes land
 fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],

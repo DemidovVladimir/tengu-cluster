@@ -59,6 +59,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_command_rejects_empty_command() {
+        let tmp = TempDir::new().unwrap();
+        let harness = TestHarness::new(tmp.path());
+        let tool = RunCommandTool::new();
+        let result = tool
+            .execute(&json!({"command": "   "}), &harness.ctx())
+            .await;
+        assert!(result.is_err(), "expected empty-command rejection, got: {:?}", result);
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("empty command"), "unexpected error: {}", msg);
+    }
+
+    #[tokio::test]
     async fn run_command_scope_denies_unlisted_binary() {
         let tmp = TempDir::new().unwrap();
         let scope = ToolScope {
@@ -88,6 +101,7 @@ impl Tool for RunCommandTool {
             .ok_or_else(|| anyhow::anyhow!("run_command: missing 'command' argument"))?;
 
         let bin = extract_binary(command);
+        if bin.is_empty() { anyhow::bail!("run_command: empty command"); }
         ctx.scope.check_shell_bin(bin)?;
 
         let output = ctx.shell.execute_shell(command, ctx.workspace)?;

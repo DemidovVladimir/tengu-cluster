@@ -445,6 +445,7 @@ pub(crate) trait AgentTaskExecutor: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Simple set of allowed tool names.
+// TODO(A9): remove once ToolUseService is deleted
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolAllowList {

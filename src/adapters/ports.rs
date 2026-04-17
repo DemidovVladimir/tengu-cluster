@@ -163,6 +163,14 @@ impl ToolScope {
         )
     }
 
+    /// Check whether `bin` is allowed by this scope's `shell_bins` list.
+    ///
+    /// `"*"` is an allow-any wildcard — used by the A1 migration-window
+    /// `permissive_scope` to preserve pre-Phase-A behaviour where shell access
+    /// was ungated. Real per-agent shell allow-lists arrive with Phase B.
+    ///
+    /// Callers must guard against empty-string `bin` values themselves
+    /// (`run_command` rejects empty commands before reaching this check).
     pub(crate) fn check_shell_bin(&self, bin: &str) -> anyhow::Result<()> {
         let basename = Path::new(bin)
             .file_name()
@@ -400,6 +408,19 @@ mod tests {
             ..Default::default()
         };
         assert!(scope.check_shell_bin("rm").is_err());
+    }
+
+    #[test]
+    fn shell_wildcard_allows_any_binary() {
+        let scope = ToolScope {
+            shell_bins: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(scope.check_shell_bin("git").is_ok());
+        assert!(scope.check_shell_bin("rm").is_ok());
+        // Empty-string guarding lives in `run_command` (step 2), not in the
+        // scope check — the wildcard accepts any input here.
+        assert!(scope.check_shell_bin("").is_ok());
     }
 
     #[test]
