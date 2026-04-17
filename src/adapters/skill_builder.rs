@@ -1,20 +1,19 @@
 //! Skill subsystem — types, parsing, registry, filesystem discovery,
-//! command routing, tool execution, and system prompt building.
+//! command routing, context fragments, and system prompt building.
+//!
+//! Shell-skill tool dispatch was moved to `plugins/skill/` in task A8.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{bail, Result};
 
 use crate::adapters::config::AgentConfig;
-use crate::adapters::ports::{ShellExecutionPort, SkillSourcePort, ToolExecutionPort};
+use crate::adapters::ports::SkillSourcePort;
 use crate::adapters::prompt_budget::truncate_to_token_budget;
 use crate::adapters::token::estimate_tokens_approx_min1;
-use crate::adapters::types::{
-    ToolCall, ToolDef,
-};
+use crate::adapters::types::ToolDef;
 
 // ===========================================================================
 // Types
@@ -578,43 +577,8 @@ fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
 }
 
 // ===========================================================================
-// Command rendering
+// Command rendering — moved to `plugins/skill/shell_tool.rs` in A8.
 // ===========================================================================
-
-/// Substitute `{{param}}` placeholders with shell-escaped argument values.
-fn render_command(template: &str, arguments: &serde_json::Value) -> Result<String> {
-    let mut result = template.to_string();
-    let mut pos = 0;
-
-    while let Some(start) = result[pos..].find("{{") {
-        let abs_start = pos + start;
-        if let Some(end) = result[abs_start + 2..].find("}}") {
-            let abs_end = abs_start + 2 + end;
-            let placeholder = result[abs_start + 2..abs_end].trim();
-
-            let value = arguments.get(placeholder);
-            let rendered = match value {
-                Some(serde_json::Value::String(s)) => shell_escape(s),
-                Some(serde_json::Value::Number(n)) => n.to_string(),
-                Some(serde_json::Value::Bool(b)) => b.to_string(),
-                Some(serde_json::Value::Null) | None => String::new(),
-                Some(other) => shell_escape(&other.to_string()),
-            };
-
-            result.replace_range(abs_start..abs_end + 2, &rendered);
-            pos = abs_start + rendered.len();
-        } else {
-            break;
-        }
-    }
-
-    Ok(result)
-}
-
-fn shell_escape(s: &str) -> String {
-    let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
-}
 
 // ===========================================================================
 // Diff (internal to registry reload)
@@ -1026,63 +990,10 @@ impl SkillSourcePort for FileSystemSkillSource {
 }
 
 // ===========================================================================
-// Tool execution
+// Tool execution — moved to `plugins/skill/` (A8). Shell-skill dispatch lives
+// in `SkillShellTool` + `SkillPlugin`; this module only owns parsing,
+// registry state, context fragments, and system-prompt building now.
 // ===========================================================================
-
-/// Executes skill-based tools via shell commands.
-pub(crate) struct SkillToolExecutionAdapter {
-    skills: HashMap<String, SkillDefinition>,
-    shell: Arc<dyn ShellExecutionPort>,
-    workspace: PathBuf,
-}
-
-impl SkillToolExecutionAdapter {
-    pub(crate) fn new(
-        skill_defs: Vec<SkillDefinition>,
-        shell: Arc<dyn ShellExecutionPort>,
-        workspace: PathBuf,
-    ) -> Self {
-        let skills = skill_defs
-            .into_iter()
-            .map(|s| (s.name.clone(), s))
-            .collect();
-        Self {
-            skills,
-            shell,
-            workspace,
-        }
-    }
-}
-
-impl ToolExecutionPort for SkillToolExecutionAdapter {
-    fn execute_tool(&self, call: &ToolCall) -> Result<String> {
-        let skill = self
-            .skills
-            .get(&call.name)
-            .ok_or_else(|| anyhow::anyhow!("Unknown skill: {}", call.name))?;
-        let template = match &skill.execution {
-            SkillExecution::Shell { template } => template,
-            SkillExecution::Api(_) => {
-                return Err(anyhow::anyhow!(
-                    "API skill '{}' cannot execute through the shell adapter",
-                    call.name
-                ))
-            }
-        };
-        let command = render_command(template, &call.arguments)?;
-        tracing::info!(skill = %call.name, command = %command, "Executing skill tool");
-        let result = self.shell.execute_shell(&command, &self.workspace);
-        match &result {
-            Ok(output) => tracing::info!(
-                skill = %call.name,
-                output_len = output.len(),
-                "Skill tool executed"
-            ),
-            Err(e) => tracing::warn!(skill = %call.name, error = %e, "Skill tool failed"),
-        }
-        result
-    }
-}
 
 // ===========================================================================
 // System prompt building

@@ -29,16 +29,15 @@ use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
+use crate::adapters::plugins::skill::SkillPlugin;
 use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
-use crate::adapters::skill_builder::{
-    self, SkillExecution, SkillRegistry, SkillStatus, SkillToolExecutionAdapter,
-};
+use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
 use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolExecutionPort, ToolScope};
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::tool_builder::{build_platform_tools, build_workspace_tools, ToolUseService};
-use crate::adapters::tool_plugin::{LegacyToolBridge, PluginCtx, PluginToolExecutor, ToolRegistry};
+use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::types::{
@@ -168,30 +167,17 @@ pub(crate) fn build_tool_executor(
         return None;
     }
 
-    // Shell skills create named tools; API skills are documentation-only.
-    let shell_skill_defs: Vec<_> = skill_registry
-        .active_skill_definitions()
-        .into_iter()
-        .filter(|skill| {
-            allowed_names.contains(&skill.name)
-                && matches!(skill.execution, SkillExecution::Shell { .. })
-        })
-        .collect();
-
-    if !shell_skill_defs.is_empty() {
-        let skill_tool_defs: Vec<ToolDef> = skill_registry
-            .active_tools()
-            .into_iter()
-            .filter(|def| shell_skill_defs.iter().any(|s| s.name == def.name))
-            .collect();
-        let skill_exec: Arc<dyn ToolExecutionPort> = Arc::new(SkillToolExecutionAdapter::new(
-            shell_skill_defs,
-            Arc::clone(&shell),
-            workspace.to_path_buf(),
-        ));
-        for def in skill_tool_defs {
-            registry.register_tool(Arc::new(LegacyToolBridge::new(def, Arc::clone(&skill_exec))));
-        }
+    // Skill plugin (A8). Registers one `SkillShellTool` per active shell skill.
+    // Documentation / API skills stay in the system-prompt path and do not
+    // create tools.
+    // TODO(A9): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    let skill_plugin = SkillPlugin::from_registry(skill_registry);
+    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        &skill_plugin,
+        &plugin_ctx,
+        &allowed_list,
+    )) {
+        tracing::warn!(error = %e, "Failed to register skill plugin — shell skills unavailable");
     }
 
     // Memory plugin (A5). Registers `remember` when memory is enabled, plus
