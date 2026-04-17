@@ -1,14 +1,13 @@
 ---
 name: telegram-rag-ingest
 description: Turn resources shared in Telegram chat (attachments, URLs, pasted text) into searchable vector memory, and answer later questions from it.
-homepage: https://github.com/moleculeprotocol/mol-tengu-cluster
 ---
 
 # Telegram RAG Ingest
 
 This skill teaches you how to persist resources a user shares over Telegram — file attachments, URLs, and pasted text blocks — into a vector index, and how to recall them later by semantic search. Retrieval is embedding-based, not keyword, so always rephrase questions into dense topic phrases before searching.
 
-This skill does **not** call any external HTTP API. It documents the local `persistent_store` tool and supporting platform primitives. Ignore the general "use only the URLs below" preamble — there are no fixed URLs in this skill. When you need to fetch a URL the user shares, use `http_request` with the user's URL directly.
+This skill documents the local `persistent_store` tool and supporting platform primitives (`http_request`, `write_file`, `read_file`). When you need to fetch a URL the user shares, use `http_request` with the user's URL directly.
 
 ## Precondition
 

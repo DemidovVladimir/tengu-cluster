@@ -30,8 +30,15 @@ pub(crate) struct SkillDefinition {
 
 #[derive(Debug, Clone)]
 pub(crate) enum SkillExecution {
+    /// Callable shell skill — template rendered + dispatched by `SkillShellTool`.
     Shell { template: String },
+    /// API reference skill — historically drove tool creation; post-Phase-A it is
+    /// documentation-only (body injected into the system prompt, no tool).
     Api(ApiExecution),
+    /// Pure documentation skill — no tool and no API reference. Frontmatter carries
+    /// only `name` + `description`; the body is injected into the system prompt as
+    /// a context fragment. Used for meta-skills like `skill-creator`, `skill-eval`.
+    Documentation,
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +129,8 @@ enum ParsedSkill {
 struct SkillFrontmatter {
     name: String,
     description: String,
-    base_url: String,
+    /// `Some(url)` → API-reference skill; `None` → documentation-only skill.
+    base_url: Option<String>,
     env_vars: Vec<SkillEnvVar>,
     commands: Vec<SkillCommand>,
 }
@@ -434,10 +442,13 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
 
     let raw_name = name?;
     let normalized_name = raw_name.replace('-', "_").to_lowercase();
-    let base_url = base_url?;
 
-    if !validate_base_url(&base_url) {
-        return None;
+    // `base_url` (alias: `homepage`) is optional. When present it turns the skill
+    // into an API-reference skill; when absent the skill becomes documentation-only.
+    if let Some(ref url) = base_url {
+        if !validate_base_url(url) {
+            return None;
+        }
     }
 
     Some((
@@ -453,43 +464,52 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
 }
 
 fn frontmatter_to_skill_definition(fm: &SkillFrontmatter) -> SkillDefinition {
-    SkillDefinition {
-        name: fm.name.clone(),
-        description: fm.description.clone(),
-        parameters: vec![
-            SkillParameter {
-                name: "method".into(),
-                param_type: SkillParamType::String,
-                required: true,
-                description: "HTTP method (GET, POST, PUT, DELETE)".into(),
-            },
-            SkillParameter {
-                name: "path".into(),
-                param_type: SkillParamType::String,
-                required: true,
-                description: if fm.base_url.ends_with("/graphql") {
-                    "API path — for GraphQL use empty string \"\"".into()
-                } else {
-                    "API path (e.g. /api/v1/posts)".into()
+    match fm.base_url.as_ref() {
+        Some(base_url) => SkillDefinition {
+            name: fm.name.clone(),
+            description: fm.description.clone(),
+            parameters: vec![
+                SkillParameter {
+                    name: "method".into(),
+                    param_type: SkillParamType::String,
+                    required: true,
+                    description: "HTTP method (GET, POST, PUT, DELETE)".into(),
                 },
-            },
-            SkillParameter {
-                name: "body".into(),
-                param_type: SkillParamType::String,
-                required: true,
-                description: "JSON request body (use \"{}\" for requests with no body)".into(),
-            },
-            SkillParameter {
-                name: "headers".into(),
-                param_type: SkillParamType::String,
-                required: false,
-                description: "Optional JSON object of additional headers to merge into the request"
-                    .into(),
-            },
-        ],
-        execution: SkillExecution::Api(ApiExecution {
-            base_url: fm.base_url.clone(),
-        }),
+                SkillParameter {
+                    name: "path".into(),
+                    param_type: SkillParamType::String,
+                    required: true,
+                    description: if base_url.ends_with("/graphql") {
+                        "API path — for GraphQL use empty string \"\"".into()
+                    } else {
+                        "API path (e.g. /api/v1/posts)".into()
+                    },
+                },
+                SkillParameter {
+                    name: "body".into(),
+                    param_type: SkillParamType::String,
+                    required: true,
+                    description: "JSON request body (use \"{}\" for requests with no body)".into(),
+                },
+                SkillParameter {
+                    name: "headers".into(),
+                    param_type: SkillParamType::String,
+                    required: false,
+                    description:
+                        "Optional JSON object of additional headers to merge into the request"
+                            .into(),
+                },
+            ],
+            execution: SkillExecution::Api(ApiExecution {
+                base_url: base_url.clone(),
+            }),
+        },
+        None => SkillDefinition {
+            name: fm.name.clone(),
+            description: fm.description.clone(),
+            parameters: Vec::new(),
+            execution: SkillExecution::Documentation,
+        },
     }
 }
 
@@ -536,6 +556,10 @@ fn validate_skill(skill: &SkillDefinition, reserved: &[&str]) -> Result<()> {
             if api.base_url.is_empty() {
                 bail!("API skill must declare a base_url");
             }
+        }
+        SkillExecution::Documentation => {
+            // No execution invariants — documentation skills only contribute body
+            // text as a context fragment; name/description checks above suffice.
         }
     }
     Ok(())
@@ -685,10 +709,15 @@ impl SkillRegistry {
                     commands,
                 }) => {
                     if validate_skill(&definition, &reserved_strs).is_err() {
-                        tracing::warn!("Skipping invalid API skill '{}'", filename);
+                        tracing::warn!("Skipping invalid frontmatter skill '{}'", filename);
                         continue;
                     }
-                    let preamble = api_skill_preamble(&definition.name);
+                    // API skills get a preamble reminding the LLM to use the documented
+                    // URLs/env-vars verbatim; documentation-only skills get the body as-is.
+                    let preamble = match &definition.execution {
+                        SkillExecution::Api(_) => api_skill_preamble(&definition.name),
+                        _ => String::new(),
+                    };
                     let name = definition.name.clone();
                     fresh.push(FreshSkillEntry {
                         name,
@@ -1119,4 +1148,56 @@ pub(crate) fn build_system_prompt_with_tools(
     }
 
     parts.join("\n\n---\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn documentation_skill_parses_without_base_url_or_execution() {
+        let content = "---\n\
+             name: my-doc-skill\n\
+             description: A pure documentation skill with no API and no execution.\n\
+             ---\n\
+             \n\
+             # My Doc Skill\n\
+             \n\
+             Body content that should become a context fragment.\n";
+        let parsed = parse_skill_file(content).expect("parse_skill_file should succeed");
+        match parsed {
+            ParsedSkill::Api {
+                definition,
+                context_body,
+                ..
+            } => {
+                assert!(matches!(definition.execution, SkillExecution::Documentation));
+                assert_eq!(definition.name, "my_doc_skill");
+                assert!(context_body.contains("Body content"));
+                assert!(definition.parameters.is_empty());
+            }
+            other => panic!("expected ParsedSkill::Api (frontmatter path), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn api_skill_with_homepage_still_parses_as_api() {
+        let content = "---\n\
+             name: api-skill\n\
+             description: Backward-compatibility check.\n\
+             homepage: https://api.example.com\n\
+             ---\n\
+             \n\
+             # API Skill\n\
+             \n\
+             Body content.\n";
+        let parsed = parse_skill_file(content).expect("parse_skill_file should succeed");
+        match parsed {
+            ParsedSkill::Api { definition, .. } => match definition.execution {
+                SkillExecution::Api(api) => assert_eq!(api.base_url, "https://api.example.com"),
+                other => panic!("expected Api execution, got {:?}", other),
+            },
+            _ => panic!("expected ParsedSkill::Api"),
+        }
+    }
 }

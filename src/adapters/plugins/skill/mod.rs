@@ -45,7 +45,7 @@ impl SkillPlugin {
     /// Build a plugin instance from the registry's current active shell skills.
     ///
     /// Only skills whose execution is `SkillExecution::Shell` contribute tools.
-    /// API / documentation skills continue to flow through the system-prompt
+    /// API and documentation skills continue to flow through the system-prompt
     /// path and are intentionally ignored here.
     ///
     /// We pair the registry's `active_tools()` (ToolDefs) with the execution
@@ -58,7 +58,7 @@ impl SkillPlugin {
             .into_iter()
             .filter_map(|skill| match skill.execution {
                 SkillExecution::Shell { template } => Some((skill.name, template)),
-                SkillExecution::Api(_) => None,
+                SkillExecution::Api(_) | SkillExecution::Documentation => None,
             })
             .collect();
 
