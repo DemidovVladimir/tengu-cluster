@@ -1313,6 +1313,7 @@ impl TelegramSession {
                 Some(&self.memory_config),
                 &agent.agent_config,
                 None, // subagents: wired by orchestrator path only for A7.
+                &self.config.mcp_servers,
             )
         });
 
@@ -1681,6 +1682,7 @@ impl TelegramSession {
                         Some(&self.memory_config),
                         &agent.agent_config,
                         None, // subagents: wired by orchestrator path only for A7.
+                        &self.config.mcp_servers,
                     )
                     .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
                 });
@@ -2123,6 +2125,7 @@ impl TelegramSession {
                 Some(&self.memory_config),
                 &agent.agent_config,
                 None, // subagents: wired by orchestrator path only for A7.
+                &self.config.mcp_servers,
             )
         });
         let sanitized_executor = current_executor

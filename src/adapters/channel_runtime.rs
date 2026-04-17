@@ -25,6 +25,7 @@ use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
+use crate::adapters::plugins::mcp::McpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
 use crate::adapters::plugins::skill::SkillPlugin;
 use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
@@ -34,7 +35,7 @@ use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
 use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::config::AgentConfig;
+use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::types::{ChatLoopState, Lens, ToolCall, ToolDef};
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ pub(crate) fn build_tool_executor(
     memory_config: Option<&crate::adapters::config::MemoryConfig>,
     agent_config: &AgentConfig,
     subagents: Option<Arc<SubagentRegistry>>,
+    mcp_servers: &[McpServerConfig],
 ) -> Option<PluginToolExecutor> {
     if tools.is_empty() {
         return None;
@@ -216,6 +218,23 @@ pub(crate) fn build_tool_executor(
             &allowed_list,
         )) {
             tracing::warn!(error = %e, "Failed to register subagents plugin — sessions_spawn/fan_out/subagents unavailable");
+        }
+    }
+
+    // MCP plugin (A10). Inbound client — connects to each configured external
+    // MCP server and registers its tools as `{server_name}.{tool_name}`. Only
+    // wired in when at least one server is configured. An empty allow-list is
+    // passed because MCP tool names are dynamic (discovered at runtime) and
+    // would never appear in the static `tools` slice.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    if !mcp_servers.is_empty() {
+        let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &mcp_plugin,
+            &plugin_ctx,
+            &[],
+        )) {
+            tracing::warn!(error = %e, "Failed to register mcp plugin — external MCP tools unavailable");
         }
     }
 
@@ -734,6 +753,7 @@ mod golden_tests {
             None,
             agent_config,
             None, // subagents: golden test simulates orchestrator-disabled default.
+            &[], // mcp_servers: default install has no MCP servers configured.
         )
         .expect("executor");
 

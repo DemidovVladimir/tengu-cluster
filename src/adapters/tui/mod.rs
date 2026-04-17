@@ -119,6 +119,7 @@ pub fn run_tui(
     view::push_welcome(&mut siv);
 
     let memory_config = config.memory.clone();
+    let mcp_servers = config.mcp_servers.clone();
 
     // Spawn engine thread
     let cb_sink = siv.cb_sink().clone();
@@ -298,6 +299,7 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 None, // subagents: A7 wires via orchestrator path only.
+                                &mcp_servers,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,
@@ -372,6 +374,7 @@ pub fn run_tui(
                                     Some(&memory_config),
                                     &engine_agent_config,
                                     None, // subagents: A7 wires via orchestrator path only.
+                                    &mcp_servers,
                                 );
                                 current_system_prompt = channel_runtime::rebuild_system_prompt(
                                     &engine_agent_config,
@@ -504,6 +507,7 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 None, // subagents: A7 wires via orchestrator path only.
+                                &mcp_servers,
                             );
                             current_system_prompt = channel_runtime::rebuild_system_prompt(
                                 &engine_agent_config,

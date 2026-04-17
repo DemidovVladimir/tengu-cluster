@@ -141,6 +141,45 @@ pub struct Config {
     /// Per-agent scopes override default_scopes wholesale (not field-merged).
     #[serde(default)]
     pub default_scopes: HashMap<String, ToolScope>,
+
+    /// Inbound MCP client connections — external MCP servers this install
+    /// connects to. At boot the MCP plugin connects to each entry, calls
+    /// `tools/list`, and exposes every remote tool as `{server_name}.{tool}`.
+    /// Default is empty: MCP is opt-in per user install.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// A single external MCP server that tengu connects to as a client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Unique server name. Used as the prefix in `{server_name}.{tool_name}`.
+    pub name: String,
+    /// Transport: "stdio" or "http".
+    pub transport: String,
+    /// For stdio: `[program, arg1, arg2, ...]`.
+    #[serde(default)]
+    pub command: Vec<String>,
+    /// For http: the JSON-RPC endpoint URL.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Environment variables passed to the stdio subprocess. Values of the
+    /// form `$VAR` are resolved from the parent process's environment.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// Optional authentication applied to http transport.
+    #[serde(default)]
+    pub auth: Option<McpAuthConfig>,
+}
+
+/// Authentication for an MCP HTTP transport.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpAuthConfig {
+    /// Auth scheme: currently only "bearer" is supported.
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    /// Token value. `$VAR` references are resolved from the process env.
+    pub token: String,
 }
 
 fn default_profile() -> String {
@@ -985,6 +1024,7 @@ impl Default for Config {
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
+            mcp_servers: Vec::new(),
         }
     }
 }

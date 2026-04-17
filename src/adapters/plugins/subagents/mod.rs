@@ -171,6 +171,7 @@ impl SubagentRuntime for ProductionSubagentRuntime {
                 Some(&self.config.memory),
                 agent_config,
                 None, // subagents not yet nested
+                &self.config.mcp_servers,
             );
             let tool_exec: Arc<dyn ToolExecutor> = executor_opt
                 .map(|e| Arc::new(e) as Arc<dyn ToolExecutor>)
