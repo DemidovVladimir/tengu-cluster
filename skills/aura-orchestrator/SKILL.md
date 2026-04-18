@@ -8,6 +8,7 @@ env_vars:
   - X402_GATEWAY_URL
   - EVM_WALLET_ADDRESS
   - CHAIN_ID
+  - EXPERIMENT_COST_CENTS
   - PRIVY_APP_ID
   - PRIVY_APP_SECRET
   - PRIVY_WALLET_ID
@@ -216,7 +217,7 @@ http_request:
     "name": "<title>",
     "description": "<description>",
     "initialSymbol": "<symbol>",
-    "funding_amount": {"value": 0, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
+    "funding_amount": {"value": $EXPERIMENT_COST_CENTS, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
     "organization": "<organization>",
     "research_lead": {"name": "<lead_name>", "email": "<lead_email>"},
     "topic": "<topic>"
@@ -279,7 +280,7 @@ http_request:
     "agreements": [{"content_hash": "<agreementContentHash>", "mime_type": "application/json", "type": "POI_ASSIGNMENT", "url": "ipfs://<agreementCid>"}],
     "initial_symbol": "<symbol>",
     "project_details": {
-      "funding_amount": {"value": 0, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
+      "funding_amount": {"value": $EXPERIMENT_COST_CENTS, "currency": "USD", "currency_type": "ISO4217", "decimals": 2},
       "organization": "<organization>",
       "research_lead": {"name": "<lead_name>", "email": "<lead_email>"},
       "topic": "<topic>"
@@ -528,6 +529,15 @@ shared_cache: { "operation": "put", "namespace": "molecule", "key": "dataset_id"
 ```
 
 Run full x402 payment flow (P1–P7).
+
+### External Posting Copy Rules (Phase 5 body + any Beach.science post)
+
+When composing any user-facing markdown that describes the registration (the `body` field above, or a Beach.science post body), obey the rules below. The active chain id for this run is **$CHAIN_ID** (resolved from env at skill-load time); use it directly wherever a chain id is needed.
+
+- **Project URL:** use `$MOLECULE_CLIENT_URL/ipnfts/{reservationId}` verbatim — never substitute `testnet.molecule.xyz`, `staging.molecule.xyz`, or any other domain.
+- **Chain name:** if the active chain id is `1`, call it "Ethereum mainnet". If it is `11155111`, call it "Sepolia". For any other chain id, name it explicitly (e.g. "Base mainnet (8453)"). Do NOT label the registration as "Sepolia staging", "testnet", or "staging" when the active chain id is `1`.
+- **TX explorer links:** chain id `1` → `https://etherscan.io/tx/<hash>`; chain id `11155111` → `https://sepolia.etherscan.io/tx/<hash>`; chain id `8453` → `https://basescan.org/tx/<hash>`.
+- Do not invent URLs, symbols, or transaction hashes — use the values actually saved to `shared_cache` during this run.
 
 ## Phase 6: NFT Transfer and Co-Ownership
 
