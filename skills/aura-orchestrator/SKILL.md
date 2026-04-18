@@ -7,6 +7,7 @@ env_vars:
   - IPNFT_CONTRACT_ADDRESS
   - X402_GATEWAY_URL
   - EVM_WALLET_ADDRESS
+  - CHAIN_ID
   - PRIVY_APP_ID
   - PRIVY_APP_SECRET
   - PRIVY_WALLET_ID
@@ -85,7 +86,7 @@ http_request:
   auth_basic_user_env: PRIVY_APP_ID
   auth_basic_pass_env: PRIVY_APP_SECRET
   headers: {"privy-app-id": "$PRIVY_APP_ID", "Content-Type": "application/json"}
-  body: {"version": "1.0", "name": "DeSci agent policy", "chain_type": "ethereum", "rules": [{"name": "Sepolia only", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "chain_id", "operator": "eq", "value": "11155111"}], "action": "ALLOW"}, {"name": "Max 0.01 ETH per tx", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "10000000000000000"}], "action": "ALLOW"}]}
+  body: {"version": "1.0", "name": "DeSci agent policy", "chain_type": "ethereum", "rules": [{"name": "Single chain only", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "chain_id", "operator": "eq", "value": "$CHAIN_ID"}], "action": "ALLOW"}, {"name": "Max 0.07 ETH per tx", "method": "eth_sendTransaction", "conditions": [{"field_source": "ethereum_transaction", "field": "value", "operator": "lte", "value": "10000000000000000"}], "action": "ALLOW"}]}
   return_body: true
 ```
 
@@ -169,7 +170,7 @@ Proceed immediately to Phase 2 — the merkle root is already in the POI respons
 sign_and_send_transaction:
   to: <poi_to>
   data: <poi_data>
-  chain_id: 11155111
+  chain_id: $CHAIN_ID
 ```
 
 Save `tx_hash` as `poi_tx_hash`.
@@ -222,9 +223,9 @@ http_request:
   },
   "connectedWalletAddress": "<wallet_address>",
   "agreementType": "POI_ASSIGNMENT",
-  "chainId": 11155111,
+  "chainId": $CHAIN_ID,
   "ipnftId": "<reservationId as decimal string>",
-  "poiLocation": {"chainId": 11155111, "transactionHash": "<poi_tx_hash>"},
+  "poiLocation": {"chainId": $CHAIN_ID, "transactionHash": "<poi_tx_hash>"},
   "merkleRootHash": "<merkle_root>"
 }
 ```
@@ -296,7 +297,7 @@ http_request:
   url: $MOLECULE_LABS_URL
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
-  body: {"query": "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }", "variables": {"metadataCid": "<metadataCid from step 5>", "minter": "<wallet_address>", "chainId": 11155111}}
+  body: {"query": "query GetTermsMessage($metadataCid: String!, $minter: String!, $chainId: Int!) { getTermsMessage(metadataCid: $metadataCid, minter: $minter, chainId: $chainId) { message digest isSuccess error { message code retryable } } }", "variables": {"metadataCid": "<metadataCid from step 5>", "minter": "<wallet_address>", "chainId": $CHAIN_ID}}
   return_body: true
 ```
 
@@ -318,7 +319,7 @@ http_request:
   url: $MOLECULE_LABS_URL
   method: POST
   headers: {"x-api-key": "$MOLECULE_API_KEY", "Content-Type": "application/json"}
-  body: {"query": "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }", "variables": {"ipnftId": "<reservationId>", "tokenURI": "ipfs://<metadataCid>", "chainId": 11155111, "minter": "<wallet_address>", "to": "<wallet_address>", "termsSignature": "<signature from step 7>"}}
+  body: {"query": "mutation SignoffMetadata($ipnftId: String!, $tokenURI: String!, $chainId: Int!, $minter: String!, $to: String!, $termsSignature: String!) { signoffMetadata(ipnftId: $ipnftId, tokenURI: $tokenURI, chainId: $chainId, minter: $minter, to: $to, termsSignature: $termsSignature) { authorization isSuccess error { message code retryable } } }", "variables": {"ipnftId": "<reservationId>", "tokenURI": "ipfs://<metadataCid>", "chainId": $CHAIN_ID, "minter": "<wallet_address>", "to": "<wallet_address>", "termsSignature": "<signature from step 7>"}}
   return_body: true
 ```
 
@@ -346,7 +347,7 @@ sign_and_send_transaction:
   to: $IPNFT_CONTRACT_ADDRESS
   data: <calldata from step 9>
   value: 1000000000000000
-  chain_id: 11155111
+  chain_id: $CHAIN_ID
 ```
 
 The mint fee is 0.001 ETH (1000000000000000 wei).
@@ -561,7 +562,7 @@ Save `calldata`.
 sign_and_send_transaction:
   to: $IPNFT_CONTRACT_ADDRESS
   data: <calldata from step B>
-  chain_id: 11155111
+  chain_id: $CHAIN_ID
 ```
 
 Save `transfer_tx_hash`.

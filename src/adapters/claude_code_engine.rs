@@ -285,7 +285,7 @@ fn process_ndjson_line(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
 
-            debug!(
+            tracing::info!(
                 subtype = subtype,
                 cost_usd = cost,
                 num_turns = turns,

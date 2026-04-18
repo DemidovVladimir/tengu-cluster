@@ -12,8 +12,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const PRIVY_API_URL: &str = "https://api.privy.io";
-pub(crate) const DEFAULT_CHAIN_ID: u64 = 11155111;
-pub(crate) const DEFAULT_SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+pub(crate) const DEFAULT_CHAIN_ID: u64 = 1;
+pub(crate) const DEFAULT_FALLBACK_RPC: &str = "https://ethereum-rpc.publicnode.com";
+
+/// Resolve chain id from `CHAIN_ID` env var when the caller omits it.
+/// Falls back to `DEFAULT_CHAIN_ID` when the env var is unset or unparseable.
+pub(crate) fn resolve_default_chain_id() -> u64 {
+    std::env::var("CHAIN_ID")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CHAIN_ID)
+}
 
 /// Canonical wallet label used for scope checks during the migration window.
 /// Until per-agent wallet allow-lists land in Phase B, all crypto tools share
@@ -151,7 +160,7 @@ pub(crate) async fn wait_for_receipt(
     tx_hash: &str,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<serde_json::Value> {
-    let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_SEPOLIA_RPC.to_string());
+    let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_FALLBACK_RPC.to_string());
 
     for _ in 0..90 {
         if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {

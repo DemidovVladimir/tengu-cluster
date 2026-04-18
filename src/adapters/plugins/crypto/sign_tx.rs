@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::adapters::plugins::crypto::helpers::{
-    privy_send_transaction, wait_for_receipt, DEFAULT_CHAIN_ID, DEFAULT_WALLET_LABEL,
+    privy_send_transaction, resolve_default_chain_id, wait_for_receipt, DEFAULT_WALLET_LABEL,
 };
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
@@ -44,7 +44,7 @@ impl SignAndSendTransactionTool {
                         },
                         "chain_id": {
                             "type": "integer",
-                            "description": "Chain ID (default: 11155111 = Sepolia)"
+                            "description": "EVM chain ID. Pass the chain ID defined by the calling skill or workflow; do not substitute a different value."
                         },
                         "wait_for_receipt": {
                             "type": "boolean",
@@ -74,10 +74,18 @@ impl Tool for SignAndSendTransactionTool {
             .ok_or_else(|| anyhow!("sign_and_send_transaction: missing 'to'"))?;
         let data = args.get("data").and_then(|v| v.as_str());
         let value = args.get("value").and_then(|v| v.as_str());
-        let chain_id = args
-            .get("chain_id")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_CHAIN_ID);
+        let expected_chain_id = resolve_default_chain_id();
+        let chain_id = match args.get("chain_id").and_then(|v| v.as_u64()) {
+            Some(given) if given != expected_chain_id => {
+                return Err(anyhow!(
+                    "chain_id mismatch: tool received {given} but this platform is configured for chain_id {expected_chain_id} (from CHAIN_ID env). \
+                    Retry with chain_id: {expected_chain_id}. \
+                    Do NOT pass 11155111 (Sepolia) or any other hard-coded chain — always use the platform chain_id."
+                ));
+            }
+            Some(given) => given,
+            None => expected_chain_id,
+        };
         let wait = args
             .get("wait_for_receipt")
             .and_then(|v| v.as_bool())

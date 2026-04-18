@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
             .compact()
             .with_writer(std::io::stderr)
             .init();
-        return adapters::mcp_bridge::run_mcp_bridge();
+        return adapters::mcp_bridge::run_mcp_bridge().await;
     }
 
     let tengu_home = resolve_tengu_home();
@@ -288,7 +288,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::McpBridge => {
-            adapters::mcp_bridge::run_mcp_bridge()
+            adapters::mcp_bridge::run_mcp_bridge().await
         }
         Commands::Secret { action } => {
             let path = secret_builder::secrets_file_path(&resolve_tengu_home());

@@ -8,13 +8,14 @@
 //! Protocol: JSON-RPC 2.0 over stdin/stdout (newline-delimited).
 
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tracing::{info, warn};
 
 use crate::adapters::config::Config;
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
@@ -117,8 +118,10 @@ impl ToolActivityPort for BridgeActivity {
 // Bridge entry point
 // ---------------------------------------------------------------------------
 
-/// Run the MCP bridge stdio server. Blocks until stdin closes.
-pub fn run_mcp_bridge() -> Result<()> {
+/// Run the MCP bridge stdio server. Uses the ambient tokio runtime (the bridge
+/// subprocess is launched from within Tengu's `#[tokio::main]`, so creating a
+/// second runtime here would panic). Returns when stdin closes.
+pub async fn run_mcp_bridge() -> Result<()> {
     let workspace = std::env::var("TENGU_BRIDGE_WORKSPACE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
@@ -134,15 +137,7 @@ pub fn run_mcp_bridge() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_MCP_RESULT_CHARS);
 
-    // Single-threaded tokio runtime — sufficient for the bridge process which
-    // serialises stdin/stdout requests anyway. `block_on` at each call site is
-    // safe because we control the outer loop.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| anyhow::anyhow!("failed to build bridge tokio runtime: {}", e))?;
-
-    let executor = rt.block_on(build_bridge_executor(&workspace, &tools))?;
+    let executor = build_bridge_executor(&workspace, &tools).await?;
     let mcp_tools: Vec<McpToolDef> = tools.iter().map(McpToolDef::from).collect();
 
     info!(
@@ -151,15 +146,13 @@ pub fn run_mcp_bridge() -> Result<()> {
         "MCP bridge started"
     );
 
-    let stdin = io::stdin();
+    let mut reader = BufReader::new(tokio::io::stdin()).lines();
     let stdout = io::stdout();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) if l.trim().is_empty() => continue,
-            Ok(l) => l,
-            Err(_) => break,
-        };
+    while let Some(line) = reader.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
 
         let request: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
@@ -191,7 +184,9 @@ pub fn run_mcp_bridge() -> Result<()> {
             "initialize" => handle_initialize(id),
             "notifications/initialized" => continue, // notification, no response
             "tools/list" => handle_tools_list(id, &mcp_tools),
-            "tools/call" => handle_tools_call(id, &request.params, &executor, max_result_chars, &rt),
+            "tools/call" => {
+                handle_tools_call(id, &request.params, &executor, max_result_chars).await
+            }
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
             _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
         };
@@ -233,12 +228,11 @@ fn handle_tools_list(id: serde_json::Value, tools: &[McpToolDef]) -> JsonRpcResp
     JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
 }
 
-fn handle_tools_call(
+async fn handle_tools_call(
     id: serde_json::Value,
     params: &serde_json::Value,
     executor: &PluginToolExecutor,
     max_result_chars: usize,
-    rt: &tokio::runtime::Runtime,
 ) -> JsonRpcResponse {
     let tool_name = params
         .get("name")
@@ -264,10 +258,10 @@ fn handle_tools_call(
         "MCP tool call started"
     );
 
-    match rt.block_on(executor.execute(&call)) {
+    match executor.execute(&call).await {
         Ok(result) => {
             let truncated = truncate_mcp_result(&result, max_result_chars);
-            debug!(
+            info!(
                 tool = %call.name,
                 elapsed_ms = started_at.elapsed().as_millis(),
                 result_len = result.len(),
