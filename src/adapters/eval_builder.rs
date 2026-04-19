@@ -102,7 +102,7 @@ pub fn parse_markdown_prompts(body: &str) -> Result<Vec<PromptRow>> {
             id,
             prompt: prompt_cell.to_string(),
             expected: expected_cell.to_string(),
-            timeout_secs: 120,
+            timeout_secs: default_timeout_secs(),
             stubs: Vec::new(),
         });
     }
