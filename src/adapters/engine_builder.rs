@@ -20,42 +20,6 @@ use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 // Factory — build engines from config
 // ---------------------------------------------------------------------------
 
-/// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
-pub(crate) fn build_planner_engine(
-    engine_type: &str,
-    model: &str,
-    claude_code_config: Option<&crate::adapters::config::ClaudeCodeConfig>,
-) -> Result<Box<dyn Engine>> {
-    match engine_type {
-        "claude_code" => {
-            #[cfg(feature = "claude_code")]
-            {
-                let cc = claude_code_config
-                    .cloned()
-                    .unwrap_or_default();
-                let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
-                Ok(Box::new(
-                    crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
-                        std::path::PathBuf::from(&cc.cli_path),
-                        crate::adapters::claude_code_engine::BuiltinToolsProfile::ReadOnly,
-                        model_opt,
-                        cc.timeout_secs,
-                    ),
-                ))
-            }
-            #[cfg(not(feature = "claude_code"))]
-            {
-                let _ = (model, claude_code_config);
-                anyhow::bail!("claude_code engine requires --features claude_code")
-            }
-        }
-        _ => {
-            let defaults = crate::adapters::config::LimitsConfig::default();
-            build_openrouter_engine(model, defaults.context_window as usize)
-        }
-    }
-}
-
 /// Build configured engine instance for one agent.
 pub(crate) fn build_engine(
     _agent_id: &str,

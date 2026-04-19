@@ -102,8 +102,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [orchestrator]
 # enabled = true
 # max_retries = 0
-# planner_engine = "openrouter"         # Dedicated engine for task planning/classification
-# planner_model = "google/gemini-2.5-flash"  # Cheaper/faster model for planning (default: uses default agent's model)
+# max_concurrent = 4   # Bounds concurrent subagents spawned via sessions_spawn / sessions_fan_out
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.

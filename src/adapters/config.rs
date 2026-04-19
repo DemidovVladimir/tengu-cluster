@@ -428,8 +428,6 @@ pub struct OrchestratorConfig {
     /// bound `sessions_spawn` / `sessions_fan_out`.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
-    pub planner_engine: Option<String>,
-    pub planner_model: Option<String>,
 }
 
 impl Default for OrchestratorConfig {
@@ -438,8 +436,6 @@ impl Default for OrchestratorConfig {
             enabled: default_orchestrator_enabled(),
             max_retries: default_max_retries(),
             max_concurrent: default_max_concurrent(),
-            planner_engine: None,
-            planner_model: None,
         }
     }
 }
