@@ -552,19 +552,49 @@ pub fn parse_verdict(raw: &str) -> anyhow::Result<Verdict> {
         verdict: String,
         rationale: String,
     }
-    match serde_json::from_str::<Raw>(raw) {
-        Ok(r) if r.verdict == "pass" || r.verdict == "fail" => Ok(Verdict {
-            verdict: r.verdict,
-            rationale: r.rationale,
-        }),
-        _ => {
-            let preview: String = raw.chars().take(200).collect();
-            Ok(Verdict {
-                verdict: "fail".into(),
-                rationale: format!("judge emitted malformed output: {}", preview),
+    fn try_parse(s: &str) -> Option<Verdict> {
+        let r: Raw = serde_json::from_str(s).ok()?;
+        if r.verdict == "pass" || r.verdict == "fail" {
+            Some(Verdict {
+                verdict: r.verdict,
+                rationale: r.rationale,
             })
+        } else {
+            None
         }
     }
+
+    // 1. Try the raw string as-is.
+    let trimmed = raw.trim();
+    if let Some(v) = try_parse(trimmed) {
+        return Ok(v);
+    }
+
+    // 2. Strip markdown code fences (```json ... ``` or ``` ... ```).
+    let stripped = trimmed
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let Some(v) = try_parse(stripped) {
+        return Ok(v);
+    }
+
+    // 3. Extract the first balanced `{...}` substring and parse that.
+    if let (Some(start), Some(end)) = (stripped.find('{'), stripped.rfind('}')) {
+        if start < end {
+            if let Some(v) = try_parse(&stripped[start..=end]) {
+                return Ok(v);
+            }
+        }
+    }
+
+    // 4. Give up. Diagnostic fail with preview of the original output.
+    let preview: String = raw.chars().take(200).collect();
+    Ok(Verdict {
+        verdict: "fail".into(),
+        rationale: format!("judge emitted malformed output: {}", preview),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -583,19 +613,12 @@ Input shape:
 
 Decide: did the agent's behaviour match the expected behaviour?
 
-Reply with strict JSON only, on a single line:
-{"verdict": "pass" | "fail", "rationale": "<one sentence>"}
+Reply with strict JSON only. Use this exact shape:
+{"verdict": "pass", "rationale": "<one short sentence>"}
+or
+{"verdict": "fail", "rationale": "<one short sentence>"}
 
-No prose, no markdown, no code fences. Just the JSON object."#;
-
-/// Prefill applied to the judge's assistant turn to force the reply to
-/// start with the JSON opening. NOTE: `judge_row` ASSUMES the underlying
-/// engine honours the prefill by continuing from this prefix rather than
-/// echoing it back in the TextDelta stream. Engines that echo the prefix
-/// will produce malformed JSON (e.g. `{"verdict":{"verdict": …}`), which
-/// `parse_verdict` will score as a diagnostic `fail`. Verify with any new
-/// engine that it does not echo prefilled content.
-const JUDGE_PREFILL: &str = r#"{"verdict":"#;
+Output only the JSON object. No prose, no markdown, no code fences, no preamble. `verdict` must be exactly "pass" or "fail" — nothing else."#;
 
 #[derive(Debug, Clone)]
 pub struct Observation {
@@ -640,6 +663,12 @@ pub async fn judge_row(
     observations: &[Observation],
     final_text: &str,
 ) -> anyhow::Result<JudgeOutcome> {
+    // NOTE: We used to prefill an Assistant message with `{"verdict":` to force
+    // JSON start, but OpenRouter's Anthropic provider rejects that ("The
+    // conversation must end with a user message."). `parse_verdict` is now
+    // robust to wrapped/fenced output, which removes the need for the prefill
+    // at the cost of occasionally paying a few tokens for prose the model
+    // emits before the JSON object.
     let messages = vec![
         Message {
             role: Role::System,
@@ -653,13 +682,6 @@ pub async fn judge_row(
             tool_call_id: None,
             tool_calls: None,
         },
-        // Prefill the assistant turn with an opening brace to force JSON start.
-        Message {
-            role: Role::Assistant,
-            content: JUDGE_PREFILL.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        },
     ];
     let ctx = EngineContext {
         workspace: None,
@@ -669,7 +691,7 @@ pub async fn judge_row(
         max_mcp_result_chars: None,
     };
     let mut stream = judge.run(&messages, &[], &ctx).await?;
-    let mut output = String::from(JUDGE_PREFILL);
+    let mut output = String::new();
     let mut input_tokens = 0u32;
     let mut output_tokens = 0u32;
     while let Some(ev) = stream.next().await {
@@ -1574,6 +1596,22 @@ workspace = "{TMP_WORKSPACE}"
         let v = parse_verdict(r#"{"verdict":"maybe","rationale":"unsure"}"#).unwrap();
         assert_eq!(v.verdict, "fail");
         assert!(v.rationale.contains("judge emitted malformed output"));
+    }
+
+    #[test]
+    fn verdict_extracts_json_from_code_fence() {
+        let raw = "```json\n{\"verdict\":\"pass\",\"rationale\":\"all good\"}\n```";
+        let v = parse_verdict(raw).unwrap();
+        assert_eq!(v.verdict, "pass");
+        assert_eq!(v.rationale, "all good");
+    }
+
+    #[test]
+    fn verdict_extracts_json_from_surrounding_prose() {
+        let raw = "The verdict is: {\"verdict\":\"fail\",\"rationale\":\"missed step\"} as shown above.";
+        let v = parse_verdict(raw).unwrap();
+        assert_eq!(v.verdict, "fail");
+        assert_eq!(v.rationale, "missed step");
     }
 
     #[tokio::test]
