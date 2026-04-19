@@ -280,6 +280,56 @@ pub fn discover_skills(
 
 use crate::adapters::config::Config;
 
+// ---------------------------------------------------------------------------
+// StubbedExecutor — wraps any ToolExecutor with per-tool response queues
+// ---------------------------------------------------------------------------
+
+use async_trait::async_trait;
+use crate::adapters::engine_builder::ToolExecutor;
+use crate::adapters::types::ToolCall;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Mutex;
+
+pub struct StubbedExecutor<'a> {
+    inner: &'a dyn ToolExecutor,
+    queues: Mutex<HashMap<String, VecDeque<serde_json::Value>>>,
+}
+
+impl<'a> StubbedExecutor<'a> {
+    pub fn new(inner: &'a dyn ToolExecutor, stubs: &[StubSpec]) -> Self {
+        let mut queues: HashMap<String, VecDeque<serde_json::Value>> = HashMap::new();
+        for spec in stubs {
+            queues
+                .entry(spec.tool.clone())
+                .or_default()
+                .extend(spec.responses.iter().cloned());
+        }
+        Self {
+            inner,
+            queues: Mutex::new(queues),
+        }
+    }
+}
+
+#[async_trait]
+impl<'a> ToolExecutor for StubbedExecutor<'a> {
+    async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+        {
+            let mut guard = self.queues.lock().unwrap();
+            if let Some(q) = guard.get_mut(&call.name) {
+                let response = if q.len() > 1 {
+                    q.pop_front().unwrap()
+                } else {
+                    // Last entry repeats forever once we stop popping.
+                    q.front().cloned().unwrap_or_else(|| serde_json::json!(null))
+                };
+                return Ok(serde_json::to_string(&response)?);
+            }
+        }
+        self.inner.execute(call).await
+    }
+}
+
 pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Config> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
@@ -303,6 +353,34 @@ pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Con
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------------------------------------------------------------------------
+    // Shared test helpers (used by stubbed_executor_* tests)
+    // ---------------------------------------------------------------------------
+
+    use async_trait::async_trait;
+    use crate::adapters::engine_builder::ToolExecutor;
+    use crate::adapters::types::ToolCall;
+
+    struct CountingExecutor {
+        counter: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for CountingExecutor {
+        async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+            self.counter.lock().unwrap().push(call.name.clone());
+            Ok(format!("live-result-for-{}", call.name))
+        }
+    }
+
+    fn make_call(name: &str) -> ToolCall {
+        ToolCall {
+            id: format!("id-{}", name),
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        }
+    }
 
     #[test]
     fn markdown_parses_well_formed_table() {
@@ -548,5 +626,45 @@ workspace = "{TMP_WORKSPACE}"
             "got: {}",
             err
         );
+    }
+
+    #[tokio::test]
+    async fn stubbed_executor_consumes_queue_then_repeats_last() {
+        let inner = CountingExecutor {
+            counter: std::sync::Mutex::new(Vec::new()),
+        };
+        let stubs = vec![StubSpec {
+            tool: "http_request".into(),
+            responses: vec![
+                serde_json::json!({"status": 503}),
+                serde_json::json!({"status": 200}),
+            ],
+        }];
+        let stubbed = StubbedExecutor::new(&inner, &stubs);
+
+        let r1 = stubbed.execute(&make_call("http_request")).await.unwrap();
+        let r2 = stubbed.execute(&make_call("http_request")).await.unwrap();
+        let r3 = stubbed.execute(&make_call("http_request")).await.unwrap();
+
+        assert!(r1.contains("503"));
+        assert!(r2.contains("200"));
+        assert!(r3.contains("200")); // last entry repeats
+        assert!(
+            inner.counter.lock().unwrap().is_empty(),
+            "stubbed calls should not reach inner executor"
+        );
+    }
+
+    #[tokio::test]
+    async fn stubbed_executor_delegates_unstubbed_tools() {
+        let inner = CountingExecutor {
+            counter: std::sync::Mutex::new(Vec::new()),
+        };
+        let stubs: Vec<StubSpec> = vec![];
+        let stubbed = StubbedExecutor::new(&inner, &stubs);
+
+        let r = stubbed.execute(&make_call("sessions_spawn")).await.unwrap();
+        assert_eq!(r, "live-result-for-sessions_spawn");
+        assert_eq!(inner.counter.lock().unwrap().as_slice(), &["sessions_spawn"]);
     }
 }
