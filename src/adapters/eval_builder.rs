@@ -63,19 +63,37 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
             }
         };
 
+    let sandbox_config = args
+        .sandbox
+        .as_ref()
+        .map(|name| PathBuf::from("sandboxes").join(name).join("config.toml"));
+    if let Some(ref p) = sandbox_config {
+        if !p.exists() {
+            eprintln!("Error: sandbox config not found: {}", p.display());
+            return Ok(2);
+        }
+    }
+
     let mut skill_reports = Vec::new();
     let mut runner_exit = 0i32;
     for skill in &skills {
-        // Row-level errors from run_skill/run_row still bubble up via ? and exit 1.
-        let report = run_skill(
+        let report = match run_skill(
             skill,
             &*judge,
             &out_dir,
             args.filter.as_deref(),
             args.concurrency,
             args.keep_workspace,
+            sandbox_config.as_deref(),
         )
-        .await?;
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error running skill '{}': {}", skill.name, e);
+                return Ok(2);
+            }
+        };
         if report.rows.iter().any(|r| r.verdict != "pass") {
             runner_exit = 1;
         }
@@ -704,6 +722,7 @@ pub struct RowCtx<'a> {
     pub judge: &'a dyn Engine,
     pub out_dir: &'a Path,
     pub keep_workspace: bool,
+    pub config_path_override: Option<&'a Path>,
 }
 
 // Minimal ToolActivityPort for eval runs — no UI, no logging.
@@ -848,6 +867,7 @@ pub async fn run_skill(
     filter: Option<&str>,
     concurrency: usize,
     keep_workspace: bool,
+    sandbox_config: Option<&Path>,
 ) -> anyhow::Result<SkillReport> {
     let skill_started = Instant::now();
     let prompts_body = std::fs::read_to_string(&skill.prompts_path)
@@ -864,7 +884,8 @@ pub async fn run_skill(
 
     // Load config once to grab agent metadata (engine, model) for report header.
     let dummy_ws = std::env::temp_dir();
-    let cfg_probe = load_eval_config(&skill.config_path, &dummy_ws)?;
+    let probe_path = sandbox_config.unwrap_or(&skill.config_path);
+    let cfg_probe = load_eval_config(probe_path, &dummy_ws)?;
     let agent = cfg_probe
         .agents
         .values()
@@ -887,15 +908,22 @@ pub async fn run_skill(
             judge,
             out_dir,
             keep_workspace,
+            config_path_override: sandbox_config,
         })
         .await?;
         row_results.push(rr);
     }
 
+    let config_source = if sandbox_config.is_some() {
+        "sandbox".to_string()
+    } else {
+        "skill-local".to_string()
+    };
+
     Ok(SkillReport {
         skill: skill.name.clone(),
         tier: skill.tier.label().to_string(),
-        config_source: "skill-local".into(),
+        config_source,
         engine: engine_id,
         agent_model,
         prompts_format: skill.prompts_format.clone(),
@@ -914,7 +942,8 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let ws_path = ws.path().to_path_buf();
 
     // 2. Load the eval config with this workspace substituted.
-    let cfg = load_eval_config(&ctx.skill.config_path, &ws_path)?;
+    let config_path = ctx.config_path_override.unwrap_or(&ctx.skill.config_path);
+    let cfg = load_eval_config(config_path, &ws_path)?;
     let agent: &AgentConfig = cfg
         .agents
         .values()
@@ -1515,6 +1544,24 @@ workspace = "{TMP_WORKSPACE}"
         let v = parse_verdict(r#"{"verdict":"maybe","rationale":"unsure"}"#).unwrap();
         assert_eq!(v.verdict, "fail");
         assert!(v.rationale.contains("judge emitted malformed output"));
+    }
+
+    #[tokio::test]
+    async fn run_returns_2_when_sandbox_path_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let args = EvalArgs {
+            skills: vec!["orchestration".to_string()],
+            sandbox: Some("does-not-exist".to_string()),
+            judge_model: None,
+            concurrency: 1,
+            format: OutputFormat::Table,
+            out_dir: Some(tmp.path().to_path_buf()),
+            filter: None,
+            keep_workspace: false,
+        };
+        std::env::set_var("OPENROUTER_API_KEY", "sk-test-not-used");
+        let exit = run(args).await.unwrap();
+        assert_eq!(exit, 2, "missing sandbox config must exit 2");
     }
 
     #[tokio::test]
