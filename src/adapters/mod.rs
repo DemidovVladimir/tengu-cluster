@@ -23,6 +23,7 @@ pub(crate) mod claude_code_engine;
 pub(crate) mod channel_runtime;
 pub(crate) mod embedding;
 pub(crate) mod engine_builder;
+pub(crate) mod eval_builder;
 pub(crate) mod mcp_bridge;
 pub(crate) mod orchestrator;
 pub(crate) mod plugins;
