@@ -1,0 +1,22 @@
+# Canonical eval config for the orchestration skill.
+# Consumed by `tengu eval orchestration` (docs/superpowers/specs/2026-04-19-eval-runner-design.md).
+
+runtime_profile = "cloud"
+
+[memory]
+enabled = true
+
+[orchestrator]
+enabled = true          # registers sessions_spawn / sessions_fan_out
+max_concurrent = 3
+
+[agents.main]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+default = true
+workspace = "{TMP_WORKSPACE}"
+skill_packages = ["orchestration"]
+
+[agents.main.limits]
+max_tool_rounds = 10
+stream_event_timeout_secs = 60

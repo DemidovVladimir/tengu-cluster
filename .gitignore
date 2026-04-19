@@ -9,3 +9,6 @@ secrets.env
 .tengu-attachments
 /hypothesis
 lastrun.md
+
+# Eval runner outputs — runs accumulate and are not source-controlled.
+evals/runs/
