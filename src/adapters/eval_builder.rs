@@ -240,9 +240,6 @@ pub fn discover_skills(
             if !filter.is_empty() && !filter.iter().any(|s| s == &name) {
                 continue;
             }
-            if !seen.insert(name.clone()) {
-                continue;
-            }
             let evals_dir = entry.path().join("evals");
             if !evals_dir.exists() {
                 continue;
@@ -256,6 +253,10 @@ pub fn discover_skills(
             } else {
                 continue;
             };
+            // Dedup happens last, once we know this directory is a real evaluable skill.
+            if !seen.insert(name.clone()) {
+                continue;
+            }
             let config_path = evals_dir.join("config.toml");
             out.push(SkillUnderTest {
                 name,
@@ -437,5 +438,25 @@ mod tests {
         let skills = discover_skills(&["beta".to_string()], &[tmp.path().join("skills")]).unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "beta");
+    }
+
+    #[test]
+    fn discover_does_not_shadow_lower_tier_when_higher_tier_lacks_evals() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let higher = tmp.path().join("higher");
+        let lower = tmp.path().join("lower");
+
+        // Higher tier: a skill directory named "demo" but WITHOUT an evals/ folder.
+        std::fs::create_dir_all(higher.join("demo")).unwrap();
+
+        // Lower tier: "demo" with a valid evals/ folder.
+        let lower_evals = lower.join("demo").join("evals");
+        std::fs::create_dir_all(&lower_evals).unwrap();
+        std::fs::write(lower_evals.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n").unwrap();
+        std::fs::write(lower_evals.join("config.toml"), "").unwrap();
+
+        let skills = discover_skills(&[], &[higher.clone(), lower.clone()]).unwrap();
+        assert_eq!(skills.len(), 1, "expected lower tier's demo to be discovered");
+        assert!(skills[0].evals_dir.starts_with(&lower), "expected lower tier, got {:?}", skills[0].evals_dir);
     }
 }
