@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct EvalArgs {
@@ -166,6 +166,117 @@ pub fn parse_yaml_prompts(body: &str) -> Result<Vec<PromptRow>> {
     Ok(rows)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillTier {
+    Managed,
+    Workspace,
+    Project,
+}
+
+impl SkillTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            SkillTier::Managed => "managed",
+            SkillTier::Workspace => "workspace",
+            SkillTier::Project => "project",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillUnderTest {
+    pub name: String,
+    pub tier: SkillTier,
+    pub evals_dir: PathBuf,
+    pub prompts_path: PathBuf,
+    pub prompts_format: String, // "markdown" or "yaml"
+    pub config_path: PathBuf,
+}
+
+pub fn default_skill_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs_next::home_dir() {
+        roots.push(home.join(".tengu").join("skills"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd.join(".tengu").join("skills"));
+        roots.push(cwd.join("skills"));
+    }
+    roots
+}
+
+fn tier_for_root(root: &Path) -> SkillTier {
+    if let Some(home) = dirs_next::home_dir() {
+        if root.starts_with(home.join(".tengu").join("skills")) {
+            return SkillTier::Managed;
+        }
+    }
+    let s = root.to_string_lossy();
+    if s.ends_with("/.tengu/skills") || s.contains("/.tengu/skills/") {
+        return SkillTier::Workspace;
+    }
+    SkillTier::Project
+}
+
+pub fn discover_skills(
+    filter: &[String],
+    roots: &[PathBuf],
+) -> anyhow::Result<Vec<SkillUnderTest>> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new(); // dedup by name; first tier wins
+    for root in roots {
+        if !root.exists() {
+            continue;
+        }
+        let tier = tier_for_root(root);
+        for entry in std::fs::read_dir(root)
+            .with_context(|| format!("read_dir {}", root.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !filter.is_empty() && !filter.iter().any(|s| s == &name) {
+                continue;
+            }
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let evals_dir = entry.path().join("evals");
+            if !evals_dir.exists() {
+                continue;
+            }
+            let yaml = evals_dir.join("prompts.yaml");
+            let md = evals_dir.join("prompts.md");
+            let (prompts_path, fmt) = if yaml.exists() {
+                (yaml, "yaml")
+            } else if md.exists() {
+                (md, "markdown")
+            } else {
+                continue;
+            };
+            let config_path = evals_dir.join("config.toml");
+            out.push(SkillUnderTest {
+                name,
+                tier,
+                evals_dir: evals_dir.clone(),
+                prompts_path,
+                prompts_format: fmt.to_string(),
+                config_path,
+            });
+        }
+    }
+    if !filter.is_empty() {
+        for wanted in filter {
+            if !out.iter().any(|s| &s.name == wanted) {
+                anyhow::bail!("skill '{}' has no evals/prompts.{{md,yaml}}", wanted);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +393,49 @@ mod tests {
 "#;
         let err = parse_yaml_prompts(body).unwrap_err();
         assert!(err.to_string().contains("duplicate row id"), "got: {}", err);
+    }
+
+    #[test]
+    fn discover_finds_skill_with_markdown_prompts() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let skill_dir = tmp.path().join("skills").join("demo").join("evals");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n").unwrap();
+        std::fs::write(skill_dir.join("config.toml"), "runtime_profile = \"cloud\"\n").unwrap();
+
+        let skills = discover_skills(&[], &[tmp.path().join("skills")]).expect("discover");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "demo");
+        assert_eq!(skills[0].tier, SkillTier::Project);
+        assert!(skills[0].prompts_path.ends_with("prompts.md"));
+        assert_eq!(skills[0].prompts_format, "markdown");
+    }
+
+    #[test]
+    fn discover_prefers_yaml_when_both_exist() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let skill_dir = tmp.path().join("skills").join("demo").join("evals");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("prompts.md"), "").unwrap();
+        std::fs::write(skill_dir.join("prompts.yaml"), "[]").unwrap();
+        std::fs::write(skill_dir.join("config.toml"), "").unwrap();
+
+        let skills = discover_skills(&[], &[tmp.path().join("skills")]).unwrap();
+        assert_eq!(skills[0].prompts_format, "yaml");
+    }
+
+    #[test]
+    fn discover_filters_by_name() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        for name in ["alpha", "beta"] {
+            let evals = tmp.path().join("skills").join(name).join("evals");
+            std::fs::create_dir_all(&evals).unwrap();
+            std::fs::write(evals.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"x\" | y |\n").unwrap();
+            std::fs::write(evals.join("config.toml"), "").unwrap();
+        }
+
+        let skills = discover_skills(&["beta".to_string()], &[tmp.path().join("skills")]).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "beta");
     }
 }
