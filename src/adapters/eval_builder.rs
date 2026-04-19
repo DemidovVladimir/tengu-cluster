@@ -278,6 +278,28 @@ pub fn discover_skills(
     Ok(out)
 }
 
+use crate::adapters::config::Config;
+
+pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Config> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("read {}", path.display()))?;
+    let expanded = raw.replace("{TMP_WORKSPACE}", &tmp_workspace.to_string_lossy());
+    let cfg: Config = toml::from_str(&expanded)
+        .with_context(|| format!("parse {}", path.display()))?;
+
+    for (name, agent) in &cfg.agents {
+        if agent.engine == "claude_code" {
+            anyhow::bail!(
+                "agent '{}': claude_code engine not supported by eval runner in v1 \
+                 (spec §3 non-goal). Switch to engine = \"openrouter\" or pass --sandbox \
+                 with an openrouter config.",
+                name
+            );
+        }
+    }
+    Ok(cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +497,56 @@ mod tests {
         let root = std::path::PathBuf::from("/some/repo/skills");
         let tier = tier_for_root(&root);
         assert_eq!(tier, SkillTier::Project);
+    }
+
+    #[test]
+    fn eval_config_expands_tmp_workspace_placeholder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+runtime_profile = "cloud"
+
+[agents.main]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+default = true
+workspace = "{TMP_WORKSPACE}"
+skill_packages = ["orchestration"]
+"#,
+        )
+        .unwrap();
+
+        let ws = tmp.path().join("row-ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let cfg = load_eval_config(&config_path, &ws).expect("load");
+
+        let agent = cfg.agents.get("main").expect("main agent");
+        assert_eq!(agent.workspace.as_deref(), Some(ws.as_path()));
+    }
+
+    #[test]
+    fn eval_config_rejects_claude_code_engine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[agents.main]
+engine = "claude_code"
+model = "sonnet"
+default = true
+workspace = "{TMP_WORKSPACE}"
+"#,
+        )
+        .unwrap();
+
+        let err = load_eval_config(&config_path, tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("claude_code engine not supported"),
+            "got: {}",
+            err
+        );
     }
 }
