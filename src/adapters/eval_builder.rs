@@ -31,11 +31,19 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     let out_dir = args.out_dir.unwrap_or_else(|| {
         PathBuf::from("evals/runs").join(started_at.format("%Y-%m-%dT%H-%M-%SZ").to_string())
     });
-    std::fs::create_dir_all(&out_dir)
-        .with_context(|| format!("create out dir {}", out_dir.display()))?;
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        eprintln!("Error: create out dir {}: {}", out_dir.display(), e);
+        return Ok(2);
+    }
 
     let roots = default_skill_roots();
-    let skills = discover_skills(&args.skills, &roots)?;
+    let skills = match discover_skills(&args.skills, &roots) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return Ok(2);
+        }
+    };
     if skills.is_empty() {
         eprintln!("no skills with evals/ found in roots: {:?}", roots);
         return Ok(2);
@@ -46,16 +54,19 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     let judge_model = args
         .judge_model
         .unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
-    let judge_box = crate::adapters::engine_builder::build_openrouter_engine(
-        &judge_model,
-        64_000,
-    )
-    .context("build judge engine")?;
-    let judge: Arc<dyn crate::adapters::types::Engine> = Arc::from(judge_box);
+    let judge: Arc<dyn crate::adapters::types::Engine> =
+        match crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000) {
+            Ok(box_engine) => Arc::from(box_engine),
+            Err(e) => {
+                eprintln!("Error: build judge engine: {}", e);
+                return Ok(2);
+            }
+        };
 
     let mut skill_reports = Vec::new();
     let mut runner_exit = 0i32;
     for skill in &skills {
+        // Row-level errors from run_skill/run_row still bubble up via ? and exit 1.
         let report = run_skill(
             skill,
             &*judge,
@@ -115,8 +126,10 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     };
 
     let report_path = out_dir.join("report.json");
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)
-        .with_context(|| format!("write {}", report_path.display()))?;
+    if let Err(e) = std::fs::write(&report_path, serde_json::to_string_pretty(&report)?) {
+        eprintln!("Error: write {}: {}", report_path.display(), e);
+        return Ok(2);
+    }
 
     match args.format {
         OutputFormat::Table => print_table(&report),
@@ -1471,5 +1484,29 @@ workspace = "{TMP_WORKSPACE}"
         let v = parse_verdict(r#"{"verdict":"maybe","rationale":"unsure"}"#).unwrap();
         assert_eq!(v.verdict, "fail");
         assert!(v.rationale.contains("judge emitted malformed output"));
+    }
+
+    #[tokio::test]
+    async fn run_returns_2_when_filter_misses() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Pass a filter for a nonexistent skill so discover_skills errors
+        // out with "skill 'X' has no evals/prompts.{md,yaml}" before we ever
+        // reach judge construction. Runner-level error → exit 2.
+        let args = EvalArgs {
+            skills: vec!["does-not-exist".to_string()],
+            sandbox: None,
+            judge_model: None,
+            concurrency: 1,
+            format: OutputFormat::Table,
+            out_dir: Some(tmp.path().to_path_buf()),
+            filter: None,
+            keep_workspace: false,
+        };
+        // Defensive: set a fake key so that if execution ever did reach the
+        // judge builder, it would not fail with an env-var error for a
+        // different reason than what we're testing.
+        std::env::set_var("OPENROUTER_API_KEY", "sk-test-not-used");
+        let exit = run(args).await.unwrap();
+        assert_eq!(exit, 2, "expected exit 2 for filter miss (runner-level error)");
     }
 }
