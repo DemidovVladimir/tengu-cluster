@@ -77,6 +77,9 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     let mut skill_reports = Vec::new();
     let mut runner_exit = 0i32;
     for skill in &skills {
+        // Runner-level errors (config parse, engine build, judge network, etc.) → exit 2.
+        // Row-level timeouts produce a RowResult with timed_out=true and do NOT bubble
+        // through here — they still set runner_exit = 1 via the verdict check below.
         let report = match run_skill(
             skill,
             &*judge,
