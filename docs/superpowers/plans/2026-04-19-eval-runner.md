@@ -242,7 +242,7 @@ fn row_id_kebabs_truncates_collapses_dashes() {
     );
     assert_eq!(derive_row_id(""), "");
     let long = "a".repeat(80);
-    assert_eq!(derive_row_id(&long).len(), 40);
+    assert_eq!(derive_row_id(&long).len(), 64);
 }
 ```
 
@@ -302,7 +302,7 @@ pub fn derive_row_id(prompt: &str) -> String {
         s = s.replace("--", "-");
     }
     let trimmed = s.trim_matches('-');
-    trimmed.chars().take(40).collect()
+    trimmed.chars().take(64).collect()
 }
 
 pub fn parse_markdown_prompts(body: &str) -> anyhow::Result<Vec<PromptRow>> {

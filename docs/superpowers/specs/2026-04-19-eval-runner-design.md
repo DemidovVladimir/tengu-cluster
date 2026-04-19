@@ -124,7 +124,7 @@ Workspace handling:
 Parsing rules:
 
 - Exactly one markdown table with header row `| Prompt | Expected behaviour |` (case-insensitive match on the header cells).
-- Row id is derived by kebab-casing the first ~40 chars of the prompt (`research paper x then mint it as an ip token` → `research-paper-x-then-mint-it-as-an-ip-token`). Collisions are an error — rename the prompt or switch to YAML.
+- Row id is derived by kebab-casing the prompt (ASCII alphanumerics lowercased, everything else → `-`, consecutive dashes collapsed, leading/trailing dashes trimmed) and capped at 64 chars (`research paper x then mint it as an ip token` → `research-paper-x-then-mint-it-as-an-ip-token`, 44 chars, fits). Collisions are an error — rename the prompt or switch to YAML.
 - Quoted prompts: leading/trailing double quotes are stripped.
 - Backtick-wrapped identifiers in the expected column are retained verbatim (they carry meaning — `sessions_fan_out` is a tool name, not prose).
 - No stubs, no per-row timeout overrides. Markdown rows always run fully live.
