@@ -490,6 +490,417 @@ pub async fn judge_row(
     parse_verdict(&output)
 }
 
+// ---------------------------------------------------------------------------
+// Per-row driver
+// ---------------------------------------------------------------------------
+
+use crate::adapters::channel_runtime;
+use crate::adapters::config::AgentConfig;
+use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
+use crate::adapters::ports::ToolActivityPort;
+use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use std::sync::atomic::AtomicU32;
+use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenCount {
+    pub input: u32,
+    pub output: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ObservationJson {
+    pub seq: u32,
+    pub name: String,
+    pub args_preview: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RowResult {
+    pub id: String,
+    pub prompt: String,
+    pub expected: String,
+    pub verdict: String,
+    pub rationale: String,
+    pub observed_tools: Vec<ObservationJson>,
+    pub wall_ms: u64,
+    pub agent_tokens: TokenCount,
+    pub judge_tokens: TokenCount,
+    pub transcript_path: PathBuf,
+    pub timed_out: bool,
+    pub stubs_used: bool,
+}
+
+pub struct RowCtx<'a> {
+    pub skill: &'a SkillUnderTest,
+    pub row: &'a PromptRow,
+    pub judge: &'a dyn Engine,
+    pub out_dir: &'a Path,
+    pub keep_workspace: bool,
+}
+
+// Minimal ToolActivityPort for eval runs — no UI, no logging.
+struct NoopActivity;
+impl ToolActivityPort for NoopActivity {
+    fn publish_tool_activity(&self, _call: &ToolCall) {}
+}
+
+// Fallback executor when the agent has no workspace (which shouldn't happen in evals).
+struct NoopRuntimeToolExecutor;
+#[async_trait]
+impl crate::adapters::engine_builder::ToolExecutor for NoopRuntimeToolExecutor {
+    async fn execute(&self, _call: &ToolCall) -> anyhow::Result<String> {
+        anyhow::bail!("no-op executor: tool calls are not enabled in this run")
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
+}
+
+fn write_transcript(
+    out_path: &Path,
+    skill: &str,
+    row: &PromptRow,
+    agent_model: &str,
+    engine_id: &str,
+    workspace: &Path,
+    messages: &[Message],
+    tool_outcomes: &[(String, String)],
+    observations: &[Observation],
+    final_text: &str,
+    verdict: &Verdict,
+    judge_user_turn: &str,
+) -> anyhow::Result<()> {
+    use std::fmt::Write;
+    let mut body = String::new();
+    writeln!(body, "# {} / {}", skill, row.id)?;
+    writeln!(body)?;
+    writeln!(body, "## Config")?;
+    writeln!(
+        body,
+        "engine={}  model={}  workspace={}",
+        engine_id,
+        agent_model,
+        workspace.display()
+    )?;
+    writeln!(body)?;
+    writeln!(body, "## User prompt")?;
+    writeln!(body, "{}", row.prompt)?;
+    writeln!(body)?;
+    writeln!(body, "## Message log")?;
+    for (i, m) in messages.iter().enumerate() {
+        writeln!(body, "[turn {} — {:?}]", i + 1, m.role)?;
+        writeln!(body, "{}", m.content)?;
+        if let Some(calls) = &m.tool_calls {
+            for c in calls {
+                writeln!(
+                    body,
+                    "→ tool call: {}({})",
+                    c.name,
+                    truncate(&c.arguments.to_string(), 2048)
+                )?;
+            }
+        }
+    }
+    for (name, out) in tool_outcomes {
+        writeln!(body, "← tool result ({}): {}", name, truncate(out, 2048))?;
+    }
+    writeln!(body)?;
+    writeln!(body, "## Observations (judge input)")?;
+    for o in observations {
+        writeln!(body, "{}. {}({})", o.seq, o.name, o.args_preview)?;
+    }
+    writeln!(body)?;
+    writeln!(body, "## Final assistant text")?;
+    writeln!(body, "{}", final_text)?;
+    writeln!(body)?;
+    writeln!(body, "## Judge")?;
+    writeln!(body, "### Prompt")?;
+    writeln!(body, "{}", judge_user_turn)?;
+    writeln!(body, "### Verdict")?;
+    writeln!(body, "{}: {}", verdict.verdict, verdict.rationale)?;
+    std::fs::write(out_path, body)
+        .with_context(|| format!("write transcript {}", out_path.display()))?;
+    Ok(())
+}
+
+/// Run a single eval row through the agent + judge pipeline.
+pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
+    let started = Instant::now();
+
+    // 1. Fresh tmp workspace per row.
+    let ws = tempfile::tempdir_in(std::env::temp_dir())
+        .context("create per-row tmp workspace")?;
+    let ws_path = ws.path().to_path_buf();
+
+    // 2. Load the eval config with this workspace substituted.
+    let cfg = load_eval_config(&ctx.skill.config_path, &ws_path)?;
+    let agent: &AgentConfig = cfg
+        .agents
+        .values()
+        .find(|a| a.default)
+        .or_else(|| cfg.agents.values().next())
+        .ok_or_else(|| anyhow::anyhow!("eval config has no agent defined"))?;
+
+    // 3. Build the engine.
+    let agent_id = cfg
+        .agents
+        .iter()
+        .find(|(_, v)| std::ptr::eq(*v, agent))
+        .map(|(k, _)| k.as_str())
+        .unwrap_or("default");
+    let engine_box =
+        crate::adapters::engine_builder::build_engine(agent_id, agent, cfg.claude_code.as_ref())?;
+    let engine: Arc<dyn Engine> = Arc::from(engine_box);
+
+    // 4. Build tool executor using the orchestrator.rs pattern.
+    let workspace_path: PathBuf = agent
+        .workspace
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|| ws_path.clone());
+
+    let secret_registry = Arc::new(SecretRegistry::new());
+    let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
+
+    // Build subagent registry when orchestrator is enabled.
+    let subagent_registry: Option<
+        Arc<crate::adapters::plugins::subagents::SubagentRegistry>,
+    > = if let Some(ref orch) = cfg.orchestrator {
+        if orch.enabled {
+            use crate::adapters::plugins::subagents::{
+                ProductionSubagentRuntime, SubagentRegistry, SubagentRuntime,
+            };
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
+                Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new());
+            let runtime: Arc<dyn SubagentRuntime> = Arc::new(ProductionSubagentRuntime {
+                config: Arc::new(cfg.clone()),
+                http,
+                shell,
+                memory: None,
+                secret_registry: Arc::clone(&secret_registry),
+            });
+            Some(Arc::new(SubagentRegistry::new(orch.max_concurrent, runtime)))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let mut base_tools = channel_runtime::compute_base_tools(
+        true,
+        false, // no memory in v1 eval runs
+        &agent.workspace_tools,
+    );
+    if subagent_registry.is_some() {
+        base_tools.extend(channel_runtime::compute_subagent_tools());
+    }
+
+    let skill_source = FileSystemSkillSource::new(workspace_path.clone());
+    let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
+    let mut skill_registry = SkillRegistry::new(base_reserved)
+        .with_allowlist(Some(agent.skill_packages.clone()));
+    skill_registry.reload(&skill_source);
+
+    let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+    let system_prompt = channel_runtime::rebuild_system_prompt(
+        agent,
+        true,
+        &skill_registry,
+        &current_tools,
+    );
+
+    let mut tool_defs = current_tools.clone();
+    let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
+        match channel_runtime::build_tool_executor(
+            &workspace_path,
+            &current_tools,
+            &skill_registry,
+            &None, // memory_handle — evals run without memory in v1
+            &secret_registry,
+            log_activity,
+            None, // cancel
+            None, // shared_http_client
+            Some(&cfg.memory),
+            agent,
+            subagent_registry,
+            &cfg.mcp_servers,
+        ) {
+            Some(executor) => {
+                let extra = executor.additional_tool_defs(&tool_defs);
+                if !extra.is_empty() {
+                    tool_defs.extend(extra);
+                }
+                Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+            }
+            None => {
+                Arc::new(NoopRuntimeToolExecutor)
+                    as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+            }
+        };
+
+    // 5. Wrap in StubbedExecutor for this row.
+    let stubbed = StubbedExecutor::new(&*inner_executor, &ctx.row.stubs);
+
+    // 6. Observation tap.
+    let observations: Arc<std::sync::Mutex<Vec<Observation>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observations_cloned = observations.clone();
+    let seq = Arc::new(AtomicU32::new(0));
+    let seq_cloned = seq.clone();
+    let observer_closure: Box<dyn Fn(&ToolCall, &str) + Send + Sync> =
+        Box::new(move |tc: &ToolCall, _result: &str| {
+            let n = seq_cloned.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            observations_cloned.lock().unwrap().push(Observation {
+                seq: n,
+                name: tc.name.clone(),
+                args_preview: truncate(&tc.arguments.to_string(), 2048),
+            });
+        });
+    let observer: ToolResultObserver<'_> = &*observer_closure;
+
+    // 7. Build user message and drive collect_engine_response.
+    let messages = vec![
+        Message {
+            role: Role::System,
+            content: system_prompt.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: ctx.row.prompt.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+
+    let engine_context = EngineContext {
+        workspace: Some(workspace_path.clone()),
+        system_prompt: Some(system_prompt.clone()),
+        bridge_tools: None,
+        max_tool_rounds: Some(agent.limits.max_tool_rounds),
+        max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+    };
+
+    let driver_fut = collect_engine_response(
+        &*engine,
+        &messages,
+        &tool_defs,
+        &engine_context,
+        Some(&stubbed),
+        Some(observer),
+        None, // cancel
+        None, // token_budget
+        agent.limits.max_tool_rounds,
+        agent.limits.max_tool_result_chars,
+        agent.limits.stream_event_timeout_secs,
+        agent.limits.compact_result_limit,
+    );
+
+    let (timed_out, engine_response) = match tokio::time::timeout(
+        std::time::Duration::from_secs(ctx.row.timeout_secs),
+        driver_fut,
+    )
+    .await
+    {
+        Ok(Ok(resp)) => (false, resp),
+        Ok(Err(e)) => return Err(e),
+        Err(_) => (
+            true,
+            crate::adapters::engine_builder::EngineResponse {
+                text: String::new(),
+                input_tokens_delta: 0,
+                output_tokens_delta: 0,
+                tool_outcomes: vec![],
+            },
+        ),
+    };
+
+    // 8. Judge.
+    let obs_snapshot = observations.lock().unwrap().clone();
+    let judge_user_turn = format_judge_user_turn(
+        &ctx.row.expected,
+        &obs_snapshot,
+        &engine_response.text,
+    );
+    let verdict = if timed_out {
+        Verdict {
+            verdict: "fail".into(),
+            rationale: format!("row timed out after {}s", ctx.row.timeout_secs),
+        }
+    } else {
+        judge_row(ctx.judge, &ctx.row.expected, &obs_snapshot, &engine_response.text).await?
+    };
+
+    // 9. Transcript.
+    std::fs::create_dir_all(ctx.out_dir)
+        .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    let transcript_path = ctx
+        .out_dir
+        .join(format!("{}-{}.md", ctx.skill.name, ctx.row.id));
+    write_transcript(
+        &transcript_path,
+        &ctx.skill.name,
+        ctx.row,
+        &agent.model,
+        engine.id(),
+        &ws_path,
+        &messages,
+        &engine_response.tool_outcomes,
+        &obs_snapshot,
+        &engine_response.text,
+        &verdict,
+        &judge_user_turn,
+    )?;
+
+    if ctx.keep_workspace {
+        std::mem::forget(ws); // leak TempDir guard — workspace persists on disk
+    }
+
+    Ok(RowResult {
+        id: ctx.row.id.clone(),
+        prompt: ctx.row.prompt.clone(),
+        expected: ctx.row.expected.clone(),
+        verdict: verdict.verdict,
+        rationale: verdict.rationale,
+        observed_tools: obs_snapshot
+            .into_iter()
+            .map(|o| ObservationJson {
+                seq: o.seq,
+                name: o.name,
+                args_preview: o.args_preview,
+            })
+            .collect(),
+        wall_ms: started.elapsed().as_millis() as u64,
+        agent_tokens: TokenCount {
+            input: engine_response.input_tokens_delta,
+            output: engine_response.output_tokens_delta,
+        },
+        judge_tokens: TokenCount {
+            input: 0,
+            output: 0,
+        }, // wired in Task 9
+        transcript_path,
+        timed_out,
+        stubs_used: !ctx.row.stubs.is_empty(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
