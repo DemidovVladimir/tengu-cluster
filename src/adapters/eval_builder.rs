@@ -26,11 +26,132 @@ pub enum OutputFormat {
     Json,
 }
 
-pub async fn run(args: EvalArgs) -> Result<i32> {
-    // Scaffold — Task 9 replaces this body with the real driver.
-    let _ = args;
-    println!("tengu eval: scaffold");
-    Ok(0)
+pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
+    let started_at = chrono::Utc::now();
+    let out_dir = args.out_dir.unwrap_or_else(|| {
+        PathBuf::from("evals/runs").join(started_at.format("%Y-%m-%dT%H-%M-%SZ").to_string())
+    });
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("create out dir {}", out_dir.display()))?;
+
+    let roots = default_skill_roots();
+    let skills = discover_skills(&args.skills, &roots)?;
+    if skills.is_empty() {
+        eprintln!("no skills with evals/ found in roots: {:?}", roots);
+        return Ok(2);
+    }
+
+    // Build the judge engine. Default context window is conservative (64k);
+    // override via env if ever needed. Judge makes one short completion per row.
+    let judge_model = args
+        .judge_model
+        .unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
+    let judge_box = crate::adapters::engine_builder::build_openrouter_engine(
+        &judge_model,
+        64_000,
+    )
+    .context("build judge engine")?;
+    let judge: Arc<dyn crate::adapters::types::Engine> = Arc::from(judge_box);
+
+    let mut skill_reports = Vec::new();
+    let mut runner_exit = 0i32;
+    for skill in &skills {
+        let report = run_skill(
+            skill,
+            &*judge,
+            &out_dir,
+            args.filter.as_deref(),
+            args.concurrency,
+            args.keep_workspace,
+        )
+        .await?;
+        if report.rows.iter().any(|r| r.verdict != "pass") {
+            runner_exit = 1;
+        }
+        skill_reports.push(report);
+    }
+
+    let finished_at = chrono::Utc::now();
+
+    let summary = Summary {
+        total_rows: skill_reports.iter().map(|s| s.rows.len() as u32).sum(),
+        passed: skill_reports
+            .iter()
+            .flat_map(|s| &s.rows)
+            .filter(|r| r.verdict == "pass")
+            .count() as u32,
+        failed: skill_reports
+            .iter()
+            .flat_map(|s| &s.rows)
+            .filter(|r| r.verdict != "pass")
+            .count() as u32,
+        timed_out: skill_reports
+            .iter()
+            .flat_map(|s| &s.rows)
+            .filter(|r| r.timed_out)
+            .count() as u32,
+        total_agent_tokens: skill_reports
+            .iter()
+            .flat_map(|s| &s.rows)
+            .map(|r| (r.agent_tokens.input + r.agent_tokens.output) as u64)
+            .sum(),
+        total_judge_tokens: skill_reports
+            .iter()
+            .flat_map(|s| &s.rows)
+            .map(|r| (r.judge_tokens.input + r.judge_tokens.output) as u64)
+            .sum(),
+        wall_ms: (finished_at - started_at).num_milliseconds() as u64,
+    };
+
+    let report = Report {
+        schema_version: 1,
+        started_at: started_at.to_rfc3339(),
+        finished_at: finished_at.to_rfc3339(),
+        runner_version: format!("tengu {}", env!("CARGO_PKG_VERSION")),
+        judge_model,
+        concurrency: args.concurrency,
+        skills: skill_reports,
+        summary,
+    };
+
+    let report_path = out_dir.join("report.json");
+    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)
+        .with_context(|| format!("write {}", report_path.display()))?;
+
+    match args.format {
+        OutputFormat::Table => print_table(&report),
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+
+    Ok(runner_exit)
+}
+
+fn print_table(report: &Report) {
+    for skill in &report.skills {
+        println!(
+            "{}  ({} rows, {:.1}s)",
+            skill.skill,
+            skill.rows.len(),
+            skill.wall_ms as f64 / 1000.0
+        );
+        for r in &skill.rows {
+            let mark = if r.verdict == "pass" { "✓" } else { "✗" };
+            println!("  {} {:32} {:4}  {}", mark, r.id, r.verdict, r.rationale);
+            if r.verdict != "pass" {
+                println!("      → see {}", r.transcript_path.display());
+            }
+        }
+        println!();
+    }
+    println!(
+        "{}/{} passed ({} failed). Total wall: {:.1}s. Total agent tokens: {}. Total judge tokens: {}.",
+        report.summary.passed,
+        report.summary.total_rows,
+        report.summary.failed,
+        report.summary.wall_ms as f64 / 1000.0,
+        report.summary.total_agent_tokens,
+        report.summary.total_judge_tokens,
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -631,6 +752,112 @@ fn write_transcript(
     std::fs::write(out_path, body)
         .with_context(|| format!("write transcript {}", out_path.display()))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Report types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillReport {
+    pub skill: String,
+    pub tier: String,
+    pub config_source: String, // "skill-local" | "sandbox" | "override"
+    pub engine: String,
+    pub agent_model: String,
+    pub prompts_format: String,
+    pub wall_ms: u64,
+    pub rows: Vec<RowResult>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Summary {
+    pub total_rows: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub timed_out: u32,
+    pub total_agent_tokens: u64,
+    pub total_judge_tokens: u64,
+    pub wall_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Report {
+    pub schema_version: u32,
+    pub started_at: String,
+    pub finished_at: String,
+    pub runner_version: String,
+    pub judge_model: String,
+    pub concurrency: usize,
+    pub skills: Vec<SkillReport>,
+    pub summary: Summary,
+}
+
+// ---------------------------------------------------------------------------
+// Skill-level driver
+// ---------------------------------------------------------------------------
+
+pub async fn run_skill(
+    skill: &SkillUnderTest,
+    judge: &dyn crate::adapters::types::Engine,
+    out_dir: &Path,
+    filter: Option<&str>,
+    concurrency: usize,
+    keep_workspace: bool,
+) -> anyhow::Result<SkillReport> {
+    let skill_started = Instant::now();
+    let prompts_body = std::fs::read_to_string(&skill.prompts_path)
+        .with_context(|| format!("read {}", skill.prompts_path.display()))?;
+    let mut rows = if skill.prompts_format == "yaml" {
+        parse_yaml_prompts(&prompts_body)?
+    } else {
+        parse_markdown_prompts(&prompts_body)?
+    };
+    if let Some(pattern) = filter {
+        let glob = glob::Pattern::new(pattern).context("invalid --filter glob")?;
+        rows.retain(|r| glob.matches(&r.id));
+    }
+
+    // Load config once to grab agent metadata (engine, model) for report header.
+    let dummy_ws = std::env::temp_dir();
+    let cfg_probe = load_eval_config(&skill.config_path, &dummy_ws)?;
+    let agent = cfg_probe
+        .agents
+        .values()
+        .find(|a| a.default)
+        .or_else(|| cfg_probe.agents.values().next())
+        .ok_or_else(|| anyhow::anyhow!("eval config has no agent"))?;
+    let engine_id = agent.engine.clone();
+    let agent_model = agent.model.clone();
+
+    if concurrency > 1 {
+        anyhow::bail!("concurrency > 1 not yet implemented in v1 — use --concurrency 1");
+    }
+
+    let mut row_results = Vec::new();
+    for row in &rows {
+        eprintln!("[{} row {}] running…", skill.name, row.id);
+        let rr = run_row(RowCtx {
+            skill,
+            row,
+            judge,
+            out_dir,
+            keep_workspace,
+        })
+        .await?;
+        row_results.push(rr);
+    }
+
+    Ok(SkillReport {
+        skill: skill.name.clone(),
+        tier: skill.tier.label().to_string(),
+        config_source: "skill-local".into(),
+        engine: engine_id,
+        agent_model,
+        prompts_format: skill.prompts_format.clone(),
+        wall_ms: skill_started.elapsed().as_millis() as u64,
+        rows: row_results,
+    })
 }
 
 /// Run a single eval row through the agent + judge pipeline.

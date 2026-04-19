@@ -5505,6 +5505,7 @@ dependencies = [
  "dotenvy",
  "dptree",
  "futures",
+ "glob",
  "pbkdf2",
  "pdf-extract",
  "qdrant-client",

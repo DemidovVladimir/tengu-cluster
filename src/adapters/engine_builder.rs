@@ -62,7 +62,7 @@ pub(crate) fn build_engine(
     }
 }
 
-fn build_openrouter_engine(
+pub fn build_openrouter_engine(
     model: &str,
     context_window: usize,
 ) -> Result<Box<dyn Engine>> {
