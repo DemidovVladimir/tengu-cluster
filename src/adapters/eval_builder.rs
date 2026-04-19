@@ -206,13 +206,13 @@ pub fn default_skill_roots() -> Vec<PathBuf> {
 }
 
 fn tier_for_root(root: &Path) -> SkillTier {
-    if let Some(home) = dirs_next::home_dir() {
-        if root.starts_with(home.join(".tengu").join("skills")) {
-            return SkillTier::Managed;
-        }
-    }
     let s = root.to_string_lossy();
-    if s.ends_with("/.tengu/skills") || s.contains("/.tengu/skills/") {
+    if s.contains("/.tengu/skills") {
+        if let Some(home) = dirs_next::home_dir() {
+            if root.starts_with(home.join(".tengu").join("skills")) {
+                return SkillTier::Managed;
+            }
+        }
         return SkillTier::Workspace;
     }
     SkillTier::Project
@@ -458,5 +458,22 @@ mod tests {
         let skills = discover_skills(&[], &[higher.clone(), lower.clone()]).unwrap();
         assert_eq!(skills.len(), 1, "expected lower tier's demo to be discovered");
         assert!(skills[0].evals_dir.starts_with(&lower), "expected lower tier, got {:?}", skills[0].evals_dir);
+    }
+
+    #[test]
+    fn tier_for_root_classifies_tenu_skills_as_workspace_when_home_unknown() {
+        // When a path contains .tengu/skills but doesn't start with $HOME,
+        // it MUST be Workspace, never Project. This guards against a silent
+        // misclassification if home_dir() ever returns None.
+        let root = std::path::PathBuf::from("/tmp/unrelated/.tengu/skills");
+        let tier = tier_for_root(&root);
+        assert_eq!(tier, SkillTier::Workspace);
+    }
+
+    #[test]
+    fn tier_for_root_classifies_plain_skills_as_project() {
+        let root = std::path::PathBuf::from("/some/repo/skills");
+        let tier = tier_for_root(&root);
+        assert_eq!(tier, SkillTier::Project);
     }
 }
