@@ -402,6 +402,15 @@ Reply with strict JSON only, on a single line:
 
 No prose, no markdown, no code fences. Just the JSON object."#;
 
+/// Prefill applied to the judge's assistant turn to force the reply to
+/// start with the JSON opening. NOTE: `judge_row` ASSUMES the underlying
+/// engine honours the prefill by continuing from this prefix rather than
+/// echoing it back in the TextDelta stream. Engines that echo the prefix
+/// will produce malformed JSON (e.g. `{"verdict":{"verdict": …}`), which
+/// `parse_verdict` will score as a diagnostic `fail`. Verify with any new
+/// engine that it does not echo prefilled content.
+const JUDGE_PREFILL: &str = r#"{"verdict":"#;
+
 #[derive(Debug, Clone)]
 pub struct Observation {
     pub seq: u32,
@@ -454,7 +463,7 @@ pub async fn judge_row(
         // Prefill the assistant turn with an opening brace to force JSON start.
         Message {
             role: Role::Assistant,
-            content: r#"{"verdict":"#.to_string(),
+            content: JUDGE_PREFILL.to_string(),
             tool_call_id: None,
             tool_calls: None,
         },
@@ -467,7 +476,7 @@ pub async fn judge_row(
         max_mcp_result_chars: None,
     };
     let mut stream = judge.run(&messages, &[], &ctx).await?;
-    let mut output = String::from(r#"{"verdict":"#);
+    let mut output = String::from(JUDGE_PREFILL);
     while let Some(ev) = stream.next().await {
         match ev {
             StreamEvent::TextDelta { text } => output.push_str(&text),
