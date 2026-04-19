@@ -88,11 +88,13 @@ Write `skills/orchestration/evals/prompts.md` with the five cases from the spec 
 | "the deploy broke, check logs, restart, verify" | Sequential multi-step. At least one `memory_write` call to record progress. |
 ```
 
-- [ ] **Step 4: Run `skill-eval` against the prompt set (manual for now)**
+- [ ] **Step 4: Run the eval prompt set**
 
-Since `skill-eval` is a documentation skill, this is a manual pass: open `skills/skill-eval/SKILL.md`, follow its procedure on `skills/orchestration/`. Record which prompts trigger the expected behaviour vs. over- or under-trigger.
+Automation for this step is specified in `docs/superpowers/specs/2026-04-19-eval-runner-design.md` and shipped on this branch: `tengu eval orchestration` replays the five prompts, scores each row pass/fail via an LLM judge, and writes per-row transcripts to `evals/runs/<ts>/`. Run it and record which prompts pass vs. fail.
 
-If the skill under-triggers (doesn't fire on "research then mint"), edit the `description:` to be more pushy and re-eval. If it over-triggers on "what's 2+2?", add an explicit `DO NOT fire on single-step arithmetic questions` negative example in the *When NOT to orchestrate* section.
+If the skill under-triggers (doesn't fire on "research then mint"), edit the `description:` to be more pushy and re-run `tengu eval orchestration`. If it over-triggers on "what's 2+2?", add an explicit `DO NOT fire on single-step arithmetic questions` negative example in the *When NOT to orchestrate* section.
+
+Until the eval runner lands, this step is the manual fallback: open `skills/skill-eval/SKILL.md`, follow its procedure on `skills/orchestration/`, paste each prompt into `tengu orchestrate --sandbox orchestration-eval`, and eyeball the tool-call stream.
 
 - [ ] **Step 5: Commit**
 

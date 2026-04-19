@@ -82,8 +82,8 @@ Produce a table with one row per skill:
 ## Limitations (Phase 0)
 
 This version of skill-eval does NOT support:
-- **LLM-judge mode** -- no automatic prompt replay or output comparison
-- **Scheduled runs** -- eval runs only on explicit trigger
-- **Automatic remediation** -- reports only, does not auto-fix
+- **LLM-judge mode** -- no automatic prompt replay or output comparison. Specified in `docs/superpowers/specs/2026-04-19-eval-runner-design.md` as the `tengu eval <skill>` CLI runner, which replays `skills/<skill>/evals/prompts.{md,yaml}` against a live agent and scores each row pass/fail via an LLM judge. Skill-eval stays focused on health/drift checks; the eval runner is the dynamic counterpart.
+- **Scheduled runs** -- eval runs only on explicit trigger.
+- **Automatic remediation** -- reports only, does not auto-fix. Phase E (`2026-04-16-phase-e-self-alignment-design.md`) adds structural fixture replay + proposed-edit generation.
 
-These capabilities may be added in future phases once there is real usage data to calibrate against.
+These capabilities are being added incrementally as usage data accumulates.

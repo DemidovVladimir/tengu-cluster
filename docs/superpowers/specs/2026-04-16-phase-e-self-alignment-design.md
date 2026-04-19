@@ -34,7 +34,7 @@ Close the evolution loop so skills improve over time against objective, determin
 
 ## 3. Non-goals
 
-- **LLM-judge mode.** Fixtures are deterministic; scoring is structural (did the expected skill fire, did the expected tools run, does the output contain expected substrings). No rubric-based LLM grading in Phase E.
+- **LLM-judge mode.** Phase E's scoring is deterministic and structural (did the expected skill fire, did the expected tools run, does the output contain expected substrings). LLM-judged binary pass/fail on loose prompt tests is a separate, complementary mechanism — specified in `2026-04-19-eval-runner-design.md` (`tengu eval <skill>`) and shipped ahead of Phase E. The eval runner handles the "did this skill teach the right decomposition" question on markdown/YAML prompts; Phase E's `tengu align` handles the "do these JSONL fixtures still score above threshold" question. Neither subsumes the other — a fully-aligned repo runs both.
 - **Auto-apply.** `skill-improver` proposes patches; it never commits to `SKILL.md` directly. User review is the gate. A tiered auto-apply mode (low-risk wording fixes auto-applied) is a follow-up, not Phase E.
 - **Scheduled/daemon runs.** `tengu align` is on-demand. Schedule via existing cron / `loop` mechanisms if wanted; no background daemon in the binary.
 - **Cross-skill regression tests.** Each skill's fixtures test only that skill. Interaction between skills (e.g., orchestration + molecule-x402) is out of scope — too brittle for a first cut.

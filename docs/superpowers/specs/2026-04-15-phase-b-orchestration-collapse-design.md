@@ -261,7 +261,7 @@ B4–B6 are pure deletions of already-dead code once B3 ships.
 ## 7. Testing strategy
 
 - **Unit tests** — n/a for skill content beyond frontmatter-parse tests (Phase A's `SkillPlugin` already has those).
-- **Skill eval** — use `skill-creator`'s eval loop to test the `orchestration` skill against a fixed prompt set (produced during B2):
+- **Skill eval** — the prompt set below was committed during B2 to `skills/orchestration/evals/prompts.md`. It is hand-run today; the automated LLM-judge runner that replays this file and scores pass/fail is specified separately in `2026-04-19-eval-runner-design.md` (`tengu eval orchestration`). That runner lands on this branch so Phase B's skill is actually testable before merge. Canonical prompts:
   - "research paper X then mint it as an IP token" → expect sequential spawn(researcher) + spawn(minter).
   - "fetch the latest prices for A, B, C" → expect parallel fan-out.
   - "what's 2+2?" → expect direct answer, no spawn.
