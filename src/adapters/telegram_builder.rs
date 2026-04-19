@@ -1015,9 +1015,21 @@ impl TelegramSession {
                     .await;
                 return;
             }
-            let _ = self
-                .handle_team(&msg.sender, goal, msg.media.as_ref())
-                .await;
+            // B3a: /team is a thin alias for sending the goal to the default
+            // agent. Decomposition is the agent's job via the orchestration skill.
+            let default_id = self.default_agent_id.clone();
+            self.user_active_agent
+                .insert(sender_id.to_string(), default_id.clone());
+            let goal_owned = goal.to_string();
+            let media_owned = msg.media.clone();
+            self.execute_chat_turn(
+                &msg.sender,
+                sender_id,
+                &default_id,
+                &goal_owned,
+                media_owned.as_ref(),
+            )
+            .await;
             return;
         }
 
@@ -1122,72 +1134,12 @@ impl TelegramSession {
     // -------------------------------------------------------------------
 
     async fn route_and_chat(&mut self, msg: InboundMessage, sender_id: &str) {
-        let (mut routed_role, user_text) =
+        let (routed_role, user_text) =
             channel_runtime::parse_agent_routing(&msg.content, Some(&self.role_to_agent));
 
-        // Multi-agent classifier routing.
-        if routed_role.is_none() && self.is_multi_agent {
-            let decision = {
-                let engine_ref: Option<&dyn Engine> =
-                    if let Some(ref dedicated) = self.planner_engine {
-                        Some(dedicated.as_ref())
-                    } else {
-                        self.agent_states
-                            .get(&self.default_agent_id)
-                            .map(|a| a.engine.as_ref())
-                    };
-                match engine_ref {
-                    Some(eng) => {
-                        crate::adapters::task_builder::classify_request(
-                            eng,
-                            &user_text,
-                            &self.agent_descriptions,
-                        )
-                        .await
-                    }
-                    None => Ok(crate::adapters::types::RouteDecision::MultiAgent),
-                }
-            };
-
-            match decision {
-                Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                    let orchestrator_enabled = self
-                        .config
-                        .orchestrator
-                        .as_ref()
-                        .is_some_and(|o| o.enabled);
-                    if self.role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
-                        info!(role = %role_key, "Classifier routed to single agent");
-                        routed_role = Some(role_key);
-                    } else if self.role_to_agent.contains_key(&role_key) && orchestrator_enabled {
-                        info!(role = %role_key, "Classifier routed to single agent, but orchestrator enabled — using planner");
-                        let _ = self
-                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                            .await;
-                        return;
-                    } else {
-                        warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
-                        let _ = self
-                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                            .await;
-                        return;
-                    }
-                }
-                Ok(crate::adapters::types::RouteDecision::MultiAgent) => {
-                    let _ = self
-                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                        .await;
-                    return;
-                }
-                Err(e) => {
-                    warn!(error = %e, "Classifier failed, falling back to planner");
-                    let _ = self
-                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                        .await;
-                    return;
-                }
-            }
-        }
+        // B3a: no upstream classifier. Messages without an explicit @role prefix
+        // fall through to the default agent, whose orchestration skill decides
+        // whether to delegate via sessions_spawn / sessions_fan_out.
 
         // Resolve target agent.
         let target_agent_id = if let Some(ref role_key) = routed_role {

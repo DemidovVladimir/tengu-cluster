@@ -705,6 +705,37 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// parse_agent_routing tests — B3a parity check: @role routing must keep
+// working after the upstream classifier branch is deleted, since the
+// orchestration skill now decomposes inside the main agent.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod routing_tests {
+    use super::parse_agent_routing;
+    use std::collections::HashMap;
+
+    #[test]
+    fn at_role_prefix_routes_to_named_agent() {
+        let mut roles = HashMap::new();
+        roles.insert("researcher".to_string(), "agent-1".to_string());
+        roles.insert("minter".to_string(), "agent-2".to_string());
+
+        let (role, text) = parse_agent_routing("@researcher: find paper X", Some(&roles));
+        assert_eq!(role.as_deref(), Some("researcher"));
+        assert_eq!(text, "find paper X");
+    }
+
+    #[test]
+    fn no_at_prefix_returns_none_role() {
+        let roles = HashMap::new();
+        let (role, text) = parse_agent_routing("plain user message", Some(&roles));
+        assert_eq!(role, None);
+        assert_eq!(text, "plain user message");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Golden registry test — asserts the LLM-facing tool surface is unchanged.
 // ---------------------------------------------------------------------------
 
