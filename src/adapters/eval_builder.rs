@@ -4,7 +4,8 @@
 //! Replays `skills/<skill>/evals/prompts.{md,yaml}` through a live agent,
 //! scores each row pass/fail via an LLM judge, and writes a report.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -115,6 +116,56 @@ pub fn parse_markdown_prompts(body: &str) -> Result<Vec<PromptRow>> {
     Ok(rows)
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct YamlRow {
+    id: String,
+    prompt: String,
+    expected: String,
+    #[serde(default = "default_timeout_secs")]
+    timeout_secs: u64,
+    #[serde(default)]
+    stubs: Vec<YamlStub>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct YamlStub {
+    tool: String,
+    responses: Vec<serde_json::Value>,
+}
+
+fn default_timeout_secs() -> u64 {
+    120
+}
+
+pub fn parse_yaml_prompts(body: &str) -> Result<Vec<PromptRow>> {
+    let raw: Vec<YamlRow> =
+        serde_yaml::from_str(body).context("yaml prompts parse failed")?;
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::with_capacity(raw.len());
+    for r in raw {
+        if !seen.insert(r.id.clone()) {
+            bail!("duplicate row id '{}' in yaml prompts", r.id);
+        }
+        rows.push(PromptRow {
+            id: r.id,
+            prompt: r.prompt,
+            expected: r.expected,
+            timeout_secs: r.timeout_secs,
+            stubs: r
+                .stubs
+                .into_iter()
+                .map(|s| StubSpec {
+                    tool: s.tool,
+                    responses: s.responses,
+                })
+                .collect(),
+        });
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +229,58 @@ mod tests {
         let id = derive_row_id(&prompt);
         assert!(!id.ends_with('-'), "id should not end with dash, got: {:?}", id);
         assert_eq!(id.len(), 63, "id length after trailing-dash trim should be 63, got {}", id.len());
+    }
+
+    #[test]
+    fn yaml_parses_well_formed() {
+        let body = r#"
+- id: seq-research-mint
+  prompt: "research paper X then mint it as an IP token"
+  expected: "Sequential sessions_spawn(researcher) then sessions_spawn(minter)."
+- id: fail-503-retry
+  prompt: "my trade failed with HTTP 503"
+  expected: "Retry the same call. No decomposition."
+  timeout_secs: 60
+  stubs:
+    - tool: http_request
+      responses:
+        - { status: 503, body: "Service Unavailable" }
+        - { status: 200, body: "{\"ok\": true}" }
+"#;
+        let rows = parse_yaml_prompts(body).expect("parse");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "seq-research-mint");
+        assert_eq!(rows[0].timeout_secs, 120);
+        assert_eq!(rows[1].timeout_secs, 60);
+        assert_eq!(rows[1].stubs.len(), 1);
+        assert_eq!(rows[1].stubs[0].tool, "http_request");
+        assert_eq!(rows[1].stubs[0].responses.len(), 2);
+    }
+
+    #[test]
+    fn yaml_rejects_unknown_keys() {
+        let body = r#"
+- id: x
+  prompt: "hello"
+  expected: "ok"
+  oops_unknown_field: true
+"#;
+        let err = parse_yaml_prompts(body).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("unknown field"), "got: {}", msg);
+    }
+
+    #[test]
+    fn yaml_rejects_duplicate_ids() {
+        let body = r#"
+- id: same
+  prompt: "a"
+  expected: "a"
+- id: same
+  prompt: "b"
+  expected: "b"
+"#;
+        let err = parse_yaml_prompts(body).unwrap_err();
+        assert!(err.to_string().contains("duplicate row id"), "got: {}", err);
     }
 }
