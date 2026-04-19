@@ -6,4 +6,4 @@
 | "fetch the latest prices for A, B, C" | Single `sessions_fan_out` with three independent requests. |
 | "what's 2+2?" | Direct answer. No `sessions_spawn` call. |
 | "my trade failed with HTTP 503" | Retry the same call. No decomposition. |
-| "the deploy broke, check logs, restart, verify" | Sequential multi-step. At least one `memory_write` call to record progress. |
+| "the deploy broke, check logs, restart, verify" | Sequential multi-step. At least one `remember` call (with progress metadata) to record state. |

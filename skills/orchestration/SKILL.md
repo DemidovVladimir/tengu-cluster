@@ -43,7 +43,7 @@ When step N+1 needs step N's output:
 
 When sub-tasks are independent:
 
-- Call `sessions_fan_out(requests=[{agent, prompt}, ...])` with all independent sub-tasks at once.
+- Call `sessions_fan_out(tasks=[{agent, prompt}, ...])` with all independent sub-tasks at once.
 - Fan-out returns combined results. Read them and decide next.
 - Prefer fan-out whenever it cuts wall-clock time and subagents don't need each other's outputs.
 
@@ -58,8 +58,8 @@ When sub-tasks are independent:
 
 ## Progress tracking
 
-- For multi-step work taking more than ~30s of wall-clock time, write a short status note via `memory_write` under `memory/YYYY-MM-DD.md`.
-- Record identifiers (tx hashes, addresses, UUIDs, doc ids) in the daily log so they survive across turns.
+- For multi-step work taking more than ~30s of wall-clock time, record a short status note via `remember` with metadata `{"kind":"progress","date":"YYYY-MM-DD"}` so it is searchable later.
+- Record identifiers (tx hashes, addresses, UUIDs, doc ids) the same way so they survive across turns.
 - Do not hide progress behind silence.
 
 ## When NOT to orchestrate
@@ -75,4 +75,4 @@ When sub-tasks are independent:
 | `sessions_spawn` | Sequential delegation; await result |
 | `sessions_fan_out` | Parallel delegation; independent tasks in one call |
 | `subagents` (action=list \| kill) | Inspect or cancel running subagents |
-| `memory_write` | Record progress and identifiers in the daily log |
+| `remember` | Record progress notes with searchable metadata |
