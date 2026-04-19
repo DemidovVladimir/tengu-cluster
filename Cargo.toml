@@ -52,5 +52,6 @@ telegram = ["teloxide", "dptree"]
 openrouter = []
 qdrant = ["qdrant-client"]
 claude_code = []
+eval-integration = []
 
 [dev-dependencies]

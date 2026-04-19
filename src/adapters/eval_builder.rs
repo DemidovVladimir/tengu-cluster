@@ -1540,4 +1540,41 @@ workspace = "{TMP_WORKSPACE}"
         let exit = run(args).await.unwrap();
         assert_eq!(exit, 2, "expected exit 2 for filter miss (runner-level error)");
     }
+
+    /// End-to-end smoke test for the eval runner against the orchestration skill.
+    ///
+    /// Gated behind `eval-integration` feature so CI without network access stays
+    /// green. Run: `cargo test --bin tengu --features eval-integration -- eval_builder::tests::orchestration_evals_smoke --nocapture`
+    ///
+    /// Skips gracefully when OPENROUTER_API_KEY is unset.
+    #[cfg(feature = "eval-integration")]
+    #[tokio::test]
+    async fn orchestration_evals_smoke() {
+        if std::env::var("OPENROUTER_API_KEY").is_err() {
+            eprintln!("skipped: OPENROUTER_API_KEY not set");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let args = EvalArgs {
+            skills: vec!["orchestration".to_string()],
+            sandbox: None,
+            judge_model: None,
+            concurrency: 1,
+            format: OutputFormat::Table,
+            out_dir: Some(tmp.path().to_path_buf()),
+            filter: None,
+            keep_workspace: false,
+        };
+        let exit = run(args).await.expect("runner succeeded");
+        assert!(exit == 0 || exit == 1, "exit code was {} (expected 0 or 1)", exit);
+
+        let report_path = tmp.path().join("report.json");
+        assert!(report_path.exists(), "report.json not written");
+        let report: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+        assert_eq!(report["schema_version"], 1);
+        assert_eq!(report["skills"][0]["skill"], "orchestration");
+        let rows = report["skills"][0]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 5, "orchestration has 5 prompt rows");
+    }
 }
