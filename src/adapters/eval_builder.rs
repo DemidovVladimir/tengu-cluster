@@ -139,25 +139,51 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     Ok(runner_exit)
 }
 
+fn should_colour() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+fn colour(s: &str, code: &str) -> String {
+    if should_colour() {
+        format!("\x1b[{}m{}\x1b[0m", code, s)
+    } else {
+        s.to_string()
+    }
+}
+
 fn print_table(report: &Report) {
     for skill in &report.skills {
         println!(
             "{}  ({} rows, {:.1}s)",
-            skill.skill,
+            colour(&skill.skill, "1"), // bold
             skill.rows.len(),
             skill.wall_ms as f64 / 1000.0
         );
         for r in &skill.rows {
-            let mark = if r.verdict == "pass" { "✓" } else { "✗" };
-            println!("  {} {:32} {:4}  {}", mark, r.id, r.verdict, r.rationale);
+            let (mark, code) = if r.verdict == "pass" {
+                ("✓", "32")
+            } else {
+                ("✗", "31")
+            };
+            println!(
+                "  {} {:32} {:4}  {}",
+                colour(mark, code),
+                r.id,
+                r.verdict,
+                r.rationale
+            );
             if r.verdict != "pass" {
                 println!("      → see {}", r.transcript_path.display());
             }
         }
         println!();
     }
-    println!(
-        "{}/{} passed ({} failed). Total wall: {:.1}s. Total agent tokens: {}. Total judge tokens: {}.",
+    let summary_line = format!(
+        "{}/{} passed ({} failed). Total wall: {:.1}s. Agent tokens: {}. Judge tokens: {}.",
         report.summary.passed,
         report.summary.total_rows,
         report.summary.failed,
@@ -165,6 +191,11 @@ fn print_table(report: &Report) {
         report.summary.total_agent_tokens,
         report.summary.total_judge_tokens,
     );
+    if report.summary.failed == 0 {
+        println!("{}", colour(&summary_line, "32"));
+    } else {
+        println!("{}", colour(&summary_line, "31"));
+    }
 }
 
 #[derive(Debug, Clone)]
