@@ -11,7 +11,6 @@ use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
 use crate::adapters::engine_builder::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
-use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use anyhow::Result;
@@ -19,8 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use crate::adapters::config::Config;
 use crate::adapters::types::{
-    AgentRole, AgentTaskExecutor, Message, Role, RoleDependencies,
-    TaskHistory, TaskStatus, ToolCall, ToolDef,
+    AgentRole, Message, Role, TaskHistory, ToolCall, ToolDef,
 };
 use crate::adapters::{Engine, EngineContext};
 use tracing::info;
@@ -49,21 +47,6 @@ struct AgentRuntime {
     max_tool_result_chars: u32,
     stream_event_timeout_secs: u64,
     compact_result_limit: u32,
-}
-
-/// Adapter implementing `AgentTaskExecutor` for real agent runtimes.
-struct AgentRuntimeExecutor {
-    runtime: Arc<AgentRuntime>,
-    secret_registry: Arc<SecretRegistry>,
-}
-
-#[async_trait::async_trait]
-impl AgentTaskExecutor for AgentRuntimeExecutor {
-    async fn execute(&self, description: &str) -> std::result::Result<(String, Vec<(String, String)>), String> {
-        execute_agent_task(&self.runtime, description, &self.secret_registry)
-            .await
-            .map_err(|e| e.to_string())
-    }
 }
 
 /// Boot the orchestrator: build agents, run interactive task dispatch.
@@ -304,27 +287,6 @@ pub(crate) async fn boot_orchestrator(
         anyhow::bail!("No agents with roles configured for orchestration");
     }
 
-    // Build a dedicated planner engine if configured.
-    let orch = config.orchestrator.as_ref();
-    let dedicated_planner: Option<Box<dyn Engine>> = match (
-        orch.and_then(|o| o.planner_engine.as_ref()),
-        orch.and_then(|o| o.planner_model.as_ref()),
-    ) {
-        (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
-                Ok(e) => {
-                    tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
-                    Some(e)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to build planner engine, falling back to default agent");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
-
     // Print fleet banner.
     println!();
     println!("  TENGU FLEET ORCHESTRATOR");
@@ -370,12 +332,6 @@ pub(crate) async fn boot_orchestrator(
     });
 
     let mut task_counter: u64 = 0;
-
-    let ev_config = OrchestratorConfig {
-        max_retries: orch_config.max_retries,
-        task_timeout: std::time::Duration::from_secs(300),
-        ..OrchestratorConfig::default()
-    };
 
     // Main dispatch loop.
     loop {
@@ -448,116 +404,27 @@ pub(crate) async fn boot_orchestrator(
                 }
             }
         } else {
-            // ── Plan-and-execute: shared orchestration pipeline ──
-            let plan_engine: &dyn Engine = dedicated_planner
-                .as_deref()
-                .unwrap_or_else(|| {
-                    let pid = planner_agent_id.as_ref().unwrap();
-                    agent_runtimes.get(pid).unwrap().engine.as_ref()
-                });
-
-            println!("  Planning...");
-
-            // Build role dependency constraints from agent configs.
-            let role_deps: RoleDependencies = config
-                .agents
-                .values()
-                .filter_map(|ac| {
-                    let role = ac.role.as_deref()?;
-                    if ac.requires.is_empty() {
-                        return None;
-                    }
-                    Some((role.to_string(), ac.requires.clone()))
-                })
-                .collect();
-
-            // Phase 1: Generate and validate plan (shared with Telegram).
-            let prepared = match event_orchestrator::prepare_plan(
-                &input,
-                plan_engine,
-                &agent_descriptions,
-                &role_deps,
-                &memory_handle,
-            )
-            .await
-            {
-                Ok(p) => p,
+            // B3c: no upfront planner. Route the raw input to the default
+            // agent — its orchestration skill (B2) decides when to delegate
+            // via sessions_spawn / sessions_fan_out.
+            let Some(default_id) = planner_agent_id.as_ref() else {
+                println!("  No default agent configured.");
+                continue;
+            };
+            let runtime = agent_runtimes.get(default_id).unwrap();
+            match execute_agent_task(runtime, &input, &secret_registry).await {
+                Ok((output, _)) => {
+                    println!();
+                    println!("  {}", output);
+                    println!();
+                    task_counter += 1;
+                    let task_id = format!("task-{}", task_counter);
+                    task_history.record(task_id.clone(), input.clone(), "default".to_string());
+                    task_history.assign(&task_id, default_id);
+                    task_history.complete(&task_id);
+                }
                 Err(e) => {
                     println!("  Failed: {}", e);
-                    continue;
-                }
-            };
-
-            println!();
-            println!("  {}", prepared.summary);
-
-            // Build executors for this plan.
-            let executors: HashMap<String, Arc<dyn AgentTaskExecutor>> = agent_runtimes
-                .iter()
-                .map(|(id, rt)| {
-                    let executor: Arc<dyn AgentTaskExecutor> = Arc::new(AgentRuntimeExecutor {
-                        runtime: Arc::clone(rt),
-                        secret_registry: Arc::clone(&secret_registry),
-                    });
-                    (id.clone(), executor)
-                })
-                .collect();
-
-            let workspace_name = first_workspace
-                .as_ref()
-                .and_then(|ws| ws.file_name())
-                .map(|n| n.to_string_lossy().to_string());
-
-            // Phase 2: Execute plan via EventBus (shared with Telegram).
-            let outcome = event_orchestrator::execute_plan(
-                prepared,
-                &role_to_agent,
-                &executors,
-                &memory_handle,
-                &input,
-                workspace_name.as_deref(),
-                &ev_config,
-            )
-            .await;
-
-            // Present results (CLI-specific).
-            match outcome {
-                Ok(plan_outcome) => {
-                    for task_out in &plan_outcome.tasks {
-                        if let Some(ref output) = task_out.output {
-                            println!();
-                            println!("  ── {} ──", task_out.id);
-                            println!("{}", output);
-                            println!("  ── end ──");
-                        }
-                    }
-
-                    let succeeded = plan_outcome
-                        .tasks
-                        .iter()
-                        .filter(|t| t.status == TaskStatus::Completed)
-                        .count();
-                    let failed = plan_outcome
-                        .tasks
-                        .iter()
-                        .filter(|t| t.status == TaskStatus::Failed)
-                        .count();
-                    let skipped = plan_outcome
-                        .tasks
-                        .iter()
-                        .filter(|t| t.status == TaskStatus::Skipped)
-                        .count();
-                    println!();
-                    println!(
-                        "  Plan completed: {}/{} succeeded, {} failed, {} skipped",
-                        succeeded,
-                        plan_outcome.tasks.len(),
-                        failed,
-                        skipped,
-                    );
-                }
-                Err(e) => {
-                    println!("  Orchestration failed: {}", e);
                 }
             }
         }
