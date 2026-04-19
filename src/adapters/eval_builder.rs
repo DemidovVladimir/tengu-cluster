@@ -61,8 +61,8 @@ pub fn derive_row_id(prompt: &str) -> String {
     while s.contains("--") {
         s = s.replace("--", "-");
     }
-    let trimmed = s.trim_matches('-');
-    trimmed.chars().take(64).collect()
+    let truncated: String = s.trim_matches('-').chars().take(64).collect();
+    truncated.trim_end_matches('-').to_string()
 }
 
 pub fn parse_markdown_prompts(body: &str) -> Result<Vec<PromptRow>> {
@@ -168,5 +168,15 @@ mod tests {
         assert_eq!(derive_row_id(""), "");
         let long = "a".repeat(80);
         assert_eq!(derive_row_id(&long).len(), 64);
+    }
+
+    #[test]
+    fn row_id_trims_trailing_dash_after_truncation() {
+        // 63 alphanumerics + one separator → without the fix, this would truncate to
+        // 64 chars ending in `-`. With the fix, the trailing dash is stripped.
+        let prompt = format!("{}!suffix", "a".repeat(63));
+        let id = derive_row_id(&prompt);
+        assert!(!id.ends_with('-'), "id should not end with dash, got: {:?}", id);
+        assert_eq!(id.len(), 63, "id length after trailing-dash trim should be 63, got {}", id.len());
     }
 }
