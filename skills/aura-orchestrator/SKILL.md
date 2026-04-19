@@ -24,6 +24,7 @@ Do NOT stop, report progress, or output text between steps — execute ALL steps
 **SUPER IMPORTANT RULES:**
 - POI registration is an **HTTP API call** (`http_request`), NOT a smart contract call. Do NOT use `abi_encode` or `sign_and_send_transaction` for POI.
 - Use `read_file` for PDFs — it has built-in PDF text extraction. NEVER use python, pip, pdftotext, or any shell tools for PDF reading.
+- Do NOT `read_file` on image/binary attachments (PNG, JPG, etc.). The skill's upload flow only needs the `file_path` — pass the path directly to `http_request`.
 - Use `shared_cache` to persist all critical molecule values (IDs, hashes, tokens). If you need a value from an earlier step, retrieve it from cache.
 - Follow every URL, contract address, and function signature in this document EXACTLY. Do NOT guess or fabricate alternatives.
 - NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
