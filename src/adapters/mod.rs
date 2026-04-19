@@ -6,18 +6,15 @@ pub mod types;
 // Re-export engine types at the adapters level for ergonomic access.
 pub use types::{Engine, EngineContext, EngineDiagnostics};
 
-pub(crate) mod agent_builder;
 pub(crate) mod chat_builder;
 pub(crate) mod memory_builder;
 pub(crate) mod secret_builder;
 pub(crate) mod skill_builder;
-pub(crate) mod task_builder;
 pub(crate) mod tool_builder;
 pub(crate) mod usage;
 
 // --- services & ports ---
 pub(crate) mod ports;
-pub(crate) mod event_orchestrator;
 pub(crate) mod flow_builder;
 pub(crate) mod prompt_budget;
 // --- adapters ---
