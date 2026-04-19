@@ -122,6 +122,8 @@ cargo run -- telegram                    # Telegram bot
 cargo run -- telegram --sandbox aura     # Telegram with sandbox config
 cargo run -- orchestrate                 # Multi-agent fleet
 cargo run -- orchestrate --sandbox aura  # Fleet with sandbox config
+cargo run -- eval orchestration          # Run a skill's evals and judge pass/fail
+cargo run -- eval orchestration --sandbox NAME  # Override with a sandbox config
 cargo run -- status                      # Show config summary
 cargo run -- doctor                      # Check backend connectivity
 cargo run -- secret init                 # Create encrypted secrets vault
@@ -233,6 +235,79 @@ Domain-specific team configs in `sandboxes/<name>/config.toml`:
 ```bash
 cargo run --features claude_code,telegram -- telegram --sandbox aura-claude
 ```
+
+## Evaluating Skills
+
+`tengu eval <skill>` runs the skill's prompt set through a live agent and scores each row pass/fail with an LLM judge. Use this to catch regressions when you edit a skill's body or description.
+
+**What a skill needs to be evaluable:**
+
+```
+skills/<skill>/evals/
+  prompts.md          # canonical table: | Prompt | Expected behaviour |
+  prompts.yaml        # optional richer format (stubs, per-row timeouts)
+  config.toml         # agent config used for the run — {TMP_WORKSPACE} placeholder expanded per row
+```
+
+`skills/orchestration/evals/` is the canonical example. `prompts.md` holds the 5 decomposition scenarios the orchestration skill is tested against; `config.toml` pins `engine = "openrouter"`, `model = "anthropic/claude-sonnet-4-6"`, enables `orchestrator` so `sessions_spawn`/`sessions_fan_out` register, and caps `max_tool_rounds = 10` for subagent taming.
+
+**Running:**
+
+```bash
+# Requires OPENROUTER_API_KEY in env (or vault).
+cargo run -- eval orchestration
+
+# Override the skill-local config with a sandbox:
+cargo run -- eval orchestration --sandbox aura
+
+# JSON output instead of the human table:
+cargo run -- eval orchestration --format json
+
+# Filter by row id (glob):
+cargo run -- eval orchestration --filter "sequential-*"
+
+# Keep per-row tmp workspaces for debugging:
+cargo run -- eval orchestration --keep-workspace
+
+# Use a different judge model (default: anthropic/claude-opus-4-7):
+cargo run -- eval orchestration --judge-model anthropic/claude-sonnet-4-6
+```
+
+**Output:** a terminal table per skill plus `evals/runs/<ISO8601-ts>/report.json` (schema_version 1) and one markdown transcript per row at `evals/runs/<ts>/<skill>-<row-id>.md`. The `evals/runs/` directory is gitignored — runs accumulate locally until you prune them.
+
+**Exit codes:** 0 = every row passed, 1 = at least one row failed, 2 = runner-level error (missing skill, missing sandbox config, missing `OPENROUTER_API_KEY`, judge unreachable).
+
+**Prompt format (markdown):**
+
+```markdown
+| Prompt | Expected behaviour |
+|---|---|
+| "research paper X then mint it" | Sequential `sessions_spawn(researcher)` then `sessions_spawn(minter)`. |
+```
+
+**Prompt format (YAML, opt-in — needed for tool stubs):**
+
+```yaml
+- id: fail-503-retry
+  prompt: "my trade failed with HTTP 503"
+  expected: "Retry the same call. No decomposition."
+  timeout_secs: 60
+  stubs:
+    - tool: http_request
+      responses:
+        - { status: 503, body: "Service Unavailable" }
+        - { status: 200, body: "{\"ok\": true}" }
+```
+
+When `prompts.yaml` and `prompts.md` both exist, YAML wins.
+
+**Limitations in v1:**
+
+- OpenRouter engine only. Configs declaring `engine = "claude_code"` error out — Claude Code runs its tool loop in a subprocess, which needs a different observation tap (future work via `mcp_bridge.rs`).
+- Sequential execution by default. `--concurrency N > 1` is not yet implemented (bails cleanly).
+- The transcript's message log only shows the initial system + user turns. Intermediate assistant turns and interleaved tool-result pairs are a known follow-up (`src/adapters/eval_builder.rs::write_transcript`).
+
+**Spec:** `docs/superpowers/specs/2026-04-19-eval-runner-design.md`.
 
 ## Telegram Bot
 
@@ -412,6 +487,7 @@ Detailed docs live in the `docs/` folder:
 | [Configuration](docs/configuration.md) | Full config reference |
 | [Skills](docs/skills.md) | Skill types, loading, cross-engine compatibility |
 | [MCP Bridge](docs/mcp-bridge.md) | How Tengu tools reach Claude Code |
+| [Eval Runner design](docs/superpowers/specs/2026-04-19-eval-runner-design.md) | `tengu eval <skill>` — design spec for the LLM-judge runner |
 
 ## Architecture
 
@@ -432,6 +508,7 @@ src/
     skill_builder.rs           # Skill parsing and registry
     memory_builder.rs          # Memory service + disk store
     orchestrator.rs            # Multi-agent fleet orchestrator
+    eval_builder.rs            # `tengu eval` runner (LLM-judge)
     telegram_builder.rs        # Telegram bot adapter
     tui/mod.rs                 # Terminal UI adapter
     ...

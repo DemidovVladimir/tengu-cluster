@@ -79,6 +79,37 @@ cargo test {{filter}} 2>&1
 
 Shell skills create named tools that execute templates with parameter substitution. They are injected inline into the tool list.
 
+## Evaluating Skills
+
+Skills can ship their own behavioural test suite. `tengu eval <skill>` replays the test prompts through a live agent and scores each row pass/fail with an LLM judge.
+
+**File:** `src/adapters/eval_builder.rs`. **Design spec:** `docs/superpowers/specs/2026-04-19-eval-runner-design.md`.
+
+**Layout (drop next to `SKILL.md`):**
+
+```
+skills/<skill>/evals/
+  prompts.md      # | Prompt | Expected behaviour | table — the default format
+  prompts.yaml    # optional richer format with tool stubs and per-row timeouts (YAML wins when both exist)
+  config.toml     # agent config used for the run; use workspace = "{TMP_WORKSPACE}" for the per-row tmp dir
+```
+
+`skills/orchestration/evals/` is the canonical example — 5 prompts covering sequential spawn, parallel fan-out, direct answer, retry-no-decomposition, and multi-step with memory. The matching `config.toml` pins `engine = "openrouter"`, `model = "anthropic/claude-sonnet-4-6"`, enables `orchestrator`, and caps `max_tool_rounds = 10`.
+
+**Run:**
+
+```bash
+cargo run -- eval orchestration          # requires OPENROUTER_API_KEY
+cargo run -- eval orchestration --sandbox aura     # override with a sandbox config
+cargo run -- eval orchestration --filter "trivial-*"  # glob over row ids
+cargo run -- eval orchestration --format json      # machine output
+cargo run -- eval orchestration --keep-workspace   # leave per-row tmp dirs for debugging
+```
+
+**Output:** terminal table + `evals/runs/<ts>/report.json` (schema_version 1) + one `<skill>-<row-id>.md` transcript per row. `evals/runs/` is gitignored. Exit codes: 0 all-pass / 1 row failure / 2 runner-level error.
+
+**v1 limitations:** OpenRouter engine only (Claude Code path deferred — the CLI runs its tool loop in a subprocess, so observation requires a different tap via `mcp_bridge.rs`); sequential execution only (`--concurrency N > 1` bails).
+
 ## Related
 - [[architecture]] — where skills fit in the system
 - [[configuration]] — skill_packages config

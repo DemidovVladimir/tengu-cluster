@@ -186,6 +186,11 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 | `agent_builder.rs` | Agent worker loop (Telegram) |
 | `task_builder.rs` | Task/plan management (Telegram) |
 
+### Evaluation
+| Module | Purpose |
+|--------|---------|
+| `eval_builder.rs` | `tengu eval <skill>` — LLM-judge runner that replays `skills/<skill>/evals/prompts.{md,yaml}` |
+
 ### Infrastructure
 | Module | Purpose |
 |--------|---------|
