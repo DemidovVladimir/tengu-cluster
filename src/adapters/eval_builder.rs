@@ -624,12 +624,19 @@ pub fn format_judge_user_turn(
     s
 }
 
+#[derive(Debug, Clone)]
+pub struct JudgeOutcome {
+    pub verdict: Verdict,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
 pub async fn judge_row(
     judge: &dyn Engine,
     expected: &str,
     observations: &[Observation],
     final_text: &str,
-) -> anyhow::Result<Verdict> {
+) -> anyhow::Result<JudgeOutcome> {
     let messages = vec![
         Message {
             role: Role::System,
@@ -660,6 +667,8 @@ pub async fn judge_row(
     };
     let mut stream = judge.run(&messages, &[], &ctx).await?;
     let mut output = String::from(JUDGE_PREFILL);
+    let mut input_tokens = 0u32;
+    let mut output_tokens = 0u32;
     while let Some(ev) = stream.next().await {
         match ev {
             StreamEvent::TextDelta { text } => output.push_str(&text),
@@ -667,10 +676,22 @@ pub async fn judge_row(
             StreamEvent::Error { message } => {
                 anyhow::bail!("judge engine error: {}", message);
             }
+            StreamEvent::Usage {
+                input_tokens: it,
+                output_tokens: ot,
+            } => {
+                input_tokens = input_tokens.saturating_add(it);
+                output_tokens = output_tokens.saturating_add(ot);
+            }
             _ => {}
         }
     }
-    parse_verdict(&output)
+    let verdict = parse_verdict(&output)?;
+    Ok(JudgeOutcome {
+        verdict,
+        input_tokens,
+        output_tokens,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1138,13 +1159,19 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         &obs_snapshot,
         &engine_response.text,
     );
-    let verdict = if timed_out {
-        Verdict {
-            verdict: "fail".into(),
-            rationale: format!("row timed out after {}s", ctx.row.timeout_secs),
-        }
+    let (verdict, judge_input_tokens, judge_output_tokens) = if timed_out {
+        (
+            Verdict {
+                verdict: "fail".into(),
+                rationale: format!("row timed out after {}s", ctx.row.timeout_secs),
+            },
+            0u32,
+            0u32,
+        )
     } else {
-        judge_row(ctx.judge, &ctx.row.expected, &obs_snapshot, &engine_response.text).await?
+        let outcome =
+            judge_row(ctx.judge, &ctx.row.expected, &obs_snapshot, &engine_response.text).await?;
+        (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
     };
 
     // 9. Transcript.
@@ -1192,9 +1219,9 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             output: engine_response.output_tokens_delta,
         },
         judge_tokens: TokenCount {
-            input: 0,
-            output: 0,
-        }, // wired in Task 9
+            input: judge_input_tokens,
+            output: judge_output_tokens,
+        },
         transcript_path,
         timed_out,
         stubs_used: !ctx.row.stubs.is_empty(),
