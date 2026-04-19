@@ -350,6 +350,137 @@ pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Con
     Ok(cfg)
 }
 
+// ---------------------------------------------------------------------------
+// Verdict + parse_verdict
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Verdict {
+    pub verdict: String, // "pass" or "fail"
+    pub rationale: String,
+}
+
+pub fn parse_verdict(raw: &str) -> anyhow::Result<Verdict> {
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        verdict: String,
+        rationale: String,
+    }
+    match serde_json::from_str::<Raw>(raw) {
+        Ok(r) if r.verdict == "pass" || r.verdict == "fail" => Ok(Verdict {
+            verdict: r.verdict,
+            rationale: r.rationale,
+        }),
+        _ => {
+            let preview: String = raw.chars().take(200).collect();
+            Ok(Verdict {
+                verdict: "fail".into(),
+                rationale: format!("judge emitted malformed output: {}", preview),
+            })
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Observation + judge prompt helpers + judge_row
+// ---------------------------------------------------------------------------
+
+use crate::adapters::types::{Engine, EngineContext, Message, Role, StreamEvent};
+use futures::StreamExt;
+
+const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's tool-call sequence matches an expected behaviour.
+
+Input shape:
+- An "Expected behaviour" description in natural language.
+- An ordered list of the agent's observed tool calls (name + truncated args).
+- The agent's final assistant text.
+
+Decide: did the agent's behaviour match the expected behaviour?
+
+Reply with strict JSON only, on a single line:
+{"verdict": "pass" | "fail", "rationale": "<one sentence>"}
+
+No prose, no markdown, no code fences. Just the JSON object."#;
+
+#[derive(Debug, Clone)]
+pub struct Observation {
+    pub seq: u32,
+    pub name: String,
+    pub args_preview: String,
+}
+
+pub fn format_judge_user_turn(
+    expected: &str,
+    observations: &[Observation],
+    final_text: &str,
+) -> String {
+    let mut s = String::new();
+    s.push_str("Expected behaviour: ");
+    s.push_str(expected);
+    s.push_str("\n\nObserved tool calls (in order):\n");
+    if observations.is_empty() {
+        s.push_str("(none)\n");
+    } else {
+        for obs in observations {
+            s.push_str(&format!("{}. {}({})\n", obs.seq, obs.name, obs.args_preview));
+        }
+    }
+    s.push_str("\nFinal assistant text:\n");
+    let text_preview: String = final_text.chars().take(1024).collect();
+    s.push_str(&text_preview);
+    s.push_str("\n\nDid the agent's behaviour match the expected? Reply with JSON only.");
+    s
+}
+
+pub async fn judge_row(
+    judge: &dyn Engine,
+    expected: &str,
+    observations: &[Observation],
+    final_text: &str,
+) -> anyhow::Result<Verdict> {
+    let messages = vec![
+        Message {
+            role: Role::System,
+            content: JUDGE_SYSTEM_PROMPT.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: format_judge_user_turn(expected, observations, final_text),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        // Prefill the assistant turn with an opening brace to force JSON start.
+        Message {
+            role: Role::Assistant,
+            content: r#"{"verdict":"#.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+    let ctx = EngineContext {
+        workspace: None,
+        system_prompt: None,
+        bridge_tools: None,
+        max_tool_rounds: Some(1),
+        max_mcp_result_chars: None,
+    };
+    let mut stream = judge.run(&messages, &[], &ctx).await?;
+    let mut output = String::from(r#"{"verdict":"#);
+    while let Some(ev) = stream.next().await {
+        match ev {
+            StreamEvent::TextDelta { text } => output.push_str(&text),
+            StreamEvent::Done => break,
+            StreamEvent::Error { message } => {
+                anyhow::bail!("judge engine error: {}", message);
+            }
+            _ => {}
+        }
+    }
+    parse_verdict(&output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,5 +797,32 @@ workspace = "{TMP_WORKSPACE}"
         let r = stubbed.execute(&make_call("sessions_spawn")).await.unwrap();
         assert_eq!(r, "live-result-for-sessions_spawn");
         assert_eq!(inner.counter.lock().unwrap().as_slice(), &["sessions_spawn"]);
+    }
+
+    #[test]
+    fn verdict_parses_pass() {
+        let v = parse_verdict(r#"{"verdict": "pass", "rationale": "all good"}"#).unwrap();
+        assert_eq!(v.verdict, "pass");
+        assert_eq!(v.rationale, "all good");
+    }
+
+    #[test]
+    fn verdict_parses_fail() {
+        let v = parse_verdict(r#"{"verdict":"fail","rationale":"missed sessions_spawn"}"#).unwrap();
+        assert_eq!(v.verdict, "fail");
+    }
+
+    #[test]
+    fn verdict_malformed_produces_fail_with_diagnostic() {
+        let v = parse_verdict("not json at all").unwrap();
+        assert_eq!(v.verdict, "fail");
+        assert!(v.rationale.contains("judge emitted malformed output"));
+    }
+
+    #[test]
+    fn verdict_rejects_unknown_verdict_value() {
+        let v = parse_verdict(r#"{"verdict":"maybe","rationale":"unsure"}"#).unwrap();
+        assert_eq!(v.verdict, "fail");
+        assert!(v.rationale.contains("judge emitted malformed output"));
     }
 }
