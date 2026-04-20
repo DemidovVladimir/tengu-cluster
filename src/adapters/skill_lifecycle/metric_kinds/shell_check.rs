@@ -1,4 +1,10 @@
 //! `shell_check` metric kind — run a command, match exit code + stdout regex.
+//!
+//! **Implicit exit-code default:** when `expect_exit_code` is omitted, the kind
+//! still requires the command to succeed (exit 0). Specifying only
+//! `expect_stdout_matches` does NOT disable the exit-code check. If you need to
+//! score a stdout match regardless of exit code, open an issue — there is no
+//! knob for it today.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -142,5 +148,17 @@ mod tests {
             spec_regex_exit(None, Some(0)),
         ).await;
         assert!(out.pass);
+    }
+
+    #[tokio::test]
+    async fn stdout_only_spec_still_requires_exit_ok() {
+        // When expect_exit_code is omitted, the default of 0 still applies.
+        // A command that fails but produces matching stdout still fails the metric.
+        let out = run(
+            MockShell { stdout: "0xabc".into(), ok: false },
+            spec_regex_exit(Some("^0x[a-f0-9]+$"), None),
+        ).await;
+        assert!(!out.pass, "stdout-only spec must still require exit 0");
+        assert!(out.notes.as_deref().unwrap().contains("exit_match=false"));
     }
 }
