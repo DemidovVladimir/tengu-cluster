@@ -10,7 +10,7 @@ pub(crate) mod config;
 pub(crate) mod metrics;
 pub(crate) mod metric_kinds;
 pub(crate) mod storage;
-// pub(crate) mod fixtures;         // Task 8
+pub(crate) mod fixtures;
 // pub(crate) mod runner;           // Task 12
 // pub(crate) mod scratch_worktree; // Task 14
 // pub(crate) mod evolve;           // Task 15
