@@ -1,9 +1,9 @@
 //! Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]`
 //! TOML section of `tengu.toml`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SkillLifecycleConfig {
     pub improver_agent: String,
     pub fixture_runner_agent: String,

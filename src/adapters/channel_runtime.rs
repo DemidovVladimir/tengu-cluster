@@ -25,6 +25,7 @@ use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
+use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::mcp::McpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
 use crate::adapters::plugins::skill::SkillPlugin;
@@ -186,6 +187,19 @@ pub(crate) fn build_tool_executor(
         }
     }
 
+    // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
+    // via `workspace_tools = ["skill_distill"]`.
+    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
+    if allowed_names.contains(SKILL_DISTILL_TOOL_NAME) {
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &SkillLifecyclePlugin,
+            &plugin_ctx,
+            &allowed_list,
+        )) {
+            tracing::warn!(error = %e, "Failed to register skill-lifecycle plugin — skill_distill unavailable");
+        }
+    }
+
     // HTTP plugin (A2). Registers `http_request`.
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
@@ -315,6 +329,9 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
     }
+    if workspace_tools.iter().any(|t| t == SKILL_DISTILL_TOOL_NAME) {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
+    }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
     tools
@@ -338,6 +355,9 @@ pub(crate) fn compute_bridge_tools(
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
+    }
+    if workspace_tools.iter().any(|t| t == SKILL_DISTILL_TOOL_NAME) {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());

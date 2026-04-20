@@ -24,6 +24,7 @@ use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
+use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::memory::MemoryPlugin;
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::ports::{ToolActivityPort, ToolScope};
@@ -428,6 +429,16 @@ async fn build_bridge_executor(
             .await
         {
             warn!(error = %e, "bridge failed to register cache plugin");
+        }
+    }
+
+    // Skill-lifecycle plugin — skill_distill (opt-in).
+    if allowed_names.contains(SKILL_DISTILL_TOOL_NAME) {
+        if let Err(e) = registry
+            .register_plugin(&SkillLifecyclePlugin, &plugin_ctx, &allowed_list)
+            .await
+        {
+            warn!(error = %e, "bridge failed to register skill-lifecycle plugin");
         }
     }
 
