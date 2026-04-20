@@ -16,6 +16,7 @@ pub trait WorkerHandle: Send + Sync {
 }
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -39,12 +40,21 @@ impl DagExecutor {
         worker: Arc<dyn WorkerHandle>,
         policy: &RetryPolicy,
         events: &EventBus,
+        cancel: Arc<AtomicBool>,
     ) -> ExecResult {
         let mut completed_outputs: HashMap<StepId, String> = HashMap::new();
         let mut in_flight: HashSet<StepId> = HashSet::new();
         let mut futures = FuturesUnordered::new();
 
         loop {
+            // Honor cancellation before dispatching the next batch of ready
+            // steps. In-flight steps are left to drain naturally; the loop
+            // returns `Cancelled` as soon as we observe the flag at a
+            // dispatch boundary.
+            if cancel.load(Ordering::SeqCst) {
+                return ExecResult::Cancelled;
+            }
+
             // Dispatch ready steps.
             let completed: HashSet<StepId> = completed_outputs.keys().cloned().collect();
             for step in plan.ready_steps(&completed) {
@@ -102,6 +112,12 @@ impl DagExecutor {
                     };
                 }
                 None => break,
+            }
+
+            // Re-check cancellation after each completion so a flag set
+            // while steps were running is observed before the next dispatch.
+            if cancel.load(Ordering::SeqCst) {
+                return ExecResult::Cancelled;
             }
         }
 
@@ -183,6 +199,10 @@ mod tests {
         }
     }
 
+    fn no_cancel() -> Arc<std::sync::atomic::AtomicBool> {
+        Arc::new(std::sync::atomic::AtomicBool::new(false))
+    }
+
     #[tokio::test]
     async fn linear_plan_completes_in_order() {
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -190,7 +210,7 @@ mod tests {
         let bus = new_bus();
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
-        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus).await;
+        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus, no_cancel()).await;
         assert!(matches!(result, ExecResult::Done { .. }));
         assert_eq!(*order.lock().await, vec!["s1".to_string(), "s2".to_string()]);
     }
@@ -200,7 +220,8 @@ mod tests {
         let bus = new_bus();
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
-        let result = DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus).await;
+        let result =
+            DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus, no_cancel()).await;
         match result {
             ExecResult::Done { final_output } => {
                 assert!(final_output.contains("s1")); // s1's output fed into s2 via <step-input>
@@ -208,5 +229,16 @@ mod tests {
             }
             _ => panic!("expected Done"),
         }
+    }
+
+    #[tokio::test]
+    async fn cancel_flag_short_circuits_before_dispatch() {
+        let bus = new_bus();
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let result =
+            DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus, cancel).await;
+        assert!(matches!(result, ExecResult::Cancelled));
     }
 }

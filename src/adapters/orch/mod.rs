@@ -29,6 +29,7 @@ pub mod wiring;
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 pub use plan::{Plan, Step, StepId};
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
@@ -43,6 +44,7 @@ pub struct Orchestrator {
     max_replans: u32,
     bus: EventBus,
     memory: Arc<MemoryManager>,
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl Orchestrator {
@@ -60,6 +62,7 @@ impl Orchestrator {
             max_replans,
             bus: events::new_bus(),
             memory,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -67,7 +70,20 @@ impl Orchestrator {
         self.bus.subscribe()
     }
 
+    /// Request cancellation of the in-flight plan. The DAG executor observes
+    /// the flag at dispatch boundaries and returns `ExecResult::Cancelled`,
+    /// which the replan driver translates into a terminal
+    /// `PlanCompleted { cancelled: true }` event. Channel-side wiring
+    /// (`/stop` for Telegram, Ctrl-C for CLI) is deferred until the
+    /// full dispatch path routes through `Orchestrator::handle`.
+    pub fn cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
     pub async fn handle(&self, user_message: String) -> String {
+        // Reset the flag each turn so a stale cancellation from a previous
+        // turn does not short-circuit this one.
+        self.cancel_flag.store(false, Ordering::SeqCst);
         replan::drive(
             Arc::clone(&self.planner),
             &user_message,
@@ -75,6 +91,7 @@ impl Orchestrator {
             &self.policy,
             self.max_replans,
             &self.bus,
+            Arc::clone(&self.cancel_flag),
         )
         .await
     }
@@ -88,6 +105,7 @@ mod e2e_tests {
     //! the crate has no `[lib]` target — external integration tests
     //! cannot reach crate-private types.
 
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -155,6 +173,7 @@ mod e2e_tests {
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
         let bus = new_bus();
+        let cancel = Arc::new(AtomicBool::new(false));
         let out = replan::drive(
             Arc::new(StaticPlanner { plan }),
             "user question",
@@ -162,6 +181,7 @@ mod e2e_tests {
             &policy,
             0,
             &bus,
+            cancel,
         )
         .await;
         assert!(out.contains("out(c)")); // synthesizer output

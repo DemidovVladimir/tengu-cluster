@@ -1,5 +1,6 @@
 //! Replan outer loop: on step exhaustion, re-invoke the planner.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::adapters::orch::events::{EventBus, OrchestratorEvent};
@@ -15,7 +16,17 @@ pub async fn drive(
     policy: &RetryPolicy,
     max_replans: u32,
     events: &EventBus,
+    cancel: Arc<AtomicBool>,
 ) -> String {
+    // Respect a cancellation requested before we even begin planning.
+    if cancel.load(Ordering::SeqCst) {
+        let _ = events.send(OrchestratorEvent::PlanCompleted {
+            final_response: "Stopped by user.".into(),
+            cancelled: true,
+        });
+        return "Stopped by user.".into();
+    }
+
     let mut plan_opt: Option<Plan> = match planner.plan(user_message).await {
         Ok(PlannerVerdict::Direct { response }) => {
             let _ = events.send(OrchestratorEvent::PlanCompleted {
@@ -40,7 +51,7 @@ pub async fn drive(
         let plan = plan_opt.as_ref().unwrap().clone();
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
-        match DagExecutor::run(&plan, Arc::clone(&worker), policy, events).await {
+        match DagExecutor::run(&plan, Arc::clone(&worker), policy, events, Arc::clone(&cancel)).await {
             ExecResult::Done { final_output } => {
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: final_output.clone(),
@@ -174,7 +185,8 @@ mod tests {
         });
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1); 3];
-        let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let out = drive(planner, "msg", worker, &policy, 2, &bus, cancel).await;
         assert!(out.contains("ok-good"));
     }
 
@@ -201,7 +213,33 @@ mod tests {
         });
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1); 3];
-        let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let out = drive(planner, "msg", worker, &policy, 2, &bus, cancel).await;
         assert!(out.contains("Unable to complete"));
+    }
+
+    #[tokio::test]
+    async fn pre_flagged_cancel_short_circuits_drive() {
+        let bus = new_bus();
+        let planner = Arc::new(ScriptedPlanner {
+            verdicts: Mutex::new(vec![PlannerVerdict::Plan {
+                plan: Plan {
+                    steps: vec![Step {
+                        id: StepId::new("x"),
+                        agent: "x".into(),
+                        goal: "g".into(),
+                        depends_on: vec![],
+                    }],
+                },
+            }]),
+        });
+        let worker = Arc::new(FailOnceWorker {
+            calls: Mutex::new(0),
+        });
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let cancel = Arc::new(AtomicBool::new(true));
+        let out = drive(planner, "msg", worker, &policy, 0, &bus, cancel).await;
+        assert_eq!(out, "Stopped by user.");
     }
 }
