@@ -32,12 +32,6 @@ enum Commands {
     Status,
     /// Run runtime/environment diagnostics.
     Doctor,
-    /// Run multi-agent fleet orchestrator.
-    Orchestrate {
-        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
-        #[arg(long)]
-        sandbox: Option<String>,
-    },
     /// Run Telegram bot adapter.
     Telegram {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
@@ -250,10 +244,6 @@ async fn main() -> Result<()> {
         Commands::Doctor => {
             run_doctor(&config);
             Ok(())
-        }
-        Commands::Orchestrate { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            adapters::orchestrator::boot_orchestrator(&config, secret_registry).await
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
