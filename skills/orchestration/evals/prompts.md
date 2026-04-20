@@ -2,8 +2,6 @@
 
 | Prompt | Expected behaviour |
 |---|---|
-| "research paper X then mint it as an IP token" | Sequential `sessions_spawn(researcher)` then `sessions_spawn(minter)`. |
-| "fetch the latest prices for A, B, C" | Single `sessions_fan_out` with three independent requests. |
+| "research what is the consumption of the bmw 330 year 2022 then check price in Berlin aprox" | Sequential `sessions_spawn(researcher)`. |
+| "fetch the latest prices for Gold, Oil, Ethereum" | Single `sessions_fan_out` with three independent requests. |
 | "what's 2+2?" | Direct answer. No `sessions_spawn` call. |
-| "my trade failed with HTTP 503" | Retry the same call. No decomposition. |
-| "the deploy broke, check logs, restart, verify" | Sequential multi-step. At least one `remember` call (with progress metadata) to record state. |

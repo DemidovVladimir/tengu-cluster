@@ -12,7 +12,7 @@ max_concurrent = 3
 
 [agents.main]
 engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+model = "anthropic/claude-haiku-4.5"
 default = true
 workspace = "{TMP_WORKSPACE}"
 skill_packages = ["orchestration"]
