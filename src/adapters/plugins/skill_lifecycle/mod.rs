@@ -1,8 +1,32 @@
 //! Skill-lifecycle plugin — registers the `skill_distill` LLM-callable tool.
-//! Opt-in per agent via `AgentConfig.workspace_tools`.
 
 #![allow(dead_code)]
 
-// pub(crate) mod distill; // filled in Task 10
+use anyhow::Result;
+use async_trait::async_trait;
+use std::sync::Arc;
 
-// Plugin struct + ToolPlugin impl land in Task 10 alongside SkillDistillTool.
+use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
+use crate::adapters::types::ToolDef;
+
+pub(crate) mod distill;
+
+#[allow(unused_imports)]
+pub(crate) use distill::{SkillDistillTool, SKILL_DISTILL_TOOL_NAME};
+
+pub(crate) struct SkillLifecyclePlugin;
+
+#[async_trait]
+impl ToolPlugin for SkillLifecyclePlugin {
+    fn name(&self) -> &'static str {
+        "skill_lifecycle"
+    }
+
+    async fn tools(&self, _ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>> {
+        Ok(vec![Arc::new(SkillDistillTool::new())])
+    }
+}
+
+pub(crate) fn tool_defs() -> Vec<ToolDef> {
+    vec![SkillDistillTool::new().definition().clone()]
+}
