@@ -705,6 +705,170 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// ChatServiceFactory — per-agent, per-call ChatRuntimeService construction
+// ---------------------------------------------------------------------------
+//
+// `ChatRuntimeService<'a>` borrows most of its fields (`engine`, `agent_config`,
+// `tools`, ...) so it cannot live behind `Arc<dyn ChatServiceFactory>` on its
+// own. The factory here owns `Arc`-held snapshots of everything a service
+// needs and rebuilds one service per `run_turn` call. Channels construct the
+// factory once at startup by supplying an `inputs_fn` closure that knows how
+// to produce per-agent inputs (the same logic they currently run inline when
+// building a `ChatRuntimeService`).
+//
+// This is the escape hatch called out in Task 5.2: per-channel fidelity
+// (`tool_observer`, `cancel`, channel-specific tool wrapping, multi-agent
+// activity context) is preserved because each channel supplies its own
+// `inputs_fn`. The generic helper `build_orchestrator` below only needs the
+// factory trait, not the channel-specific shape.
+
+use async_trait::async_trait;
+
+use crate::adapters::chat_builder::ChatRuntimeService;
+use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
+use crate::adapters::memory::manager::MemoryManager;
+use crate::adapters::memory_builder::MemoryService;
+use crate::adapters::orch::planner::OrchestratorAgentPlanner;
+use crate::adapters::orch::retry::RetryPolicy;
+use crate::adapters::orch::roster::render_roster;
+use crate::adapters::orch::wiring::{ChatOrchestratorPortImpl, ChatServiceFactory, ChatWorker};
+use crate::adapters::orch::Orchestrator;
+use crate::adapters::types::FlowCompactionPolicy;
+use crate::adapters::Engine;
+use crate::adapters::config::Config;
+
+/// Owned snapshot of the inputs a `ChatRuntimeService<'a>` needs for a single
+/// turn. `inputs_fn` closures produce one of these per call; the factory then
+/// borrows into it to build the service for `process_user_text`.
+///
+/// Keeping this owned (`Arc`, `String`, `Vec`, `Box<dyn Fn ...>`) sidesteps
+/// the lifetime problem discovered in Task 5.1: `ChatRuntimeService<'a>` has
+/// an `'a` lifetime, so it must be constructed *inside* `run_turn` where the
+/// borrow can be rooted in a stack-local `ChatTurnInputs`.
+pub(crate) struct ChatTurnInputs {
+    pub engine: Arc<dyn Engine>,
+    pub agent_id: String,
+    pub agent_config: Arc<AgentConfig>,
+    pub history_turn_limit: usize,
+    pub compaction_policy: FlowCompactionPolicy,
+    pub system_prompt: String,
+    pub tools: Vec<ToolDef>,
+    pub tool_executor: Option<Arc<dyn ToolExecutor>>,
+    pub memory_handle: Option<Arc<MemoryServiceHandle>>,
+    pub max_recall_entries: usize,
+    pub max_recall_tokens: usize,
+    pub bridge_tools: Option<Vec<ToolDef>>,
+    /// Optional per-turn callback invoked after each tool executes.
+    /// Boxed so channels can close over their own event channels.
+    pub tool_observer: Option<Arc<dyn Fn(&ToolCall, &str) + Send + Sync>>,
+    /// Optional cancellation flag (shared). Cloned into each turn by the
+    /// channel; the factory just borrows from it.
+    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// Closure that produces the per-turn inputs for a named agent.
+///
+/// Each channel (TUI, Telegram, CLI orchestrator) supplies its own closure so
+/// channel-specific details (secret-redacting tool executor wrapper,
+/// tool-activity observer, typing-indicator cancel flag, multi-agent
+/// activity context appended to the system prompt) are preserved. A closure
+/// is used instead of a second trait to keep the factory construction
+/// site-local and avoid leaking channel internals into the factory API.
+pub(crate) type ChatInputsFn =
+    Arc<dyn Fn(&str) -> anyhow::Result<ChatTurnInputs> + Send + Sync>;
+
+/// Concrete `ChatServiceFactory` used by the orchestrator wiring.
+///
+/// Cheap to clone behind an `Arc`. All state is immutable after construction;
+/// per-call variability lives in `inputs_fn`.
+pub(crate) struct RuntimeChatServiceFactory {
+    inputs_fn: ChatInputsFn,
+}
+
+impl RuntimeChatServiceFactory {
+    pub(crate) fn new(inputs_fn: ChatInputsFn) -> Self {
+        Self { inputs_fn }
+    }
+}
+
+#[async_trait]
+impl ChatServiceFactory for RuntimeChatServiceFactory {
+    async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String> {
+        let inputs = (self.inputs_fn)(agent)?;
+
+        // Build MemoryService from the handle on the stack so the service
+        // can borrow into it.
+        let memory_service = inputs
+            .memory_handle
+            .as_ref()
+            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
+
+        // Wrap tool_observer Arc into the `&dyn Fn` form the service expects.
+        let observer_arc = inputs.tool_observer.clone();
+        let observer_ref: Option<ToolResultObserver<'_>> =
+            observer_arc.as_deref().map(|f| f as ToolResultObserver<'_>);
+
+        let service = ChatRuntimeService {
+            engine: inputs.engine.as_ref(),
+            agent_id: &inputs.agent_id,
+            agent_config: inputs.agent_config.as_ref(),
+            history_turn_limit: inputs.history_turn_limit,
+            compaction_policy: inputs.compaction_policy,
+            system_prompt: inputs.system_prompt.clone(),
+            tools: &inputs.tools,
+            tool_executor: inputs.tool_executor.as_deref().map(|e| e as &dyn ToolExecutor),
+            memory_service: memory_service.as_ref(),
+            max_recall_entries: inputs.max_recall_entries,
+            max_recall_tokens: inputs.max_recall_tokens,
+            tool_observer: observer_ref,
+            cancel: inputs.cancel.as_deref(),
+            bridge_tools: inputs.bridge_tools.as_deref(),
+        };
+
+        let mut state = create_chat_loop_state(inputs.agent_config.as_ref());
+        let result = service.process_user_text(&mut state, text).await?;
+        // Per §5.1 note: an empty assistant response (tool-only turn, budget
+        // exhaustion notice) degrades to an empty string; the caller can
+        // inspect `system_notice` via a dedicated path when that matters.
+        // The orchestrator always wants *some* string to feed back into the
+        // next step.
+        Ok(result.assistant_text.unwrap_or_default())
+    }
+}
+
+/// Build the harness-owned `Orchestrator` from config + factory + memory.
+///
+/// Returns `None` when `config.orchestrator` is absent (orchestration
+/// disabled — channels fall back to direct default-agent dispatch).
+pub(crate) fn build_orchestrator(
+    config: &Config,
+    chat_factory: Arc<dyn ChatServiceFactory>,
+    memory: Arc<MemoryManager>,
+) -> Option<Orchestrator> {
+    let cfg = config.orchestrator.as_ref()?;
+    let worker = Arc::new(ChatWorker::new(Arc::clone(&chat_factory), Arc::clone(&memory)));
+    let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
+        Arc::clone(&chat_factory),
+        Arc::clone(&memory),
+    ));
+    let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
+    let planner = Arc::new(OrchestratorAgentPlanner::new(
+        cfg.agent.clone(),
+        chat_port,
+        Arc::clone(&memory),
+        roster,
+    ));
+    let policy = RetryPolicy::new(cfg.max_attempts_per_step);
+    Some(Orchestrator::new(
+        planner,
+        worker,
+        policy,
+        cfg.max_replans,
+        memory,
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Golden registry test — asserts the LLM-facing tool surface is unchanged.
 // ---------------------------------------------------------------------------
 
