@@ -11,7 +11,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::memory_builder::MemoryServiceHandle;
-use crate::adapters::plugins::subagents::SubagentRegistry;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{ToolCall, ToolDef};
@@ -63,11 +62,6 @@ pub(crate) struct ToolCtx<'a> {
     pub memory: Option<&'a MemoryServiceHandle>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
-    /// Subagent registry handle — present only when the orchestrator is
-    /// enabled (gated by `OrchestratorConfig.enabled`). The subagents plugin
-    /// uses this to spawn / kill / steer LLM-driven subagents; all other
-    /// plugins ignore it.
-    pub subagents: Option<&'a SubagentRegistry>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
@@ -78,8 +72,6 @@ pub(crate) struct PluginCtx<'a> {
     pub shell: Arc<dyn ShellExecutionPort>,
     pub memory: Option<Arc<MemoryServiceHandle>>,
     pub secret_registry: Arc<SecretRegistry>,
-    /// Subagent registry — only set when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +157,6 @@ pub(crate) struct PluginToolExecutor {
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
-    /// Subagent registry — only populated when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
 }
 
 impl PluginToolExecutor {
@@ -174,7 +164,7 @@ impl PluginToolExecutor {
     ///
     /// Used to surface dynamically-discovered plugin tools (currently: MCP proxy tools
     /// with `{server}.{tool}` names) to the LLM. The static plugins (workspace, http,
-    /// crypto, cache, memory, skill, subagents) contribute tool defs via their own
+    /// crypto, cache, memory, skill) contribute tool defs via their own
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
@@ -208,7 +198,6 @@ impl ToolExecutor for PluginToolExecutor {
             memory: self.memory.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
-            subagents: self.subagents.as_ref().map(|r| r.as_ref()),
         };
 
         let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
@@ -260,7 +249,6 @@ mod tests {
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
-            subagents: None,
         }
     }
 

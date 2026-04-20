@@ -394,7 +394,6 @@ async fn build_bridge_executor(
         shell: Arc::clone(&shell),
         memory: memory_handle.clone(),
         secret_registry: Arc::clone(&secret_registry),
-        subagents: None,
     };
 
     let mut registry = ToolRegistry::new();
@@ -474,6 +473,5 @@ async fn build_bridge_executor(
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,
-        subagents: None,
     })
 }

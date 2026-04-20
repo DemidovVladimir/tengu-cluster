@@ -403,7 +403,6 @@ pub fn run_tui(
                                 None,
                                 Some(&memory_config),
                                 &engine_agent_config,
-                                None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
                             );
                             if let Some(ref exec) = current_executor {
@@ -484,7 +483,6 @@ pub fn run_tui(
                                     None,
                                     Some(&memory_config),
                                     &engine_agent_config,
-                                    None, // subagents: A7 wires via orchestrator path only.
                                     &mcp_servers,
                                 );
                                 if let Some(ref exec) = current_executor {
@@ -623,7 +621,6 @@ pub fn run_tui(
                                 None,
                                 Some(&memory_config),
                                 &engine_agent_config,
-                                None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
                             );
                             if let Some(ref exec) = current_executor {

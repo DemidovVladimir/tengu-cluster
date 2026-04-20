@@ -288,7 +288,6 @@ mod tests {
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
             memory: None,
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -307,7 +306,6 @@ mod tests {
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
             memory: Some(dummy_handle()),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -333,7 +331,6 @@ mod tests {
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
             memory: Some(dummy_handle()),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();

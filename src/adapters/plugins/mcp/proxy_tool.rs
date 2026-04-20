@@ -104,7 +104,6 @@ mod tests {
             memory: None,
             secret_registry: &secrets,
             activity: activity.as_ref(),
-            subagents: None,
         };
 
         let args = json!({"title": "bug"});

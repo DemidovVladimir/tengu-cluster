@@ -1371,7 +1371,6 @@ impl TelegramSession {
                 None,
                 Some(&self.memory_config),
                 &agent.agent_config,
-                None, // subagents: wired by orchestrator path only for A7.
                 &self.config.mcp_servers,
             )
         });
@@ -1747,7 +1746,6 @@ impl TelegramSession {
                         None,
                         Some(&self.memory_config),
                         &agent.agent_config,
-                        None, // subagents: wired by orchestrator path only for A7.
                         &self.config.mcp_servers,
                     )
                     .map(|e| {
@@ -2196,7 +2194,6 @@ impl TelegramSession {
                 None,
                 Some(&self.memory_config),
                 &agent.agent_config,
-                None, // subagents: wired by orchestrator path only for A7.
                 &self.config.mcp_servers,
             )
         });

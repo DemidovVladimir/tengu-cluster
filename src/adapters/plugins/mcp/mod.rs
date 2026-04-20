@@ -114,7 +114,6 @@ mod tests {
             shell: Arc::new(LocalShellExecutor::new()),
             memory: None,
             secret_registry: Arc::new(SecretRegistry::new()),
-            subagents: None,
         }
     }
 

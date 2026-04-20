@@ -28,7 +28,6 @@ use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::mcp::McpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
 use crate::adapters::plugins::skill::SkillPlugin;
-use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
@@ -82,7 +81,7 @@ pub(crate) fn rebuild_system_prompt(
 ///
 /// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Every tool is
 /// backed by a domain plugin (workspace, http, crypto, cache, memory, skill,
-/// subagents).
+/// mcp).
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
@@ -94,7 +93,6 @@ pub(crate) fn build_tool_executor(
     shared_http_client: Option<&reqwest::Client>,
     memory_config: Option<&crate::adapters::config::MemoryConfig>,
     agent_config: &AgentConfig,
-    subagents: Option<Arc<SubagentRegistry>>,
     mcp_servers: &[McpServerConfig],
 ) -> Option<PluginToolExecutor> {
     if tools.is_empty() {
@@ -126,7 +124,6 @@ pub(crate) fn build_tool_executor(
         shell: Arc::clone(&shell),
         memory: memory_handle.clone(),
         secret_registry: Arc::clone(secret_registry),
-        subagents: subagents.clone(),
     };
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
@@ -208,19 +205,6 @@ pub(crate) fn build_tool_executor(
         tracing::warn!(error = %e, "Failed to register crypto plugin — crypto tools unavailable");
     }
 
-    // Subagents plugin (A7). Only registers tools when a SubagentRegistry is
-    // provided — callers pass `Some` when `config.orchestrator.enabled`.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
-    if subagents.is_some() {
-        if let Err(e) = futures::executor::block_on(registry.register_plugin(
-            &SubagentsPlugin,
-            &plugin_ctx,
-            &allowed_list,
-        )) {
-            tracing::warn!(error = %e, "Failed to register subagents plugin — sessions_spawn/fan_out/subagents unavailable");
-        }
-    }
-
     // MCP plugin (A10). Inbound client — connects to each configured external
     // MCP server and registers its tools as `{server_name}.{tool_name}`. Only
     // wired in when at least one server is configured. An empty allow-list is
@@ -256,18 +240,7 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,
-        subagents,
     })
-}
-
-/// Tool definitions advertised by the subagents plugin.
-///
-/// Channel adapters call this when the orchestrator is enabled so the
-/// three subagent tools appear in the LLM-facing tool list. Keeping the
-/// helper separate from `compute_base_tools` keeps the default surface
-/// untouched for users without orchestration configured.
-pub(crate) fn compute_subagent_tools() -> Vec<ToolDef> {
-    crate::adapters::plugins::subagents::tool_defs()
 }
 
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
@@ -916,7 +889,6 @@ mod golden_tests {
             None,
             None,
             agent_config,
-            None, // subagents: golden test simulates orchestrator-disabled default.
             &[], // mcp_servers: default install has no MCP servers configured.
         )
         .expect("executor");
