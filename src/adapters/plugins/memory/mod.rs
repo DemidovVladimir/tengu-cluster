@@ -21,9 +21,11 @@ use crate::adapters::types::ToolDef;
 
 pub(crate) mod ingest;
 pub(crate) mod persistent_store;
+pub(crate) mod search;
 
 pub(crate) use ingest::{MemoryIngestTool, MEMORY_INGEST_TOOL_NAME};
 pub(crate) use persistent_store::{PersistentStoreTool, PERSISTENT_STORE_TOOL_NAME};
+pub(crate) use search::{MemorySearchTool, MEMORY_SEARCH_TOOL_NAME};
 
 /// ToolDef for `memory_ingest` — kept in sync with the schema in
 /// `ingest::MemoryIngestTool::new`.
@@ -62,6 +64,47 @@ pub(crate) fn memory_ingest_def() -> ToolDef {
                     "additionalProperties": true
                 }
             }
+        }),
+    )
+}
+
+/// ToolDef for `memory_search` — kept in sync with the schema in
+/// `search::MemorySearchTool::new`.
+pub(crate) fn memory_search_def() -> ToolDef {
+    ToolDef::new(
+        MEMORY_SEARCH_TOOL_NAME,
+        "Targeted vector search of long-term memory. Returns hits with \
+         text, similarity score, and metadata. Use when you need to \
+         look up specific prior content (documents ingested by other \
+         agents, past turn summaries, etc.). Optional `agent`, \
+         `source`, and `kind` filters restrict matches to entries \
+         whose metadata has the exact given value.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language search query embedded by the memory backend."
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max hits to return (default: 5).",
+                    "default": 5
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `agent` metadata equals this value."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `source` metadata equals this value."
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `kind` metadata equals this value."
+                }
+            },
+            "required": ["query"]
         }),
     )
 }
@@ -113,7 +156,7 @@ pub(crate) fn persistent_store_def() -> ToolDef {
 /// inclusion by whether memory is enabled. `persistent_store` is opt-in per
 /// agent via `workspace_tools` and has its own separate `tool_defs()` below.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    vec![memory_ingest_def()]
+    vec![memory_ingest_def(), memory_search_def()]
 }
 
 /// Tool definitions for the opt-in `persistent_store` tool.
@@ -155,8 +198,10 @@ impl ToolPlugin for MemoryPlugin {
             return Ok(vec![]);
         };
 
-        let mut tools: Vec<Arc<dyn Tool>> =
-            vec![Arc::new(MemoryIngestTool::new(Arc::clone(&handle)))];
+        let mut tools: Vec<Arc<dyn Tool>> = vec![
+            Arc::new(MemoryIngestTool::new(Arc::clone(&handle))),
+            Arc::new(MemorySearchTool::new(Arc::clone(&handle))),
+        ];
 
         if ctx
             .config
@@ -268,6 +313,7 @@ mod tests {
         let tools = plugin.tools(&ctx).await.unwrap();
         let names: Vec<String> = tools.iter().map(|t| t.definition().name.clone()).collect();
         assert!(names.contains(&"memory_ingest".to_string()));
+        assert!(names.contains(&"memory_search".to_string()));
         assert!(
             !names.contains(&"persistent_store".to_string()),
             "persistent_store should be opt-in"
@@ -293,6 +339,7 @@ mod tests {
         let tools = plugin.tools(&ctx).await.unwrap();
         let names: Vec<String> = tools.iter().map(|t| t.definition().name.clone()).collect();
         assert!(names.contains(&"memory_ingest".to_string()));
+        assert!(names.contains(&"memory_search".to_string()));
         assert!(names.contains(&"persistent_store".to_string()));
     }
 }

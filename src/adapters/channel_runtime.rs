@@ -775,10 +775,14 @@ mod golden_tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        // `memory_ingest` requires a memory handle — only present when memory is enabled.
-        // `persistent_store` requires memory too and is opt-in.
+        // `memory_ingest` and `memory_search` require a memory handle — only
+        // present when memory is enabled. `persistent_store` requires memory
+        // too and is opt-in.
         if names.contains("memory_ingest") {
             expected.insert("memory_ingest".to_string());
+        }
+        if names.contains("memory_search") {
+            expected.insert("memory_search".to_string());
         }
 
         assert_eq!(

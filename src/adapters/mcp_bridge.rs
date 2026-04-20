@@ -359,6 +359,7 @@ async fn build_bridge_executor(
     // Memory handle: only built when memory tools are requested and the API
     // key is present. Errors fall through to None so other tools still work.
     let needs_memory = allowed_names.contains("memory_ingest")
+        || allowed_names.contains("memory_search")
         || allowed_names.contains(
             crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME,
         );
