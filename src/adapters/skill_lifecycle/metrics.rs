@@ -83,7 +83,7 @@ pub(crate) struct MetricRunCtx<'a> {
     pub skill_dir: &'a Path,
     pub workspace: &'a Path,
     pub shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
-    // Extended in later tasks (LLM client, tool registry handle).
+    pub tools: Option<&'a crate::adapters::tool_plugin::ToolRegistry>,
 }
 
 #[async_trait]
