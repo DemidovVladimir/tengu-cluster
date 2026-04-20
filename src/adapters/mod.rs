@@ -8,6 +8,7 @@ pub use types::{Engine, EngineContext, EngineDiagnostics};
 
 pub(crate) mod agent_builder;
 pub(crate) mod chat_builder;
+pub mod memory;
 pub(crate) mod memory_builder;
 pub(crate) mod secret_builder;
 pub(crate) mod skill_builder;
