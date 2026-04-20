@@ -27,4 +27,54 @@ pub mod telemetry;
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 pub use plan::{Plan, Step, StepId};
-// `Orchestrator` struct is appended to this file in Task 4.9.
+
+use std::sync::Arc;
+
+use crate::adapters::memory::manager::MemoryManager;
+use crate::adapters::orch::executor::WorkerHandle;
+use crate::adapters::orch::planner::Planner;
+use crate::adapters::orch::retry::RetryPolicy;
+
+pub struct Orchestrator {
+    planner: Arc<dyn Planner>,
+    worker: Arc<dyn WorkerHandle>,
+    policy: RetryPolicy,
+    max_replans: u32,
+    bus: EventBus,
+    memory: Arc<MemoryManager>,
+}
+
+impl Orchestrator {
+    pub fn new(
+        planner: Arc<dyn Planner>,
+        worker: Arc<dyn WorkerHandle>,
+        policy: RetryPolicy,
+        max_replans: u32,
+        memory: Arc<MemoryManager>,
+    ) -> Self {
+        Self {
+            planner,
+            worker,
+            policy,
+            max_replans,
+            bus: events::new_bus(),
+            memory,
+        }
+    }
+
+    pub fn subscribe(&self) -> EventReceiver {
+        self.bus.subscribe()
+    }
+
+    pub async fn handle(&self, user_message: String) -> String {
+        replan::drive(
+            Arc::clone(&self.planner),
+            &user_message,
+            Arc::clone(&self.worker),
+            &self.policy,
+            self.max_replans,
+            &self.bus,
+        )
+        .await
+    }
+}
