@@ -416,42 +416,30 @@ fn default_max_tokens() -> u64 {
     100_000
 }
 
-/// Orchestrator configuration for fleet management.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Orchestration configuration. Presence activates orchestration;
+/// absence falls back to single-agent-default dispatch.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OrchestratorConfig {
-    #[serde(default = "default_orchestrator_enabled")]
-    pub enabled: bool,
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-    /// Maximum number of subagents that may be running concurrently when
-    /// the orchestrator is enabled. Used by the subagents plugin (A7) to
-    /// bound `sessions_spawn` / `sessions_fan_out`.
-    #[serde(default = "default_max_concurrent")]
-    pub max_concurrent: usize,
-    pub planner_engine: Option<String>,
-    pub planner_model: Option<String>,
+    /// Name of the agent (in `Config.agents`) that acts as the
+    /// orchestrator.
+    pub agent: String,
+
+    /// Tier 1: how many times a single step is retried before
+    /// escalation.
+    #[serde(default = "default_max_attempts_per_step")]
+    pub max_attempts_per_step: u32,
+
+    /// Tier 2: how many times the orchestrator is re-invoked to replan
+    /// after exhaustion before bailing out.
+    #[serde(default = "default_max_replans")]
+    pub max_replans: u32,
 }
 
-impl Default for OrchestratorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_orchestrator_enabled(),
-            max_retries: default_max_retries(),
-            max_concurrent: default_max_concurrent(),
-            planner_engine: None,
-            planner_model: None,
-        }
-    }
-}
-
-fn default_orchestrator_enabled() -> bool {
-    false
-}
-fn default_max_retries() -> u32 {
+fn default_max_attempts_per_step() -> u32 {
     3
 }
-fn default_max_concurrent() -> usize {
-    4
+fn default_max_replans() -> u32 {
+    2
 }
 
 /// Telegram bot adapter configuration.

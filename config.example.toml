@@ -100,10 +100,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # See tengu/Sandboxes.md for details.
 
 # [orchestrator]
-# enabled = true
-# max_retries = 0
-# planner_engine = "openrouter"         # Dedicated engine for task planning/classification
-# planner_model = "google/gemini-2.5-flash"  # Cheaper/faster model for planning (default: uses default agent's model)
+# agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that acts as the orchestrator
+# max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
+# max_replans = 2                       # Tier 2: how many times the orchestrator is re-invoked to replan before bailing out
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.

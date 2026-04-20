@@ -1019,30 +1019,31 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
     // Build subagent registry when orchestrator is enabled.
+    // Note: the subagents plugin is slated for deletion in Phase 6; for now
+    // we keep it compiling but gate it on `orchestrator.is_some()`.
     let subagent_registry: Option<
         Arc<crate::adapters::plugins::subagents::SubagentRegistry>,
-    > = if let Some(ref orch) = cfg.orchestrator {
-        if orch.enabled {
-            use crate::adapters::plugins::subagents::{
-                ProductionSubagentRuntime, SubagentRegistry, SubagentRuntime,
-            };
-            let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new());
-            let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
-                Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new());
-            let runtime: Arc<dyn SubagentRuntime> = Arc::new(ProductionSubagentRuntime {
-                config: Arc::new(cfg.clone()),
-                http,
-                shell,
-                memory: None,
-                secret_registry: Arc::clone(&secret_registry),
-            });
-            Some(Arc::new(SubagentRegistry::new(orch.max_concurrent, runtime)))
-        } else {
-            None
-        }
+    > = if cfg.orchestrator.is_some() {
+        use crate::adapters::plugins::subagents::{
+            ProductionSubagentRuntime, SubagentRegistry, SubagentRuntime,
+        };
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
+            Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new());
+        let runtime: Arc<dyn SubagentRuntime> = Arc::new(ProductionSubagentRuntime {
+            config: Arc::new(cfg.clone()),
+            http,
+            shell,
+            memory: None,
+            secret_registry: Arc::clone(&secret_registry),
+        });
+        // Hard-cap concurrency at the former default of 4 (the dedicated
+        // `max_concurrent` field was removed in the Task 3.1 reshape because
+        // the subagents plugin itself is going away in Phase 6).
+        Some(Arc::new(SubagentRegistry::new(4, runtime)))
     } else {
         None
     };

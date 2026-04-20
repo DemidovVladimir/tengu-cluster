@@ -824,31 +824,11 @@ impl TelegramSession {
             })
             .collect();
 
-        // Build dedicated planner engine if configured.
-        let planner_engine: Option<Arc<dyn Engine>> = match (
-            config
-                .orchestrator
-                .as_ref()
-                .and_then(|o| o.planner_engine.as_ref()),
-            config
-                .orchestrator
-                .as_ref()
-                .and_then(|o| o.planner_model.as_ref()),
-        ) {
-            (Some(engine_type), Some(model)) => {
-                match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
-                    Ok(e) => {
-                        info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
-                        Some(Arc::from(e))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to build planner engine, falling back to default agent");
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
+        // The former `planner_engine` / `planner_model` overrides were
+        // removed in the Task 3.1 reshape. The legacy Telegram `/team`
+        // planner falls back to the default agent's engine; dedicated
+        // orchestrator-agent wiring lands in Phase 5.3.
+        let planner_engine: Option<Arc<dyn Engine>> = None;
 
         let is_multi_agent = agent_states.len() > 1;
 
@@ -1151,11 +1131,8 @@ impl TelegramSession {
 
             match decision {
                 Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                    let orchestrator_enabled = self
-                        .config
-                        .orchestrator
-                        .as_ref()
-                        .is_some_and(|o| o.enabled);
+                    // Presence of `[orchestrator]` now activates orchestration.
+                    let orchestrator_enabled = self.config.orchestrator.is_some();
                     if self.role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
                         info!(role = %role_key, "Classifier routed to single agent");
                         routed_role = Some(role_key);

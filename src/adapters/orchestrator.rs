@@ -74,12 +74,13 @@ pub(crate) async fn boot_orchestrator(
     config: &Config,
     secret_registry: Arc<SecretRegistry>,
 ) -> Result<()> {
-    let orch_config = config.orchestrator.clone().unwrap_or_default();
-
-    if !orch_config.enabled {
-        info!("Orchestrator disabled in config, skipping boot");
-        return Ok(());
-    }
+    let orch_config = match config.orchestrator.clone() {
+        Some(cfg) => cfg,
+        None => {
+            info!("Orchestrator not configured ([orchestrator] block absent), skipping boot");
+            return Ok(());
+        }
+    };
 
     // Apply workspace scaffold if configured.
     crate::adapters::scaffold::maybe_apply_scaffold(config);
@@ -136,10 +137,10 @@ pub(crate) async fn boot_orchestrator(
             memory: memory_handle.clone(),
             secret_registry: Arc::clone(&secret_registry),
         });
-        Some(Arc::new(SubagentRegistry::new(
-            orch_config.max_concurrent,
-            runtime,
-        )))
+        // Hard-cap concurrency at the former default of 4 (the dedicated
+        // `max_concurrent` field was removed in the Task 3.1 reshape; the
+        // subagents plugin itself is scheduled for deletion in Phase 6).
+        Some(Arc::new(SubagentRegistry::new(4, runtime)))
     };
 
     // Register agents with roles, build engines and tool executors.
@@ -304,26 +305,11 @@ pub(crate) async fn boot_orchestrator(
         anyhow::bail!("No agents with roles configured for orchestration");
     }
 
-    // Build a dedicated planner engine if configured.
-    let orch = config.orchestrator.as_ref();
-    let dedicated_planner: Option<Box<dyn Engine>> = match (
-        orch.and_then(|o| o.planner_engine.as_ref()),
-        orch.and_then(|o| o.planner_model.as_ref()),
-    ) {
-        (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
-                Ok(e) => {
-                    tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
-                    Some(e)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to build planner engine, falling back to default agent");
-                    None
-                }
-            }
-        }
-        _ => None,
-    };
+    // The former `planner_engine` / `planner_model` overrides were removed in
+    // the Task 3.1 reshape. The orchestrator agent's engine/model now come
+    // from its `[agents.<name>]` entry (keyed by `OrchestratorConfig.agent`).
+    // This legacy path falls back to the default agent's engine below.
+    let dedicated_planner: Option<Box<dyn Engine>> = None;
 
     // Print fleet banner.
     println!();
@@ -372,7 +358,10 @@ pub(crate) async fn boot_orchestrator(
     let mut task_counter: u64 = 0;
 
     let ev_config = OrchestratorConfig {
-        max_retries: orch_config.max_retries,
+        // Reuse the reshaped per-step retry count as the legacy event-bus
+        // retry count — close enough for the legacy CLI path, which will be
+        // deleted in Phase 7.
+        max_retries: orch_config.max_attempts_per_step,
         task_timeout: std::time::Duration::from_secs(300),
         ..OrchestratorConfig::default()
     };

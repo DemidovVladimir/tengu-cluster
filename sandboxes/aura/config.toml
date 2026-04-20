@@ -18,10 +18,9 @@ tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
 
 [orchestrator]
-enabled = true
-max_retries = 2
-planner_engine = "anthropic"
-planner_model = "anthropic/claude-sonnet-4.6"
+agent = "orchestrator"
+max_attempts_per_step = 3
+max_replans = 2
 
 # --- Scaffold ---
 # Root workspace with working directories created at startup.
