@@ -121,6 +121,111 @@ pub fn run_tui(
     let memory_config = config.memory.clone();
     let mcp_servers = config.mcp_servers.clone();
 
+    // Task 5.4 — harness-owned orchestration wiring for CLI interactive chat.
+    //
+    // Mirrors the scaffold landed in Task 5.3 for Telegram. The TUI's engine
+    // thread owns per-turn mutable state (`current_tools`, `current_executor`,
+    // `current_system_prompt`, `runtime_state`) that rotates each turn on the
+    // engine thread's stack; a clean `ChatInputsFn` closure that produces
+    // `ChatTurnInputs` per agent would require either:
+    //   1. Moving the per-turn rebuild out of the engine thread into an
+    //      `Arc<RwLock<...>>` accessible from both the engine thread and the
+    //      factory closure, or
+    //   2. Switching the engine thread from a blocking `mpsc::Receiver<ChatRequest>`
+    //      loop to an async task so the orchestrator can drive turns through
+    //      it directly.
+    // Both are larger refactors than this task's scope, so we land the
+    // orchestrator struct + event-bus subscription now (so operators can
+    // observe harness-owned progress via a TUI system bubble) and defer the
+    // factory-closure wiring — same DONE_WITH_CONCERNS shape as Task 5.3.
+    //
+    // `_memory_manager` is held so it stays alive for the lifetime of the
+    // orchestrator (which holds an `Arc<MemoryManager>` internally).
+    let _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager> =
+        Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+    let orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>> = {
+        let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
+            Err(anyhow::anyhow!(
+                "TUI orchestrator factory not yet wired — see Task 5.4 DONE_WITH_CONCERNS note",
+            ))
+        });
+        let factory: Arc<dyn crate::adapters::orch::wiring::ChatServiceFactory> =
+            Arc::new(channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn));
+        channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
+            .map(Arc::new)
+    };
+    if orchestrator.is_some() {
+        tracing::info!("TUI orchestrator constructed (factory stub — dispatch wiring deferred)");
+    }
+
+    // Task 5.4 — verbose event rendering for CLI. Subscribe to the
+    // orchestrator bus (if configured) and push each progress event as a
+    // System bubble into the TUI. When the factory-closure refactor lands,
+    // this will render the live DAG progress tree from the same subscriber.
+    // Cursive owns stdout, so we render through `cb_sink` rather than
+    // printing directly — avoids corrupting the TUI frame buffer.
+    if let Some(orch) = orchestrator.as_ref() {
+        let mut rx = orch.subscribe();
+        let sink = siv.cb_sink().clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                use crate::adapters::orch::OrchestratorEvent;
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => {
+                            let line: Option<String> = match event {
+                                OrchestratorEvent::PlanCreated { plan } => Some(format!(
+                                    "orch: plan created ({} step{})",
+                                    plan.steps.len(),
+                                    if plan.steps.len() == 1 { "" } else { "s" },
+                                )),
+                                OrchestratorEvent::StepStarted { step_id, agent } => {
+                                    Some(format!("orch: ▶ {} [{}]", step_id.0, agent))
+                                }
+                                OrchestratorEvent::StepSucceeded { step_id, .. } => {
+                                    Some(format!("orch: ✓ {}", step_id.0))
+                                }
+                                OrchestratorEvent::StepFailed { step_id, attempt, error } => {
+                                    Some(format!(
+                                        "orch: ✗ {} (attempt {}): {}",
+                                        step_id.0, attempt, error
+                                    ))
+                                }
+                                OrchestratorEvent::StepExhausted { step_id, final_error } => {
+                                    Some(format!("orch: ⊘ {} exhausted: {}", step_id.0, final_error))
+                                }
+                                OrchestratorEvent::ReplanTriggered { reason } => {
+                                    Some(format!("orch: ↻ replan — {}", reason))
+                                }
+                                OrchestratorEvent::PlanCompleted { cancelled, .. } => Some(
+                                    if cancelled {
+                                        "orch: plan cancelled".to_string()
+                                    } else {
+                                        "orch: plan completed".to_string()
+                                    },
+                                ),
+                                OrchestratorEvent::StepProgress { .. } => None,
+                            };
+                            if let Some(text) = line {
+                                let _ = sink.send(Box::new(move |siv: &mut Cursive| {
+                                    view::push_bubble(siv, BubbleRole::System, &text);
+                                }));
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "orch event subscriber lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                "TUI orchestrator configured but no tokio runtime — event subscriber not spawned"
+            );
+        }
+    }
+
     // Spawn engine thread
     let cb_sink = siv.cb_sink().clone();
     let send_engine = SendEngine(engine);
