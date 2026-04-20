@@ -74,6 +74,10 @@ Expected: builds, eval-module tests pass.
 
 ### Task 0.2: Commit deletion of superseded Phase B/C/D/E specs and plans
 
+**STATUS: DONE ON MAIN — SKIP THIS TASK.** The deletions were committed on `main` as `44f1c57` before branching. The new feature branch inherits the clean state. Move directly to Phase 1.
+
+
+
 **Files:**
 - Delete (already marked `D` in `git status`):
   - `docs/superpowers/plans/2026-04-16-phase-e-self-alignment.md`
