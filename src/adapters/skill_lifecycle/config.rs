@@ -10,6 +10,7 @@ pub(crate) struct SkillLifecycleConfig {
     #[serde(default = "default_max_evolve_cycles")]
     pub default_max_evolve_cycles: u32,
     #[serde(default = "default_per_run_dir")]
+    // NOTE: Task 7 must read this field to control the per-run directory name.
     pub per_run_dir: String,
     #[serde(default = "default_rolling_window")]
     pub default_rolling_window: u32,
