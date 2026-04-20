@@ -27,11 +27,15 @@ git pull origin main
 git checkout -b feature/harness-orchestration
 ```
 
-- [ ] **Step 2: Cherry-pick eval-runner commits in order (oldest first)**
+- [ ] **Step 2: Cherry-pick eval-runner commits in topological order (oldest first)**
 
-These commits on `feature/phase-b-orchestration-collapse` add the `tengu eval` runner which is independent of the orchestration-skill direction. Cherry-pick them in chronological order:
+These commits on `feature/phase-b-orchestration-collapse` add the `tengu eval` runner which is independent of the orchestration-skill direction. **Scaffold first, then dependents in git-chronological order:**
 
 ```bash
+git cherry-pick 2382186  # feat(eval): scaffold tengu eval CLI subcommand          (adds eval_builder.rs)
+git cherry-pick 53bf3a1  # feat(eval): PromptRow + markdown prompts parser
+git cherry-pick ab2cd85  # docs(eval): row id cap is 64 chars
+git cherry-pick 7af8cb8  # fix(eval): strip trailing dash
 git cherry-pick 2a844de  # feat(eval): YAML prompts parser with stub support
 git cherry-pick 87fc347  # refactor(eval): single source of truth for default timeout
 git cherry-pick d832c57  # feat(eval): skill discovery across three tiers
@@ -45,10 +49,6 @@ git cherry-pick 6c816c3  # feat(eval): per-row driver with observation tap
 git cherry-pick 25ede6d  # feat(eval): report builder + top-level run() driver
 git cherry-pick aa011f0  # fix(eval): runner-level errors return exit code 2
 git cherry-pick 52abd55  # feat(eval): ANSI colour in terminal table
-git cherry-pick 2382186  # feat(eval): scaffold tengu eval CLI subcommand
-git cherry-pick 53bf3a1  # feat(eval): PromptRow + markdown prompts parser
-git cherry-pick ab2cd85  # docs(eval): row id cap is 64 chars
-git cherry-pick 7af8cb8  # fix(eval): strip trailing dash
 git cherry-pick 847193e  # fix(eval): wire --sandbox override
 git cherry-pick f1b9d12  # fix(eval): capture judge token usage
 git cherry-pick 40a4d52  # fix(eval): run_skill errors exit 2
