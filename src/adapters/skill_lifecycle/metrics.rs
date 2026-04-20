@@ -64,7 +64,7 @@ impl MetricSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MetricOutcome {
     pub pass: bool,
     pub score: f32,
@@ -200,7 +200,9 @@ mod tests {
             expect_exit_code: Some(0),
             min_pass_rate: Some(1.5),
         }];
-        assert!(validate_metrics(&specs, dir.path()).is_err());
+        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        assert!(err.contains("1.5"), "{err}");
+        assert!(err.contains("outside [0,1]"), "{err}");
     }
 
     #[test]
@@ -213,7 +215,11 @@ mod tests {
             expect_exit_code: None,
             min_pass_rate: None,
         }];
-        assert!(validate_metrics(&specs, dir.path()).is_err());
+        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        assert!(
+            err.contains("must set expect_stdout_matches or expect_exit_code"),
+            "{err}"
+        );
     }
 
     #[test]
