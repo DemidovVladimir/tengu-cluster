@@ -29,6 +29,7 @@ pub(crate) mod embedding;
 pub(crate) mod engine_builder;
 pub(crate) mod eval_builder;
 pub(crate) mod mcp_bridge;
+pub(crate) mod orch;
 pub(crate) mod orchestrator;
 pub(crate) mod plugins;
 pub(crate) mod prune;
