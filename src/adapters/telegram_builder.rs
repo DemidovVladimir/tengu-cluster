@@ -593,6 +593,21 @@ struct TelegramSession {
     memory_handle: Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
     secret_registry: Arc<SecretRegistry>,
 
+    // Harness-owned orchestration (Task 5.3, scoped per plan guardrail).
+    //
+    // Constructed when `config.orchestrator.is_some()`. The factory closure
+    // that would produce per-turn `ChatTurnInputs` for each agent cannot be
+    // cleanly expressed without first refactoring `agent_states` into an
+    // `Arc<RwLock<...>>` (skill hot-reload currently mutates in place), so
+    // this landing only wires up the struct and event bus; actually routing
+    // user messages through `orchestrator.handle()` is deferred to a
+    // follow-up. See the DONE_WITH_CONCERNS note in the Task 5.3 report.
+    //
+    // `_memory_manager` is held so it stays alive for the lifetime of the
+    // orchestrator (which holds an `Arc<MemoryManager>` internally).
+    orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>>,
+    _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager>,
+
     // Per-user mutable state
     user_states: HashMap<String, ChatLoopState>,
     user_state_last_active: HashMap<String, std::time::Instant>,
@@ -856,6 +871,38 @@ impl TelegramSession {
 
         info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
 
+        // Task 5.3 — harness-owned orchestration wiring (scoped).
+        //
+        // Build an empty `MemoryManager` (no providers registered — Telegram
+        // does not yet wire external memory providers through the new
+        // manager; `MemoryManager::prefetch_all` / `sync_all` on an empty
+        // manager are no-ops, which is the correct behaviour here).
+        //
+        // The chat factory is a stub: building a real `ChatInputsFn` closure
+        // that produces `ChatTurnInputs` per agent requires turning
+        // `agent_states: HashMap<String, TelegramAgentState>` into an
+        // `Arc<RwLock<...>>` (skill hot-reload + per-turn mutation currently
+        // take `&mut self`). That refactor is deferred per the Task 5.3 plan
+        // guardrail — this landing only sets up the orchestrator struct and
+        // event bus so the next task can focus on the factory wiring alone.
+        let memory_manager = Arc::new(
+            crate::adapters::memory::manager::MemoryManager::new(),
+        );
+        let orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>> = {
+            let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
+                Err(anyhow::anyhow!(
+                    "Telegram orchestrator factory not yet wired — see Task 5.3 DONE_WITH_CONCERNS note",
+                ))
+            });
+            let factory: Arc<dyn crate::adapters::orch::wiring::ChatServiceFactory> =
+                Arc::new(channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn));
+            channel_runtime::build_orchestrator(&config, factory, Arc::clone(&memory_manager))
+                .map(Arc::new)
+        };
+        if orchestrator.is_some() {
+            info!("Telegram orchestrator constructed (factory stub — dispatch wiring deferred)");
+        }
+
         let session = TelegramSession {
             pipe,
             turn_cancel,
@@ -873,6 +920,8 @@ impl TelegramSession {
             planner_engine,
             memory_handle,
             secret_registry,
+            orchestrator,
+            _memory_manager: memory_manager,
             user_states: HashMap::new(),
             user_state_last_active: HashMap::new(),
             last_eviction_check: std::time::Instant::now(),
@@ -894,6 +943,39 @@ impl TelegramSession {
         mut inbound_rx: tokio::sync::mpsc::Receiver<InboundMessage>,
     ) -> Result<()> {
         rt.block_on(async {
+            // Task 5.3 — quiet event rendering. Subscribe to the orchestrator
+            // bus (if configured) and log progress events at `info!` level so
+            // operators can observe harness-owned orchestration while the
+            // actual per-message dispatch wiring is pending. When the
+            // factory-closure refactor lands, replace this with a per-turn
+            // subscription that edits a "Thinking..." message in place (or a
+            // single-response fallback if teloxide edit-in-place is not wired
+            // into `TelegramPipe`).
+            if let Some(orch) = self.orchestrator.as_ref() {
+                let mut rx = orch.subscribe();
+                tokio::spawn(async move {
+                    use crate::adapters::orch::OrchestratorEvent;
+                    loop {
+                        match rx.recv().await {
+                            Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {
+                                info!(step = %step_id.0, agent = %agent, "orch StepStarted");
+                            }
+                            Ok(OrchestratorEvent::ReplanTriggered { reason }) => {
+                                info!(reason = %reason, "orch ReplanTriggered");
+                            }
+                            Ok(OrchestratorEvent::PlanCompleted { cancelled, .. }) => {
+                                info!(cancelled, "orch PlanCompleted");
+                            }
+                            Ok(_) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!(dropped = n, "orch event subscriber lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+
             let ctrl_c = tokio::signal::ctrl_c();
             tokio::pin!(ctrl_c);
 
