@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::orch::plan::Plan;
+use crate::adapters::orchestrator::plan::Plan;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -124,7 +124,7 @@ impl Planner for OrchestratorAgentPlanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orch::plan::StepId;
+    use crate::adapters::orchestrator::plan::StepId;
 
     #[test]
     fn parses_direct() {

@@ -9,10 +9,6 @@
 //! - `events`    — OrchestratorEvent enum + broadcast channel
 //! - `roster`    — agent roster rendering + template substitution
 //! - `telemetry` — event → tracing bridge
-//!
-//! NOTE: Temporarily named `orch` (not `orchestrator`) to avoid collision
-//! with the legacy `src/adapters/orchestrator.rs` file. Will be renamed
-//! to `orchestrator/` in Phase 7 when the legacy file is deleted.
 
 pub mod config;
 pub mod events;
@@ -33,9 +29,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orch::executor::WorkerHandle;
-use crate::adapters::orch::planner::Planner;
-use crate::adapters::orch::retry::RetryPolicy;
+use crate::adapters::orchestrator::executor::WorkerHandle;
+use crate::adapters::orchestrator::planner::Planner;
+use crate::adapters::orchestrator::retry::RetryPolicy;
 
 pub struct Orchestrator {
     planner: Arc<dyn Planner>,
@@ -110,12 +106,12 @@ mod e2e_tests {
 
     use async_trait::async_trait;
 
-    use crate::adapters::orch::events::new_bus;
-    use crate::adapters::orch::executor::WorkerHandle;
-    use crate::adapters::orch::plan::{Plan, Step, StepId};
-    use crate::adapters::orch::planner::{Planner, PlannerVerdict};
-    use crate::adapters::orch::replan;
-    use crate::adapters::orch::retry::RetryPolicy;
+    use crate::adapters::orchestrator::events::new_bus;
+    use crate::adapters::orchestrator::executor::WorkerHandle;
+    use crate::adapters::orchestrator::plan::{Plan, Step, StepId};
+    use crate::adapters::orchestrator::planner::{Planner, PlannerVerdict};
+    use crate::adapters::orchestrator::replan;
+    use crate::adapters::orchestrator::retry::RetryPolicy;
 
     struct StaticPlanner {
         plan: Plan,

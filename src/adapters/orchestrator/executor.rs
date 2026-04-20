@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::adapters::orch::plan::Step;
+use crate::adapters::orchestrator::plan::Step;
 
 /// Abstracts "how to run a worker step." The real impl calls
 /// `ChatRuntimeService::process_user_text` under the hood. Tests
@@ -22,9 +22,9 @@ use std::sync::Arc;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::info;
 
-use crate::adapters::orch::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orch::plan::{Plan, StepId};
-use crate::adapters::orch::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
+use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
+use crate::adapters::orchestrator::plan::{Plan, StepId};
+use crate::adapters::orchestrator::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
 
 pub enum ExecResult {
     Done { final_output: String },
@@ -154,9 +154,9 @@ fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orch::events::new_bus;
-    use crate::adapters::orch::plan::{Plan, Step, StepId};
-    use crate::adapters::orch::retry::RetryPolicy;
+    use crate::adapters::orchestrator::events::new_bus;
+    use crate::adapters::orchestrator::plan::{Plan, Step, StepId};
+    use crate::adapters::orchestrator::retry::RetryPolicy;
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;

@@ -3,11 +3,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::adapters::orch::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orch::executor::{DagExecutor, ExecResult, WorkerHandle};
-use crate::adapters::orch::plan::Plan;
-use crate::adapters::orch::planner::{Planner, PlannerVerdict};
-use crate::adapters::orch::retry::RetryPolicy;
+use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
+use crate::adapters::orchestrator::executor::{DagExecutor, ExecResult, WorkerHandle};
+use crate::adapters::orchestrator::plan::Plan;
+use crate::adapters::orchestrator::planner::{Planner, PlannerVerdict};
+use crate::adapters::orchestrator::retry::RetryPolicy;
 
 pub async fn drive(
     planner: Arc<dyn Planner>,
@@ -110,8 +110,8 @@ pub async fn drive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orch::events::new_bus;
-    use crate::adapters::orch::plan::{Step, StepId};
+    use crate::adapters::orchestrator::events::new_bus;
+    use crate::adapters::orchestrator::plan::{Step, StepId};
     use async_trait::async_trait;
     use std::sync::Mutex;
     use std::time::Duration;

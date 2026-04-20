@@ -8,9 +8,9 @@ use std::sync::Arc;
 use crate::adapters::memory::injector;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::memory::writer;
-use crate::adapters::orch::executor::WorkerHandle;
-use crate::adapters::orch::plan::Step;
-use crate::adapters::orch::planner::OrchestratorChatPort;
+use crate::adapters::orchestrator::executor::WorkerHandle;
+use crate::adapters::orchestrator::plan::Step;
+use crate::adapters::orchestrator::planner::OrchestratorChatPort;
 
 /// Abstracts "run a conversation turn against a named agent." Implementors
 /// construct the agent-scoped `ChatRuntimeService<'a>` per call with a fresh

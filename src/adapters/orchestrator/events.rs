@@ -2,7 +2,7 @@
 
 use tokio::sync::broadcast;
 
-use crate::adapters::orch::plan::{Plan, StepId};
+use crate::adapters::orchestrator::plan::{Plan, StepId};
 
 #[derive(Debug, Clone)]
 pub enum OrchestratorEvent {

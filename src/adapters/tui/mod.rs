@@ -143,13 +143,13 @@ pub fn run_tui(
     // orchestrator (which holds an `Arc<MemoryManager>` internally).
     let _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager> =
         Arc::new(crate::adapters::memory::manager::MemoryManager::new());
-    let orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>> = {
+    let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
         let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
             Err(anyhow::anyhow!(
                 "TUI orchestrator factory not yet wired — see Task 5.4 DONE_WITH_CONCERNS note",
             ))
         });
-        let factory: Arc<dyn crate::adapters::orch::wiring::ChatServiceFactory> =
+        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
             Arc::new(channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn));
         channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
             .map(Arc::new)
@@ -169,7 +169,7 @@ pub fn run_tui(
         let sink = siv.cb_sink().clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                use crate::adapters::orch::OrchestratorEvent;
+                use crate::adapters::orchestrator::OrchestratorEvent;
                 loop {
                     match rx.recv().await {
                         Ok(event) => {

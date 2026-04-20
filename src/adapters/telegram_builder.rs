@@ -502,7 +502,7 @@ struct TelegramSession {
     //
     // `_memory_manager` is held so it stays alive for the lifetime of the
     // orchestrator (which holds an `Arc<MemoryManager>` internally).
-    orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>>,
+    orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>>,
     _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager>,
 
     // Per-user mutable state
@@ -746,13 +746,13 @@ impl TelegramSession {
         let memory_manager = Arc::new(
             crate::adapters::memory::manager::MemoryManager::new(),
         );
-        let orchestrator: Option<Arc<crate::adapters::orch::Orchestrator>> = {
+        let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
             let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
                 Err(anyhow::anyhow!(
                     "Telegram orchestrator factory not yet wired — see Task 5.3 DONE_WITH_CONCERNS note",
                 ))
             });
-            let factory: Arc<dyn crate::adapters::orch::wiring::ChatServiceFactory> =
+            let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
                 Arc::new(channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn));
             channel_runtime::build_orchestrator(&config, factory, Arc::clone(&memory_manager))
                 .map(Arc::new)
@@ -810,7 +810,7 @@ impl TelegramSession {
             if let Some(orch) = self.orchestrator.as_ref() {
                 let mut rx = orch.subscribe();
                 tokio::spawn(async move {
-                    use crate::adapters::orch::OrchestratorEvent;
+                    use crate::adapters::orchestrator::OrchestratorEvent;
                     loop {
                         match rx.recv().await {
                             Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {
