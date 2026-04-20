@@ -8,7 +8,7 @@
 
 pub(crate) mod config;
 pub(crate) mod metrics;
-// pub(crate) mod metric_kinds;     // Task 3
+pub(crate) mod metric_kinds;
 // pub(crate) mod storage;          // Task 7
 // pub(crate) mod fixtures;         // Task 8
 // pub(crate) mod runner;           // Task 12
