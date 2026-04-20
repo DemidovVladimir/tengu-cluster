@@ -474,5 +474,6 @@ async fn build_bridge_executor(
         activity: Arc::new(BridgeActivity),
         scopes,
         subagents: None,
+        conversation: Vec::new(),
     })
 }

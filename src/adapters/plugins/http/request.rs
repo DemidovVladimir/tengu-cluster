@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+#[cfg(test)]
+use crate::adapters::tool_plugin::ConversationView;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct HttpRequestTool {
@@ -426,6 +428,7 @@ mod tests {
                 secret_registry: &self.secrets,
                 activity: self.activity.as_ref(),
                 subagents: None,
+                conversation: ConversationView::empty(),
             }
         }
     }

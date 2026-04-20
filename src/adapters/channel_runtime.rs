@@ -257,6 +257,7 @@ pub(crate) fn build_tool_executor(
         activity,
         scopes,
         subagents,
+        conversation: Vec::new(),
     })
 }
 

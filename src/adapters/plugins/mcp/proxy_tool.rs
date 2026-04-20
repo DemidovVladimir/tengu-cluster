@@ -14,6 +14,8 @@ use serde_json::Value;
 
 use super::client::McpCaller;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+#[cfg(test)]
+use crate::adapters::tool_plugin::ConversationView;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct McpProxyTool {
@@ -105,6 +107,7 @@ mod tests {
             secret_registry: &secrets,
             activity: activity.as_ref(),
             subagents: None,
+            conversation: ConversationView::empty(),
         };
 
         let args = json!({"title": "bug"});
