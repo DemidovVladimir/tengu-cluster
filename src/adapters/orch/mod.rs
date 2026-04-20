@@ -23,6 +23,7 @@ pub mod replan;
 pub mod retry;
 pub mod roster;
 pub mod telemetry;
+pub mod wiring;
 
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
