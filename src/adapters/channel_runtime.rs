@@ -154,7 +154,7 @@ pub(crate) fn build_tool_executor(
         tracing::warn!(error = %e, "Failed to register skill plugin — shell skills unavailable");
     }
 
-    // Memory plugin (A5). Registers `remember` when memory is enabled, plus
+    // Memory plugin (A5). Registers `memory_ingest` when memory is enabled, plus
     // `persistent_store` when listed in `workspace_tools`. The plugin itself
     // gates on `ctx.memory.is_some()`.
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
@@ -170,7 +170,7 @@ pub(crate) fn build_tool_executor(
         &plugin_ctx,
         &allowed_list,
     )) {
-        tracing::warn!(error = %e, "Failed to register memory plugin — remember/persistent_store unavailable");
+        tracing::warn!(error = %e, "Failed to register memory plugin — memory_ingest/persistent_store unavailable");
     }
 
     // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
@@ -745,7 +745,7 @@ mod golden_tests {
             tmp.path(),
             &tools,
             &skill_registry,
-            &None, // memory_handle: omit — `remember` is only registered by MemoryPlugin when ctx.memory is Some.
+            &None, // memory_handle: omit — `memory_ingest` is only registered by MemoryPlugin when ctx.memory is Some.
             &secret_registry,
             activity,
             None,
@@ -775,10 +775,10 @@ mod golden_tests {
         .iter()
         .map(|s| s.to_string())
         .collect();
-        // `remember` requires a memory handle — only present when memory is enabled.
+        // `memory_ingest` requires a memory handle — only present when memory is enabled.
         // `persistent_store` requires memory too and is opt-in.
-        if names.contains("remember") {
-            expected.insert("remember".to_string());
+        if names.contains("memory_ingest") {
+            expected.insert("memory_ingest".to_string());
         }
 
         assert_eq!(

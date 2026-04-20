@@ -358,7 +358,7 @@ async fn build_bridge_executor(
 
     // Memory handle: only built when memory tools are requested and the API
     // key is present. Errors fall through to None so other tools still work.
-    let needs_memory = allowed_names.contains("remember")
+    let needs_memory = allowed_names.contains("memory_ingest")
         || allowed_names.contains(
             crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME,
         );
@@ -412,7 +412,7 @@ async fn build_bridge_executor(
         anyhow::bail!("bridge failed to register workspace plugin: {}", e);
     }
 
-    // Memory plugin — remember, persistent_store (gated by ctx.memory).
+    // Memory plugin — memory_ingest, persistent_store (gated by ctx.memory).
     let memory_plugin = MemoryPlugin::new(1000, 200);
     if let Err(e) = registry
         .register_plugin(&memory_plugin, &plugin_ctx, &allowed_list)
