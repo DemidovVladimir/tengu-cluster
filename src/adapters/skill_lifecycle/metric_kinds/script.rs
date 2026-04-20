@@ -97,7 +97,7 @@ mod tests {
         let ws = std::env::temp_dir();
         let fixture = FixtureContext { prompt: "", expected_outcome: None, transcript: "" };
         let ctx = MetricRunCtx {
-            skill_dir: dir.path(), workspace: &ws, shell: &NoShell, tools: None,
+            skill_dir: dir.path(), workspace: &ws, shell: &NoShell, tools: None, judge: None,
         };
         let spec = MetricSpec::Script { name: "m".into(), path: spec_path, min_pass_rate: None };
         ScriptKind.run(&spec, &fixture, &ctx).await.unwrap()

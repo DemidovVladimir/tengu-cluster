@@ -107,7 +107,7 @@ mod tests {
     async fn run(shell: MockShell, spec: MetricSpec) -> MetricOutcome {
         let ws = std::env::temp_dir();
         let fixture = FixtureContext { prompt: "", expected_outcome: None, transcript: "" };
-        let ctx = MetricRunCtx { skill_dir: &ws, workspace: &ws, shell: &shell, tools: None };
+        let ctx = MetricRunCtx { skill_dir: &ws, workspace: &ws, shell: &shell, tools: None, judge: None };
         ShellCheckKind.run(&spec, &fixture, &ctx).await.unwrap()
     }
 

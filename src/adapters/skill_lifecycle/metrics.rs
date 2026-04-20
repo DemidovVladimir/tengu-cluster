@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -78,12 +79,20 @@ pub(crate) struct FixtureContext<'a> {
     pub transcript: &'a str,
 }
 
+/// Minimal LLM client used by the judge kind. Trait boundary keeps the metric
+/// layer independent of the full engine stack and allows tests to inject fixtures.
+#[async_trait]
+pub(crate) trait JudgeClient: Send + Sync {
+    async fn judge(&self, system: &str, user: &str, prefill: &str, model: Option<&str>) -> Result<String>;
+}
+
 /// Runtime context passed to every metric kind.
 pub(crate) struct MetricRunCtx<'a> {
     pub skill_dir: &'a Path,
     pub workspace: &'a Path,
     pub shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
     pub tools: Option<&'a crate::adapters::tool_plugin::ToolRegistry>,
+    pub judge: Option<Arc<dyn JudgeClient>>,
 }
 
 #[async_trait]
