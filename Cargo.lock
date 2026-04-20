@@ -5506,6 +5506,7 @@ dependencies = [
  "dptree",
  "futures",
  "glob",
+ "once_cell",
  "pbkdf2",
  "pdf-extract",
  "qdrant-client",
