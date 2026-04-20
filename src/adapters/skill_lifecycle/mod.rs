@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod config;
-// pub(crate) mod metrics;          // Task 2
+pub(crate) mod metrics;
 // pub(crate) mod metric_kinds;     // Task 3
 // pub(crate) mod storage;          // Task 7
 // pub(crate) mod fixtures;         // Task 8
