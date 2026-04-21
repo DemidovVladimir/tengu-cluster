@@ -553,6 +553,32 @@ impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
     }
 }
 
+/// Owned variant of `SanitizedToolExecutor` that holds its dependencies behind
+/// `Arc`s. Used by the orchestrator chat-factory path, where the factory
+/// closure must return a `'static` `Arc<dyn ToolExecutor>` — borrowing into
+/// a per-turn stack-local `SanitizedToolExecutor<'a>` is not possible there.
+pub(crate) struct OwnedSanitizedToolExecutor {
+    inner: std::sync::Arc<dyn ToolExecutor>,
+    registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
+}
+
+impl OwnedSanitizedToolExecutor {
+    pub fn new(
+        inner: std::sync::Arc<dyn ToolExecutor>,
+        registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
+    ) -> Self {
+        Self { inner, registry }
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for OwnedSanitizedToolExecutor {
+    async fn execute(&self, call: &ToolCall) -> Result<String> {
+        let result = self.inner.execute(call).await?;
+        Ok(self.registry.redact(&result))
+    }
+}
+
 /// Optional callback invoked after each tool execution.
 pub type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 

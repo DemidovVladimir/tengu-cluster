@@ -121,42 +121,31 @@ pub fn run_tui(
     let memory_config = config.memory.clone();
     let mcp_servers = config.mcp_servers.clone();
 
-    // Task 5.4 — harness-owned orchestration wiring for CLI interactive chat.
+    // Harness-owned orchestration (Track A — factory-closure wiring).
     //
-    // Mirrors the scaffold landed in Task 5.3 for Telegram. The TUI's engine
-    // thread owns per-turn mutable state (`current_tools`, `current_executor`,
-    // `current_system_prompt`, `runtime_state`) that rotates each turn on the
-    // engine thread's stack; a clean `ChatInputsFn` closure that produces
-    // `ChatTurnInputs` per agent would require either:
-    //   1. Moving the per-turn rebuild out of the engine thread into an
-    //      `Arc<RwLock<...>>` accessible from both the engine thread and the
-    //      factory closure, or
-    //   2. Switching the engine thread from a blocking `mpsc::Receiver<ChatRequest>`
-    //      loop to an async task so the orchestrator can drive turns through
-    //      it directly.
-    // Both are larger refactors than this task's scope, so we land the
-    // orchestrator struct + event-bus subscription now (so operators can
-    // observe harness-owned progress via a TUI system bubble) and defer the
-    // factory-closure wiring — same DONE_WITH_CONCERNS shape as Task 5.3.
+    // `MemoryManager` stays empty (no providers) — Track B owns the port
+    // wiring that registers `BuiltinMemoryProvider`. An empty manager is a
+    // no-op for `prefetch_all` / `sync_all`, which is correct for now.
     //
-    // `_memory_manager` is held so it stays alive for the lifetime of the
-    // orchestrator (which holds an `Arc<MemoryManager>` internally).
+    // `orchestrator_snapshots` is shared between this main thread (where
+    // the orchestrator + factory are constructed) and the engine thread
+    // (where snapshots are written before each user-message dispatch).
+    // The engine thread runs `rt.block_on(orchestrator.handle(...))` and the
+    // orchestrator spawns step tasks that call our factory closure, which
+    // reads inputs back from the same map.
     let _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager> =
         Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+    let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
+        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
-        let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
-            Err(anyhow::anyhow!(
-                "TUI orchestrator factory not yet wired — see Task 5.4 DONE_WITH_CONCERNS note",
-            ))
-        });
-        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> = Arc::new(
-            channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn),
-        );
+        let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
+        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+            Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
         channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
             .map(Arc::new)
     };
     if orchestrator.is_some() {
-        tracing::info!("TUI orchestrator constructed (factory stub — dispatch wiring deferred)");
+        tracing::info!("TUI orchestrator constructed with per-turn snapshot factory");
     }
 
     // Task 5.4 — verbose event rendering for CLI. Subscribe to the
@@ -239,6 +228,8 @@ pub fn run_tui(
     let engine_agent_id = agent_id.clone();
     let engine_agent_config = agent_config.clone();
     let secret_registry_clone = Arc::clone(&secret_registry);
+    let engine_orchestrator = orchestrator.clone();
+    let engine_orchestrator_snapshots = Arc::clone(&orchestrator_snapshots);
 
     std::thread::spawn(move || {
         let secret_registry = secret_registry_clone;
@@ -247,7 +238,8 @@ pub fn run_tui(
             .build()
             .expect("Failed to create tokio runtime for engine thread");
 
-        let engine = send_engine.0;
+        // Promote the engine to an Arc so orchestrator snapshots can share it.
+        let engine: Arc<dyn crate::adapters::Engine> = Arc::from(send_engine.0);
 
         // Resolve workspace path (expand tilde)
         let workspace: Option<PathBuf> = engine_agent_config
@@ -654,6 +646,83 @@ pub fn run_tui(
                     }
 
                     let text = user_text;
+
+                    // Orchestrator dispatch path. When orchestration is
+                    // configured we route the user message through
+                    // `Orchestrator::handle` instead of a single
+                    // `ChatRuntimeService` turn. The snapshot map is shared
+                    // with the factory closure; we publish a fresh entry for
+                    // this agent each turn so hot-reloaded tools / system
+                    // prompt / owned executor are visible when the DAG
+                    // executor spawns a step.
+                    if let Some(ref orch) = engine_orchestrator {
+                        // Move the current executor into an `Arc` and wrap
+                        // with the owned sanitizer. Because the executor is
+                        // rebuilt whenever `tools_dirty` fires, this snapshot
+                        // is safe to share across spawned orchestrator tasks.
+                        let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
+                            current_executor.take().map(|exec| {
+                                let inner: Arc<dyn ToolExecutor> = Arc::new(exec);
+                                let wrapped: Arc<dyn ToolExecutor> = Arc::new(
+                                    crate::adapters::engine_builder::OwnedSanitizedToolExecutor::new(
+                                        Arc::clone(&inner),
+                                        Arc::clone(&secret_registry),
+                                    ),
+                                );
+                                wrapped
+                            });
+
+                        let bridge_tools_opt = if current_bridge_tools.is_empty() {
+                            None
+                        } else {
+                            Some(current_bridge_tools.clone())
+                        };
+
+                        let snapshot = channel_runtime::ChatTurnInputs {
+                            engine: Arc::clone(&engine),
+                            agent_id: engine_agent_id.clone(),
+                            agent_config: Arc::new(engine_agent_config.clone()),
+                            history_turn_limit,
+                            compaction_policy,
+                            system_prompt: current_system_prompt.clone(),
+                            tools: current_tools.clone(),
+                            tool_executor: sanitized_exec_arc,
+                            memory_manager: memory_manager_handle.clone(),
+                            max_recall_entries: memory_config.max_recall_entries,
+                            max_recall_tokens: memory_config.max_recall_tokens,
+                            bridge_tools: bridge_tools_opt,
+                            tool_observer: None,
+                            cancel: None,
+                        };
+                        if let Ok(mut guard) = engine_orchestrator_snapshots.write() {
+                            guard.insert(engine_agent_id.clone(), snapshot);
+                        } else {
+                            tracing::error!("orchestrator snapshots lock poisoned");
+                        }
+
+                        let final_output = rt.block_on(orch.handle(text.clone()));
+
+                        let redacted = secret_registry.redact(&final_output);
+                        let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
+                            view::hide_thinking(siv);
+                            if redacted.trim().is_empty() {
+                                view::push_bubble(
+                                    siv,
+                                    BubbleRole::System,
+                                    "(Orchestrator returned no response)",
+                                );
+                            } else {
+                                view::push_bubble(siv, BubbleRole::Assistant, &redacted);
+                            }
+                        }));
+
+                        // The orchestrator took ownership of the executor
+                        // (via the sanitized Arc). Mark tools dirty so the
+                        // next direct or orchestrator turn rebuilds a fresh
+                        // one against the latest skill registry.
+                        tools_dirty = true;
+                        continue;
+                    }
 
                     rt.block_on(async {
                         // Wrap tool executor with secret redaction decorator.
