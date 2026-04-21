@@ -59,7 +59,12 @@ The JSON object is one of two shapes:
 
 Rules for plans:
   1. Every step has a unique `id` string.
-  2. `agent` must name one of the agents in the roster below.
+  2. `agent` MUST be one of the exact names listed in the roster below.
+     The roster is the COMPLETE list of agents — no other agent exists.
+     Do NOT invent names like "analyst", "planner", "scholar",
+     "evaluator", "coordinator" — use the closest role from the roster
+     (usually `researcher` for information gathering of any kind,
+     `writer` for any prose/synthesis/formatting task).
   3. `depends_on` lists ids that must complete first. Steps with
      depends_on=[] run in parallel.
   4. Exactly ONE step has no dependents (the leaf). Its output is the
@@ -67,8 +72,11 @@ Rules for plans:
      whose depends_on is all the parallel branches.
   5. Goals must be single-sentence and focused — the worker sees only
      this goal plus upstream step outputs.
+  6. When the user describes a multi-phase flow ("first X, then in
+     parallel Y, finally Z"), preserve ALL phases as distinct steps
+     with appropriate depends_on edges. Do NOT collapse phases.
 
-Available agents:
+Available agents (USE ONLY THESE NAMES):
 
 {{ roster }}
 
