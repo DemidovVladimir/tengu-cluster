@@ -63,6 +63,20 @@ enum Commands {
         /// Keep per-row tmp workspaces after run (for debugging).
         #[arg(long)]
         keep_workspace: bool,
+        /// Retain only the N most recent run directories under evals/runs/.
+        /// Older ones are deleted at startup. Default 10. Ignored when
+        /// --out is set. Pass a large number (e.g. 9999) to effectively disable.
+        #[arg(long, default_value_t = 10)]
+        keep_runs: usize,
+        /// Skip writing per-row transcripts, report.json, metrics.json, and
+        /// history.jsonl. The table / JSON summary still prints. For quick
+        /// iteration without polluting the repo.
+        #[arg(long)]
+        no_persist: bool,
+        /// Retain only the N most recent per-skill `metrics/runs/<ts>/`
+        /// directories. `0` disables pruning. Default 10.
+        #[arg(long, default_value_t = 10)]
+        max_runs: u32,
     },
     /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
     Secret {
@@ -282,6 +296,9 @@ async fn main() -> Result<()> {
             out,
             filter,
             keep_workspace,
+            keep_runs,
+            no_persist,
+            max_runs,
         } => {
             let format = match format.as_str() {
                 "table" => adapters::eval_builder::OutputFormat::Table,
@@ -297,6 +314,9 @@ async fn main() -> Result<()> {
                 out_dir: out,
                 filter,
                 keep_workspace,
+                keep_runs: Some(keep_runs),
+                no_persist,
+                max_per_run_reports: max_runs,
             };
             let exit_code = adapters::eval_builder::run(args).await?;
             std::process::exit(exit_code);

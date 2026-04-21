@@ -63,6 +63,56 @@ pub(crate) fn create_scratch(
     }
 }
 
+/// Startup sweep: remove any directories under `<workspace>/.tengu/worktrees/`
+/// older than `stale_hours` hours. Catches leaked worktrees from Ctrl-C /
+/// crashes / killed processes. `stale_hours == 0` disables the sweep.
+///
+/// For each stale directory we try `git worktree remove --force` first (so
+/// git's administrative metadata stays consistent), falling back to plain
+/// `remove_dir_all`. Errors are logged and swallowed — this is best-effort.
+pub(crate) fn sweep_stale_worktrees(
+    shell: &dyn ShellExecutionPort,
+    workspace: &Path,
+    stale_hours: u32,
+) {
+    if stale_hours == 0 {
+        return;
+    }
+    let parent = workspace.join(".tengu").join("worktrees");
+    if !parent.exists() {
+        return;
+    }
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(stale_hours as u64 * 3600))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        if mtime >= cutoff {
+            continue;
+        }
+        let cmd = format!(
+            "git worktree remove --force {}",
+            shell_escape(path.to_string_lossy().as_ref())
+        );
+        let _ = shell.execute_shell(&cmd, workspace);
+        if path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                tracing::warn!(path = %path.display(), error = %e, "sweep_stale_worktrees: remove_dir_all failed");
+            } else {
+                tracing::info!(path = %path.display(), "sweep_stale_worktrees: removed stale worktree");
+            }
+        }
+    }
+}
+
 pub(crate) fn remove_scratch(
     shell: &dyn ShellExecutionPort,
     workspace: &Path,

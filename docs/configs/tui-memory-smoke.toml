@@ -1,0 +1,181 @@
+# Ready-to-paste TUI config for testing the memory scenarios S-18 / S-19 / S-20
+# from docs/orchestration-test-scenarios.md.
+#
+# Differences from skills/orchestration-e2e/evals/config.toml:
+#   1. [memory] block present + enabled — the eval path uses an empty
+#      MemoryManager; this config installs a real disk-backed vector store
+#      via channel_runtime::build_memory_manager.
+#   2. route_explicit_agents = true — so `@researcher:` and `@writer:`
+#      prompts also go through the planner (needed for S-20 cross-agent
+#      handoff where you explicitly address each agent).
+#   3. Absolute workspace paths — replace $WORKSPACE below with your
+#      actual test directory (e.g. /Users/yourname/tengu-memory-smoke).
+#      {TMP_WORKSPACE} only works inside the eval runner.
+#
+# How to use:
+#   1. Pick a directory for test state:
+#        mkdir -p ~/tengu-memory-smoke
+#        cd ~/tengu-memory-smoke
+#   2. Copy this file to the TUI config location:
+#        cp /Users/vladimirdemidov/development/tengu-cluster/docs/configs/tui-memory-smoke.toml ./tengu.toml
+#   3. Replace $WORKSPACE with the absolute path:
+#        sed -i '' "s|\$WORKSPACE|$PWD|g" tengu.toml
+#   4. Set your OpenRouter key:
+#        export OPENROUTER_API_KEY=sk-or-...
+#        export RUST_LOG=tengu_cluster=info,tengu_cluster::adapters::orchestrator=debug
+#   5. Start the TUI from THIS directory (so `.` resolves correctly):
+#        cd ~/tengu-memory-smoke
+#        /Users/vladimirdemidov/development/tengu-cluster/target/release/tengu chat
+#
+# Verify startup logs:
+#   "TUI orchestrator constructed with per-turn snapshot factory"
+#   "DiskVectorStore loaded"     (may say "entries=0" on first boot)
+#
+# After each turn, bottom status bar should update: "mem: N entries / K KB"
+
+runtime_profile = "cloud"
+
+# ---------------------------------------------------------------------------
+# Memory subsystem — ON.
+#
+# Using disk backend by default. If you have Qdrant running locally, set
+# backend = "qdrant" and provide qdrant_url / qdrant_api_key.
+# ---------------------------------------------------------------------------
+[memory]
+enabled = true
+backend = "disk"
+embedding_model = "text-embedding-3-small"
+vector_size = 1536
+max_recall_entries = 5
+max_recall_tokens = 4000
+persistent_store_chunk_size = 1000
+persistent_store_chunk_overlap = 200
+
+# ---------------------------------------------------------------------------
+# Orchestration — ON. Presence of this block activates harness-owned
+# orchestration (design §5.1). route_explicit_agents = true makes
+# @role:-prefixed messages go through the planner too, which S-20 needs.
+# ---------------------------------------------------------------------------
+[orchestrator]
+agent = "orchestrator"
+max_attempts_per_step = 3
+max_replans = 2
+route_explicit_agents = true
+
+# ---------------------------------------------------------------------------
+# Orchestrator agent — planner only. Gets memory_search; no other tools.
+# Empty workspace_tools in the eval path; here it has memory_search so
+# the planner can look up prior context before planning (useful for S-18).
+# ---------------------------------------------------------------------------
+[agents.orchestrator]
+default = false
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+workspace = "$WORKSPACE"
+workspace_tools = ["memory_search"]
+
+[agents.orchestrator.identity]
+instructions = """
+You are an ORCHESTRATOR. You do not answer the user's question directly.
+You decompose their request into a plan of work for specialist agents.
+
+You MUST emit exactly one JSON object and nothing else:
+  - no prose before or after
+  - no markdown code fences
+  - no explanations, apologies, or commentary
+
+The JSON object is one of two shapes:
+
+  {"kind": "direct", "response": "..."}
+
+    Use ONLY for trivial chat, greetings, single-fact arithmetic, or a
+    definition the orchestrator can answer in one sentence. When in doubt,
+    prefer a plan.
+
+  {"kind": "plan", "steps": [
+    {"id": "s1", "agent": "<agent_name>", "goal": "<focused single-sentence goal>", "depends_on": []},
+    ...
+  ]}
+
+Rules for plans:
+  1. Every step has a unique `id` string.
+  2. `agent` MUST be one of the exact names in the roster below. The
+     roster is the COMPLETE list — no other agent exists. Do NOT invent
+     names like "analyst", "planner", "scholar", "coordinator",
+     "evaluator". Use `researcher` for info-gathering, `writer` for
+     prose/synthesis/formatting.
+  3. `depends_on` lists ids that must complete first. depends_on=[] means
+     the step is parallel-ready.
+  4. Exactly ONE step has no dependents (the leaf). Its output is the
+     final response. Fan-outs need a synthesizer leaf step that
+     depends_on all branches.
+  5. Goals are single-sentence and focused. The worker sees only the
+     goal + upstream step outputs.
+  6. When the user describes a multi-phase flow ("first X, then in
+     parallel Y, finally Z"), preserve ALL phases as distinct steps.
+     Do NOT collapse phases.
+
+Available agents (USE ONLY THESE NAMES):
+
+{{ roster }}
+
+Emit the JSON object and stop. Do not add anything after the closing brace.
+"""
+
+[agents.orchestrator.limits]
+max_tool_rounds = 5
+stream_event_timeout_secs = 60
+
+# ---------------------------------------------------------------------------
+# Worker: researcher — default agent. Info-gathering, ingestion, fetch.
+# Has memory_ingest so S-19 and S-20 can persist content across sessions.
+# ---------------------------------------------------------------------------
+[agents.researcher]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "$WORKSPACE"
+workspace_tools = ["http_request", "memory_search", "memory_ingest"]
+
+[agents.researcher.identity]
+instructions = """
+You are a focused researcher. Given a single goal:
+  - Gather the requested information efficiently.
+  - When the user asks to remember / ingest content, chunk it and call
+    memory_ingest. Include descriptive metadata (source URL, topic, kind).
+  - Return a concise summary of what you found or stored.
+
+Avoid excessive tool churn — a well-chosen 1-3 http_requests is better
+than 10 poorly-targeted ones.
+"""
+
+[agents.researcher.limits]
+max_tool_rounds = 8
+stream_event_timeout_secs = 60
+
+# ---------------------------------------------------------------------------
+# Worker: writer — synthesis, prose, formal tone.
+# Has memory_search so S-20's cross-agent handoff works (writer pulls
+# researcher's ingested chunks).
+# ---------------------------------------------------------------------------
+[agents.writer]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "$WORKSPACE"
+workspace_tools = ["memory_search"]
+
+[agents.writer.identity]
+instructions = """
+You draft polished responses that synthesize inputs handed to you.
+When upstream step inputs are attached as <step-input from="..."> blocks,
+read them carefully and reference their content in your reply.
+
+When the user's request references prior conversation or stored
+documents, call memory_search with the relevant query before writing —
+surface the retrieved content in your reply rather than inventing from
+scratch.
+"""
+
+[agents.writer.limits]
+max_tool_rounds = 5
+stream_event_timeout_secs = 60

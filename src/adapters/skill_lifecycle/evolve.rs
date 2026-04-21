@@ -10,7 +10,9 @@ use crate::adapters::config::Config;
 use crate::adapters::orchestrator::wiring::ChatServiceFactory;
 use crate::adapters::skill_lifecycle::approval_gate::{read_decision, render, Decision, GateView};
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
-use crate::adapters::skill_lifecycle::scratch_worktree::{create_scratch, remove_scratch};
+use crate::adapters::skill_lifecycle::scratch_worktree::{
+    create_scratch, remove_scratch, sweep_stale_worktrees,
+};
 use crate::adapters::skill_lifecycle::storage::{MetricRollup, MetricsJson};
 
 // ---------------------------------------------------------------------------
@@ -219,6 +221,10 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
     let max_cycles = args.max_cycles.unwrap_or(sl.default_max_evolve_cycles);
     let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
 
+    // 0. Startup sweep — remove any leaked scratch worktrees older than the
+    //    configured threshold (default 24h). Covers crashes / Ctrl-C exits.
+    sweep_stale_worktrees(&shell, args.workspace, sl.worktree_stale_hours);
+
     // 1. Baseline — run eval_builder::run_skill against the real workspace.
     let baseline_rollups = run_eval_and_read_metrics(args.workspace, args.skill, None).await?;
     let target = pick_target_metric(&baseline_rollups, args.target_metric.as_deref())?;
@@ -419,6 +425,7 @@ async fn run_eval_and_read_metrics(
         1,
         false,
         None,
+        eval_builder::RunSkillOptions::default(),
     )
     .await?;
 
