@@ -167,10 +167,7 @@ mod tests {
     #[tokio::test]
     async fn parses_pass_verdict() {
         // Judge now returns a complete JSON object (no prefill).
-        let out = run_with(StubJudge(
-            r#"{"verdict":"pass","score":0.85,"notes":"ok"}"#,
-        ))
-        .await;
+        let out = run_with(StubJudge(r#"{"verdict":"pass","score":0.85,"notes":"ok"}"#)).await;
         assert!(out.pass);
         assert!((out.score - 0.85).abs() < 1e-4);
         assert_eq!(out.notes.as_deref(), Some("ok"));

@@ -185,9 +185,7 @@ pub(crate) fn build_tool_executor(
     // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
     // via `workspace_tools = ["skill_distill"]`. The tool writes a new skill
     // directory from the calling agent's in-context synthesis.
-    if allowed_names.contains(
-        crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME,
-    ) {
+    if allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME) {
         if let Err(e) = futures::executor::block_on(registry.register_plugin(
             &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
             &plugin_ctx,

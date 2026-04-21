@@ -104,7 +104,8 @@ pub(crate) struct MetricRunCtx<'a> {
     pub memory_manager: Option<&'a crate::adapters::memory::manager::MemoryManager>,
     pub secret_registry: Option<&'a crate::adapters::secret_builder::SecretRegistry>,
     pub activity: Option<&'a dyn crate::adapters::ports::ToolActivityPort>,
-    pub tool_scopes: Option<&'a std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
+    pub tool_scopes:
+        Option<&'a std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
 }
 
 #[async_trait]

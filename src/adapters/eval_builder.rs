@@ -237,9 +237,7 @@ pub struct StubSpec {
 ///
 /// Called from both `eval_builder::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
 /// Default model: `anthropic/claude-opus-4-7`, 64 k context window.
-pub fn build_judge(
-    model: Option<String>,
-) -> Result<Arc<dyn crate::adapters::types::Engine>> {
+pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::adapters::types::Engine>> {
     let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
     let box_engine =
         crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000)?;
@@ -1100,8 +1098,9 @@ pub async fn run_skill(
     // Load skill metrics from SKILL.md frontmatter (empty vec → backward compat).
     let skill_metrics = load_skill_metrics(&skill.skill_md_path, &skill.skill_dir)?;
     // Build a shared JudgeClient adapter wrapping the eval judge Arc.
-    let judge_client: Arc<dyn JudgeClient> =
-        Arc::new(EvalJudgeClient { engine: Arc::clone(&judge) });
+    let judge_client: Arc<dyn JudgeClient> = Arc::new(EvalJudgeClient {
+        engine: Arc::clone(&judge),
+    });
 
     let mut row_results = Vec::new();
     for row in &rows {
@@ -1743,8 +1742,7 @@ async fn run_row_via_orchestrator(
         (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
     };
 
-    let judge_user_turn =
-        format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &final_text);
+    let judge_user_turn = format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &final_text);
 
     // Transcript.
     std::fs::create_dir_all(ctx.out_dir)
@@ -2171,9 +2169,18 @@ workspace = "{TMP_WORKSPACE}"
         }];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r1 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
-        let r2 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
-        let r3 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
+        let r1 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
+        let r2 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
+        let r3 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
 
         assert!(r1.contains("503"));
         assert!(r2.contains("200"));
@@ -2192,7 +2199,10 @@ workspace = "{TMP_WORKSPACE}"
         let stubs: Vec<StubSpec> = vec![];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r = stubbed.execute(&make_call("sessions_spawn"), &[]).await.unwrap();
+        let r = stubbed
+            .execute(&make_call("sessions_spawn"), &[])
+            .await
+            .unwrap();
         assert_eq!(r, "live-result-for-sessions_spawn");
         assert_eq!(
             inner.counter.lock().unwrap().as_slice(),

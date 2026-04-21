@@ -12,6 +12,6 @@ pub(crate) mod metric_kinds;
 pub(crate) mod metrics;
 pub(crate) mod storage;
 // pub(crate) mod runner;           // Task 12
-pub(crate) mod scratch_worktree;
-pub(crate) mod evolve;
 pub(crate) mod approval_gate;
+pub(crate) mod evolve;
+pub(crate) mod scratch_worktree;

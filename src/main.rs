@@ -408,8 +408,7 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
-            let v: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&mj_path)?)?;
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&mj_path)?)?;
             println!("{}", serde_json::to_string_pretty(&v)?);
             let hpath = skill_dir.join("metrics").join("history.jsonl");
             if hpath.exists() {

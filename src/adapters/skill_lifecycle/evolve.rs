@@ -147,10 +147,7 @@ fn replace_metrics_block(fm: &str, metrics: &[MetricSpec]) -> Result<String> {
     let mut v: serde_yaml::Value = serde_yaml::from_str(fm)?;
     let new_metrics_val: serde_yaml::Value = serde_yaml::to_value(metrics)?;
     if let serde_yaml::Value::Mapping(ref mut m) = v {
-        m.insert(
-            serde_yaml::Value::String("metrics".into()),
-            new_metrics_val,
-        );
+        m.insert(serde_yaml::Value::String("metrics".into()), new_metrics_val);
     }
     Ok(serde_yaml::to_string(&v)?)
 }
@@ -216,17 +213,14 @@ pub struct EvolveArgs<'a> {
 }
 
 pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
-    let sl = args
-        .config
-        .skill_lifecycle
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("[skill_lifecycle] config missing; needed for tengu skill evolve"))?;
+    let sl = args.config.skill_lifecycle.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("[skill_lifecycle] config missing; needed for tengu skill evolve")
+    })?;
     let max_cycles = args.max_cycles.unwrap_or(sl.default_max_evolve_cycles);
     let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
 
     // 1. Baseline — run eval_builder::run_skill against the real workspace.
-    let baseline_rollups =
-        run_eval_and_read_metrics(args.workspace, args.skill, None).await?;
+    let baseline_rollups = run_eval_and_read_metrics(args.workspace, args.skill, None).await?;
     let target = pick_target_metric(&baseline_rollups, args.target_metric.as_deref())?;
     let baseline = Baseline {
         rollups: baseline_rollups,
@@ -234,7 +228,12 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
     };
 
     // 2. Scratch worktree.
-    let scratch = create_scratch(&shell, args.workspace, args.skill, args.base_branch.as_deref())?;
+    let scratch = create_scratch(
+        &shell,
+        args.workspace,
+        args.skill,
+        args.base_branch.as_deref(),
+    )?;
 
     // 3. Cycle loop.
     let mut cycles: Vec<CycleOutcome> = Vec::new();
@@ -249,7 +248,11 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
         )
         .await?;
 
-        let skill_md = scratch.path.join("skills").join(args.skill).join("SKILL.md");
+        let skill_md = scratch
+            .path
+            .join("skills")
+            .join(args.skill)
+            .join("SKILL.md");
         let old_lines = count_body_lines(&skill_md)?;
         apply_proposal_to_skill_md(&skill_md, &proposal.proposal)?;
         let new_lines = count_body_lines(&skill_md)?;
@@ -345,7 +348,10 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
             // Sanity re-eval on the real workspace.
             let _ = run_eval_and_read_metrics(args.workspace, args.skill, None).await;
             remove_scratch(&shell, args.workspace, &scratch)?;
-            println!("Changes applied. Run `git diff skills/{}/` to review.", args.skill);
+            println!(
+                "Changes applied. Run `git diff skills/{}/` to review.",
+                args.skill
+            );
         }
         Decision::Discard => {
             append_evolve_log(args.workspace, args.skill, &baseline, best, "rejected")?;
@@ -405,16 +411,28 @@ async fn run_eval_and_read_metrics(
 
     let out_dir = workspace.join(".tengu").join("evolve-out");
     std::fs::create_dir_all(&out_dir)?;
-    let _ = eval_builder::run_skill(&skill_ut, Arc::clone(&judge), &out_dir, None, 1, false, None).await?;
+    let _ = eval_builder::run_skill(
+        &skill_ut,
+        Arc::clone(&judge),
+        &out_dir,
+        None,
+        1,
+        false,
+        None,
+    )
+    .await?;
 
     let mj_path = if roots_override.is_some() {
-        roots_override.unwrap().join("skills").join(skill).join("metrics.json")
+        roots_override
+            .unwrap()
+            .join("skills")
+            .join(skill)
+            .join("metrics.json")
     } else {
         workspace.join("skills").join(skill).join("metrics.json")
     };
     let mj: MetricsJson = serde_json::from_slice(
-        &std::fs::read(&mj_path)
-            .with_context(|| format!("read {}", mj_path.display()))?,
+        &std::fs::read(&mj_path).with_context(|| format!("read {}", mj_path.display()))?,
     )?;
     Ok(mj.metrics)
 }
@@ -562,10 +580,7 @@ mod tests {
     #[test]
     fn pick_best_rejects_regressions_beyond_tolerance() {
         let b = baseline(0.6, 1.0);
-        let cs = vec![
-            cycle(1, 0.9, 0.90, 3),
-            cycle(2, 0.75, 0.98, 3),
-        ];
+        let cs = vec![cycle(1, 0.9, 0.90, 3), cycle(2, 0.75, 0.98, 3)];
         assert_eq!(pick_best(&b, &cs), Some(1));
     }
 
