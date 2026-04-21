@@ -438,6 +438,14 @@ pub struct OrchestratorConfig {
     /// after exhaustion before bailing out.
     #[serde(default = "default_max_replans")]
     pub max_replans: u32,
+
+    /// When `true`, `@role:`-prefixed messages are also routed through the
+    /// orchestrator (the planner decides whether to honor or override the
+    /// user's explicit target). When `false` (default), `@role:` bypasses
+    /// the orchestrator and dispatches directly to the named agent —
+    /// preserves the "talk to this agent specifically" escape hatch.
+    #[serde(default)]
+    pub route_explicit_agents: bool,
 }
 
 fn default_max_attempts_per_step() -> u32 {

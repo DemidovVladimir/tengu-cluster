@@ -177,11 +177,16 @@ impl QdrantVectorStore {
 
 #[async_trait]
 impl VectorStore for QdrantVectorStore {
-    async fn write(&self, embedding: Vec<f32>, text: &str, metadata: ChunkMetadata) -> Result<()> {
+    async fn write(
+        &self,
+        embedding: Vec<f32>,
+        text: &str,
+        metadata: ChunkMetadata,
+    ) -> Result<String> {
         let payload_json = Self::payload_from(text, &metadata);
         let id = uuid::Uuid::new_v4().to_string();
         let point = PointStruct::new(
-            id,
+            id.clone(),
             embedding,
             qdrant_client::Payload::try_from(payload_json).unwrap_or_default(),
         );
@@ -189,7 +194,7 @@ impl VectorStore for QdrantVectorStore {
             .upsert_points(UpsertPointsBuilder::new(&self.collection, vec![point]).wait(true))
             .await
             .context("failed to upsert point to Qdrant")?;
-        Ok(())
+        Ok(id)
     }
 
     async fn search(
@@ -237,6 +242,74 @@ impl VectorStore for QdrantVectorStore {
             .collect();
 
         Ok(hits)
+    }
+
+    async fn delete(&self, id: &str) -> Result<bool> {
+        use qdrant_client::qdrant::{DeletePointsBuilder, PointsIdsList};
+
+        self.client
+            .delete_points(
+                DeletePointsBuilder::new(&self.collection)
+                    .points(PointsIdsList {
+                        ids: vec![id.into()],
+                    })
+                    .wait(true),
+            )
+            .await
+            .context("Qdrant delete failed")?;
+        Ok(true)
+    }
+
+    async fn clear_all(&self) -> Result<()> {
+        // Qdrant doesn't expose "delete all" per-collection as a single call;
+        // delete the collection and recreate it. Preserves vector config.
+        // Best-effort — recreate failure is fatal.
+        let vector_size = self
+            .client
+            .collection_info(&self.collection)
+            .await
+            .context("failed to read collection info for clear_all")?
+            .result
+            .and_then(|info| info.config)
+            .and_then(|cfg| cfg.params)
+            .and_then(|params| params.vectors_config)
+            .and_then(|vc| match vc.config {
+                Some(qdrant_client::qdrant::vectors_config::Config::Params(p)) => Some(p.size),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("could not infer vector size for clear_all"))?;
+
+        self.client
+            .delete_collection(&self.collection)
+            .await
+            .context("Qdrant delete_collection failed")?;
+        self.client
+            .create_collection(
+                CreateCollectionBuilder::new(&self.collection)
+                    .vectors_config(VectorParamsBuilder::new(vector_size, Distance::Cosine)),
+            )
+            .await
+            .context("Qdrant recreate collection failed")?;
+        Ok(())
+    }
+
+    async fn entry_count(&self) -> Result<usize> {
+        let info = self
+            .client
+            .collection_info(&self.collection)
+            .await
+            .context("Qdrant collection_info failed")?;
+        Ok(info
+            .result
+            .and_then(|r| r.points_count)
+            .map(|c| c as usize)
+            .unwrap_or(0))
+    }
+
+    async fn storage_bytes(&self) -> Result<u64> {
+        // Qdrant doesn't expose storage bytes via the info endpoint reliably
+        // — return 0 to signal "unknown" rather than fail the caller.
+        Ok(0)
     }
 }
 

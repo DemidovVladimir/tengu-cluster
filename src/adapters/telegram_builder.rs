@@ -1140,10 +1140,23 @@ impl TelegramSession {
         // executor spawns each step and calls our factory closure to resolve
         // per-agent inputs via `orchestrator_snapshots`.
         //
-        // We defer only to the orchestrator when the user did NOT explicitly
-        // route with `@role:` prefix. Explicit routing means "talk to this
-        // specific agent directly", which bypasses the planner.
-        if self.orchestrator.is_some() && target_agent_id == self.default_agent_id {
+        // Orchestrator dispatch:
+        //   - default agent message → always through the orchestrator
+        //     (when one is configured)
+        //   - `@role:`-prefixed message → by default bypasses the
+        //     orchestrator (explicit routing = "talk to this agent
+        //     directly"), UNLESS `orchestrator.route_explicit_agents = true`
+        //     which flips the toggle so the planner sees everything.
+        let explicit_route = target_agent_id != self.default_agent_id;
+        let route_through_orchestrator = self.orchestrator.is_some()
+            && (!explicit_route
+                || self
+                    .config
+                    .orchestrator
+                    .as_ref()
+                    .map(|c| c.route_explicit_agents)
+                    .unwrap_or(false));
+        if route_through_orchestrator {
             // Release the mutable borrow on `agent` so we can build snapshots
             // for every agent below.
             let _ = agent;
@@ -1453,13 +1466,26 @@ impl TelegramSession {
                 Some(agent.current_bridge_tools.clone())
             };
 
+            // Cross-agent Recent Team Activity — preserved on the
+            // orchestrator path (addresses limitation #6). Each snapshot
+            // gets its own agent-scoped view (build_activity_context
+            // filters out the target agent's own entries).
+            let mut snapshot_system_prompt = agent.current_system_prompt.clone();
+            if self.is_multi_agent {
+                let activity_ctx =
+                    channel_runtime::build_activity_context(&self.activity_log, agent_id);
+                if !activity_ctx.is_empty() {
+                    snapshot_system_prompt.push_str(&activity_ctx);
+                }
+            }
+
             let inputs = channel_runtime::ChatTurnInputs {
                 engine: Arc::clone(&agent.engine),
                 agent_id: agent.agent_id.clone(),
                 agent_config: Arc::new(agent.agent_config.clone()),
                 history_turn_limit: agent.history_turn_limit,
                 compaction_policy: agent.compaction_policy,
-                system_prompt: agent.current_system_prompt.clone(),
+                system_prompt: snapshot_system_prompt,
                 tools: agent.current_tools.clone(),
                 tool_executor: current_executor,
                 memory_manager: self.memory_manager_handle.clone(),
@@ -1717,12 +1743,11 @@ impl TelegramSession {
             }
         }
         let mut lines = vec!["All conversations cleared.".to_string()];
-        if self.memory_manager_handle.is_some() {
-            lines.push(
-                "Persistent memory purge not supported on current backend — \
-                 delete <workspace>/memory/vectors.bin manually to reset."
-                    .to_string(),
-            );
+        if let Some(ref mgr) = self.memory_manager_handle {
+            match mgr.clear_all().await {
+                Ok(()) => lines.push("Persistent memory cleared.".to_string()),
+                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+            }
         } else {
             lines.push("No persistent memory active.".to_string());
         }

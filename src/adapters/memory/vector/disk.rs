@@ -24,16 +24,28 @@ use crate::adapters::memory::vector::VectorStore;
 /// resulting string. Kept private to this module.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Entry {
+    /// Synthetic UUID assigned at write-time so callers can later `delete(id)`.
+    /// Defaulted for backwards compatibility with stores written before
+    /// delete-by-id landed — old entries get `""` and can't be deleted
+    /// individually until re-written.
+    #[serde(default)]
+    id: String,
     text: String,
     embedding: Vec<f32>,
     metadata_json: String,
 }
 
 impl Entry {
-    fn new(text: String, embedding: Vec<f32>, metadata: &ChunkMetadata) -> Result<Self> {
+    fn new(
+        id: String,
+        text: String,
+        embedding: Vec<f32>,
+        metadata: &ChunkMetadata,
+    ) -> Result<Self> {
         let metadata_json =
             serde_json::to_string(metadata).context("failed to serialize chunk metadata")?;
         Ok(Self {
+            id,
             text,
             embedding,
             metadata_json,
@@ -163,14 +175,21 @@ fn metadata_matches(have: &ChunkMetadata, want: &ChunkMetadata) -> bool {
 
 #[async_trait]
 impl VectorStore for DiskVectorStore {
-    async fn write(&self, embedding: Vec<f32>, text: &str, metadata: ChunkMetadata) -> Result<()> {
-        let entry = Entry::new(text.to_string(), embedding, &metadata)?;
+    async fn write(
+        &self,
+        embedding: Vec<f32>,
+        text: &str,
+        metadata: ChunkMetadata,
+    ) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let entry = Entry::new(id.clone(), text.to_string(), embedding, &metadata)?;
         let mut entries = self
             .entries
             .write()
             .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         entries.push(entry);
-        self.flush(&entries)
+        self.flush(&entries)?;
+        Ok(id)
     }
 
     async fn search(
@@ -208,6 +227,49 @@ impl VectorStore for DiskVectorStore {
         });
         scored.truncate(top_k);
         Ok(scored)
+    }
+
+    async fn delete(&self, id: &str) -> Result<bool> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        let before = entries.len();
+        entries.retain(|e| e.id != id);
+        if entries.len() == before {
+            return Ok(false);
+        }
+        self.flush(&entries)?;
+        Ok(true)
+    }
+
+    async fn clear_all(&self) -> Result<()> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        entries.clear();
+        self.flush(&entries)
+    }
+
+    async fn entry_count(&self) -> Result<usize> {
+        let entries = self
+            .entries
+            .read()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        Ok(entries.len())
+    }
+
+    async fn storage_bytes(&self) -> Result<u64> {
+        match std::fs::metadata(&self.store_path) {
+            Ok(m) => Ok(m.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(anyhow::anyhow!(
+                "failed to stat {}: {}",
+                self.store_path.display(),
+                e
+            )),
+        }
     }
 }
 
