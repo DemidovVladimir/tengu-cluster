@@ -1743,12 +1743,11 @@ impl TelegramSession {
             }
         }
         let mut lines = vec!["All conversations cleared.".to_string()];
-        if self.memory_manager_handle.is_some() {
-            lines.push(
-                "Persistent memory purge not supported on current backend — \
-                 delete <workspace>/memory/vectors.bin manually to reset."
-                    .to_string(),
-            );
+        if let Some(ref mgr) = self.memory_manager_handle {
+            match mgr.clear_all().await {
+                Ok(()) => lines.push("Persistent memory cleared.".to_string()),
+                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+            }
         } else {
             lines.push("No persistent memory active.".to_string());
         }

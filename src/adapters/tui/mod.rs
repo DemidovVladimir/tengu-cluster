@@ -349,15 +349,11 @@ pub fn run_tui(
                     if text == "/purge" {
                         runtime_state.reset_for_new_session();
                         let mut lines = vec!["Conversation cleared.".to_string()];
-                        if memory_manager_handle.is_some() {
-                            // The new `VectorStore` trait has no clear_all
-                            // surface. To reset persistent memory, delete
-                            // `<workspace>/memory/vectors.bin` manually.
-                            lines.push(
-                                "Persistent memory purge not supported on current backend — \
-                                 delete <workspace>/memory/vectors.bin manually to reset."
-                                    .to_string(),
-                            );
+                        if let Some(ref mgr) = memory_manager_handle {
+                            match rt.block_on(mgr.clear_all()) {
+                                Ok(()) => lines.push("Persistent memory cleared.".to_string()),
+                                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
+                            }
                         } else {
                             lines.push("No persistent memory active.".to_string());
                         }
@@ -547,12 +543,11 @@ pub fn run_tui(
                                 .await
                             {
                                 Ok(res) => {
-                                    // The new `VectorStore` trait has no
-                                    // entry-count / size surface — the TUI
-                                    // status line no longer shows memory
-                                    // stats until those hooks land on the
-                                    // manager.
-                                    let memory_stats: Option<(usize, u64)> = None;
+                                    // Pull fresh memory stats from the
+                                    // manager (entry_count + storage_bytes).
+                                    let memory_stats: Option<(usize, u64)> = memory_manager_handle
+                                        .as_ref()
+                                        .and_then(|mgr| rt.block_on(mgr.stats()));
                                     let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                         view::hide_thinking(siv);
                                         if let Some(notice) = res.system_notice {
@@ -761,8 +756,10 @@ pub fn run_tui(
                                 total_output_tokens,
                                 ..
                             }) => {
-                                // No memory-stats hook on the new backend.
-                                let memory_stats: Option<(usize, u64)> = None;
+                                // Pull fresh memory stats from the manager.
+                                let memory_stats: Option<(usize, u64)> = memory_manager_handle
+                                    .as_ref()
+                                    .and_then(|mgr| rt.block_on(mgr.stats()));
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {
