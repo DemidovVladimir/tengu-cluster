@@ -796,6 +796,63 @@ impl RuntimeChatServiceFactory {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OrchestratorSnapshots — shared state bridge for channel factory closures.
+// ---------------------------------------------------------------------------
+//
+// Channels (Telegram, TUI) hold per-agent runtime state that mutates between
+// messages (skill hot-reload + per-turn system-prompt tweaks). The orchestrator
+// holds an `Arc<dyn ChatServiceFactory>` whose `run_turn` method is spawned
+// into a tokio task, so the factory cannot borrow channel-local state.
+//
+// `OrchestratorSnapshots` is an `Arc<RwLock<HashMap<String, ChatTurnInputs>>>`
+// shared between the channel and the factory. Before each `orchestrator.handle`
+// call the channel writes a fresh snapshot for each agent; the factory closure
+// reads back from the same map. This keeps the factory `'static` while letting
+// per-message state (hot-reloaded tools, current system prompt, per-turn
+// tool_observer / cancel) flow in through owned clones.
+pub(crate) type OrchestratorSnapshots = Arc<std::sync::RwLock<HashMap<String, ChatTurnInputs>>>;
+
+/// Build a `ChatInputsFn` closure that resolves agent inputs from an
+/// `OrchestratorSnapshots` table. Returns a cheap error when the agent is not
+/// present — the orchestrator surfaces this as a step failure which triggers a
+/// replan.
+pub(crate) fn snapshots_inputs_fn(state: OrchestratorSnapshots) -> ChatInputsFn {
+    Arc::new(move |agent: &str| {
+        let guard = state
+            .read()
+            .map_err(|e| anyhow::anyhow!("orchestrator snapshot lock poisoned: {}", e))?;
+        let snap = guard.get(agent).ok_or_else(|| {
+            anyhow::anyhow!(
+                "orchestrator snapshot missing for agent '{}' (populate snapshots before handle())",
+                agent
+            )
+        })?;
+        Ok(clone_chat_turn_inputs(snap))
+    })
+}
+
+/// Clone a `ChatTurnInputs` by cloning Arcs and owned fields.
+/// `Arc<dyn Fn>` / `Arc<dyn ToolExecutor>` / `Arc<dyn Engine>` all clone cheaply.
+fn clone_chat_turn_inputs(src: &ChatTurnInputs) -> ChatTurnInputs {
+    ChatTurnInputs {
+        engine: Arc::clone(&src.engine),
+        agent_id: src.agent_id.clone(),
+        agent_config: Arc::clone(&src.agent_config),
+        history_turn_limit: src.history_turn_limit,
+        compaction_policy: src.compaction_policy,
+        system_prompt: src.system_prompt.clone(),
+        tools: src.tools.clone(),
+        tool_executor: src.tool_executor.clone(),
+        memory_manager: src.memory_manager.clone(),
+        max_recall_entries: src.max_recall_entries,
+        max_recall_tokens: src.max_recall_tokens,
+        bridge_tools: src.bridge_tools.clone(),
+        tool_observer: src.tool_observer.clone(),
+        cancel: src.cancel.clone(),
+    }
+}
+
 #[async_trait]
 impl ChatServiceFactory for RuntimeChatServiceFactory {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String> {
