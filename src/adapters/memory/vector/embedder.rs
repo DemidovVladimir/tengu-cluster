@@ -52,15 +52,31 @@ impl Embedder {
 
     /// Embed a single text. Returns a `Vec<f32>` of model-dependent length
     /// (1536 for `text-embedding-3-small`).
+    ///
+    /// Internally a thin wrapper over `embed_batch(&[text])` — prefer
+    /// `embed_batch` when you have >1 text to embed (single HTTP round-trip).
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let mut out = self.embed_batch(&[text]).await?;
+        out.pop()
+            .ok_or_else(|| anyhow::anyhow!("embedder returned no vectors for single-text call"))
+    }
+
+    /// Embed multiple texts in a single HTTP request. Returns a vector of
+    /// embeddings in the same order as `texts`.
+    ///
+    /// Empty input short-circuits to `Ok(vec![])`.
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
         match &self.mode {
             Mode::Real {
                 client,
                 api_key,
                 model,
-            } => embed_openrouter(client, api_key, model, text).await,
+            } => embed_batch_openrouter(client, api_key, model, texts).await,
             #[cfg(test)]
-            Mode::Null => Ok(vec![0.0; DEFAULT_DIM]),
+            Mode::Null => Ok(texts.iter().map(|_| vec![0.0; DEFAULT_DIM]).collect()),
         }
     }
 
@@ -72,15 +88,15 @@ impl Embedder {
     }
 }
 
-async fn embed_openrouter(
+async fn embed_batch_openrouter(
     client: &reqwest::Client,
     api_key: &str,
     model: &str,
-    text: &str,
-) -> Result<Vec<f32>> {
+    texts: &[&str],
+) -> Result<Vec<Vec<f32>>> {
     let body = serde_json::json!({
         "model": model,
-        "input": [text],
+        "input": texts,
     });
 
     let resp = client
@@ -105,16 +121,26 @@ async fn embed_openrouter(
     let data = json["data"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("missing 'data' array in embedding response"))?;
-    let first = data
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("empty 'data' array in embedding response"))?;
-    let embedding = first["embedding"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("missing 'embedding' array in response item"))?
-        .iter()
-        .map(|v| v.as_f64().unwrap_or(0.0) as f32)
-        .collect::<Vec<f32>>();
-    Ok(embedding)
+
+    if data.len() != texts.len() {
+        anyhow::bail!(
+            "embedding API returned {} vectors for {} inputs",
+            data.len(),
+            texts.len()
+        );
+    }
+
+    let mut out = Vec::with_capacity(texts.len());
+    for item in data {
+        let embedding = item["embedding"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("missing 'embedding' array in response item"))?
+            .iter()
+            .map(|v| v.as_f64().unwrap_or(0.0) as f32)
+            .collect::<Vec<f32>>();
+        out.push(embedding);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -127,5 +153,22 @@ mod tests {
         let v = e.embed("any text").await.unwrap();
         assert_eq!(v.len(), DEFAULT_DIM);
         assert!(v.iter().all(|x| *x == 0.0));
+    }
+
+    #[tokio::test]
+    async fn null_batch_returns_one_vector_per_input() {
+        let e = Embedder::null();
+        let v = e.embed_batch(&["a", "b", "c"]).await.unwrap();
+        assert_eq!(v.len(), 3);
+        for emb in &v {
+            assert_eq!(emb.len(), DEFAULT_DIM);
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_batch_short_circuits() {
+        let e = Embedder::null();
+        let v = e.embed_batch(&[]).await.unwrap();
+        assert!(v.is_empty());
     }
 }

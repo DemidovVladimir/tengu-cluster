@@ -161,13 +161,26 @@ impl Tool for MemoryIngestTool {
             anyhow::bail!("memory_ingest: 'chunks' was provided but empty");
         }
 
-        let count = chunks.len();
-        for chunk in &chunks {
-            let redacted = ctx.secret_registry.redact(chunk);
+        // Redact each chunk and own the String so we can hand refs to the
+        // batch API.
+        let redacted_owned: Vec<String> = chunks
+            .iter()
+            .map(|c| ctx.secret_registry.redact(c).to_string())
+            .collect();
+
+        let count = if redacted_owned.len() == 1 {
+            // Single-text path — skips the batch indirection.
             self.memory_manager
-                .ingest_one(redacted.as_str(), agent_id, metadata.clone())
+                .ingest_one(&redacted_owned[0], agent_id, metadata.clone())
                 .await?;
-        }
+            1
+        } else {
+            // Multi-chunk path — one embedding HTTP call covers all chunks.
+            let text_refs: Vec<&str> = redacted_owned.iter().map(|s| s.as_str()).collect();
+            self.memory_manager
+                .ingest_batch(&text_refs, agent_id, metadata.clone())
+                .await?
+        };
 
         let msg = if count == 1 {
             "Stored 1 memory chunk.".to_string()

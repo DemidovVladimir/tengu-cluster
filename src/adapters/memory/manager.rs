@@ -84,6 +84,50 @@ impl MemoryManager {
         store.write(embedding, text, metadata).await
     }
 
+    /// Batch-ingest: embed all `texts` in a single HTTP round-trip, then
+    /// write each entry. All entries share the same `agent` + `metadata`
+    /// template (metadata is cloned per entry). Significantly faster than
+    /// calling `ingest_one` in a loop when there are many chunks — one
+    /// embedding request instead of N.
+    ///
+    /// Returns the count of entries successfully written. Fails fast if
+    /// embedding or any individual write fails.
+    pub async fn ingest_batch(
+        &self,
+        texts: &[&str],
+        agent: &str,
+        metadata: ChunkMetadata,
+    ) -> anyhow::Result<usize> {
+        if texts.is_empty() {
+            return Ok(0);
+        }
+        let guard = self.vector.read().await;
+        let (embedder, store) = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("memory manager: no vector backend registered"))?;
+
+        let embeddings = embedder.embed_batch(texts).await?;
+        if embeddings.len() != texts.len() {
+            anyhow::bail!(
+                "ingest_batch: embedder returned {} vectors for {} texts",
+                embeddings.len(),
+                texts.len()
+            );
+        }
+
+        let mut template = metadata;
+        if template.agent.is_none() {
+            template.agent = Some(agent.to_string());
+        }
+
+        let mut written = 0usize;
+        for (text, embedding) in texts.iter().zip(embeddings.into_iter()) {
+            store.write(embedding, text, template.clone()).await?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
     /// Embed `query` and run a `top_k` vector search over the shared
     /// backend. Mirrors `VectorStore::search` directly; callers supply
     /// their own metadata filter when needed.
