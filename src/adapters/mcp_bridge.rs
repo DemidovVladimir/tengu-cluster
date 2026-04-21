@@ -18,9 +18,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::config::Config;
-use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
+use crate::adapters::memory::manager::MemoryManager;
+use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
@@ -351,25 +351,35 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
 
     let secret_registry = Arc::new(SecretRegistry::new());
 
-    // Memory handle: only built when memory tools are requested and the API
-    // key is present. Errors fall through to None so other tools still work.
+    // Memory manager: only built when memory tools are requested and the
+    // API key is present. Errors fall through to None so other tools still
+    // work. Wraps the shared `Embedder` + `DiskVectorStore` pair so
+    // `memory_ingest` / `memory_search` / `persistent_store` all talk to
+    // the same backing store.
     let needs_memory = allowed_names.contains("memory_ingest")
         || allowed_names.contains("memory_search")
         || allowed_names.contains(crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME);
-    let memory_handle: Option<Arc<MemoryServiceHandle>> = if needs_memory {
+    let memory_manager_handle: Option<Arc<MemoryManager>> = if needs_memory {
         match std::env::var("OPENROUTER_API_KEY") {
             Ok(api_key) => {
-                let embedding = Arc::new(OpenRouterEmbeddingAdapter::new(
-                    api_key,
-                    "openai/text-embedding-3-small".to_string(),
-                ));
                 let memory_dir = workspace.join("memory");
-                DiskVectorMemoryStore::new(&memory_dir).ok().map(|store| {
-                    Arc::new(MemoryServiceHandle {
-                        embedding,
-                        store: Arc::new(store),
-                    })
-                })
+                match DiskVectorStore::new(&memory_dir) {
+                    Ok(store) => {
+                        let store: Arc<dyn VectorStore> = Arc::new(store);
+                        let embedder = Arc::new(Embedder::new(
+                            api_key,
+                            "openai/text-embedding-3-small".to_string(),
+                        ));
+
+                        let manager = Arc::new(MemoryManager::new());
+                        manager.set_vector_backend(embedder, store).await;
+                        Some(manager)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "bridge failed to init disk memory store");
+                        None
+                    }
+                }
             }
             Err(_) => {
                 warn!("Memory tools requested but OPENROUTER_API_KEY not set — skipping");
@@ -385,7 +395,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         config: &agent_config,
         http: http_client.clone(),
         shell: Arc::clone(&shell),
-        memory: memory_handle.clone(),
+        memory_manager: memory_manager_handle.clone(),
         secret_registry: Arc::clone(&secret_registry),
     };
 
@@ -460,7 +470,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory: memory_handle,
+        memory_manager: memory_manager_handle,
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,

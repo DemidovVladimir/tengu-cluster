@@ -193,15 +193,15 @@ impl ToolPlugin for MemoryPlugin {
     }
 
     async fn tools(&self, ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>> {
-        let Some(handle) = ctx.memory.as_ref().cloned() else {
-            // Memory disabled — no tools.
+        // Vector-memory tools go through `MemoryManager` directly.
+        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+        if let Some(manager) = ctx.memory_manager.as_ref().cloned() {
+            tools.push(Arc::new(MemoryIngestTool::new(Arc::clone(&manager))));
+            tools.push(Arc::new(MemorySearchTool::new(Arc::clone(&manager))));
+        } else {
+            // No vector backend registered — no vector-memory tools.
             return Ok(vec![]);
-        };
-
-        let mut tools: Vec<Arc<dyn Tool>> = vec![
-            Arc::new(MemoryIngestTool::new(Arc::clone(&handle))),
-            Arc::new(MemorySearchTool::new(Arc::clone(&handle))),
-        ];
+        }
 
         if ctx
             .config
@@ -209,12 +209,14 @@ impl ToolPlugin for MemoryPlugin {
             .iter()
             .any(|t| t == PERSISTENT_STORE_TOOL_NAME)
         {
-            tools.push(Arc::new(PersistentStoreTool::new(
-                ctx.workspace.to_path_buf(),
-                Arc::clone(&handle),
-                self.chunk_size,
-                self.chunk_overlap,
-            )));
+            if let Some(manager) = ctx.memory_manager.as_ref().cloned() {
+                tools.push(Arc::new(PersistentStoreTool::new(
+                    ctx.workspace.to_path_buf(),
+                    manager,
+                    self.chunk_size,
+                    self.chunk_overlap,
+                )));
+            }
         }
 
         Ok(tools)
@@ -225,55 +227,18 @@ impl ToolPlugin for MemoryPlugin {
 mod tests {
     use super::*;
     use crate::adapters::config::Config;
-    use crate::adapters::memory_builder::MemoryServiceHandle;
-    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
-    use crate::adapters::types::{MemoryEntry, MemorySearchResult};
+    use crate::adapters::memory::manager::MemoryManager;
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
     use tempfile::TempDir;
 
-    /// Test-only no-op memory handle used to exercise plugin gating without a
-    /// real embedding backend or vector store.
-    fn dummy_handle() -> Arc<MemoryServiceHandle> {
-        struct NoopEmbed;
-
-        #[async_trait]
-        impl EmbeddingPort for NoopEmbed {
-            async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-                Ok(vec![])
-            }
-        }
-
-        struct NoopStore;
-
-        #[async_trait]
-        impl MemoryStorePort for NoopStore {
-            async fn store(&self, _entry: &MemoryEntry) -> Result<()> {
-                Ok(())
-            }
-            async fn search_by_vector(
-                &self,
-                _embedding: &[f32],
-                _top_k: usize,
-            ) -> Result<Vec<MemorySearchResult>> {
-                Ok(vec![])
-            }
-            async fn delete(&self, _id: &str) -> Result<bool> {
-                Ok(false)
-            }
-            async fn clear_all(&self) -> Result<()> {
-                Ok(())
-            }
-            async fn entry_count(&self) -> usize {
-                0
-            }
-            async fn storage_bytes(&self) -> u64 {
-                0
-            }
-        }
-
-        Arc::new(MemoryServiceHandle {
-            embedding: Arc::new(NoopEmbed),
-            store: Arc::new(NoopStore),
-        })
+    /// Test-only `MemoryManager` with a null `Embedder` + in-memory disk
+    /// vector store — exercises plugin gating without network or disk I/O.
+    async fn dummy_manager() -> Arc<MemoryManager> {
+        let manager = Arc::new(MemoryManager::new());
+        let store: Arc<dyn VectorStore> = Arc::new(DiskVectorStore::in_memory());
+        let embedder = Arc::new(Embedder::null());
+        manager.set_vector_backend(embedder, store).await;
+        manager
     }
 
     #[tokio::test]
@@ -286,7 +251,7 @@ mod tests {
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
@@ -299,12 +264,13 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let config = Config::default();
         let agent_config = config.agents.get("main").unwrap().clone();
+        let manager = dummy_manager().await;
         let ctx = PluginCtx {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: Some(dummy_handle()),
+            memory_manager: Some(manager),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
@@ -324,12 +290,13 @@ mod tests {
         let config = Config::default();
         let mut agent_config = config.agents.get("main").unwrap().clone();
         agent_config.workspace_tools = vec!["persistent_store".to_string()];
+        let manager = dummy_manager().await;
         let ctx = PluginCtx {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: Some(dummy_handle()),
+            memory_manager: Some(manager),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);

@@ -1,32 +1,31 @@
 // src/adapters/plugins/memory/ingest.rs
 //! `memory_ingest` tool — ingest a document or fact into vector memory.
 //!
-//! Renamed from `remember` during harness-orchestration Phase 2 / task 2.1.
-//! The underlying write path still runs through `MemoryService` (ported into
-//! `MemoryManager` in a later task); this file only re-skins the LLM-facing
-//! surface and extends the input schema with optional `chunks` and free-form
-//! `metadata` fields for forward compatibility with chunked ingestion.
+//! Talks to `MemoryManager` directly — the harness-owned `Embedder` +
+//! `VectorStore` pair registered once per session by
+//! `channel_runtime::build_memory_manager`. The pre-migration path went
+//! through a `MemoryServiceHandle` (`EmbeddingPort` / `MemoryStorePort`
+//! shim); this version bypasses that indirection entirely.
 //!
-//! The earlier `remember` tool accepted only `content` + string-keyed
-//! `metadata`. `memory_ingest` additionally accepts:
+//! Input schema (unchanged from the legacy `remember` tool plus the
+//! harness-orchestration Phase 2 extensions):
 //!
-//! - `chunks: Vec<String>` — pre-chunked content; if provided, each chunk is
-//!   stored as a separate memory entry with shared metadata.
-//! - `metadata: object` — free-form tags. Non-string values are coerced to
-//!   their JSON string representation so the existing `MemoryService` API
-//!   (which takes `HashMap<String, String>`) can still consume them.
-//!
-//! `text` is accepted as an alias for `content` so callers can phrase their
-//! ingest request either way. One of `text`/`content`/`chunks` must be
-//! present.
+//! - `text` / `content` — the text to ingest (aliases).
+//! - `chunks: Vec<String>` — pre-chunked content; each chunk lands as
+//!   its own memory entry with shared metadata.
+//! - `metadata: object` — free-form tags. String values pass through;
+//!   non-string values are coerced to their JSON string form.
+//! - `agent_id` — the logical agent the entry belongs to (defaults to
+//!   `"default"`). Populated into `ChunkMetadata::agent` so
+//!   `memory_search` filters still work.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::adapters::memory_builder::{MemoryService, MemoryServiceHandle};
+use crate::adapters::memory::context_block::ChunkMetadata;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
@@ -36,11 +35,11 @@ pub(crate) const MEMORY_INGEST_TOOL_NAME: &str = "memory_ingest";
 
 pub(crate) struct MemoryIngestTool {
     def: ToolDef,
-    handle: Arc<MemoryServiceHandle>,
+    memory_manager: Arc<MemoryManager>,
 }
 
 impl MemoryIngestTool {
-    pub(crate) fn new(handle: Arc<MemoryServiceHandle>) -> Self {
+    pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
         Self {
             def: ToolDef::new(
                 MEMORY_INGEST_TOOL_NAME,
@@ -80,29 +79,45 @@ impl MemoryIngestTool {
                     }
                 }),
             ),
-            handle,
+            memory_manager,
         }
     }
 }
 
-/// Convert a free-form metadata object into the `HashMap<String, String>` the
-/// underlying `MemoryService` expects. Strings pass through; everything else
-/// is serialized to its JSON representation so nothing is silently dropped.
-fn coerce_metadata(value: Option<&Value>) -> HashMap<String, String> {
-    value
-        .and_then(|v| v.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| {
-                    let s = match v {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    (k.clone(), s)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// Build a `ChunkMetadata` from the LLM-supplied free-form metadata map.
+/// Known keys (`agent`, `source`, `kind`, `timestamp_utc`, `tags`) land in
+/// their typed slots; everything else lands in `extra` as JSON values (so
+/// non-string values don't lose their shape).
+fn build_chunk_metadata(raw: Option<&Value>) -> ChunkMetadata {
+    let mut md = ChunkMetadata::default();
+    if let Some(obj) = raw.and_then(|v| v.as_object()) {
+        for (k, v) in obj.iter() {
+            match k.as_str() {
+                "agent" => md.agent = v.as_str().map(|s| s.to_string()),
+                "source" => md.source = v.as_str().map(|s| s.to_string()),
+                "kind" => md.kind = v.as_str().map(|s| s.to_string()),
+                "timestamp_utc" => md.timestamp_utc = v.as_str().map(|s| s.to_string()),
+                "tags" => {
+                    if let Some(arr) = v.as_array() {
+                        md.tags = arr
+                            .iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect();
+                    } else if let Some(s) = v.as_str() {
+                        md.tags = s
+                            .split(',')
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                    }
+                }
+                other => {
+                    md.extra.insert(other.to_string(), v.clone());
+                }
+            }
+        }
+    }
+    md
 }
 
 #[async_trait]
@@ -113,16 +128,15 @@ impl Tool for MemoryIngestTool {
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // scope: pure-compute — the OpenRouter embedding host is an
-        // implementation detail of the memory subsystem (baked into
-        // `OpenRouterEmbeddingAdapter`), not a tool-argument-driven HTTP call.
-        // The tool surface exposes only in-memory storage semantics.
+        // implementation detail of the memory subsystem; the tool surface
+        // exposes only in-memory storage semantics.
 
         let agent_id = args
             .get("agent_id")
             .and_then(|v| v.as_str())
             .unwrap_or("default");
 
-        let metadata = coerce_metadata(args.get("metadata"));
+        let metadata = build_chunk_metadata(args.get("metadata"));
 
         // Collect the corpus to ingest: explicit chunks take precedence, else
         // fall back to `text`/`content` as a single entry.
@@ -147,22 +161,18 @@ impl Tool for MemoryIngestTool {
             anyhow::bail!("memory_ingest: 'chunks' was provided but empty");
         }
 
-        let service =
-            MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
-
-        let mut ids: Vec<String> = Vec::with_capacity(chunks.len());
+        let count = chunks.len();
         for chunk in &chunks {
             let redacted = ctx.secret_registry.redact(chunk);
-            let id = service
-                .remember_with_metadata(redacted.as_str(), agent_id, metadata.clone())
+            self.memory_manager
+                .ingest_one(redacted.as_str(), agent_id, metadata.clone())
                 .await?;
-            ids.push(id);
         }
 
-        let msg = if ids.len() == 1 {
-            format!("Stored memory with id: {}", ids[0])
+        let msg = if count == 1 {
+            "Stored 1 memory chunk.".to_string()
         } else {
-            format!("Stored {} chunks with ids: {}", ids.len(), ids.join(", "))
+            format!("Stored {} chunks.", count)
         };
         Ok(ToolOutput::from(msg))
     }

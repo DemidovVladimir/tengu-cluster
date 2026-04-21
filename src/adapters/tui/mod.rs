@@ -17,7 +17,6 @@ use crate::adapters::config::{Config, RuntimeProfile};
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
@@ -256,14 +255,24 @@ pub fn run_tui(
             .as_ref()
             .map(|p| crate::adapters::tool_builder::expand_tilde(p));
 
-        // Build memory subsystem if enabled.
-        let memory_handle =
-            channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
+        // Build memory subsystem if enabled. Backed by a shared
+        // `Embedder` + `VectorStore` pair via `MemoryManager`.
+        let memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>> = {
+            let mgr =
+                channel_runtime::build_memory_manager(&memory_config, &rt, workspace.as_deref());
+            let vector_ready =
+                futures::executor::block_on(async { mgr.has_vector_backend().await });
+            if vector_ready {
+                Some(mgr)
+            } else {
+                None
+            }
+        };
 
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
-        let has_memory = memory_handle.is_some();
+        let has_memory = memory_manager_handle.is_some();
         let manages_workspace = engine.manages_own_workspace();
         let mut base_tools = channel_runtime::compute_base_tools(
             uses_tools,
@@ -308,10 +317,8 @@ pub fn run_tui(
 
         let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);
 
-        // Create MemoryService from handle if available.
-        let memory_service_instance = memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
+        // Memory recall during chat turns goes through the
+        // `MemoryManager` directly (ChatRuntimeService::memory_manager).
 
         while let Ok(request) = request_rx.recv() {
             match request {
@@ -350,11 +357,15 @@ pub fn run_tui(
                     if text == "/purge" {
                         runtime_state.reset_for_new_session();
                         let mut lines = vec!["Conversation cleared.".to_string()];
-                        if let Some(ref handle) = memory_handle {
-                            match rt.block_on(handle.store.clear_all()) {
-                                Ok(()) => lines.push("Persistent memory purged.".to_string()),
-                                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
-                            }
+                        if memory_manager_handle.is_some() {
+                            // The new `VectorStore` trait has no clear_all
+                            // surface. To reset persistent memory, delete
+                            // `<workspace>/memory/vectors.bin` manually.
+                            lines.push(
+                                "Persistent memory purge not supported on current backend — \
+                                 delete <workspace>/memory/vectors.bin manually to reset."
+                                    .to_string(),
+                            );
                         } else {
                             lines.push("No persistent memory active.".to_string());
                         }
@@ -400,7 +411,7 @@ pub fn run_tui(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
-                                &memory_handle,
+                                &memory_manager_handle,
                                 &secret_registry,
                                 Arc::clone(&activity),
                                 None,
@@ -478,7 +489,7 @@ pub fn run_tui(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
-                                    &memory_handle,
+                                    &memory_manager_handle,
                                     &secret_registry,
                                     Arc::clone(&activity),
                                     None,
@@ -527,7 +538,7 @@ pub fn run_tui(
                                 tool_executor: sanitized_executor
                                     .as_ref()
                                     .map(|e| e as &dyn ToolExecutor),
-                                memory_service: memory_service_instance.as_ref(),
+                                memory_manager: memory_manager_handle.as_deref(),
                                 max_recall_entries: memory_config.max_recall_entries,
                                 max_recall_tokens: memory_config.max_recall_tokens,
                                 tool_observer: None,
@@ -544,13 +555,12 @@ pub fn run_tui(
                                 .await
                             {
                                 Ok(res) => {
-                                    let memory_stats = if let Some(ref h) = memory_handle {
-                                        let count = h.store.entry_count().await;
-                                        let bytes = h.store.storage_bytes().await;
-                                        Some((count, bytes))
-                                    } else {
-                                        None
-                                    };
+                                    // The new `VectorStore` trait has no
+                                    // entry-count / size surface — the TUI
+                                    // status line no longer shows memory
+                                    // stats until those hooks land on the
+                                    // manager.
+                                    let memory_stats: Option<(usize, u64)> = None;
                                     let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                         view::hide_thinking(siv);
                                         if let Some(notice) = res.system_notice {
@@ -618,7 +628,7 @@ pub fn run_tui(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
-                                &memory_handle,
+                                &memory_manager_handle,
                                 &secret_registry,
                                 Arc::clone(&activity),
                                 None,
@@ -663,7 +673,7 @@ pub fn run_tui(
                             tool_executor: sanitized_executor
                                 .as_ref()
                                 .map(|e| e as &dyn ToolExecutor),
-                            memory_service: memory_service_instance.as_ref(),
+                            memory_manager: memory_manager_handle.as_deref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
@@ -682,13 +692,8 @@ pub fn run_tui(
                                 total_output_tokens,
                                 ..
                             }) => {
-                                let memory_stats = if let Some(ref h) = memory_handle {
-                                    let count = h.store.entry_count().await;
-                                    let bytes = h.store.storage_bytes().await;
-                                    Some((count, bytes))
-                                } else {
-                                    None
-                                };
+                                // No memory-stats hook on the new backend.
+                                let memory_stats: Option<(usize, u64)> = None;
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {

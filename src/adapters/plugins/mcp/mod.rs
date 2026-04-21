@@ -113,7 +113,7 @@ mod tests {
             config: agent,
             http: reqwest::Client::new(),
             shell: Arc::new(LocalShellExecutor::new()),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(SecretRegistry::new()),
         }
     }

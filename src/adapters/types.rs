@@ -6,7 +6,6 @@
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::str::FromStr;
 
@@ -290,27 +289,6 @@ impl ToolDef {
             parameters,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Memory types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MemoryEntry {
-    pub id: String,
-    pub content: String,
-    pub embedding: Vec<f32>,
-    pub agent_id: String,
-    pub created_at_epoch_s: u64,
-    #[serde(default)]
-    pub metadata: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct MemorySearchResult {
-    pub entry: MemoryEntry,
-    pub score: f32,
 }
 
 // ---------------------------------------------------------------------------

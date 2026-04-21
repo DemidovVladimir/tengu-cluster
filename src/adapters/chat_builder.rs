@@ -15,7 +15,7 @@ use crate::adapters::engine_builder::{collect_engine_response, ToolExecutor, Too
 use crate::adapters::flow_builder::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
-use crate::adapters::memory_builder::MemoryService;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::prompt_budget::{assemble_recent_history, compute_base_input_budget};
 use crate::adapters::token::estimate_tokens_approx_min1;
 use crate::adapters::types::{
@@ -230,8 +230,9 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub system_prompt: String,
     pub tools: &'a [ToolDef],
     pub tool_executor: Option<&'a dyn ToolExecutor>,
-    pub memory_service: Option<&'a MemoryService<'a>>,
+    pub memory_manager: Option<&'a MemoryManager>,
     pub max_recall_entries: usize,
+    #[allow(dead_code)] // reserved for future token-budget-based trimming of recall results
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
@@ -314,26 +315,21 @@ impl<'a> ChatRuntimeService<'a> {
 
         let needs_fresh_grounding = needs_fresh_history_grounding(text);
 
-        // Recall relevant memories if memory service is available.
+        // Recall relevant memories if a memory manager with a vector
+        // backend is available.
         let memory_block = if needs_fresh_grounding {
             None
-        } else if let Some(mem) = self.memory_service {
-            match mem
-                .recall(
-                    &state
-                        .messages
-                        .last()
-                        .map(|m| m.content.as_str())
-                        .unwrap_or(""),
-                    self.max_recall_entries,
-                    self.max_recall_tokens,
-                )
-                .await
-            {
-                Ok(results) if !results.is_empty() => {
+        } else if let Some(mgr) = self.memory_manager {
+            let query = state
+                .messages
+                .last()
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+            match mgr.search(query, self.max_recall_entries, None).await {
+                Ok(hits) if !hits.is_empty() => {
                     let mut block = String::from("[Relevant memories]\n");
-                    for r in &results {
-                        block.push_str(&format!("- {}\n", r.entry.content));
+                    for h in &hits {
+                        block.push_str(&format!("- {}\n", h.text));
                     }
                     Some(block)
                 }

@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::memory_builder::MemoryServiceHandle;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{ToolCall, ToolDef};
@@ -90,7 +90,7 @@ pub(crate) struct ToolCtx<'a> {
     pub scope: &'a ToolScope,
     pub shell: &'a dyn ShellExecutionPort,
     pub http: &'a reqwest::Client,
-    pub memory: Option<&'a MemoryServiceHandle>,
+    pub memory_manager: Option<&'a MemoryManager>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
     pub conversation: ConversationView<'a>,
@@ -102,7 +102,7 @@ pub(crate) struct PluginCtx<'a> {
     pub config: &'a crate::adapters::config::AgentConfig,
     pub http: reqwest::Client,
     pub shell: Arc<dyn ShellExecutionPort>,
-    pub memory: Option<Arc<MemoryServiceHandle>>,
+    pub memory_manager: Option<Arc<MemoryManager>>,
     pub secret_registry: Arc<SecretRegistry>,
 }
 
@@ -188,7 +188,7 @@ pub(crate) struct PluginToolExecutor {
     pub workspace: std::path::PathBuf,
     pub shell: Arc<dyn ShellExecutionPort>,
     pub http: reqwest::Client,
-    pub memory: Option<Arc<MemoryServiceHandle>>,
+    pub memory_manager: Option<Arc<MemoryManager>>,
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
@@ -228,7 +228,7 @@ impl ToolExecutor for PluginToolExecutor {
             scope: &scope,
             shell: self.shell.as_ref(),
             http: &self.http,
-            memory: self.memory.as_ref().map(|m| m.as_ref()),
+            memory_manager: self.memory_manager.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
             conversation: ConversationView::empty(),
@@ -282,7 +282,7 @@ mod tests {
             workspace: std::path::PathBuf::from("."),
             shell: Arc::new(LocalShellExecutor::new()),
             http: reqwest::Client::new(),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
