@@ -56,9 +56,20 @@ pub(crate) async fn classify_request(
 
     let defaults = LimitsConfig::default();
     let response = collect_engine_response(
-        engine, &messages, &[], &context, None, None, None, None,
-        defaults.max_tool_rounds, defaults.max_tool_result_chars, defaults.stream_event_timeout_secs, defaults.compact_result_limit,
-    ).await?;
+        engine,
+        &messages,
+        &[],
+        &context,
+        None,
+        None,
+        None,
+        None,
+        defaults.max_tool_rounds,
+        defaults.max_tool_result_chars,
+        defaults.stream_event_timeout_secs,
+        defaults.compact_result_limit,
+    )
+    .await?;
 
     parse_route_decision(&response.text, agent_descriptions)
 }
@@ -149,9 +160,20 @@ pub(crate) async fn generate_plan(
 
     let defaults = LimitsConfig::default();
     let response = collect_engine_response(
-        engine, &messages, &[], &context, None, None, None, None,
-        defaults.max_tool_rounds, defaults.max_tool_result_chars, defaults.stream_event_timeout_secs, defaults.compact_result_limit,
-    ).await?;
+        engine,
+        &messages,
+        &[],
+        &context,
+        None,
+        None,
+        None,
+        None,
+        defaults.max_tool_rounds,
+        defaults.max_tool_result_chars,
+        defaults.stream_event_timeout_secs,
+        defaults.compact_result_limit,
+    )
+    .await?;
 
     if response.text.is_empty() {
         anyhow::bail!("Planner received empty response from engine");
@@ -176,8 +198,7 @@ pub(crate) async fn generate_plan(
 
 /// Fix `depends_on` entries that reference role names instead of task IDs.
 pub(crate) fn resolve_role_refs_in_depends(tasks: &mut [PlanTask]) -> usize {
-    let id_set: std::collections::HashSet<String> =
-        tasks.iter().map(|t| t.id.clone()).collect();
+    let id_set: std::collections::HashSet<String> = tasks.iter().map(|t| t.id.clone()).collect();
     let last_task_for_role: HashMap<String, String> = {
         let mut map = HashMap::new();
         for task in tasks.iter() {
@@ -417,4 +438,3 @@ fn parse_plan_json(text: &str) -> Result<Vec<PlanTask>> {
     }
     Ok(result)
 }
-

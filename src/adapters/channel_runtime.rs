@@ -20,23 +20,23 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
-use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::mcp::McpPlugin;
 use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
 use crate::adapters::plugins::skill::SkillPlugin;
+use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::subagents::{SubagentRegistry, SubagentsPlugin};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
+use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
+use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
-use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::types::{ChatLoopState, Lens, ToolCall, ToolDef};
 
 // ---------------------------------------------------------------------------
@@ -243,11 +243,9 @@ pub(crate) fn build_tool_executor(
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
-        if let Err(e) = futures::executor::block_on(registry.register_plugin(
-            &mcp_plugin,
-            &plugin_ctx,
-            &[],
-        )) {
+        if let Err(e) =
+            futures::executor::block_on(registry.register_plugin(&mcp_plugin, &plugin_ctx, &[]))
+        {
             tracing::warn!(error = %e, "Failed to register mcp plugin — external MCP tools unavailable");
         }
     }
@@ -342,10 +340,7 @@ pub(crate) fn compute_base_tools(
 /// Unlike `compute_base_tools`, this ALWAYS returns all tools (workspace + platform +
 /// memory + cache) regardless of engine capabilities. Used to populate the MCP bridge
 /// when a Claude Code engine needs access to Tengu-native tools.
-pub(crate) fn compute_bridge_tools(
-    has_memory: bool,
-    workspace_tools: &[String],
-) -> Vec<ToolDef> {
+pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String]) -> Vec<ToolDef> {
     let mut tools = crate::adapters::plugins::workspace::tool_defs();
     if has_memory {
         tools.extend(crate::adapters::plugins::memory::tool_defs());
@@ -453,9 +448,7 @@ pub(crate) fn build_memory_handle(
                     }
                     _ => DiskVectorMemoryStore::new(&resolved_store_path)
                         .ok()
-                        .map(|s| {
-                            Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>
-                        }),
+                        .map(|s| Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>),
                 };
 
             store.map(|s| {
@@ -621,9 +614,7 @@ pub(crate) struct ActivityEntry {
 
 /// Format a tool call for the activity log.
 /// Read-only tools (read_file, list_directory, etc.) are not interesting for other agents.
-pub(crate) fn format_tool_for_activity(
-    call: &ToolCall,
-) -> Option<String> {
+pub(crate) fn format_tool_for_activity(call: &ToolCall) -> Option<String> {
     let read_only = matches!(
         call.name.as_str(),
         "read_file" | "list_directory" | "get_wallet_address" | "abi_encode" | "hex_to_uint256"
@@ -639,7 +630,10 @@ pub(crate) fn format_tool_for_activity(
 }
 
 /// Build a context block summarising what OTHER agents have done recently.
-pub(crate) fn build_activity_context(activity_log: &[ActivityEntry], current_agent_id: &str) -> String {
+pub(crate) fn build_activity_context(
+    activity_log: &[ActivityEntry],
+    current_agent_id: &str,
+) -> String {
     let other: Vec<&ActivityEntry> = activity_log
         .iter()
         .filter(|e| e.agent_id != current_agent_id)
@@ -774,7 +768,7 @@ mod golden_tests {
             None,
             agent_config,
             None, // subagents: golden test simulates orchestrator-disabled default.
-            &[], // mcp_servers: default install has no MCP servers configured.
+            &[],  // mcp_servers: default install has no MCP servers configured.
         )
         .expect("executor");
 

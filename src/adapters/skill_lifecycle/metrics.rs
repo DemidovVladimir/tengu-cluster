@@ -83,7 +83,13 @@ pub(crate) struct FixtureContext<'a> {
 /// layer independent of the full engine stack and allows tests to inject fixtures.
 #[async_trait]
 pub(crate) trait JudgeClient: Send + Sync {
-    async fn judge(&self, system: &str, user: &str, prefill: &str, model: Option<&str>) -> Result<String>;
+    async fn judge(
+        &self,
+        system: &str,
+        user: &str,
+        prefill: &str,
+        model: Option<&str>,
+    ) -> Result<String>;
 }
 
 /// Runtime context passed to every metric kind.
@@ -129,7 +135,10 @@ pub(crate) fn validate_metrics(specs: &[MetricSpec], skill_dir: &Path) -> Result
                     bail!("metric '{}' has empty cmd", name);
                 }
                 if expect_stdout_matches.is_none() && expect_exit_code.is_none() {
-                    bail!("metric '{}' must set expect_stdout_matches or expect_exit_code", name);
+                    bail!(
+                        "metric '{}' must set expect_stdout_matches or expect_exit_code",
+                        name
+                    );
                 }
             }
             MetricSpec::LlmJudge { rubric_file, .. } => {
@@ -195,7 +204,9 @@ mod tests {
                 min_pass_rate: None,
             },
         ];
-        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        let err = validate_metrics(&specs, dir.path())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("duplicate"), "{err}");
     }
 
@@ -209,7 +220,9 @@ mod tests {
             expect_exit_code: Some(0),
             min_pass_rate: Some(1.5),
         }];
-        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        let err = validate_metrics(&specs, dir.path())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("1.5"), "{err}");
         assert!(err.contains("outside [0,1]"), "{err}");
     }
@@ -224,7 +237,9 @@ mod tests {
             expect_exit_code: None,
             min_pass_rate: None,
         }];
-        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        let err = validate_metrics(&specs, dir.path())
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("must set expect_stdout_matches or expect_exit_code"),
             "{err}"
@@ -240,7 +255,9 @@ mod tests {
             judge_model: None,
             min_pass_rate: None,
         }];
-        let err = validate_metrics(&specs, dir.path()).unwrap_err().to_string();
+        let err = validate_metrics(&specs, dir.path())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("rubric_file missing"), "{err}");
     }
 

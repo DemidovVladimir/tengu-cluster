@@ -397,4 +397,3 @@ pub fn push_tool_activity(siv: &mut Cursive, tool_name: &str, detail: &str) {
     });
     scroll_chat_to_bottom(siv);
 }
-

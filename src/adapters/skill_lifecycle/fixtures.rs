@@ -34,13 +34,18 @@ pub(crate) fn read_fixtures(path: &Path) -> Result<FixturesFile> {
     let body = std::fs::read_to_string(path)?;
     let parsed: FixturesFile = serde_yaml::from_str(&body)?;
     if parsed.schema_version != 1 {
-        bail!("unsupported fixtures schema_version: {}", parsed.schema_version);
+        bail!(
+            "unsupported fixtures schema_version: {}",
+            parsed.schema_version
+        );
     }
     Ok(parsed)
 }
 
 pub(crate) fn write_fixtures(path: &Path, file: &FixturesFile) -> Result<()> {
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(path, serde_yaml::to_string(file)?)?;
     Ok(())
 }
@@ -61,8 +66,12 @@ pub(crate) fn extract_fixtures(messages: &[Message], opts: &ExtractOpts) -> Vec<
 
     while idx < messages.len() {
         // Find next user message
-        while idx < messages.len() && !matches!(messages[idx].role, Role::User) { idx += 1; }
-        if idx >= messages.len() { break; }
+        while idx < messages.len() && !matches!(messages[idx].role, Role::User) {
+            idx += 1;
+        }
+        if idx >= messages.len() {
+            break;
+        }
         let user = &messages[idx];
         idx += 1;
 
@@ -71,7 +80,9 @@ pub(crate) fn extract_fixtures(messages: &[Message], opts: &ExtractOpts) -> Vec<
         while asst_idx < messages.len() && !matches!(messages[asst_idx].role, Role::Assistant) {
             asst_idx += 1;
         }
-        if asst_idx >= messages.len() { break; }
+        if asst_idx >= messages.len() {
+            break;
+        }
         let asst = &messages[asst_idx];
         idx = asst_idx + 1;
 
@@ -79,7 +90,11 @@ pub(crate) fn extract_fixtures(messages: &[Message], opts: &ExtractOpts) -> Vec<
 
         out.push(Fixture {
             id: format!("f{}", fixture_n),
-            prompt: if opts.include_user_messages { user.content.clone() } else { String::new() },
+            prompt: if opts.include_user_messages {
+                user.content.clone()
+            } else {
+                String::new()
+            },
             expected_tool_calls,
             expected_outcome: opts.expected_outcome.clone(),
             metrics: opts.metric_names.clone(),
@@ -90,7 +105,9 @@ pub(crate) fn extract_fixtures(messages: &[Message], opts: &ExtractOpts) -> Vec<
 }
 
 fn extract_tool_calls(calls: &Option<Vec<ToolCall>>, drop: &[String]) -> Vec<ExpectedToolCall> {
-    let Some(calls) = calls else { return Vec::new() };
+    let Some(calls) = calls else {
+        return Vec::new();
+    };
     calls
         .iter()
         .filter(|c| !drop.iter().any(|d| d == &c.name))
@@ -113,7 +130,9 @@ fn redact_args(args: &serde_json::Value) -> serde_json::Value {
         serde_json::Value::Array(a) => {
             serde_json::Value::Array(a.iter().map(redact_args).collect())
         }
-        serde_json::Value::String(s) if s.len() > 32 => serde_json::Value::String("<elided>".into()),
+        serde_json::Value::String(s) if s.len() > 32 => {
+            serde_json::Value::String("<elided>".into())
+        }
         _ => args.clone(),
     }
 }
@@ -125,18 +144,29 @@ mod tests {
     use tempfile::TempDir;
 
     fn msg(role: Role, content: &str) -> Message {
-        Message { role, content: content.into(), tool_call_id: None, tool_calls: None }
+        Message {
+            role,
+            content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
     }
 
     fn asst_with_calls(calls: Vec<ToolCall>) -> Message {
         Message {
-            role: Role::Assistant, content: String::new(),
-            tool_call_id: None, tool_calls: Some(calls),
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(calls),
         }
     }
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall { id: "c1".into(), name: name.into(), arguments: args }
+        ToolCall {
+            id: "c1".into(),
+            name: name.into(),
+            arguments: args,
+        }
     }
 
     #[test]
@@ -146,7 +176,8 @@ mod tests {
         let f = FixturesFile {
             schema_version: 1,
             fixtures: vec![Fixture {
-                id: "f1".into(), prompt: "hi".into(),
+                id: "f1".into(),
+                prompt: "hi".into(),
                 expected_tool_calls: vec![],
                 expected_outcome: Some("ok".into()),
                 metrics: vec!["m1".into()],
@@ -191,11 +222,14 @@ mod tests {
         let long = "x".repeat(50);
         let messages = vec![
             msg(Role::User, "req"),
-            asst_with_calls(vec![call("http_request", json!({
-                "url": long.clone(),
-                "method": "POST",
-                "body_obj": { "deeply": { "nested": long.clone() } },
-            }))]),
+            asst_with_calls(vec![call(
+                "http_request",
+                json!({
+                    "url": long.clone(),
+                    "method": "POST",
+                    "body_obj": { "deeply": { "nested": long.clone() } },
+                }),
+            )]),
         ];
         let opts = ExtractOpts {
             include_user_messages: true,
@@ -220,7 +254,8 @@ mod tests {
             ]),
         ];
         let opts = ExtractOpts {
-            include_user_messages: true, expected_outcome: None,
+            include_user_messages: true,
+            expected_outcome: None,
             drop_tool_names: vec!["memory_search".into()],
             metric_names: vec![],
         };
@@ -237,8 +272,10 @@ mod tests {
             msg(Role::User, "orphan"),
         ];
         let opts = ExtractOpts {
-            include_user_messages: true, expected_outcome: None,
-            drop_tool_names: vec![], metric_names: vec![],
+            include_user_messages: true,
+            expected_outcome: None,
+            drop_tool_names: vec![],
+            metric_names: vec![],
         };
         let fxs = extract_fixtures(&messages, &opts);
         assert_eq!(fxs.len(), 1);

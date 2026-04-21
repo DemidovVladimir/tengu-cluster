@@ -91,8 +91,7 @@ impl Tool for SignAndSendTransactionTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let tx_hash =
-            privy_send_transaction(ctx.http, to, data, value, chain_id).await?;
+        let tx_hash = privy_send_transaction(ctx.http, to, data, value, chain_id).await?;
 
         let text = if wait {
             let receipt = wait_for_receipt(ctx.http, &tx_hash, self.cancel.as_ref()).await?;

@@ -16,14 +16,14 @@ pub(crate) mod tool_builder;
 pub(crate) mod usage;
 
 // --- services & ports ---
-pub(crate) mod ports;
 pub(crate) mod event_orchestrator;
 pub(crate) mod flow_builder;
+pub(crate) mod ports;
 pub(crate) mod prompt_budget;
 // --- adapters ---
+pub(crate) mod channel_runtime;
 #[cfg(feature = "claude_code")]
 pub(crate) mod claude_code_engine;
-pub(crate) mod channel_runtime;
 pub(crate) mod embedding;
 pub(crate) mod engine_builder;
 pub(crate) mod mcp_bridge;
@@ -35,7 +35,7 @@ pub(crate) mod qdrant_memory_store;
 pub(crate) mod scaffold;
 pub(crate) mod shell_executor;
 pub(crate) mod skill_lifecycle;
-pub(crate) mod tool_plugin;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram_builder;
+pub(crate) mod tool_plugin;
 pub(crate) mod tui;

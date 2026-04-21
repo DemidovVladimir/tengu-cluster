@@ -13,9 +13,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::client::McpCaller;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 #[cfg(test)]
 use crate::adapters::tool_plugin::ConversationView;
+use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct McpProxyTool {

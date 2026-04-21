@@ -1,7 +1,7 @@
 //! Prompt budgeting helpers for runtime turns.
 
-use crate::adapters::types::HistoryAssembly;
 use crate::adapters::token::estimate_tokens_approx_min1;
+use crate::adapters::types::HistoryAssembly;
 use crate::adapters::types::Message;
 
 /// Assemble newest contiguous history suffix that fits the token budget.

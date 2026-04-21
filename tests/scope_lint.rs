@@ -39,11 +39,7 @@ fn can_read_all_adapter_sources() {
     for file in &files {
         let content = fs::read_to_string(file)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", file.display(), e));
-        assert!(
-            !content.is_empty(),
-            "File {} is empty",
-            file.display()
-        );
+        assert!(!content.is_empty(), "File {} is empty", file.display());
     }
 }
 

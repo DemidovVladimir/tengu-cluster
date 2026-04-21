@@ -85,7 +85,8 @@ impl Tool for RememberTool {
             })
             .unwrap_or_default();
 
-        let service = MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
+        let service =
+            MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
         let id = service
             .remember_with_metadata(content, agent_id, metadata)
             .await?;

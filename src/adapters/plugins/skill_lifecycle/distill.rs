@@ -177,10 +177,8 @@ impl Tool for SkillDistillTool {
                 MetricSpec::LlmJudge {
                     name, rubric_file, ..
                 } => {
-                    let stub =
-                        format!("# Rubric for {name}\n\nDescribe pass criteria here.\n");
-                    let target =
-                        metrics_dir.join(Path::new(rubric_file).file_name().unwrap());
+                    let stub = format!("# Rubric for {name}\n\nDescribe pass criteria here.\n");
+                    let target = metrics_dir.join(Path::new(rubric_file).file_name().unwrap());
                     std::fs::write(target, stub)?;
                 }
                 MetricSpec::Script { name, path, .. } => {

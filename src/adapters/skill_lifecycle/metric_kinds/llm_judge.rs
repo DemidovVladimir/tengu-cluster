@@ -21,13 +21,18 @@ impl MetricKind for LlmJudgeKind {
         ctx: &MetricRunCtx<'_>,
     ) -> Result<MetricOutcome> {
         let (rubric_file, judge_model) = match spec {
-            MetricSpec::LlmJudge { rubric_file, judge_model, .. } => (rubric_file.clone(), judge_model.clone()),
+            MetricSpec::LlmJudge {
+                rubric_file,
+                judge_model,
+                ..
+            } => (rubric_file.clone(), judge_model.clone()),
             _ => anyhow::bail!("LlmJudgeKind given wrong spec"),
         };
 
         let Some(judge) = ctx.judge.as_ref() else {
             return Ok(MetricOutcome {
-                pass: false, score: 0.0,
+                pass: false,
+                score: 0.0,
                 notes: Some("judge client unavailable".into()),
                 raw: json!({}),
             });
@@ -41,13 +46,27 @@ impl MetricKind for LlmJudgeKind {
             expected = fixture.expected_outcome.unwrap_or(""),
         );
 
-        let raw = judge.judge(JUDGE_SYSTEM, &user, "{\"verdict\":\"", judge_model.as_deref()).await?;
+        let raw = judge
+            .judge(
+                JUDGE_SYSTEM,
+                &user,
+                "{\"verdict\":\"",
+                judge_model.as_deref(),
+            )
+            .await?;
         // Re-attach the prefill so we always parse a complete object.
         let full = format!("{{\"verdict\":\"{raw}");
-        let parsed: Value = serde_json::from_str(&full).map_err(|e| anyhow!("judge output not JSON: {e}; got {full}"))?;
-        let verdict = parsed.get("verdict").and_then(|v| v.as_str()).unwrap_or("fail");
+        let parsed: Value = serde_json::from_str(&full)
+            .map_err(|e| anyhow!("judge output not JSON: {e}; got {full}"))?;
+        let verdict = parsed
+            .get("verdict")
+            .and_then(|v| v.as_str())
+            .unwrap_or("fail");
         let score = parsed.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-        let notes = parsed.get("notes").and_then(|v| v.as_str()).map(String::from);
+        let notes = parsed
+            .get("notes")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         Ok(MetricOutcome {
             pass: verdict == "pass",
@@ -76,20 +95,32 @@ mod tests {
 
     struct NoShell;
     impl crate::adapters::ports::ShellExecutionPort for NoShell {
-        fn execute_shell(&self, _: &str, _: &Path) -> Result<String> { Ok(String::new()) }
+        fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
+            Ok(String::new())
+        }
     }
 
     async fn run_with(stub: StubJudge) -> MetricOutcome {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("r.md"), "criterion: returns JSON\n").unwrap();
         let ws = std::env::temp_dir();
-        let fixture = FixtureContext { prompt: "p", expected_outcome: None, transcript: "t" };
+        let fixture = FixtureContext {
+            prompt: "p",
+            expected_outcome: None,
+            transcript: "t",
+        };
         let ctx = MetricRunCtx {
-            skill_dir: dir.path(), workspace: &ws, shell: &NoShell, tools: None,
+            skill_dir: dir.path(),
+            workspace: &ws,
+            shell: &NoShell,
+            tools: None,
             judge: Some(Arc::new(stub)),
         };
         let spec = MetricSpec::LlmJudge {
-            name: "j".into(), rubric_file: "r.md".into(), judge_model: None, min_pass_rate: None,
+            name: "j".into(),
+            rubric_file: "r.md".into(),
+            judge_model: None,
+            min_pass_rate: None,
         };
         LlmJudgeKind.run(&spec, &fixture, &ctx).await.unwrap()
     }
@@ -115,15 +146,30 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("r.md"), "x\n").unwrap();
         let ws = std::env::temp_dir();
-        let fixture = FixtureContext { prompt: "", expected_outcome: None, transcript: "" };
+        let fixture = FixtureContext {
+            prompt: "",
+            expected_outcome: None,
+            transcript: "",
+        };
         let ctx = MetricRunCtx {
-            skill_dir: dir.path(), workspace: &ws, shell: &NoShell, tools: None, judge: None,
+            skill_dir: dir.path(),
+            workspace: &ws,
+            shell: &NoShell,
+            tools: None,
+            judge: None,
         };
         let spec = MetricSpec::LlmJudge {
-            name: "j".into(), rubric_file: "r.md".into(), judge_model: None, min_pass_rate: None,
+            name: "j".into(),
+            rubric_file: "r.md".into(),
+            judge_model: None,
+            min_pass_rate: None,
         };
         let out = LlmJudgeKind.run(&spec, &fixture, &ctx).await.unwrap();
         assert!(!out.pass);
-        assert!(out.notes.as_deref().unwrap().contains("judge client unavailable"));
+        assert!(out
+            .notes
+            .as_deref()
+            .unwrap()
+            .contains("judge client unavailable"));
     }
 }

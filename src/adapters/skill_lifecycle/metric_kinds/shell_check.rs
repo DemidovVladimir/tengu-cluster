@@ -32,7 +32,11 @@ impl MetricKind for ShellCheckKind {
                 expect_stdout_matches,
                 expect_exit_code,
                 ..
-            } => (cmd.clone(), expect_stdout_matches.clone(), *expect_exit_code),
+            } => (
+                cmd.clone(),
+                expect_stdout_matches.clone(),
+                *expect_exit_code,
+            ),
             _ => anyhow::bail!("ShellCheckKind given wrong spec"),
         };
 
@@ -68,7 +72,11 @@ impl MetricKind for ShellCheckKind {
     }
 }
 
-fn run_cmd(shell: &dyn ShellExecutionPort, cmd: &str, workspace: &std::path::Path) -> (String, bool) {
+fn run_cmd(
+    shell: &dyn ShellExecutionPort,
+    cmd: &str,
+    workspace: &std::path::Path,
+) -> (String, bool) {
     match shell.execute_shell(cmd, workspace) {
         Ok(out) => (out, true),
         Err(e) => (format!("ERR: {e}"), false),
@@ -106,17 +114,31 @@ mod tests {
 
     async fn run(shell: MockShell, spec: MetricSpec) -> MetricOutcome {
         let ws = std::env::temp_dir();
-        let fixture = FixtureContext { prompt: "", expected_outcome: None, transcript: "" };
-        let ctx = MetricRunCtx { skill_dir: &ws, workspace: &ws, shell: &shell, tools: None, judge: None };
+        let fixture = FixtureContext {
+            prompt: "",
+            expected_outcome: None,
+            transcript: "",
+        };
+        let ctx = MetricRunCtx {
+            skill_dir: &ws,
+            workspace: &ws,
+            shell: &shell,
+            tools: None,
+            judge: None,
+        };
         ShellCheckKind.run(&spec, &fixture, &ctx).await.unwrap()
     }
 
     #[tokio::test]
     async fn passes_when_regex_matches_and_exit_ok() {
         let out = run(
-            MockShell { stdout: "0xabc".into(), ok: true },
+            MockShell {
+                stdout: "0xabc".into(),
+                ok: true,
+            },
             spec_regex_exit(Some("^0x[a-f0-9]+$"), Some(0)),
-        ).await;
+        )
+        .await;
         assert!(out.pass);
         assert_eq!(out.score, 1.0);
     }
@@ -124,9 +146,13 @@ mod tests {
     #[tokio::test]
     async fn fails_when_regex_mismatches() {
         let out = run(
-            MockShell { stdout: "nope".into(), ok: true },
+            MockShell {
+                stdout: "nope".into(),
+                ok: true,
+            },
             spec_regex_exit(Some("^0x[a-f0-9]+$"), Some(0)),
-        ).await;
+        )
+        .await;
         assert!(!out.pass);
         assert_eq!(out.score, 0.0);
         assert!(out.notes.as_deref().unwrap().contains("stdout_match=false"));
@@ -135,18 +161,26 @@ mod tests {
     #[tokio::test]
     async fn fails_when_exit_nonzero_and_exit_expected_zero() {
         let out = run(
-            MockShell { stdout: "".into(), ok: false },
+            MockShell {
+                stdout: "".into(),
+                ok: false,
+            },
             spec_regex_exit(None, Some(0)),
-        ).await;
+        )
+        .await;
         assert!(!out.pass);
     }
 
     #[tokio::test]
     async fn exit_only_mode_passes_on_ok() {
         let out = run(
-            MockShell { stdout: "".into(), ok: true },
+            MockShell {
+                stdout: "".into(),
+                ok: true,
+            },
             spec_regex_exit(None, Some(0)),
-        ).await;
+        )
+        .await;
         assert!(out.pass);
     }
 
@@ -155,9 +189,13 @@ mod tests {
         // When expect_exit_code is omitted, the default of 0 still applies.
         // A command that fails but produces matching stdout still fails the metric.
         let out = run(
-            MockShell { stdout: "0xabc".into(), ok: false },
+            MockShell {
+                stdout: "0xabc".into(),
+                ok: false,
+            },
             spec_regex_exit(Some("^0x[a-f0-9]+$"), None),
-        ).await;
+        )
+        .await;
         assert!(!out.pass, "stdout-only spec must still require exit 0");
         assert!(out.notes.as_deref().unwrap().contains("exit_match=false"));
     }

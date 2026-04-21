@@ -62,7 +62,6 @@ enum Commands {
     McpBridge,
 }
 
-
 #[derive(Subcommand)]
 enum SecretAction {
     /// Create encrypted secrets vault with master password
@@ -287,14 +286,14 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Commands::McpBridge => {
-            adapters::mcp_bridge::run_mcp_bridge().await
-        }
+        Commands::McpBridge => adapters::mcp_bridge::run_mcp_bridge().await,
         Commands::Secret { action } => {
             let path = secret_builder::secrets_file_path(&resolve_tengu_home());
             match action {
                 SecretAction::Init => secret_builder::init_secrets_file(&path)?,
-                SecretAction::Set { key, value } => secret_builder::set_secret(&path, &key, &value)?,
+                SecretAction::Set { key, value } => {
+                    secret_builder::set_secret(&path, &key, &value)?
+                }
                 SecretAction::Remove { key } => secret_builder::remove_secret(&path, &key)?,
                 SecretAction::List => {
                     let keys = secret_builder::list_secret_keys(&path)?;

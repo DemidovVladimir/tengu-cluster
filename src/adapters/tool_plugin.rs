@@ -161,7 +161,10 @@ impl ToolRegistry {
     }
 
     pub(crate) fn definitions(&self) -> Vec<ToolDef> {
-        self.by_name.values().map(|t| t.definition().clone()).collect()
+        self.by_name
+            .values()
+            .map(|t| t.definition().clone())
+            .collect()
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
@@ -219,10 +222,8 @@ impl PluginToolExecutor {
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
-        let known: std::collections::HashSet<&str> = already_advertised
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let known: std::collections::HashSet<&str> =
+            already_advertised.iter().map(|t| t.name.as_str()).collect();
         self.registry
             .definitions()
             .into_iter()
@@ -254,7 +255,10 @@ impl ToolExecutor for PluginToolExecutor {
             conversation: view,
         };
 
-        let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
+        let output = self
+            .registry
+            .invoke(&call.name, &call.arguments, &ctx)
+            .await?;
         Ok(output.text)
     }
 }

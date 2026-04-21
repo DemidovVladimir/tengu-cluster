@@ -74,7 +74,11 @@ mod tests {
                 &harness.ctx(),
             )
             .await;
-        assert!(result.is_err(), "expected skill-dir block, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected skill-dir block, got: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
@@ -85,10 +89,7 @@ mod tests {
         let harness = TestHarness::with_scope(tmp.path(), scope);
         let tool = WriteFileTool::new();
         let result = tool
-            .execute(
-                &json!({"path": "out.txt", "content": "x"}),
-                &harness.ctx(),
-            )
+            .execute(&json!({"path": "out.txt", "content": "x"}), &harness.ctx())
             .await;
         assert!(result.is_err(), "expected scope denial, got: {:?}", result);
     }

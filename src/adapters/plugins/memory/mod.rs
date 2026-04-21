@@ -137,8 +137,7 @@ impl ToolPlugin for MemoryPlugin {
             return Ok(vec![]);
         };
 
-        let mut tools: Vec<Arc<dyn Tool>> =
-            vec![Arc::new(RememberTool::new(Arc::clone(&handle)))];
+        let mut tools: Vec<Arc<dyn Tool>> = vec![Arc::new(RememberTool::new(Arc::clone(&handle)))];
 
         if ctx
             .config

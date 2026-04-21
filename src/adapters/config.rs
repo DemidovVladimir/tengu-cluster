@@ -1053,9 +1053,7 @@ mod tests {
         main.limits.max_output_tokens_per_turn = Some(8_192);
 
         let err = config.validate().expect_err("expected validation error");
-        assert!(err
-            .to_string()
-            .contains("cannot exceed context_window"));
+        assert!(err.to_string().contains("cannot exceed context_window"));
     }
 
     #[test]
@@ -1089,7 +1087,9 @@ mod tests {
         });
 
         let err = config.validate().expect_err("expected validation error");
-        assert!(err.to_string().contains("builtin_tools_profile must be one of"));
+        assert!(err
+            .to_string()
+            .contains("builtin_tools_profile must be one of"));
     }
 
     #[test]

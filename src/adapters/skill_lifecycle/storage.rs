@@ -77,11 +77,20 @@ pub(crate) fn finalize_run(
     // history.jsonl — append one line per metric for this run
     let hpath = history_path(skill_dir);
     std::fs::create_dir_all(hpath.parent().unwrap())?;
-    let mut hf = std::fs::OpenOptions::new().create(true).append(true).open(&hpath)?;
+    let mut hf = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&hpath)?;
     let run_ref = format!("metrics/runs/{ts}");
     for spec in specs {
         let (n, pass_rate) = aggregate(samples, spec.name());
-        let line = HistoryLine { ts, metric: spec.name(), pass_rate, n, run_ref: &run_ref };
+        let line = HistoryLine {
+            ts,
+            metric: spec.name(),
+            pass_rate,
+            n,
+            run_ref: &run_ref,
+        };
         writeln!(hf, "{}", serde_json::to_string(&line)?)?;
     }
 
@@ -95,7 +104,10 @@ pub(crate) fn finalize_run(
         rolling_window,
         metrics: rollups,
     };
-    std::fs::write(metrics_json_path(skill_dir), serde_json::to_vec_pretty(&out)?)?;
+    std::fs::write(
+        metrics_json_path(skill_dir),
+        serde_json::to_vec_pretty(&out)?,
+    )?;
     Ok(())
 }
 
@@ -114,10 +126,16 @@ fn aggregate(samples: &[RunSample], metric: &str) -> (u32, f32) {
     for s in samples {
         if let Some(o) = s.outcomes.get(metric) {
             n += 1;
-            if o.pass { passes += 1; }
+            if o.pass {
+                passes += 1;
+            }
         }
     }
-    let rate = if n == 0 { 0.0 } else { passes as f32 / n as f32 };
+    let rate = if n == 0 {
+        0.0
+    } else {
+        passes as f32 / n as f32
+    };
     (n, rate)
 }
 
@@ -135,7 +153,11 @@ fn compute_rollups(
         for line in BufReader::new(f).lines() {
             let line = line?;
             let v: serde_json::Value = serde_json::from_str(&line)?;
-            let metric = v.get("metric").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+            let metric = v
+                .get("metric")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
             let rate = v.get("pass_rate").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
             let n = v.get("n").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
             per_metric.entry(metric.clone()).or_default().push(rate);
@@ -157,12 +179,15 @@ fn compute_rollups(
         };
         let min = spec.min_pass_rate();
         let gated = min.is_some_and(|m| pass_rate < m);
-        out.insert(name.clone(), MetricRollup {
-            pass_rate,
-            n: *per_metric_n.get(&name).unwrap_or(&0),
-            min_pass_rate: min,
-            gated,
-        });
+        out.insert(
+            name.clone(),
+            MetricRollup {
+                pass_rate,
+                n: *per_metric_n.get(&name).unwrap_or(&0),
+                min_pass_rate: min,
+                gated,
+            },
+        );
     }
     Ok(out)
 }
@@ -175,16 +200,27 @@ mod tests {
 
     fn sample(metric: &str, pass: bool) -> RunSample {
         let mut map = BTreeMap::new();
-        map.insert(metric.to_string(), MetricOutcome {
-            pass, score: if pass { 1.0 } else { 0.0 }, notes: None, raw: json!({}),
-        });
-        RunSample { fixture_id: "f1".into(), outcomes: map }
+        map.insert(
+            metric.to_string(),
+            MetricOutcome {
+                pass,
+                score: if pass { 1.0 } else { 0.0 },
+                notes: None,
+                raw: json!({}),
+            },
+        );
+        RunSample {
+            fixture_id: "f1".into(),
+            outcomes: map,
+        }
     }
 
     fn shell_spec(name: &str, min: Option<f32>) -> MetricSpec {
         MetricSpec::ShellCheck {
-            name: name.into(), cmd: "x".into(),
-            expect_stdout_matches: None, expect_exit_code: Some(0),
+            name: name.into(),
+            cmd: "x".into(),
+            expect_stdout_matches: None,
+            expect_exit_code: Some(0),
             min_pass_rate: min,
         }
     }
@@ -196,11 +232,18 @@ mod tests {
         let specs = vec![shell_spec("m1", Some(0.8))];
         let samples = vec![sample("m1", true), sample("m1", false)];
 
-        finalize_run(skill_dir, "mint-ipnft", "2026-04-22T14-03-11Z", &specs, &samples, 10).unwrap();
+        finalize_run(
+            skill_dir,
+            "mint-ipnft",
+            "2026-04-22T14-03-11Z",
+            &specs,
+            &samples,
+            10,
+        )
+        .unwrap();
 
-        let mj: MetricsJson = serde_json::from_slice(
-            &std::fs::read(metrics_json_path(skill_dir)).unwrap()
-        ).unwrap();
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
         assert_eq!(mj.skill, "mint-ipnft");
         let r = mj.metrics.get("m1").unwrap();
         assert!((r.pass_rate - 0.5).abs() < 1e-4);
@@ -209,7 +252,10 @@ mod tests {
 
         let h = std::fs::read_to_string(history_path(skill_dir)).unwrap();
         assert_eq!(h.lines().count(), 1);
-        assert!(std::fs::metadata(per_run_dir(skill_dir, "2026-04-22T14-03-11Z").join("report.json")).is_ok());
+        assert!(std::fs::metadata(
+            per_run_dir(skill_dir, "2026-04-22T14-03-11Z").join("report.json")
+        )
+        .is_ok());
     }
 
     #[test]
@@ -224,9 +270,8 @@ mod tests {
             let samples = vec![sample("m1", ok)];
             finalize_run(skill_dir, "s", &format!("t{i}"), &specs, &samples, 5).unwrap();
         }
-        let mj: MetricsJson = serde_json::from_slice(
-            &std::fs::read(metrics_json_path(skill_dir)).unwrap()
-        ).unwrap();
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
         let r = mj.metrics.get("m1").unwrap();
         // Last 5 runs: t7(fail=0), t8(pass=1), t9(fail=0), t10(pass=1), t11(fail=0)
         // Average of [0.0, 1.0, 0.0, 1.0, 0.0] == 0.4
@@ -238,18 +283,36 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let skill_dir = dir.path();
         let specs = vec![
-            shell_spec("m1", None),        // no min -> never gated
-            shell_spec("m2", Some(0.5)),   // pass_rate 1.0 -> not gated
+            shell_spec("m1", None),      // no min -> never gated
+            shell_spec("m2", Some(0.5)), // pass_rate 1.0 -> not gated
         ];
         let mut outs = BTreeMap::new();
-        outs.insert("m1".into(), MetricOutcome { pass: true, score: 1.0, notes: None, raw: json!({}) });
-        outs.insert("m2".into(), MetricOutcome { pass: true, score: 1.0, notes: None, raw: json!({}) });
-        let samples = vec![RunSample { fixture_id: "f".into(), outcomes: outs }];
+        outs.insert(
+            "m1".into(),
+            MetricOutcome {
+                pass: true,
+                score: 1.0,
+                notes: None,
+                raw: json!({}),
+            },
+        );
+        outs.insert(
+            "m2".into(),
+            MetricOutcome {
+                pass: true,
+                score: 1.0,
+                notes: None,
+                raw: json!({}),
+            },
+        );
+        let samples = vec![RunSample {
+            fixture_id: "f".into(),
+            outcomes: outs,
+        }];
 
         finalize_run(skill_dir, "s", "t0", &specs, &samples, 10).unwrap();
-        let mj: MetricsJson = serde_json::from_slice(
-            &std::fs::read(metrics_json_path(skill_dir)).unwrap()
-        ).unwrap();
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
         assert!(!mj.metrics["m1"].gated);
         assert!(!mj.metrics["m2"].gated);
     }

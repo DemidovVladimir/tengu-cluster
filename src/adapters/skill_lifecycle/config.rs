@@ -16,9 +16,15 @@ pub(crate) struct SkillLifecycleConfig {
     pub default_rolling_window: u32,
 }
 
-fn default_max_evolve_cycles() -> u32 { 3 }
-fn default_per_run_dir() -> String { "metrics".to_string() }
-fn default_rolling_window() -> u32 { 10 }
+fn default_max_evolve_cycles() -> u32 {
+    3
+}
+fn default_per_run_dir() -> String {
+    "metrics".to_string()
+}
+fn default_rolling_window() -> u32 {
+    10
+}
 
 #[cfg(test)]
 mod tests {

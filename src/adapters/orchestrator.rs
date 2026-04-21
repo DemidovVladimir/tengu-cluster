@@ -5,24 +5,24 @@
 //! dependencies are satisfied, and parallelism emerges from the DAG.
 
 use crate::adapters::channel_runtime;
+use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
-use crate::adapters::memory_builder::MemoryServiceHandle;
-use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
 use crate::adapters::engine_builder::{
     collect_engine_response, SanitizedToolExecutor, ToolExecutor,
 };
 use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
+use crate::adapters::memory_builder::MemoryServiceHandle;
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::adapters::types::{
+    AgentRole, AgentTaskExecutor, Message, Role, RoleDependencies, TaskHistory, TaskStatus,
+    ToolCall, ToolDef,
+};
+use crate::adapters::{Engine, EngineContext};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::adapters::config::Config;
-use crate::adapters::types::{
-    AgentRole, AgentTaskExecutor, Message, Role, RoleDependencies,
-    TaskHistory, TaskStatus, ToolCall, ToolDef,
-};
-use crate::adapters::{Engine, EngineContext};
 use tracing::info;
 
 /// No-op tool activity adapter for fleet agents — logs are sufficient.
@@ -59,7 +59,10 @@ struct AgentRuntimeExecutor {
 
 #[async_trait::async_trait]
 impl AgentTaskExecutor for AgentRuntimeExecutor {
-    async fn execute(&self, description: &str) -> std::result::Result<(String, Vec<(String, String)>), String> {
+    async fn execute(
+        &self,
+        description: &str,
+    ) -> std::result::Result<(String, Vec<(String, String)>), String> {
         execute_agent_task(&self.runtime, description, &self.secret_registry)
             .await
             .map_err(|e| e.to_string())
@@ -187,14 +190,12 @@ pub(crate) async fn boot_orchestrator(
                 base_tools.extend(channel_runtime::compute_subagent_tools());
             }
             let skill_source = FileSystemSkillSource::new(ws.clone());
-            let base_reserved: Vec<String> =
-                base_tools.iter().map(|t| t.name.clone()).collect();
+            let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
             let mut skill_registry = SkillRegistry::new(base_reserved)
                 .with_allowlist(Some(agent_config.skill_packages.clone()));
             skill_registry.reload(&skill_source);
 
-            let current_tools =
-                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+            let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
             let prompt = channel_runtime::rebuild_system_prompt(
                 agent_config,
                 true,
@@ -311,7 +312,11 @@ pub(crate) async fn boot_orchestrator(
         orch.and_then(|o| o.planner_model.as_ref()),
     ) {
         (Some(engine_type), Some(model)) => {
-            match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
+            match crate::adapters::engine_builder::build_planner_engine(
+                engine_type,
+                model,
+                config.claude_code.as_ref(),
+            ) {
                 Ok(e) => {
                     tracing::info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
                     Some(e)
@@ -449,12 +454,10 @@ pub(crate) async fn boot_orchestrator(
             }
         } else {
             // ── Plan-and-execute: shared orchestration pipeline ──
-            let plan_engine: &dyn Engine = dedicated_planner
-                .as_deref()
-                .unwrap_or_else(|| {
-                    let pid = planner_agent_id.as_ref().unwrap();
-                    agent_runtimes.get(pid).unwrap().engine.as_ref()
-                });
+            let plan_engine: &dyn Engine = dedicated_planner.as_deref().unwrap_or_else(|| {
+                let pid = planner_agent_id.as_ref().unwrap();
+                agent_runtimes.get(pid).unwrap().engine.as_ref()
+            });
 
             println!("  Planning...");
 

@@ -82,11 +82,9 @@ impl Tool for ReadFileTool {
         // The LLM commonly tries to `read_file` images before upload; that's
         // unnecessary — the upload path only needs `file_path`.
         const BINARY_EXTS: &[&str] = &[
-            "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "ico", "svg",
-            "mp3", "mp4", "mov", "avi", "wav", "ogg", "flac",
-            "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-            "exe", "dll", "so", "dylib", "bin", "wasm",
-            "parquet", "db", "sqlite",
+            "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "ico", "svg", "mp3", "mp4", "mov",
+            "avi", "wav", "ogg", "flac", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "exe",
+            "dll", "so", "dylib", "bin", "wasm", "parquet", "db", "sqlite",
         ];
         if BINARY_EXTS.contains(&ext_lower.as_str()) {
             bail!(

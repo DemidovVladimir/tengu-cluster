@@ -5,12 +5,12 @@
 //! handles errors with retry + cascade-skip, and integrates Tier 1 data routing.
 
 use crate::adapters::types::{AgentId, OrchestratorEvent, Plan, TaskId, TaskStatus};
+use crate::adapters::Engine;
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use crate::adapters::Engine;
 use tokio::sync::mpsc;
 
 /// Maximum output length included verbatim in downstream context.
@@ -238,7 +238,8 @@ pub(crate) async fn prepare_plan(
     };
 
     // Generate plan via planner LLM.
-    let mut tasks = task_builder::generate_plan(planner_engine, &enriched_goal, agent_descriptions).await?;
+    let mut tasks =
+        task_builder::generate_plan(planner_engine, &enriched_goal, agent_descriptions).await?;
 
     // Resolve role-name references, auto-repair dependencies, validate.
     let role_refs = task_builder::resolve_role_refs_in_depends(&mut tasks);
@@ -247,7 +248,11 @@ pub(crate) async fn prepare_plan(
     }
     let repaired = task_builder::repair_plan_dependencies(&mut tasks, role_deps);
     if repaired > 0 {
-        tracing::info!(repaired, "Auto-repaired plan: added {} dependency edges", repaired);
+        tracing::info!(
+            repaired,
+            "Auto-repaired plan: added {} dependency edges",
+            repaired
+        );
     }
     task_builder::validate_plan_dependencies(&tasks, role_deps)?;
 
@@ -363,44 +368,44 @@ pub(crate) async fn execute_plan(
         if !has_completed {
             tracing::debug!("Skipping topic overview storage — no completed tasks");
         } else {
-        // Strip file attachment paths from the goal — they are ephemeral and
-        // would pollute future plan prompts when recalled as prior work.
-        let clean_goal: String = original_goal
-            .lines()
-            .filter(|line| !line.starts_with("[Attached file:"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut mem_summary = format!("Goal: {}\n\nResults:\n", clean_goal.trim());
-        for t in &plan_outcome.tasks {
-            let status = match t.status {
-                TaskStatus::Completed => "ok",
-                TaskStatus::Failed => "failed",
-                TaskStatus::Skipped => "skipped",
-                _ => "unknown",
-            };
-            let output_preview = t
-                .output
-                .as_deref()
-                .map(|o| crate::adapters::channel_runtime::truncate_output(o, 500))
-                .unwrap_or_default();
-            mem_summary.push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
-        }
+            // Strip file attachment paths from the goal — they are ephemeral and
+            // would pollute future plan prompts when recalled as prior work.
+            let clean_goal: String = original_goal
+                .lines()
+                .filter(|line| !line.starts_with("[Attached file:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut mem_summary = format!("Goal: {}\n\nResults:\n", clean_goal.trim());
+            for t in &plan_outcome.tasks {
+                let status = match t.status {
+                    TaskStatus::Completed => "ok",
+                    TaskStatus::Failed => "failed",
+                    TaskStatus::Skipped => "skipped",
+                    _ => "unknown",
+                };
+                let output_preview = t
+                    .output
+                    .as_deref()
+                    .map(|o| crate::adapters::channel_runtime::truncate_output(o, 500))
+                    .unwrap_or_default();
+                mem_summary.push_str(&format!("- {} ({}): {}\n", t.id, status, output_preview));
+            }
 
-        let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
-        let mut meta = HashMap::new();
-        meta.insert("kind".into(), "topic_overview".into());
-        meta.insert("source".into(), "orchestrator".into());
-        meta.insert("goal".into(), original_goal.to_string());
-        if let Some(name) = workspace_name {
-            meta.insert("workspace_id".into(), name.to_string());
-        }
-        match mem_svc
-            .remember_with_metadata(&mem_summary, "orchestrator", meta)
-            .await
-        {
-            Ok(id) => tracing::debug!(id, "Stored topic overview in memory"),
-            Err(e) => tracing::warn!(error = %e, "Failed to store topic overview"),
-        }
+            let mem_svc = MemoryService::new(handle.embedding.as_ref(), handle.store.as_ref());
+            let mut meta = HashMap::new();
+            meta.insert("kind".into(), "topic_overview".into());
+            meta.insert("source".into(), "orchestrator".into());
+            meta.insert("goal".into(), original_goal.to_string());
+            if let Some(name) = workspace_name {
+                meta.insert("workspace_id".into(), name.to_string());
+            }
+            match mem_svc
+                .remember_with_metadata(&mem_summary, "orchestrator", meta)
+                .await
+            {
+                Ok(id) => tracing::debug!(id, "Stored topic overview in memory"),
+                Err(e) => tracing::warn!(error = %e, "Failed to store topic overview"),
+            }
         } // else (has_completed)
     }
 
@@ -416,10 +421,7 @@ pub(crate) async fn execute_plan(
 /// Data sources:
 /// 1. In-memory Task artifacts (tool envelopes + structured block fields)
 /// 2. Structured output block from LLM output (MINT_OUTPUT:, MOL_LABS_OUTPUT:, etc.)
-pub(crate) fn build_task_context(
-    plan: &Plan,
-    task_id: &TaskId,
-) -> HashMap<String, Value> {
+pub(crate) fn build_task_context(plan: &Plan, task_id: &TaskId) -> HashMap<String, Value> {
     let task = &plan.tasks[task_id];
     tracing::info!(
         task = %task_id,
@@ -652,7 +654,12 @@ async fn dispatch_task(
             .tasks
             .get(task_id)
             .ok_or_else(|| format!("task {task_id} not found"))?;
-        (task.role.clone(), task.description.clone(), task.last_error.clone(), task.attempt)
+        (
+            task.role.clone(),
+            task.description.clone(),
+            task.last_error.clone(),
+            task.attempt,
+        )
     };
 
     let agent_id = role_to_agent
@@ -812,7 +819,6 @@ fn is_self_referential_add(
     false
 }
 
-
 /// Parse `KEY: VALUE` lines from a structured output block (e.g. MINT_OUTPUT:).
 /// Returns a map of clean field names to values.
 fn parse_structured_block_fields(block: &str) -> HashMap<String, String> {
@@ -850,7 +856,10 @@ fn find_timed_out_tasks(plan: &Plan, timeout: Duration) -> Vec<TaskId> {
     plan.tasks
         .values()
         .filter(|t| t.status == TaskStatus::Running)
-        .filter(|t| t.started_at.is_some_and(|s| now.duration_since(s) >= timeout))
+        .filter(|t| {
+            t.started_at
+                .is_some_and(|s| now.duration_since(s) >= timeout)
+        })
         .map(|t| t.id.clone())
         .collect()
 }
@@ -901,9 +910,19 @@ pub(crate) async fn run_orchestrator(
 
     // Initial dispatch.
     let ready = plan.dispatch_ready_tasks();
-    tracing::debug!(ready_count = ready.len(), "run_orchestrator — initial dispatch");
+    tracing::debug!(
+        ready_count = ready.len(),
+        "run_orchestrator — initial dispatch"
+    );
     for task_id in ready {
-        dispatch_task(&mut plan, &task_id, agent_senders, role_to_agent, planner_ref).await?;
+        dispatch_task(
+            &mut plan,
+            &task_id,
+            agent_senders,
+            role_to_agent,
+            planner_ref,
+        )
+        .await?;
     }
 
     if plan.is_complete() {
@@ -1129,9 +1148,21 @@ pub(crate) async fn run_orchestrator(
         }
 
         if plan.is_complete() {
-            let completed = plan.tasks.values().filter(|t| t.status == TaskStatus::Completed).count();
-            let failed = plan.tasks.values().filter(|t| t.status == TaskStatus::Failed).count();
-            let skipped = plan.tasks.values().filter(|t| t.status == TaskStatus::Skipped).count();
+            let completed = plan
+                .tasks
+                .values()
+                .filter(|t| t.status == TaskStatus::Completed)
+                .count();
+            let failed = plan
+                .tasks
+                .values()
+                .filter(|t| t.status == TaskStatus::Failed)
+                .count();
+            let skipped = plan
+                .tasks
+                .values()
+                .filter(|t| t.status == TaskStatus::Skipped)
+                .count();
             tracing::info!(
                 completed = completed,
                 failed = failed,

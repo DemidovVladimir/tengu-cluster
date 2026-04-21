@@ -36,7 +36,8 @@ impl MetricKind for ScriptKind {
                 .env("TRANSCRIPT", transcript_val)
                 .env("EXPECTED_OUTCOME", expected_val)
                 .output()
-        }).await??;
+        })
+        .await??;
 
         let stdout = String::from_utf8_lossy(&out.stdout).to_string();
 
@@ -63,8 +64,12 @@ fn fixture_prompt_env(_: &FixtureContext<'_>) -> String {
     // Actual wiring happens in Task 12's runner; tests set the env directly.
     String::new()
 }
-fn fixture_transcript_env(_: &FixtureContext<'_>) -> String { String::new() }
-fn fixture_expected_env(_: &FixtureContext<'_>) -> String { String::new() }
+fn fixture_transcript_env(_: &FixtureContext<'_>) -> String {
+    String::new()
+}
+fn fixture_expected_env(_: &FixtureContext<'_>) -> String {
+    String::new()
+}
 
 #[derive(serde::Deserialize)]
 struct ScriptOutput {
@@ -84,7 +89,9 @@ mod tests {
 
     struct NoShell;
     impl crate::adapters::ports::ShellExecutionPort for NoShell {
-        fn execute_shell(&self, _: &str, _: &Path) -> Result<String> { Ok(String::new()) }
+        fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
+            Ok(String::new())
+        }
     }
 
     fn write_script(dir: &Path, body: &str) -> String {
@@ -95,18 +102,33 @@ mod tests {
 
     async fn run_script(dir: &TempDir, spec_path: String) -> MetricOutcome {
         let ws = std::env::temp_dir();
-        let fixture = FixtureContext { prompt: "", expected_outcome: None, transcript: "" };
-        let ctx = MetricRunCtx {
-            skill_dir: dir.path(), workspace: &ws, shell: &NoShell, tools: None, judge: None,
+        let fixture = FixtureContext {
+            prompt: "",
+            expected_outcome: None,
+            transcript: "",
         };
-        let spec = MetricSpec::Script { name: "m".into(), path: spec_path, min_pass_rate: None };
+        let ctx = MetricRunCtx {
+            skill_dir: dir.path(),
+            workspace: &ws,
+            shell: &NoShell,
+            tools: None,
+            judge: None,
+        };
+        let spec = MetricSpec::Script {
+            name: "m".into(),
+            path: spec_path,
+            min_pass_rate: None,
+        };
         ScriptKind.run(&spec, &fixture, &ctx).await.unwrap()
     }
 
     #[tokio::test]
     async fn parses_valid_json_pass() {
         let dir = TempDir::new().unwrap();
-        let path = write_script(dir.path(), "#!/bin/sh\necho '{\"pass\":true,\"score\":0.9}'\n");
+        let path = write_script(
+            dir.path(),
+            "#!/bin/sh\necho '{\"pass\":true,\"score\":0.9}'\n",
+        );
         let out = run_script(&dir, path).await;
         assert!(out.pass);
         assert_eq!(out.score, 0.9);

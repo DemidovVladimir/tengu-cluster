@@ -20,9 +20,13 @@ impl MetricKind for ToolAssertionKind {
         ctx: &MetricRunCtx<'_>,
     ) -> Result<MetricOutcome> {
         let (tool_name, action, key, assertion) = match spec {
-            MetricSpec::ToolAssertion { tool, action, key, assert, .. } => {
-                (tool.clone(), action.clone(), key.clone(), assert.clone())
-            }
+            MetricSpec::ToolAssertion {
+                tool,
+                action,
+                key,
+                assert,
+                ..
+            } => (tool.clone(), action.clone(), key.clone(), assert.clone()),
             _ => bail!("ToolAssertionKind given wrong spec"),
         };
 
@@ -63,28 +67,46 @@ impl MetricKind for ToolAssertionKind {
         Ok(MetricOutcome {
             pass,
             score: if pass { 1.0 } else { 0.0 },
-            notes: if pass { None } else { Some("assertion failed".into()) },
+            notes: if pass {
+                None
+            } else {
+                Some("assertion failed".into())
+            },
             raw: json!({ "args": args, "observed": { "registered": true } }),
         })
     }
 }
 
 fn assert_value(assertion: &Value, observed: &Value) -> bool {
-    let Some(obj) = assertion.as_object() else { return false };
+    let Some(obj) = assertion.as_object() else {
+        return false;
+    };
     for (k, v) in obj {
         match k.as_str() {
             "value_matches" => {
                 let Some(pat) = v.as_str() else { return false };
-                let Some(s) = observed_as_str(observed) else { return false };
-                let Ok(re) = Regex::new(pat) else { return false };
-                if !re.is_match(s) { return false; }
+                let Some(s) = observed_as_str(observed) else {
+                    return false;
+                };
+                let Ok(re) = Regex::new(pat) else {
+                    return false;
+                };
+                if !re.is_match(s) {
+                    return false;
+                }
             }
             "value_equals" => {
-                if observed != v { return false; }
+                if observed != v {
+                    return false;
+                }
             }
             "value_in" => {
-                let Some(arr) = v.as_array() else { return false };
-                if !arr.iter().any(|c| c == observed) { return false; }
+                let Some(arr) = v.as_array() else {
+                    return false;
+                };
+                if !arr.iter().any(|c| c == observed) {
+                    return false;
+                }
             }
             _ => return false,
         }
