@@ -354,12 +354,10 @@ impl PersistentStoreTool {
         // Chunk the text content.
         let chunks = chunk_text(&text_content, self.chunk_size, self.chunk_overlap);
 
-        // New `VectorStore::write` doesn't return ids — track a simple
-        // counter instead so the manifest records how many chunks were
-        // embedded successfully. `chunk_ids` becomes dead weight and is
-        // left empty to preserve the manifest shape.
-        let chunk_ids: Vec<String> = Vec::new();
-        let mut embedded_count = 0usize;
+        // Track the chunk ids returned by the vector store so the manifest
+        // can record them — enables deterministic per-chunk delete on file
+        // removal (addresses limitation #2).
+        let mut chunk_ids: Vec<String> = Vec::new();
         for (i, chunk) in chunks.iter().enumerate() {
             let chunk_content = if i == 0 {
                 if let Some(desc) = description {
@@ -390,13 +388,14 @@ impl PersistentStoreTool {
                 .ingest_one(&chunk_content, "persistent_store", md)
                 .await
             {
-                Ok(()) => embedded_count += 1,
+                Ok(id) => chunk_ids.push(id),
                 Err(e) => {
                     warn!(error = %e, chunk = i, "Failed to embed chunk, skipping");
                 }
             }
         }
 
+        let embedded_count = chunk_ids.len();
         let manifest = FileManifest {
             file_id: file_id.clone(),
             original_name: file_name.clone(),
@@ -530,13 +529,28 @@ impl PersistentStoreTool {
         let manifest_data = std::fs::read_to_string(&manifest_path)?;
         let manifest: FileManifest = serde_json::from_str(&manifest_data)?;
 
-        // NOTE: the new `VectorStore` trait has no per-id delete. Vector
-        // entries for these chunks stay in the store until a full rebuild.
-        // Listing always reflects manifests (not the vector index) so the
-        // LLM-visible "this file exists" state is consistent with delete —
-        // only the background embeddings linger, scored low against fresh
-        // queries because they still carry the original `file_id`.
-        let chunks_recorded = manifest.chunk_ids.len().max(manifest.chunk_count);
+        // Delete vector entries by id (addresses limitation #2). For older
+        // manifests written before ids were tracked, chunk_ids is empty —
+        // log that we can't clean the vectors and move on (the file-level
+        // manifest is still removed so listings stay consistent).
+        let mut vectors_deleted = 0usize;
+        let mut vectors_missing = 0usize;
+        for id in &manifest.chunk_ids {
+            match self.memory_manager.delete_entry(id).await {
+                Ok(true) => vectors_deleted += 1,
+                Ok(false) => vectors_missing += 1,
+                Err(e) => warn!(error = %e, chunk_id = %id, "failed to delete chunk vector"),
+            }
+        }
+        if manifest.chunk_ids.is_empty() && manifest.chunk_count > 0 {
+            warn!(
+                file_id = %file_id,
+                chunk_count = manifest.chunk_count,
+                "Legacy manifest without chunk_ids — vectors cannot be deleted individually. \
+                 Run `tengu memory purge` to clear the full vector store if stale entries \
+                 cause problems."
+            );
+        }
 
         // Delete the file directory.
         std::fs::remove_dir_all(&file_dir)?;
@@ -544,13 +558,16 @@ impl PersistentStoreTool {
         info!(
             file_id = %file_id,
             file_name = %manifest.original_name,
-            "Deleted stored file (manifest removed; vector entries are not per-id-deletable)"
+            vectors_deleted,
+            vectors_missing,
+            "Deleted stored file + vector entries"
         );
 
         Ok(json!({
             "file_id": file_id,
             "file_name": manifest.original_name,
-            "chunks_deleted": chunks_recorded,
+            "chunks_deleted": vectors_deleted,
+            "chunks_orphaned": vectors_missing,
             "status": "deleted"
         })
         .to_string())
