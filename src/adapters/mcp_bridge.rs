@@ -434,6 +434,22 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         }
     }
 
+    // Skill-lifecycle plugin — skill_distill (opt-in).
+    if allowed_names.contains(
+        crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME,
+    ) {
+        if let Err(e) = registry
+            .register_plugin(
+                &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
+                &plugin_ctx,
+                &allowed_list,
+            )
+            .await
+        {
+            warn!(error = %e, "bridge failed to register skill-lifecycle plugin");
+        }
+    }
+
     // HTTP plugin — http_request.
     if let Err(e) = registry
         .register_plugin(&HttpPlugin, &plugin_ctx, &allowed_list)

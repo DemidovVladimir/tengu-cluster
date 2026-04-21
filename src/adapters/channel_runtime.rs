@@ -182,6 +182,21 @@ pub(crate) fn build_tool_executor(
         }
     }
 
+    // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
+    // via `workspace_tools = ["skill_distill"]`. The tool writes a new skill
+    // directory from the calling agent's in-context synthesis.
+    if allowed_names.contains(
+        crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME,
+    ) {
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
+            &plugin_ctx,
+            &allowed_list,
+        )) {
+            tracing::warn!(error = %e, "Failed to register skill-lifecycle plugin — skill_distill unavailable");
+        }
+    }
+
     // HTTP plugin (A2). Registers `http_request`.
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
@@ -284,6 +299,12 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
     }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
+    }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
     tools
@@ -304,6 +325,12 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
+    }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
