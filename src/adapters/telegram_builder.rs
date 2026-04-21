@@ -1466,13 +1466,26 @@ impl TelegramSession {
                 Some(agent.current_bridge_tools.clone())
             };
 
+            // Cross-agent Recent Team Activity — preserved on the
+            // orchestrator path (addresses limitation #6). Each snapshot
+            // gets its own agent-scoped view (build_activity_context
+            // filters out the target agent's own entries).
+            let mut snapshot_system_prompt = agent.current_system_prompt.clone();
+            if self.is_multi_agent {
+                let activity_ctx =
+                    channel_runtime::build_activity_context(&self.activity_log, agent_id);
+                if !activity_ctx.is_empty() {
+                    snapshot_system_prompt.push_str(&activity_ctx);
+                }
+            }
+
             let inputs = channel_runtime::ChatTurnInputs {
                 engine: Arc::clone(&agent.engine),
                 agent_id: agent.agent_id.clone(),
                 agent_config: Arc::new(agent.agent_config.clone()),
                 history_turn_limit: agent.history_turn_limit,
                 compaction_policy: agent.compaction_policy,
-                system_prompt: agent.current_system_prompt.clone(),
+                system_prompt: snapshot_system_prompt,
                 tools: agent.current_tools.clone(),
                 tool_executor: current_executor,
                 memory_manager: self.memory_manager_handle.clone(),
