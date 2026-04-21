@@ -1,7 +1,7 @@
 //! Workspace scaffold — creates directories and seed files before agents start.
 
-use std::path::PathBuf;
 use crate::adapters::config::ScaffoldConfig;
+use std::path::PathBuf;
 use tracing::info;
 
 /// Expand `~` to the user's home directory.

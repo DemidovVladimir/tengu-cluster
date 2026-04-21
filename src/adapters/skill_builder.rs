@@ -374,7 +374,6 @@ fn extract_fenced_code(lines: &[&str]) -> Result<String> {
     Ok(code.join("\n").trim().to_string())
 }
 
-
 // --- Frontmatter parsing ---
 
 fn validate_base_url(url: &str) -> bool {
@@ -657,10 +656,7 @@ fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
 // Diff (internal to registry reload)
 // ===========================================================================
 
-fn diff_skill_sets(
-    current: &HashMap<String, SkillEntry>,
-    fresh: &[FreshSkillEntry],
-) -> SkillDiff {
+fn diff_skill_sets(current: &HashMap<String, SkillEntry>, fresh: &[FreshSkillEntry]) -> SkillDiff {
     let fresh_names: HashSet<&str> = fresh.iter().map(|f| f.name.as_str()).collect();
     let current_names: HashSet<&str> = current.keys().map(|n| n.as_str()).collect();
 
@@ -1104,9 +1100,7 @@ pub(crate) fn build_system_prompt_with_tools(
     let mut total_tokens = 0usize;
 
     // 1. Default preamble.
-    let preamble = format!(
-        "You are {name}. Use tools to execute actions. Never fabricate data."
-    );
+    let preamble = format!("You are {name}. Use tools to execute actions. Never fabricate data.");
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
@@ -1220,12 +1214,18 @@ mod tests {
                 context_body,
                 ..
             } => {
-                assert!(matches!(definition.execution, SkillExecution::Documentation));
+                assert!(matches!(
+                    definition.execution,
+                    SkillExecution::Documentation
+                ));
                 assert_eq!(definition.name, "my_doc_skill");
                 assert!(context_body.contains("Body content"));
                 assert!(definition.parameters.is_empty());
             }
-            other => panic!("expected ParsedSkill::Api (frontmatter path), got {:?}", other),
+            other => panic!(
+                "expected ParsedSkill::Api (frontmatter path), got {:?}",
+                other
+            ),
         }
     }
 

@@ -11,6 +11,8 @@ use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
+#[cfg(test)]
+use crate::adapters::tool_plugin::ConversationView;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
@@ -84,7 +86,9 @@ impl Tool for HttpRequestTool {
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // Scope gate first (also enforced inside `expand_env_refs` for env vars).
-        let url_raw = args.get("url").and_then(|v| v.as_str())
+        let url_raw = args
+            .get("url")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("http_request: missing 'url'"))?;
         let url = expand_env_refs(url_raw, ctx)?;
         if !url.starts_with("https://") && !url.starts_with("http://") {
@@ -301,8 +305,8 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String)>> 
     if raw.trim().is_empty() || raw.trim() == "{}" {
         return Ok(Vec::new());
     }
-    let object: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw)
-        .map_err(|e| anyhow!("headers must be a JSON object: {}", e))?;
+    let object: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(raw).map_err(|e| anyhow!("headers must be a JSON object: {}", e))?;
     object
         .into_iter()
         .map(|(key, value)| {
@@ -426,6 +430,7 @@ mod tests {
                 secret_registry: &self.secrets,
                 activity: self.activity.as_ref(),
                 subagents: None,
+                conversation: ConversationView::empty(),
             }
         }
     }

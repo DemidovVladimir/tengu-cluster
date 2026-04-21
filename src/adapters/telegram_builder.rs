@@ -25,23 +25,22 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_builder::build_engine;
-use crate::adapters::skill_builder::{
-    FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
-};
 use crate::adapters::chat_builder::{
-    needs_fresh_history_grounding, handle_chat_command, CommandResult,
-    ChatRuntimeService, EngineInfo,
+    handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
+    EngineInfo,
 };
+use crate::adapters::config::Config;
+use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::config::Config;
+use crate::adapters::skill_builder::{
+    FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
+};
 use crate::adapters::types::{
-    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient,
-    ToolCall, ToolDef,
+    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
 };
 use crate::adapters::Engine;
 
@@ -51,7 +50,6 @@ use crate::adapters::Engine;
 
 /// Maximum characters per Telegram message (with safety margin).
 const TELEGRAM_MAX_LEN: usize = 4000;
-
 
 /// How often to sweep for idle user states.
 const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -101,10 +99,7 @@ impl TelegramPipe {
     }
 
     /// Start the teloxide dispatcher and forward incoming messages to `inbound_tx`.
-    async fn connect(
-        &self,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
-    ) -> Result<()> {
+    async fn connect(&self, inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::requests::Requester;
 
@@ -135,160 +130,155 @@ impl TelegramPipe {
 
             let cancel_for_handler = turn_cancel.clone();
             let groups_ref = Arc::clone(&media_groups);
-            let msg_handler =
-                Update::filter_message().endpoint(move |msg: Message, bot: Bot| {
-                    let tx = inbound_tx.clone();
-                    let cancel = cancel_for_handler.clone();
-                    let groups = Arc::clone(&groups_ref);
-                    async move {
-                        let text = msg.text().or(msg.caption()).unwrap_or_default().to_string();
+            let msg_handler = Update::filter_message().endpoint(move |msg: Message, bot: Bot| {
+                let tx = inbound_tx.clone();
+                let cancel = cancel_for_handler.clone();
+                let groups = Arc::clone(&groups_ref);
+                async move {
+                    let text = msg.text().or(msg.caption()).unwrap_or_default().to_string();
 
-                        if text == "/stop" || text.starts_with("/stop@") {
-                            if let Some(ref flag) = cancel {
-                                flag.store(true, Ordering::Relaxed);
-                            }
-                            let chat_id = msg.chat.id.0;
-                            let _ = bot
-                                .send_message(
-                                    teloxide::types::ChatId(chat_id),
-                                    "⏹ Stopping current operation...",
-                                )
-                                .await;
-                            return Ok(());
+                    if text == "/stop" || text.starts_with("/stop@") {
+                        if let Some(ref flag) = cancel {
+                            flag.store(true, Ordering::Relaxed);
                         }
+                        let chat_id = msg.chat.id.0;
+                        let _ = bot
+                            .send_message(
+                                teloxide::types::ChatId(chat_id),
+                                "⏹ Stopping current operation...",
+                            )
+                            .await;
+                        return Ok(());
+                    }
 
-                        let mut media_payloads: Vec<MediaPayload> = Vec::new();
+                    let mut media_payloads: Vec<MediaPayload> = Vec::new();
 
-                        if let Some(doc) = msg.document() {
+                    if let Some(doc) = msg.document() {
+                        match download_telegram_file(
+                            &bot,
+                            &doc.file.id,
+                            doc.mime_type.as_ref().map(|m| m.to_string()),
+                            doc.file_name.clone(),
+                        )
+                        .await
+                        {
+                            Ok(payload) => media_payloads.push(payload),
+                            Err(e) => error!("Failed to download Telegram document: {}", e),
+                        }
+                    }
+
+                    if let Some(photos) = msg.photo() {
+                        if let Some(photo) = photos.last() {
                             match download_telegram_file(
                                 &bot,
-                                &doc.file.id,
-                                doc.mime_type.as_ref().map(|m| m.to_string()),
-                                doc.file_name.clone(),
+                                &photo.file.id,
+                                Some("image/jpeg".to_string()),
+                                Some("photo.jpg".to_string()),
                             )
                             .await
                             {
                                 Ok(payload) => media_payloads.push(payload),
-                                Err(e) => error!("Failed to download Telegram document: {}", e),
+                                Err(e) => error!("Failed to download Telegram photo: {}", e),
                             }
                         }
+                    }
 
-                        if let Some(photos) = msg.photo() {
-                            if let Some(photo) = photos.last() {
-                                match download_telegram_file(
-                                    &bot,
-                                    &photo.file.id,
-                                    Some("image/jpeg".to_string()),
-                                    Some("photo.jpg".to_string()),
-                                )
-                                .await
-                                {
-                                    Ok(payload) => media_payloads.push(payload),
-                                    Err(e) => error!("Failed to download Telegram photo: {}", e),
-                                }
-                            }
-                        }
+                    if text.is_empty() && media_payloads.is_empty() {
+                        return Ok::<(), teloxide::RequestError>(());
+                    }
 
-                        if text.is_empty() && media_payloads.is_empty() {
-                            return Ok::<(), teloxide::RequestError>(());
-                        }
+                    let chat_id = msg.chat.id.0.to_string();
+                    let sender_id = msg
+                        .from
+                        .as_ref()
+                        .map(|u| u.id.0.to_string())
+                        .unwrap_or_else(|| chat_id.clone());
 
-                        let chat_id = msg.chat.id.0.to_string();
-                        let sender_id = msg
-                            .from
-                            .as_ref()
-                            .map(|u| u.id.0.to_string())
-                            .unwrap_or_else(|| chat_id.clone());
-
-                        if let Some(group_id) = msg.media_group_id() {
-                            let group_id = group_id.to_string();
-                            let is_first = {
-                                let mut map = groups.lock().await;
-                                let entry = map.entry(group_id.clone()).or_insert_with(|| {
-                                    MediaGroupState {
+                    if let Some(group_id) = msg.media_group_id() {
+                        let group_id = group_id.to_string();
+                        let is_first = {
+                            let mut map = groups.lock().await;
+                            let entry =
+                                map.entry(group_id.clone())
+                                    .or_insert_with(|| MediaGroupState {
                                         text: String::new(),
                                         media: Vec::new(),
                                         chat_id: chat_id.clone(),
                                         sender_id: sender_id.clone(),
-                                    }
-                                });
-                                if !text.is_empty() && entry.text.is_empty() {
-                                    entry.text = text;
-                                }
-                                entry.media.extend(media_payloads);
-                                entry.media.len() == 1
-                            };
-
-                            if is_first {
-                                let flush_tx = tx.clone();
-                                let flush_groups = Arc::clone(&groups);
-                                let flush_group_id = group_id;
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(1500))
-                                        .await;
-                                    let state =
-                                        flush_groups.lock().await.remove(&flush_group_id);
-                                    if let Some(state) = state {
-                                        debug!(
-                                            group_id = %flush_group_id,
-                                            attachments = state.media.len(),
-                                            "Flushing media group"
-                                        );
-                                        let inbound = InboundMessage {
-                                            sender: Recipient {
-                                                pipe_id: "telegram".to_string(),
-                                                peer_id: state.sender_id,
-                                                account_id: None,
-                                                thread_id: Some(state.chat_id),
-                                            },
-                                            content: state.text,
-                                            timestamp: chrono::Utc::now(),
-                                            media: if state.media.is_empty() {
-                                                None
-                                            } else {
-                                                Some(state.media)
-                                            },
-                                        };
-                                        if flush_tx.send(inbound).await.is_err() {
-                                            error!(
-                                                "Failed to forward media group to inbound channel"
-                                            );
-                                        }
-                                    }
-                                });
+                                    });
+                            if !text.is_empty() && entry.text.is_empty() {
+                                entry.text = text;
                             }
-                            return Ok(());
-                        }
-
-                        debug!(
-                            chat_id = %chat_id,
-                            sender = %sender_id,
-                            attachments = media_payloads.len(),
-                            "Telegram message received"
-                        );
-
-                        let inbound = InboundMessage {
-                            sender: Recipient {
-                                pipe_id: "telegram".to_string(),
-                                peer_id: sender_id,
-                                account_id: None,
-                                thread_id: Some(chat_id),
-                            },
-                            content: text,
-                            timestamp: chrono::Utc::now(),
-                            media: if media_payloads.is_empty() {
-                                None
-                            } else {
-                                Some(media_payloads)
-                            },
+                            entry.media.extend(media_payloads);
+                            entry.media.len() == 1
                         };
 
-                        if tx.send(inbound).await.is_err() {
-                            error!("Failed to forward Telegram message to inbound channel");
+                        if is_first {
+                            let flush_tx = tx.clone();
+                            let flush_groups = Arc::clone(&groups);
+                            let flush_group_id = group_id;
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                let state = flush_groups.lock().await.remove(&flush_group_id);
+                                if let Some(state) = state {
+                                    debug!(
+                                        group_id = %flush_group_id,
+                                        attachments = state.media.len(),
+                                        "Flushing media group"
+                                    );
+                                    let inbound = InboundMessage {
+                                        sender: Recipient {
+                                            pipe_id: "telegram".to_string(),
+                                            peer_id: state.sender_id,
+                                            account_id: None,
+                                            thread_id: Some(state.chat_id),
+                                        },
+                                        content: state.text,
+                                        timestamp: chrono::Utc::now(),
+                                        media: if state.media.is_empty() {
+                                            None
+                                        } else {
+                                            Some(state.media)
+                                        },
+                                    };
+                                    if flush_tx.send(inbound).await.is_err() {
+                                        error!("Failed to forward media group to inbound channel");
+                                    }
+                                }
+                            });
                         }
-                        Ok(())
+                        return Ok(());
                     }
-                });
+
+                    debug!(
+                        chat_id = %chat_id,
+                        sender = %sender_id,
+                        attachments = media_payloads.len(),
+                        "Telegram message received"
+                    );
+
+                    let inbound = InboundMessage {
+                        sender: Recipient {
+                            pipe_id: "telegram".to_string(),
+                            peer_id: sender_id,
+                            account_id: None,
+                            thread_id: Some(chat_id),
+                        },
+                        content: text,
+                        timestamp: chrono::Utc::now(),
+                        media: if media_payloads.is_empty() {
+                            None
+                        } else {
+                            Some(media_payloads)
+                        },
+                    };
+
+                    if tx.send(inbound).await.is_err() {
+                        error!("Failed to forward Telegram message to inbound channel");
+                    }
+                    Ok(())
+                }
+            });
 
             let handler = dptree::entry().branch(msg_handler);
 
@@ -335,7 +325,12 @@ impl TelegramPipe {
     }
 
     /// Send a plain text message to the target chat.
-    async fn send_text(&self, target: &Recipient, text: &str, _opts: &DeliveryOptions) -> Result<()> {
+    async fn send_text(
+        &self,
+        target: &Recipient,
+        text: &str,
+        _opts: &DeliveryOptions,
+    ) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::ChatId;
 
@@ -404,8 +399,7 @@ struct TelegramToolActivityAdapter {
 
 impl ToolActivityPort for TelegramToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        let (title, detail) =
-            crate::adapters::tool_builder::build_tool_activity_text(call);
+        let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
         let mut text = format!("[{}] {}", self.agent_label, title);
         if let Some(detail) = detail {
             text.push_str(": ");
@@ -420,14 +414,11 @@ impl ToolActivityPort for TelegramToolActivityAdapter {
     }
 }
 
-fn make_tool_activity_adapter(
-    agent_label: impl Into<String>,
-) -> Arc<dyn ToolActivityPort> {
+fn make_tool_activity_adapter(agent_label: impl Into<String>) -> Arc<dyn ToolActivityPort> {
     Arc::new(TelegramToolActivityAdapter {
         agent_label: agent_label.into(),
     })
 }
-
 
 // ===========================================================================
 // Per-agent runtime state
@@ -644,13 +635,14 @@ impl TelegramSession {
         let mut default_agent_id: Option<String> = None;
 
         for (agent_id, agent_config) in &config.agents {
-            let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
-                Ok(e) => Arc::from(e),
-                Err(e) => {
-                    warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
-                    continue;
-                }
-            };
+            let engine: Arc<dyn Engine> =
+                match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
+                    Ok(e) => Arc::from(e),
+                    Err(e) => {
+                        warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
+                        continue;
+                    }
+                };
 
             let engine_info = EngineInfo {
                 context_window: engine.context_window(),
@@ -671,15 +663,11 @@ impl TelegramSession {
                 has_memory,
                 &agent_config.workspace_tools,
             );
-            let bridge_base_tools: Vec<ToolDef> =
-                if manages_workspace && workspace.is_some() {
-                    channel_runtime::compute_bridge_tools(
-                        has_memory,
-                        &agent_config.workspace_tools,
-                    )
-                } else {
-                    vec![]
-                };
+            let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
+                channel_runtime::compute_bridge_tools(has_memory, &agent_config.workspace_tools)
+            } else {
+                vec![]
+            };
 
             let skill_source: Option<FileSystemSkillSource> = workspace
                 .as_ref()
@@ -836,7 +824,11 @@ impl TelegramSession {
                 .and_then(|o| o.planner_model.as_ref()),
         ) {
             (Some(engine_type), Some(model)) => {
-                match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
+                match crate::adapters::engine_builder::build_planner_engine(
+                    engine_type,
+                    model,
+                    config.claude_code.as_ref(),
+                ) {
                     Ok(e) => {
                         info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
                         Some(Arc::from(e))
@@ -1067,7 +1059,12 @@ impl TelegramSession {
                 .insert(sender_id.to_string(), active_aid.clone());
             let _ = self
                 .handle_skill_cmd(
-                    &msg.sender, sender_id, &active_aid, &skill_name, &cmd_name, &args,
+                    &msg.sender,
+                    sender_id,
+                    &active_aid,
+                    &skill_name,
+                    &cmd_name,
+                    &args,
                 )
                 .await;
             return;
@@ -1151,11 +1148,8 @@ impl TelegramSession {
 
             match decision {
                 Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                    let orchestrator_enabled = self
-                        .config
-                        .orchestrator
-                        .as_ref()
-                        .is_some_and(|o| o.enabled);
+                    let orchestrator_enabled =
+                        self.config.orchestrator.as_ref().is_some_and(|o| o.enabled);
                     if self.role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
                         info!(role = %role_key, "Classifier routed to single agent");
                         routed_role = Some(role_key);
@@ -1221,8 +1215,14 @@ impl TelegramSession {
         self.user_active_agent
             .insert(sender_id.to_string(), target_agent_id.clone());
 
-        self.execute_chat_turn(&msg.sender, sender_id, &target_agent_id, &user_text, msg.media.as_ref())
-            .await;
+        self.execute_chat_turn(
+            &msg.sender,
+            sender_id,
+            &target_agent_id,
+            &user_text,
+            msg.media.as_ref(),
+        )
+        .await;
     }
 
     async fn execute_chat_turn(
@@ -1254,41 +1254,39 @@ impl TelegramSession {
         }
 
         // Save attached files.
-        let user_content =
-            if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
-                let attachments_dir = ws.join(".tengu-attachments");
-                std::fs::create_dir_all(&attachments_dir).ok();
+        let user_content = if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
+            let attachments_dir = ws.join(".tengu-attachments");
+            std::fs::create_dir_all(&attachments_dir).ok();
 
-                let mut file_notes = Vec::new();
-                for m in *media_items {
-                    let fname = sanitize_attachment_filename(
-                        m.filename.as_deref().unwrap_or("attachment"),
-                    );
-                    let path = attachments_dir.join(&fname);
-                    match std::fs::write(&path, &m.data) {
-                        Ok(()) => {
-                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
-                            file_notes.push(format!(
-                                "[Attached file: {} ({}, {} bytes)]",
-                                path.display(),
-                                m.mime_type,
-                                m.data.len()
-                            ));
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to save Telegram attachment");
-                        }
+            let mut file_notes = Vec::new();
+            for m in *media_items {
+                let fname =
+                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
+                let path = attachments_dir.join(&fname);
+                match std::fs::write(&path, &m.data) {
+                    Ok(()) => {
+                        info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
+                        file_notes.push(format!(
+                            "[Attached file: {} ({}, {} bytes)]",
+                            path.display(),
+                            m.mime_type,
+                            m.data.len()
+                        ));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to save Telegram attachment");
                     }
                 }
+            }
 
-                if file_notes.is_empty() {
-                    user_text.to_string()
-                } else {
-                    format!("{}\n{}", file_notes.join("\n"), user_text)
-                }
-            } else {
+            if file_notes.is_empty() {
                 user_text.to_string()
-            };
+            } else {
+                format!("{}\n{}", file_notes.join("\n"), user_text)
+            }
+        } else {
+            user_text.to_string()
+        };
 
         *self.current_recipient.lock().unwrap() = Some(sender.clone());
 
@@ -1410,15 +1408,17 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: turn_system_prompt,
             tools: &turn_tools,
-            tool_executor: sanitized_executor
-                .as_ref()
-                .map(|e| e as &dyn ToolExecutor),
+            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
             memory_service: memory_service.as_ref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: Some(&tool_result_observer),
             cancel: Some(&self.turn_cancel),
-            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
+            bridge_tools: if agent.current_bridge_tools.is_empty() {
+                None
+            } else {
+                Some(&agent.current_bridge_tools)
+            },
         };
 
         let _ = self.pipe.send_chat_action(sender).await;
@@ -1454,8 +1454,10 @@ impl TelegramSession {
                 if let Some(ref text) = result.assistant_text {
                     let reply = self.secret_registry.redact(text);
                     for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                        if let Err(e) =
-                            self.pipe.send_text(sender, chunk, &self.delivery_opts).await
+                        if let Err(e) = self
+                            .pipe
+                            .send_text(sender, chunk, &self.delivery_opts)
+                            .await
                         {
                             error!(error = %e, "Failed to send Telegram reply chunk");
                         }
@@ -1574,23 +1576,22 @@ impl TelegramSession {
             .await?;
 
         let fallback_engine;
-        let planner_engine: &dyn Engine =
-            if let Some(ref dedicated) = self.planner_engine {
-                dedicated.as_ref()
-            } else {
-                match self.agent_states.get(&self.default_agent_id) {
-                    Some(a) => {
-                        fallback_engine = a.engine.clone();
-                        fallback_engine.as_ref()
-                    }
-                    None => {
-                        self.pipe
-                            .send_text(sender, "Planner engine unavailable.", &self.delivery_opts)
-                            .await?;
-                        return Ok(());
-                    }
+        let planner_engine: &dyn Engine = if let Some(ref dedicated) = self.planner_engine {
+            dedicated.as_ref()
+        } else {
+            match self.agent_states.get(&self.default_agent_id) {
+                Some(a) => {
+                    fallback_engine = a.engine.clone();
+                    fallback_engine.as_ref()
                 }
-            };
+                None => {
+                    self.pipe
+                        .send_text(sender, "Planner engine unavailable.", &self.delivery_opts)
+                        .await?;
+                    return Ok(());
+                }
+            }
+        };
 
         // Build role dependency constraints from agent configs.
         let role_deps: crate::adapters::types::RoleDependencies = self
@@ -1737,7 +1738,9 @@ impl TelegramSession {
         let notify_opts = self.delivery_opts.clone();
         let notify_handle = tokio::spawn(async move {
             while let Some(msg) = notify_rx.recv().await {
-                let _ = notify_pipe.send_text(&notify_sender, &msg, &notify_opts).await;
+                let _ = notify_pipe
+                    .send_text(&notify_sender, &msg, &notify_opts)
+                    .await;
             }
         });
 
@@ -1786,10 +1789,8 @@ impl TelegramSession {
                     };
                     summary.push_str(&format!("\n{} {}", mark, t.id));
                     if let Some(ref out) = t.output {
-                        summary.push_str(&format!(
-                            ": {}",
-                            channel_runtime::truncate_output(out, 300)
-                        ));
+                        summary
+                            .push_str(&format!(": {}", channel_runtime::truncate_output(out, 300)));
                     }
                     summary.push('\n');
                 }
@@ -2025,9 +2026,7 @@ impl TelegramSession {
                 if p.exists() {
                     match std::fs::remove_dir_all(&p) {
                         Ok(()) => lines.push(format!("Cleaned {}", p.display())),
-                        Err(e) => {
-                            lines.push(format!("Failed to clean {}: {}", p.display(), e))
-                        }
+                        Err(e) => lines.push(format!("Failed to clean {}: {}", p.display(), e)),
                     }
                 }
             }
@@ -2185,15 +2184,17 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: agent.current_system_prompt.clone(),
             tools: &active_tools,
-            tool_executor: sanitized_executor
-                .as_ref()
-                .map(|e| e as &dyn ToolExecutor),
+            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
             memory_service: memory_service.as_ref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: None,
             cancel: Some(&self.turn_cancel),
-            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
+            bridge_tools: if agent.current_bridge_tools.is_empty() {
+                None
+            } else {
+                Some(&agent.current_bridge_tools)
+            },
         };
 
         let result = chat_runtime.process_user_text(state, &injected).await;

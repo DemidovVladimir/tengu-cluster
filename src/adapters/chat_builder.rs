@@ -19,8 +19,7 @@ use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::prompt_budget::{assemble_recent_history, compute_base_input_budget};
 use crate::adapters::token::estimate_tokens_approx_min1;
 use crate::adapters::types::{
-    ChatLoopState, EngineDiagnostics, FlowCompactionPolicy, Lens, Message, Recipient, Role,
-    ToolDef,
+    ChatLoopState, EngineDiagnostics, FlowCompactionPolicy, Lens, Message, Recipient, Role, ToolDef,
 };
 use crate::adapters::{Engine, EngineContext};
 

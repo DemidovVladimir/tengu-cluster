@@ -81,15 +81,11 @@ impl Tool for SessionsFanOutTool {
             let agent = task
                 .get("agent")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow!("sessions_fan_out: tasks[{}].agent is required", idx)
-                })?;
+                .ok_or_else(|| anyhow!("sessions_fan_out: tasks[{}].agent is required", idx))?;
             let prompt = task
                 .get("prompt")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    anyhow!("sessions_fan_out: tasks[{}].prompt is required", idx)
-                })?;
+                .ok_or_else(|| anyhow!("sessions_fan_out: tasks[{}].prompt is required", idx))?;
             decoded.push((agent.to_string(), prompt.to_string()));
         }
 

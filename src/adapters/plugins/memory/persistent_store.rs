@@ -126,8 +126,8 @@ fn extract_docx_text(raw_bytes: &[u8]) -> Result<String> {
 
 /// Extract text from Excel workbooks via calamine.
 fn extract_excel_text(path: &Path) -> Result<String> {
-    let mut workbook = open_workbook_auto(path)
-        .map_err(|e| anyhow::anyhow!("Cannot open spreadsheet: {e}"))?;
+    let mut workbook =
+        open_workbook_auto(path).map_err(|e| anyhow::anyhow!("Cannot open spreadsheet: {e}"))?;
 
     let mut full_text = String::new();
     let sheet_names: Vec<String> = workbook.sheet_names().to_vec();
@@ -437,7 +437,12 @@ impl PersistentStoreTool {
                 continue;
             }
             seen_files.entry(file_id.clone()).or_insert_with(|| {
-                let file_name = r.entry.metadata.get("file_name").cloned().unwrap_or_default();
+                let file_name = r
+                    .entry
+                    .metadata
+                    .get("file_name")
+                    .cloned()
+                    .unwrap_or_default();
                 json!({
                     "file_id": file_id,
                     "file_name": file_name,
@@ -549,12 +554,12 @@ impl Tool for PersistentStoreTool {
 
         let result = match operation {
             "store" => {
-                let file_path = args
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("persistent_store store: missing 'file_path'")
-                    })?;
+                let file_path =
+                    args.get("file_path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("persistent_store store: missing 'file_path'")
+                        })?;
                 let description = args.get("description").and_then(|v| v.as_str());
                 self.execute_store(file_path, description).await?
             }
@@ -563,10 +568,7 @@ impl Tool for PersistentStoreTool {
                     .get("query")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow::anyhow!("persistent_store search: missing 'query'"))?;
-                let top_k = args
-                    .get("top_k")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5) as usize;
+                let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
                 self.execute_search(query, top_k).await?
             }
             "list" => self.execute_list()?,
@@ -751,7 +753,11 @@ mod tests {
         let result = tool
             .execute(&json!({ "operation": "reboot" }), &harness.ctx())
             .await;
-        assert!(result.is_err(), "expected error for unknown op, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected error for unknown op, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("unknown operation"), "unexpected: {}", msg);
     }

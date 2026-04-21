@@ -125,10 +125,7 @@ mod tests {
     async fn skill_shell_renders_template() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let tool = SkillShellTool::new(
-            tool_def("echo_arg"),
-            "echo {{expression}}".to_string(),
-        );
+        let tool = SkillShellTool::new(tool_def("echo_arg"), "echo {{expression}}".to_string());
         let output = tool
             .execute(&json!({ "expression": "hello-skills" }), &harness.ctx())
             .await
@@ -146,7 +143,11 @@ mod tests {
         let harness = TestHarness::new(tmp.path());
         let tool = SkillShellTool::new(tool_def("blank"), "   ".to_string());
         let result = tool.execute(&json!({}), &harness.ctx()).await;
-        assert!(result.is_err(), "expected empty-command rejection, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected empty-command rejection, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("empty command"), "unexpected error: {}", msg);
     }
@@ -160,10 +161,7 @@ mod tests {
             ..Default::default()
         };
         let harness = TestHarness::with_scope(tmp.path(), scope);
-        let tool = SkillShellTool::new(
-            tool_def("forbidden"),
-            "echo should-not-run".to_string(),
-        );
+        let tool = SkillShellTool::new(tool_def("forbidden"), "echo should-not-run".to_string());
         let result = tool.execute(&json!({}), &harness.ctx()).await;
         assert!(result.is_err(), "expected scope denial, got: {:?}", result);
     }

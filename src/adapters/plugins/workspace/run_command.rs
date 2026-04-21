@@ -66,7 +66,11 @@ mod tests {
         let result = tool
             .execute(&json!({"command": "   "}), &harness.ctx())
             .await;
-        assert!(result.is_err(), "expected empty-command rejection, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected empty-command rejection, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("empty command"), "unexpected error: {}", msg);
     }
@@ -101,7 +105,9 @@ impl Tool for RunCommandTool {
             .ok_or_else(|| anyhow::anyhow!("run_command: missing 'command' argument"))?;
 
         let bin = extract_binary(command);
-        if bin.is_empty() { anyhow::bail!("run_command: empty command"); }
+        if bin.is_empty() {
+            anyhow::bail!("run_command: empty command");
+        }
         ctx.scope.check_shell_bin(bin)?;
 
         let output = ctx.shell.execute_shell(command, ctx.workspace)?;

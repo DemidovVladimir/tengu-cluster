@@ -1,8 +1,6 @@
 //! Agent primitives for fleet orchestration: worker loop and artifact extraction.
 
-use crate::adapters::types::{
-    AgentId, AgentTaskExecutor, OrchestratorEvent, TokenUsage,
-};
+use crate::adapters::types::{AgentId, AgentTaskExecutor, OrchestratorEvent, TokenUsage};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;

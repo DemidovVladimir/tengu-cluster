@@ -107,8 +107,8 @@ impl SubagentRuntime for ProductionSubagentRuntime {
             build_engine, collect_engine_response, SanitizedToolExecutor, ToolExecutor,
         };
         use crate::adapters::ports::ToolActivityPort;
-        use crate::adapters::types::{EngineContext, Message, Role, ToolCall, ToolDef};
         use crate::adapters::skill_builder::SkillRegistry;
+        use crate::adapters::types::{EngineContext, Message, Role, ToolCall, ToolDef};
 
         let agent_config = self
             .config
@@ -116,11 +116,7 @@ impl SubagentRuntime for ProductionSubagentRuntime {
             .get(agent_name)
             .ok_or_else(|| anyhow!("unknown agent '{}'", agent_name))?;
 
-        let engine = build_engine(
-            agent_name,
-            agent_config,
-            self.config.claude_code.as_ref(),
-        )?;
+        let engine = build_engine(agent_name, agent_config, self.config.claude_code.as_ref())?;
 
         // Workspace — expand tildes the same way the fleet orchestrator does.
         let workspace: Option<std::path::PathBuf> = agent_config
@@ -132,63 +128,65 @@ impl SubagentRuntime for ProductionSubagentRuntime {
         // `orchestrator::run_fleet_orchestrator` but does not install any
         // subagent tools on the child — subagents cannot themselves spawn
         // (yet). Phase B can lift this restriction.
-        let (system_prompt, tools, tool_executor): (
-            String,
-            Vec<ToolDef>,
-            Arc<dyn ToolExecutor>,
-        ) = if let Some(ref ws) = workspace {
-            let base_tools = channel_runtime::compute_base_tools(
-                true,
-                self.memory.is_some(),
-                &agent_config.workspace_tools,
-            );
-            let base_reserved: Vec<String> =
-                base_tools.iter().map(|t| t.name.clone()).collect();
-            let mut skill_registry = SkillRegistry::new(base_reserved)
-                .with_allowlist(Some(agent_config.skill_packages.clone()));
-            let skill_source =
-                crate::adapters::skill_builder::FileSystemSkillSource::new(ws.clone());
-            skill_registry.reload(&skill_source);
+        let (system_prompt, tools, tool_executor): (String, Vec<ToolDef>, Arc<dyn ToolExecutor>) =
+            if let Some(ref ws) = workspace {
+                let base_tools = channel_runtime::compute_base_tools(
+                    true,
+                    self.memory.is_some(),
+                    &agent_config.workspace_tools,
+                );
+                let base_reserved: Vec<String> =
+                    base_tools.iter().map(|t| t.name.clone()).collect();
+                let mut skill_registry = SkillRegistry::new(base_reserved)
+                    .with_allowlist(Some(agent_config.skill_packages.clone()));
+                let skill_source =
+                    crate::adapters::skill_builder::FileSystemSkillSource::new(ws.clone());
+                skill_registry.reload(&skill_source);
 
-            let mut current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-            let prompt = channel_runtime::rebuild_system_prompt(
-                agent_config,
-                true,
-                &skill_registry,
-                &current_tools,
-            );
+                let mut current_tools =
+                    channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+                let prompt = channel_runtime::rebuild_system_prompt(
+                    agent_config,
+                    true,
+                    &skill_registry,
+                    &current_tools,
+                );
 
-            let activity: Arc<dyn ToolActivityPort> = Arc::new(LogToolActivity);
-            let executor_opt = channel_runtime::build_tool_executor(
-                ws,
-                &current_tools,
-                &skill_registry,
-                &self.memory,
-                &self.secret_registry,
-                activity,
-                Some(Arc::clone(&cancel)),
-                Some(&self.http),
-                Some(&self.config.memory),
-                agent_config,
-                None, // subagents not yet nested
-                &self.config.mcp_servers,
-            );
-            let tool_exec: Arc<dyn ToolExecutor> = match executor_opt {
-                Some(e) => {
-                    let extra = e.additional_tool_defs(&current_tools);
-                    if !extra.is_empty() {
-                        current_tools.extend(extra);
+                let activity: Arc<dyn ToolActivityPort> = Arc::new(LogToolActivity);
+                let executor_opt = channel_runtime::build_tool_executor(
+                    ws,
+                    &current_tools,
+                    &skill_registry,
+                    &self.memory,
+                    &self.secret_registry,
+                    activity,
+                    Some(Arc::clone(&cancel)),
+                    Some(&self.http),
+                    Some(&self.config.memory),
+                    agent_config,
+                    None, // subagents not yet nested
+                    &self.config.mcp_servers,
+                );
+                let tool_exec: Arc<dyn ToolExecutor> = match executor_opt {
+                    Some(e) => {
+                        let extra = e.additional_tool_defs(&current_tools);
+                        if !extra.is_empty() {
+                            current_tools.extend(extra);
+                        }
+                        Arc::new(e) as Arc<dyn ToolExecutor>
                     }
-                    Arc::new(e) as Arc<dyn ToolExecutor>
-                }
-                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+                    None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+                };
+                (prompt, current_tools, tool_exec)
+            } else {
+                let prompt =
+                    crate::adapters::skill_builder::build_system_prompt(agent_config, false, &[]);
+                (
+                    prompt,
+                    vec![],
+                    Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+                )
             };
-            (prompt, current_tools, tool_exec)
-        } else {
-            let prompt =
-                crate::adapters::skill_builder::build_system_prompt(agent_config, false, &[]);
-            (prompt, vec![], Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>)
-        };
 
         let messages = vec![Message {
             role: Role::User,
@@ -305,11 +303,7 @@ impl SubagentRegistry {
     ///
     /// Returns the subagent's final assistant message (no marker wrapping).
     /// The caller (the tool) wraps it in `<<<BEGIN/END_SUBAGENT_RESULT>>>`.
-    pub(crate) async fn spawn_and_await(
-        &self,
-        agent_name: &str,
-        prompt: &str,
-    ) -> Result<String> {
+    pub(crate) async fn spawn_and_await(&self, agent_name: &str, prompt: &str) -> Result<String> {
         // Reserve a slot. If another subagent with the same name is already
         // running we keep them separate by suffixing an occurrence counter;
         // the caller (tool) only ever reads back the un-suffixed agent name
@@ -515,14 +509,12 @@ pub(crate) mod test_support {
                     Ok(text.clone())
                 }
                 StubBehavior::Err(msg) => Err(anyhow!(msg.clone())),
-                StubBehavior::Blocking => {
-                    loop {
-                        if cancel.load(Ordering::Relaxed) {
-                            return Err(anyhow!("cancelled"));
-                        }
-                        tokio::time::sleep(Duration::from_millis(10)).await;
+                StubBehavior::Blocking => loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(anyhow!("cancelled"));
                     }
-                }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                },
             }
         }
     }
@@ -560,7 +552,10 @@ mod tests {
                 delay_ms: 5,
             },
         );
-        let result = registry.spawn_and_await("worker", "do stuff").await.unwrap();
+        let result = registry
+            .spawn_and_await("worker", "do stuff")
+            .await
+            .unwrap();
         assert_eq!(result, "hello from subagent");
         // Handle should be removed after completion.
         assert!(registry.list().await.is_empty());
@@ -627,9 +622,7 @@ mod tests {
                 delay_ms: 0,
             },
         );
-        let result = registry
-            .steer("nobody", "go faster".to_string())
-            .await;
+        let result = registry.steer("nobody", "go faster".to_string()).await;
         assert!(result.is_err(), "steer on missing agent should error");
         let msg = format!("{}", result.unwrap_err());
         assert!(

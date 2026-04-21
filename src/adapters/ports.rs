@@ -5,11 +5,11 @@
 //! Sync ports: `ToolActivityPort`, `SkillSourcePort`, `ShellExecutionPort`.
 //! Async ports (`#[async_trait]`): `EmbeddingPort`, `MemoryStorePort`.
 
+use crate::adapters::types::{MemoryEntry, MemorySearchResult, ToolCall};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use crate::adapters::types::{MemoryEntry, MemorySearchResult, ToolCall};
 
 /// Output port for publishing tool activity events to the UI/log layer.
 pub(crate) trait ToolActivityPort: Send + Sync {
@@ -465,4 +465,3 @@ mod tests {
         assert!(scope.check_wallet("any").is_err());
     }
 }
-

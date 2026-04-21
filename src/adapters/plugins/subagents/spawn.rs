@@ -105,13 +105,12 @@ mod tests {
 
         let tool = SessionsSpawnTool::new();
         let out = tool
-            .execute(
-                &json!({"agent": "worker", "prompt": "ping"}),
-                &ctx,
-            )
+            .execute(&json!({"agent": "worker", "prompt": "ping"}), &ctx)
             .await
             .unwrap();
-        assert!(out.text.starts_with("<<<BEGIN_SUBAGENT_RESULT agent=worker>>>"));
+        assert!(out
+            .text
+            .starts_with("<<<BEGIN_SUBAGENT_RESULT agent=worker>>>"));
         assert!(out.text.contains("child said hi"));
         assert!(out.text.trim_end().ends_with("<<<END_SUBAGENT_RESULT>>>"));
     }

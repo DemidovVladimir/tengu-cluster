@@ -25,6 +25,7 @@ use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::memory::MemoryPlugin;
+use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::ports::{ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
@@ -188,7 +189,9 @@ pub async fn run_mcp_bridge() -> Result<()> {
                 handle_tools_call(id, &request.params, &executor, max_result_chars).await
             }
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
-            _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
+            _ => {
+                JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method))
+            }
         };
 
         write_response(&stdout, &resp);
@@ -234,10 +237,7 @@ async fn handle_tools_call(
     executor: &PluginToolExecutor,
     max_result_chars: usize,
 ) -> JsonRpcResponse {
-    let tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params
         .get("arguments")
         .cloned()
@@ -327,12 +327,8 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 // channel-specific activity port).
 // ---------------------------------------------------------------------------
 
-async fn build_bridge_executor(
-    workspace: &Path,
-    tools: &[ToolDef],
-) -> Result<PluginToolExecutor> {
-    let allowed_names: HashSet<String> =
-        tools.iter().map(|t| t.name.clone()).collect();
+async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<PluginToolExecutor> {
+    let allowed_names: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
 
     // Bridge-side defaults: use the default main agent config for plugin
@@ -359,9 +355,7 @@ async fn build_bridge_executor(
     // Memory handle: only built when memory tools are requested and the API
     // key is present. Errors fall through to None so other tools still work.
     let needs_memory = allowed_names.contains("remember")
-        || allowed_names.contains(
-            crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME,
-        );
+        || allowed_names.contains(crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME);
     let memory_handle: Option<Arc<MemoryServiceHandle>> = if needs_memory {
         match std::env::var("OPENROUTER_API_KEY") {
             Ok(api_key) => {
@@ -431,6 +425,16 @@ async fn build_bridge_executor(
         }
     }
 
+    // Skill-lifecycle plugin — skill_distill (opt-in).
+    if allowed_names.contains(SKILL_DISTILL_TOOL_NAME) {
+        if let Err(e) = registry
+            .register_plugin(&SkillLifecyclePlugin, &plugin_ctx, &allowed_list)
+            .await
+        {
+            warn!(error = %e, "bridge failed to register skill-lifecycle plugin");
+        }
+    }
+
     // HTTP plugin — http_request.
     if let Err(e) = registry
         .register_plugin(&HttpPlugin, &plugin_ctx, &allowed_list)
@@ -455,9 +459,7 @@ async fn build_bridge_executor(
         net_hosts: vec!["*".to_string()],
         env_reads: vec!["*".to_string()],
         shell_bins: vec!["*".to_string()],
-        wallets: vec![
-            crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string(),
-        ],
+        wallets: vec![crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string()],
     };
     let mut scopes: HashMap<String, ToolScope> = HashMap::new();
     for name in registry.tool_names() {
@@ -474,5 +476,6 @@ async fn build_bridge_executor(
         activity: Arc::new(BridgeActivity),
         scopes,
         subagents: None,
+        conversation: Vec::new(),
     })
 }

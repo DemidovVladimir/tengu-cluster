@@ -237,9 +237,7 @@ fn process_ndjson_line(
                                 );
                             }
                             "thinking" => {
-                                if let Some(text) =
-                                    block.get("thinking").and_then(|v| v.as_str())
-                                {
+                                if let Some(text) = block.get("thinking").and_then(|v| v.as_str()) {
                                     if !text.is_empty() {
                                         events.push(StreamEvent::ThinkingDelta {
                                             text: text.to_string(),
@@ -540,11 +538,7 @@ impl Engine for ClaudeCodeEngine {
 
         // Spawn subprocess
         let mut child = cmd.spawn().map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to spawn claude CLI at {:?}: {}",
-                self.cli_path,
-                e
-            )
+            anyhow::anyhow!("Failed to spawn claude CLI at {:?}: {}", self.cli_path, e)
         })?;
 
         // Write prompt to stdin, then close it to signal EOF
@@ -582,7 +576,8 @@ impl Engine for ClaudeCodeEngine {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        let events = process_ndjson_line(&line, &mut emitted_text, &mut tool_call_count);
+                        let events =
+                            process_ndjson_line(&line, &mut emitted_text, &mut tool_call_count);
                         for event in events {
                             if tx.send(event).await.is_err() {
                                 break;
@@ -609,8 +604,7 @@ impl Engine for ClaudeCodeEngine {
             if tool_limit_hit {
                 error!(
                     tool_call_count,
-                    max_tool_rounds,
-                    "Claude Code max tool rounds exceeded — killing subprocess"
+                    max_tool_rounds, "Claude Code max tool rounds exceeded — killing subprocess"
                 );
                 let _ = child.kill().await;
                 let _ = tx

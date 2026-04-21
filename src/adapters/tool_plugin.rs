@@ -54,6 +54,39 @@ pub(crate) trait ToolPlugin: Send + Sync {
 // Contexts
 // ---------------------------------------------------------------------------
 
+/// Read-only view of the calling agent's message history. Passed by the engine
+/// to each `Tool::execute` so tools can inspect conversation context without
+/// being able to mutate it.
+#[derive(Clone, Copy)]
+pub(crate) struct ConversationView<'a> {
+    messages: &'a [crate::adapters::types::Message],
+}
+
+impl<'a> ConversationView<'a> {
+    pub(crate) fn new(messages: &'a [crate::adapters::types::Message]) -> Self {
+        Self { messages }
+    }
+    pub(crate) fn empty() -> Self {
+        Self { messages: &[] }
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.messages.len()
+    }
+    pub(crate) fn slice(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> anyhow::Result<&'a [crate::adapters::types::Message]> {
+        if from > to || to > self.messages.len() {
+            anyhow::bail!(
+                "conversation slice out of range: {from}..{to} len={}",
+                self.messages.len()
+            );
+        }
+        Ok(&self.messages[from..to])
+    }
+}
+
 /// Per-call context passed to every `Tool::execute`. Borrowed, never stored.
 pub(crate) struct ToolCtx<'a> {
     pub workspace: &'a Path,
@@ -68,6 +101,10 @@ pub(crate) struct ToolCtx<'a> {
     /// uses this to spawn / kill / steer LLM-driven subagents; all other
     /// plugins ignore it.
     pub subagents: Option<&'a SubagentRegistry>,
+    /// Read-only snapshot of the calling agent's message history up to the
+    /// current turn. Tools that need to inspect the conversation (e.g.
+    /// `skill_distill`) use this; all other tools ignore it.
+    pub conversation: ConversationView<'a>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
@@ -124,7 +161,10 @@ impl ToolRegistry {
     }
 
     pub(crate) fn definitions(&self) -> Vec<ToolDef> {
-        self.by_name.values().map(|t| t.definition().clone()).collect()
+        self.by_name
+            .values()
+            .map(|t| t.definition().clone())
+            .collect()
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
@@ -167,6 +207,10 @@ pub(crate) struct PluginToolExecutor {
     pub scopes: HashMap<String, ToolScope>,
     /// Subagent registry — only populated when the orchestrator is enabled.
     pub subagents: Option<Arc<SubagentRegistry>>,
+    /// Snapshot of the calling agent's message history at the start of the
+    /// current turn. Updated by callers before invoking `collect_engine_response`.
+    /// Empty when not set (non-distill tools ignore this field entirely).
+    pub conversation: Vec<crate::adapters::types::Message>,
 }
 
 impl PluginToolExecutor {
@@ -178,10 +222,8 @@ impl PluginToolExecutor {
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
-        let known: std::collections::HashSet<&str> = already_advertised
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let known: std::collections::HashSet<&str> =
+            already_advertised.iter().map(|t| t.name.as_str()).collect();
         self.registry
             .definitions()
             .into_iter()
@@ -200,6 +242,7 @@ impl ToolExecutor for PluginToolExecutor {
         }
 
         let scope = self.scopes.get(&call.name).cloned().unwrap_or_default();
+        let view = ConversationView::new(&self.conversation);
         let ctx = ToolCtx {
             workspace: &self.workspace,
             scope: &scope,
@@ -209,9 +252,13 @@ impl ToolExecutor for PluginToolExecutor {
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
             subagents: self.subagents.as_ref().map(|r| r.as_ref()),
+            conversation: view,
         };
 
-        let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
+        let output = self
+            .registry
+            .invoke(&call.name, &call.arguments, &ctx)
+            .await?;
         Ok(output.text)
     }
 }
@@ -261,6 +308,7 @@ mod tests {
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
             subagents: None,
+            conversation: Vec::new(),
         }
     }
 

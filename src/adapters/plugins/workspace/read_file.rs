@@ -59,12 +59,13 @@ impl Tool for ReadFileTool {
             );
         }
 
-        let is_pdf = target
+        let ext_lower = target
             .extension()
-            .map(|e| e.eq_ignore_ascii_case("pdf"))
-            .unwrap_or(false);
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
 
-        if is_pdf {
+        if ext_lower == "pdf" {
             let text = pdf_extract::extract_text(&target).map_err(|e| {
                 anyhow::anyhow!("Cannot extract text from PDF '{}': {}", path_str, e)
             })?;
@@ -74,11 +75,36 @@ impl Tool for ReadFileTool {
                     path_str
                 );
             }
-            Ok(ToolOutput::from(text))
-        } else {
-            let content = std::fs::read_to_string(&target)
-                .map_err(|e| anyhow::anyhow!("Cannot read file '{}': {}", path_str, e))?;
-            Ok(ToolOutput::from(content))
+            return Ok(ToolOutput::from(text));
+        }
+
+        // Reject well-known binary formats up front with actionable guidance.
+        // The LLM commonly tries to `read_file` images before upload; that's
+        // unnecessary — the upload path only needs `file_path`.
+        const BINARY_EXTS: &[&str] = &[
+            "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "ico", "svg", "mp3", "mp4", "mov",
+            "avi", "wav", "ogg", "flac", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "exe",
+            "dll", "so", "dylib", "bin", "wasm", "parquet", "db", "sqlite",
+        ];
+        if BINARY_EXTS.contains(&ext_lower.as_str()) {
+            bail!(
+                "Refusing to read binary file '{}' (.{}). Do NOT read binary assets (images, archives, etc.) — \
+                 pass the path directly to the upload tool via `file_path`. \
+                 For images in particular, `http_request` with `file_path: {}` is sufficient for S3/PUT uploads.",
+                path_str, ext_lower, path_str
+            );
+        }
+
+        match std::fs::read_to_string(&target) {
+            Ok(content) => Ok(ToolOutput::from(content)),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                bail!(
+                    "File '{}' is not UTF-8 text. If it's a binary asset (image, archive, etc.), \
+                     do not read it — pass the path to the upload tool via `file_path`.",
+                    path_str
+                );
+            }
+            Err(e) => bail!("Cannot read file '{}': {}", path_str, e),
         }
     }
 }

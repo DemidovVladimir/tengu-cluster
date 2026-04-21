@@ -289,11 +289,7 @@ impl FromStr for Lens {
 // ---------------------------------------------------------------------------
 
 impl ToolDef {
-    pub(crate) fn new(
-        name: &str,
-        description: &str,
-        parameters: serde_json::Value,
-    ) -> Self {
+    pub(crate) fn new(name: &str, description: &str, parameters: serde_json::Value) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -679,9 +675,10 @@ impl Plan {
                     return Err(format!("cannot remove running task {id}"));
                 }
 
-                let has_dependents = self.tasks.values().any(|t| {
-                    t.id != *id && t.depends_on.contains(id) && !t.status.is_terminal()
-                });
+                let has_dependents = self
+                    .tasks
+                    .values()
+                    .any(|t| t.id != *id && t.depends_on.contains(id) && !t.status.is_terminal());
                 if has_dependents {
                     return Err(format!(
                         "cannot remove task {id}: other non-terminal tasks depend on it"
@@ -693,10 +690,7 @@ impl Plan {
                 tracing::debug!(task = %id, revision = self.revision, "apply_modification — RemoveTask succeeded");
                 Ok(())
             }
-            PlanModification::UpdateDependencies {
-                id,
-                new_depends_on,
-            } => {
+            PlanModification::UpdateDependencies { id, new_depends_on } => {
                 let task = self
                     .tasks
                     .get(id)
@@ -814,21 +808,24 @@ impl TaskHistory {
 
     /// Record a new task.
     pub fn record(&self, id: String, description: String, role: String) {
-        self.entries
-            .write()
-            .unwrap()
-            .push(TaskHistoryEntry {
-                id,
-                description,
-                role,
-                assigned_agent: None,
-                status: "pending".into(),
-            });
+        self.entries.write().unwrap().push(TaskHistoryEntry {
+            id,
+            description,
+            role,
+            assigned_agent: None,
+            status: "pending".into(),
+        });
     }
 
     /// Mark a task as assigned to an agent and in-progress.
     pub fn assign(&self, id: &str, agent: &str) {
-        if let Some(entry) = self.entries.write().unwrap().iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = self
+            .entries
+            .write()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e.id == id)
+        {
             entry.assigned_agent = Some(agent.to_string());
             entry.status = "in-progress".into();
         }
@@ -836,7 +833,13 @@ impl TaskHistory {
 
     /// Mark a task as completed.
     pub fn complete(&self, id: &str) {
-        if let Some(entry) = self.entries.write().unwrap().iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = self
+            .entries
+            .write()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e.id == id)
+        {
             entry.status = "completed".into();
         }
     }
@@ -893,4 +896,3 @@ impl EventBus {
         }
     }
 }
-
