@@ -58,7 +58,41 @@ pub(crate) fn metrics_json_path(skill_dir: &Path) -> PathBuf {
     skill_dir.join("metrics.json")
 }
 
+/// Prune per-run report directories under `<parent>/<ts>/` to at most
+/// `max_runs` by keeping the lexicographically-latest entries (ISO-8601
+/// timestamps sort correctly). `max_runs == 0` disables pruning. Errors
+/// during individual removals are logged and swallowed — retention is a
+/// best-effort cleanup, not a correctness gate.
+pub(crate) fn prune_old_run_dirs(parent: &Path, max_runs: u32) {
+    if max_runs == 0 || !parent.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let mut dirs: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.path())
+        .collect();
+    dirs.sort();
+    let keep = max_runs as usize;
+    if dirs.len() <= keep {
+        return;
+    }
+    let to_drop = dirs.len() - keep;
+    for dir in dirs.into_iter().take(to_drop) {
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(dir = %dir.display(), error = %e, "prune_old_run_dirs: remove failed");
+        }
+    }
+}
+
 /// Write the full per-run report + append to history + recompute metrics.json.
+///
+/// `max_per_run_reports` — when > 0, retains at most N most-recent per-run
+/// directories under `metrics/runs/`. Older directories are deleted after
+/// the new run is written.
 pub(crate) fn finalize_run(
     skill_dir: &Path,
     skill: &str,
@@ -66,6 +100,7 @@ pub(crate) fn finalize_run(
     specs: &[MetricSpec],
     samples: &[RunSample],
     rolling_window: u32,
+    max_per_run_reports: u32,
 ) -> Result<()> {
     let run_dir = per_run_dir(skill_dir, ts);
     std::fs::create_dir_all(&run_dir)?;
@@ -108,6 +143,11 @@ pub(crate) fn finalize_run(
         metrics_json_path(skill_dir),
         serde_json::to_vec_pretty(&out)?,
     )?;
+
+    // Retention: keep the newest N per-run directories.
+    let runs_parent = skill_dir.join("metrics").join("runs");
+    prune_old_run_dirs(&runs_parent, max_per_run_reports);
+
     Ok(())
 }
 
@@ -239,6 +279,7 @@ mod tests {
             &specs,
             &samples,
             10,
+            0, // no retention pruning in this test
         )
         .unwrap();
 
@@ -268,7 +309,7 @@ mod tests {
         for i in 0..12 {
             let ok = i % 2 == 0;
             let samples = vec![sample("m1", ok)];
-            finalize_run(skill_dir, "s", &format!("t{i}"), &specs, &samples, 5).unwrap();
+            finalize_run(skill_dir, "s", &format!("t{i}"), &specs, &samples, 5, 0).unwrap();
         }
         let mj: MetricsJson =
             serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
@@ -310,10 +351,49 @@ mod tests {
             outcomes: outs,
         }];
 
-        finalize_run(skill_dir, "s", "t0", &specs, &samples, 10).unwrap();
+        finalize_run(skill_dir, "s", "t0", &specs, &samples, 10, 0).unwrap();
         let mj: MetricsJson =
             serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
         assert!(!mj.metrics["m1"].gated);
         assert!(!mj.metrics["m2"].gated);
+    }
+
+    #[test]
+    fn retention_prunes_old_per_run_dirs() {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path();
+        let specs = vec![shell_spec("m1", Some(0.8))];
+
+        // 7 runs with max_per_run_reports = 3 — should retain runs [t4, t5, t6].
+        for i in 0..7 {
+            let samples = vec![sample("m1", true)];
+            finalize_run(skill_dir, "s", &format!("t{i:02}"), &specs, &samples, 10, 3).unwrap();
+        }
+
+        let runs_dir = skill_dir.join("metrics").join("runs");
+        let mut dirs: Vec<String> = std::fs::read_dir(&runs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        dirs.sort();
+        assert_eq!(dirs, vec!["t04", "t05", "t06"]);
+
+        // history.jsonl still has all 7 lines — retention only touches run dirs.
+        let h = std::fs::read_to_string(history_path(skill_dir)).unwrap();
+        assert_eq!(h.lines().count(), 7);
+    }
+
+    #[test]
+    fn retention_zero_disables_pruning() {
+        let dir = TempDir::new().unwrap();
+        let runs = dir.path().join("runs");
+        std::fs::create_dir_all(runs.join("a")).unwrap();
+        std::fs::create_dir_all(runs.join("b")).unwrap();
+        std::fs::create_dir_all(runs.join("c")).unwrap();
+
+        prune_old_run_dirs(&runs, 0);
+        let count = std::fs::read_dir(&runs).unwrap().count();
+        assert_eq!(count, 3);
     }
 }

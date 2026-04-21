@@ -18,6 +18,22 @@ pub struct EvalArgs {
     pub out_dir: Option<PathBuf>,
     pub filter: Option<String>,
     pub keep_workspace: bool,
+    /// Retention: keep only the last N run directories under the auto-generated
+    /// `evals/runs/<timestamp>/` path. Older directories get deleted at startup
+    /// BEFORE the current run writes anything. `None` → no cleanup (unbounded
+    /// growth). Set to e.g. 10 to cap cruft.
+    ///
+    /// Ignored when `out_dir` is explicitly supplied — the user picked an
+    /// exact path, retention cleanup of sibling dirs would be surprising.
+    pub keep_runs: Option<usize>,
+    /// When `true`, skip writing per-row transcripts, `report.json`, and
+    /// skill `metrics.json` / `history.jsonl`. The in-memory `SkillReport`
+    /// is still returned and the table / JSON summary still prints. For
+    /// quick iteration without polluting the repo.
+    pub no_persist: bool,
+    /// Retention cap for per-skill `metrics/runs/<ts>/` directories. Passed
+    /// through to `finalize_run`. `0` disables pruning. Defaults to 10.
+    pub max_per_run_reports: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,11 +42,55 @@ pub enum OutputFormat {
     Json,
 }
 
+/// Delete old auto-generated run directories under `evals/runs/`, keeping
+/// only the most recent `keep` by modification time. Silent no-op when the
+/// parent dir doesn't exist. Non-directory entries are ignored.
+fn prune_old_run_dirs(parent: &Path, keep: usize) -> std::io::Result<()> {
+    if !parent.exists() {
+        return Ok(());
+    }
+    let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let mtime = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        entries.push((path, mtime));
+    }
+    if entries.len() <= keep {
+        return Ok(());
+    }
+    // Newest first
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    for (path, _) in entries.into_iter().skip(keep) {
+        let _ = std::fs::remove_dir_all(&path);
+    }
+    Ok(())
+}
+
 pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     let started_at = chrono::Utc::now();
-    let out_dir = args.out_dir.unwrap_or_else(|| {
+    let auto_out_dir = args.out_dir.is_none();
+    let out_dir = args.out_dir.clone().unwrap_or_else(|| {
         PathBuf::from("evals/runs").join(started_at.format("%Y-%m-%dT%H-%M-%SZ").to_string())
     });
+
+    // Retention: prune old auto-generated run directories BEFORE creating
+    // the new one. Only fires when out_dir was not explicitly supplied —
+    // user-chosen paths are never touched. Default of 10 keeps recent
+    // history for diagnosis without unbounded growth.
+    if auto_out_dir {
+        let keep = args.keep_runs.unwrap_or(10);
+        if let Err(e) = prune_old_run_dirs(&PathBuf::from("evals/runs"), keep) {
+            eprintln!("Warning: failed to prune old run dirs: {}", e);
+        }
+    }
+
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
         eprintln!("Error: create out dir {}: {}", out_dir.display(), e);
         return Ok(2);
@@ -87,6 +147,10 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
             args.concurrency,
             args.keep_workspace,
             sandbox_config.as_deref(),
+            RunSkillOptions {
+                persist: !args.no_persist,
+                max_per_run_reports: args.max_per_run_reports,
+            },
         )
         .await
         {
@@ -929,6 +993,10 @@ pub struct RowCtx<'a> {
     pub config_path_override: Option<&'a Path>,
     pub skill_metrics: &'a [MetricSpec],
     pub judge_client: Arc<dyn JudgeClient>,
+    /// When false, `run_row` does not write its per-row transcript. Other
+    /// side effects (agent dispatch, judge call, metric scoring) still run —
+    /// only the on-disk persistence is elided.
+    pub persist_transcript: bool,
 }
 
 // Minimal ToolActivityPort for eval runs — no UI, no logging.
@@ -1070,6 +1138,32 @@ pub struct Report {
 // Skill-level driver
 // ---------------------------------------------------------------------------
 
+/// Options controlling persistence side-effects of `run_skill`. Kept as a
+/// struct so callers that don't care (tests, evolve's cycle re-eval) can
+/// pass `RunSkillOptions::default()` without threading a growing positional
+/// argument list.
+#[derive(Debug, Clone)]
+pub struct RunSkillOptions {
+    /// When `false`, `run_skill` writes no per-row transcripts, no
+    /// `report.json`, and does not update `metrics.json`/`history.jsonl`.
+    /// The returned `SkillReport` is still populated for the in-memory
+    /// caller (e.g. a CLI that renders a table).
+    pub persist: bool,
+    /// Retention cap for per-run detail directories under
+    /// `skills/<name>/metrics/runs/`. `0` disables pruning. Honoured only
+    /// when `persist` is `true`.
+    pub max_per_run_reports: u32,
+}
+
+impl Default for RunSkillOptions {
+    fn default() -> Self {
+        Self {
+            persist: true,
+            max_per_run_reports: 10,
+        }
+    }
+}
+
 pub async fn run_skill(
     skill: &SkillUnderTest,
     judge: Arc<dyn crate::adapters::types::Engine>,
@@ -1078,6 +1172,7 @@ pub async fn run_skill(
     concurrency: usize,
     keep_workspace: bool,
     sandbox_config: Option<&Path>,
+    options: RunSkillOptions,
 ) -> anyhow::Result<SkillReport> {
     let skill_started = Instant::now();
     let skill_started_ts = chrono::Utc::now();
@@ -1129,6 +1224,7 @@ pub async fn run_skill(
             config_path_override: sandbox_config,
             skill_metrics: skill_metrics.as_slice(),
             judge_client: Arc::clone(&judge_client),
+            persist_transcript: options.persist,
         })
         .await?;
         row_results.push(rr);
@@ -1160,15 +1256,18 @@ pub async fn run_skill(
             })
             .collect();
         let rolling_window = 10u32; // TODO: read from [skill_lifecycle] config if present.
-        finalize_run(
-            &skill.skill_dir,
-            &skill.name,
-            &ts,
-            &skill_metrics,
-            &samples,
-            rolling_window,
-        )
-        .with_context(|| format!("finalize_run for {}", skill.name))?;
+        if options.persist {
+            finalize_run(
+                &skill.skill_dir,
+                &skill.name,
+                &ts,
+                &skill_metrics,
+                &samples,
+                rolling_window,
+                options.max_per_run_reports,
+            )
+            .with_context(|| format!("finalize_run for {}", skill.name))?;
+        }
     }
 
     let config_source = if sandbox_config.is_some() {
@@ -1391,26 +1490,30 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
     };
 
-    // 9. Transcript.
-    std::fs::create_dir_all(ctx.out_dir)
-        .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    // 9. Transcript (skipped when --no-persist). Path still computed so
+    // the RowResult has a stable identifier, even when the file isn't
+    // actually written.
     let transcript_path = ctx
         .out_dir
         .join(format!("{}-{}.md", ctx.skill.name, ctx.row.id));
-    write_transcript(
-        &transcript_path,
-        &ctx.skill.name,
-        ctx.row,
-        &agent.model,
-        engine.id(),
-        &ws_path,
-        &messages,
-        &engine_response.tool_outcomes,
-        &obs_snapshot,
-        &engine_response.text,
-        &verdict,
-        &judge_user_turn,
-    )?;
+    if ctx.persist_transcript {
+        std::fs::create_dir_all(ctx.out_dir)
+            .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+        write_transcript(
+            &transcript_path,
+            &ctx.skill.name,
+            ctx.row,
+            &agent.model,
+            engine.id(),
+            &ws_path,
+            &messages,
+            &engine_response.tool_outcomes,
+            &obs_snapshot,
+            &engine_response.text,
+            &verdict,
+            &judge_user_turn,
+        )?;
+    }
 
     if ctx.keep_workspace {
         std::mem::forget(ws); // leak TempDir guard — workspace persists on disk
@@ -1847,12 +1950,14 @@ async fn run_row_via_orchestrator(
 
     let judge_user_turn = format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &final_text);
 
-    // Transcript.
-    std::fs::create_dir_all(ctx.out_dir)
-        .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    // Transcript (skipped when --no-persist).
     let transcript_path = ctx
         .out_dir
         .join(format!("{}-{}.md", ctx.skill.name, ctx.row.id));
+    if ctx.persist_transcript {
+        std::fs::create_dir_all(ctx.out_dir)
+            .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    }
 
     // The orchestrator path doesn't have a single `messages` array like
     // the direct path — we synthesize a minimal one for the transcript.
@@ -1886,20 +1991,22 @@ async fn run_row_via_orchestrator(
         },
     ];
 
-    write_transcript(
-        &transcript_path,
-        &ctx.skill.name,
-        ctx.row,
-        &default_agent_model,
-        &engine_id_str,
-        &ws_path,
-        &stub_messages,
-        &[], // tool_outcomes — orchestrator path observations already include them
-        &obs_snapshot,
-        &final_text,
-        &verdict,
-        &judge_user_turn,
-    )?;
+    if ctx.persist_transcript {
+        write_transcript(
+            &transcript_path,
+            &ctx.skill.name,
+            ctx.row,
+            &default_agent_model,
+            &engine_id_str,
+            &ws_path,
+            &stub_messages,
+            &[], // tool_outcomes — orchestrator path observations already include them
+            &obs_snapshot,
+            &final_text,
+            &verdict,
+            &judge_user_turn,
+        )?;
+    }
 
     if ctx.keep_workspace {
         std::mem::forget(_ws);
@@ -2369,6 +2476,9 @@ workspace = "{TMP_WORKSPACE}"
             out_dir: Some(tmp.path().to_path_buf()),
             filter: None,
             keep_workspace: false,
+            keep_runs: None,
+            no_persist: false,
+            max_per_run_reports: 10,
         };
         std::env::set_var("OPENROUTER_API_KEY", "sk-test-not-used");
         let exit = run(args).await.unwrap();
@@ -2390,6 +2500,9 @@ workspace = "{TMP_WORKSPACE}"
             out_dir: Some(tmp.path().to_path_buf()),
             filter: None,
             keep_workspace: false,
+            keep_runs: None,
+            no_persist: false,
+            max_per_run_reports: 10,
         };
         // Defensive: set a fake key so that if execution ever did reach the
         // judge builder, it would not fail with an env-var error for a

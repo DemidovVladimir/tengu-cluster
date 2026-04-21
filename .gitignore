@@ -11,3 +11,13 @@ secrets.env
 lastrun.md
 .tengu/worktrees/
 .tengu/scratch/
+
+# Eval runner artifacts (per-run transcripts + report.json). The eval
+# runner auto-prunes to `--keep-runs` (default 10), but gitignore keeps
+# them out of status/commits regardless.
+/evals/runs/
+
+# Skill lifecycle per-run artifacts. The rolling metrics.json + history.jsonl
+# are intentional persistent state and remain tracked; only the per-run
+# detail dirs are transient.
+/skills/*/metrics/runs/
