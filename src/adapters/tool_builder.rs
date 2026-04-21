@@ -65,9 +65,7 @@ pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
 
 // ── UI helpers ──────────────────────────────────────────────────────────
 
-pub(crate) fn build_tool_activity_text(
-    call: &ToolCall,
-) -> (String, Option<String>) {
+pub(crate) fn build_tool_activity_text(call: &ToolCall) -> (String, Option<String>) {
     let title = prettify_tool_name(&call.name);
     let detail = summarize_tool_args_for(&call.name, &call.arguments);
     let detail = if detail.is_empty() {

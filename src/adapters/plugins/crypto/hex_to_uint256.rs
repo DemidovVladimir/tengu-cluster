@@ -88,9 +88,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
         let tool = HexToUint256Tool::new();
-        let result = tool
-            .execute(&json!({"hex": "0xzz"}), &harness.ctx())
-            .await;
+        let result = tool.execute(&json!({"hex": "0xzz"}), &harness.ctx()).await;
         assert!(result.is_err(), "expected invalid hex error");
     }
 }

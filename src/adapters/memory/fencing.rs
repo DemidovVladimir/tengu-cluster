@@ -26,9 +26,8 @@ pub fn build_memory_context_block(raw_context: &str) -> String {
 /// (defense in depth — a provider that accidentally returns fenced
 /// content shouldn't double-wrap).
 pub fn sanitize_context(text: &str) -> String {
-    static FENCE_TAGS: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
-        Regex::new(r"(?i)</?\s*memory-context\s*>").unwrap()
-    });
+    static FENCE_TAGS: once_cell::sync::Lazy<Regex> =
+        once_cell::sync::Lazy::new(|| Regex::new(r"(?i)</?\s*memory-context\s*>").unwrap());
     static INTERNAL_BLOCK: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
         Regex::new(r"(?is)<\s*memory-context\s*>.*?</\s*memory-context\s*>").unwrap()
     });

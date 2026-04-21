@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 pub struct StepId(pub String);
 
 impl StepId {
-    pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,10 +46,12 @@ impl Plan {
     /// Return all steps whose dependencies are satisfied by `completed`
     /// and that are not themselves in `completed`.
     pub fn ready_steps(&self, completed: &HashSet<StepId>) -> Vec<&Step> {
-        self.steps.iter().filter(|s| {
-            !completed.contains(&s.id)
-                && s.depends_on.iter().all(|d| completed.contains(d))
-        }).collect()
+        self.steps
+            .iter()
+            .filter(|s| {
+                !completed.contains(&s.id) && s.depends_on.iter().all(|d| completed.contains(d))
+            })
+            .collect()
     }
 
     /// Full topology validation: no duplicate IDs, no cycles, no unknown
@@ -77,8 +81,16 @@ impl Plan {
             }
         }
         // cycle detection (Kahn's algorithm)
-        let mut in_deg: HashMap<StepId, usize> = self.steps.iter().map(|s| (s.id.clone(), s.depends_on.len())).collect();
-        let mut queue: Vec<StepId> = in_deg.iter().filter(|(_, &d)| d == 0).map(|(k, _)| k.clone()).collect();
+        let mut in_deg: HashMap<StepId, usize> = self
+            .steps
+            .iter()
+            .map(|s| (s.id.clone(), s.depends_on.len()))
+            .collect();
+        let mut queue: Vec<StepId> = in_deg
+            .iter()
+            .filter(|(_, &d)| d == 0)
+            .map(|(k, _)| k.clone())
+            .collect();
         let mut removed = 0;
         while let Some(id) = queue.pop() {
             removed += 1;
@@ -86,22 +98,35 @@ impl Plan {
                 if s.depends_on.contains(&id) {
                     if let Some(d) = in_deg.get_mut(&s.id) {
                         *d -= 1;
-                        if *d == 0 { queue.push(s.id.clone()); }
+                        if *d == 0 {
+                            queue.push(s.id.clone());
+                        }
                     }
                 }
             }
         }
         if removed != self.steps.len() {
-            let cycle_id = self.steps.iter().find(|s| in_deg[&s.id] > 0).map(|s| s.id.clone()).unwrap();
+            let cycle_id = self
+                .steps
+                .iter()
+                .find(|s| in_deg[&s.id] > 0)
+                .map(|s| s.id.clone())
+                .unwrap();
             return Err(PlanError::Cycle(cycle_id));
         }
         // single leaf
         let has_dep_on: HashSet<&StepId> = self.steps.iter().flat_map(|s| &s.depends_on).collect();
-        let leaves: Vec<&Step> = self.steps.iter().filter(|s| !has_dep_on.contains(&s.id)).collect();
+        let leaves: Vec<&Step> = self
+            .steps
+            .iter()
+            .filter(|s| !has_dep_on.contains(&s.id))
+            .collect();
         match leaves.len() {
             0 => Err(PlanError::NoLeaf),
             1 => Ok(()),
-            _ => Err(PlanError::MultipleLeaves(leaves.into_iter().map(|s| s.id.clone()).collect())),
+            _ => Err(PlanError::MultipleLeaves(
+                leaves.into_iter().map(|s| s.id.clone()).collect(),
+            )),
         }
     }
 
@@ -109,7 +134,11 @@ impl Plan {
         let has_dep_on: HashSet<&StepId> = self.steps.iter().flat_map(|s| &s.depends_on).collect();
         let mut leaves = self.steps.iter().filter(|s| !has_dep_on.contains(&s.id));
         let first = leaves.next()?;
-        if leaves.next().is_some() { None } else { Some(first) }
+        if leaves.next().is_some() {
+            None
+        } else {
+            Some(first)
+        }
     }
 }
 
@@ -128,7 +157,9 @@ mod tests {
 
     #[test]
     fn ready_steps_respects_dependencies() {
-        let plan = Plan { steps: vec![step("a", "x", &[]), step("b", "x", &["a"])] };
+        let plan = Plan {
+            steps: vec![step("a", "x", &[]), step("b", "x", &["a"])],
+        };
         let ready = plan.ready_steps(&HashSet::new());
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].id, StepId::new("a"));
@@ -136,41 +167,65 @@ mod tests {
 
     #[test]
     fn validate_detects_cycle() {
-        let plan = Plan { steps: vec![step("a", "x", &["b"]), step("b", "x", &["a"])] };
+        let plan = Plan {
+            steps: vec![step("a", "x", &["b"]), step("b", "x", &["a"])],
+        };
         assert!(matches!(plan.validate(&["x"]), Err(PlanError::Cycle(_))));
     }
 
     #[test]
     fn validate_detects_unknown_dep() {
-        let plan = Plan { steps: vec![step("a", "x", &["ghost"])] };
-        assert!(matches!(plan.validate(&["x"]), Err(PlanError::UnknownDependency(_, _))));
+        let plan = Plan {
+            steps: vec![step("a", "x", &["ghost"])],
+        };
+        assert!(matches!(
+            plan.validate(&["x"]),
+            Err(PlanError::UnknownDependency(_, _))
+        ));
     }
 
     #[test]
     fn validate_rejects_unknown_agent() {
-        let plan = Plan { steps: vec![step("a", "ghost-agent", &[])] };
-        assert!(matches!(plan.validate(&["x"]), Err(PlanError::UnknownAgent(_, _))));
+        let plan = Plan {
+            steps: vec![step("a", "ghost-agent", &[])],
+        };
+        assert!(matches!(
+            plan.validate(&["x"]),
+            Err(PlanError::UnknownAgent(_, _))
+        ));
     }
 
     #[test]
     fn validate_rejects_multiple_leaves() {
-        let plan = Plan { steps: vec![step("a", "x", &[]), step("b", "x", &[])] };
-        assert!(matches!(plan.validate(&["x"]), Err(PlanError::MultipleLeaves(_))));
+        let plan = Plan {
+            steps: vec![step("a", "x", &[]), step("b", "x", &[])],
+        };
+        assert!(matches!(
+            plan.validate(&["x"]),
+            Err(PlanError::MultipleLeaves(_))
+        ));
     }
 
     #[test]
     fn validate_accepts_single_leaf() {
-        let plan = Plan { steps: vec![
-            step("a", "x", &[]),
-            step("b", "x", &[]),
-            step("c", "x", &["a", "b"]),
-        ] };
+        let plan = Plan {
+            steps: vec![
+                step("a", "x", &[]),
+                step("b", "x", &[]),
+                step("c", "x", &["a", "b"]),
+            ],
+        };
         assert!(plan.validate(&["x"]).is_ok());
     }
 
     #[test]
     fn single_leaf_returns_leaf() {
-        let plan = Plan { steps: vec![step("a", "x", &[]), step("b", "x", &["a"])] };
-        assert_eq!(plan.single_leaf().map(|s| s.id.clone()), Some(StepId::new("b")));
+        let plan = Plan {
+            steps: vec![step("a", "x", &[]), step("b", "x", &["a"])],
+        };
+        assert_eq!(
+            plan.single_leaf().map(|s| s.id.clone()),
+            Some(StepId::new("b"))
+        );
     }
 }

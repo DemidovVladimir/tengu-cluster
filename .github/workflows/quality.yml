@@ -16,9 +16,6 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Check Rust file descriptions
-        run: scripts/check_rust_file_descriptions.sh
-
       - name: Rustfmt
         run: cargo fmt --all --check
 

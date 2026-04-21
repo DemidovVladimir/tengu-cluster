@@ -283,11 +283,7 @@ impl FromStr for Lens {
 // ---------------------------------------------------------------------------
 
 impl ToolDef {
-    pub(crate) fn new(
-        name: &str,
-        description: &str,
-        parameters: serde_json::Value,
-    ) -> Self {
+    pub(crate) fn new(name: &str, description: &str, parameters: serde_json::Value) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -373,4 +369,3 @@ impl ChatLoopState {
         self.total_output_tokens = 0;
     }
 }
-

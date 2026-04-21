@@ -23,8 +23,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, Distance, PointStruct, QueryPointsBuilder,
-    UpsertPointsBuilder, VectorParamsBuilder,
+    CreateCollectionBuilder, Distance, PointStruct, QueryPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder,
 };
 use qdrant_client::Qdrant;
 
@@ -177,12 +177,7 @@ impl QdrantVectorStore {
 
 #[async_trait]
 impl VectorStore for QdrantVectorStore {
-    async fn write(
-        &self,
-        embedding: Vec<f32>,
-        text: &str,
-        metadata: ChunkMetadata,
-    ) -> Result<()> {
+    async fn write(&self, embedding: Vec<f32>, text: &str, metadata: ChunkMetadata) -> Result<()> {
         let payload_json = Self::payload_from(text, &metadata);
         let id = uuid::Uuid::new_v4().to_string();
         let point = PointStruct::new(
@@ -228,9 +223,7 @@ impl VectorStore for QdrantVectorStore {
                 let text = payload
                     .get("text")
                     .and_then(|v| match &v.kind {
-                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => {
-                            Some(s.clone())
-                        }
+                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => Some(s.clone()),
                         _ => None,
                     })
                     .unwrap_or_default();

@@ -20,7 +20,11 @@ impl RetryPolicy {
     pub fn new(max_attempts: u32) -> Self {
         Self {
             max_attempts,
-            backoff: vec![Duration::from_secs(1), Duration::from_secs(3), Duration::from_secs(9)],
+            backoff: vec![
+                Duration::from_secs(1),
+                Duration::from_secs(3),
+                Duration::from_secs(9),
+            ],
         }
     }
 }
@@ -50,7 +54,11 @@ pub async fn run_step_with_retry(
                 });
                 warn!(step = ?step.id, attempt, error = %last_err, "step failed");
                 if attempt < policy.max_attempts {
-                    let delay = policy.backoff.get((attempt - 1) as usize).copied().unwrap_or(Duration::from_secs(9));
+                    let delay = policy
+                        .backoff
+                        .get((attempt - 1) as usize)
+                        .copied()
+                        .unwrap_or(Duration::from_secs(9));
                     sleep(delay).await;
                 }
             }
@@ -71,7 +79,10 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    struct FlakyWorker { fails_until: u32, calls: Arc<AtomicU32> }
+    struct FlakyWorker {
+        fails_until: u32,
+        calls: Arc<AtomicU32>,
+    }
     #[async_trait]
     impl WorkerHandle for FlakyWorker {
         async fn run_step(&self, _: &Step, _: &str) -> anyhow::Result<String> {
@@ -85,14 +96,26 @@ mod tests {
     }
 
     fn test_step() -> Step {
-        Step { id: StepId::new("s1"), agent: "x".into(), goal: "g".into(), depends_on: vec![] }
+        Step {
+            id: StepId::new("s1"),
+            agent: "x".into(),
+            goal: "g".into(),
+            depends_on: vec![],
+        }
     }
 
     #[tokio::test]
     async fn succeeds_on_first_try() {
-        let worker = Arc::new(FlakyWorker { fails_until: 0, calls: Arc::new(AtomicU32::new(0)) });
+        let worker = Arc::new(FlakyWorker {
+            fails_until: 0,
+            calls: Arc::new(AtomicU32::new(0)),
+        });
         let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_millis(1), Duration::from_millis(1), Duration::from_millis(1)];
+        policy.backoff = vec![
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        ];
         let bus = new_bus();
         match run_step_with_retry(&test_step(), "", worker, &policy, &bus).await {
             StepOutcome::Ok(s) => assert!(s.contains("output from call 1")),
@@ -102,7 +125,10 @@ mod tests {
 
     #[tokio::test]
     async fn exhausts_after_max_attempts() {
-        let worker = Arc::new(FlakyWorker { fails_until: 99, calls: Arc::new(AtomicU32::new(0)) });
+        let worker = Arc::new(FlakyWorker {
+            fails_until: 99,
+            calls: Arc::new(AtomicU32::new(0)),
+        });
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1), Duration::from_millis(1)];
         let bus = new_bus();
@@ -114,7 +140,10 @@ mod tests {
 
     #[tokio::test]
     async fn succeeds_on_second_attempt() {
-        let worker = Arc::new(FlakyWorker { fails_until: 1, calls: Arc::new(AtomicU32::new(0)) });
+        let worker = Arc::new(FlakyWorker {
+            fails_until: 1,
+            calls: Arc::new(AtomicU32::new(0)),
+        });
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1), Duration::from_millis(1)];
         let bus = new_bus();

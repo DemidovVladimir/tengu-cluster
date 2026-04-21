@@ -38,7 +38,12 @@ impl MemoryManager {
     /// Returns the list of provider names currently registered, in
     /// registration order (builtin first).
     pub async fn providers(&self) -> Vec<String> {
-        self.providers.read().await.iter().map(|p| p.name().to_string()).collect()
+        self.providers
+            .read()
+            .await
+            .iter()
+            .map(|p| p.name().to_string())
+            .collect()
     }
 
     pub async fn prefetch_all(&self, agent: &str, query: &str) -> String {
@@ -69,7 +74,9 @@ impl MemoryManager {
 }
 
 impl Default for MemoryManager {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -78,13 +85,23 @@ mod tests {
     use async_trait::async_trait;
     use std::path::Path;
 
-    struct FakeProvider { name: String }
+    struct FakeProvider {
+        name: String,
+    }
     #[async_trait]
     impl MemoryProvider for FakeProvider {
-        fn name(&self) -> &str { &self.name }
-        fn is_available(&self) -> bool { true }
-        async fn initialize(&self, _: &str, _: &Path) -> anyhow::Result<()> { Ok(()) }
-        async fn prefetch(&self, _: &str, q: &str) -> String { format!("from-{}: {}", self.name, q) }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn initialize(&self, _: &str, _: &Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn prefetch(&self, _: &str, q: &str) -> String {
+            format!("from-{}: {}", self.name, q)
+        }
         async fn sync_turn(&self, _: &str, _: &str, _: &str) {}
         async fn shutdown(&self) {}
     }
@@ -92,24 +109,45 @@ mod tests {
     #[tokio::test]
     async fn builtin_registers_first() {
         let mgr = MemoryManager::new();
-        mgr.add_provider(Box::new(FakeProvider { name: "builtin".into() })).await;
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "builtin".into(),
+        }))
+        .await;
         assert_eq!(mgr.providers().await, vec!["builtin".to_string()]);
     }
 
     #[tokio::test]
     async fn at_most_one_external() {
         let mgr = MemoryManager::new();
-        mgr.add_provider(Box::new(FakeProvider { name: "builtin".into() })).await;
-        mgr.add_provider(Box::new(FakeProvider { name: "letta".into() })).await;
-        mgr.add_provider(Box::new(FakeProvider { name: "mem0".into() })).await; // rejected
-        assert_eq!(mgr.providers().await, vec!["builtin".to_string(), "letta".to_string()]);
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "builtin".into(),
+        }))
+        .await;
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "letta".into(),
+        }))
+        .await;
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "mem0".into(),
+        }))
+        .await; // rejected
+        assert_eq!(
+            mgr.providers().await,
+            vec!["builtin".to_string(), "letta".to_string()]
+        );
     }
 
     #[tokio::test]
     async fn prefetch_concatenates_providers() {
         let mgr = MemoryManager::new();
-        mgr.add_provider(Box::new(FakeProvider { name: "builtin".into() })).await;
-        mgr.add_provider(Box::new(FakeProvider { name: "letta".into() })).await;
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "builtin".into(),
+        }))
+        .await;
+        mgr.add_provider(Box::new(FakeProvider {
+            name: "letta".into(),
+        }))
+        .await;
         let out = mgr.prefetch_all("researcher", "q").await;
         assert!(out.contains("from-builtin"));
         assert!(out.contains("from-letta"));

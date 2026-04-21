@@ -6,14 +6,37 @@ use crate::adapters::orchestrator::plan::{Plan, StepId};
 
 #[derive(Debug, Clone)]
 pub enum OrchestratorEvent {
-    PlanCreated { plan: Plan },
-    StepStarted { step_id: StepId, agent: String },
-    StepProgress { step_id: StepId, chunk: String },
-    StepFailed { step_id: StepId, attempt: u32, error: String },
-    StepExhausted { step_id: StepId, final_error: String },
-    StepSucceeded { step_id: StepId, output: String },
-    ReplanTriggered { reason: String },
-    PlanCompleted { final_response: String, cancelled: bool },
+    PlanCreated {
+        plan: Plan,
+    },
+    StepStarted {
+        step_id: StepId,
+        agent: String,
+    },
+    StepProgress {
+        step_id: StepId,
+        chunk: String,
+    },
+    StepFailed {
+        step_id: StepId,
+        attempt: u32,
+        error: String,
+    },
+    StepExhausted {
+        step_id: StepId,
+        final_error: String,
+    },
+    StepSucceeded {
+        step_id: StepId,
+        output: String,
+    },
+    ReplanTriggered {
+        reason: String,
+    },
+    PlanCompleted {
+        final_response: String,
+        cancelled: bool,
+    },
 }
 
 pub type EventBus = broadcast::Sender<OrchestratorEvent>;

@@ -19,13 +19,23 @@ mod tests {
     use async_trait::async_trait;
     use std::path::Path;
 
-    struct Stub { body: String }
+    struct Stub {
+        body: String,
+    }
     #[async_trait]
     impl MemoryProvider for Stub {
-        fn name(&self) -> &str { "builtin" }
-        fn is_available(&self) -> bool { true }
-        async fn initialize(&self, _: &str, _: &Path) -> anyhow::Result<()> { Ok(()) }
-        async fn prefetch(&self, _: &str, _: &str) -> String { self.body.clone() }
+        fn name(&self) -> &str {
+            "builtin"
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn initialize(&self, _: &str, _: &Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn prefetch(&self, _: &str, _: &str) -> String {
+            self.body.clone()
+        }
         async fn sync_turn(&self, _: &str, _: &str, _: &str) {}
         async fn shutdown(&self) {}
     }
@@ -41,7 +51,10 @@ mod tests {
     #[tokio::test]
     async fn nonempty_provider_fences_output() {
         let mgr = MemoryManager::new();
-        mgr.add_provider(Box::new(Stub { body: "relevant fact".into() })).await;
+        mgr.add_provider(Box::new(Stub {
+            body: "relevant fact".into(),
+        }))
+        .await;
         let block = for_turn(&mgr, "a", "q").await;
         assert!(block.body.starts_with("<memory-context>"));
         assert!(block.body.contains("relevant fact"));

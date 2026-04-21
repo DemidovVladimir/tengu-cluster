@@ -15,7 +15,6 @@ use crate::adapters::types::{Message, ModelInfo, Role, StreamEvent, ToolCall, To
 use crate::adapters::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 
-
 // ---------------------------------------------------------------------------
 // Factory — build engines from config
 // ---------------------------------------------------------------------------
@@ -30,10 +29,12 @@ pub(crate) fn build_planner_engine(
         "claude_code" => {
             #[cfg(feature = "claude_code")]
             {
-                let cc = claude_code_config
-                    .cloned()
-                    .unwrap_or_default();
-                let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
+                let cc = claude_code_config.cloned().unwrap_or_default();
+                let model_opt = if model.is_empty() {
+                    None
+                } else {
+                    Some(model.to_string())
+                };
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
@@ -66,15 +67,17 @@ pub(crate) fn build_engine(
         "claude_code" => {
             #[cfg(feature = "claude_code")]
             {
-                let cc = claude_code_config
-                    .cloned()
-                    .unwrap_or_default();
+                let cc = claude_code_config.cloned().unwrap_or_default();
                 let profile = agent_config
                     .claude_code
                     .as_ref()
                     .map(|c| c.builtin_tools_profile.as_str())
                     .unwrap_or("editor_shell");
-                let model_opt = if agent_config.model.is_empty() { None } else { Some(agent_config.model.clone()) };
+                let model_opt = if agent_config.model.is_empty() {
+                    None
+                } else {
+                    Some(agent_config.model.clone())
+                };
                 let timeout = agent_config.limits.stream_event_timeout_secs;
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
@@ -98,10 +101,7 @@ pub(crate) fn build_engine(
     }
 }
 
-pub fn build_openrouter_engine(
-    model: &str,
-    context_window: usize,
-) -> Result<Box<dyn Engine>> {
+pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box<dyn Engine>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is required"))?;
     let base_url = std::env::var("OPENROUTER_BASE_URL")
@@ -198,12 +198,7 @@ struct OpenRouterUsage {
 }
 
 impl OpenRouterEngine {
-    pub fn new(
-        base_url: &str,
-        model: &str,
-        api_key: &str,
-        context_window: usize,
-    ) -> Self {
+    pub fn new(base_url: &str, model: &str, api_key: &str, context_window: usize) -> Self {
         let context_window_tokens = context_window;
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -267,7 +262,9 @@ impl OpenRouterEngine {
             false
         };
         if truncated {
-            tracing::warn!("Model output truncated by output token limit (finish_reason=length/max_tokens)");
+            tracing::warn!(
+                "Model output truncated by output token limit (finish_reason=length/max_tokens)"
+            );
         }
 
         // Signal truncation via a special marker in the text stream so the tool
@@ -597,7 +594,8 @@ pub async fn collect_engine_response(
         }
 
         let (response_text, tool_calls, input_delta, output_delta) =
-            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout).await?;
+            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout)
+                .await?;
 
         total_input_delta += input_delta;
         total_output_delta += output_delta;
@@ -640,7 +638,8 @@ pub async fn collect_engine_response(
                 });
                 messages.push(Message {
                     role: Role::User,
-                    content: "Your output was truncated. Continue from where you left off.".to_string(),
+                    content: "Your output was truncated. Continue from where you left off."
+                        .to_string(),
                     tool_call_id: None,
                     tool_calls: None,
                 });

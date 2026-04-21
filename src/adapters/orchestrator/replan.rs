@@ -51,7 +51,15 @@ pub async fn drive(
         let plan = plan_opt.as_ref().unwrap().clone();
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
-        match DagExecutor::run(&plan, Arc::clone(&worker), policy, events, Arc::clone(&cancel)).await {
+        match DagExecutor::run(
+            &plan,
+            Arc::clone(&worker),
+            policy,
+            events,
+            Arc::clone(&cancel),
+        )
+        .await
+        {
             ExecResult::Done { final_output } => {
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: final_output.clone(),

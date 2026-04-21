@@ -23,8 +23,7 @@ use std::path::Path;
 
 #[test]
 fn memory_search_plugin_source_exists() {
-    let src =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins/memory/search.rs");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins/memory/search.rs");
     assert!(
         src.exists(),
         "memory_search plugin source not found at {}",
@@ -61,8 +60,7 @@ fn memory_search_plugin_source_exists() {
 
 #[test]
 fn memory_search_is_registered_by_plugin() {
-    let mod_rs =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins/memory/mod.rs");
+    let mod_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins/memory/mod.rs");
     let body = fs::read_to_string(&mod_rs).expect("read memory/mod.rs");
 
     // The plugin's `tool_defs()` must advertise memory_search so

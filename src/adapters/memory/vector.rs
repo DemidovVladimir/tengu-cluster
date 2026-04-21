@@ -13,12 +13,7 @@ use crate::adapters::memory::context_block::{ChunkMetadata, MemoryHit};
 
 #[async_trait]
 pub trait VectorStore: Send + Sync {
-    async fn write(
-        &self,
-        embedding: Vec<f32>,
-        text: &str,
-        metadata: ChunkMetadata,
-    ) -> Result<()>;
+    async fn write(&self, embedding: Vec<f32>, text: &str, metadata: ChunkMetadata) -> Result<()>;
 
     async fn search(
         &self,

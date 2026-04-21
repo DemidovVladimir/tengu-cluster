@@ -131,18 +131,14 @@ impl MemoryStorePort for QdrantMemoryStore {
                 let content = payload
                     .get("content")
                     .and_then(|v| match &v.kind {
-                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => {
-                            Some(s.clone())
-                        }
+                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => Some(s.clone()),
                         _ => None,
                     })
                     .unwrap_or_default();
                 let agent_id = payload
                     .get("agent_id")
                     .and_then(|v| match &v.kind {
-                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => {
-                            Some(s.clone())
-                        }
+                        Some(qdrant_client::qdrant::value::Kind::StringValue(s)) => Some(s.clone()),
                         _ => None,
                     })
                     .unwrap_or_default();
@@ -170,9 +166,7 @@ impl MemoryStorePort for QdrantMemoryStore {
                 let mut metadata = std::collections::HashMap::new();
                 for (k, v) in &payload {
                     if let Some(stripped) = k.strip_prefix("meta_") {
-                        if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) =
-                            &v.kind
-                        {
+                        if let Some(qdrant_client::qdrant::value::Kind::StringValue(s)) = &v.kind {
                             metadata.insert(stripped.to_string(), s.clone());
                         }
                     }

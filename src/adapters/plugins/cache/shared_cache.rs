@@ -92,7 +92,10 @@ impl SharedCacheTool {
             rusqlite::params![namespace, key, value_json],
         )?;
 
-        Ok(format!("ok: {namespace}/{key} ({} bytes)", value_json.len()))
+        Ok(format!(
+            "ok: {namespace}/{key} ({} bytes)",
+            value_json.len()
+        ))
     }
 
     fn execute_delete(&self, namespace: &str, key: &str) -> Result<String> {
@@ -111,9 +114,8 @@ impl SharedCacheTool {
 
     fn execute_list(&self, namespace: &str) -> Result<String> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("lock: {e}"))?;
-        let mut stmt = db.prepare(
-            "SELECT key FROM cache_entries WHERE namespace = ?1 ORDER BY key",
-        )?;
+        let mut stmt =
+            db.prepare("SELECT key FROM cache_entries WHERE namespace = ?1 ORDER BY key")?;
         let keys: Vec<String> = stmt
             .query_map(rusqlite::params![namespace], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -213,7 +215,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(put.text.starts_with("ok: ns/k"), "unexpected put: {}", put.text);
+        assert!(
+            put.text.starts_with("ok: ns/k"),
+            "unexpected put: {}",
+            put.text
+        );
 
         let get = tool
             .execute(
@@ -269,7 +275,11 @@ mod tests {
                 &harness.ctx(),
             )
             .await;
-        assert!(result.is_err(), "expected error for unknown op, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected error for unknown op, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(
             msg.contains("unknown operation"),

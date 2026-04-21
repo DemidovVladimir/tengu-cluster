@@ -10,19 +10,21 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_builder::build_engine;
-use crate::adapters::skill_builder::{
-    self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
+use crate::adapters::chat_builder::{
+    handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
 };
-use crate::adapters::chat_builder::{handle_chat_command, CommandResult, EngineInfo, ChatRuntimeService, ChatTurnResult};
+use crate::adapters::config::{Config, RuntimeProfile};
+use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
-use app::{BubbleRole, ChatRequest, SkillCommand};
-use crate::adapters::config::{Config, RuntimeProfile};
+use crate::adapters::skill_builder::{
+    self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
+};
 use crate::adapters::types::{ToolCall, ToolDef};
+use app::{BubbleRole, ChatRequest, SkillCommand};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -60,7 +62,6 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
         }));
     }
 }
-
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
 pub fn run_tui(
@@ -149,8 +150,9 @@ pub fn run_tui(
                 "TUI orchestrator factory not yet wired — see Task 5.4 DONE_WITH_CONCERNS note",
             ))
         });
-        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
-            Arc::new(channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn));
+        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> = Arc::new(
+            channel_runtime::RuntimeChatServiceFactory::new(stub_inputs_fn),
+        );
         channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
             .map(Arc::new)
     };
@@ -185,25 +187,31 @@ pub fn run_tui(
                                 OrchestratorEvent::StepSucceeded { step_id, .. } => {
                                     Some(format!("orch: ✓ {}", step_id.0))
                                 }
-                                OrchestratorEvent::StepFailed { step_id, attempt, error } => {
-                                    Some(format!(
-                                        "orch: ✗ {} (attempt {}): {}",
-                                        step_id.0, attempt, error
-                                    ))
-                                }
-                                OrchestratorEvent::StepExhausted { step_id, final_error } => {
-                                    Some(format!("orch: ⊘ {} exhausted: {}", step_id.0, final_error))
-                                }
+                                OrchestratorEvent::StepFailed {
+                                    step_id,
+                                    attempt,
+                                    error,
+                                } => Some(format!(
+                                    "orch: ✗ {} (attempt {}): {}",
+                                    step_id.0, attempt, error
+                                )),
+                                OrchestratorEvent::StepExhausted {
+                                    step_id,
+                                    final_error,
+                                } => Some(format!(
+                                    "orch: ⊘ {} exhausted: {}",
+                                    step_id.0, final_error
+                                )),
                                 OrchestratorEvent::ReplanTriggered { reason } => {
                                     Some(format!("orch: ↻ replan — {}", reason))
                                 }
-                                OrchestratorEvent::PlanCompleted { cancelled, .. } => Some(
-                                    if cancelled {
+                                OrchestratorEvent::PlanCompleted { cancelled, .. } => {
+                                    Some(if cancelled {
                                         "orch: plan cancelled".to_string()
                                     } else {
                                         "orch: plan completed".to_string()
-                                    },
-                                ),
+                                    })
+                                }
                                 OrchestratorEvent::StepProgress { .. } => None,
                             };
                             if let Some(text) = line {
@@ -264,15 +272,13 @@ pub fn run_tui(
         );
         // For engines that manage their own workspace (claude_code), build bridge
         // tools so Tengu-native tools are still accessible via MCP bridge.
-        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> =
-            if manages_workspace && workspace.is_some() {
-                channel_runtime::compute_bridge_tools(
-                    has_memory,
-                    &engine_agent_config.workspace_tools,
-                )
-            } else {
-                vec![]
-            };
+        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> = if manages_workspace
+            && workspace.is_some()
+        {
+            channel_runtime::compute_bridge_tools(has_memory, &engine_agent_config.workspace_tools)
+        } else {
+            vec![]
+        };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> = workspace
@@ -388,10 +394,8 @@ pub fn run_tui(
 
                         // Always force a full rebuild to pick up env + skill changes.
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(
-                                &base_tools,
-                                &skill_registry,
-                            );
+                            current_tools =
+                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
@@ -468,10 +472,8 @@ pub fn run_tui(
                         }
                         if tools_dirty {
                             if let Some(ref ws) = workspace {
-                                current_tools = channel_runtime::rebuild_tools(
-                                    &base_tools,
-                                    &skill_registry,
-                                );
+                                current_tools =
+                                    channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                                 current_executor = channel_runtime::build_tool_executor(
                                     ws,
                                     &current_tools,
@@ -530,7 +532,11 @@ pub fn run_tui(
                                 max_recall_tokens: memory_config.max_recall_tokens,
                                 tool_observer: None,
                                 cancel: None,
-                                bridge_tools: if current_bridge_tools.is_empty() { None } else { Some(&current_bridge_tools) },
+                                bridge_tools: if current_bridge_tools.is_empty() {
+                                    None
+                                } else {
+                                    Some(&current_bridge_tools)
+                                },
                             };
 
                             match chat_runtime
@@ -606,10 +612,8 @@ pub fn run_tui(
                     // Rebuild tools/executor/prompt when dirty.
                     if tools_dirty {
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(
-                                &base_tools,
-                                &skill_registry,
-                            );
+                            current_tools =
+                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,

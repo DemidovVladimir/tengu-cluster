@@ -143,7 +143,9 @@ mod tests {
     async fn setup_workspace() -> (TempDir, BuiltinMemoryProvider) {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
-        fs::create_dir_all(root.join(".tengu/memory")).await.unwrap();
+        fs::create_dir_all(root.join(".tengu/memory"))
+            .await
+            .unwrap();
         fs::write(root.join("MEMORY.md"), "# Project memory\n\nfacts")
             .await
             .unwrap();

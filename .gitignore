@@ -9,3 +9,5 @@ secrets.env
 .tengu-attachments
 /hypothesis
 lastrun.md
+.tengu/worktrees/
+.tengu/scratch/

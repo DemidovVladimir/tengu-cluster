@@ -163,12 +163,7 @@ fn metadata_matches(have: &ChunkMetadata, want: &ChunkMetadata) -> bool {
 
 #[async_trait]
 impl VectorStore for DiskVectorStore {
-    async fn write(
-        &self,
-        embedding: Vec<f32>,
-        text: &str,
-        metadata: ChunkMetadata,
-    ) -> Result<()> {
+    async fn write(&self, embedding: Vec<f32>, text: &str, metadata: ChunkMetadata) -> Result<()> {
         let entry = Entry::new(text.to_string(), embedding, &metadata)?;
         let mut entries = self
             .entries
@@ -286,10 +281,7 @@ mod tests {
             .write(vec![1.0, 0.0], "alice-note", md_a)
             .await
             .unwrap();
-        store
-            .write(vec![1.0, 0.0], "bob-note", md_b)
-            .await
-            .unwrap();
+        store.write(vec![1.0, 0.0], "bob-note", md_b).await.unwrap();
 
         let want = ChunkMetadata {
             agent: Some("alice".into()),

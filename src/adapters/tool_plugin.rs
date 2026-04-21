@@ -53,6 +53,37 @@ pub(crate) trait ToolPlugin: Send + Sync {
 // Contexts
 // ---------------------------------------------------------------------------
 
+/// Read-only view of the current conversation messages, passed to tools
+/// that need to inspect history (e.g. skill_lifecycle::distill).
+pub(crate) struct ConversationView<'a> {
+    messages: &'a [crate::adapters::types::Message],
+}
+
+impl<'a> ConversationView<'a> {
+    pub(crate) fn new(messages: &'a [crate::adapters::types::Message]) -> Self {
+        Self { messages }
+    }
+    pub(crate) fn empty() -> Self {
+        Self { messages: &[] }
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.messages.len()
+    }
+    pub(crate) fn slice(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> anyhow::Result<&'a [crate::adapters::types::Message]> {
+        if from > to || to > self.messages.len() {
+            anyhow::bail!(
+                "conversation slice out of range: {from}..{to} len={}",
+                self.messages.len()
+            );
+        }
+        Ok(&self.messages[from..to])
+    }
+}
+
 /// Per-call context passed to every `Tool::execute`. Borrowed, never stored.
 pub(crate) struct ToolCtx<'a> {
     pub workspace: &'a Path,
@@ -62,6 +93,7 @@ pub(crate) struct ToolCtx<'a> {
     pub memory: Option<&'a MemoryServiceHandle>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
+    pub conversation: ConversationView<'a>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
@@ -116,7 +148,10 @@ impl ToolRegistry {
     }
 
     pub(crate) fn definitions(&self) -> Vec<ToolDef> {
-        self.by_name.values().map(|t| t.definition().clone()).collect()
+        self.by_name
+            .values()
+            .map(|t| t.definition().clone())
+            .collect()
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
@@ -168,10 +203,8 @@ impl PluginToolExecutor {
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
-        let known: std::collections::HashSet<&str> = already_advertised
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let known: std::collections::HashSet<&str> =
+            already_advertised.iter().map(|t| t.name.as_str()).collect();
         self.registry
             .definitions()
             .into_iter()
@@ -198,9 +231,13 @@ impl ToolExecutor for PluginToolExecutor {
             memory: self.memory.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
+            conversation: ConversationView::empty(),
         };
 
-        let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
+        let output = self
+            .registry
+            .invoke(&call.name, &call.arguments, &ctx)
+            .await?;
         Ok(output.text)
     }
 }

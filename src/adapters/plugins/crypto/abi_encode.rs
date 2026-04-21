@@ -93,7 +93,9 @@ mod tests {
         );
         // 4 bytes selector + 32 + 32 = 68 bytes → 136 hex chars + "0x" + "calldata: "
         assert!(
-            output.text.contains("000000000000000000000000000000000000000000000000000000000000002a"),
+            output
+                .text
+                .contains("000000000000000000000000000000000000000000000000000000000000002a"),
             "expected uint256 = 42 tail, got: {}",
             output.text
         );
@@ -113,6 +115,10 @@ mod tests {
                 &harness.ctx(),
             )
             .await;
-        assert!(result.is_err(), "expected arity mismatch, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected arity mismatch, got: {:?}",
+            result
+        );
     }
 }

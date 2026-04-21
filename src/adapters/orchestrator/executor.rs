@@ -72,14 +72,9 @@ impl DagExecutor {
                     agent: step.agent.clone(),
                 });
                 futures.push(tokio::spawn(async move {
-                    let outcome = run_step_with_retry(
-                        &step_clone,
-                        &step_inputs,
-                        worker,
-                        &policy,
-                        &events,
-                    )
-                    .await;
+                    let outcome =
+                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events)
+                            .await;
                     (step_clone.id, outcome)
                 }));
             }
@@ -101,7 +96,10 @@ impl DagExecutor {
                 }
                 Some(Ok((id, StepOutcome::Exhausted(err)))) => {
                     in_flight.remove(&id);
-                    return ExecResult::NeedsReplan { failed: id, error: err };
+                    return ExecResult::NeedsReplan {
+                        failed: id,
+                        error: err,
+                    };
                 }
                 Some(Err(join_err)) => {
                     // Task panicked. Treat as catastrophic.
@@ -206,13 +204,18 @@ mod tests {
     #[tokio::test]
     async fn linear_plan_completes_in_order() {
         let order = Arc::new(Mutex::new(Vec::new()));
-        let worker = Arc::new(OrderRecordingWorker { order: order.clone() });
+        let worker = Arc::new(OrderRecordingWorker {
+            order: order.clone(),
+        });
         let bus = new_bus();
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
         let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus, no_cancel()).await;
         assert!(matches!(result, ExecResult::Done { .. }));
-        assert_eq!(*order.lock().await, vec!["s1".to_string(), "s2".to_string()]);
+        assert_eq!(
+            *order.lock().await,
+            vec!["s1".to_string(), "s2".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -220,8 +223,14 @@ mod tests {
         let bus = new_bus();
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
-        let result =
-            DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus, no_cancel()).await;
+        let result = DagExecutor::run(
+            &linear_plan(),
+            Arc::new(OkWorker),
+            &policy,
+            &bus,
+            no_cancel(),
+        )
+        .await;
         match result {
             ExecResult::Done { final_output } => {
                 assert!(final_output.contains("s1")); // s1's output fed into s2 via <step-input>

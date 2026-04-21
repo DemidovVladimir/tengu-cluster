@@ -326,8 +326,7 @@ fn default_timeout_secs() -> u64 {
 }
 
 pub fn parse_yaml_prompts(body: &str) -> Result<Vec<PromptRow>> {
-    let raw: Vec<YamlRow> =
-        serde_yaml::from_str(body).context("yaml prompts parse failed")?;
+    let raw: Vec<YamlRow> = serde_yaml::from_str(body).context("yaml prompts parse failed")?;
     let mut seen = std::collections::HashSet::new();
     let mut rows = Vec::with_capacity(raw.len());
     for r in raw {
@@ -415,8 +414,8 @@ pub fn discover_skills(
             continue;
         }
         let tier = tier_for_root(root);
-        for entry in std::fs::read_dir(root)
-            .with_context(|| format!("read_dir {}", root.display()))?
+        for entry in
+            std::fs::read_dir(root).with_context(|| format!("read_dir {}", root.display()))?
         {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -470,9 +469,9 @@ use crate::adapters::config::Config;
 // StubbedExecutor — wraps any ToolExecutor with per-tool response queues
 // ---------------------------------------------------------------------------
 
-use async_trait::async_trait;
 use crate::adapters::engine_builder::ToolExecutor;
 use crate::adapters::types::ToolCall;
+use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
@@ -507,7 +506,9 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
                     q.pop_front().unwrap()
                 } else {
                     // Last entry repeats forever once we stop popping.
-                    q.front().cloned().unwrap_or_else(|| serde_json::json!(null))
+                    q.front()
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!(null))
                 };
                 return Ok(serde_json::to_string(&response)?);
             }
@@ -517,11 +518,10 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
 }
 
 pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Config> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("read {}", path.display()))?;
+    let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let expanded = raw.replace("{TMP_WORKSPACE}", &tmp_workspace.to_string_lossy());
-    let cfg: Config = toml::from_str(&expanded)
-        .with_context(|| format!("parse {}", path.display()))?;
+    let cfg: Config =
+        toml::from_str(&expanded).with_context(|| format!("parse {}", path.display()))?;
 
     for (name, agent) in &cfg.agents {
         if agent.engine == "claude_code" {
@@ -640,7 +640,10 @@ pub fn format_judge_user_turn(
         s.push_str("(none)\n");
     } else {
         for obs in observations {
-            s.push_str(&format!("{}. {}({})\n", obs.seq, obs.name, obs.args_preview));
+            s.push_str(&format!(
+                "{}. {}({})\n",
+                obs.seq, obs.name, obs.args_preview
+            ));
         }
     }
     s.push_str("\nFinal assistant text:\n");
@@ -983,8 +986,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let started = Instant::now();
 
     // 1. Fresh tmp workspace per row.
-    let ws = tempfile::tempdir_in(std::env::temp_dir())
-        .context("create per-row tmp workspace")?;
+    let ws = tempfile::tempdir_in(std::env::temp_dir()).context("create per-row tmp workspace")?;
     let ws_path = ws.path().to_path_buf();
 
     // 2. Load the eval config with this workspace substituted.
@@ -1026,17 +1028,13 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
 
     let skill_source = FileSystemSkillSource::new(workspace_path.clone());
     let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-    let mut skill_registry = SkillRegistry::new(base_reserved)
-        .with_allowlist(Some(agent.skill_packages.clone()));
+    let mut skill_registry =
+        SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
     skill_registry.reload(&skill_source);
 
     let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-    let system_prompt = channel_runtime::rebuild_system_prompt(
-        agent,
-        true,
-        &skill_registry,
-        &current_tools,
-    );
+    let system_prompt =
+        channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
 
     let mut tool_defs = current_tools.clone();
     let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
@@ -1060,10 +1058,8 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 }
                 Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
             }
-            None => {
-                Arc::new(NoopRuntimeToolExecutor)
-                    as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
-            }
+            None => Arc::new(NoopRuntimeToolExecutor)
+                as Arc<dyn crate::adapters::engine_builder::ToolExecutor>,
         };
 
     // 5. Wrap in StubbedExecutor for this row.
@@ -1146,11 +1142,8 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
 
     // 8. Judge.
     let obs_snapshot = observations.lock().unwrap().clone();
-    let judge_user_turn = format_judge_user_turn(
-        &ctx.row.expected,
-        &obs_snapshot,
-        &engine_response.text,
-    );
+    let judge_user_turn =
+        format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &engine_response.text);
     let (verdict, judge_input_tokens, judge_output_tokens) = if timed_out {
         (
             Verdict {
@@ -1161,8 +1154,13 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             0u32,
         )
     } else {
-        let outcome =
-            judge_row(ctx.judge, &ctx.row.expected, &obs_snapshot, &engine_response.text).await?;
+        let outcome = judge_row(
+            ctx.judge,
+            &ctx.row.expected,
+            &obs_snapshot,
+            &engine_response.text,
+        )
+        .await?;
         (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
     };
 
@@ -1228,9 +1226,9 @@ mod tests {
     // Shared test helpers (used by stubbed_executor_* tests)
     // ---------------------------------------------------------------------------
 
-    use async_trait::async_trait;
     use crate::adapters::engine_builder::ToolExecutor;
     use crate::adapters::types::ToolCall;
+    use async_trait::async_trait;
 
     struct CountingExecutor {
         counter: std::sync::Mutex<Vec<String>>,
@@ -1263,7 +1261,10 @@ mod tests {
 "#;
         let rows = parse_markdown_prompts(body).expect("parse");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].prompt, "research paper X then mint it as an IP token");
+        assert_eq!(
+            rows[0].prompt,
+            "research paper X then mint it as an IP token"
+        );
         assert_eq!(
             rows[0].expected,
             "Sequential `sessions_spawn(researcher)` then `sessions_spawn(minter)`."
@@ -1309,8 +1310,17 @@ mod tests {
         // 64 chars ending in `-`. With the fix, the trailing dash is stripped.
         let prompt = format!("{}!suffix", "a".repeat(63));
         let id = derive_row_id(&prompt);
-        assert!(!id.ends_with('-'), "id should not end with dash, got: {:?}", id);
-        assert_eq!(id.len(), 63, "id length after trailing-dash trim should be 63, got {}", id.len());
+        assert!(
+            !id.ends_with('-'),
+            "id should not end with dash, got: {:?}",
+            id
+        );
+        assert_eq!(
+            id.len(),
+            63,
+            "id length after trailing-dash trim should be 63, got {}",
+            id.len()
+        );
     }
 
     #[test]
@@ -1371,8 +1381,16 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let skill_dir = tmp.path().join("skills").join("demo").join("evals");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n").unwrap();
-        std::fs::write(skill_dir.join("config.toml"), "runtime_profile = \"cloud\"\n").unwrap();
+        std::fs::write(
+            skill_dir.join("prompts.md"),
+            "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n",
+        )
+        .unwrap();
+        std::fs::write(
+            skill_dir.join("config.toml"),
+            "runtime_profile = \"cloud\"\n",
+        )
+        .unwrap();
 
         let skills = discover_skills(&[], &[tmp.path().join("skills")]).expect("discover");
         assert_eq!(skills.len(), 1);
@@ -1401,7 +1419,11 @@ mod tests {
         for name in ["alpha", "beta"] {
             let evals = tmp.path().join("skills").join(name).join("evals");
             std::fs::create_dir_all(&evals).unwrap();
-            std::fs::write(evals.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"x\" | y |\n").unwrap();
+            std::fs::write(
+                evals.join("prompts.md"),
+                "| Prompt | Expected |\n|---|---|\n| \"x\" | y |\n",
+            )
+            .unwrap();
             std::fs::write(evals.join("config.toml"), "").unwrap();
         }
 
@@ -1422,12 +1444,24 @@ mod tests {
         // Lower tier: "demo" with a valid evals/ folder.
         let lower_evals = lower.join("demo").join("evals");
         std::fs::create_dir_all(&lower_evals).unwrap();
-        std::fs::write(lower_evals.join("prompts.md"), "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n").unwrap();
+        std::fs::write(
+            lower_evals.join("prompts.md"),
+            "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n",
+        )
+        .unwrap();
         std::fs::write(lower_evals.join("config.toml"), "").unwrap();
 
         let skills = discover_skills(&[], &[higher.clone(), lower.clone()]).unwrap();
-        assert_eq!(skills.len(), 1, "expected lower tier's demo to be discovered");
-        assert!(skills[0].evals_dir.starts_with(&lower), "expected lower tier, got {:?}", skills[0].evals_dir);
+        assert_eq!(
+            skills.len(),
+            1,
+            "expected lower tier's demo to be discovered"
+        );
+        assert!(
+            skills[0].evals_dir.starts_with(&lower),
+            "expected lower tier, got {:?}",
+            skills[0].evals_dir
+        );
     }
 
     #[test]
@@ -1535,7 +1569,10 @@ workspace = "{TMP_WORKSPACE}"
 
         let r = stubbed.execute(&make_call("sessions_spawn")).await.unwrap();
         assert_eq!(r, "live-result-for-sessions_spawn");
-        assert_eq!(inner.counter.lock().unwrap().as_slice(), &["sessions_spawn"]);
+        assert_eq!(
+            inner.counter.lock().unwrap().as_slice(),
+            &["sessions_spawn"]
+        );
     }
 
     #[test]
@@ -1575,7 +1612,8 @@ workspace = "{TMP_WORKSPACE}"
 
     #[test]
     fn verdict_extracts_json_from_surrounding_prose() {
-        let raw = "The verdict is: {\"verdict\":\"fail\",\"rationale\":\"missed step\"} as shown above.";
+        let raw =
+            "The verdict is: {\"verdict\":\"fail\",\"rationale\":\"missed step\"} as shown above.";
         let v = parse_verdict(raw).unwrap();
         assert_eq!(v.verdict, "fail");
         assert_eq!(v.rationale, "missed step");
@@ -1620,6 +1658,9 @@ workspace = "{TMP_WORKSPACE}"
         // different reason than what we're testing.
         std::env::set_var("OPENROUTER_API_KEY", "sk-test-not-used");
         let exit = run(args).await.unwrap();
-        assert_eq!(exit, 2, "expected exit 2 for filter miss (runner-level error)");
+        assert_eq!(
+            exit, 2,
+            "expected exit 2 for filter miss (runner-level error)"
+        );
     }
 }

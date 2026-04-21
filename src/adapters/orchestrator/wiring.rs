@@ -50,11 +50,21 @@ impl WorkerHandle for ChatWorker {
         let user_content = if step_inputs.is_empty() {
             format!("{}\n\n{}", mem.body, step.goal).trim().to_string()
         } else {
-            format!("{}\n\n{}\n\nYour task:\n{}", mem.body, step_inputs, step.goal).trim().to_string()
+            format!(
+                "{}\n\n{}\n\nYour task:\n{}",
+                mem.body, step_inputs, step.goal
+            )
+            .trim()
+            .to_string()
         };
 
         let reply = self.chat.run_turn(&step.agent, &user_content).await?;
-        writer::sync_turn(Arc::clone(&self.memory), step.agent.clone(), step.goal.clone(), reply.clone());
+        writer::sync_turn(
+            Arc::clone(&self.memory),
+            step.agent.clone(),
+            step.goal.clone(),
+            reply.clone(),
+        );
         Ok(reply)
     }
 }
@@ -72,11 +82,22 @@ impl ChatOrchestratorPortImpl {
 
 #[async_trait]
 impl OrchestratorChatPort for ChatOrchestratorPortImpl {
-    async fn run_orchestrator_turn(&self, agent: &str, user_message: &str) -> anyhow::Result<String> {
+    async fn run_orchestrator_turn(
+        &self,
+        agent: &str,
+        user_message: &str,
+    ) -> anyhow::Result<String> {
         let mem = injector::for_turn(&self.memory, agent, user_message).await;
-        let user_content = format!("{}\n\n{}", mem.body, user_message).trim().to_string();
+        let user_content = format!("{}\n\n{}", mem.body, user_message)
+            .trim()
+            .to_string();
         let reply = self.chat.run_turn(agent, &user_content).await?;
-        writer::sync_turn(Arc::clone(&self.memory), agent.to_string(), user_message.to_string(), reply.clone());
+        writer::sync_turn(
+            Arc::clone(&self.memory),
+            agent.to_string(),
+            user_message.to_string(),
+            reply.clone(),
+        );
         Ok(reply)
     }
 }

@@ -104,6 +104,7 @@ mod tests {
             memory: None,
             secret_registry: &secrets,
             activity: activity.as_ref(),
+            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
         };
 
         let args = json!({"title": "bug"});
