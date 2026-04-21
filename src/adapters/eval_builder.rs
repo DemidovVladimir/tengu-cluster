@@ -1176,6 +1176,20 @@ pub async fn run_skill(
 }
 
 /// Run a single eval row through the agent + judge pipeline.
+///
+/// Two execution paths:
+///
+/// - **Direct dispatch** (default): the config's default agent receives the
+///   prompt and drives the LLM tool loop directly via `collect_engine_response`.
+///   This is the path the eval runner was originally written for (pre
+///   PR #6), and it still runs for configs without an `[orchestrator]` block.
+///
+/// - **Orchestrator dispatch**: when `cfg.orchestrator.is_some()`, the row
+///   goes through `Orchestrator::handle` — the orchestrator agent plans,
+///   the DAG executor spawns worker steps, each worker step runs
+///   `collect_engine_response` inside an `EvalChatServiceFactory` closure
+///   that threads this row's stubs + observation tap + token accumulator.
+///   This is the path the `skills/orchestration-e2e` evals rely on.
 pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let started = Instant::now();
 
@@ -1192,6 +1206,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         .find(|a| a.default)
         .or_else(|| cfg.agents.values().next())
         .ok_or_else(|| anyhow::anyhow!("eval config has no agent defined"))?;
+
+    // 2b. Branch: orchestrator vs direct dispatch.
+    if cfg.orchestrator.is_some() {
+        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg).await;
+    }
 
     // 3. Build the engine.
     let agent_id = cfg
@@ -1453,6 +1472,342 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         agent_tokens: TokenCount {
             input: engine_response.input_tokens_delta,
             output: engine_response.output_tokens_delta,
+        },
+        judge_tokens: TokenCount {
+            input: judge_input_tokens,
+            output: judge_output_tokens,
+        },
+        transcript_path,
+        timed_out,
+        stubs_used: !ctx.row.stubs.is_empty(),
+        metric_outcomes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator dispatch path for eval rows.
+// ---------------------------------------------------------------------------
+//
+// When an eval config declares `[orchestrator]`, rows are run through
+// `Orchestrator::handle` instead of directly against the default agent's
+// engine. Each worker step dispatched by the orchestrator goes through
+// `EvalChatServiceFactory::run_turn`, which rebuilds that agent's engine +
+// tools + system prompt and drives `collect_engine_response` — the SAME
+// code path the direct eval uses — but with per-row stubs and an observer
+// tap that accumulates tool calls across all worker steps.
+//
+// This keeps the stubbed_executor + observation machinery intact: stubs
+// fire inside worker steps, tool calls all land in one observations vec
+// regardless of which worker made them, and token counts aggregate.
+
+struct EvalRowAccum {
+    observations: Arc<std::sync::Mutex<Vec<Observation>>>,
+    seq: Arc<AtomicU32>,
+    tokens: Arc<std::sync::Mutex<(u32, u32)>>, // cumulative (input, output) across worker steps
+    stubs: Vec<StubSpec>,
+    engine_id: Arc<std::sync::Mutex<String>>, // captured from the first worker step for transcript
+}
+
+struct EvalChatServiceFactory {
+    cfg: Arc<Config>,
+    ws_path: PathBuf,
+    accum: Arc<EvalRowAccum>,
+}
+
+#[async_trait]
+impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServiceFactory {
+    async fn run_turn(&self, agent_name: &str, text: &str) -> anyhow::Result<String> {
+        let agent = self
+            .cfg
+            .agents
+            .get(agent_name)
+            .ok_or_else(|| anyhow::anyhow!("unknown agent: {}", agent_name))?;
+
+        // Per-step engine + tools + system prompt. Mirrors the direct
+        // eval path (run_row steps 3–5), parameterized by agent name.
+        let engine_box = crate::adapters::engine_builder::build_engine(
+            agent_name,
+            agent,
+            self.cfg.claude_code.as_ref(),
+        )?;
+        let engine: Arc<dyn Engine> = Arc::from(engine_box);
+        {
+            let mut eid = self.accum.engine_id.lock().unwrap();
+            if eid.is_empty() {
+                *eid = engine.id().to_string();
+            }
+        }
+
+        let workspace_path: PathBuf = agent
+            .workspace
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| self.ws_path.clone());
+
+        let secret_registry = Arc::new(SecretRegistry::new());
+        let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
+
+        let base_tools = channel_runtime::compute_base_tools(
+            true,
+            false, // memory off in v1 eval runs
+            &agent.workspace_tools,
+        );
+
+        let skill_source = FileSystemSkillSource::new(workspace_path.clone());
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
+        let mut skill_registry =
+            SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
+        skill_registry.reload(&skill_source);
+
+        let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+        let system_prompt =
+            channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
+
+        let mut tool_defs = current_tools.clone();
+        let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
+            match channel_runtime::build_tool_executor(
+                &workspace_path,
+                &current_tools,
+                &skill_registry,
+                &None,
+                &secret_registry,
+                log_activity,
+                None,
+                None,
+                Some(&self.cfg.memory),
+                agent,
+                &self.cfg.mcp_servers,
+            ) {
+                Some(executor) => {
+                    let extra = executor.additional_tool_defs(&tool_defs);
+                    if !extra.is_empty() {
+                        tool_defs.extend(extra);
+                    }
+                    Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+                }
+                None => Arc::new(NoopRuntimeToolExecutor)
+                    as Arc<dyn crate::adapters::engine_builder::ToolExecutor>,
+            };
+
+        let stubbed = StubbedExecutor::new(&*inner_executor, &self.accum.stubs);
+
+        let obs = Arc::clone(&self.accum.observations);
+        let seq = Arc::clone(&self.accum.seq);
+        let observer_closure: Box<dyn Fn(&ToolCall, &str) + Send + Sync> =
+            Box::new(move |tc: &ToolCall, _result: &str| {
+                let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                obs.lock().unwrap().push(Observation {
+                    seq: n,
+                    name: tc.name.clone(),
+                    args_preview: truncate(&tc.arguments.to_string(), 2048),
+                });
+            });
+        let observer: ToolResultObserver<'_> = &*observer_closure;
+
+        let messages = vec![
+            Message {
+                role: Role::System,
+                content: system_prompt.clone(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            Message {
+                role: Role::User,
+                content: text.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let engine_context = EngineContext {
+            workspace: Some(workspace_path.clone()),
+            system_prompt: Some(system_prompt.clone()),
+            bridge_tools: None,
+            max_tool_rounds: Some(agent.limits.max_tool_rounds),
+            max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+        };
+
+        let response = crate::adapters::engine_builder::collect_engine_response(
+            &*engine,
+            &messages,
+            &tool_defs,
+            &engine_context,
+            Some(&stubbed),
+            Some(observer),
+            None,
+            None,
+            agent.limits.max_tool_rounds,
+            agent.limits.max_tool_result_chars,
+            agent.limits.stream_event_timeout_secs,
+            agent.limits.compact_result_limit,
+        )
+        .await?;
+
+        {
+            let mut tok = self.accum.tokens.lock().unwrap();
+            tok.0 = tok.0.saturating_add(response.input_tokens_delta);
+            tok.1 = tok.1.saturating_add(response.output_tokens_delta);
+        }
+
+        Ok(response.text)
+    }
+}
+
+async fn run_row_via_orchestrator(
+    ctx: RowCtx<'_>,
+    started: Instant,
+    _ws: tempfile::TempDir,
+    ws_path: PathBuf,
+    cfg: Config,
+) -> anyhow::Result<RowResult> {
+    // Shared state threaded through every worker step the orchestrator
+    // spawns for this row.
+    let accum = Arc::new(EvalRowAccum {
+        observations: Arc::new(std::sync::Mutex::new(Vec::new())),
+        seq: Arc::new(AtomicU32::new(0)),
+        tokens: Arc::new(std::sync::Mutex::new((0, 0))),
+        stubs: ctx.row.stubs.clone(),
+        engine_id: Arc::new(std::sync::Mutex::new(String::new())),
+    });
+
+    let cfg_arc = Arc::new(cfg);
+    let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+        Arc::new(EvalChatServiceFactory {
+            cfg: Arc::clone(&cfg_arc),
+            ws_path: ws_path.clone(),
+            accum: Arc::clone(&accum),
+        });
+
+    // Evals run without a live memory backend — register an empty
+    // MemoryManager so the orchestrator doesn't choke on missing deps.
+    let memory_manager = Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+
+    let orchestrator = channel_runtime::build_orchestrator(
+        &cfg_arc,
+        Arc::clone(&factory),
+        Arc::clone(&memory_manager),
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")
+    })?;
+
+    // Drive with the row's timeout.
+    let prompt = ctx.row.prompt.clone();
+    let driver_fut = orchestrator.handle(prompt);
+    let (timed_out, final_text) = match tokio::time::timeout(
+        std::time::Duration::from_secs(ctx.row.timeout_secs),
+        driver_fut,
+    )
+    .await
+    {
+        Ok(text) => (false, text),
+        Err(_) => (true, String::new()),
+    };
+
+    // Snapshot results from the accumulator.
+    let obs_snapshot = accum.observations.lock().unwrap().clone();
+    let (input_tokens, output_tokens) = *accum.tokens.lock().unwrap();
+    let engine_id_str = accum.engine_id.lock().unwrap().clone();
+
+    // Judge.
+    let (verdict, judge_input_tokens, judge_output_tokens) = if timed_out {
+        (
+            Verdict {
+                verdict: "fail".into(),
+                rationale: format!("row timed out after {}s", ctx.row.timeout_secs),
+            },
+            0u32,
+            0u32,
+        )
+    } else {
+        let outcome = judge_row(&*ctx.judge, &ctx.row.expected, &obs_snapshot, &final_text).await?;
+        (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
+    };
+
+    let judge_user_turn =
+        format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &final_text);
+
+    // Transcript.
+    std::fs::create_dir_all(ctx.out_dir)
+        .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    let transcript_path = ctx
+        .out_dir
+        .join(format!("{}-{}.md", ctx.skill.name, ctx.row.id));
+
+    // The orchestrator path doesn't have a single `messages` array like
+    // the direct path — we synthesize a minimal one for the transcript.
+    let default_agent_id = cfg_arc
+        .agents
+        .iter()
+        .find(|(_, v)| v.default)
+        .map(|(k, _)| k.clone())
+        .unwrap_or_else(|| "default".into());
+    let default_agent_model = cfg_arc
+        .agents
+        .get(&default_agent_id)
+        .map(|a| a.model.clone())
+        .unwrap_or_default();
+    let stub_messages = vec![
+        Message {
+            role: Role::System,
+            content: format!(
+                "[orchestrator dispatch — actual prompts per-step; \
+                 default agent was `{}`]",
+                default_agent_id
+            ),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: ctx.row.prompt.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+
+    write_transcript(
+        &transcript_path,
+        &ctx.skill.name,
+        ctx.row,
+        &default_agent_model,
+        &engine_id_str,
+        &ws_path,
+        &stub_messages,
+        &[], // tool_outcomes — orchestrator path observations already include them
+        &obs_snapshot,
+        &final_text,
+        &verdict,
+        &judge_user_turn,
+    )?;
+
+    if ctx.keep_workspace {
+        std::mem::forget(_ws);
+    }
+
+    // Metric scoring (parity with the direct path) — skipped here; eval
+    // row scoring currently lives in the direct-path section. Follow-up
+    // if orchestrator evals need metric scoring too.
+    let metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
+
+    Ok(RowResult {
+        id: ctx.row.id.clone(),
+        prompt: ctx.row.prompt.clone(),
+        expected: ctx.row.expected.clone(),
+        verdict: verdict.verdict,
+        rationale: verdict.rationale,
+        observed_tools: obs_snapshot
+            .into_iter()
+            .map(|o| ObservationJson {
+                seq: o.seq,
+                name: o.name,
+                args_preview: o.args_preview,
+            })
+            .collect(),
+        wall_ms: started.elapsed().as_millis() as u64,
+        agent_tokens: TokenCount {
+            input: input_tokens,
+            output: output_tokens,
         },
         judge_tokens: TokenCount {
             input: judge_input_tokens,

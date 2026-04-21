@@ -341,11 +341,18 @@ The above are manual. For repeatable regression:
 tengu eval orchestration-e2e
 ```
 
-This runs `skills/orchestration-e2e/evals/prompts.yaml`. Expected output: a 5-row table (will grow to 9 with the additions in this PR) with `verdict: pass|fail|error` per row. **Not all will pass on first run.** Use judge rationales to classify:
+This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs work
-- `fail` with rationale like "final text lacks content from step inputs" → step_input threading bug
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` declares `[orchestrator]`, `src/adapters/eval_builder.rs::run_row` detects it and routes each prompt through `Orchestrator::handle` instead of the default agent's direct `collect_engine_response` path. Each worker step the orchestrator spawns goes through the same `collect_engine_response` machinery but wrapped in `EvalChatServiceFactory` so the row's stubs + observer tap + token accumulator thread into every step. Observations from all worker steps land in the same per-row vec; tokens sum across steps.
+
+**Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
+
+- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning (in `config.toml` under `agents.orchestrator.identity.instructions`)
+- `fail` with rationale like "final text lacks content from step inputs" → step_input threading bug in `executor.rs` OR writer agent not reading its step-inputs (agent prompt issue)
+- `fail` with rationale like "agent ran tools directly instead of emitting a plan" → orchestrator didn't fire at all; check `[orchestrator]` block parses; check `eval_builder::run_row` took the orchestrator branch (look at `🤖 Dispatch:` line in the transcript — absent means direct path, present means orchestrator path)
 - `error` → harness crash; read logs
+
+To diagnose a specific fail: open `evals/runs/<timestamp>/orchestration-e2e-<row_id>.md` — the transcript includes the prompt, every observed tool call, and the final reply. Failed rows surface the judge's rationale verbatim.
 
 ---
 

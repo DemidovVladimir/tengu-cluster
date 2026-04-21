@@ -558,6 +558,17 @@ Each interface is ≤10 methods and documented in its defining file.
 
 All pass under `cargo test --bin tengu <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).
 
+### 14.1 End-to-end eval dispatch
+
+`tengu eval <skill>` has two dispatch paths in `src/adapters/eval_builder.rs::run_row`:
+
+- **Direct** (default): row prompt → default agent's `collect_engine_response`. Used by config files without an `[orchestrator]` block — `skills/<name>/evals/config.toml`.
+- **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle`. The orchestrator agent plans, the DAG executor spawns worker steps, each worker step calls `collect_engine_response` inside an `EvalChatServiceFactory` closure that threads the row's stubs + observer + token accumulator. Used by `skills/orchestration-e2e/evals/config.toml`.
+
+Both paths produce the same `RowResult` shape for the judge — observations accumulate across worker steps, tokens sum, final text is the plan's leaf output.
+
+Runbook for smoke testing orchestration: see `docs/orchestration-test-scenarios.md`.
+
 ---
 
 ## 15. PR history
