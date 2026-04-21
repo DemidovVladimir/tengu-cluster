@@ -405,7 +405,7 @@ async fn run_eval_and_read_metrics(
 
     let out_dir = workspace.join(".tengu").join("evolve-out");
     std::fs::create_dir_all(&out_dir)?;
-    let _ = eval_builder::run_skill(&skill_ut, &*judge, &out_dir, None, 1, false, None).await?;
+    let _ = eval_builder::run_skill(&skill_ut, Arc::clone(&judge), &out_dir, None, 1, false, None).await?;
 
     let mj_path = if roots_override.is_some() {
         roots_override.unwrap().join("skills").join(skill).join("metrics.json")
