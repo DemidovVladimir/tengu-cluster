@@ -2,840 +2,1120 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Skill Lifecycle — Pipeline Reference</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skill Lifecycle — Pipeline Diagram</title>
 <style>
   :root {
-    --bg: #0f1419;
-    --bg-elev: #1a212b;
-    --bg-card: #232b37;
-    --fg: #e6e9ef;
-    --fg-dim: #8a94a6;
-    --accent: #66d9a8;
-    --accent-dim: #2e7d5b;
-    --warn: #e7c547;
-    --danger: #e06c75;
-    --border: #2d3748;
-    --code-bg: #0a0d12;
-    --link: #7fb7ff;
+    --bg: #0a0e14;
+    --bg-1: #12171f;
+    --bg-2: #1a2029;
+    --panel: #1e2631;
+    --panel-hi: #283140;
+    --border: #2d3845;
+    --text: #e5eaf0;
+    --text-dim: #8b95a5;
+    --text-muted: #5a6472;
+    --accent: #7dd3a5;
+    --accent-soft: #2d5f47;
+    --accent-glow: rgba(125, 211, 165, 0.25);
+    --blue: #7fb4ff;
+    --blue-soft: #243b5c;
+    --purple: #b891f5;
+    --purple-soft: #3a2d56;
+    --orange: #f5a858;
+    --orange-soft: #4d3a20;
+    --red: #ef6d7a;
+    --red-soft: #4a2429;
+    --gold: #e5c06a;
+    --shadow: 0 4px 14px rgba(0,0,0,0.35), 0 1px 3px rgba(0,0,0,0.25);
+    --shadow-hi: 0 8px 28px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3);
+    --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
-    margin: 0; padding: 0;
-    background: var(--bg); color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
+    background: var(--bg); color: var(--text);
+    font-family: var(--font); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
-  .layout {
-    display: grid;
-    grid-template-columns: 260px 1fr;
+  body {
+    background:
+      radial-gradient(ellipse 1400px 600px at 50% -200px, rgba(125,211,165,0.08), transparent 70%),
+      radial-gradient(ellipse 900px 500px at 90% 30%, rgba(184,145,245,0.05), transparent 70%),
+      var(--bg);
     min-height: 100vh;
+    padding-bottom: 80px;
   }
-  nav.sidebar {
-    background: var(--bg-elev);
-    border-right: 1px solid var(--border);
-    padding: 24px 20px;
-    position: sticky; top: 0;
-    height: 100vh;
-    overflow-y: auto;
+
+  header.hero {
+    max-width: 1400px; margin: 0 auto; padding: 64px 40px 40px;
+    text-align: center;
   }
-  nav.sidebar h1 {
-    font-size: 18px; margin: 0 0 8px; color: var(--accent);
-    letter-spacing: 0.01em;
+  .eyebrow {
+    display: inline-block;
+    font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+    padding: 6px 14px; border: 1px solid var(--accent-soft);
+    border-radius: 999px; background: rgba(125,211,165,0.05);
+    margin-bottom: 20px;
   }
-  nav.sidebar p.tagline {
-    font-size: 12px; color: var(--fg-dim); margin: 0 0 20px;
+  h1 {
+    font-size: 48px; font-weight: 700; letter-spacing: -0.02em;
+    background: linear-gradient(180deg, var(--text) 0%, var(--text-dim) 140%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; margin-bottom: 14px;
   }
-  nav.sidebar ol {
-    list-style: none; padding: 0; margin: 0;
-    counter-reset: section;
+  .subtitle {
+    font-size: 18px; color: var(--text-dim);
+    max-width: 720px; margin: 0 auto;
   }
-  nav.sidebar li {
-    counter-increment: section;
-    margin-bottom: 6px;
-  }
-  nav.sidebar a {
-    color: var(--fg); text-decoration: none;
-    display: block; padding: 6px 10px; border-radius: 6px;
-    font-size: 13px;
-  }
-  nav.sidebar a::before {
-    content: counter(section) ". ";
-    color: var(--fg-dim);
-  }
-  nav.sidebar a:hover { background: var(--bg-card); color: var(--accent); }
-  main {
-    padding: 32px 48px;
-    max-width: 1280px;
-  }
-  h1.title {
-    font-size: 28px; margin: 0 0 8px;
-    color: var(--accent);
-  }
-  p.lead { color: var(--fg-dim); margin: 0 0 32px; }
-  section {
-    margin-bottom: 48px; padding-bottom: 24px;
-    border-bottom: 1px solid var(--border);
-  }
-  section:last-of-type { border-bottom: none; }
-  section h2 {
-    font-size: 20px; margin: 0 0 4px;
-    color: var(--accent);
-    display: flex; align-items: baseline; gap: 12px;
-  }
-  section h2 .num {
-    font-size: 14px; color: var(--fg-dim);
-    font-family: "SF Mono", Menlo, Monaco, monospace;
-  }
-  section > p {
-    color: var(--fg); margin: 0 0 16px;
-    max-width: 900px;
-  }
-  section details {
-    margin-top: 16px; padding: 12px 16px;
-    background: var(--bg-card); border-radius: 8px;
+
+  main { max-width: 1400px; margin: 0 auto; padding: 0 40px; }
+
+  /* Section frame */
+  .section {
+    margin-top: 72px;
+    padding: 32px;
+    background: var(--bg-1);
     border: 1px solid var(--border);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
   }
-  section details summary {
-    cursor: pointer; color: var(--accent); font-weight: 500;
+  .section-header {
+    display: flex; align-items: center; gap: 16px;
+    margin-bottom: 8px;
   }
-  section details[open] summary { margin-bottom: 12px; }
-  .diagram {
-    background: var(--bg-card); border-radius: 12px;
-    padding: 24px; border: 1px solid var(--border);
+  .section-num {
+    font-family: var(--mono); font-size: 13px; color: var(--accent);
+    background: var(--accent-soft); padding: 4px 10px; border-radius: 6px;
+    font-weight: 600; letter-spacing: 0.05em;
+  }
+  .section h2 {
+    font-size: 24px; font-weight: 700; letter-spacing: -0.01em;
+  }
+  .section p.lead {
+    color: var(--text-dim); margin: 6px 0 28px;
+    max-width: 880px; font-size: 15px;
+  }
+
+  /* ========================================================== */
+  /* HERO PIPELINE DIAGRAM                                      */
+  /* ========================================================== */
+  .hero-diagram {
+    position: relative;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border-radius: 16px;
+    padding: 48px 32px;
+    overflow: hidden;
+  }
+  .hero-diagram::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 20% 50%, rgba(127,180,255,0.08), transparent 40%),
+      radial-gradient(circle at 80% 50%, rgba(184,145,245,0.08), transparent 40%);
+    pointer-events: none;
+  }
+  .flow {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+    align-items: center;
+    gap: 0;
+    position: relative; z-index: 1;
+  }
+  .stage {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 14px; padding: 0 12px;
+  }
+  .stage-box {
+    width: 100%; max-width: 220px;
+    padding: 22px 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    text-align: center;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    position: relative;
+  }
+  .stage-box:hover {
+    transform: translateY(-4px);
+    border-color: var(--accent);
+    box-shadow: var(--shadow-hi), 0 0 0 1px var(--accent-glow);
+  }
+  .stage-icon {
+    width: 44px; height: 44px;
+    margin: 0 auto 12px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 12px;
+    font-size: 22px;
+  }
+  .stage-icon.green { background: var(--accent-soft); color: var(--accent); }
+  .stage-icon.blue  { background: var(--blue-soft); color: var(--blue); }
+  .stage-icon.purple{ background: var(--purple-soft); color: var(--purple); }
+  .stage-icon.orange{ background: var(--orange-soft); color: var(--orange); }
+
+  .stage-title {
+    font-size: 15px; font-weight: 700; margin-bottom: 4px;
+    letter-spacing: -0.01em;
+  }
+  .stage-subtitle {
+    font-size: 12px; color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .stage-desc {
+    font-size: 13px; color: var(--text-dim); margin-top: 10px;
+    max-width: 200px;
+    line-height: 1.5;
+  }
+
+  .arrow {
+    display: flex; flex-direction: column; align-items: center;
+    color: var(--text-muted);
+    padding: 0 8px;
+  }
+  .arrow svg { width: 52px; height: 28px; }
+  .arrow-label {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.12em; color: var(--text-muted);
+    margin-top: 6px;
+    font-weight: 600;
+  }
+
+  /* Feedback loop arrow (evolve → skill) */
+  .loop-arrow {
+    position: absolute;
+    bottom: -32px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: var(--accent);
+    padding: 6px 14px;
+    background: var(--bg);
+    border: 1px solid var(--accent-soft);
+    border-radius: 999px;
+    font-family: var(--mono); letter-spacing: 0.05em;
+  }
+  .loop-arrow::before, .loop-arrow::after {
+    content: ''; width: 80px; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent));
+  }
+  .loop-arrow::after {
+    background: linear-gradient(270deg, transparent, var(--accent));
+  }
+
+  /* ========================================================== */
+  /* SUB-FLOWS: steps in a horizontal line                      */
+  /* ========================================================== */
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-top: 28px;
+  }
+  .step {
+    position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 18px 18px;
+    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  }
+  .step:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent);
+    box-shadow: var(--shadow);
+  }
+  .step-num {
+    position: absolute; top: -10px; left: 14px;
+    width: 24px; height: 24px;
+    background: var(--bg-2);
+    border: 1px solid var(--accent-soft);
+    color: var(--accent);
+    border-radius: 50%;
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step-title {
+    font-size: 14px; font-weight: 700; margin-bottom: 6px;
+  }
+  .step-desc {
+    font-size: 12.5px; color: var(--text-dim); line-height: 1.5;
+  }
+  .step-file {
+    display: block; margin-top: 10px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--accent); opacity: 0.9;
+  }
+
+  /* ========================================================== */
+  /* TIMELINE for sequential flows                              */
+  /* ========================================================== */
+  .timeline {
+    position: relative; padding: 8px 0 0;
+  }
+  .timeline::before {
+    content: ''; position: absolute;
+    left: 19px; top: 16px; bottom: 16px;
+    width: 2px;
+    background: linear-gradient(180deg, var(--accent) 0%, var(--blue) 50%, var(--purple) 100%);
+    border-radius: 1px;
+  }
+  .timeline-item {
+    position: relative; padding-left: 56px; padding-bottom: 20px;
+  }
+  .timeline-item:last-child { padding-bottom: 0; }
+  .timeline-dot {
+    position: absolute; left: 10px; top: 10px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--bg-1);
+    border: 2px solid var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: var(--accent);
+    font-family: var(--mono);
+    z-index: 1;
+  }
+  .timeline-item:nth-child(3n+2) .timeline-dot { border-color: var(--blue); color: var(--blue); }
+  .timeline-item:nth-child(3n) .timeline-dot { border-color: var(--purple); color: var(--purple); }
+  .timeline-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 20px;
+  }
+  .timeline-card h4 {
+    font-size: 14px; font-weight: 700; margin-bottom: 4px;
+  }
+  .timeline-card p {
+    font-size: 13px; color: var(--text-dim); line-height: 1.5;
+  }
+  .timeline-card code {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--bg); color: var(--accent);
+    padding: 2px 6px; border-radius: 4px;
+  }
+
+  /* ========================================================== */
+  /* DECISION DIAMOND (for evolve approval gate)                */
+  /* ========================================================== */
+  .decision-tree {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 16px;
+    margin-top: 28px;
+  }
+  .decision {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    position: relative;
+    text-align: center;
+  }
+  .decision-key {
+    display: inline-block;
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    width: 28px; height: 28px; line-height: 28px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+  }
+  .decision.apply { border-color: var(--accent-soft); }
+  .decision.apply .decision-key { background: var(--accent-soft); color: var(--accent); }
+  .decision.discard { border-color: var(--border); }
+  .decision.discard .decision-key { background: var(--bg-2); color: var(--text-dim); }
+  .decision.details { border-color: var(--blue-soft); }
+  .decision.details .decision-key { background: var(--blue-soft); color: var(--blue); }
+  .decision.worktree { border-color: var(--orange-soft); }
+  .decision.worktree .decision-key { background: var(--orange-soft); color: var(--orange); }
+  .decision-label {
+    font-size: 13px; font-weight: 600; margin-bottom: 6px;
+  }
+  .decision-desc {
+    font-size: 11.5px; color: var(--text-dim); line-height: 1.4;
+  }
+
+  /* ========================================================== */
+  /* FILESYSTEM VISUAL                                          */
+  /* ========================================================== */
+  .fs-tree {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    margin-top: 24px;
+    font-family: var(--mono); font-size: 13px;
+    line-height: 1.9;
+  }
+  .fs-tree .dir { color: var(--blue); font-weight: 600; }
+  .fs-tree .new { color: var(--accent); }
+  .fs-tree .hot { color: var(--orange); }
+  .fs-tree .mem { color: var(--purple); }
+  .fs-tree .muted { color: var(--text-muted); }
+  .fs-tree .comment { color: var(--text-muted); font-style: italic; font-family: var(--font); font-size: 12px; }
+
+  /* ========================================================== */
+  /* CONCRETE EXAMPLE — conversation trace                      */
+  /* ========================================================== */
+  .example-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+    margin-top: 28px;
+  }
+  @media (max-width: 900px) { .example-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px;
+  }
+  .panel-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em;
+    color: var(--accent); font-weight: 700;
+    margin-bottom: 12px;
+  }
+  .panel h3 {
+    font-size: 16px; margin-bottom: 14px; font-weight: 600;
+  }
+  .chat-msg {
+    padding: 12px 14px; border-radius: 10px;
+    margin-bottom: 10px; font-size: 13px; line-height: 1.55;
+  }
+  .chat-msg .author {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; margin-bottom: 4px;
+  }
+  .chat-msg.user { background: var(--bg-2); border-left: 3px solid var(--blue); }
+  .chat-msg.user .author { color: var(--blue); }
+  .chat-msg.agent { background: var(--bg-2); border-left: 3px solid var(--accent); }
+  .chat-msg.agent .author { color: var(--accent); }
+  .chat-msg.tool { background: var(--bg-2); border-left: 3px solid var(--purple); font-family: var(--mono); font-size: 12px; }
+  .chat-msg.tool .author { color: var(--purple); font-family: var(--font); }
+
+  pre.code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-family: var(--mono); font-size: 12.5px;
+    color: var(--text); line-height: 1.65;
     overflow-x: auto;
   }
-  .diagram .mermaid {
-    background: transparent !important;
+  pre.code .k { color: var(--purple); }
+  pre.code .s { color: var(--accent); }
+  pre.code .c { color: var(--text-muted); font-style: italic; }
+  pre.code .n { color: var(--orange); }
+
+  /* ========================================================== */
+  /* STATUS BAR                                                 */
+  /* ========================================================== */
+  .status-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+    margin-top: 24px;
   }
-  code, kbd {
-    font-family: "SF Mono", Menlo, Monaco, monospace;
-    font-size: 13px;
-    background: var(--code-bg); color: var(--accent);
-    padding: 1px 6px; border-radius: 4px;
+  .stat {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
   }
-  pre {
-    background: var(--code-bg); color: var(--fg);
-    padding: 16px; border-radius: 8px;
-    font-size: 13px; overflow-x: auto;
-    border: 1px solid var(--border);
+  .stat-value {
+    font-size: 22px; font-weight: 700; font-family: var(--mono);
+    color: var(--accent);
   }
-  pre code { background: transparent; padding: 0; color: inherit; }
-  table.ref {
-    width: 100%; border-collapse: collapse;
-    background: var(--bg-card); border-radius: 8px;
-    overflow: hidden; border: 1px solid var(--border);
-    font-size: 13px;
+  .stat-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--text-dim); margin-top: 4px;
   }
-  table.ref th, table.ref td {
-    text-align: left; padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
+
+  /* ========================================================== */
+  /* CODE REFERENCE                                             */
+  /* ========================================================== */
+  .code-refs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+    margin-top: 24px;
   }
-  table.ref th { background: var(--bg-elev); color: var(--fg-dim); font-weight: 500; }
-  table.ref tr:last-child td { border-bottom: none; }
-  table.ref code { color: var(--accent); }
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 20px; }
-  .chip {
-    background: var(--bg-card); color: var(--fg); font-size: 12px;
-    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+  .code-ref {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+    transition: border-color 0.2s;
   }
-  .chip.accent { color: var(--accent); border-color: var(--accent-dim); }
-  .chip.warn { color: var(--warn); border-color: var(--warn); }
-  .chip.danger { color: var(--danger); border-color: var(--danger); }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  @media (max-width: 960px) {
-    .layout { grid-template-columns: 1fr; }
-    nav.sidebar { position: static; height: auto; }
-    main { padding: 24px; }
-    .cols { grid-template-columns: 1fr; }
+  .code-ref:hover { border-color: var(--accent); }
+  .code-ref-title {
+    font-size: 13px; font-weight: 700; margin-bottom: 6px;
   }
+  .code-ref-path {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--accent); margin-bottom: 4px;
+    word-break: break-all;
+  }
+  .code-ref-fn {
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  /* Callout box */
   .callout {
-    background: var(--bg-card); border-left: 3px solid var(--accent);
-    padding: 12px 16px; border-radius: 4px; margin: 16px 0;
-    font-size: 14px;
+    margin-top: 20px; padding: 16px 20px;
+    background: rgba(229, 192, 106, 0.05);
+    border: 1px solid rgba(229, 192, 106, 0.2);
+    border-left: 3px solid var(--gold);
+    border-radius: 8px;
+    font-size: 13.5px;
   }
-  .callout.warn { border-left-color: var(--warn); }
-  .callout.danger { border-left-color: var(--danger); }
-  a { color: var(--link); }
+  .callout .label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
+    color: var(--gold); font-weight: 700; margin-bottom: 6px;
+  }
+  .callout code {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--bg); color: var(--gold); padding: 1px 6px; border-radius: 3px;
+  }
+
+  @media (max-width: 1100px) {
+    .flow { grid-template-columns: 1fr; gap: 20px; }
+    .arrow { transform: rotate(90deg); padding: 4px 0; }
+  }
 </style>
 </head>
 <body>
 
-<div class="layout">
-
-<nav class="sidebar">
-  <h1>Skill Lifecycle</h1>
-  <p class="tagline">Pipeline reference</p>
-  <ol>
-    <li><a href="#arch">Architecture</a></li>
-    <li><a href="#loop">Closed loop</a></li>
-    <li><a href="#distill">Distill</a></li>
-    <li><a href="#eval">Eval</a></li>
-    <li><a href="#evolve">Evolve</a></li>
-    <li><a href="#data">Data model</a></li>
-    <li><a href="#fs">Filesystem</a></li>
-    <li><a href="#config">Config flow</a></li>
-    <li><a href="#example">Worked example</a></li>
-    <li><a href="#code">Code index</a></li>
-  </ol>
-</nav>
+<header class="hero">
+  <span class="eyebrow">◆ Skill Lifecycle Subsystem</span>
+  <h1>From conversation to evolving skill</h1>
+  <p class="subtitle">
+    Agents author skills mid-chat via <code style="font-family:var(--mono);font-size:14px;background:var(--bg-2);padding:2px 8px;border-radius:4px;color:var(--accent);">skill_distill</code>.
+    Declared metrics score each fixture. Bounded rewrite-rescore loops
+    improve gated metrics behind a user approval gate.
+  </p>
+</header>
 
 <main>
 
-<h1 class="title">Skill Lifecycle — Pipeline Reference</h1>
-<p class="lead">
-  Visual map of how skills are authored, scored against declared metrics, and evolved toward
-  higher pass rates — every diagram tied to the file that implements it.
-</p>
+<!-- =============================================================== -->
+<!-- HERO: FULL PIPELINE                                              -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">1</span>
+    <h2>The full pipeline, one view</h2>
+  </div>
+  <p class="lead">
+    Four stages. Each produces artifacts consumed by the next. Gated metrics
+    from ② feed back into ③ to drive evolution.
+  </p>
 
-<div class="chips">
-  <span class="chip accent">tengu eval &lt;skill&gt;</span>
-  <span class="chip accent">tengu skill-metrics &lt;skill&gt;</span>
-  <span class="chip accent">tengu skill-evolve &lt;skill&gt;</span>
-  <span class="chip">skill_distill tool</span>
+  <div class="hero-diagram">
+    <div class="flow">
+
+      <div class="stage">
+        <div class="stage-box">
+          <div class="stage-icon blue">👤</div>
+          <div class="stage-title">User + Agent</div>
+          <div class="stage-subtitle">tengu chat</div>
+          <div class="stage-desc">User guides the agent through a workflow via conversation + tool calls.</div>
+        </div>
+      </div>
+
+      <div class="arrow">
+        <svg viewBox="0 0 52 28"><path d="M0,14 L42,14 M36,8 L44,14 L36,20" stroke="#5a6472" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="arrow-label">distill</span>
+      </div>
+
+      <div class="stage">
+        <div class="stage-box">
+          <div class="stage-icon green">📝</div>
+          <div class="stage-title">Skill authored</div>
+          <div class="stage-subtitle">skill_distill tool</div>
+          <div class="stage-desc">Atomic write: SKILL.md + evals/ + metrics/. Available next session.</div>
+        </div>
+      </div>
+
+      <div class="arrow">
+        <svg viewBox="0 0 52 28"><path d="M0,14 L42,14 M36,8 L44,14 L36,20" stroke="#5a6472" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="arrow-label">eval</span>
+      </div>
+
+      <div class="stage">
+        <div class="stage-box">
+          <div class="stage-icon purple">📊</div>
+          <div class="stage-title">Metrics scored</div>
+          <div class="stage-subtitle">tengu eval</div>
+          <div class="stage-desc">Fixtures replayed. Four kinds of checks. Rolling metrics.json + history.jsonl.</div>
+        </div>
+      </div>
+
+      <div class="arrow">
+        <svg viewBox="0 0 52 28"><path d="M0,14 L42,14 M36,8 L44,14 L36,20" stroke="#5a6472" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="arrow-label">evolve</span>
+      </div>
+
+      <div class="stage">
+        <div class="stage-box">
+          <div class="stage-icon orange">🔁</div>
+          <div class="stage-title">Skill evolves</div>
+          <div class="stage-subtitle">tengu skill-evolve</div>
+          <div class="stage-desc">Bounded rewrite loop. Best cycle selected. User approves before any change.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="loop-arrow">
+      ↺ feedback loop: gated metric triggers next evolve
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="stat">
+      <div class="stat-value">4</div>
+      <div class="stat-label">Metric kinds</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">3</div>
+      <div class="stat-label">CLI commands</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">128</div>
+      <div class="stat-label">Unit tests</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">~$1.00</div>
+      <div class="stat-label">Full validation cost</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">~5 min</div>
+      <div class="stat-label">Full validation time</div>
+    </div>
+  </div>
 </div>
 
-<!-- ================================================================ -->
-<section id="arch">
-  <h2><span class="num">§1</span> System architecture</h2>
-  <p>Bird's-eye view of the subsystem's place in the runtime. New code in green.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-flowchart TB
-    U[User]
-
-    subgraph Channels[" Channels "]
-        TUI[tui/]
-        TG[telegram]
-        CLI[main.rs]
-    end
-
-    subgraph Harness[" Harness "]
-        CR[channel_runtime.rs<br/>build_tool_executor<br/>build_cli_chat_factory]
-        Engine[engine_builder.rs<br/>ToolExecutor trait]
-        Orch[orchestrator/<br/>ChatServiceFactory]
-        Mem[memory/]
-    end
-
-    subgraph SL[" Skill Lifecycle "]
-        SLC[skill_lifecycle/<br/>metrics · storage<br/>evolve · fixtures<br/>scratch_worktree<br/>approval_gate]
-        Plugin[plugins/skill_lifecycle/<br/>SkillDistillTool]
-        Eval[eval_builder.rs<br/>run_skill<br/>EvalJudgeClient]
-    end
-
-    subgraph Disk[" Filesystem "]
-        Skills[(skills/&lt;n&gt;/<br/>SKILL.md<br/>evals/<br/>metrics/)]
-        Metrics[(skills/&lt;n&gt;/<br/>metrics.json<br/>history.jsonl<br/>runs/&lt;ts&gt;/)]
-        Scratch[(.tengu/worktrees/)]
-        Runs[(evals/runs/&lt;ts&gt;/)]
-    end
-
-    OR[(OpenRouter<br/>opus-4-7 · sonnet-4-6)]
-
-    U --> TUI & TG & CLI
-    TUI & TG --> CR
-    CLI --> Eval
-    CLI -->|skill-evolve| SLC
-    CR --> Engine
-    CR --> Orch
-    Engine --> Plugin
-    Engine --> OR
-    Plugin --> Skills
-    SLC --> Metrics
-    SLC --> Scratch
-    Eval --> Runs
-    Eval --> SLC
-    SLC -->|run_skill| Eval
-    SLC -->|run_turn improver| Orch
-    Orch --> Mem
-
-    classDef new fill:#1e4d3b,stroke:#66d9a8,color:#e6e9ef
-    class SL,SLC,Plugin,Eval new
-    </pre>
+<!-- =============================================================== -->
+<!-- DISTILL                                                           -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">2 · Distill</span>
+    <h2>From conversation → reusable skill</h2>
   </div>
+  <p class="lead">
+    An agent with <code style="color:var(--accent);font-family:var(--mono);">skill_distill</code> in its
+    <code style="color:var(--accent);font-family:var(--mono);">workspace_tools</code> can author a complete skill
+    from the current conversation. The tool writes files atomically; no LLM call runs inside the tool.
+  </p>
+
+  <div class="steps">
+    <div class="step">
+      <span class="step-num">1</span>
+      <div class="step-title">User says so</div>
+      <div class="step-desc">"let's save this as a skill called eth-balance-check"</div>
+      <span class="step-file">tui/mod.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num">2</span>
+      <div class="step-title">Agent synthesizes</div>
+      <div class="step-desc">LLM composes body_markdown + metrics spec from in-context understanding.</div>
+      <span class="step-file">LLM reasoning</span>
+    </div>
+    <div class="step">
+      <span class="step-num">3</span>
+      <div class="step-title">Tool dispatched</div>
+      <div class="step-desc">scope.check_fs_write → validate_name → collision check across 3 tiers.</div>
+      <span class="step-file">plugins/skill_lifecycle/distill.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num">4</span>
+      <div class="step-title">Fixtures extracted</div>
+      <div class="step-desc">Mechanical (user, assistant) pair extraction. Long args schema-redacted.</div>
+      <span class="step-file">skill_lifecycle/fixtures.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num">5</span>
+      <div class="step-title">Atomic write</div>
+      <div class="step-desc">tmp dir → rename. SKILL.md, evals/prompts.yaml, metrics/*.md.</div>
+      <span class="step-file">std::fs::rename</span>
+    </div>
+    <div class="step">
+      <span class="step-num">6</span>
+      <div class="step-title">Return receipt</div>
+      <div class="step-desc">{ path, fixtures_created, loaded_in_current_conversation: false }</div>
+      <span class="step-file">ToolOutput</span>
+    </div>
+  </div>
+
   <div class="callout">
-    <strong>Key seam:</strong> <code>ChatServiceFactory::run_turn(agent, text) → Result&lt;String&gt;</code>
-    at <code>orchestrator/wiring.rs:30</code>. A single-turn RPC that evolve uses to dispatch the
-    skill-improver agent. No DAG orchestrator needed for that.
+    <div class="label">⚡ Cache discipline</div>
+    The new skill does <strong>not</strong> activate in the current conversation.
+    <code>loaded_in_current_conversation: false</code> is returned explicitly — the runtime's
+    <code>ToolRegistry</code> is stable per session. The skill becomes callable when the next
+    <code>tengu chat</code> starts.
   </div>
-</section>
+</div>
 
-<!-- ================================================================ -->
-<section id="loop">
-  <h2><span class="num">§2</span> The closed loop</h2>
-  <p>Three flows form a self-reinforcing cycle.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-flowchart LR
-    subgraph Distill["① Distill"]
-        direction TB
-        d1[user: save this<br/>as a skill]
-        d2[LLM agent calls<br/>skill_distill]
-        d3[atomic file write<br/>skills/&lt;n&gt;/SKILL.md<br/>evals/prompts.yaml<br/>metrics/*]
-        d1 --> d2 --> d3
-    end
-
-    subgraph Eval["② Eval"]
-        direction TB
-        e1[tengu eval &lt;n&gt;]
-        e2[for each fixture:<br/>dispatch agent<br/>row-judge<br/>metric kinds]
-        e3[finalize_run:<br/>metrics.json<br/>history.jsonl]
-        e1 --> e2 --> e3
-    end
-
-    subgraph Evolve["③ Evolve"]
-        direction TB
-        v1[tengu skill-evolve &lt;n&gt;]
-        v2[baseline +<br/>scratch worktree]
-        v3[N cycles:<br/>improver proposes<br/>rescore]
-        v4[best cycle +<br/>approval gate]
-        v5[apply / discard]
-        v1 --> v2 --> v3 --> v4 --> v5
-    end
-
-    Distill -.-> Eval
-    Eval -.failing metric.-> Evolve
-    Evolve -.updated skill.-> Eval
-    </pre>
+<!-- =============================================================== -->
+<!-- EVAL                                                              -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">3 · Eval</span>
+    <h2>Replay fixtures → score metrics</h2>
   </div>
-</section>
-
-<!-- ================================================================ -->
-<section id="distill">
-  <h2><span class="num">§3</span> Distill — author a skill from a conversation</h2>
-  <p>
-    Agent (with <code>skill_distill</code> in <code>workspace_tools</code>) synthesizes a
-    full SKILL.md from its in-context understanding. Tool writes files atomically — no LLM
-    call inside the tool.
-  </p>
-  <div class="diagram">
-    <pre class="mermaid">
-sequenceDiagram
-    actor U as User
-    participant A as LLM Agent
-    participant E as engine/collect_engine_response
-    participant T as SkillDistillTool
-    participant F as fixtures::extract_fixtures
-    participant FS as Filesystem
-
-    U->>A: "save this as a skill called eth-balance"
-    A->>A: synthesize body + metrics
-    A->>E: tool_call skill_distill(...)
-    E->>T: execute(&call, &messages)
-    T->>T: scope.check_fs_write
-    T->>T: validate_name
-    T->>T: collision check (3 tiers)
-    T->>F: extract_fixtures(slice)
-    F-->>T: Vec<Fixture> (args schema-redacted)
-    T->>FS: write tmp/ + atomic rename
-    T-->>E: { path, fixtures_created,<br/>loaded_in_current_conversation: false }
-    E-->>A: tool result
-    A-->>U: "Saved. Available next session."
-    </pre>
-  </div>
-  <div class="callout warn">
-    <strong>Cache-discipline invariant:</strong> the new skill does NOT activate in the
-    current conversation. The runtime's <code>ToolRegistry</code> is fixed per session —
-    the distilled skill becomes callable on the next <code>tengu chat</code> start.
-  </div>
-</section>
-
-<!-- ================================================================ -->
-<section id="eval">
-  <h2><span class="num">§4</span> Eval — score the skill</h2>
-  <p>
-    Replays <code>evals/prompts.yaml</code> through the configured agent. Each row is
-    scored by (a) the pre-existing row LLM judge AND (b) any <code>metrics:</code>
-    declared in SKILL.md frontmatter. Writes rolling <code>metrics.json</code> +
-    appends <code>history.jsonl</code>.
-  </p>
-  <div class="diagram">
-    <pre class="mermaid">
-sequenceDiagram
-    actor U as User
-    participant CLI
-    participant EB as eval_builder::run
-    participant D as discover_skills<br/>load_skill_metrics
-    participant R as run_row
-    participant A as Agent (fixture-runner)
-    participant RJ as Row judge
-    participant MK as MetricKind::run
-    participant JC as EvalJudgeClient
-    participant S as storage::finalize_run
-
-    U->>CLI: tengu eval skill-creator
-    CLI->>EB: EvalArgs { no_persist, max_per_run_reports, ... }
-    EB->>EB: prune_old_run_dirs (evals/runs/)
-    EB->>D: discover_skills + load frontmatter metrics
-    D-->>EB: SkillUnderTest + Vec&lt;MetricSpec&gt;
-    loop each fixture row
-        EB->>R: run_row(persist_transcript)
-        R->>A: dispatch prompt
-        A-->>R: assistant text + tool outcomes
-        R->>RJ: judge_row(expected, obs, text)
-        RJ-->>R: Verdict (pass / fail)
-        loop each frontmatter metric
-            R->>MK: run(spec, fixture, ctx)
-            alt kind = llm_judge
-                MK->>JC: judge(user, prefill="")
-                JC-->>MK: extract_json_object
-            else deterministic
-                MK->>MK: shell / tool / script
-            end
-            MK-->>R: MetricOutcome
-        end
-        R-->>EB: RowResult + metric_outcomes
-    end
-    alt persist
-        EB->>S: finalize_run(samples, rolling_window,<br/>max_per_run_reports)
-        S->>S: write report.json
-        S->>S: append history.jsonl
-        S->>S: recompute metrics.json
-        S->>S: prune metrics/runs/ to N most recent
-    end
-    EB-->>CLI: SkillReport + exit code
-    </pre>
-  </div>
-  <table class="ref">
-    <thead>
-      <tr><th>Exit</th><th>Meaning</th><th>Typical cause</th></tr>
-    </thead>
-    <tbody>
-      <tr><td><code>0</code></td><td>All gated metrics pass</td><td>Skill is healthy</td></tr>
-      <tr><td><code>1</code></td><td>At least one gated metric failed</td><td>Candidate for <code>tengu skill-evolve</code></td></tr>
-      <tr><td><code>2</code></td><td>Runner error</td><td>Config missing, LLM unavailable, broken fixture file</td></tr>
-    </tbody>
-  </table>
-</section>
-
-<!-- ================================================================ -->
-<section id="evolve">
-  <h2><span class="num">§5</span> Evolve — improve a gated metric</h2>
-  <p>
-    Bounded rewrite → rescore loop. Scratch git worktree isolates cycles. Best-cycle
-    selection enforces "no regression greater than 0.05 absolute on non-target gated
-    metrics." User approves before any change touches the real SKILL.md.
+  <p class="lead">
+    Per-row: dispatch the agent, let the row-judge verdict pass/fail, then score every
+    <code style="color:var(--accent);font-family:var(--mono);">metrics:</code> entry declared in SKILL.md frontmatter.
+    Four kinds of checks:
   </p>
 
-  <details open>
-    <summary>State machine — every decision the loop makes</summary>
-    <div class="diagram" style="margin-top: 16px;">
-    <pre class="mermaid">
-stateDiagram-v2
-    [*] --> Sweep
-    Sweep --> Baseline: sweep_stale_worktrees<br/>(older than 24h)
-    Baseline --> PickTarget: run_skill (real workspace)
-    PickTarget --> NothingToEvolve: no gated metric<br/>(exit 0)
-    PickTarget --> CreateScratch: lowest gated pass_rate
-
-    CreateScratch --> Cycle1: git worktree add<br/>or non-git fallback
-
-    state "Cycle 1..N" as C {
-        Cycle1 --> CallImprover
-        CallImprover --> ApplyProposal: ChatServiceFactory::run_turn
-        ApplyProposal --> Rescore: atomic rename SKILL.md
-        Rescore --> Decide: run_skill (scratch)
-        Decide --> Cycle1: continue
-        Decide --> EarlyExit: target = 1.0 OR<br/>all gated pass AND<br/>target improved ≥ 0.15
-    }
-
-    EarlyExit --> PickBest
-    Cycle1 --> PickBest: max_cycles reached
-
-    PickBest --> AllRegressed: no cycle passes<br/>regression tolerance
-    PickBest --> ApprovalGate: candidate found
-
-    AllRegressed --> [*]: Worktree preserved<br/>for inspection
-
-    ApprovalGate --> Apply: [y]
-    ApprovalGate --> Discard: [n]
-    ApprovalGate --> Details: [d]
-    ApprovalGate --> OpenWT: [o]
-
-    Apply --> SanityRerun: copy scratch SKILL.md<br/>append evolve_log.md
-    SanityRerun --> Remove: git worktree remove
-    Discard --> Remove
-    Details --> Remove
-    OpenWT --> [*]: scratch preserved
-
-    Remove --> [*]
-    </pre>
+  <div class="steps" style="grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
+    <div class="step">
+      <span class="step-num" style="color:var(--accent);border-color:var(--accent-soft);">sh</span>
+      <div class="step-title">shell_check</div>
+      <div class="step-desc">Runs a command, matches exit code + stdout regex. For deterministic outcomes — tx confirmed, file exists.</div>
+      <span class="step-file">metric_kinds/shell_check.rs</span>
     </div>
-  </details>
-
-  <details>
-    <summary>Sequence diagram — what runs in what order</summary>
-    <div class="diagram" style="margin-top: 16px;">
-    <pre class="mermaid">
-sequenceDiagram
-    actor U as User
-    participant CLI
-    participant EV as run_evolve
-    participant SW as sweep_stale_worktrees
-    participant EB as eval_builder::run_skill
-    participant CS as ChatServiceFactory
-    participant IM as Improver (opus-4-7)
-    participant AG as approval_gate
-    participant FS as Filesystem
-
-    U->>CLI: tengu skill-evolve skill-creator --max-cycles 1
-    CLI->>EV: EvolveArgs
-    EV->>SW: sweep stale worktrees (>24h)
-    EV->>EB: baseline run_skill
-    EB-->>EV: metrics.json
-    EV->>EV: pick_target_metric
-    EV->>FS: create scratch worktree
-    loop cycle 1..N
-        EV->>EV: build improver user msg
-        EV->>CS: run_turn(improver_agent, msg)
-        CS->>IM: LLM call
-        IM-->>CS: JSON proposal
-        CS-->>EV: ImproverProposal
-        EV->>FS: atomic rename SKILL.md in scratch
-        EV->>EB: cycle run_skill (scratch)
-        EB-->>EV: scratch metrics.json
-    end
-    EV->>EV: pick_best (filter regressions > 0.05)
-    alt candidate found
-        EV->>AG: render GateView
-        AG->>U: diff + delta + [y/n/d/o]
-        U->>AG: keystroke
-        AG-->>EV: Decision
-        alt Apply
-            EV->>FS: copy scratch SKILL.md to real
-            EV->>EB: sanity re-eval on real
-            EV->>FS: git worktree remove
-            EV-->>U: "Changes applied."
-        else Discard
-            EV->>FS: git worktree remove
-            EV-->>U: "Baseline preserved."
-        end
-    else all regressed
-        EV-->>U: "No changes. Worktree preserved."
-    end
-    </pre>
+    <div class="step">
+      <span class="step-num" style="color:var(--blue);border-color:var(--blue-soft);">ai</span>
+      <div class="step-title">llm_judge</div>
+      <div class="step-desc">Loads a rubric_file. A judge LLM scores the fixture transcript against narrative criteria.</div>
+      <span class="step-file">metric_kinds/llm_judge.rs</span>
     </div>
-  </details>
-</section>
-
-<!-- ================================================================ -->
-<section id="data">
-  <h2><span class="num">§6</span> Data model</h2>
-  <p>Types that cross module boundaries. All in <code>src/adapters/skill_lifecycle/</code>.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-classDiagram
-    class MetricSpec {
-        «enum tag=kind»
-        ShellCheck
-        LlmJudge
-        ToolAssertion
-        Script
-        +name()
-        +min_pass_rate()
-    }
-    class MetricKind {
-        «trait»
-        +run(spec, fixture, ctx) MetricOutcome
-    }
-    class MetricOutcome {
-        +pass bool
-        +score f32
-        +notes Option~String~
-        +raw Value
-    }
-    class MetricRollup {
-        +pass_rate f32
-        +n u32
-        +min_pass_rate Option~f32~
-        +gated bool
-    }
-    class MetricsJson {
-        +schema_version u32
-        +skill String
-        +last_run String
-        +rolling_window u32
-        +metrics Map~String, MetricRollup~
-    }
-    class Baseline {
-        +rollups Map
-        +target_metric String
-    }
-    class CycleOutcome {
-        +cycle_n u32
-        +rollups Map
-        +body_delta_lines_added i32
-        +rationale String
-        +new_body String
-    }
-    class ImproverProposal {
-        +proposal ProposalBody
-    }
-    class ProposalBody {
-        +body_markdown String
-        +metrics Option~Vec~MetricSpec~~
-        +rationale String
-    }
-    class ShellCheckKind
-    class LlmJudgeKind
-    class ToolAssertionKind
-    class ScriptKind
-
-    MetricKind <|.. ShellCheckKind
-    MetricKind <|.. LlmJudgeKind
-    MetricKind <|.. ToolAssertionKind
-    MetricKind <|.. ScriptKind
-    MetricKind ..> MetricSpec
-    MetricKind ..> MetricOutcome
-    MetricsJson o-- MetricRollup
-    Baseline *-- MetricRollup
-    CycleOutcome *-- MetricRollup
-    CycleOutcome *-- MetricSpec
-    ImproverProposal *-- ProposalBody
-    ProposalBody *-- MetricSpec
-    </pre>
-  </div>
-</section>
-
-<!-- ================================================================ -->
-<section id="fs">
-  <h2><span class="num">§7</span> Filesystem layout</h2>
-  <p>After a full distill → eval → evolve cycle for <code>my-skill</code>:</p>
-  <pre>skills/
-  my-skill/
-    SKILL.md                    <span style="color:var(--fg-dim)"># frontmatter: name, description, metrics: [...]</span>
-    evals/
-      config.toml               <span style="color:var(--fg-dim)"># per-skill eval agent config</span>
-      prompts.yaml              <span style="color:var(--fg-dim)"># flat list: [{id, prompt, expected}, ...]</span>
-    metrics/
-      &lt;rubric_name&gt;.md            <span style="color:var(--fg-dim)"># llm_judge rubric</span>
-      history.jsonl             <span style="color:var(--fg-dim)"># append-only (one line per run per metric)</span>
-      evolve_log.md             <span style="color:var(--fg-dim)"># append-only (one line per evolve attempt)</span>
-      runs/&lt;ts&gt;/
-        report.json             <span style="color:var(--fg-dim)"># capped at N by max_per_run_reports</span>
-    metrics.json                <span style="color:var(--fg-dim)"># rolling snapshot, overwritten each run</span>
-
-evals/runs/&lt;ts&gt;/                <span style="color:var(--fg-dim)"># global eval runs — capped by --keep-runs</span>
-  report.json
-  my-skill-f1.md
-
-.tengu/
-  worktrees/evolve-my-skill-&lt;ts&gt;/  <span style="color:var(--fg-dim)"># scratch git worktree (swept at startup)</span>
-  scratch/evolve-my-skill-&lt;ts&gt;/    <span style="color:var(--fg-dim)"># non-git fallback</span></pre>
-</section>
-
-<!-- ================================================================ -->
-<section id="config">
-  <h2><span class="num">§8</span> Configuration flow</h2>
-  <p>How <code>~/.tengu/config.toml</code> activates the subsystem at runtime.</p>
-  <div class="diagram">
-    <pre class="mermaid">
-flowchart LR
-    subgraph TOML[" ~/.tengu/config.toml "]
-        direction TB
-        t1["[skill_lifecycle]"]
-        t2["[agents.skill-improver]"]
-        t3["[agents.fixture-runner]"]
-        t4["[agents.main]<br/>workspace_tools = [skill_distill]"]
-    end
-
-    subgraph Load[" Load time "]
-        direction TB
-        parse[Config::from_file]
-        validate[validate allowlist:<br/>shared_cache, persistent_store,<br/>skill_distill]
-    end
-
-    subgraph Runtime[" Runtime wiring "]
-        direction TB
-        cbt[compute_base_tools]
-        bte[build_tool_executor]
-        reg[register SkillLifecyclePlugin]
-        bccf[build_cli_chat_factory]
-    end
-
-    subgraph Invoke[" Commands "]
-        direction TB
-        eval_inv[tengu eval]
-        evolve_inv[tengu skill-evolve]
-    end
-
-    t1 & t2 & t3 & t4 --> parse --> validate
-    validate --> cbt --> bte --> reg
-    parse --> bccf
-    eval_inv --> cbt
-    evolve_inv --> bccf
-    </pre>
+    <div class="step">
+      <span class="step-num" style="color:var(--purple);border-color:var(--purple-soft);">ta</span>
+      <div class="step-title">tool_assertion</div>
+      <div class="step-desc">Dispatches a workspace tool. Asserts via value_matches / value_equals / value_in.</div>
+      <span class="step-file">metric_kinds/tool_assertion.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num" style="color:var(--orange);border-color:var(--orange-soft);">//</span>
+      <div class="step-title">script</div>
+      <div class="step-desc">Invokes sh &lt;path&gt; with fixture data as env vars. Parses stdout JSON. Escape hatch for custom checks.</div>
+      <span class="step-file">metric_kinds/script.rs</span>
+    </div>
   </div>
 
-  <h3 style="margin-top: 24px; font-size: 16px; color: var(--fg);">Failure modes</h3>
-  <table class="ref">
-    <thead>
-      <tr><th>What's missing</th><th>Symptom</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>[skill_lifecycle]</code> block</td>
-        <td><code>"[skill_lifecycle] config missing; needed for tengu skill evolve"</code></td>
-      </tr>
-      <tr>
-        <td><code>[agents.skill-improver]</code></td>
-        <td>Improver dispatch fails — "snapshots lock poisoned"</td>
-      </tr>
-      <tr>
-        <td><code>"skill_distill"</code> not in agent's <code>workspace_tools</code></td>
-        <td>Agent describes the call in prose — never actually invokes the tool</td>
-      </tr>
-      <tr>
-        <td><code>skill_distill</code> missing from validator allowlist</td>
-        <td><code>"unknown tool 'skill_distill'"</code> at config load</td>
-      </tr>
-      <tr>
-        <td><code>SkillLifecyclePlugin</code> not registered in <code>build_tool_executor</code></td>
-        <td><code>"Tool 'skill_distill' is not available to this agent"</code> at call time</td>
-      </tr>
-    </tbody>
-  </table>
-</section>
-
-<!-- ================================================================ -->
-<section id="example">
-  <h2><span class="num">§9</span> Worked example — <code>eth-balance-check</code></h2>
-  <p>User builds a wallet-balance workflow, distills it, evaluates, evolves.</p>
-
-  <div class="cols">
-    <div>
-      <h3 style="font-size: 15px; color: var(--accent);">① Conversation</h3>
-      <pre>User: check balance of 0xcaD88677...
-Agent: [http_request → POST eth.llamarpc.com]
-       [hex_to_uint256 0x1bc16d674ec80000]
-       [persistent_store set last_balance_0xcaD88]
-       "2.0 ETH. Saved."
-User: save this as eth-balance-check</pre>
+  <h3 style="margin-top:32px;margin-bottom:12px;font-size:16px;color:var(--text);">Runner flow</h3>
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-dot">①</div>
+      <div class="timeline-card">
+        <h4>Discover skill + load metrics</h4>
+        <p><code>discover_skills(["skill-creator"], roots)</code> finds <code>SKILL.md</code>. <code>load_skill_metrics</code> parses frontmatter <code>metrics:</code> block.</p>
+      </div>
     </div>
-    <div>
-      <h3 style="font-size: 15px; color: var(--accent);">② Agent's distill call</h3>
-      <pre>skill_distill(
-  name: "eth-balance-check",
-  description: "Use when checking ETH balance
-     of a wallet on mainnet...",
-  body_markdown: "## Overview\n...",
-  metrics: [
-    { kind: "shell_check",
-      name: "eth_balance_format", ... },
-    { kind: "llm_judge",
-      name: "procedure_quality", ... }
+    <div class="timeline-item">
+      <div class="timeline-dot">②</div>
+      <div class="timeline-card">
+        <h4>Prune old evals/runs/</h4>
+        <p>Before writing this run, <code>prune_old_run_dirs</code> removes the oldest — retention cap default 10 via <code>--keep-runs</code>.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">③</div>
+      <div class="timeline-card">
+        <h4>Per-row: dispatch + row-judge + metric kinds</h4>
+        <p>For each fixture in <code>prompts.yaml</code>: dispatch prompt through configured agent; judge passes/fails the row; each metric kind scores against the transcript. When <code>--no-persist</code>, skip transcript write.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">④</div>
+      <div class="timeline-card">
+        <h4>Finalize — if persist</h4>
+        <p><code>finalize_run</code> writes <code>metrics/runs/&lt;ts&gt;/report.json</code>, appends <code>history.jsonl</code>, recomputes rolling <code>metrics.json</code>, prunes old per-skill run dirs.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">⑤</div>
+      <div class="timeline-card">
+        <h4>Exit code</h4>
+        <p>
+          <code style="color:var(--accent);">0</code> all gated metrics pass ·
+          <code style="color:var(--orange);">1</code> at least one gated metric failed (candidate for evolve) ·
+          <code style="color:var(--red);">2</code> runner error (config, LLM unavailable, fixture malformed).
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =============================================================== -->
+<!-- EVOLVE                                                            -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">4 · Evolve</span>
+    <h2>Bounded rewrite-rescore loop</h2>
+  </div>
+  <p class="lead">
+    Picks the lowest gated metric as target. Creates a scratch git worktree. Dispatches the
+    <code style="color:var(--accent);font-family:var(--mono);">skill-improver</code> agent through
+    <code style="color:var(--accent);font-family:var(--mono);">ChatServiceFactory::run_turn</code> for up to N cycles.
+    Best-cycle selection filters regressions &gt; 0.05 on non-target gated metrics. User approves before anything touches the real SKILL.md.
+  </p>
+
+  <h3 style="margin-top:24px;margin-bottom:12px;font-size:16px;color:var(--text);">The loop</h3>
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-dot">0</div>
+      <div class="timeline-card">
+        <h4>Startup sweep</h4>
+        <p><code>sweep_stale_worktrees</code> removes any <code>.tengu/worktrees/</code> dirs older than <code>worktree_stale_hours</code> (default 24h). Catches leaks from prior crashes / Ctrl-C.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">1</div>
+      <div class="timeline-card">
+        <h4>Baseline eval</h4>
+        <p>Full <code>run_skill</code> on the real workspace. Reads back <code>metrics.json</code>. <code>pick_target_metric</code> selects the lowest gated metric.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">2</div>
+      <div class="timeline-card">
+        <h4>Scratch worktree</h4>
+        <p><code>git worktree add .tengu/worktrees/evolve-&lt;skill&gt;-&lt;ts&gt;</code>. Non-git workspaces fall back to <code>.tengu/scratch/</code> with a copy of <code>skills/&lt;skill&gt;/</code>.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">3</div>
+      <div class="timeline-card">
+        <h4>Cycle 1..N: improver proposes</h4>
+        <p>Build user message: current SKILL.md body + failing fixture transcripts + prior-cycle summaries. Call <code>ChatServiceFactory::run_turn(improver_agent, msg)</code>. Parse <code>{"proposal":{"body_markdown":...,"rationale":...}}</code>.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">4</div>
+      <div class="timeline-card">
+        <h4>Apply + rescore inside scratch</h4>
+        <p><code>apply_proposal_to_skill_md</code> atomic rename. <code>run_skill</code> scoped to scratch. Early exit if target hits 1.0 OR all gated pass + target improved ≥0.15.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">5</div>
+      <div class="timeline-card">
+        <h4>Best-cycle selection</h4>
+        <p><code>pick_best</code>: filter cycles that regress any non-target gated metric by more than 0.05. Among survivors, pick highest target pass_rate, tie-break by fewer body lines added.</p>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-dot">6</div>
+      <div class="timeline-card">
+        <h4>Approval gate</h4>
+        <p>Terminal renders baseline→best delta, unified diff of SKILL.md, improver's rationale. User presses one key:</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:24px;margin-bottom:12px;font-size:16px;color:var(--text);">User decision</h3>
+  <div class="decision-tree">
+    <div class="decision apply">
+      <span class="decision-key">y</span>
+      <div class="decision-label">Apply</div>
+      <div class="decision-desc">Copy scratch SKILL.md to real. Sanity re-eval. Worktree removed. evolve_log.md logs "accepted".</div>
+    </div>
+    <div class="decision discard">
+      <span class="decision-key">n</span>
+      <div class="decision-label">Discard</div>
+      <div class="decision-desc">Worktree removed. Baseline preserved. evolve_log.md logs "rejected".</div>
+    </div>
+    <div class="decision details">
+      <span class="decision-key">d</span>
+      <div class="decision-label">Details</div>
+      <div class="decision-desc">Prints full proposal JSON. Then auto-discards. Worktree removed.</div>
+    </div>
+    <div class="decision worktree">
+      <span class="decision-key">o</span>
+      <div class="decision-label">Open worktree</div>
+      <div class="decision-desc">Prints worktree path. Leaves it in place. User inspects manually; re-run to retry.</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="label">⚠ All-cycles-regress path</div>
+    If every cycle regresses some non-target gated metric beyond tolerance, <code>pick_best</code> returns <code>None</code>.
+    Evolve exits without prompting: <em>"No changes applied. Worktree preserved for inspection."</em> Worktree
+    auto-cleans on next evolve if older than 24h.
+  </div>
+</div>
+
+<!-- =============================================================== -->
+<!-- FILESYSTEM VIEW                                                   -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">5</span>
+    <h2>What's on disk</h2>
+  </div>
+  <p class="lead">After a full distill → eval → evolve cycle for <code style="color:var(--accent);font-family:var(--mono);">my-skill</code>:</p>
+
+  <div class="fs-tree">
+<span class="dir">skills/</span>
+  <span class="dir">my-skill/</span>
+    <span class="new">SKILL.md</span>                            <span class="comment">frontmatter: name, description, metrics: […]; body</span>
+    <span class="dir">evals/</span>
+      <span class="new">config.toml</span>                       <span class="comment">per-skill eval agent config (hand-written)</span>
+      <span class="new">prompts.yaml</span>                      <span class="comment">flat list: [{id, prompt, expected}, …]</span>
+    <span class="dir">metrics/</span>
+      <span class="new">&lt;rubric_name&gt;.md</span>                   <span class="comment">llm_judge rubric</span>
+      <span class="hot">history.jsonl</span>                     <span class="comment">append-only — one line per run per metric</span>
+      <span class="hot">evolve_log.md</span>                     <span class="comment">append-only — one line per evolve attempt</span>
+      <span class="dir">runs/&lt;ts&gt;/</span>
+        <span class="mem">report.json</span>                     <span class="comment">capped at N by max_per_run_reports</span>
+    <span class="hot">metrics.json</span>                         <span class="comment">rolling snapshot, overwritten each run</span>
+
+<span class="dir">evals/runs/&lt;ts&gt;/</span>                        <span class="comment">global eval runs — capped by --keep-runs</span>
+  <span class="mem">report.json</span>
+  <span class="mem">my-skill-f1.md</span>                         <span class="comment">per-fixture transcript</span>
+
+<span class="dir">.tengu/</span>
+  <span class="dir">worktrees/</span>
+    <span class="hot">evolve-my-skill-&lt;ts&gt;/</span>                <span class="comment">scratch git worktree (swept at evolve startup)</span>
+  <span class="dir">scratch/</span>
+    <span class="hot">evolve-my-skill-&lt;ts&gt;/</span>                <span class="comment">non-git fallback (same sweep)</span></div>
+
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 16px; font-size: 12px; color: var(--text-dim);">
+    <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--accent);"></span> Created by distill / eval</div>
+    <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--orange);"></span> Append-only / rolling</div>
+    <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--purple);"></span> Per-run detail (pruned)</div>
+    <div style="display:flex;align-items:center;gap:8px;"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--blue);"></span> Directories</div>
+  </div>
+</div>
+
+<!-- =============================================================== -->
+<!-- WORKED EXAMPLE                                                    -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">6 · Example</span>
+    <h2>eth-balance-check — end to end</h2>
+  </div>
+  <p class="lead">
+    User builds a wallet-balance checker. Asks the agent to save it. Evaluates. Evolves.
+  </p>
+
+  <div class="example-grid">
+    <div class="panel">
+      <div class="panel-label">① Conversation</div>
+      <div class="chat-msg user">
+        <div class="author">User</div>
+        Check the balance of <code style="color:var(--accent)">0xcaD88677CA87…</code> on Ethereum mainnet.
+      </div>
+      <div class="chat-msg tool">
+        <div class="author">Agent (tool)</div>
+        http_request → POST https://eth.llamarpc.com<br>
+        result: "0x1bc16d674ec80000"
+      </div>
+      <div class="chat-msg tool">
+        <div class="author">Agent (tool)</div>
+        hex_to_uint256 → "2000000000000000000"
+      </div>
+      <div class="chat-msg tool">
+        <div class="author">Agent (tool)</div>
+        persistent_store set last_balance_0xcaD88 → ok
+      </div>
+      <div class="chat-msg agent">
+        <div class="author">Agent</div>
+        <strong>2.0 ETH.</strong> Saved to persistent store.
+      </div>
+      <div class="chat-msg user">
+        <div class="author">User</div>
+        Let's save this as a skill called <code>eth-balance-check</code>.
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">② Agent invokes skill_distill</div>
+      <pre class="code"><span class="k">skill_distill</span>(
+  <span class="k">name</span>: <span class="s">"eth-balance-check"</span>,
+  <span class="k">description</span>: <span class="s">"Use when checking ETH
+     balance of a wallet on
+     mainnet via public RPC."</span>,
+  <span class="k">body_markdown</span>: <span class="s">"## Overview\n…"</span>,
+  <span class="k">metrics</span>: [
+    { <span class="k">kind</span>: <span class="s">"shell_check"</span>,
+      <span class="k">name</span>: <span class="s">"balance_format"</span>,
+      <span class="k">cmd</span>: <span class="s">"…"</span>,
+      <span class="k">min_pass_rate</span>: <span class="n">0.9</span> },
+    { <span class="k">kind</span>: <span class="s">"llm_judge"</span>,
+      <span class="k">name</span>: <span class="s">"procedure_quality"</span>,
+      <span class="k">rubric_file</span>: <span class="s">"metrics/…md"</span>,
+      <span class="k">min_pass_rate</span>: <span class="n">0.7</span> }
   ],
-  from_message_index: 0
+  <span class="k">from_message_index</span>: <span class="n">0</span>
 )</pre>
     </div>
   </div>
 
-  <h3 style="font-size: 15px; margin-top: 20px; color: var(--accent);">③ Files written (atomic)</h3>
-  <pre>skills/eth-balance-check/
-  SKILL.md                      <span style="color:var(--fg-dim)"># frontmatter + body + metrics block</span>
-  evals/prompts.yaml            <span style="color:var(--fg-dim)"># 1 fixture, tool args schema-redacted</span>
-  metrics/procedure_quality.md  <span style="color:var(--fg-dim)"># rubric stub (user fills in)</span></pre>
-
-  <h3 style="font-size: 15px; margin-top: 20px; color: var(--accent);">④ Evaluate</h3>
-  <pre>$ tengu eval eth-balance-check
+  <div class="example-grid" style="margin-top: 20px;">
+    <div class="panel">
+      <div class="panel-label">③ Files written (atomic)</div>
+      <pre class="code"><span class="c"># skills/eth-balance-check/</span>
+├── SKILL.md
+│   <span class="c"># frontmatter + body + metrics</span>
+├── evals/
+│   └── prompts.yaml
+│       <span class="c"># 1 fixture, tool args</span>
+│       <span class="c"># schema-redacted</span>
+└── metrics/
+    └── procedure_quality.md
+        <span class="c"># rubric stub — user fills in</span></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-label">④ Eval output</div>
+      <pre class="code"><span class="c">$ tengu eval eth-balance-check</span>
 
 eth-balance-check (1 row, 35s)
-  ✓ f1    pass    procedure_quality: gated (0.65 &lt; 0.70)
+  ✓ f1    pass
 
-1/1 passed. Exit 1 (gated metric fails rolling threshold).</pre>
+procedure_quality: gated
+  <span class="n">0.65</span> &lt; <span class="n">0.70</span>   → candidate for evolve
 
-  <h3 style="font-size: 15px; margin-top: 20px; color: var(--accent);">⑤ Evolve</h3>
-  <pre>$ echo "n" | tengu skill-evolve eth-balance-check --max-cycles 2
+<span class="c"># exit code 1</span></pre>
+    </div>
+  </div>
 
-Target: procedure_quality (0.65 → 0.88, delta +0.23)
+  <div class="panel" style="margin-top: 20px;">
+    <div class="panel-label">⑤ Evolve proposal</div>
+    <pre class="code"><span class="c">$ echo "n" | tengu skill-evolve eth-balance-check --max-cycles 2</span>
+
+Target: <span class="s">procedure_quality</span> (baseline <span class="n">0.65</span> → best <span class="n">0.88</span>, delta <span style="color:var(--accent)">+0.23</span>)
 
 SKILL.md changes:
-  @@ ## Procedure @@
-  +1. **Pre-flight: confirm chain_id.** Before signing...
-   2. Fetch raw balance via eth_getBalance (latest)
-  +3. Verify result is non-empty hex (0x + ≥1 char)
-   4. Convert wei → ETH via hex_to_uint256
+  <span class="c">@@ ## Procedure @@</span>
+  <span style="color:var(--accent)">+</span> <span class="k">1.</span> <span style="color:var(--accent)">Pre-flight: confirm chain_id (mainnet = 1).</span>
+    <span class="k">2.</span> Fetch raw balance via eth_getBalance ("latest")
+  <span style="color:var(--accent)">+</span> <span style="color:var(--accent)">3. Verify result is non-empty hex (0x + ≥1 char)</span>
+    <span class="k">4.</span> Convert wei → ETH via hex_to_uint256
 
-[y] apply, [n] discard, ...</pre>
+Rationale:
+  <span class="c">Adds pre-flight chain_id check + hex validation.
+  Failing fixture f1 accepted empty hex; this traps it.</span>
 
-  <div class="callout warn">
-    <strong>Known gap:</strong> <code>skill_distill</code> does NOT generate
-    <code>evals/config.toml</code>. Users must write it by hand before
-    <code>tengu eval</code> can run against a distilled skill — see
-    <code>skills/skill-creator/evals/config.toml</code> for a template.
+[y] apply, [n] discard, [d] show details, [o] open worktree:</pre>
   </div>
-</section>
 
-<!-- ================================================================ -->
-<section id="code">
-  <h2><span class="num">§10</span> Code reference index</h2>
-  <p>Every component, its file, and the main entry point.</p>
-  <table class="ref">
-    <thead><tr><th>Component</th><th>File</th><th>Entry</th></tr></thead>
-    <tbody>
-      <tr><td>skill_distill tool</td><td><code>plugins/skill_lifecycle/distill.rs</code></td><td><code>SkillDistillTool::execute</code></td></tr>
-      <tr><td>Plugin registration</td><td><code>channel_runtime.rs</code></td><td><code>build_tool_executor</code> (SKILL_DISTILL_TOOL_NAME branch)</td></tr>
-      <tr><td>Config parsing</td><td><code>skill_lifecycle/config.rs</code></td><td><code>SkillLifecycleConfig</code></td></tr>
-      <tr><td>workspace_tools allowlist</td><td><code>config.rs</code></td><td><code>validate_workspace_tools</code></td></tr>
-      <tr><td>Metric types + trait</td><td><code>skill_lifecycle/metrics.rs</code></td><td><code>MetricSpec</code>, <code>MetricKind</code>, <code>JudgeClient</code></td></tr>
-      <tr><td>shell_check</td><td><code>skill_lifecycle/metric_kinds/shell_check.rs</code></td><td><code>ShellCheckKind::run</code></td></tr>
-      <tr><td>llm_judge</td><td><code>skill_lifecycle/metric_kinds/llm_judge.rs</code></td><td><code>LlmJudgeKind::run</code>, <code>extract_json_object</code></td></tr>
-      <tr><td>tool_assertion</td><td><code>skill_lifecycle/metric_kinds/tool_assertion.rs</code></td><td><code>ToolAssertionKind::run</code>, <code>assert_value</code></td></tr>
-      <tr><td>script</td><td><code>skill_lifecycle/metric_kinds/script.rs</code></td><td><code>ScriptKind::run</code></td></tr>
-      <tr><td>Rolling storage</td><td><code>skill_lifecycle/storage.rs</code></td><td><code>finalize_run</code>, <code>prune_old_run_dirs</code></td></tr>
-      <tr><td>Fixtures + extraction</td><td><code>skill_lifecycle/fixtures.rs</code></td><td><code>extract_fixtures</code>, <code>redact_args</code></td></tr>
-      <tr><td>Eval runner</td><td><code>eval_builder.rs</code></td><td><code>run</code>, <code>run_skill</code>, <code>run_row</code>, <code>load_skill_metrics</code></td></tr>
-      <tr><td>Judge adapter</td><td><code>eval_builder.rs</code></td><td><code>EvalJudgeClient::judge</code></td></tr>
-      <tr><td>Evolve loop</td><td><code>skill_lifecycle/evolve.rs</code></td><td><code>run_evolve</code>, <code>pick_target_metric</code>, <code>pick_best</code></td></tr>
-      <tr><td>Approval gate</td><td><code>skill_lifecycle/approval_gate.rs</code></td><td><code>render</code>, <code>read_decision</code></td></tr>
-      <tr><td>Scratch worktree</td><td><code>skill_lifecycle/scratch_worktree.rs</code></td><td><code>create_scratch</code>, <code>remove_scratch</code>, <code>sweep_stale_worktrees</code></td></tr>
-      <tr><td>Improver dispatch seam</td><td><code>orchestrator/wiring.rs</code></td><td><code>ChatServiceFactory::run_turn</code></td></tr>
-      <tr><td>CLI factory</td><td><code>channel_runtime.rs</code></td><td><code>build_cli_chat_factory</code></td></tr>
-      <tr><td>CLI dispatch</td><td><code>main.rs</code></td><td><code>Commands::Eval / SkillEvolve / SkillMetrics / SkillAcceptProposal</code></td></tr>
-    </tbody>
-  </table>
-
-  <p style="margin-top: 20px; color: var(--fg-dim); font-size: 13px;">
-    Related docs:
-    <a href="skill-lifecycle-validation.md">validation guide</a> ·
-    <a href="skill-lifecycle-pipeline-diagrams.md">markdown diagrams (same content)</a> ·
-    <a href="skills.md">skill authoring</a> ·
-    <a href="configuration.md">config reference</a> ·
-    <a href="architecture.md">architecture overview</a>
-  </p>
-</section>
-
-</main>
+  <div class="callout" style="margin-top: 20px;">
+    <div class="label">Known gap</div>
+    <code>skill_distill</code> does <strong>not</strong> seed <code>evals/config.toml</code> — the user writes it by hand
+    before <code>tengu eval</code> can run. Template lives at <code>skills/skill-creator/evals/config.toml</code>.
+  </div>
 </div>
 
-<script>
-  mermaid.initialize({
-    startOnLoad: true,
-    theme: 'dark',
-    themeVariables: {
-      darkMode: true,
-      background: '#232b37',
-      primaryColor: '#2d3748',
-      primaryTextColor: '#e6e9ef',
-      primaryBorderColor: '#66d9a8',
-      lineColor: '#8a94a6',
-      secondaryColor: '#1e4d3b',
-      tertiaryColor: '#0f1419',
-      mainBkg: '#1a212b',
-      secondBkg: '#232b37',
-      nodeBorder: '#66d9a8',
-      clusterBkg: '#1a212b',
-      clusterBorder: '#2d3748',
-      edgeLabelBackground: '#1a212b',
-      fontSize: '14px'
-    },
-    flowchart: { curve: 'basis', padding: 12 },
-    sequence: { showSequenceNumbers: true, wrap: true },
-    state: { useMaxWidth: true }
-  });
-</script>
+<!-- =============================================================== -->
+<!-- CODE REFERENCE INDEX                                              -->
+<!-- =============================================================== -->
+<div class="section">
+  <div class="section-header">
+    <span class="section-num">7 · Code</span>
+    <h2>Where everything lives</h2>
+  </div>
+  <p class="lead">Each component, its file, and its entry point. All paths relative to the repo root.</p>
+
+  <div class="code-refs">
+    <div class="code-ref">
+      <div class="code-ref-title">skill_distill tool</div>
+      <div class="code-ref-path">plugins/skill_lifecycle/distill.rs</div>
+      <div class="code-ref-fn">fn SkillDistillTool::execute</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Plugin registration</div>
+      <div class="code-ref-path">channel_runtime.rs</div>
+      <div class="code-ref-fn">fn build_tool_executor — SKILL_DISTILL_TOOL_NAME branch</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Config parsing</div>
+      <div class="code-ref-path">skill_lifecycle/config.rs</div>
+      <div class="code-ref-fn">struct SkillLifecycleConfig</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">workspace_tools allowlist</div>
+      <div class="code-ref-path">config.rs</div>
+      <div class="code-ref-fn">fn validate_workspace_tools</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Metric types + trait</div>
+      <div class="code-ref-path">skill_lifecycle/metrics.rs</div>
+      <div class="code-ref-fn">MetricSpec · MetricKind · JudgeClient</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">shell_check</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/shell_check.rs</div>
+      <div class="code-ref-fn">fn ShellCheckKind::run</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">llm_judge</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/llm_judge.rs</div>
+      <div class="code-ref-fn">fn LlmJudgeKind::run · fn extract_json_object</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">tool_assertion</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/tool_assertion.rs</div>
+      <div class="code-ref-fn">fn ToolAssertionKind::run · fn assert_value</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">script</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/script.rs</div>
+      <div class="code-ref-fn">fn ScriptKind::run</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Rolling storage</div>
+      <div class="code-ref-path">skill_lifecycle/storage.rs</div>
+      <div class="code-ref-fn">fn finalize_run · fn prune_old_run_dirs</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Fixtures + extraction</div>
+      <div class="code-ref-path">skill_lifecycle/fixtures.rs</div>
+      <div class="code-ref-fn">fn extract_fixtures · fn redact_args</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Eval runner</div>
+      <div class="code-ref-path">eval_builder.rs</div>
+      <div class="code-ref-fn">fn run · fn run_skill · fn run_row · fn load_skill_metrics</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Judge adapter</div>
+      <div class="code-ref-path">eval_builder.rs</div>
+      <div class="code-ref-fn">struct EvalJudgeClient · impl JudgeClient</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Evolve loop</div>
+      <div class="code-ref-path">skill_lifecycle/evolve.rs</div>
+      <div class="code-ref-fn">fn run_evolve · fn pick_target_metric · fn pick_best</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Approval gate</div>
+      <div class="code-ref-path">skill_lifecycle/approval_gate.rs</div>
+      <div class="code-ref-fn">fn render · fn read_decision</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Scratch worktree</div>
+      <div class="code-ref-path">skill_lifecycle/scratch_worktree.rs</div>
+      <div class="code-ref-fn">fn create_scratch · fn remove_scratch · fn sweep_stale_worktrees</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Improver dispatch seam</div>
+      <div class="code-ref-path">orchestrator/wiring.rs</div>
+      <div class="code-ref-fn">trait ChatServiceFactory::run_turn</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">CLI chat factory</div>
+      <div class="code-ref-path">channel_runtime.rs</div>
+      <div class="code-ref-fn">fn build_cli_chat_factory</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">CLI dispatch</div>
+      <div class="code-ref-path">main.rs</div>
+      <div class="code-ref-fn">Commands::Eval · SkillEvolve · SkillMetrics · SkillAcceptProposal</div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 48px; padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px;">
+  <p>Related:
+    <a href="skill-lifecycle-validation.md" style="color:var(--accent);text-decoration:none;">validation guide</a> ·
+    <a href="skill-lifecycle-pipeline-diagrams.md" style="color:var(--accent);text-decoration:none;">markdown diagrams</a> ·
+    <a href="skills.md" style="color:var(--accent);text-decoration:none;">skill authoring</a> ·
+    <a href="configuration.md" style="color:var(--accent);text-decoration:none;">config reference</a> ·
+    <a href="architecture.md" style="color:var(--accent);text-decoration:none;">architecture</a>
+  </p>
+</div>
+
+</main>
 
 </body>
 </html>
