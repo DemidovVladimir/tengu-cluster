@@ -660,12 +660,27 @@ pub fn parse_verdict(raw: &str) -> anyhow::Result<Verdict> {
 use crate::adapters::types::{Engine, EngineContext, Message, Role, StreamEvent};
 use futures::StreamExt;
 
-const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's tool-call sequence matches an expected behaviour.
+const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's behaviour matches an expected behaviour.
 
 Input shape:
 - An "Expected behaviour" description in natural language.
-- An ordered list of the agent's observed tool calls (name + truncated args).
+- An ordered list of observations (name + truncated detail). Each observation is ONE of:
+  * A tool call made by a worker: name is the tool (e.g. `http_request`, `write_file`).
+  * An orchestrator event: name is prefixed `orchestrator:` — e.g.:
+      - `orchestrator:plan_created` (detail lists step ids + agents + depends_on — this
+        tells you the DAG shape: which steps are parallel, which are sequential,
+        which is the synthesizer)
+      - `orchestrator:step_started` / `step_succeeded` / `step_failed` / `step_exhausted`
+      - `orchestrator:replan_triggered`
+      - `orchestrator:plan_completed`
 - The agent's final assistant text.
+
+The orchestrator has NO tools — any tool call in the list was made by a WORKER step. Tool calls
+belong to the step whose `orchestrator:step_started` event immediately precedes them.
+
+Judge based on the `orchestrator:plan_created` event's DAG shape (parallel vs sequential,
+single leaf, correct agents) AND the final text quality — not on whether http_request or
+write_file appears (workers legitimately call those).
 
 Decide: did the agent's behaviour match the expected behaviour?
 
@@ -1709,6 +1724,89 @@ async fn run_row_via_orchestrator(
         anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")
     })?;
 
+    // Subscribe to orchestrator events and convert each into a synthetic
+    // observation. The judge receives the full trace: plan shape + each
+    // step boundary interleaved with tool calls. Without this, the judge
+    // sees only the worker tool calls and can't distinguish "orchestrator
+    // fanned out to 3 parallel researchers" from "one researcher made 3
+    // sequential calls" — the plan semantics are invisible at the tool
+    // layer alone.
+    let event_obs = Arc::clone(&accum.observations);
+    let event_seq = Arc::clone(&accum.seq);
+    let mut event_rx = orchestrator.subscribe();
+    let event_task = tokio::spawn(async move {
+        use crate::adapters::orchestrator::OrchestratorEvent;
+        while let Ok(ev) = event_rx.recv().await {
+            let (name, detail) = match ev {
+                OrchestratorEvent::PlanCreated { plan } => {
+                    let steps: Vec<String> = plan
+                        .steps
+                        .iter()
+                        .map(|s| {
+                            let deps: Vec<String> =
+                                s.depends_on.iter().map(|d| d.0.clone()).collect();
+                            if deps.is_empty() {
+                                format!("{}:{}(deps=[])", s.id.0, s.agent)
+                            } else {
+                                format!("{}:{}(deps=[{}])", s.id.0, s.agent, deps.join(","))
+                            }
+                        })
+                        .collect();
+                    (
+                        "orchestrator:plan_created".to_string(),
+                        format!("steps=[{}]", steps.join(", ")),
+                    )
+                }
+                OrchestratorEvent::StepStarted { step_id, agent } => (
+                    "orchestrator:step_started".to_string(),
+                    format!("{}:{}", step_id.0, agent),
+                ),
+                OrchestratorEvent::StepSucceeded { step_id, output } => (
+                    "orchestrator:step_succeeded".to_string(),
+                    format!("{}:{}", step_id.0, truncate(&output, 200)),
+                ),
+                OrchestratorEvent::StepFailed {
+                    step_id,
+                    attempt,
+                    error,
+                } => (
+                    "orchestrator:step_failed".to_string(),
+                    format!(
+                        "{}:attempt={} err={}",
+                        step_id.0,
+                        attempt,
+                        truncate(&error, 200)
+                    ),
+                ),
+                OrchestratorEvent::StepExhausted {
+                    step_id,
+                    final_error,
+                } => (
+                    "orchestrator:step_exhausted".to_string(),
+                    format!("{}:err={}", step_id.0, truncate(&final_error, 200)),
+                ),
+                OrchestratorEvent::ReplanTriggered { reason } => (
+                    "orchestrator:replan_triggered".to_string(),
+                    truncate(&reason, 200),
+                ),
+                OrchestratorEvent::PlanCompleted {
+                    final_response,
+                    cancelled,
+                } => (
+                    "orchestrator:plan_completed".to_string(),
+                    format!("cancelled={} final_len={}", cancelled, final_response.len()),
+                ),
+                OrchestratorEvent::StepProgress { .. } => continue,
+            };
+            let n = event_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            event_obs.lock().unwrap().push(Observation {
+                seq: n,
+                name,
+                args_preview: detail,
+            });
+        }
+    });
+
     // Drive with the row's timeout.
     let prompt = ctx.row.prompt.clone();
     let driver_fut = orchestrator.handle(prompt);
@@ -1721,6 +1819,11 @@ async fn run_row_via_orchestrator(
         Ok(text) => (false, text),
         Err(_) => (true, String::new()),
     };
+
+    // Let the event drain finish — PlanCompleted should already have
+    // fired. Give it a brief grace window to flush before we snapshot.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    event_task.abort();
 
     // Snapshot results from the accumulator.
     let obs_snapshot = accum.observations.lock().unwrap().clone();
