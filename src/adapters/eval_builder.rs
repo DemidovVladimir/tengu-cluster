@@ -552,7 +552,11 @@ impl<'a> StubbedExecutor<'a> {
 
 #[async_trait]
 impl<'a> ToolExecutor for StubbedExecutor<'a> {
-    async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> anyhow::Result<String> {
         {
             let mut guard = self.queues.lock().unwrap();
             if let Some(q) = guard.get_mut(&call.name) {
@@ -567,7 +571,7 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
                 return Ok(serde_json::to_string(&response)?);
             }
         }
-        self.inner.execute(call).await
+        self.inner.execute(call, messages).await
     }
 }
 
@@ -924,7 +928,11 @@ impl ToolActivityPort for NoopActivity {
 struct NoopRuntimeToolExecutor;
 #[async_trait]
 impl crate::adapters::engine_builder::ToolExecutor for NoopRuntimeToolExecutor {
-    async fn execute(&self, _call: &ToolCall) -> anyhow::Result<String> {
+    async fn execute(
+        &self,
+        _call: &ToolCall,
+        _messages: &[crate::adapters::types::Message],
+    ) -> anyhow::Result<String> {
         anyhow::bail!("no-op executor: tool calls are not enabled in this run")
     }
 }
@@ -1470,7 +1478,11 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for CountingExecutor {
-        async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+        async fn execute(
+            &self,
+            call: &ToolCall,
+            _messages: &[crate::adapters::types::Message],
+        ) -> anyhow::Result<String> {
             self.counter.lock().unwrap().push(call.name.clone());
             Ok(format!("live-result-for-{}", call.name))
         }
@@ -1780,9 +1792,9 @@ workspace = "{TMP_WORKSPACE}"
         }];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r1 = stubbed.execute(&make_call("http_request")).await.unwrap();
-        let r2 = stubbed.execute(&make_call("http_request")).await.unwrap();
-        let r3 = stubbed.execute(&make_call("http_request")).await.unwrap();
+        let r1 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
+        let r2 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
+        let r3 = stubbed.execute(&make_call("http_request"), &[]).await.unwrap();
 
         assert!(r1.contains("503"));
         assert!(r2.contains("200"));
@@ -1801,7 +1813,7 @@ workspace = "{TMP_WORKSPACE}"
         let stubs: Vec<StubSpec> = vec![];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r = stubbed.execute(&make_call("sessions_spawn")).await.unwrap();
+        let r = stubbed.execute(&make_call("sessions_spawn"), &[]).await.unwrap();
         assert_eq!(r, "live-result-for-sessions_spawn");
         assert_eq!(
             inner.counter.lock().unwrap().as_slice(),

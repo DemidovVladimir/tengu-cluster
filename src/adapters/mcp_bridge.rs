@@ -257,7 +257,7 @@ async fn handle_tools_call(
         "MCP tool call started"
     );
 
-    match executor.execute(&call).await {
+    match executor.execute(&call, &[]).await {
         Ok(result) => {
             let truncated = truncate_mcp_result(&result, max_result_chars);
             info!(
