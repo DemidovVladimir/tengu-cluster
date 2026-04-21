@@ -1547,11 +1547,26 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
         let secret_registry = Arc::new(SecretRegistry::new());
         let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
-        let base_tools = channel_runtime::compute_base_tools(
-            true,
-            false, // memory off in v1 eval runs
-            &agent.workspace_tools,
-        );
+        // Orchestrator agent gets NO tools — its job is to emit JSON only.
+        // `compute_base_tools` otherwise unconditionally includes workspace +
+        // http + crypto, which causes the planner LLM to use them to answer
+        // the user's question directly instead of planning.
+        let is_orchestrator_agent = self
+            .cfg
+            .orchestrator
+            .as_ref()
+            .map(|o| o.agent == agent_name)
+            .unwrap_or(false);
+
+        let base_tools = if is_orchestrator_agent {
+            Vec::new()
+        } else {
+            channel_runtime::compute_base_tools(
+                true,
+                false, // memory off in v1 eval runs
+                &agent.workspace_tools,
+            )
+        };
 
         let skill_source = FileSystemSkillSource::new(workspace_path.clone());
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
@@ -1559,7 +1574,11 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
             SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
         skill_registry.reload(&skill_source);
 
-        let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+        let current_tools = if is_orchestrator_agent {
+            Vec::new()
+        } else {
+            channel_runtime::rebuild_tools(&base_tools, &skill_registry)
+        };
         let system_prompt =
             channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
 
