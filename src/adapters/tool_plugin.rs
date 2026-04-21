@@ -11,7 +11,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::memory_builder::MemoryServiceHandle;
-use crate::adapters::plugins::subagents::SubagentRegistry;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{ToolCall, ToolDef};
@@ -54,10 +53,8 @@ pub(crate) trait ToolPlugin: Send + Sync {
 // Contexts
 // ---------------------------------------------------------------------------
 
-/// Read-only view of the calling agent's message history. Passed by the engine
-/// to each `Tool::execute` so tools can inspect conversation context without
-/// being able to mutate it.
-#[derive(Clone, Copy)]
+/// Read-only view of the current conversation messages, passed to tools
+/// that need to inspect history (e.g. skill_lifecycle::distill).
 pub(crate) struct ConversationView<'a> {
     messages: &'a [crate::adapters::types::Message],
 }
@@ -96,14 +93,6 @@ pub(crate) struct ToolCtx<'a> {
     pub memory: Option<&'a MemoryServiceHandle>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
-    /// Subagent registry handle — present only when the orchestrator is
-    /// enabled (gated by `OrchestratorConfig.enabled`). The subagents plugin
-    /// uses this to spawn / kill / steer LLM-driven subagents; all other
-    /// plugins ignore it.
-    pub subagents: Option<&'a SubagentRegistry>,
-    /// Read-only snapshot of the calling agent's message history up to the
-    /// current turn. Tools that need to inspect the conversation (e.g.
-    /// `skill_distill`) use this; all other tools ignore it.
     pub conversation: ConversationView<'a>,
 }
 
@@ -115,8 +104,6 @@ pub(crate) struct PluginCtx<'a> {
     pub shell: Arc<dyn ShellExecutionPort>,
     pub memory: Option<Arc<MemoryServiceHandle>>,
     pub secret_registry: Arc<SecretRegistry>,
-    /// Subagent registry — only set when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -205,12 +192,6 @@ pub(crate) struct PluginToolExecutor {
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
-    /// Subagent registry — only populated when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
-    /// Snapshot of the calling agent's message history at the start of the
-    /// current turn. Updated by callers before invoking `collect_engine_response`.
-    /// Empty when not set (non-distill tools ignore this field entirely).
-    pub conversation: Vec<crate::adapters::types::Message>,
 }
 
 impl PluginToolExecutor {
@@ -218,7 +199,7 @@ impl PluginToolExecutor {
     ///
     /// Used to surface dynamically-discovered plugin tools (currently: MCP proxy tools
     /// with `{server}.{tool}` names) to the LLM. The static plugins (workspace, http,
-    /// crypto, cache, memory, skill, subagents) contribute tool defs via their own
+    /// crypto, cache, memory, skill) contribute tool defs via their own
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
@@ -242,7 +223,6 @@ impl ToolExecutor for PluginToolExecutor {
         }
 
         let scope = self.scopes.get(&call.name).cloned().unwrap_or_default();
-        let view = ConversationView::new(&self.conversation);
         let ctx = ToolCtx {
             workspace: &self.workspace,
             scope: &scope,
@@ -251,8 +231,7 @@ impl ToolExecutor for PluginToolExecutor {
             memory: self.memory.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
-            subagents: self.subagents.as_ref().map(|r| r.as_ref()),
-            conversation: view,
+            conversation: ConversationView::empty(),
         };
 
         let output = self
@@ -307,8 +286,6 @@ mod tests {
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
-            subagents: None,
-            conversation: Vec::new(),
         }
     }
 

@@ -13,8 +13,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::client::McpCaller;
-#[cfg(test)]
-use crate::adapters::tool_plugin::ConversationView;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
@@ -106,8 +104,7 @@ mod tests {
             memory: None,
             secret_registry: &secrets,
             activity: activity.as_ref(),
-            subagents: None,
-            conversation: ConversationView::empty(),
+            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
         };
 
         let args = json!({"title": "bug"});

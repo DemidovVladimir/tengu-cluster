@@ -337,7 +337,6 @@ mod tests {
             memory: None,
             secret_registry: secrets,
             activity,
-            subagents: None,
             conversation: ConversationView::new(messages),
         }
     }

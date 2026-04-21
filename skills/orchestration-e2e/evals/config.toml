@@ -1,0 +1,83 @@
+# End-to-end eval config for the harness-owned orchestration system.
+#
+# Consumed by `tengu eval orchestration-e2e`.
+# Runner: src/adapters/eval_builder.rs (discover_skills walks skills/<name>/evals/).
+#
+# Purpose: exercise the orchestrator agent (planner → DAG executor → workers)
+# through a 5-row prompt suite covering direct response, sequential DAG,
+# parallel fan-out with synthesizer, failure/replan, and the "skip orchestration
+# for trivial input" fast path.
+
+runtime_profile = "cloud"
+
+[memory]
+enabled = true
+
+# Presence of this block activates harness-owned orchestration (design §5.1).
+# The referenced agent below must exist in [agents.*].
+[orchestrator]
+agent = "orchestrator"
+max_attempts_per_step = 3
+max_replans = 2
+
+# ---------------------------------------------------------------------------
+# Orchestrator agent — planner only. Gets memory_search; no other tools.
+# ---------------------------------------------------------------------------
+[agents.orchestrator]
+default = false
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+workspace = "{TMP_WORKSPACE}"
+workspace_tools = ["memory_search"]
+
+[agents.orchestrator.identity]
+instructions = """
+You decompose user requests into plans of steps dispatched to specialist agents.
+You emit JSON only. Available agents and their capabilities:
+
+{{ roster }}
+
+Output shape:
+  {"kind": "direct", "response": "..."}
+  {"kind": "plan", "steps": [{"id": "...", "agent": "...", "goal": "...", "depends_on": [...]}]}
+
+If a plan fans out, always include a final synthesizer step that depends on the fan-out outputs.
+Use memory_search before planning when the request references prior work.
+"""
+
+[agents.orchestrator.limits]
+max_tool_rounds = 5
+stream_event_timeout_secs = 60
+
+# ---------------------------------------------------------------------------
+# Worker: researcher — used for info-gathering steps.
+# ---------------------------------------------------------------------------
+[agents.researcher]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "{TMP_WORKSPACE}"
+workspace_tools = ["http_request", "memory_search", "memory_ingest"]
+
+[agents.researcher.identity]
+instructions = "You are a focused researcher. Given a single goal, gather and return concise findings."
+
+[agents.researcher.limits]
+max_tool_rounds = 8
+stream_event_timeout_secs = 60
+
+# ---------------------------------------------------------------------------
+# Worker: writer — drafts prose (synthesizer role in fan-out plans).
+# ---------------------------------------------------------------------------
+[agents.writer]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "{TMP_WORKSPACE}"
+workspace_tools = ["memory_search"]
+
+[agents.writer.identity]
+instructions = "You draft polished responses synthesizing inputs handed to you. Be concise."
+
+[agents.writer.limits]
+max_tool_rounds = 5
+stream_event_timeout_secs = 60

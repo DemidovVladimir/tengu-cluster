@@ -1,6 +1,6 @@
 # Architecture
 
-> Every phase spec (A, B, C, D) references this document. Every PR is reviewed against it.
+> Every implementation plan references this document. Every PR is reviewed against it.
 
 Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `src/main.rs` — flat structure, no sub-crates.
 
@@ -8,34 +8,23 @@ Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `
 
 ## Doctrine
 
-The Rust core exists to serve three principles. Violating any of them is a doctrine violation that blocks the PR.
+Three principles, checked against every PR:
 
-### 1. LLM is the heart
+### 1. The harness owns control flow
 
-It consumes tokens and emits tokens. It has no behaviour of its own — no memory, no goals, no identity, no plans. Anything that looks like "the agent did X because..." is really "the context instructed the LLM, and the LLM produced X." The Rust core never hard-codes behaviour that belongs to the model.
+Orchestration, routing, memory retrieval, memory writes, retries, replans, cancellation, cache discipline, turn lifecycle — all of it is Rust code. No skill teaches these behaviours to an LLM, because no LLM is asked to decide them.
 
-### 2. Context and skills are the brain
+### 2. Agents are narrow LLM workers
 
-Everything the LLM knows on a given turn lives in the context window: system prompt, bootstrap files (AGENTS.md, MEMORY.md, daily logs, identity files), tool definitions, skill catalog entries, transcript history, pending tool results.
+An agent is an `AgentConfig` entry: a name, a system prompt, a model, a tool list, optional memory scope. Agents do not know about other agents. Agents do not decompose user requests. Agents do not spawn subagents. Each agent's conversation is a single stable system prompt + a user message + tool calls — the shape prompt caching demands.
 
-Skills are how policy reaches the brain — any strategy, workflow, playbook, plan, or "how the agent decides what to do" is a skill, and each skill materializes into context via frontmatter catalog entries (compact) and body text (loaded on demand). Orchestration. Decomposition. Delegation. Failure handling. Progress tracking. Even meta-behaviour like "how to write new skills" is a skill (`skill-creator`).
+### 3. The orchestrator is "just an agent with one tool"
 
-The Rust core's job is **brain assembly** — deciding which skills + bootstrap + transcript enter the context, in what order, at what compression, and what to do when the window overflows (Phase D's RAG spill). The core does not decide what the brain does with that context.
-
-Skills evolve through `skill-creator` (create), `skill-eval` (measure), and `skill-improver` (propose edits from align reports — Phase E). The harness gets closer to the user over time because the brain does, not because the core does.
-
-### 3. Tools and MCP are the hands and senses
-
-They are the only way the LLM touches the world. A tool reads a file, writes a file, runs a command, signs a transaction, calls an HTTP API, spawns a subagent. Tools are:
-
-- **Gateable** — the user decides which tools exist for each agent. The per-agent tool list is computed in `channel_runtime::compute_base_tools` + skill tools + (when enabled) `compute_subagent_tools`, and passed to `build_tool_executor` as its allow-list. Tools whose names are not in the list are not registered.
-- **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny). Every registered tool gets a per-agent scope entry; every `Tool::execute` body calls `scope.check_*()` as its first logic line, enforced structurally by `tests/scope_lint.rs`.
-
-MCP servers extend the hands without touching Rust. Adding a tool never requires adding Rust code beyond a new plugin file or a new `[[mcp_servers]]` entry.
+The orchestrator is not a Rust class with baked-in planning logic. It is an `AgentConfig` entry like any other worker, with exactly one tool (`memory_search`) and a system prompt that teaches it to emit structured JSON plans. What makes it the orchestrator is its position in the runtime: it runs first, its output drives the DAG executor, and workers never invoke it back.
 
 ### The no-compromise corollary
 
-If work during any phase is tempted to add Rust code that encodes *policy* — when to delegate, how to retry, what to prioritize, how to format output, when to ask for clarification — that code is a skill, not Rust. The test is: *does a non-engineer user need to change this behaviour by editing a markdown file, or by filing a PR?* If the answer is "markdown file," it's a skill.
+If something in the codebase tries to encode per-user routing preferences, per-workflow templates, or task-specific retry strategies, stop. Those are config or agent system-prompt concerns, not Rust code. The harness owns *mechanism*, not *policy intent*. The test is: *does a non-engineer user need to change this behaviour by editing a config file (`tengu.toml`) or by filing a PR?* If the answer is "config file," it's config. If the answer is "PR," it's Rust code.
 
 This rule is the single sentence every PR reviewer checks against. A violation is not a style issue; it is a doctrine violation and blocks the PR.
 

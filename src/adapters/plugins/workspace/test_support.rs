@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
-use crate::adapters::tool_plugin::{ConversationView, ToolCtx};
+use crate::adapters::tool_plugin::ToolCtx;
 use crate::adapters::types::ToolCall;
 
 /// No-op activity port for tests.
@@ -70,8 +70,7 @@ impl TestHarness {
             memory: None,
             secret_registry: &self.secrets,
             activity: self.activity.as_ref(),
-            subagents: None,
-            conversation: ConversationView::empty(),
+            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
         }
     }
 }

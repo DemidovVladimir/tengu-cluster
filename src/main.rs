@@ -32,17 +32,37 @@ enum Commands {
     Status,
     /// Run runtime/environment diagnostics.
     Doctor,
-    /// Run multi-agent fleet orchestrator.
-    Orchestrate {
-        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
-        #[arg(long)]
-        sandbox: Option<String>,
-    },
     /// Run Telegram bot adapter.
     Telegram {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
         sandbox: Option<String>,
+    },
+    /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
+    Eval {
+        /// One or more skill names. Empty = discover all skills with evals.
+        skills: Vec<String>,
+        /// Override skill-local evals/config.toml with sandboxes/<name>/config.toml.
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Judge model override. Default: anthropic/claude-opus-4-7.
+        #[arg(long)]
+        judge_model: Option<String>,
+        /// Max rows run in parallel within a skill. Default: 1 (sequential).
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
+        /// Output format. Table prints a human summary; json prints the report JSON and suppresses the table.
+        #[arg(long, default_value = "table")]
+        format: String,
+        /// Output directory for transcripts + report.json. Default: evals/runs/<ISO8601-ts>/.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Glob filter over row ids within a skill.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Keep per-row tmp workspaces after run (for debugging).
+        #[arg(long)]
+        keep_workspace: bool,
     },
     /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
     Secret {
@@ -224,10 +244,6 @@ async fn main() -> Result<()> {
             run_doctor(&config);
             Ok(())
         }
-        Commands::Orchestrate { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            adapters::orchestrator::boot_orchestrator(&config, secret_registry).await
-        }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
@@ -236,6 +252,34 @@ async fn main() -> Result<()> {
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
+        }
+        Commands::Eval {
+            skills,
+            sandbox,
+            judge_model,
+            concurrency,
+            format,
+            out,
+            filter,
+            keep_workspace,
+        } => {
+            let format = match format.as_str() {
+                "table" => adapters::eval_builder::OutputFormat::Table,
+                "json" => adapters::eval_builder::OutputFormat::Json,
+                other => anyhow::bail!("invalid --format: {} (expected 'table' or 'json')", other),
+            };
+            let args = adapters::eval_builder::EvalArgs {
+                skills,
+                sandbox,
+                judge_model,
+                concurrency,
+                format,
+                out_dir: out,
+                filter,
+                keep_workspace,
+            };
+            let exit_code = adapters::eval_builder::run(args).await?;
+            std::process::exit(exit_code);
         }
         Commands::Prune { sandbox, yes } => {
             let (workspaces, scaffold_dirs): (Vec<PathBuf>, Vec<String>) =

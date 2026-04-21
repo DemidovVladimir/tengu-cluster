@@ -101,7 +101,7 @@ pub(crate) fn build_engine(
     }
 }
 
-fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box<dyn Engine>> {
+pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box<dyn Engine>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is required"))?;
     let base_url = std::env::var("OPENROUTER_BASE_URL")
@@ -516,7 +516,7 @@ fn convert_messages_openai_compatible(
 // ---------------------------------------------------------------------------
 
 /// Result of a single engine call including response text and token usage delta.
-pub(crate) struct EngineResponse {
+pub struct EngineResponse {
     pub text: String,
     pub input_tokens_delta: u32,
     pub output_tokens_delta: u32,
@@ -526,7 +526,7 @@ pub(crate) struct EngineResponse {
 
 /// Trait for executing tool calls.
 #[async_trait]
-pub(crate) trait ToolExecutor: Send + Sync {
+pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, call: &ToolCall) -> Result<String>;
 }
 
@@ -554,10 +554,10 @@ impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
 }
 
 /// Optional callback invoked after each tool execution.
-pub(crate) type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
+pub type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 
 /// Execute one or more engine rounds, handling tool calls automatically.
-pub(crate) async fn collect_engine_response(
+pub async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
     tools: &[ToolDef],

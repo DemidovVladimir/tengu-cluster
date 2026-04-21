@@ -25,7 +25,6 @@ use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
 use crate::adapters::plugins::memory::MemoryPlugin;
-use crate::adapters::plugins::skill_lifecycle::{SkillLifecyclePlugin, SKILL_DISTILL_TOOL_NAME};
 use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::ports::{ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
@@ -354,7 +353,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
 
     // Memory handle: only built when memory tools are requested and the API
     // key is present. Errors fall through to None so other tools still work.
-    let needs_memory = allowed_names.contains("remember")
+    let needs_memory = allowed_names.contains("memory_ingest")
+        || allowed_names.contains("memory_search")
         || allowed_names.contains(crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME);
     let memory_handle: Option<Arc<MemoryServiceHandle>> = if needs_memory {
         match std::env::var("OPENROUTER_API_KEY") {
@@ -387,7 +387,6 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         shell: Arc::clone(&shell),
         memory: memory_handle.clone(),
         secret_registry: Arc::clone(&secret_registry),
-        subagents: None,
     };
 
     let mut registry = ToolRegistry::new();
@@ -406,7 +405,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         anyhow::bail!("bridge failed to register workspace plugin: {}", e);
     }
 
-    // Memory plugin — remember, persistent_store (gated by ctx.memory).
+    // Memory plugin — memory_ingest, persistent_store (gated by ctx.memory).
     let memory_plugin = MemoryPlugin::new(1000, 200);
     if let Err(e) = registry
         .register_plugin(&memory_plugin, &plugin_ctx, &allowed_list)
@@ -422,16 +421,6 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
             .await
         {
             warn!(error = %e, "bridge failed to register cache plugin");
-        }
-    }
-
-    // Skill-lifecycle plugin — skill_distill (opt-in).
-    if allowed_names.contains(SKILL_DISTILL_TOOL_NAME) {
-        if let Err(e) = registry
-            .register_plugin(&SkillLifecyclePlugin, &plugin_ctx, &allowed_list)
-            .await
-        {
-            warn!(error = %e, "bridge failed to register skill-lifecycle plugin");
         }
     }
 
@@ -475,7 +464,5 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,
-        subagents: None,
-        conversation: Vec::new(),
     })
 }

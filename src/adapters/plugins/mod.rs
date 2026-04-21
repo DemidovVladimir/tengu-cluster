@@ -8,5 +8,4 @@ pub(crate) mod mcp;
 pub(crate) mod memory;
 pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
-pub(crate) mod subagents;
 pub(crate) mod workspace;

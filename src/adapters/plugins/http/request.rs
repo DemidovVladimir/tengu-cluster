@@ -11,8 +11,6 @@ use reqwest::{Method, Url};
 use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
-#[cfg(test)]
-use crate::adapters::tool_plugin::ConversationView;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
@@ -429,8 +427,7 @@ mod tests {
                 memory: None,
                 secret_registry: &self.secrets,
                 activity: self.activity.as_ref(),
-                subagents: None,
-                conversation: ConversationView::empty(),
+                conversation: crate::adapters::tool_plugin::ConversationView::empty(),
             }
         }
     }
