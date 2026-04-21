@@ -49,14 +49,13 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
         return Ok(2);
     }
 
-    // Build the judge engine. Default context window is conservative (64k);
-    // override via env if ever needed. Judge makes one short completion per row.
+    // Build the judge engine via the shared helper.
     let judge_model = args
         .judge_model
         .unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
     let judge: Arc<dyn crate::adapters::types::Engine> =
-        match crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000) {
-            Ok(box_engine) => Arc::from(box_engine),
+        match build_judge(Some(judge_model.clone())) {
+            Ok(j) => j,
             Err(e) => {
                 eprintln!("Error: build judge engine: {}", e);
                 return Ok(2);
@@ -232,6 +231,19 @@ pub struct PromptRow {
 pub struct StubSpec {
     pub tool: String,
     pub responses: Vec<serde_json::Value>,
+}
+
+/// Build a judge engine for eval + evolve scoring.
+///
+/// Called from both `eval_builder::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
+/// Default model: `anthropic/claude-opus-4-7`, 64 k context window.
+pub fn build_judge(
+    model: Option<String>,
+) -> Result<Arc<dyn crate::adapters::types::Engine>> {
+    let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
+    let box_engine =
+        crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000)?;
+    Ok(Arc::from(box_engine))
 }
 
 pub fn derive_row_id(prompt: &str) -> String {

@@ -929,6 +929,27 @@ pub(crate) fn build_orchestrator(
     ))
 }
 
+/// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to
+/// dispatch a turn against a named agent (e.g. `tengu skill evolve` targeting
+/// the skill-improver agent).
+///
+/// IMPLEMENTATION NOTE (γ.6): Full wiring requires assembling per-agent engine,
+/// tool executor, memory manager and populating an `OrchestratorSnapshots` map —
+/// equivalent to the Telegram/TUI bootstrap path. That is a non-trivial refactor
+/// (>150 lines) and is left as a targeted follow-up. This stub returns a `bail!`
+/// so the CLI entry-point compiles; `tengu skill evolve` will be gated at
+/// runtime until this is properly wired.
+pub(crate) async fn build_cli_chat_factory(
+    _config: &Config,
+    _workspace: &std::path::Path,
+) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
+    anyhow::bail!(
+        "build_cli_chat_factory: not yet implemented — \
+         see γ.6 follow-up. Wire RuntimeChatServiceFactory from \
+         build_tool_executor + build_memory_manager + snapshots_inputs_fn."
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Golden registry test — asserts the LLM-facing tool surface is unchanged.
 // ---------------------------------------------------------------------------

@@ -80,6 +80,26 @@ enum Commands {
     },
     /// Run MCP bridge server (stdio). Used as a subprocess by Claude Code engine.
     McpBridge,
+    /// Bounded rewrite→rescore loop for a skill, with user approval gate.
+    SkillEvolve {
+        skill: String,
+        #[arg(long)]
+        max_cycles: Option<u32>,
+        #[arg(long)]
+        target_metric: Option<String>,
+        #[arg(long)]
+        base_branch: Option<String>,
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
+    /// Inspect rolling metrics for a skill.
+    SkillMetrics {
+        skill: String,
+        #[arg(long, default_value_t = 10)]
+        last: u32,
+    },
+    /// Apply a saved evolve proposal (reserved for future auto-trigger work).
+    SkillAcceptProposal { path: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -352,6 +372,63 @@ async fn main() -> Result<()> {
                 SecretAction::ChangePassword => secret_builder::change_password(&path)?,
                 SecretAction::Path => println!("{}", path.display()),
             }
+            Ok(())
+        }
+        Commands::SkillEvolve {
+            skill,
+            max_cycles,
+            target_metric,
+            base_branch,
+            sandbox,
+        } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            let workspace = std::env::current_dir()?;
+            let chat_factory =
+                adapters::channel_runtime::build_cli_chat_factory(&config, &workspace).await?;
+            let args = adapters::skill_lifecycle::evolve::EvolveArgs {
+                config: &config,
+                workspace: &workspace,
+                skill: &skill,
+                max_cycles,
+                target_metric,
+                base_branch,
+                chat_factory,
+            };
+            adapters::skill_lifecycle::evolve::run_evolve(args).await?;
+            Ok(())
+        }
+        Commands::SkillMetrics { skill, last } => {
+            let workspace = std::env::current_dir()?;
+            let skill_dir = workspace.join("skills").join(&skill);
+            let mj_path = skill_dir.join("metrics.json");
+            if !mj_path.exists() {
+                eprintln!(
+                    "No metrics.json yet for skill '{}'. Run `tengu eval {}` first.",
+                    skill, skill
+                );
+                return Ok(());
+            }
+            let v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&mj_path)?)?;
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            let hpath = skill_dir.join("metrics").join("history.jsonl");
+            if hpath.exists() {
+                println!("\n-- history (last {last}) --");
+                let text = std::fs::read_to_string(&hpath)?;
+                let lines: Vec<&str> = text.lines().collect();
+                for l in lines.iter().rev().take(last as usize).rev() {
+                    println!("{l}");
+                }
+            }
+            Ok(())
+        }
+        Commands::SkillAcceptProposal { path } => {
+            eprintln!(
+                "accept-proposal is a placeholder in v1. \
+                 Proposals are applied inline during `tengu skill evolve`. \
+                 Path ignored: {}",
+                path.display()
+            );
             Ok(())
         }
     }
