@@ -29,7 +29,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
-# workspace_tools = ["shared_cache"]  # Optional first-party workspace tools
+# workspace_tools = ["shared_cache", "skill_distill"]  # skill_distill lets the agent author new skills from conversation
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -168,3 +168,40 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #
 # [agents.editor.limits]
 # max_tokens_per_flow = 5_000_000
+
+# --- Skill Lifecycle ---
+# Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
+# `tengu skill evolve <skill>`. All three drive the metrics: frontmatter
+# contract declared per-skill in SKILL.md. See
+# `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
+
+# [skill_lifecycle]
+# improver_agent = "skill-improver"        # Required for `tengu skill evolve`
+# fixture_runner_agent = "fixture-runner"  # Required for `tengu eval`
+# default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
+# default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
+
+# [agents.skill-improver]
+# engine = "openrouter"
+# model = "anthropic/claude-opus-4-7"
+# workspace_tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
+#
+# [agents.skill-improver.identity]
+# name = "Skill Improver"
+# instructions = """
+# You are a skill-improver. Given a skill that is under-performing on a specific
+# metric, you propose a REVISED skill body that should raise that metric's pass
+# rate without regressing other metrics. Emit ONE JSON object and nothing else:
+# {"proposal":{"body_markdown":"...","metrics":[...]?,"rationale":"..."}}
+# Preserve name + description unchanged. Do not remove metrics. Prefer small
+# targeted revisions over wholesale rewrites.
+# """
+
+# [agents.fixture-runner]
+# engine = "openrouter"
+# model = "anthropic/claude-sonnet-4-6"
+# workspace_tools = ["read_file", "list_directory", "run_command"]
+#
+# [agents.fixture-runner.identity]
+# name = "Fixture Runner"
+# instructions = "You execute a single skill fixture and return the final assistant output."

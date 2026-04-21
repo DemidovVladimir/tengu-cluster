@@ -53,10 +53,45 @@ homepage: https://example.com
 requires_bins: ["curl"]     # optional: required CLI tools
 requires_env: ["API_KEY"]   # optional: required env vars
 os: ["linux", "macos"]      # optional: OS filter
+metrics:                    # optional: accuracy metrics (see below)
+  - name: output_quality
+    kind: llm_judge
+    rubric_file: metrics/rubric.md
+    min_pass_rate: 0.7
 ---
 ```
 
 Gating metadata (`requires_bins`, `requires_env`, `os`) is evaluated at load time. Skills that fail gating checks are silently skipped.
+
+## Metrics & Evolution
+
+A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Four built-in kinds:
+
+| Kind | What it does |
+|------|--------------|
+| `shell_check` | Runs a command, matches exit code + stdout regex. For deterministic outcomes (tx confirmed, file exists). |
+| `llm_judge` | Loads a `rubric_file`, lets a judge LLM score the fixture transcript against narrative criteria. For qualitative quality. |
+| `tool_assertion` | Dispatches a workspace tool (e.g. `persistent_store`) and asserts on its output via `value_matches` / `value_equals` / `value_in`. |
+| `script` | Invokes `sh <path>` with fixture data in env vars; parses stdout JSON `{pass, score, notes?}`. Escape hatch for custom checks. |
+
+Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric.
+
+See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1 for the complete frontmatter schema.
+
+## Distillation
+
+An agent with `workspace_tools = ["skill_distill"]` can author a new skill mid-conversation via the `skill_distill` tool. Given in-context understanding plus a starting message index, the tool writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. The new skill does **not** load into the current conversation — cache discipline requires a stable tool/skill inventory per conversation. It becomes available on next session start.
+
+## CLI commands
+
+| Command | Purpose |
+|---------|---------|
+| `tengu eval <skill>` | Replay `evals/prompts.yaml` fixtures, score each via the skill's metrics, write `metrics.json` + append to `metrics/history.jsonl`, emit per-row transcripts under `evals/runs/<ts>/`. |
+| `tengu skill-metrics <skill>` | Show rolling `metrics.json` + recent history entries (read-only, no API calls). |
+| `tengu skill-evolve <skill>` | Bounded rewrite→rescore loop. Baseline-evals, picks the lowest-gated metric as target, spawns `skill-improver` in a scratch git worktree for N cycles, picks the best cycle (no regression > 0.05 on other gated metrics), shows a diff + metric delta, prompts y/n/d/o. |
+| `tengu skill-accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1). |
+
+Activating evolve requires `[skill_lifecycle]` + `[agents.skill-improver]` + `[agents.fixture-runner]` in `tengu.toml` — see [[configuration]].
 
 ## Example: Documentation Skill
 
@@ -81,6 +116,7 @@ Shell skills create named tools that execute templates with parameter substituti
 
 ## Related
 - [[architecture]] — where skills fit in the system
-- [[configuration]] — skill_packages config
+- [[configuration]] — skill_packages config + `[skill_lifecycle]` block
 - [[mcp-bridge]] — how skill tools reach Claude Code
 - [[engine-backends]] — how skills work with different backends
+- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — metrics + evolve design spec

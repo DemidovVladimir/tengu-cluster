@@ -1,6 +1,11 @@
 ---
 name: skill-creator
 description: Use when creating a new skill or modifying an existing skill for a tengu agent. Covers skill anatomy, frontmatter, naming, the three-tier hierarchy, and the create/modify workflow using workspace primitives.
+metrics:
+  - name: distill_quality
+    kind: llm_judge
+    rubric_file: metrics/distill_quality.md
+    min_pass_rate: 0.7
 ---
 
 # Skill Creator
@@ -96,6 +101,21 @@ description: Use when creating a new skill or modifying an existing skill for a 
 2. **Identify what to change.** Is the description not triggering correctly? Is the body missing a case?
 3. **Edit.** Use `write_file` to update the skill.
 4. **Test.** Same as create -- verify the agent uses the updated content correctly.
+
+## Distillation (from a live conversation)
+
+When the user says "let's save this as a skill" or equivalent after completing a successful workflow, call the `skill_distill` tool. Prefer it over `write_file` for skill authoring -- it handles fixture seeding and metric scaffolding in one step.
+
+**Inputs you supply (you are the author):**
+
+- `name` -- kebab-case, verb-first (e.g. `mint-ipnft`).
+- `description` -- starts with "Use when...", third person, triggering conditions only.
+- `body_markdown` -- the skill body you compose from your in-context understanding. Structure: Overview -> When to Use -> Procedure -> Common Mistakes. Refer to what *worked*; omit exploration that failed.
+- `metrics` -- at least one metric. Prefer `shell_check` for deterministic outcomes (tx confirmed, file exists). Use `llm_judge` with a narrative rubric for qualitative criteria. See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` s.6 for the full schema.
+- `from_message_index` -- the 0-based message index where the distilled behaviour started. When in doubt, pick the message where the user stated the goal.
+- `fixture_hints.drop_tool_names` -- exclude noise like `memory_search` that doesn't belong in the replay fixtures.
+
+**Invariant:** the new skill does NOT activate in the current conversation. It becomes available on next session start. This is intentional -- prompt-caching requires a stable tool/skill inventory per conversation.
 
 ## The No-Compromise Test
 

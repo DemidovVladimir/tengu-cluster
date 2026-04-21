@@ -527,7 +527,11 @@ pub struct EngineResponse {
 /// Trait for executing tool calls.
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
-    async fn execute(&self, call: &ToolCall) -> Result<String>;
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String>;
 }
 
 /// Decorator that redacts registered secret values from all tool output.
@@ -547,8 +551,12 @@ impl<'a> SanitizedToolExecutor<'a> {
 
 #[async_trait]
 impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
-        let result = self.inner.execute(call).await?;
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String> {
+        let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
     }
 }
@@ -573,8 +581,12 @@ impl OwnedSanitizedToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for OwnedSanitizedToolExecutor {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
-        let result = self.inner.execute(call).await?;
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String> {
+        let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
     }
 }
@@ -702,7 +714,7 @@ pub async fn collect_engine_response(
                 });
             }
 
-            let result = match executor.execute(tc).await {
+            let result = match executor.execute(tc, &messages).await {
                 Ok(output) => output,
                 Err(e) => format!("ERROR: {}", e),
             };

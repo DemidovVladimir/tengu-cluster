@@ -44,6 +44,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 tokio-stream = "0.1"
 tempfile = "3"
 glob = "0.3"
+similar = "2"
 qdrant-client = { version = "1.14", optional = true }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 dptree = { version = "0.3", optional = true }

@@ -49,14 +49,13 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
         return Ok(2);
     }
 
-    // Build the judge engine. Default context window is conservative (64k);
-    // override via env if ever needed. Judge makes one short completion per row.
+    // Build the judge engine via the shared helper.
     let judge_model = args
         .judge_model
         .unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
     let judge: Arc<dyn crate::adapters::types::Engine> =
-        match crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000) {
-            Ok(box_engine) => Arc::from(box_engine),
+        match build_judge(Some(judge_model.clone())) {
+            Ok(j) => j,
             Err(e) => {
                 eprintln!("Error: build judge engine: {}", e);
                 return Ok(2);
@@ -82,7 +81,7 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
         // through here — they still set runner_exit = 1 via the verdict check below.
         let report = match run_skill(
             skill,
-            &*judge,
+            Arc::clone(&judge),
             &out_dir,
             args.filter.as_deref(),
             args.concurrency,
@@ -234,6 +233,17 @@ pub struct StubSpec {
     pub responses: Vec<serde_json::Value>,
 }
 
+/// Build a judge engine for eval + evolve scoring.
+///
+/// Called from both `eval_builder::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
+/// Default model: `anthropic/claude-opus-4-7`, 64 k context window.
+pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::adapters::types::Engine>> {
+    let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
+    let box_engine =
+        crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000)?;
+    Ok(Arc::from(box_engine))
+}
+
 pub fn derive_row_id(prompt: &str) -> String {
     let mut s: String = prompt
         .chars()
@@ -376,6 +386,8 @@ pub struct SkillUnderTest {
     pub prompts_path: PathBuf,
     pub prompts_format: String, // "markdown" or "yaml"
     pub config_path: PathBuf,
+    pub skill_md_path: PathBuf,
+    pub skill_dir: PathBuf,
 }
 
 pub fn default_skill_roots() -> Vec<PathBuf> {
@@ -443,6 +455,8 @@ pub fn discover_skills(
                 continue;
             }
             let config_path = evals_dir.join("config.toml");
+            let skill_dir = entry.path().to_path_buf();
+            let skill_md_path = skill_dir.join("SKILL.md");
             out.push(SkillUnderTest {
                 name,
                 tier,
@@ -450,6 +464,8 @@ pub fn discover_skills(
                 prompts_path,
                 prompts_format: fmt.to_string(),
                 config_path,
+                skill_md_path,
+                skill_dir,
             });
         }
     }
@@ -464,6 +480,42 @@ pub fn discover_skills(
 }
 
 use crate::adapters::config::Config;
+
+// ---------------------------------------------------------------------------
+// Skill metrics frontmatter — load + validate on skill discovery
+// ---------------------------------------------------------------------------
+
+use crate::adapters::skill_lifecycle::metrics::{validate_metrics, MetricSpec};
+
+#[derive(Debug, serde::Deserialize)]
+struct SkillFrontmatter {
+    #[serde(default)]
+    metrics: Vec<MetricSpec>,
+}
+
+pub(crate) fn load_skill_metrics(
+    skill_md_path: &Path,
+    skill_dir: &Path,
+) -> anyhow::Result<Vec<MetricSpec>> {
+    if !skill_md_path.exists() {
+        return Ok(vec![]);
+    }
+    let body = std::fs::read_to_string(skill_md_path)
+        .with_context(|| format!("read {}", skill_md_path.display()))?;
+    let Some(rest) = body.strip_prefix("---\n") else {
+        return Ok(vec![]);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Ok(vec![]);
+    };
+    let fm_yaml = &rest[..end];
+    let fm: SkillFrontmatter = serde_yaml::from_str(fm_yaml)
+        .with_context(|| format!("parse frontmatter of {}", skill_md_path.display()))?;
+    if !fm.metrics.is_empty() {
+        validate_metrics(&fm.metrics, skill_dir)?;
+    }
+    Ok(fm.metrics)
+}
 
 // ---------------------------------------------------------------------------
 // StubbedExecutor — wraps any ToolExecutor with per-tool response queues
@@ -498,7 +550,11 @@ impl<'a> StubbedExecutor<'a> {
 
 #[async_trait]
 impl<'a> ToolExecutor for StubbedExecutor<'a> {
-    async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> anyhow::Result<String> {
         {
             let mut guard = self.queues.lock().unwrap();
             if let Some(q) = guard.get_mut(&call.name) {
@@ -513,7 +569,7 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
                 return Ok(serde_json::to_string(&response)?);
             }
         }
-        self.inner.execute(call).await
+        self.inner.execute(call, messages).await
     }
 }
 
@@ -604,12 +660,27 @@ pub fn parse_verdict(raw: &str) -> anyhow::Result<Verdict> {
 use crate::adapters::types::{Engine, EngineContext, Message, Role, StreamEvent};
 use futures::StreamExt;
 
-const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's tool-call sequence matches an expected behaviour.
+const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's behaviour matches an expected behaviour.
 
 Input shape:
 - An "Expected behaviour" description in natural language.
-- An ordered list of the agent's observed tool calls (name + truncated args).
+- An ordered list of observations (name + truncated detail). Each observation is ONE of:
+  * A tool call made by a worker: name is the tool (e.g. `http_request`, `write_file`).
+  * An orchestrator event: name is prefixed `orchestrator:` — e.g.:
+      - `orchestrator:plan_created` (detail lists step ids + agents + depends_on — this
+        tells you the DAG shape: which steps are parallel, which are sequential,
+        which is the synthesizer)
+      - `orchestrator:step_started` / `step_succeeded` / `step_failed` / `step_exhausted`
+      - `orchestrator:replan_triggered`
+      - `orchestrator:plan_completed`
 - The agent's final assistant text.
+
+The orchestrator has NO tools — any tool call in the list was made by a WORKER step. Tool calls
+belong to the step whose `orchestrator:step_started` event immediately precedes them.
+
+Judge based on the `orchestrator:plan_created` event's DAG shape (parallel vs sequential,
+single leaf, correct agents) AND the final text quality — not on whether http_request or
+write_file appears (workers legitimately call those).
 
 Decide: did the agent's behaviour match the expected behaviour?
 
@@ -749,6 +820,15 @@ pub struct ObservationJson {
     pub args_preview: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MetricOutcomeJson {
+    pub metric: String,
+    pub pass: bool,
+    pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RowResult {
     pub id: String,
@@ -763,15 +843,92 @@ pub struct RowResult {
     pub transcript_path: PathBuf,
     pub timed_out: bool,
     pub stubs_used: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metric_outcomes: Vec<MetricOutcomeJson>,
+}
+
+// ---------------------------------------------------------------------------
+// EvalJudgeClient — adapts the eval judge engine to the JudgeClient trait
+// ---------------------------------------------------------------------------
+
+use crate::adapters::skill_lifecycle::metrics::JudgeClient;
+
+struct EvalJudgeClient {
+    engine: Arc<dyn Engine>,
+}
+
+#[async_trait]
+impl JudgeClient for EvalJudgeClient {
+    async fn judge(
+        &self,
+        system: &str,
+        user: &str,
+        prefill: &str,
+        _model: Option<&str>,
+    ) -> anyhow::Result<String> {
+        // Build a single-turn completion, prefilling the assistant if a prefill is given.
+        // OpenRouter/Anthropic reject a conversation ending with an Assistant message, so
+        // we only add the prefill entry when it is non-empty.
+        let mut messages = vec![
+            Message {
+                role: Role::System,
+                content: system.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            Message {
+                role: Role::User,
+                content: user.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+        if !prefill.is_empty() {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: prefill.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
+        let ctx = EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: Some(1),
+            max_mcp_result_chars: None,
+        };
+        let mut stream = self.engine.run(&messages, &[], &ctx).await?;
+        let mut output = String::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                StreamEvent::TextDelta { text } => output.push_str(&text),
+                StreamEvent::Done => break,
+                StreamEvent::Error { message } => {
+                    anyhow::bail!("EvalJudgeClient engine error: {}", message);
+                }
+                _ => {}
+            }
+        }
+        // Strip prefill prefix from response if present.
+        let result = if !prefill.is_empty() && output.starts_with(prefill) {
+            output[prefill.len()..].to_string()
+        } else {
+            output
+        };
+        Ok(result)
+    }
 }
 
 pub struct RowCtx<'a> {
     pub skill: &'a SkillUnderTest,
     pub row: &'a PromptRow,
-    pub judge: &'a dyn Engine,
+    pub judge: Arc<dyn Engine>,
     pub out_dir: &'a Path,
     pub keep_workspace: bool,
     pub config_path_override: Option<&'a Path>,
+    pub skill_metrics: &'a [MetricSpec],
+    pub judge_client: Arc<dyn JudgeClient>,
 }
 
 // Minimal ToolActivityPort for eval runs — no UI, no logging.
@@ -784,7 +941,11 @@ impl ToolActivityPort for NoopActivity {
 struct NoopRuntimeToolExecutor;
 #[async_trait]
 impl crate::adapters::engine_builder::ToolExecutor for NoopRuntimeToolExecutor {
-    async fn execute(&self, _call: &ToolCall) -> anyhow::Result<String> {
+    async fn execute(
+        &self,
+        _call: &ToolCall,
+        _messages: &[crate::adapters::types::Message],
+    ) -> anyhow::Result<String> {
         anyhow::bail!("no-op executor: tool calls are not enabled in this run")
     }
 }
@@ -911,7 +1072,7 @@ pub struct Report {
 
 pub async fn run_skill(
     skill: &SkillUnderTest,
-    judge: &dyn crate::adapters::types::Engine,
+    judge: Arc<dyn crate::adapters::types::Engine>,
     out_dir: &Path,
     filter: Option<&str>,
     concurrency: usize,
@@ -919,6 +1080,7 @@ pub async fn run_skill(
     sandbox_config: Option<&Path>,
 ) -> anyhow::Result<SkillReport> {
     let skill_started = Instant::now();
+    let skill_started_ts = chrono::Utc::now();
     let prompts_body = std::fs::read_to_string(&skill.prompts_path)
         .with_context(|| format!("read {}", skill.prompts_path.display()))?;
     let mut rows = if skill.prompts_format == "yaml" {
@@ -948,19 +1110,65 @@ pub async fn run_skill(
         anyhow::bail!("concurrency > 1 not yet implemented in v1 — use --concurrency 1");
     }
 
+    // Load skill metrics from SKILL.md frontmatter (empty vec → backward compat).
+    let skill_metrics = load_skill_metrics(&skill.skill_md_path, &skill.skill_dir)?;
+    // Build a shared JudgeClient adapter wrapping the eval judge Arc.
+    let judge_client: Arc<dyn JudgeClient> = Arc::new(EvalJudgeClient {
+        engine: Arc::clone(&judge),
+    });
+
     let mut row_results = Vec::new();
     for row in &rows {
         eprintln!("[{} row {}] running…", skill.name, row.id);
         let rr = run_row(RowCtx {
             skill,
             row,
-            judge,
+            judge: Arc::clone(&judge),
             out_dir,
             keep_workspace,
             config_path_override: sandbox_config,
+            skill_metrics: skill_metrics.as_slice(),
+            judge_client: Arc::clone(&judge_client),
         })
         .await?;
         row_results.push(rr);
+    }
+
+    // Write metrics.json + history.jsonl if the skill declares any metrics.
+    if !skill_metrics.is_empty() {
+        use crate::adapters::skill_lifecycle::storage::{finalize_run, RunSample};
+        let ts = skill_started_ts.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+        let samples: Vec<RunSample> = row_results
+            .iter()
+            .map(|r| {
+                let mut outcomes = std::collections::BTreeMap::new();
+                for mo in &r.metric_outcomes {
+                    outcomes.insert(
+                        mo.metric.clone(),
+                        crate::adapters::skill_lifecycle::metrics::MetricOutcome {
+                            pass: mo.pass,
+                            score: mo.score,
+                            notes: mo.notes.clone(),
+                            raw: serde_json::json!({}),
+                        },
+                    );
+                }
+                RunSample {
+                    fixture_id: r.id.clone(),
+                    outcomes,
+                }
+            })
+            .collect();
+        let rolling_window = 10u32; // TODO: read from [skill_lifecycle] config if present.
+        finalize_run(
+            &skill.skill_dir,
+            &skill.name,
+            &ts,
+            &skill_metrics,
+            &samples,
+            rolling_window,
+        )
+        .with_context(|| format!("finalize_run for {}", skill.name))?;
     }
 
     let config_source = if sandbox_config.is_some() {
@@ -982,6 +1190,20 @@ pub async fn run_skill(
 }
 
 /// Run a single eval row through the agent + judge pipeline.
+///
+/// Two execution paths:
+///
+/// - **Direct dispatch** (default): the config's default agent receives the
+///   prompt and drives the LLM tool loop directly via `collect_engine_response`.
+///   This is the path the eval runner was originally written for (pre
+///   PR #6), and it still runs for configs without an `[orchestrator]` block.
+///
+/// - **Orchestrator dispatch**: when `cfg.orchestrator.is_some()`, the row
+///   goes through `Orchestrator::handle` — the orchestrator agent plans,
+///   the DAG executor spawns worker steps, each worker step runs
+///   `collect_engine_response` inside an `EvalChatServiceFactory` closure
+///   that threads this row's stubs + observation tap + token accumulator.
+///   This is the path the `skills/orchestration-e2e` evals rely on.
 pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let started = Instant::now();
 
@@ -998,6 +1220,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         .find(|a| a.default)
         .or_else(|| cfg.agents.values().next())
         .ok_or_else(|| anyhow::anyhow!("eval config has no agent defined"))?;
+
+    // 2b. Branch: orchestrator vs direct dispatch.
+    if cfg.orchestrator.is_some() {
+        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg).await;
+    }
 
     // 3. Build the engine.
     let agent_id = cfg
@@ -1155,7 +1382,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         )
     } else {
         let outcome = judge_row(
-            ctx.judge,
+            &*ctx.judge,
             &ctx.row.expected,
             &obs_snapshot,
             &engine_response.text,
@@ -1189,6 +1416,58 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         std::mem::forget(ws); // leak TempDir guard — workspace persists on disk
     }
 
+    // 10. Score against per-skill metric kinds (if any declared in SKILL.md frontmatter).
+    let mut metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
+    if !ctx.skill_metrics.is_empty() {
+        use crate::adapters::skill_lifecycle::metric_kinds::{
+            LlmJudgeKind, ScriptKind, ShellCheckKind, ToolAssertionKind,
+        };
+        use crate::adapters::skill_lifecycle::metrics::{
+            FixtureContext, MetricKind, MetricOutcome, MetricRunCtx,
+        };
+
+        let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+        let fixture = FixtureContext {
+            prompt: &ctx.row.prompt,
+            expected_outcome: Some(ctx.row.expected.as_str()),
+            transcript: &engine_response.text,
+        };
+        let run_ctx = MetricRunCtx {
+            skill_dir: &ctx.skill.skill_dir,
+            workspace: &ws_path,
+            shell: &shell,
+            tools: None,
+            judge: Some(Arc::clone(&ctx.judge_client)),
+            http: None,
+            memory_manager: None,
+            secret_registry: None,
+            activity: None,
+            tool_scopes: None,
+        };
+        for spec in ctx.skill_metrics {
+            let outcome: anyhow::Result<MetricOutcome> = match spec {
+                MetricSpec::ShellCheck { .. } => ShellCheckKind.run(spec, &fixture, &run_ctx).await,
+                MetricSpec::LlmJudge { .. } => LlmJudgeKind.run(spec, &fixture, &run_ctx).await,
+                MetricSpec::ToolAssertion { .. } => {
+                    ToolAssertionKind.run(spec, &fixture, &run_ctx).await
+                }
+                MetricSpec::Script { .. } => ScriptKind.run(spec, &fixture, &run_ctx).await,
+            };
+            let o = outcome.unwrap_or_else(|e| MetricOutcome {
+                pass: false,
+                score: 0.0,
+                notes: Some(format!("metric runner error: {e}")),
+                raw: serde_json::json!({}),
+            });
+            metric_outcomes.push(MetricOutcomeJson {
+                metric: spec.name().to_string(),
+                pass: o.pass,
+                score: o.score,
+                notes: o.notes,
+            });
+        }
+    }
+
     Ok(RowResult {
         id: ctx.row.id.clone(),
         prompt: ctx.row.prompt.clone(),
@@ -1215,6 +1494,449 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         transcript_path,
         timed_out,
         stubs_used: !ctx.row.stubs.is_empty(),
+        metric_outcomes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator dispatch path for eval rows.
+// ---------------------------------------------------------------------------
+//
+// When an eval config declares `[orchestrator]`, rows are run through
+// `Orchestrator::handle` instead of directly against the default agent's
+// engine. Each worker step dispatched by the orchestrator goes through
+// `EvalChatServiceFactory::run_turn`, which rebuilds that agent's engine +
+// tools + system prompt and drives `collect_engine_response` — the SAME
+// code path the direct eval uses — but with per-row stubs and an observer
+// tap that accumulates tool calls across all worker steps.
+//
+// This keeps the stubbed_executor + observation machinery intact: stubs
+// fire inside worker steps, tool calls all land in one observations vec
+// regardless of which worker made them, and token counts aggregate.
+
+struct EvalRowAccum {
+    observations: Arc<std::sync::Mutex<Vec<Observation>>>,
+    seq: Arc<AtomicU32>,
+    tokens: Arc<std::sync::Mutex<(u32, u32)>>, // cumulative (input, output) across worker steps
+    stubs: Vec<StubSpec>,
+    engine_id: Arc<std::sync::Mutex<String>>, // captured from the first worker step for transcript
+}
+
+struct EvalChatServiceFactory {
+    cfg: Arc<Config>,
+    ws_path: PathBuf,
+    accum: Arc<EvalRowAccum>,
+}
+
+#[async_trait]
+impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServiceFactory {
+    async fn run_turn(&self, agent_name: &str, text: &str) -> anyhow::Result<String> {
+        let agent = self
+            .cfg
+            .agents
+            .get(agent_name)
+            .ok_or_else(|| anyhow::anyhow!("unknown agent: {}", agent_name))?;
+
+        // Per-step engine + tools + system prompt. Mirrors the direct
+        // eval path (run_row steps 3–5), parameterized by agent name.
+        let engine_box = crate::adapters::engine_builder::build_engine(
+            agent_name,
+            agent,
+            self.cfg.claude_code.as_ref(),
+        )?;
+        let engine: Arc<dyn Engine> = Arc::from(engine_box);
+        {
+            let mut eid = self.accum.engine_id.lock().unwrap();
+            if eid.is_empty() {
+                *eid = engine.id().to_string();
+            }
+        }
+
+        let workspace_path: PathBuf = agent
+            .workspace
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| self.ws_path.clone());
+
+        let secret_registry = Arc::new(SecretRegistry::new());
+        let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
+
+        // Orchestrator agent gets NO tools — its job is to emit JSON only.
+        // `compute_base_tools` otherwise unconditionally includes workspace +
+        // http + crypto, which causes the planner LLM to use them to answer
+        // the user's question directly instead of planning.
+        let is_orchestrator_agent = self
+            .cfg
+            .orchestrator
+            .as_ref()
+            .map(|o| o.agent == agent_name)
+            .unwrap_or(false);
+
+        let base_tools = if is_orchestrator_agent {
+            Vec::new()
+        } else {
+            channel_runtime::compute_base_tools(
+                true,
+                false, // memory off in v1 eval runs
+                &agent.workspace_tools,
+            )
+        };
+
+        let skill_source = FileSystemSkillSource::new(workspace_path.clone());
+        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
+        let mut skill_registry =
+            SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
+        skill_registry.reload(&skill_source);
+
+        let current_tools = if is_orchestrator_agent {
+            Vec::new()
+        } else {
+            channel_runtime::rebuild_tools(&base_tools, &skill_registry)
+        };
+        let system_prompt =
+            channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
+
+        let mut tool_defs = current_tools.clone();
+        let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
+            match channel_runtime::build_tool_executor(
+                &workspace_path,
+                &current_tools,
+                &skill_registry,
+                &None,
+                &secret_registry,
+                log_activity,
+                None,
+                None,
+                Some(&self.cfg.memory),
+                agent,
+                &self.cfg.mcp_servers,
+            ) {
+                Some(executor) => {
+                    let extra = executor.additional_tool_defs(&tool_defs);
+                    if !extra.is_empty() {
+                        tool_defs.extend(extra);
+                    }
+                    Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+                }
+                None => Arc::new(NoopRuntimeToolExecutor)
+                    as Arc<dyn crate::adapters::engine_builder::ToolExecutor>,
+            };
+
+        let stubbed = StubbedExecutor::new(&*inner_executor, &self.accum.stubs);
+
+        let obs = Arc::clone(&self.accum.observations);
+        let seq = Arc::clone(&self.accum.seq);
+        let observer_closure: Box<dyn Fn(&ToolCall, &str) + Send + Sync> =
+            Box::new(move |tc: &ToolCall, _result: &str| {
+                let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                obs.lock().unwrap().push(Observation {
+                    seq: n,
+                    name: tc.name.clone(),
+                    args_preview: truncate(&tc.arguments.to_string(), 2048),
+                });
+            });
+        let observer: ToolResultObserver<'_> = &*observer_closure;
+
+        let messages = vec![
+            Message {
+                role: Role::System,
+                content: system_prompt.clone(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            Message {
+                role: Role::User,
+                content: text.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+
+        let engine_context = EngineContext {
+            workspace: Some(workspace_path.clone()),
+            system_prompt: Some(system_prompt.clone()),
+            bridge_tools: None,
+            max_tool_rounds: Some(agent.limits.max_tool_rounds),
+            max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+        };
+
+        let response = crate::adapters::engine_builder::collect_engine_response(
+            &*engine,
+            &messages,
+            &tool_defs,
+            &engine_context,
+            Some(&stubbed),
+            Some(observer),
+            None,
+            None,
+            agent.limits.max_tool_rounds,
+            agent.limits.max_tool_result_chars,
+            agent.limits.stream_event_timeout_secs,
+            agent.limits.compact_result_limit,
+        )
+        .await?;
+
+        {
+            let mut tok = self.accum.tokens.lock().unwrap();
+            tok.0 = tok.0.saturating_add(response.input_tokens_delta);
+            tok.1 = tok.1.saturating_add(response.output_tokens_delta);
+        }
+
+        Ok(response.text)
+    }
+}
+
+async fn run_row_via_orchestrator(
+    ctx: RowCtx<'_>,
+    started: Instant,
+    _ws: tempfile::TempDir,
+    ws_path: PathBuf,
+    cfg: Config,
+) -> anyhow::Result<RowResult> {
+    // Shared state threaded through every worker step the orchestrator
+    // spawns for this row.
+    let accum = Arc::new(EvalRowAccum {
+        observations: Arc::new(std::sync::Mutex::new(Vec::new())),
+        seq: Arc::new(AtomicU32::new(0)),
+        tokens: Arc::new(std::sync::Mutex::new((0, 0))),
+        stubs: ctx.row.stubs.clone(),
+        engine_id: Arc::new(std::sync::Mutex::new(String::new())),
+    });
+
+    let cfg_arc = Arc::new(cfg);
+    let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+        Arc::new(EvalChatServiceFactory {
+            cfg: Arc::clone(&cfg_arc),
+            ws_path: ws_path.clone(),
+            accum: Arc::clone(&accum),
+        });
+
+    // Evals run without a live memory backend — register an empty
+    // MemoryManager so the orchestrator doesn't choke on missing deps.
+    let memory_manager = Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+
+    let orchestrator = channel_runtime::build_orchestrator(
+        &cfg_arc,
+        Arc::clone(&factory),
+        Arc::clone(&memory_manager),
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")
+    })?;
+
+    // Subscribe to orchestrator events and convert each into a synthetic
+    // observation. The judge receives the full trace: plan shape + each
+    // step boundary interleaved with tool calls. Without this, the judge
+    // sees only the worker tool calls and can't distinguish "orchestrator
+    // fanned out to 3 parallel researchers" from "one researcher made 3
+    // sequential calls" — the plan semantics are invisible at the tool
+    // layer alone.
+    let event_obs = Arc::clone(&accum.observations);
+    let event_seq = Arc::clone(&accum.seq);
+    let mut event_rx = orchestrator.subscribe();
+    let event_task = tokio::spawn(async move {
+        use crate::adapters::orchestrator::OrchestratorEvent;
+        while let Ok(ev) = event_rx.recv().await {
+            let (name, detail) = match ev {
+                OrchestratorEvent::PlanCreated { plan } => {
+                    let steps: Vec<String> = plan
+                        .steps
+                        .iter()
+                        .map(|s| {
+                            let deps: Vec<String> =
+                                s.depends_on.iter().map(|d| d.0.clone()).collect();
+                            if deps.is_empty() {
+                                format!("{}:{}(deps=[])", s.id.0, s.agent)
+                            } else {
+                                format!("{}:{}(deps=[{}])", s.id.0, s.agent, deps.join(","))
+                            }
+                        })
+                        .collect();
+                    (
+                        "orchestrator:plan_created".to_string(),
+                        format!("steps=[{}]", steps.join(", ")),
+                    )
+                }
+                OrchestratorEvent::StepStarted { step_id, agent } => (
+                    "orchestrator:step_started".to_string(),
+                    format!("{}:{}", step_id.0, agent),
+                ),
+                OrchestratorEvent::StepSucceeded { step_id, output } => (
+                    "orchestrator:step_succeeded".to_string(),
+                    format!("{}:{}", step_id.0, truncate(&output, 200)),
+                ),
+                OrchestratorEvent::StepFailed {
+                    step_id,
+                    attempt,
+                    error,
+                } => (
+                    "orchestrator:step_failed".to_string(),
+                    format!(
+                        "{}:attempt={} err={}",
+                        step_id.0,
+                        attempt,
+                        truncate(&error, 200)
+                    ),
+                ),
+                OrchestratorEvent::StepExhausted {
+                    step_id,
+                    final_error,
+                } => (
+                    "orchestrator:step_exhausted".to_string(),
+                    format!("{}:err={}", step_id.0, truncate(&final_error, 200)),
+                ),
+                OrchestratorEvent::ReplanTriggered { reason } => (
+                    "orchestrator:replan_triggered".to_string(),
+                    truncate(&reason, 200),
+                ),
+                OrchestratorEvent::PlanCompleted {
+                    final_response,
+                    cancelled,
+                } => (
+                    "orchestrator:plan_completed".to_string(),
+                    format!("cancelled={} final_len={}", cancelled, final_response.len()),
+                ),
+                OrchestratorEvent::StepProgress { .. } => continue,
+            };
+            let n = event_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            event_obs.lock().unwrap().push(Observation {
+                seq: n,
+                name,
+                args_preview: detail,
+            });
+        }
+    });
+
+    // Drive with the row's timeout.
+    let prompt = ctx.row.prompt.clone();
+    let driver_fut = orchestrator.handle(prompt);
+    let (timed_out, final_text) = match tokio::time::timeout(
+        std::time::Duration::from_secs(ctx.row.timeout_secs),
+        driver_fut,
+    )
+    .await
+    {
+        Ok(text) => (false, text),
+        Err(_) => (true, String::new()),
+    };
+
+    // Let the event drain finish — PlanCompleted should already have
+    // fired. Give it a brief grace window to flush before we snapshot.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    event_task.abort();
+
+    // Snapshot results from the accumulator.
+    let obs_snapshot = accum.observations.lock().unwrap().clone();
+    let (input_tokens, output_tokens) = *accum.tokens.lock().unwrap();
+    let engine_id_str = accum.engine_id.lock().unwrap().clone();
+
+    // Judge.
+    let (verdict, judge_input_tokens, judge_output_tokens) = if timed_out {
+        (
+            Verdict {
+                verdict: "fail".into(),
+                rationale: format!("row timed out after {}s", ctx.row.timeout_secs),
+            },
+            0u32,
+            0u32,
+        )
+    } else {
+        let outcome = judge_row(&*ctx.judge, &ctx.row.expected, &obs_snapshot, &final_text).await?;
+        (outcome.verdict, outcome.input_tokens, outcome.output_tokens)
+    };
+
+    let judge_user_turn = format_judge_user_turn(&ctx.row.expected, &obs_snapshot, &final_text);
+
+    // Transcript.
+    std::fs::create_dir_all(ctx.out_dir)
+        .with_context(|| format!("create out_dir {}", ctx.out_dir.display()))?;
+    let transcript_path = ctx
+        .out_dir
+        .join(format!("{}-{}.md", ctx.skill.name, ctx.row.id));
+
+    // The orchestrator path doesn't have a single `messages` array like
+    // the direct path — we synthesize a minimal one for the transcript.
+    let default_agent_id = cfg_arc
+        .agents
+        .iter()
+        .find(|(_, v)| v.default)
+        .map(|(k, _)| k.clone())
+        .unwrap_or_else(|| "default".into());
+    let default_agent_model = cfg_arc
+        .agents
+        .get(&default_agent_id)
+        .map(|a| a.model.clone())
+        .unwrap_or_default();
+    let stub_messages = vec![
+        Message {
+            role: Role::System,
+            content: format!(
+                "[orchestrator dispatch — actual prompts per-step; \
+                 default agent was `{}`]",
+                default_agent_id
+            ),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: ctx.row.prompt.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+
+    write_transcript(
+        &transcript_path,
+        &ctx.skill.name,
+        ctx.row,
+        &default_agent_model,
+        &engine_id_str,
+        &ws_path,
+        &stub_messages,
+        &[], // tool_outcomes — orchestrator path observations already include them
+        &obs_snapshot,
+        &final_text,
+        &verdict,
+        &judge_user_turn,
+    )?;
+
+    if ctx.keep_workspace {
+        std::mem::forget(_ws);
+    }
+
+    // Metric scoring (parity with the direct path) — skipped here; eval
+    // row scoring currently lives in the direct-path section. Follow-up
+    // if orchestrator evals need metric scoring too.
+    let metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
+
+    Ok(RowResult {
+        id: ctx.row.id.clone(),
+        prompt: ctx.row.prompt.clone(),
+        expected: ctx.row.expected.clone(),
+        verdict: verdict.verdict,
+        rationale: verdict.rationale,
+        observed_tools: obs_snapshot
+            .into_iter()
+            .map(|o| ObservationJson {
+                seq: o.seq,
+                name: o.name,
+                args_preview: o.args_preview,
+            })
+            .collect(),
+        wall_ms: started.elapsed().as_millis() as u64,
+        agent_tokens: TokenCount {
+            input: input_tokens,
+            output: output_tokens,
+        },
+        judge_tokens: TokenCount {
+            input: judge_input_tokens,
+            output: judge_output_tokens,
+        },
+        transcript_path,
+        timed_out,
+        stubs_used: !ctx.row.stubs.is_empty(),
+        metric_outcomes,
     })
 }
 
@@ -1236,7 +1958,11 @@ mod tests {
 
     #[async_trait]
     impl ToolExecutor for CountingExecutor {
-        async fn execute(&self, call: &ToolCall) -> anyhow::Result<String> {
+        async fn execute(
+            &self,
+            call: &ToolCall,
+            _messages: &[crate::adapters::types::Message],
+        ) -> anyhow::Result<String> {
             self.counter.lock().unwrap().push(call.name.clone());
             Ok(format!("live-result-for-{}", call.name))
         }
@@ -1546,9 +2272,18 @@ workspace = "{TMP_WORKSPACE}"
         }];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r1 = stubbed.execute(&make_call("http_request")).await.unwrap();
-        let r2 = stubbed.execute(&make_call("http_request")).await.unwrap();
-        let r3 = stubbed.execute(&make_call("http_request")).await.unwrap();
+        let r1 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
+        let r2 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
+        let r3 = stubbed
+            .execute(&make_call("http_request"), &[])
+            .await
+            .unwrap();
 
         assert!(r1.contains("503"));
         assert!(r2.contains("200"));
@@ -1567,7 +2302,10 @@ workspace = "{TMP_WORKSPACE}"
         let stubs: Vec<StubSpec> = vec![];
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
-        let r = stubbed.execute(&make_call("sessions_spawn")).await.unwrap();
+        let r = stubbed
+            .execute(&make_call("sessions_spawn"), &[])
+            .await
+            .unwrap();
         assert_eq!(r, "live-result-for-sessions_spawn");
         assert_eq!(
             inner.counter.lock().unwrap().as_slice(),
@@ -1661,6 +2399,108 @@ workspace = "{TMP_WORKSPACE}"
         assert_eq!(
             exit, 2,
             "expected exit 2 for filter miss (runner-level error)"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // load_skill_metrics tests (α.8)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn load_skill_metrics_empty_when_no_frontmatter() {
+        // A SKILL.md without frontmatter should return an empty vec (backward compat).
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "# My Skill\n\nThis skill has no metrics frontmatter.\n",
+        )
+        .unwrap();
+        let metrics = load_skill_metrics(&skill_md, skill_dir).expect("load_skill_metrics");
+        assert!(
+            metrics.is_empty(),
+            "expected empty metrics, got {:?}",
+            metrics
+        );
+    }
+
+    #[test]
+    fn load_skill_metrics_parses_all_four_kinds() {
+        // Happy-path: SKILL.md with all 4 metric kinds.
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+
+        // Create the files validate_metrics needs on disk.
+        std::fs::write(skill_dir.join("rubric.md"), "# Rubric\n").unwrap();
+        std::fs::write(skill_dir.join("check.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            r#"---
+metrics:
+  - kind: shell_check
+    name: lints-clean
+    cmd: "echo ok"
+    expect_exit_code: 0
+  - kind: llm_judge
+    name: quality
+    rubric_file: rubric.md
+    min_pass_rate: 0.8
+  - kind: tool_assertion
+    name: tool-called
+    tool: http_request
+    action: call
+    assert: {"status": 200}
+  - kind: script
+    name: custom-script
+    path: check.sh
+---
+
+# My Skill
+
+Skill body here.
+"#,
+        )
+        .unwrap();
+
+        let metrics = load_skill_metrics(&skill_md, skill_dir).expect("load_skill_metrics");
+        assert_eq!(metrics.len(), 4, "expected 4 metric specs");
+        let names: Vec<&str> = metrics.iter().map(|m| m.name()).collect();
+        assert!(names.contains(&"lints-clean"));
+        assert!(names.contains(&"quality"));
+        assert!(names.contains(&"tool-called"));
+        assert!(names.contains(&"custom-script"));
+    }
+
+    #[test]
+    fn load_skill_metrics_bails_on_missing_rubric_file() {
+        // validate_metrics should surface an error when rubric_file doesn't exist on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            r#"---
+metrics:
+  - kind: llm_judge
+    name: quality
+    rubric_file: nonexistent.md
+---
+
+# Skill
+"#,
+        )
+        .unwrap();
+
+        let err = load_skill_metrics(&skill_md, skill_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("rubric_file missing") || err.contains("nonexistent.md"),
+            "unexpected error: {}",
+            err
         );
     }
 }

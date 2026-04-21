@@ -182,6 +182,19 @@ pub(crate) fn build_tool_executor(
         }
     }
 
+    // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
+    // via `workspace_tools = ["skill_distill"]`. The tool writes a new skill
+    // directory from the calling agent's in-context synthesis.
+    if allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME) {
+        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+            &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
+            &plugin_ctx,
+            &allowed_list,
+        )) {
+            tracing::warn!(error = %e, "Failed to register skill-lifecycle plugin — skill_distill unavailable");
+        }
+    }
+
     // HTTP plugin (A2). Registers `http_request`.
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if let Err(e) = futures::executor::block_on(registry.register_plugin(
@@ -284,6 +297,12 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
     }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
+    }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
     tools
@@ -304,6 +323,12 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
     }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
+    }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
@@ -927,6 +952,68 @@ pub(crate) fn build_orchestrator(
         cfg.max_replans,
         memory,
     ))
+}
+
+/// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to
+/// dispatch a turn against a named agent (e.g. `tengu skill evolve` targeting
+/// the skill-improver agent).
+///
+/// Pre-populates an `OrchestratorSnapshots` table with one `ChatTurnInputs` per
+/// agent in `config.agents`, then wraps it in a `RuntimeChatServiceFactory`.
+/// Tool execution is intentionally omitted — the skill-improver only needs the
+/// engine + memory for text generation; workspace tools can be added later.
+pub(crate) async fn build_cli_chat_factory(
+    config: &Config,
+    workspace: &std::path::Path,
+) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
+    use crate::adapters::engine_builder::build_engine;
+    use crate::adapters::memory::manager::MemoryManager;
+
+    // Build a shared memory manager (no vector backend for CLI — acceptable
+    // degradation; the improver only needs text generation context).
+    let memory: Arc<MemoryManager> = Arc::new(MemoryManager::new());
+
+    let snapshots: OrchestratorSnapshots =
+        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+
+    for (name, agent_cfg) in &config.agents {
+        let engine_box = build_engine(name, agent_cfg, config.claude_code.as_ref())?;
+        let compaction_policy = crate::adapters::flow_builder::resolve_flow_compaction_policy(
+            &agent_cfg.flow,
+            agent_cfg.limits.max_tokens_per_flow,
+            engine_box.context_window(),
+            engine_box.max_output_tokens_per_turn() as usize,
+        );
+        let engine: Arc<dyn Engine> = Arc::from(engine_box);
+        let system_prompt =
+            crate::adapters::skill_builder::build_system_prompt(agent_cfg, false, &[]);
+        let history_turn_limit =
+            crate::adapters::flow_builder::resolve_history_turn_limit(&agent_cfg.flow);
+        let inputs = ChatTurnInputs {
+            engine,
+            agent_id: name.clone(),
+            agent_config: Arc::new(agent_cfg.clone()),
+            history_turn_limit,
+            compaction_policy,
+            system_prompt,
+            tools: Vec::new(),
+            tool_executor: None,
+            memory_manager: Some(Arc::clone(&memory)),
+            max_recall_entries: 10,
+            max_recall_tokens: 2000,
+            bridge_tools: None,
+            tool_observer: None,
+            cancel: None,
+        };
+        snapshots
+            .write()
+            .map_err(|e| anyhow::anyhow!("snapshots lock poisoned: {e}"))?
+            .insert(name.clone(), inputs);
+    }
+
+    let _ = workspace; // workspace available for future tool wiring
+    let inputs_fn = snapshots_inputs_fn(snapshots);
+    Ok(Arc::new(RuntimeChatServiceFactory::new(inputs_fn)))
 }
 
 // ---------------------------------------------------------------------------

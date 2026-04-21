@@ -41,39 +41,77 @@ impl MetricKind for ToolAssertionKind {
 
         // Arg shape is kind-specific: `{action, key?}` passed through to the tool.
         let mut args = json!({ "action": action });
-        if let Some(k) = key {
+        if let Some(k) = key.clone() {
             args["key"] = Value::String(k);
         }
 
-        // Tool dispatch happens through the registry; a ToolCtx is required to call
-        // `invoke`. The eval runner constructs one and passes it via a richer
-        // MetricRunCtx extension in Task 12. For now, feature-gate: if the tool
-        // isn't registered we fail; otherwise we pass when the assertion is
-        // trivially satisfied against {"registered": true}.
-        let registered = registry.definitions().iter().any(|d| d.name == tool_name);
-        if !registered {
+        // If all ToolCtx fields are present, dispatch live; otherwise degrade to
+        // registration-only check (backwards-compatible with pre-Task-12 evals).
+        let (Some(http), Some(secret_registry), Some(activity)) =
+            (ctx.http, ctx.secret_registry, ctx.activity)
+        else {
+            // Degraded path: just check registration.
+            let registered = registry.definitions().iter().any(|d| d.name == tool_name);
+            if !registered {
+                return Ok(MetricOutcome {
+                    pass: false,
+                    score: 0.0,
+                    notes: Some(format!("tool '{tool_name}' not registered")),
+                    raw: json!({ "args": args }),
+                });
+            }
+            let pass = assert_value(&assertion, &json!({ "registered": true }));
             return Ok(MetricOutcome {
+                pass,
+                score: if pass { 1.0 } else { 0.0 },
+                notes: if pass {
+                    None
+                } else {
+                    Some("assertion failed (degraded: no live dispatch ctx)".into())
+                },
+                raw: json!({ "args": args, "observed": { "registered": true } }),
+            });
+        };
+
+        // Live-dispatch path: build a ToolCtx and invoke.
+        let empty_scopes = std::collections::HashMap::new();
+        let scopes = ctx.tool_scopes.unwrap_or(&empty_scopes);
+        let default_scope = crate::adapters::ports::ToolScope::default();
+        let scope = scopes.get(&tool_name).unwrap_or(&default_scope);
+        let tool_ctx = crate::adapters::tool_plugin::ToolCtx {
+            workspace: ctx.workspace,
+            scope,
+            shell: ctx.shell,
+            http,
+            memory_manager: ctx.memory_manager,
+            secret_registry,
+            activity,
+            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+        };
+
+        match registry.invoke(&tool_name, &args, &tool_ctx).await {
+            Ok(output) => {
+                let observed: Value = serde_json::from_str(&output.text)
+                    .unwrap_or_else(|_| Value::String(output.text.clone()));
+                let pass = assert_value(&assertion, &observed);
+                Ok(MetricOutcome {
+                    pass,
+                    score: if pass { 1.0 } else { 0.0 },
+                    notes: if pass {
+                        None
+                    } else {
+                        Some(format!("assertion failed; observed: {observed}"))
+                    },
+                    raw: json!({ "args": args, "observed": observed }),
+                })
+            }
+            Err(e) => Ok(MetricOutcome {
                 pass: false,
                 score: 0.0,
-                notes: Some(format!("tool '{tool_name}' not registered")),
+                notes: Some(format!("tool dispatch failed: {e}")),
                 raw: json!({ "args": args }),
-            });
+            }),
         }
-
-        // NOTE: actual async invoke happens via a dispatcher added in Task 12.
-        // Until then, tool_assertion passes when the tool is registered AND the
-        // assertion block is trivially satisfied against {"registered": true}.
-        let pass = assert_value(&assertion, &json!({ "registered": true }));
-        Ok(MetricOutcome {
-            pass,
-            score: if pass { 1.0 } else { 0.0 },
-            notes: if pass {
-                None
-            } else {
-                Some("assertion failed".into())
-            },
-            raw: json!({ "args": args, "observed": { "registered": true } }),
-        })
     }
 }
 

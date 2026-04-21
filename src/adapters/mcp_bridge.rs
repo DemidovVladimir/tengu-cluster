@@ -257,7 +257,7 @@ async fn handle_tools_call(
         "MCP tool call started"
     );
 
-    match executor.execute(&call).await {
+    match executor.execute(&call, &[]).await {
         Ok(result) => {
             let truncated = truncate_mcp_result(&result, max_result_chars);
             info!(
@@ -431,6 +431,20 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
             .await
         {
             warn!(error = %e, "bridge failed to register cache plugin");
+        }
+    }
+
+    // Skill-lifecycle plugin — skill_distill (opt-in).
+    if allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME) {
+        if let Err(e) = registry
+            .register_plugin(
+                &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
+                &plugin_ctx,
+                &allowed_list,
+            )
+            .await
+        {
+            warn!(error = %e, "bridge failed to register skill-lifecycle plugin");
         }
     }
 

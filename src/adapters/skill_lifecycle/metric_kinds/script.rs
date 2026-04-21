@@ -113,6 +113,11 @@ mod tests {
             shell: &NoShell,
             tools: None,
             judge: None,
+            http: None,
+            memory_manager: None,
+            secret_registry: None,
+            activity: None,
+            tool_scopes: None,
         };
         let spec = MetricSpec::Script {
             name: "m".into(),

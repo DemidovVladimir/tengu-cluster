@@ -37,6 +37,7 @@ To skip the master password prompt, set `TENGU_MASTER_PASSWORD` env var.
 | `[telegram]` | Telegram bot adapter |
 | `[scaffold]` | Workspace directory/file scaffolding |
 | `[claude_code]` | Global Claude Code backend settings |
+| `[skill_lifecycle]` | Skill eval / metrics / evolve (required to activate `tengu skill-evolve`) |
 
 ## Agent Configuration
 
@@ -49,7 +50,7 @@ workspace = "~/projects/my-app"    # Workspace root
 default_lens = "eco"               # "eco" | "standard" | "precise"
 role = "backend_engineer"          # Orchestration role (optional)
 skill_packages = ["aura-orchestrator"]  # Skills to load
-workspace_tools = ["shared_cache"]      # Optional workspace tools
+workspace_tools = ["shared_cache", "skill_distill"]  # Optional workspace tools (see [[skills#Distillation]])
 ```
 
 ### Engine Selection
@@ -212,8 +213,48 @@ Config is validated at load time. Invalid values produce clear error messages:
 - Engine must be `openrouter` or `claude_code`
 - Profile must be `none`, `read_only`, `editor`, or `editor_shell`
 - Limits must be positive, cost thresholds consistent
+- `workspace_tools` entries must be in `["shared_cache", "persistent_store", "skill_distill"]`
+
+## Skill Lifecycle
+
+Enables `tengu eval <skill>`, `tengu skill-metrics <skill>`, and `tengu skill-evolve <skill>`. See [[skills#Metrics & Evolution]] for the frontmatter contract. This block is optional — absence disables the evolve CLI but does not affect chat/eval of skills that don't declare metrics.
+
+```toml
+[skill_lifecycle]
+improver_agent       = "skill-improver"     # Name of the agent (in [agents.*]) that proposes rewrites
+fixture_runner_agent = "fixture-runner"     # Name of the agent that executes eval fixtures
+default_max_evolve_cycles = 3               # Tier-2 cap on rewrite→rescore cycles per evolve run
+default_rolling_window    = 10              # Window over which metrics.json pass_rate is computed
+
+[agents.skill-improver]
+engine = "openrouter"
+model  = "anthropic/claude-opus-4-7"
+workspace_tools = []                         # Read-only; harness applies diffs, not the agent
+
+[agents.skill-improver.identity]
+name = "Skill Improver"
+instructions = """
+You are a skill-improver. Given a skill that is under-performing on a specific
+metric, propose a REVISED skill body that raises the metric's pass rate without
+regressing others. Emit ONE JSON object and nothing else:
+{"proposal":{"body_markdown":"...","metrics":[...]?,"rationale":"..."}}
+"""
+
+[agents.fixture-runner]
+engine = "openrouter"
+model  = "anthropic/claude-sonnet-4-6"
+workspace_tools = []
+```
+
+Agents that should be able to author skills mid-conversation add `"skill_distill"` to their own `workspace_tools`:
+
+```toml
+[agents.main]
+workspace_tools = ["skill_distill"]
+```
 
 ## Related
 - [[architecture]] — system overview
 - [[engine-backends]] — engine comparison
-- [[skills]] — skill_packages configuration
+- [[skills]] — skill_packages configuration + `[skill_lifecycle]` details
+- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — design spec

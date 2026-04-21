@@ -215,7 +215,11 @@ impl PluginToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for PluginToolExecutor {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String> {
         self.activity.publish_tool_activity(call);
 
         if self.registry.get(&call.name).is_none() {
@@ -231,7 +235,7 @@ impl ToolExecutor for PluginToolExecutor {
             memory_manager: self.memory_manager.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
-            conversation: ConversationView::empty(),
+            conversation: ConversationView::new(messages),
         };
 
         let output = self

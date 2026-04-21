@@ -99,6 +99,13 @@ pub(crate) struct MetricRunCtx<'a> {
     pub shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
     pub tools: Option<&'a crate::adapters::tool_plugin::ToolRegistry>,
     pub judge: Option<Arc<dyn JudgeClient>>,
+    // Fields needed for live tool dispatch via `tool_assertion`.
+    pub http: Option<&'a reqwest::Client>,
+    pub memory_manager: Option<&'a crate::adapters::memory::manager::MemoryManager>,
+    pub secret_registry: Option<&'a crate::adapters::secret_builder::SecretRegistry>,
+    pub activity: Option<&'a dyn crate::adapters::ports::ToolActivityPort>,
+    pub tool_scopes:
+        Option<&'a std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
 }
 
 #[async_trait]
