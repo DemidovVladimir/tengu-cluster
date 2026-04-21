@@ -304,23 +304,248 @@ Presence of `[orchestrator]` activates orchestration. Absence → single-agent d
 
 ---
 
-## 9. Known limitations (live on main)
+## 9. Status of known limitations
 
-1. **Batch embedding gone.** Old port took `&[&str]`; new `Embedder::embed` is single-text. N HTTP calls instead of 1 for multi-text ingestion. Follow-up: add `Embedder::embed_batch`.
+All six limitations originally noted at the time of the four-PR merge have been addressed in a follow-up polish pass. Current state:
 
-2. **`persistent_store` delete is manifest-only.** `VectorStore` trait has no `delete(id)`. Manifest entries are removed but vector entries linger in `vectors.bin` until rebuild.
+1. **Batch embedding.** ✅ Fixed. `Embedder::embed_batch(&[&str]) -> Vec<Vec<f32>>` does one HTTP round-trip for N inputs. `MemoryManager::ingest_batch(texts, agent, metadata)` uses it; `memory_ingest` multi-chunk path routes through it. Single-text `embed()` is a thin wrapper.
 
-3. **`/purge` no longer clears memory.** Prints pointer to `<workspace>/memory/vectors.bin` — no programmatic clear.
+2. **Per-id delete.** ✅ Fixed. `VectorStore::delete(id)` + `VectorStore::write` now returns the synthetic entry id. `persistent_store` tracks `chunk_ids` in its `FileManifest` and calls `MemoryManager::delete_entry(id)` per chunk on file delete. Legacy manifests without ids log a warning.
 
-4. **TUI status line drops `entry_count` / `storage_bytes`.** Not exposed on `VectorStore`.
+3. **`/purge` clears memory.** ✅ Fixed. Telegram `/purge` and TUI `/purge` both call `MemoryManager::clear_all()` which delegates to `VectorStore::clear_all()`. Disk impl truncates + flushes; Qdrant impl deletes the collection and recreates it with the same vector config.
 
-5. **`@role:` explicit routing bypasses the orchestrator.** By design — `@researcher: do X` goes direct-dispatch, orchestrator only fires for default-agent messages.
+4. **TUI status line shows memory stats.** ✅ Fixed. `VectorStore::entry_count()` + `storage_bytes()` added. `MemoryManager::stats() -> Option<(usize, u64)>` surfaces them. TUI updates the status bar after each turn: `mem: N entries / M KB`.
 
-6. **Cross-agent "Recent Team Activity" preserved only on direct path.** Orchestrator-dispatched steps don't see other agents' recent activity.
+5. **`@role:` explicit routing.** ✅ Configurable. New `OrchestratorConfig.route_explicit_agents` (default `false`) preserves the direct-dispatch escape hatch; set `true` to route explicit targets through the orchestrator so the planner sees the request and can honor or override.
+
+6. **Cross-agent Recent Team Activity.** ✅ Fixed. `execute_orchestrator_turn` injects `build_activity_context(&self.activity_log, agent_id)` into each per-agent snapshot's system prompt — same as the direct dispatch path.
 
 ---
 
-## 10. Test coverage
+## 10. Sequence diagrams
+
+### 10.1 Orchestrator happy path (sequential multi-step)
+
+```
+User          Channel         Orchestrator    Planner         Executor         Worker(s)         Memory
+  │              │                 │              │                │                │                │
+  │─── msg ─────▶│                 │              │                │                │                │
+  │              │──── handle ─────▶              │                │                │                │
+  │              │                 │── plan ─────▶│                │                │                │
+  │              │                 │              │── LLM call ───────────────────────────────────────▶ prefetch
+  │              │                 │              ◀─── verdict ──── (plan: s1 → s2)  │                │
+  │              │                 │─ PlanCreated ▶ bus                               │                │
+  │              │                 │── run plan ─────────────────▶│                │                │
+  │              │                 │              │                │─ ready=[s1] ──▶│                │
+  │              │                 │              │                │                │── mem inject ─▶│
+  │              │                 │              │                │                │── LLM turn ───▶│
+  │              │                 │              │                │                │◀── output ─────│
+  │              │                 │              │                │                │── sync_turn ──▶│ (spawned)
+  │              │                 │              │                │◀─ StepSucceeded │                │
+  │              │                 │              │                │─ ready=[s2] ──▶│                │
+  │              │                 │              │                │                │ ...            │
+  │              │                 │              │                │◀─ StepSucceeded │                │
+  │              │                 │              │                │─ all done ────▶│                │
+  │              │                 │◀─── final_response from leaf ─│                │                │
+  │              │◀── reply ────── PlanCompleted                                                      │
+  │◀── reply ───│                                                                                    │
+```
+
+### 10.2 Replan on step exhaustion
+
+```
+Executor                Worker                RetryPolicy               Replan          Planner
+    │                     │                        │                       │               │
+    │── run_step ────────▶│                        │                       │               │
+    │                     │─── fail #1 ───────────▶│                       │               │
+    │                     │◀─── backoff 1s ────────│                       │               │
+    │                     │─── fail #2 ───────────▶│                       │               │
+    │                     │◀─── backoff 3s ────────│                       │               │
+    │                     │─── fail #3 ───────────▶│                       │               │
+    │◀───── StepExhausted ─│ (max_attempts_per_step=3)                     │               │
+    │── NeedsReplan ───────────────────────────────▶│                      │               │
+    │                                                │──── planner.replan ─▶│               │
+    │                                                │                     │── LLM call ──▶│ (orchestrator
+    │                                                │                     │               │  agent, with
+    │                                                │                     │               │  failure ctx)
+    │                                                │                     │◀── new plan ──│
+    │◀─── run new plan ──────────────────────────────│                     │               │
+    │  ... continues until done or max_replans=2 exceeded ...
+```
+
+### 10.3 Cancel (`/stop`) mid-plan
+
+```
+User         Channel         Orchestrator      Executor         Worker
+  │            │                   │                │               │
+  │─/stop ────▶│                   │                │               │
+  │            │── cancel() ───────▶ (flag=true)    │               │
+  │            │                   │                │ (in-flight    │
+  │            │                   │                │  worker keeps │
+  │            │                   │                │  running until│
+  │            │                   │                │  LLM returns) │
+  │            │                   │◀── check flag ─│               │
+  │            │                   │                │← skip dispatch│
+  │            │                   │  (ExecResult::Cancelled)       │
+  │            │◀── "Stopped by user." ────────────                 │
+  │◀── reply ──│                                                    │
+```
+
+Note: AtomicBool is checked between step dispatches, NOT mid-step. A worker already running an LLM call finishes that call and its output is discarded.
+
+---
+
+## 11. Code walkthrough
+
+When the TL;DR isn't enough. Follow these paths in order.
+
+### 11.1 A user message arrives in Telegram
+
+1. `telegram_builder.rs:878` — dispatcher calls `route_and_chat(msg, sender_id)`.
+2. `telegram_builder.rs:1026` — `route_and_chat` parses `@role:` prefix via `channel_runtime::parse_agent_routing`. Resolves `target_agent_id`.
+3. `telegram_builder.rs:1072` — `execute_chat_turn` is called. Hot-reloads skills, rebuilds tools/prompt if dirty.
+4. `telegram_builder.rs:1146` — orchestrator-gate check:
+   - orchestrator configured AND (default agent OR `route_explicit_agents=true`) → branches to `execute_orchestrator_turn`
+   - otherwise → direct dispatch below
+5. **Direct path:** `telegram_builder.rs:1258` injects activity context, builds `ChatRuntimeService<'a>` inline, calls `process_user_text`.
+6. **Orchestrator path:** `telegram_builder.rs:1384` is `execute_orchestrator_turn`:
+   - Hot-reload every agent (lines 1392–1407).
+   - For each agent, build a `ChatTurnInputs` snapshot (lines 1416–1486) with per-agent `current_tools`, `current_system_prompt` + activity context, per-agent `OwnedSanitizedToolExecutor`, the shared memory manager.
+   - Publish the snapshots atomically (lines 1492–1508).
+   - `orchestrator.handle(user_content).await` (line 1521).
+   - Redact + chunk the reply.
+
+### 11.2 Inside `Orchestrator::handle`
+
+- `orchestrator/mod.rs:83` — `handle()` resets cancel flag and calls `replan::drive`.
+- `orchestrator/replan.rs` — `drive` runs the planner once, loops the executor + planner-on-exhaustion until `Done` / exhausted replans / cancelled.
+- `orchestrator/planner.rs` — `OrchestratorAgentPlanner::plan` calls the orchestrator agent's LLM turn through the `OrchestratorChatPort` (backed by `ChatOrchestratorPortImpl` → `ChatServiceFactory.run_turn`).
+- `orchestrator/planner.rs:135` — `parse_verdict` strips markdown fences and deserializes the JSON into `PlannerVerdict::Direct` or `PlannerVerdict::Plan`.
+
+### 11.3 Inside `DagExecutor`
+
+- `orchestrator/executor.rs:64` — `run(plan, worker, policy, events, cancel)` main loop.
+- `orchestrator/plan.rs:94` — `Plan::ready_steps(&completed)` returns steps with all deps satisfied.
+- `orchestrator/executor.rs` spawns each ready step via `tokio::spawn`; collects completions via `FuturesUnordered`.
+- `orchestrator/retry.rs` — `run_step_with_retry` wraps each worker call with backoff.
+
+### 11.4 Inside a worker step
+
+- `orchestrator/wiring.rs` — `ChatWorker::run_step`:
+  1. `injector::for_turn(memory, step.agent, step.goal)` → fenced `<memory-context>` block.
+  2. Assemble user content: `memory_block + (step_inputs if any) + step.goal`.
+  3. `ChatServiceFactory::run_turn(agent, content)` → real LLM call.
+  4. `writer::sync_turn(memory, agent, step.goal, reply)` — spawned, non-blocking.
+- `channel_runtime.rs` `RuntimeChatServiceFactory::run_turn`:
+  1. Calls `inputs_fn(agent)` → snapshot.
+  2. Constructs `ChatRuntimeService<'a>` borrowing into the snapshot.
+  3. Calls `process_user_text(&mut ChatLoopState::default(), content)`.
+  4. Returns `assistant_text` from the `ChatTurnResult`.
+
+### 11.5 Memory flow for a single turn
+
+Pre-turn (inside `ChatWorker::run_step`):
+- `injector::for_turn(mgr, agent, query)`:
+  - `mgr.prefetch_all(agent, query)` → iterates providers, each returns formatted hits.
+  - `fencing::build_memory_context_block(raw)` → wraps in `<memory-context>`.
+  - Returns `PinnedMemoryBlock` — NOT persisted in message history.
+
+Post-turn (inside `ChatWorker::run_step`, after LLM call):
+- `writer::sync_turn(mgr, agent, user, asst)`:
+  - `tokio::spawn` a detached task that calls `mgr.sync_all(agent, user, asst)`.
+  - Returns immediately — user-visible reply never waits.
+
+LLM-tool path (inside `process_user_text` if the LLM calls `memory_search`):
+- `plugins/memory/search.rs` → `MemoryManager::search(query, top_k, filter)` → `Embedder::embed` + `VectorStore::search`.
+
+Explicit ingest path (if the LLM calls `memory_ingest`):
+- `plugins/memory/ingest.rs` → `MemoryManager::ingest_batch` (multi-chunk) OR `ingest_one` (single) → `Embedder::embed_batch` + N × `VectorStore::write`.
+
+---
+
+## 12. Operational runbook
+
+### 12.1 Enabling orchestration
+
+1. Add `[orchestrator]` + matching `[agents.<name>]` block to `tengu.toml` (see §7).
+2. Ensure `OPENROUTER_API_KEY` (or equivalent for your engine) is set.
+3. Ensure a default agent exists (`default = true` on one of `[agents.*]`).
+4. Restart the binary. On startup logs:
+   - `"TUI orchestrator constructed with per-turn snapshot factory"` — TUI.
+   - `"Telegram orchestrator constructed with per-message snapshot factory"` — Telegram.
+5. Send a user message. First-turn overhead is ~1 extra LLM call (the planner).
+
+### 12.2 Disabling orchestration
+
+Remove or comment out the `[orchestrator]` block. Falls back to single-agent-default dispatch (same behavior as before PR #6). No code changes needed.
+
+### 12.3 Debugging: orchestrator didn't fire
+
+Checklist:
+- `[orchestrator]` block present and parses? Check startup config errors.
+- Agent named in `orchestrator.agent` exists in `[agents.*]`?
+- Message routed by `@role:`? Then it's bypassed by default. Set `route_explicit_agents = true` if you want it through.
+- Channel is Telegram or TUI? Other adapters (if any) don't yet wire orchestrator.
+
+Logs to grep for:
+- `"TUI orchestrator constructed"` / `"Telegram orchestrator constructed"` — confirms construction at startup.
+- `"orch: plan created"` — confirms a plan was built on a message.
+- `"orch: ▶ <step> [<agent>]"` — confirms a step fired.
+- `"orch: replan triggered"` — step exhausted, planner re-invoked.
+
+### 12.4 Debugging: memory didn't kick in
+
+Memory is automatic IF `build_memory_manager` returned `Some` at startup. Preconditions:
+- `[memory] enabled = true` in `tengu.toml` (default yes).
+- `OPENROUTER_API_KEY` set (the embedder needs it — even the BuiltinMemoryProvider requires it for `prefetch`).
+- `<workspace>/memory/` is writable. Disk store creates it on first write.
+
+Logs:
+- `"DiskVectorStore loaded"` — disk backend ready.
+- `"QdrantVectorStore connected"` — Qdrant backend ready.
+- `"OPENROUTER_API_KEY not set, memory disabled"` — backend didn't initialize.
+
+Status:
+- `mgr.has_vector_backend()` returns `true` once a backend is installed.
+- TUI bottom bar: `mem: N entries / K KB` updates after every turn.
+
+### 12.5 Wiping memory
+
+- Telegram: `/purge` — clears conversations + calls `MemoryManager::clear_all()`.
+- TUI: `/purge` — same.
+- CLI file-level: delete `<workspace>/memory/vectors.bin` manually. Still supported as a fallback (safe to do when the harness isn't running).
+
+### 12.6 Adding a new worker agent
+
+1. Add `[agents.<name>]` + `[agents.<name>.identity]` block to `tengu.toml` (see the example in §7).
+2. List any tools the agent should have in `workspace_tools`.
+3. Restart.
+4. The orchestrator agent's `{{ roster }}` substitution picks up the new entry automatically — the planner sees the new agent as a dispatch target.
+
+### 12.7 Tuning retry / replan budgets
+
+Default: `max_attempts_per_step = 3`, `max_replans = 2`. Raise either in `[orchestrator]` if your workers are flaky or your plans need more refinement opportunities. Don't raise them without a reason — each replan costs a full orchestrator-agent LLM call.
+
+---
+
+## 13. Extension points
+
+For future work, the harness is explicitly designed to accept extensions at these boundaries:
+
+| Extension | Interface | Typical use |
+|---|---|---|
+| New channel (Slack, Discord, HTTP API) | Implement `ChatInputsFn` closure + call `build_orchestrator` | Wiring a new IM/API endpoint into the same orchestration flow |
+| New memory backend | `impl VectorStore` (and register via `MemoryManager::set_vector_backend`) | Swap Qdrant for Pinecone, or add an in-memory mock for tests |
+| External memory provider (LangMem, Letta, Mem0) | `impl MemoryProvider` + `MemoryManager::add_provider` | Layer semantic-memory products over the builtin store |
+| Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `OrchestratorAgentPlanner` | Skip LLM planner calls for recognized patterns |
+| Custom worker handle (delegate to remote cluster, Modal, etc.) | `impl WorkerHandle` | Fan work out to hosted inference instead of local engine |
+| Replay / deterministic test | `impl ChatServiceFactory` with scripted responses | Golden-test orchestration flows without live LLM calls |
+
+Each interface is ≤10 methods and documented in its defining file.
+
+---
+
+## 14. Test coverage
 
 | Area | Location | Count |
 |---|---|---|
@@ -335,7 +560,7 @@ All pass under `cargo test --bin tengu <filter>` with narrow filters (per projec
 
 ---
 
-## 11. PR history
+## 15. PR history
 
 | PR | Title | Merged SHA | Net LOC |
 |---|---|---|---|
@@ -343,5 +568,4 @@ All pass under `cargo test --bin tengu <filter>` with narrow filters (per projec
 | #6 | feat: harness-owned orchestration + memory subsystem | `e76c08d` | +10,252 / −12,226 |
 | #7 | refactor(memory): port MemoryService to memory::vector::* and delete old files | `9667ea3` | +575 / −1,175 |
 | #8 | feat(channels): wire Telegram + TUI through Orchestrator::handle | `1533c48` | +570 / −58 |
-
-Main is at `1533c48` with all four merged.
+| post-merge polish | embed_batch, delete/clear_all/entry_count/storage_bytes, route_explicit_agents, activity-in-snapshots, /purge → clear_all, TUI stats | (current branch) | +~400 / −~50 |
