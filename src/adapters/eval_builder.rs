@@ -81,7 +81,7 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
         // through here — they still set runner_exit = 1 via the verdict check below.
         let report = match run_skill(
             skill,
-            &*judge,
+            Arc::clone(&judge),
             &out_dir,
             args.filter.as_deref(),
             args.concurrency,
@@ -388,6 +388,8 @@ pub struct SkillUnderTest {
     pub prompts_path: PathBuf,
     pub prompts_format: String, // "markdown" or "yaml"
     pub config_path: PathBuf,
+    pub skill_md_path: PathBuf,
+    pub skill_dir: PathBuf,
 }
 
 pub fn default_skill_roots() -> Vec<PathBuf> {
@@ -455,6 +457,8 @@ pub fn discover_skills(
                 continue;
             }
             let config_path = evals_dir.join("config.toml");
+            let skill_dir = entry.path().to_path_buf();
+            let skill_md_path = skill_dir.join("SKILL.md");
             out.push(SkillUnderTest {
                 name,
                 tier,
@@ -462,6 +466,8 @@ pub fn discover_skills(
                 prompts_path,
                 prompts_format: fmt.to_string(),
                 config_path,
+                skill_md_path,
+                skill_dir,
             });
         }
     }
@@ -476,6 +482,42 @@ pub fn discover_skills(
 }
 
 use crate::adapters::config::Config;
+
+// ---------------------------------------------------------------------------
+// Skill metrics frontmatter — load + validate on skill discovery
+// ---------------------------------------------------------------------------
+
+use crate::adapters::skill_lifecycle::metrics::{validate_metrics, MetricSpec};
+
+#[derive(Debug, serde::Deserialize)]
+struct SkillFrontmatter {
+    #[serde(default)]
+    metrics: Vec<MetricSpec>,
+}
+
+pub(crate) fn load_skill_metrics(
+    skill_md_path: &Path,
+    skill_dir: &Path,
+) -> anyhow::Result<Vec<MetricSpec>> {
+    if !skill_md_path.exists() {
+        return Ok(vec![]);
+    }
+    let body = std::fs::read_to_string(skill_md_path)
+        .with_context(|| format!("read {}", skill_md_path.display()))?;
+    let Some(rest) = body.strip_prefix("---\n") else {
+        return Ok(vec![]);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Ok(vec![]);
+    };
+    let fm_yaml = &rest[..end];
+    let fm: SkillFrontmatter = serde_yaml::from_str(fm_yaml)
+        .with_context(|| format!("parse frontmatter of {}", skill_md_path.display()))?;
+    if !fm.metrics.is_empty() {
+        validate_metrics(&fm.metrics, skill_dir)?;
+    }
+    Ok(fm.metrics)
+}
 
 // ---------------------------------------------------------------------------
 // StubbedExecutor — wraps any ToolExecutor with per-tool response queues
@@ -761,6 +803,15 @@ pub struct ObservationJson {
     pub args_preview: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MetricOutcomeJson {
+    pub metric: String,
+    pub pass: bool,
+    pub score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RowResult {
     pub id: String,
@@ -775,15 +826,92 @@ pub struct RowResult {
     pub transcript_path: PathBuf,
     pub timed_out: bool,
     pub stubs_used: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metric_outcomes: Vec<MetricOutcomeJson>,
+}
+
+// ---------------------------------------------------------------------------
+// EvalJudgeClient — adapts the eval judge engine to the JudgeClient trait
+// ---------------------------------------------------------------------------
+
+use crate::adapters::skill_lifecycle::metrics::JudgeClient;
+
+struct EvalJudgeClient {
+    engine: Arc<dyn Engine>,
+}
+
+#[async_trait]
+impl JudgeClient for EvalJudgeClient {
+    async fn judge(
+        &self,
+        system: &str,
+        user: &str,
+        prefill: &str,
+        _model: Option<&str>,
+    ) -> anyhow::Result<String> {
+        // Build a single-turn completion, prefilling the assistant if a prefill is given.
+        // OpenRouter/Anthropic reject a conversation ending with an Assistant message, so
+        // we only add the prefill entry when it is non-empty.
+        let mut messages = vec![
+            Message {
+                role: Role::System,
+                content: system.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+            Message {
+                role: Role::User,
+                content: user.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            },
+        ];
+        if !prefill.is_empty() {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: prefill.to_string(),
+                tool_call_id: None,
+                tool_calls: None,
+            });
+        }
+        let ctx = EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: Some(1),
+            max_mcp_result_chars: None,
+        };
+        let mut stream = self.engine.run(&messages, &[], &ctx).await?;
+        let mut output = String::new();
+        while let Some(ev) = stream.next().await {
+            match ev {
+                StreamEvent::TextDelta { text } => output.push_str(&text),
+                StreamEvent::Done => break,
+                StreamEvent::Error { message } => {
+                    anyhow::bail!("EvalJudgeClient engine error: {}", message);
+                }
+                _ => {}
+            }
+        }
+        // Strip prefill prefix from response if present.
+        let result = if !prefill.is_empty() && output.starts_with(prefill) {
+            output[prefill.len()..].to_string()
+        } else {
+            output
+        };
+        Ok(result)
+    }
 }
 
 pub struct RowCtx<'a> {
     pub skill: &'a SkillUnderTest,
     pub row: &'a PromptRow,
-    pub judge: &'a dyn Engine,
+    pub judge: Arc<dyn Engine>,
     pub out_dir: &'a Path,
     pub keep_workspace: bool,
     pub config_path_override: Option<&'a Path>,
+    pub skill_metrics: &'a [MetricSpec],
+    pub judge_client: Arc<dyn JudgeClient>,
 }
 
 // Minimal ToolActivityPort for eval runs — no UI, no logging.
@@ -923,7 +1051,7 @@ pub struct Report {
 
 pub async fn run_skill(
     skill: &SkillUnderTest,
-    judge: &dyn crate::adapters::types::Engine,
+    judge: Arc<dyn crate::adapters::types::Engine>,
     out_dir: &Path,
     filter: Option<&str>,
     concurrency: usize,
@@ -931,6 +1059,7 @@ pub async fn run_skill(
     sandbox_config: Option<&Path>,
 ) -> anyhow::Result<SkillReport> {
     let skill_started = Instant::now();
+    let skill_started_ts = chrono::Utc::now();
     let prompts_body = std::fs::read_to_string(&skill.prompts_path)
         .with_context(|| format!("read {}", skill.prompts_path.display()))?;
     let mut rows = if skill.prompts_format == "yaml" {
@@ -960,19 +1089,64 @@ pub async fn run_skill(
         anyhow::bail!("concurrency > 1 not yet implemented in v1 — use --concurrency 1");
     }
 
+    // Load skill metrics from SKILL.md frontmatter (empty vec → backward compat).
+    let skill_metrics = load_skill_metrics(&skill.skill_md_path, &skill.skill_dir)?;
+    // Build a shared JudgeClient adapter wrapping the eval judge Arc.
+    let judge_client: Arc<dyn JudgeClient> =
+        Arc::new(EvalJudgeClient { engine: Arc::clone(&judge) });
+
     let mut row_results = Vec::new();
     for row in &rows {
         eprintln!("[{} row {}] running…", skill.name, row.id);
         let rr = run_row(RowCtx {
             skill,
             row,
-            judge,
+            judge: Arc::clone(&judge),
             out_dir,
             keep_workspace,
             config_path_override: sandbox_config,
+            skill_metrics: skill_metrics.as_slice(),
+            judge_client: Arc::clone(&judge_client),
         })
         .await?;
         row_results.push(rr);
+    }
+
+    // Write metrics.json + history.jsonl if the skill declares any metrics.
+    if !skill_metrics.is_empty() {
+        use crate::adapters::skill_lifecycle::storage::{finalize_run, RunSample};
+        let ts = skill_started_ts.format("%Y-%m-%dT%H-%M-%SZ").to_string();
+        let samples: Vec<RunSample> = row_results
+            .iter()
+            .map(|r| {
+                let mut outcomes = std::collections::BTreeMap::new();
+                for mo in &r.metric_outcomes {
+                    outcomes.insert(
+                        mo.metric.clone(),
+                        crate::adapters::skill_lifecycle::metrics::MetricOutcome {
+                            pass: mo.pass,
+                            score: mo.score,
+                            notes: mo.notes.clone(),
+                            raw: serde_json::json!({}),
+                        },
+                    );
+                }
+                RunSample {
+                    fixture_id: r.id.clone(),
+                    outcomes,
+                }
+            })
+            .collect();
+        let rolling_window = 10u32; // TODO: read from [skill_lifecycle] config if present.
+        finalize_run(
+            &skill.skill_dir,
+            &skill.name,
+            &ts,
+            &skill_metrics,
+            &samples,
+            rolling_window,
+        )
+        .with_context(|| format!("finalize_run for {}", skill.name))?;
     }
 
     let config_source = if sandbox_config.is_some() {
@@ -1167,7 +1341,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         )
     } else {
         let outcome = judge_row(
-            ctx.judge,
+            &*ctx.judge,
             &ctx.row.expected,
             &obs_snapshot,
             &engine_response.text,
@@ -1201,6 +1375,53 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         std::mem::forget(ws); // leak TempDir guard — workspace persists on disk
     }
 
+    // 10. Score against per-skill metric kinds (if any declared in SKILL.md frontmatter).
+    let mut metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
+    if !ctx.skill_metrics.is_empty() {
+        use crate::adapters::skill_lifecycle::metric_kinds::{
+            LlmJudgeKind, ScriptKind, ShellCheckKind, ToolAssertionKind,
+        };
+        use crate::adapters::skill_lifecycle::metrics::{
+            FixtureContext, MetricKind, MetricOutcome, MetricRunCtx,
+        };
+
+        let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+        let fixture = FixtureContext {
+            prompt: &ctx.row.prompt,
+            expected_outcome: Some(ctx.row.expected.as_str()),
+            transcript: &engine_response.text,
+        };
+        let run_ctx = MetricRunCtx {
+            skill_dir: &ctx.skill.skill_dir,
+            workspace: &ws_path,
+            shell: &shell,
+            tools: None,
+            judge: Some(Arc::clone(&ctx.judge_client)),
+        };
+        for spec in ctx.skill_metrics {
+            let outcome: anyhow::Result<MetricOutcome> = match spec {
+                MetricSpec::ShellCheck { .. } => ShellCheckKind.run(spec, &fixture, &run_ctx).await,
+                MetricSpec::LlmJudge { .. } => LlmJudgeKind.run(spec, &fixture, &run_ctx).await,
+                MetricSpec::ToolAssertion { .. } => {
+                    ToolAssertionKind.run(spec, &fixture, &run_ctx).await
+                }
+                MetricSpec::Script { .. } => ScriptKind.run(spec, &fixture, &run_ctx).await,
+            };
+            let o = outcome.unwrap_or_else(|e| MetricOutcome {
+                pass: false,
+                score: 0.0,
+                notes: Some(format!("metric runner error: {e}")),
+                raw: serde_json::json!({}),
+            });
+            metric_outcomes.push(MetricOutcomeJson {
+                metric: spec.name().to_string(),
+                pass: o.pass,
+                score: o.score,
+                notes: o.notes,
+            });
+        }
+    }
+
     Ok(RowResult {
         id: ctx.row.id.clone(),
         prompt: ctx.row.prompt.clone(),
@@ -1227,6 +1448,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         transcript_path,
         timed_out,
         stubs_used: !ctx.row.stubs.is_empty(),
+        metric_outcomes,
     })
 }
 
@@ -1673,6 +1895,108 @@ workspace = "{TMP_WORKSPACE}"
         assert_eq!(
             exit, 2,
             "expected exit 2 for filter miss (runner-level error)"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // load_skill_metrics tests (α.8)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn load_skill_metrics_empty_when_no_frontmatter() {
+        // A SKILL.md without frontmatter should return an empty vec (backward compat).
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "# My Skill\n\nThis skill has no metrics frontmatter.\n",
+        )
+        .unwrap();
+        let metrics = load_skill_metrics(&skill_md, skill_dir).expect("load_skill_metrics");
+        assert!(
+            metrics.is_empty(),
+            "expected empty metrics, got {:?}",
+            metrics
+        );
+    }
+
+    #[test]
+    fn load_skill_metrics_parses_all_four_kinds() {
+        // Happy-path: SKILL.md with all 4 metric kinds.
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+
+        // Create the files validate_metrics needs on disk.
+        std::fs::write(skill_dir.join("rubric.md"), "# Rubric\n").unwrap();
+        std::fs::write(skill_dir.join("check.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            r#"---
+metrics:
+  - kind: shell_check
+    name: lints-clean
+    cmd: "echo ok"
+    expect_exit_code: 0
+  - kind: llm_judge
+    name: quality
+    rubric_file: rubric.md
+    min_pass_rate: 0.8
+  - kind: tool_assertion
+    name: tool-called
+    tool: http_request
+    action: call
+    assert: {"status": 200}
+  - kind: script
+    name: custom-script
+    path: check.sh
+---
+
+# My Skill
+
+Skill body here.
+"#,
+        )
+        .unwrap();
+
+        let metrics = load_skill_metrics(&skill_md, skill_dir).expect("load_skill_metrics");
+        assert_eq!(metrics.len(), 4, "expected 4 metric specs");
+        let names: Vec<&str> = metrics.iter().map(|m| m.name()).collect();
+        assert!(names.contains(&"lints-clean"));
+        assert!(names.contains(&"quality"));
+        assert!(names.contains(&"tool-called"));
+        assert!(names.contains(&"custom-script"));
+    }
+
+    #[test]
+    fn load_skill_metrics_bails_on_missing_rubric_file() {
+        // validate_metrics should surface an error when rubric_file doesn't exist on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path();
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            r#"---
+metrics:
+  - kind: llm_judge
+    name: quality
+    rubric_file: nonexistent.md
+---
+
+# Skill
+"#,
+        )
+        .unwrap();
+
+        let err = load_skill_metrics(&skill_md, skill_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("rubric_file missing") || err.contains("nonexistent.md"),
+            "unexpected error: {}",
+            err
         );
     }
 }
