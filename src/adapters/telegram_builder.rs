@@ -1140,10 +1140,23 @@ impl TelegramSession {
         // executor spawns each step and calls our factory closure to resolve
         // per-agent inputs via `orchestrator_snapshots`.
         //
-        // We defer only to the orchestrator when the user did NOT explicitly
-        // route with `@role:` prefix. Explicit routing means "talk to this
-        // specific agent directly", which bypasses the planner.
-        if self.orchestrator.is_some() && target_agent_id == self.default_agent_id {
+        // Orchestrator dispatch:
+        //   - default agent message → always through the orchestrator
+        //     (when one is configured)
+        //   - `@role:`-prefixed message → by default bypasses the
+        //     orchestrator (explicit routing = "talk to this agent
+        //     directly"), UNLESS `orchestrator.route_explicit_agents = true`
+        //     which flips the toggle so the planner sees everything.
+        let explicit_route = target_agent_id != self.default_agent_id;
+        let route_through_orchestrator = self.orchestrator.is_some()
+            && (!explicit_route
+                || self
+                    .config
+                    .orchestrator
+                    .as_ref()
+                    .map(|c| c.route_explicit_agents)
+                    .unwrap_or(false));
+        if route_through_orchestrator {
             // Release the mutable borrow on `agent` so we can build snapshots
             // for every agent below.
             let _ = agent;
