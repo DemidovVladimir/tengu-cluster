@@ -125,6 +125,11 @@ mod tests {
             shell: &shell,
             tools: None,
             judge: None,
+            http: None,
+            memory_manager: None,
+            secret_registry: None,
+            activity: None,
+            tool_scopes: None,
         };
         ShellCheckKind.run(&spec, &fixture, &ctx).await.unwrap()
     }

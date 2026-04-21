@@ -1405,6 +1405,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             shell: &shell,
             tools: None,
             judge: Some(Arc::clone(&ctx.judge_client)),
+            http: None,
+            memory_manager: None,
+            secret_registry: None,
+            activity: None,
+            tool_scopes: None,
         };
         for spec in ctx.skill_metrics {
             let outcome: anyhow::Result<MetricOutcome> = match spec {
