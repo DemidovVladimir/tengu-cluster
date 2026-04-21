@@ -1,5 +1,11 @@
 # Skill Metrics + Evolution Implementation Plan
 
+> **⚠️ Status (as of 2026-04-21):**
+> - **Tasks 1–11 landed on main** via commits `2dc6e6d`..`acae292` (14 commits incl. minor fixes).
+> - **Tasks 12–21 were SUPERSEDED** by the phase-2 plan after `feature/harness-orchestration` merged to main and `eval_builder.rs` (1666 lines) came back with it. The phase-2 plan integrates `metrics:` frontmatter scoring into the existing `eval_builder.rs` rather than replacing it. Read the phase-2 plan instead of executing Tasks 12–21 below.
+>
+> **Follow the phase-2 plan:** `docs/superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship the `skill_lifecycle` subsystem from `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` (commit `1d9883b`): the `skill_distill` LLM tool, a frontmatter `metrics:` contract with four built-in kinds, and the `tengu eval` / `tengu skill metrics` / `tengu skill evolve` CLI surface with a bounded rewrite→rescore loop behind a user approval gate.

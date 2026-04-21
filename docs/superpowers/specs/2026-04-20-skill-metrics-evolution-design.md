@@ -718,3 +718,56 @@ Project convention: cap individual test runs ≤30s; no blind full `cargo test`.
 Auto-trigger on threshold drop · live per-invocation metrics · hot-reload of new skills into live conversations · parallel evolve cycles · cross-skill metric dependencies · multi-skill evolve · LLM-driven approval · auto-commit on accept · mid-run streaming · property fuzzing · metric migration tooling · aggregate skill score.
 
 Each appears in the section where it would naturally belong, with one-line rationale. This section exists only for quick lookup.
+
+---
+
+## 15. Implementation addendum (added 2026-04-21)
+
+This addendum captures where the shipped implementation deviated from the spec. The spec above is preserved as originally written; use this section when reconciling spec language against real code.
+
+### 15.1 CLI naming is kebab-case, not space-separated
+
+Spec refers to `tengu skill evolve`, `tengu skill metrics`, `tengu skill accept-proposal` throughout. Real binary (clap flattens nested subcommands) is:
+
+| Spec | Real |
+|------|------|
+| `tengu eval <skill>` | `tengu eval <skill>` (unchanged) |
+| `tengu skill metrics <skill>` | `tengu skill-metrics <skill>` |
+| `tengu skill evolve <skill>` | `tengu skill-evolve <skill>` |
+| `tengu skill accept-proposal <path>` | `tengu skill-accept-proposal <path>` |
+
+Re-shaping to nested `Commands::Skill { action: SkillAction { Evolve, ... } }` is a small future cleanup if you want the spec's form.
+
+### 15.2 Eval scoring integrates into `eval_builder.rs`, not a new runner
+
+§6.5 describes the runner as orchestrator-driven with a dedicated `fixture-runner` agent dispatched per fixture by a new `skill_lifecycle/runner.rs`. Reality: `src/adapters/eval_builder.rs` (phase-b row-runner, landed via PR #6 as part of the harness-orchestration merge) came back to `main`, and the phase-2 plan chose **integration over replacement**. The `metrics:` frontmatter scoring is now embedded in `eval_builder::run_row` / `run_skill`:
+
+- `load_skill_metrics(skill_md_path, skill_dir)` parses the frontmatter block (Task α.2).
+- Each row, after the row-level LLM judge, iterates declared metrics and dispatches to `MetricKind::run` (Task α.4).
+- `skill_lifecycle::storage::finalize_run` writes `metrics.json` + appends `history.jsonl` at end-of-skill (Task α.7).
+- `EvalJudgeClient` adapter bridges the existing judge engine into the `JudgeClient` trait (Task α.5).
+
+`fixture-runner` is still a valid config entry (see `config.example.toml`) — it's used as the target agent inside `eval_builder`'s dispatch, not as a wrapper around a parallel runner.
+
+### 15.3 `ConversationView` threaded through `ToolExecutor::execute`
+
+§5.6 shows `ConversationView` carried on `ToolCtx<'a>`, populated via `PluginToolExecutor.conversation: Vec<Message>`. During phase 2 (commit `e243468`) this was reshaped: the `ToolExecutor::execute` trait signature became `execute(&self, call: &ToolCall, messages: &[Message])`, and `PluginToolExecutor` constructs `ConversationView::new(messages)` from the parameter — removing the need for interior mutability. Six impls were updated; `collect_engine_response` passes its live message slice. Net effect is identical to the spec; the mechanism is cleaner.
+
+### 15.4 `build_cli_chat_factory` pre-populates snapshots at startup
+
+§7 describes evolve using `ChatServiceFactory::run_turn` to dispatch the improver agent. The spec was silent on how the CLI constructs that factory. Real impl (commit `dfa24da`, `src/adapters/channel_runtime.rs::build_cli_chat_factory`): build a per-agent `ChatTurnInputs` at startup, stash in a shared `OrchestratorSnapshots` map, wrap in `RuntimeChatServiceFactory::new(snapshots_inputs_fn(snapshots))`. CLI commands run once and exit, so one-shot population is sufficient (vs. TUI/Telegram, which rewrite snapshots per user message).
+
+### 15.5 `tool_assertion` live-dispatch path
+
+§6.3 describes `tool_assertion` invoking the named tool via `ToolRegistry`. Commit `740ef25` added the live-dispatch path with a graceful degrade: when `MetricRunCtx`'s optional `tools` / `http` / `secret_registry` / `activity` / `tool_scopes` are all populated, the metric constructs a `ToolCtx` and calls `registry.invoke(...)`. When any is absent (e.g. in current eval_builder scoring where those fields are populated lazily), the metric reports `"tool registry unavailable"` as `pass: false`.
+
+### 15.6 Verified end-to-end 2026-04-21
+
+`tengu eval skill-creator` ran against real OpenRouter — 2/2 rows passed the row-judge, `distill_quality` metric returned substantive per-row verdicts, `metrics.json` + `history.jsonl` persisted correctly.
+
+`tengu skill-evolve skill-creator --max-cycles 1` ran against real OpenRouter — baseline + scratch worktree + improver dispatch (claude-opus-4-7) + cycle rescore + best-cycle selection + approval gate all worked. Discard path committed a rejection entry to `evolve_log.md`. Apply path + multi-cycle path + all-cycles-regress path remain unexercised against real API; their logic is unit-tested.
+
+### 15.7 Two bug fixes found via smoke
+
+- **`LlmJudgeKind` prefill incompatibility** (commit `6d88028`): Anthropic models via OpenRouter reject assistant-message prefills. Replaced `{"verdict":"` prefill with an "emit JSON only" instruction + a balanced-brace extractor that tolerates prose around the JSON.
+- **`SkillLifecyclePlugin` registration missing** (commit `f16d2ef`): Task 11's wiring into `build_tool_executor` and `compute_base_tools` was lost in branch shuffling. Agents with `workspace_tools = ["skill_distill"]` validated at config-load but the tool was never advertised to the LLM, so they described calls in prose instead of invoking. Re-registered; smoke verified 2/2 pass.

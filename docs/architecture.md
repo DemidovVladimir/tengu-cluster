@@ -97,10 +97,19 @@ Passed to every `engine.run()` call:
 - `bridge_tools` — tool definitions for the [[mcp-bridge]] (Claude Code only)
 
 ### Tool Assembly (`src/adapters/channel_runtime.rs`)
-- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache plugins for the outer loop
+- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache, and skill-lifecycle plugins for the outer loop (`skill_distill`, `shared_cache`, `persistent_store` are opt-in per agent via `workspace_tools`)
 - `compute_subagent_tools()` — subagent-spawn tool defs, added when the orchestrator is enabled
 - `compute_bridge_tools()` — tool defs for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, skill-lifecycle, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+
+### Skill Lifecycle (`src/adapters/skill_lifecycle/`, `src/adapters/plugins/skill_lifecycle/`)
+A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
+
+- `skill_distill` (LLM-callable tool, opt-in via `workspace_tools`) — an agent authors a new skill from the current conversation. Writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. Cache discipline: the new skill does NOT load into the current conversation.
+- `tengu eval <skill>` (integrated into `eval_builder.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
+- `tengu skill-evolve <skill>` — bounded rewrite→rescore loop. Baseline, scratch git worktree, N cycles via the `skill-improver` agent, best-cycle selection (no regression > 0.05 on other gated metrics), user approval gate, apply-or-discard.
+
+All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
 
 ### Plugin Architecture (`src/adapters/plugins/`, `src/adapters/tool_plugin.rs`)
 
@@ -149,6 +158,8 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 | `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
 | `plugins/subagents/` | `sessions_spawn`, `sessions_fan_out`, `subagents` — registered when orchestrator is enabled |
 | `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
+| `plugins/skill_lifecycle/` | `skill_distill` — LLM-callable skill authoring from the active conversation (opt-in via `workspace_tools`) |
+| `skill_lifecycle/` | Metric types + 4 kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
 | `tool_builder.rs` | Path validation + tool-activity UI helpers (no executors) |
 | `shell_executor.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
 | `skill_builder.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `plugins/skill/`) |
@@ -186,4 +197,5 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 - [[engine-backends]] — detailed engine comparison
 - [[configuration]] — config reference
 - [[mcp-bridge]] — MCP tool bridge details
-- [[skills]] — skill system architecture
+- [[skills]] — skill system architecture (incl. metrics, distillation, evolve)
+- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec
