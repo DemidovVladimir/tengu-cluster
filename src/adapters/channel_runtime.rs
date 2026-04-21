@@ -8,7 +8,7 @@
 //!
 //! - **Tool/executor/prompt rebuilding** — `rebuild_tools`, `rebuild_system_prompt`,
 //!   `build_tool_executor`
-//! - **Memory subsystem initialization** — `build_memory_handle`
+//! - **Memory subsystem initialization** — `build_memory_manager`
 //! - **Base tool computation** — `compute_base_tools` (workspace primitives +
 //!   subsystem tools)
 //! - **Agent routing** — `parse_agent_routing`
@@ -21,8 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::config::{AgentConfig, McpServerConfig};
-use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
-use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
+use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
 use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
 use crate::adapters::plugins::crypto::CryptoPlugin;
 use crate::adapters::plugins::http::HttpPlugin;
@@ -86,7 +85,7 @@ pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
     skill_registry: &SkillRegistry,
-    memory_handle: &Option<Arc<MemoryServiceHandle>>,
+    memory_manager: &Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -122,7 +121,7 @@ pub(crate) fn build_tool_executor(
         config: agent_config,
         http: http_client.clone(),
         shell: Arc::clone(&shell),
-        memory: memory_handle.clone(),
+        memory_manager: memory_manager.clone(),
         secret_registry: Arc::clone(secret_registry),
     };
     // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
@@ -234,7 +233,7 @@ pub(crate) fn build_tool_executor(
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory: memory_handle.clone(),
+        memory_manager: memory_manager.clone(),
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,
@@ -351,72 +350,111 @@ pub(crate) fn resolve_qdrant_collection(
     }
 }
 
-/// Build the shared memory subsystem handle from config.
+/// Build the new `Embedder` + `VectorStore` pair from config.
 ///
-/// Returns `None` if memory is disabled, the API key is not set, or store init fails.
-/// When `workspace` is `Some`, memory is stored in `<workspace>/memory/` instead
-/// of the global `~/.tengu/memory/` path.
-pub(crate) fn build_memory_handle(
+/// Returns `None` if memory is disabled, the API key is missing, or the
+/// backend fails to initialize. Consumed by `build_memory_manager`
+/// (which registers the pair into a `BuiltinMemoryProvider` + the
+/// manager's shared vector backend).
+fn build_vector_stack(
     memory_config: &crate::adapters::config::MemoryConfig,
     #[allow(unused_variables)] rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
-) -> Option<Arc<MemoryServiceHandle>> {
+) -> Option<(Arc<Embedder>, Arc<dyn VectorStore>)> {
     if !memory_config.enabled {
         return None;
     }
 
-    match std::env::var("OPENROUTER_API_KEY") {
-        Ok(api_key) => {
-            let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
-            #[allow(unused_variables)]
-            let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
-
-            let store: Option<Arc<dyn crate::adapters::ports::MemoryStorePort>> =
-                match memory_config.backend.as_str() {
-                    #[cfg(feature = "qdrant")]
-                    "qdrant" => {
-                        use crate::adapters::qdrant_memory_store::QdrantMemoryStore;
-                        match rt.block_on(QdrantMemoryStore::new(
-                            &memory_config.qdrant_url,
-                            memory_config.qdrant_api_key.as_deref(),
-                            &resolved_collection,
-                            memory_config.vector_size,
-                        )) {
-                            Ok(s) => Some(Arc::new(s)),
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to init Qdrant memory store, memory disabled");
-                                None
-                            }
-                        }
-                    }
-                    #[cfg(not(feature = "qdrant"))]
-                    "qdrant" => {
-                        tracing::warn!("Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk");
-                        DiskVectorMemoryStore::new(&resolved_store_path)
-                            .ok()
-                            .map(|s| {
-                                Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>
-                            })
-                    }
-                    _ => DiskVectorMemoryStore::new(&resolved_store_path)
-                        .ok()
-                        .map(|s| Arc::new(s) as Arc<dyn crate::adapters::ports::MemoryStorePort>),
-                };
-
-            store.map(|s| {
-                let embedding =
-                    OpenRouterEmbeddingAdapter::new(api_key, memory_config.embedding_model.clone());
-                Arc::new(MemoryServiceHandle {
-                    embedding: Arc::new(embedding),
-                    store: s,
-                })
-            })
-        }
+    let api_key = match std::env::var("OPENROUTER_API_KEY") {
+        Ok(k) => k,
         Err(_) => {
             tracing::warn!("OPENROUTER_API_KEY not set, memory disabled");
-            None
+            return None;
         }
-    }
+    };
+
+    let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
+    #[allow(unused_variables)]
+    let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
+
+    let store: Option<Arc<dyn VectorStore>> = match memory_config.backend.as_str() {
+        #[cfg(feature = "qdrant")]
+        "qdrant" => {
+            use crate::adapters::memory::vector::QdrantVectorStore;
+            match rt.block_on(QdrantVectorStore::new(
+                &memory_config.qdrant_url,
+                memory_config.qdrant_api_key.as_deref(),
+                &resolved_collection,
+                memory_config.vector_size,
+            )) {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init Qdrant vector store, memory disabled");
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "qdrant"))]
+        "qdrant" => {
+            tracing::warn!(
+                "Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk"
+            );
+            DiskVectorStore::new(&resolved_store_path)
+                .ok()
+                .map(|s| Arc::new(s) as Arc<dyn VectorStore>)
+        }
+        _ => DiskVectorStore::new(&resolved_store_path)
+            .ok()
+            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
+    };
+
+    let store = store?;
+    let embedder = Arc::new(Embedder::new(
+        api_key,
+        memory_config.embedding_model.clone(),
+    ));
+    Some((embedder, store))
+}
+
+/// Build a `MemoryManager` populated with a `BuiltinMemoryProvider` that
+/// uses the new `Embedder` + `VectorStore` pair.
+///
+/// Returns a freshly-constructed manager (possibly empty) when memory is
+/// disabled or the vector stack fails to initialize, so channels can
+/// always hand a valid `Arc<MemoryManager>` to the orchestrator.
+/// Workspace defaults to the current directory when `None` so the
+/// `BuiltinMemoryProvider` has a real path to read AGENTS.md / MEMORY.md
+/// / daily logs from.
+pub(crate) fn build_memory_manager(
+    memory_config: &crate::adapters::config::MemoryConfig,
+    rt: &tokio::runtime::Runtime,
+    workspace: Option<&Path>,
+) -> Arc<crate::adapters::memory::manager::MemoryManager> {
+    use crate::adapters::memory::builtin::BuiltinMemoryProvider;
+    use crate::adapters::memory::manager::MemoryManager;
+
+    let manager = Arc::new(MemoryManager::new());
+
+    let Some((embedder, store)) = build_vector_stack(memory_config, rt, workspace) else {
+        return manager;
+    };
+
+    let ws = workspace
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let provider = Box::new(BuiltinMemoryProvider::new(
+        ws,
+        Arc::clone(&store),
+        Arc::clone(&embedder),
+    ));
+
+    let mgr_for_task = Arc::clone(&manager);
+    rt.block_on(async move {
+        mgr_for_task.add_provider(provider).await;
+        mgr_for_task.set_vector_backend(embedder, store).await;
+    });
+
+    manager
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +733,6 @@ use crate::adapters::chat_builder::ChatRuntimeService;
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::orchestrator::planner::OrchestratorAgentPlanner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
 use crate::adapters::orchestrator::roster::render_roster;
@@ -723,7 +760,7 @@ pub(crate) struct ChatTurnInputs {
     pub system_prompt: String,
     pub tools: Vec<ToolDef>,
     pub tool_executor: Option<Arc<dyn ToolExecutor>>,
-    pub memory_handle: Option<Arc<MemoryServiceHandle>>,
+    pub memory_manager: Option<Arc<MemoryManager>>,
     pub max_recall_entries: usize,
     pub max_recall_tokens: usize,
     pub bridge_tools: Option<Vec<ToolDef>>,
@@ -764,13 +801,6 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String> {
         let inputs = (self.inputs_fn)(agent)?;
 
-        // Build MemoryService from the handle on the stack so the service
-        // can borrow into it.
-        let memory_service = inputs
-            .memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
         // Wrap tool_observer Arc into the `&dyn Fn` form the service expects.
         let observer_arc = inputs.tool_observer.clone();
         let observer_ref: Option<ToolResultObserver<'_>> =
@@ -788,7 +818,7 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
                 .tool_executor
                 .as_deref()
                 .map(|e| e as &dyn ToolExecutor),
-            memory_service: memory_service.as_ref(),
+            memory_manager: inputs.memory_manager.as_deref(),
             max_recall_entries: inputs.max_recall_entries,
             max_recall_tokens: inputs.max_recall_tokens,
             tool_observer: observer_ref,
@@ -883,7 +913,7 @@ mod golden_tests {
             tmp.path(),
             &tools,
             &skill_registry,
-            &None, // memory_handle: omit — `memory_ingest` is only registered by MemoryPlugin when ctx.memory is Some.
+            &None, // memory_manager: omit — memory plugin gates on ctx.memory_manager.
             &secret_registry,
             activity,
             None,

@@ -33,7 +33,6 @@ use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::memory_builder::MemoryService;
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
@@ -478,7 +477,7 @@ struct TelegramSession {
     role_to_agent: HashMap<String, String>,
 
     // Services
-    memory_handle: Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
+    memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
     secret_registry: Arc<SecretRegistry>,
 
     // Harness-owned orchestration (Task 5.3, scoped per plan guardrail).
@@ -535,9 +534,13 @@ impl TelegramSession {
                 .map(|p| crate::adapters::tool_builder::expand_tilde(p))
         });
 
-        let memory_handle =
-            channel_runtime::build_memory_handle(&memory_config, rt, first_workspace.as_deref());
-        let has_memory = memory_handle.is_some();
+        // Memory backend (shared `Embedder` + `VectorStore`) exposed via
+        // `MemoryManager`. The manager is always constructed (so the
+        // orchestrator has a valid handle), but `has_memory` gates tool
+        // registration on whether the vector backend actually installed.
+        let memory_manager_early =
+            channel_runtime::build_memory_manager(&memory_config, rt, first_workspace.as_deref());
+        let has_memory = rt.block_on(async { memory_manager_early.has_vector_backend().await });
 
         crate::adapters::scaffold::maybe_apply_scaffold(&config);
 
@@ -731,7 +734,7 @@ impl TelegramSession {
         // take `&mut self`). That refactor is deferred per the Task 5.3 plan
         // guardrail — this landing only sets up the orchestrator struct and
         // event bus so the next task can focus on the factory wiring alone.
-        let memory_manager = Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+        let memory_manager = memory_manager_early;
         let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
             let stub_inputs_fn: channel_runtime::ChatInputsFn = Arc::new(|_agent: &str| {
                 Err(anyhow::anyhow!(
@@ -762,7 +765,11 @@ impl TelegramSession {
             agent_states,
             default_agent_id,
             role_to_agent,
-            memory_handle,
+            memory_manager_handle: if has_memory {
+                Some(Arc::clone(&memory_manager))
+            } else {
+                None
+            },
             secret_registry,
             orchestrator,
             _memory_manager: memory_manager,
@@ -1136,7 +1143,7 @@ impl TelegramSession {
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
-                &self.memory_handle,
+                &self.memory_manager_handle,
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
@@ -1226,11 +1233,6 @@ impl TelegramSession {
             );
         }
 
-        let memory_service = self
-            .memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
         let turn_tools = agent.current_tools.clone();
         let chat_runtime = ChatRuntimeService {
             engine: agent.engine.as_ref(),
@@ -1241,7 +1243,7 @@ impl TelegramSession {
             system_prompt: turn_system_prompt,
             tools: &turn_tools,
             tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
-            memory_service: memory_service.as_ref(),
+            memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: Some(&tool_result_observer),
@@ -1539,11 +1541,12 @@ impl TelegramSession {
             }
         }
         let mut lines = vec!["All conversations cleared.".to_string()];
-        if let Some(ref handle) = self.memory_handle {
-            match handle.store.clear_all().await {
-                Ok(()) => lines.push("Persistent memory purged.".to_string()),
-                Err(e) => lines.push(format!("Memory clear failed: {}", e)),
-            }
+        if self.memory_manager_handle.is_some() {
+            lines.push(
+                "Persistent memory purge not supported on current backend — \
+                 delete <workspace>/memory/vectors.bin manually to reset."
+                    .to_string(),
+            );
         } else {
             lines.push("No persistent memory active.".to_string());
         }
@@ -1662,7 +1665,7 @@ impl TelegramSession {
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
-                &self.memory_handle,
+                &self.memory_manager_handle,
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
@@ -1702,11 +1705,6 @@ impl TelegramSession {
             }
         });
 
-        let memory_service = self
-            .memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
         let active_tools = agent.current_tools.clone();
         let chat_runtime = ChatRuntimeService {
             engine: agent.engine.as_ref(),
@@ -1717,7 +1715,7 @@ impl TelegramSession {
             system_prompt: agent.current_system_prompt.clone(),
             tools: &active_tools,
             tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
-            memory_service: memory_service.as_ref(),
+            memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: None,

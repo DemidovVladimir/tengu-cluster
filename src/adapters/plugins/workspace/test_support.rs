@@ -67,7 +67,7 @@ impl TestHarness {
             scope: &self.scope,
             shell: self.shell.as_ref(),
             http: &self.http,
-            memory: None,
+            memory_manager: None,
             secret_registry: &self.secrets,
             activity: self.activity.as_ref(),
             conversation: crate::adapters::tool_plugin::ConversationView::empty(),

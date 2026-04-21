@@ -334,7 +334,7 @@ mod tests {
             scope,
             shell,
             http,
-            memory: None,
+            memory_manager: None,
             secret_registry: secrets,
             activity,
             conversation: ConversationView::new(messages),

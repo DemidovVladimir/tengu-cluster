@@ -1,26 +1,21 @@
 // src/adapters/plugins/memory/search.rs
 //! `memory_search` tool — targeted vector read of the memory store.
 //!
-//! This is the read-side complement to `memory_ingest`: the LLM issues a
-//! natural-language `query` (plus optional metadata filters) and receives a
-//! JSON array of hits, each carrying the stored text, a similarity score, and
-//! the entry's free-form metadata. Use it when the caller needs to look up
-//! specific prior content (documents ingested by other agents, past turn
-//! summaries, etc.) instead of relying on the automatic memory prefetch.
+//! Read-side complement to `memory_ingest`: the LLM issues a
+//! natural-language `query` (plus optional metadata filters) and
+//! receives a JSON array of hits, each carrying the stored text, a
+//! similarity score, and the entry's free-form metadata.
 //!
-//! Interim wiring (harness-orchestration task 2.2): the tool runs through the
-//! same `MemoryServiceHandle` that `MemoryIngestTool` uses — i.e.
-//! `MemoryService::recall_filtered` against the shared embedding + store
-//! ports. When `MemoryService` is retired in favor of `MemoryManager` (a later
-//! task in the same plan), both tools flip to `MemoryManager` together.
+//! Talks to `MemoryManager` directly (same backend as `memory_ingest`).
+//! No more `MemoryService::recall_filtered` indirection.
 
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::adapters::memory_builder::{MemoryService, MemoryServiceHandle};
+use crate::adapters::memory::context_block::ChunkMetadata;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::types::ToolDef;
 
@@ -31,20 +26,13 @@ pub(crate) const MEMORY_SEARCH_TOOL_NAME: &str = "memory_search";
 /// Default `top_k` when the caller does not specify one.
 const DEFAULT_TOP_K: usize = 5;
 
-/// Effective token budget for a single `memory_search` response. Chosen to
-/// match the order-of-magnitude of an interactive recall — large enough to
-/// return several multi-paragraph chunks but small enough to avoid blowing
-/// up the tool-result channel. `MemoryService::recall_filtered` uses this
-/// only for trimming the already-ranked result list.
-const DEFAULT_MAX_TOKENS: usize = 4096;
-
 pub(crate) struct MemorySearchTool {
     def: ToolDef,
-    handle: Arc<MemoryServiceHandle>,
+    memory_manager: Arc<MemoryManager>,
 }
 
 impl MemorySearchTool {
-    pub(crate) fn new(handle: Arc<MemoryServiceHandle>) -> Self {
+    pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
         Self {
             def: ToolDef::new(
                 MEMORY_SEARCH_TOOL_NAME,
@@ -82,7 +70,7 @@ impl MemorySearchTool {
                     "required": ["query"]
                 }),
             ),
-            handle,
+            memory_manager,
         }
     }
 }
@@ -94,11 +82,7 @@ impl Tool for MemorySearchTool {
     }
 
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
-        // scope: pure-compute — like `memory_ingest`, this tool only touches
-        // the in-process embedding + vector-store ports. The tool surface is
-        // entirely in-memory; the embedding HTTP call is an implementation
-        // detail baked into the `OpenRouterEmbeddingAdapter`, not a
-        // tool-argument-driven network hop.
+        // scope: pure-compute — same rationale as `memory_ingest`.
 
         let query = args
             .get("query")
@@ -115,35 +99,72 @@ impl Tool for MemorySearchTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_TOP_K);
 
-        // Build the metadata filter from the three optional keys. An absent
-        // key means "do not filter"; an empty string is treated the same as
-        // an absent key so the LLM can't accidentally exclude everything by
-        // passing `""`.
-        let mut filter: HashMap<String, String> = HashMap::new();
-        for key in ["agent", "source", "kind"] {
-            if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
-                if !v.is_empty() {
-                    filter.insert(key.to_string(), v.to_string());
-                }
+        // Build the metadata filter from the three optional keys. Empty
+        // strings are treated as absent so the LLM can't accidentally
+        // exclude everything by passing `""`.
+        let mut filter = ChunkMetadata::default();
+        let mut has_filter = false;
+        if let Some(v) = args.get("agent").and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                filter.agent = Some(v.to_string());
+                has_filter = true;
+            }
+        }
+        if let Some(v) = args.get("source").and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                filter.source = Some(v.to_string());
+                has_filter = true;
+            }
+        }
+        if let Some(v) = args.get("kind").and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                filter.kind = Some(v.to_string());
+                has_filter = true;
             }
         }
 
-        let service =
-            MemoryService::new(self.handle.embedding.as_ref(), self.handle.store.as_ref());
-
-        let results = service
-            .recall_filtered(query, top_k, DEFAULT_MAX_TOKENS, &filter)
+        let results = self
+            .memory_manager
+            .search(query, top_k, if has_filter { Some(&filter) } else { None })
             .await?;
 
         let hits: Vec<Value> = results
             .into_iter()
-            .map(|r| {
+            .map(|hit| {
+                let mut meta_map = serde_json::Map::new();
+                if let Some(ref a) = hit.metadata.agent {
+                    meta_map.insert("agent".into(), Value::String(a.clone()));
+                }
+                if let Some(ref s) = hit.metadata.source {
+                    meta_map.insert("source".into(), Value::String(s.clone()));
+                }
+                if let Some(ref k) = hit.metadata.kind {
+                    meta_map.insert("kind".into(), Value::String(k.clone()));
+                }
+                if let Some(ref ts) = hit.metadata.timestamp_utc {
+                    meta_map.insert("timestamp_utc".into(), Value::String(ts.clone()));
+                }
+                if !hit.metadata.tags.is_empty() {
+                    meta_map.insert(
+                        "tags".into(),
+                        Value::Array(
+                            hit.metadata
+                                .tags
+                                .iter()
+                                .map(|t| Value::String(t.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
+                for (k, v) in &hit.metadata.extra {
+                    meta_map.insert(k.clone(), v.clone());
+                }
+                let agent_id = hit.metadata.agent.clone().unwrap_or_default();
                 json!({
-                    "text": r.entry.content,
-                    "score": r.score,
-                    "metadata": r.entry.metadata,
-                    "agent_id": r.entry.agent_id,
-                    "id": r.entry.id,
+                    "text": hit.text,
+                    "score": hit.score,
+                    "metadata": Value::Object(meta_map),
+                    "agent_id": agent_id,
                 })
             })
             .collect();
@@ -156,75 +177,34 @@ impl Tool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory_builder::DiskVectorMemoryStore;
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
     use crate::adapters::plugins::memory::ingest::MemoryIngestTool;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
     use tempfile::TempDir;
 
-    /// Deterministic stub embedder. Produces a fixed-length vector whose
-    /// first coordinate is driven by a word-frequency check against a tiny
-    /// vocabulary, so two inputs that share keywords score higher via
-    /// cosine similarity than unrelated inputs. That's all we need to
-    /// assert "ingested chunk is retrieved by a keyword-overlapping query".
-    struct KeywordEmbedder;
-
-    #[async_trait]
-    impl EmbeddingPort for KeywordEmbedder {
-        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-            // 8-dim basis: [alpha, protocol, signed, 2026, writer, researcher, fact, misc]
-            let words = [
-                "alpha",
-                "protocol",
-                "signed",
-                "2026",
-                "writer",
-                "researcher",
-                "fact",
-                "misc",
-            ];
-            Ok(texts
-                .iter()
-                .map(|t| {
-                    let lower = t.to_lowercase();
-                    let mut v = vec![0.0f32; words.len()];
-                    for (i, w) in words.iter().enumerate() {
-                        if lower.contains(w) {
-                            v[i] = 1.0;
-                        }
-                    }
-                    // Always put a tiny bias in the last coord so zero-overlap
-                    // queries still produce a non-degenerate vector (otherwise
-                    // cosine_similarity returns 0.0 for everything and the
-                    // order is indeterminate).
-                    v[words.len() - 1] = 0.01;
-                    v
-                })
-                .collect())
-        }
+    fn make_manager() -> Arc<MemoryManager> {
+        let manager = Arc::new(MemoryManager::new());
+        let store: Arc<dyn VectorStore> = Arc::new(DiskVectorStore::in_memory());
+        let embedder = Arc::new(Embedder::null());
+        // Blocking on the runtime bootstrap is fine — tokio test runtime.
+        let mgr = Arc::clone(&manager);
+        futures::executor::block_on(async move {
+            mgr.set_vector_backend(embedder, store).await;
+        });
+        manager
     }
 
-    fn make_handle(workspace: &std::path::Path) -> Arc<MemoryServiceHandle> {
-        let store_dir = workspace.join("memory");
-        let store = DiskVectorMemoryStore::new(&store_dir).expect("disk store init");
-        Arc::new(MemoryServiceHandle {
-            embedding: Arc::new(KeywordEmbedder),
-            store: Arc::new(store) as Arc<dyn MemoryStorePort>,
-        })
-    }
-
-    /// End-to-end plugin test: agent "researcher" ingests a fact via
-    /// `memory_ingest`; agent "writer" retrieves it via `memory_search`.
-    /// Mirrors the Phase 2 contract: "fact ingested as researcher →
-    /// searchable as writer".
+    /// End-to-end plugin test: ingest → search returns the ingested
+    /// content. Uses the null Embedder so every vector is the zero
+    /// vector; cosine similarity is then 0.0 for every hit, but the
+    /// entry still comes back via the raw search path.
     #[tokio::test]
     async fn ingest_then_search_returns_ingested_chunk() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
+        let manager = make_manager();
 
-        // Ingest as researcher.
-        let ingest = MemoryIngestTool::new(Arc::clone(&handle));
+        let ingest = MemoryIngestTool::new(Arc::clone(&manager));
         let ingest_args = json!({
             "content": "The Alpha Protocol was signed on 2026-01-15.",
             "agent_id": "researcher",
@@ -235,9 +215,7 @@ mod tests {
             .await
             .expect("ingest should succeed");
 
-        // Search as writer — the tool has no agent identity of its own; any
-        // agent using the shared handle sees the shared store.
-        let search = MemorySearchTool::new(Arc::clone(&handle));
+        let search = MemorySearchTool::new(Arc::clone(&manager));
         let search_args = json!({
             "query": "Alpha Protocol signing date",
             "top_k": 5,
@@ -270,15 +248,16 @@ mod tests {
         );
     }
 
-    /// Metadata-filter path: ingest two entries with different `kind` values
-    /// and assert the search only returns the one matching the filter.
+    /// Metadata-filter path: ingest two entries with different `kind`
+    /// values and assert the search only returns the one matching the
+    /// filter.
     #[tokio::test]
     async fn metadata_filter_restricts_hits() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
+        let manager = make_manager();
 
-        let ingest = MemoryIngestTool::new(Arc::clone(&handle));
+        let ingest = MemoryIngestTool::new(Arc::clone(&manager));
         ingest
             .execute(
                 &json!({
@@ -302,7 +281,7 @@ mod tests {
             .await
             .unwrap();
 
-        let search = MemorySearchTool::new(Arc::clone(&handle));
+        let search = MemorySearchTool::new(Arc::clone(&manager));
         let out = search
             .execute(
                 &json!({
@@ -336,9 +315,9 @@ mod tests {
     async fn missing_query_errors() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
+        let manager = make_manager();
 
-        let search = MemorySearchTool::new(handle);
+        let search = MemorySearchTool::new(manager);
         let out = search.execute(&json!({}), &harness.ctx()).await;
         assert!(out.is_err(), "expected missing-query error");
     }
@@ -348,9 +327,9 @@ mod tests {
     async fn empty_query_errors() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
+        let manager = make_manager();
 
-        let search = MemorySearchTool::new(handle);
+        let search = MemorySearchTool::new(manager);
         let out = search
             .execute(&json!({ "query": "   " }), &harness.ctx())
             .await;

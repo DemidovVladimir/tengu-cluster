@@ -1042,7 +1042,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             &workspace_path,
             &current_tools,
             &skill_registry,
-            &None, // memory_handle — evals run without memory in v1
+            &None, // memory_manager — evals run without memory in v1
             &secret_registry,
             log_activity,
             None, // cancel

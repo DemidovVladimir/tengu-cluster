@@ -4,11 +4,20 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
+use crate::adapters::memory::context_block::{ChunkMetadata, MemoryHit};
 use crate::adapters::memory::provider::MemoryProvider;
+use crate::adapters::memory::vector::{Embedder, VectorStore};
 
 pub struct MemoryManager {
     providers: Arc<RwLock<Vec<Box<dyn MemoryProvider>>>>,
     has_external: Arc<RwLock<bool>>,
+    /// Shared vector backend — embedder + store. Populated alongside the
+    /// builtin provider so tool-callable read/write paths (`memory_ingest`,
+    /// `memory_search`, `persistent_store`) can address the same backing
+    /// store without going through the provider indirection (which is
+    /// shaped for pre-turn fetch / post-turn sync, not user-driven
+    /// ingestion).
+    vector: RwLock<Option<(Arc<Embedder>, Arc<dyn VectorStore>)>>,
 }
 
 impl MemoryManager {
@@ -16,6 +25,7 @@ impl MemoryManager {
         Self {
             providers: Arc::new(RwLock::new(Vec::new())),
             has_external: Arc::new(RwLock::new(false)),
+            vector: RwLock::new(None),
         }
     }
 
@@ -33,6 +43,63 @@ impl MemoryManager {
             *flag = true;
         }
         self.providers.write().await.push(provider);
+    }
+
+    /// Register the shared vector backend used by tool-callable ingest /
+    /// search paths. Call once alongside `add_provider(BuiltinMemoryProvider)`
+    /// so both the provider's pre/post-turn path and the tool path address
+    /// the same store.
+    pub async fn set_vector_backend(&self, embedder: Arc<Embedder>, store: Arc<dyn VectorStore>) {
+        *self.vector.write().await = Some((embedder, store));
+    }
+
+    /// Returns `true` if `set_vector_backend` has installed a vector
+    /// backend. Tool plugins gate tool registration on this so tools aren't
+    /// advertised when the backend is unavailable.
+    pub async fn has_vector_backend(&self) -> bool {
+        self.vector.read().await.is_some()
+    }
+
+    /// Embed `text` and write a single entry to the shared vector backend.
+    /// No-op error when the backend isn't installed — callers must check
+    /// `has_vector_backend` first.
+    pub async fn ingest_one(
+        &self,
+        text: &str,
+        agent: &str,
+        metadata: ChunkMetadata,
+    ) -> anyhow::Result<()> {
+        let guard = self.vector.read().await;
+        let (embedder, store) = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("memory manager: no vector backend registered"))?;
+
+        let embedding = embedder.embed(text).await?;
+        // Ensure the agent populates the metadata so filters still work
+        // when callers forget to set it.
+        let mut metadata = metadata;
+        if metadata.agent.is_none() {
+            metadata.agent = Some(agent.to_string());
+        }
+        store.write(embedding, text, metadata).await
+    }
+
+    /// Embed `query` and run a `top_k` vector search over the shared
+    /// backend. Mirrors `VectorStore::search` directly; callers supply
+    /// their own metadata filter when needed.
+    pub async fn search(
+        &self,
+        query: &str,
+        top_k: usize,
+        filter: Option<&ChunkMetadata>,
+    ) -> anyhow::Result<Vec<MemoryHit>> {
+        let guard = self.vector.read().await;
+        let (embedder, store) = guard
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("memory manager: no vector backend registered"))?;
+
+        let embedding = embedder.embed(query).await?;
+        store.search(&embedding, top_k, filter).await
     }
 
     /// Returns the list of provider names currently registered, in
