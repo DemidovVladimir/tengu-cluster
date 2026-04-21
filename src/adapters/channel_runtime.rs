@@ -933,21 +933,62 @@ pub(crate) fn build_orchestrator(
 /// dispatch a turn against a named agent (e.g. `tengu skill evolve` targeting
 /// the skill-improver agent).
 ///
-/// IMPLEMENTATION NOTE (γ.6): Full wiring requires assembling per-agent engine,
-/// tool executor, memory manager and populating an `OrchestratorSnapshots` map —
-/// equivalent to the Telegram/TUI bootstrap path. That is a non-trivial refactor
-/// (>150 lines) and is left as a targeted follow-up. This stub returns a `bail!`
-/// so the CLI entry-point compiles; `tengu skill evolve` will be gated at
-/// runtime until this is properly wired.
+/// Pre-populates an `OrchestratorSnapshots` table with one `ChatTurnInputs` per
+/// agent in `config.agents`, then wraps it in a `RuntimeChatServiceFactory`.
+/// Tool execution is intentionally omitted — the skill-improver only needs the
+/// engine + memory for text generation; workspace tools can be added later.
 pub(crate) async fn build_cli_chat_factory(
-    _config: &Config,
-    _workspace: &std::path::Path,
+    config: &Config,
+    workspace: &std::path::Path,
 ) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
-    anyhow::bail!(
-        "build_cli_chat_factory: not yet implemented — \
-         see γ.6 follow-up. Wire RuntimeChatServiceFactory from \
-         build_tool_executor + build_memory_manager + snapshots_inputs_fn."
-    )
+    use crate::adapters::engine_builder::build_engine;
+    use crate::adapters::memory::manager::MemoryManager;
+
+    // Build a shared memory manager (no vector backend for CLI — acceptable
+    // degradation; the improver only needs text generation context).
+    let memory: Arc<MemoryManager> = Arc::new(MemoryManager::new());
+
+    let snapshots: OrchestratorSnapshots =
+        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+
+    for (name, agent_cfg) in &config.agents {
+        let engine_box = build_engine(name, agent_cfg, config.claude_code.as_ref())?;
+        let compaction_policy = crate::adapters::flow_builder::resolve_flow_compaction_policy(
+            &agent_cfg.flow,
+            agent_cfg.limits.max_tokens_per_flow,
+            engine_box.context_window(),
+            engine_box.max_output_tokens_per_turn() as usize,
+        );
+        let engine: Arc<dyn Engine> = Arc::from(engine_box);
+        let system_prompt =
+            crate::adapters::skill_builder::build_system_prompt(agent_cfg, false, &[]);
+        let history_turn_limit =
+            crate::adapters::flow_builder::resolve_history_turn_limit(&agent_cfg.flow);
+        let inputs = ChatTurnInputs {
+            engine,
+            agent_id: name.clone(),
+            agent_config: Arc::new(agent_cfg.clone()),
+            history_turn_limit,
+            compaction_policy,
+            system_prompt,
+            tools: Vec::new(),
+            tool_executor: None,
+            memory_manager: Some(Arc::clone(&memory)),
+            max_recall_entries: 10,
+            max_recall_tokens: 2000,
+            bridge_tools: None,
+            tool_observer: None,
+            cancel: None,
+        };
+        snapshots
+            .write()
+            .map_err(|e| anyhow::anyhow!("snapshots lock poisoned: {e}"))?
+            .insert(name.clone(), inputs);
+    }
+
+    let _ = workspace; // workspace available for future tool wiring
+    let inputs_fn = snapshots_inputs_fn(snapshots);
+    Ok(Arc::new(RuntimeChatServiceFactory::new(inputs_fn)))
 }
 
 // ---------------------------------------------------------------------------
