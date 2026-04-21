@@ -946,7 +946,7 @@ impl Config {
             format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
         );
 
-        let valid_workspace_tools = ["shared_cache", "persistent_store"];
+        let valid_workspace_tools = ["shared_cache", "persistent_store", "skill_distill"];
         for wt in &agent.workspace_tools {
             if !valid_workspace_tools.contains(&wt.as_str()) {
                 errors.push(format!(

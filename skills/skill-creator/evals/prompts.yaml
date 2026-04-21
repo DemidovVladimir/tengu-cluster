@@ -1,18 +1,15 @@
-schema_version: 1
-fixtures:
-  - id: f1
-    prompt: |
-      The user has just successfully minted an IPNFT by calling http_request (gas price),
-      sign_and_send_transaction (mint call), and persistent_store (save tx hash).
-      They ask: "Let's save this as a skill called mint-ipnft."
-      Produce a skill_distill call and show its body_markdown.
-    expected_outcome: "skill_distill invoked with coherent body and at least one metric"
-    metrics: [distill_quality]
-  - id: f2
-    prompt: |
-      The user has been iterating on a data-pipeline workflow: http_request to fetch,
-      run_command to transform, and write_file to save. They say "save this as a skill
-      called pipeline-ingest."
-      Produce a skill_distill call.
-    expected_outcome: "skill_distill with three-step Procedure, drop noisy tools if any"
-    metrics: [distill_quality]
+- id: f1
+  prompt: |
+    The user has just successfully minted an IPNFT by calling http_request (gas price),
+    sign_and_send_transaction (mint call), and persistent_store (save tx hash).
+    They ask: "Let's save this as a skill called mint-ipnft."
+    Produce a skill_distill call and show its body_markdown.
+  expected: "skill_distill invoked with coherent body and at least one metric"
+
+- id: f2
+  prompt: |
+    The user has been iterating on a data-pipeline workflow: http_request to fetch,
+    run_command to transform, and write_file to save. They say "save this as a skill
+    called pipeline-ingest."
+    Produce a skill_distill call.
+  expected: "skill_distill with three-step Procedure, drop noisy tools if any"
