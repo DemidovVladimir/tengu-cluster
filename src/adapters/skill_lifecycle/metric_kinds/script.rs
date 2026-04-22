@@ -4,7 +4,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
 use std::process::Command;
-use std::time::Duration;
 
 use crate::adapters::skill_lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
@@ -78,8 +77,6 @@ struct ScriptOutput {
     #[serde(default)]
     notes: Option<String>,
 }
-
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(test)]
 mod tests {
