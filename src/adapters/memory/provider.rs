@@ -8,8 +8,6 @@
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::adapters::types::Message;
-
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
     /// Short identifier (`"builtin"`, `"letta"`, …).
@@ -40,12 +38,6 @@ pub trait MemoryProvider: Send + Sync {
     /// summary. MUST be non-blocking or cheap — the user-facing reply
     /// never waits on this.
     async fn sync_turn(&self, agent: &str, user: &str, assistant: &str);
-
-    /// Called before context compression. Return text to include in
-    /// the compression summary prompt. Default: empty.
-    async fn on_pre_compress(&self, _messages: &[Message]) -> String {
-        String::new()
-    }
 
     /// Clean teardown — flush queues, close connections.
     async fn shutdown(&self);
