@@ -2089,8 +2089,8 @@ mod tests {
 
 | Prompt | Expected behaviour |
 |---|---|
-| "research paper X then mint it as an IP token" | Sequential `sessions_spawn(researcher)` then `sessions_spawn(minter)`. |
-| "what's 2+2?" | Direct answer. No `sessions_spawn` call. |
+| "research paper X then mint it as an IP token" | Delegate to subagent via `memory_ingest` to store findings; then reply. |
+| "what's 2+2?" | Direct answer. No `memory_ingest` call. |
 "#;
         let rows = parse_markdown_prompts(body).expect("parse");
         assert_eq!(rows.len(), 2);
@@ -2100,7 +2100,7 @@ mod tests {
         );
         assert_eq!(
             rows[0].expected,
-            "Sequential `sessions_spawn(researcher)` then `sessions_spawn(minter)`."
+            "Delegate to subagent via `memory_ingest` to store findings; then reply."
         );
         assert_eq!(rows[0].id, "research-paper-x-then-mint-it-as-an-ip-token");
         assert_eq!(rows[1].id, "what-s-2-2");
@@ -2161,7 +2161,7 @@ mod tests {
         let body = r#"
 - id: seq-research-mint
   prompt: "research paper X then mint it as an IP token"
-  expected: "Sequential sessions_spawn(researcher) then sessions_spawn(minter)."
+  expected: "Delegate to subagent via memory_ingest to store findings; then reply."
 - id: fail-503-retry
   prompt: "my trade failed with HTTP 503"
   expected: "Retry the same call. No decomposition."
@@ -2410,13 +2410,13 @@ workspace = "{TMP_WORKSPACE}"
         let stubbed = StubbedExecutor::new(&inner, &stubs);
 
         let r = stubbed
-            .execute(&make_call("sessions_spawn"), &[])
+            .execute(&make_call("memory_ingest"), &[])
             .await
             .unwrap();
-        assert_eq!(r, "live-result-for-sessions_spawn");
+        assert_eq!(r, "live-result-for-memory_ingest");
         assert_eq!(
             inner.counter.lock().unwrap().as_slice(),
-            &["sessions_spawn"]
+            &["memory_ingest"]
         );
     }
 
@@ -2429,7 +2429,7 @@ workspace = "{TMP_WORKSPACE}"
 
     #[test]
     fn verdict_parses_fail() {
-        let v = parse_verdict(r#"{"verdict":"fail","rationale":"missed sessions_spawn"}"#).unwrap();
+        let v = parse_verdict(r#"{"verdict":"fail","rationale":"missed memory_ingest"}"#).unwrap();
         assert_eq!(v.verdict, "fail");
     }
 
