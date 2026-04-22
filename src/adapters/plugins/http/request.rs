@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct HttpRequestTool {
@@ -84,10 +85,7 @@ impl Tool for HttpRequestTool {
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // Scope gate first (also enforced inside `expand_env_refs` for env vars).
-        let url_raw = args
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("http_request: missing 'url'"))?;
+        let url_raw = require_str(args, "http_request", "url")?;
         let url = expand_env_refs(url_raw, ctx)?;
         if !url.starts_with("https://") && !url.starts_with("http://") {
             bail!("http_request: url must start with http:// or https://");
@@ -95,10 +93,7 @@ impl Tool for HttpRequestTool {
         let host = host_from_url(&url)?;
         ctx.scope.check_net_host(&host)?;
 
-        let method_str = args
-            .get("method")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("http_request: missing 'method'"))?;
+        let method_str = require_str(args, "http_request", "method")?;
         let body = arg_to_string(args, "body");
         let headers_json = arg_to_string(args, "headers");
         let file_path = args.get("file_path").and_then(|v| v.as_str());
@@ -474,7 +469,7 @@ mod tests {
         assert!(result.is_err(), "expected error for missing url");
         let msg = format!("{}", result.unwrap_err());
         assert!(
-            msg.contains("missing 'url'"),
+            msg.contains("'url' is required"),
             "expected missing url message, got: {}",
             msg
         );

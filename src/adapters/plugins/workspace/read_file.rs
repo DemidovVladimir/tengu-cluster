@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct ReadFileTool {
@@ -41,10 +42,7 @@ impl Tool for ReadFileTool {
     }
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("read_file: missing 'path' argument"))?;
+        let path_str = require_str(args, "read_file", "path")?;
 
         let target = validate_path(ctx.workspace, path_str)?;
         ctx.scope.check_fs_read(&target)?;

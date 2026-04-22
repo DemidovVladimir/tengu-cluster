@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 /// Tool name (kept constant for cross-module reference).
@@ -49,10 +50,7 @@ impl Tool for MemorySearchTool {
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // scope: pure-compute — same rationale as `memory_ingest`.
 
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("memory_search: missing required 'query' string"))?;
+        let query = require_str(args, "memory_search", "query")?;
 
         if query.trim().is_empty() {
             anyhow::bail!("memory_search: 'query' must be a non-empty string");

@@ -11,6 +11,7 @@ pub mod memory;
 pub(crate) mod secret_builder;
 pub(crate) mod skill_builder;
 pub(crate) mod tool_builder;
+pub(crate) mod tool_utils;
 pub(crate) mod usage;
 
 // --- services & ports ---

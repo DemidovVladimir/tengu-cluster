@@ -1,7 +1,7 @@
 // src/adapters/plugins/crypto/sign_message.rs
 //! `sign_message` tool — EIP-191 personal_sign via Privy.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -9,6 +9,7 @@ use crate::adapters::plugins::crypto::helpers::{
     privy_personal_sign, privy_wallet_address, DEFAULT_WALLET_LABEL,
 };
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct SignMessageTool {
@@ -45,10 +46,7 @@ impl Tool for SignMessageTool {
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         ctx.scope.check_wallet(DEFAULT_WALLET_LABEL)?;
 
-        let message = args
-            .get("message")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("sign_message: missing 'message'"))?;
+        let message = require_str(args, "sign_message", "message")?;
 
         let signature = privy_personal_sign(ctx.http, message).await?;
         let address = privy_wallet_address(ctx.http).await?;
