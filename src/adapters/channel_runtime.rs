@@ -597,14 +597,7 @@ pub(crate) fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
 /// Used by both CLI and Telegram orchestrators to embed previous step output
 /// inline in task prompts instead of referencing file paths.
 pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
-        return text.to_string();
-    }
-    let mut end = max_chars;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...(truncated)", &text[..end])
+    crate::adapters::token::truncate_with_suffix(text, max_chars, "...(truncated)")
 }
 
 // ---------------------------------------------------------------------------
@@ -691,14 +684,7 @@ pub(crate) fn build_activity_context(
 
 /// Truncate text to at most `max` chars on a char boundary, appending "…" if cut.
 pub(crate) fn truncate_summary(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    crate::adapters::token::truncate_with_suffix(text, max, "…")
 }
 
 // ---------------------------------------------------------------------------
