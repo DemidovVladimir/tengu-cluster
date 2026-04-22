@@ -304,7 +304,8 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<crate::adapters::tool_plugin::PluginToolExecutor> = None;
+        let mut current_executor: Option<Arc<crate::adapters::tool_plugin::PluginToolExecutor>> =
+            None;
         let mut current_system_prompt = system_prompt;
 
         let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);
@@ -407,7 +408,8 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            );
+                            )
+                            .map(Arc::new);
                             if let Some(ref exec) = current_executor {
                                 let extra = exec.additional_tool_defs(&current_tools);
                                 if !extra.is_empty() {
@@ -485,7 +487,8 @@ pub fn run_tui(
                                     Some(&memory_config),
                                     &engine_agent_config,
                                     &mcp_servers,
-                                );
+                                )
+                                .map(Arc::new);
                                 if let Some(ref exec) = current_executor {
                                     let extra = exec.additional_tool_defs(&current_tools);
                                     if !extra.is_empty() {
@@ -511,7 +514,9 @@ pub fn run_tui(
                         // Process as a chat turn with the injected prompt.
                         rt.block_on(async {
                             let sanitized_executor = current_executor.as_ref().map(|e| {
-                                SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                                let inner: std::sync::Arc<dyn ToolExecutor> =
+                                    Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
+                                SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
                             });
                             let tool_defs = current_tools.clone();
 
@@ -623,7 +628,8 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            );
+                            )
+                            .map(Arc::new);
                             if let Some(ref exec) = current_executor {
                                 let extra = exec.additional_tool_defs(&current_tools);
                                 if !extra.is_empty() {
@@ -657,9 +663,10 @@ pub fn run_tui(
                         // is safe to share across spawned orchestrator tasks.
                         let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
                             current_executor.take().map(|exec| {
-                                let inner: Arc<dyn ToolExecutor> = Arc::new(exec);
+                                let inner: Arc<dyn ToolExecutor> =
+                                    exec as Arc<dyn ToolExecutor>;
                                 let wrapped: Arc<dyn ToolExecutor> = Arc::new(
-                                    crate::adapters::engine_builder::OwnedSanitizedToolExecutor::new(
+                                    crate::adapters::engine_builder::SanitizedToolExecutor::new(
                                         Arc::clone(&inner),
                                         Arc::clone(&secret_registry),
                                     ),
@@ -722,7 +729,9 @@ pub fn run_tui(
                     rt.block_on(async {
                         // Wrap tool executor with secret redaction decorator.
                         let sanitized_executor = current_executor.as_ref().map(|e| {
-                            SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                            let inner: std::sync::Arc<dyn ToolExecutor> =
+                                Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
+                            SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
                         });
                         let tool_defs = current_tools.clone();
 
