@@ -34,42 +34,7 @@ pub(crate) struct MemorySearchTool {
 impl MemorySearchTool {
     pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
         Self {
-            def: ToolDef::new(
-                MEMORY_SEARCH_TOOL_NAME,
-                "Targeted vector search of long-term memory. Returns hits with \
-                 text, similarity score, and metadata. Use when you need to \
-                 look up specific prior content (documents ingested by other \
-                 agents, past turn summaries, etc.). Optional `agent`, \
-                 `source`, and `kind` filters restrict matches to entries \
-                 whose metadata has the exact given value.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language search query embedded by the memory backend."
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max hits to return (default: 5).",
-                            "default": 5
-                        },
-                        "agent": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `agent` metadata equals this value."
-                        },
-                        "source": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `source` metadata equals this value."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `kind` metadata equals this value."
-                        }
-                    },
-                    "required": ["query"]
-                }),
-            ),
+            def: super::memory_search_def(),
             memory_manager,
         }
     }

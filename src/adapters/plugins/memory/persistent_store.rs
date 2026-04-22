@@ -208,41 +208,7 @@ impl PersistentStoreTool {
         chunk_overlap: usize,
     ) -> Self {
         Self {
-            def: ToolDef::new(
-                PERSISTENT_STORE_TOOL_NAME,
-                "Persistent file store with vector search. Store files, search by semantic query, list or delete stored files.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["store", "search", "list", "delete"],
-                            "description": "Operation to perform"
-                        },
-                        "file_path": {
-                            "type": "string",
-                            "description": "Path to the file to store (required for store). Relative to workspace or absolute."
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Human description of the file content (optional for store, improves search quality)"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Semantic search query (required for search)"
-                        },
-                        "file_id": {
-                            "type": "string",
-                            "description": "File ID to delete (required for delete)"
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max results to return for search (default: 5)"
-                        }
-                    },
-                    "required": ["operation"]
-                }),
-            ),
+            def: super::persistent_store_def(),
             workspace,
             memory_manager,
             chunk_size,
