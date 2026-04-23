@@ -21,7 +21,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 
 use crate::adapters::memory::context_block::ChunkMetadata;
@@ -41,44 +41,7 @@ pub(crate) struct MemoryIngestTool {
 impl MemoryIngestTool {
     pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
         Self {
-            def: ToolDef::new(
-                MEMORY_INGEST_TOOL_NAME,
-                "Ingest a document or fact into long-term vector memory. \
-                 Accepts either a single `text`/`content` string or a list of \
-                 pre-chunked `chunks`, plus optional free-form `metadata` \
-                 (e.g. source, topic, kind). Embeddings are computed by the \
-                 memory backend.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "The fact, insight, or document body to ingest. \
-                                            Alias of `text`; one of content/text/chunks is required."
-                        },
-                        "text": {
-                            "type": "string",
-                            "description": "Alias of `content` — the text to ingest."
-                        },
-                        "chunks": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "Optional pre-chunked content. If supplied, each chunk \
-                                            is ingested as a separate memory entry sharing the \
-                                            same metadata. Use when the caller has already split \
-                                            a long document."
-                        },
-                        "metadata": {
-                            "type": "object",
-                            "description": "Optional free-form tags attached to every stored \
-                                            entry (e.g. {\"kind\": \"fact\", \"source\": \"url\", \
-                                            \"topic\": \"auth\"}). Non-string values are coerced \
-                                            to strings.",
-                            "additionalProperties": true
-                        }
-                    }
-                }),
-            ),
+            def: super::memory_ingest_def(),
             memory_manager,
         }
     }

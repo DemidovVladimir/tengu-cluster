@@ -42,10 +42,6 @@ pub(crate) struct RunSample {
     pub outcomes: BTreeMap<String, MetricOutcome>,
 }
 
-pub(crate) fn skill_dir(workspace: &Path, skill: &str) -> PathBuf {
-    workspace.join("skills").join(skill)
-}
-
 pub(crate) fn per_run_dir(skill_dir: &Path, ts: &str) -> PathBuf {
     skill_dir.join("metrics").join("runs").join(ts)
 }

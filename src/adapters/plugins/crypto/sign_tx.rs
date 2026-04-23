@@ -14,6 +14,7 @@ use crate::adapters::plugins::crypto::helpers::{
     privy_send_transaction, resolve_default_chain_id, wait_for_receipt, DEFAULT_WALLET_LABEL,
 };
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct SignAndSendTransactionTool {
@@ -68,10 +69,7 @@ impl Tool for SignAndSendTransactionTool {
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         ctx.scope.check_wallet(DEFAULT_WALLET_LABEL)?;
 
-        let to = args
-            .get("to")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("sign_and_send_transaction: missing 'to'"))?;
+        let to = require_str(args, "sign_and_send_transaction", "to")?;
         let data = args.get("data").and_then(|v| v.as_str());
         let value = args.get("value").and_then(|v| v.as_str());
         let expected_chain_id = resolve_default_chain_id();
@@ -159,7 +157,7 @@ mod tests {
         assert!(result.is_err(), "expected missing 'to' error");
         let msg = format!("{}", result.unwrap_err());
         assert!(
-            msg.contains("missing 'to'"),
+            msg.contains("'to' is required"),
             "expected missing 'to' message, got: {}",
             msg
         );

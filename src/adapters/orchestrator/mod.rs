@@ -10,7 +10,6 @@
 //! - `roster`    — agent roster rendering + template substitution
 //! - `telemetry` — event → tracing bridge
 
-pub mod config;
 pub mod events;
 pub mod executor;
 pub mod plan;
@@ -18,7 +17,6 @@ pub mod planner;
 pub mod replan;
 pub mod retry;
 pub mod roster;
-pub mod telemetry;
 pub mod wiring;
 
 // Public API re-exports

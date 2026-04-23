@@ -25,6 +25,7 @@ use tracing::{info, warn};
 use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) const PERSISTENT_STORE_TOOL_NAME: &str = "persistent_store";
@@ -208,41 +209,7 @@ impl PersistentStoreTool {
         chunk_overlap: usize,
     ) -> Self {
         Self {
-            def: ToolDef::new(
-                PERSISTENT_STORE_TOOL_NAME,
-                "Persistent file store with vector search. Store files, search by semantic query, list or delete stored files.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["store", "search", "list", "delete"],
-                            "description": "Operation to perform"
-                        },
-                        "file_path": {
-                            "type": "string",
-                            "description": "Path to the file to store (required for store). Relative to workspace or absolute."
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Human description of the file content (optional for store, improves search quality)"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Semantic search query (required for search)"
-                        },
-                        "file_id": {
-                            "type": "string",
-                            "description": "File ID to delete (required for delete)"
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max results to return for search (default: 5)"
-                        }
-                    },
-                    "required": ["operation"]
-                }),
-            ),
+            def: super::persistent_store_def(),
             workspace,
             memory_manager,
             chunk_size,
@@ -590,36 +557,22 @@ impl Tool for PersistentStoreTool {
         let storage_root = self.storage_root();
         std::fs::create_dir_all(&storage_root)?;
 
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("persistent_store: missing 'operation'"))?;
+        let operation = require_str(args, "persistent_store", "operation")?;
 
         let result = match operation {
             "store" => {
-                let file_path =
-                    args.get("file_path")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("persistent_store store: missing 'file_path'")
-                        })?;
+                let file_path = require_str(args, "persistent_store store", "file_path")?;
                 let description = args.get("description").and_then(|v| v.as_str());
                 self.execute_store(file_path, description).await?
             }
             "search" => {
-                let query = args
-                    .get("query")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("persistent_store search: missing 'query'"))?;
+                let query = require_str(args, "persistent_store search", "query")?;
                 let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
                 self.execute_search(query, top_k).await?
             }
             "list" => self.execute_list()?,
             "delete" => {
-                let file_id = args
-                    .get("file_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("persistent_store delete: missing 'file_id'"))?;
+                let file_id = require_str(args, "persistent_store delete", "file_id")?;
                 self.execute_delete(file_id).await?
             }
             other => bail!("persistent_store: unknown operation '{other}'"),

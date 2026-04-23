@@ -535,42 +535,17 @@ pub trait ToolExecutor: Send + Sync {
 }
 
 /// Decorator that redacts registered secret values from all tool output.
-pub(crate) struct SanitizedToolExecutor<'a> {
-    inner: &'a dyn ToolExecutor,
-    registry: &'a crate::adapters::secret_builder::SecretRegistry,
-}
-
-impl<'a> SanitizedToolExecutor<'a> {
-    pub fn new(
-        inner: &'a dyn ToolExecutor,
-        registry: &'a crate::adapters::secret_builder::SecretRegistry,
-    ) -> Self {
-        Self { inner, registry }
-    }
-}
-
-#[async_trait]
-impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
-    async fn execute(
-        &self,
-        call: &ToolCall,
-        messages: &[crate::adapters::types::Message],
-    ) -> Result<String> {
-        let result = self.inner.execute(call, messages).await?;
-        Ok(self.registry.redact(&result))
-    }
-}
-
-/// Owned variant of `SanitizedToolExecutor` that holds its dependencies behind
-/// `Arc`s. Used by the orchestrator chat-factory path, where the factory
-/// closure must return a `'static` `Arc<dyn ToolExecutor>` — borrowing into
-/// a per-turn stack-local `SanitizedToolExecutor<'a>` is not possible there.
-pub(crate) struct OwnedSanitizedToolExecutor {
+///
+/// Owns its dependencies behind `Arc` so the decorator is `'static` —
+/// required by the orchestrator chat-factory path. Per-turn borrowed
+/// callers wrap their inner executor + registry in `Arc` at the call
+/// site.
+pub(crate) struct SanitizedToolExecutor {
     inner: std::sync::Arc<dyn ToolExecutor>,
     registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
 }
 
-impl OwnedSanitizedToolExecutor {
+impl SanitizedToolExecutor {
     pub fn new(
         inner: std::sync::Arc<dyn ToolExecutor>,
         registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
@@ -580,7 +555,7 @@ impl OwnedSanitizedToolExecutor {
 }
 
 #[async_trait]
-impl ToolExecutor for OwnedSanitizedToolExecutor {
+impl ToolExecutor for SanitizedToolExecutor {
     async fn execute(
         &self,
         call: &ToolCall,
@@ -898,19 +873,15 @@ fn compact_tool_result(content: &str, limit: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn truncate_tool_result(result: &str, max_chars: usize) -> String {
-    if result.len() <= max_chars {
-        return result.to_string();
+    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+        None => result.to_string(),
+        Some((prefix, end)) => format!(
+            "{}\n\n[truncated — showing {} of {} chars]",
+            prefix,
+            end,
+            result.len()
+        ),
     }
-    let mut end = max_chars;
-    while end > 0 && !result.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n\n[truncated — showing {} of {} chars]",
-        &result[..end],
-        end,
-        result.len()
-    )
 }
 
 fn flush_pending_tool_call(

@@ -31,9 +31,7 @@ use crate::adapters::chat_builder::{
 };
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
-use crate::adapters::engine_builder::{
-    OwnedSanitizedToolExecutor, SanitizedToolExecutor, ToolExecutor,
-};
+use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
@@ -1194,9 +1192,10 @@ impl TelegramSession {
             }
         }
 
-        let sanitized_executor = current_executor
-            .as_ref()
-            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
+        let sanitized_executor = current_executor.map(|e| {
+            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
+            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
+        });
 
         let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1451,11 +1450,9 @@ impl TelegramSession {
                     )
                     .map(|e| {
                         let inner: Arc<dyn ToolExecutor> = Arc::new(e);
-                        let sanitized: Arc<dyn ToolExecutor> =
-                            Arc::new(OwnedSanitizedToolExecutor::new(
-                                inner,
-                                Arc::clone(&self.secret_registry),
-                            ));
+                        let sanitized: Arc<dyn ToolExecutor> = Arc::new(
+                            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry)),
+                        );
                         sanitized
                     })
                 });
@@ -1882,9 +1879,10 @@ impl TelegramSession {
                 agent.current_tools.extend(extra);
             }
         }
-        let sanitized_executor = current_executor
-            .as_ref()
-            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
+        let sanitized_executor = current_executor.map(|e| {
+            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
+            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
+        });
 
         self.turn_cancel.store(false, Ordering::Relaxed);
 

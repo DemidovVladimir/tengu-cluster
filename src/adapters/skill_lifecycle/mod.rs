@@ -4,8 +4,6 @@
 //! (in `plugins/skill_lifecycle/`), `run_eval` (via `tengu eval`), and
 //! `run_evolve` (via `tengu skill evolve`).
 
-#![allow(dead_code)]
-
 pub(crate) mod config;
 pub(crate) mod fixtures;
 pub(crate) mod metric_kinds;

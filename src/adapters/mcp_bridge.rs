@@ -305,19 +305,15 @@ async fn handle_tools_call(
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
 
 fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
-    if result.len() <= max_chars {
-        return result.to_string();
+    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+        None => result.to_string(),
+        Some((prefix, end)) => format!(
+            "{}\n\n[truncated — showing {} of {} chars]",
+            prefix,
+            end,
+            result.len()
+        ),
     }
-    let mut end = max_chars;
-    while end > 0 && !result.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n\n[truncated — showing {} of {} chars]",
-        &result[..end],
-        end,
-        result.len()
-    )
 }
 
 // ---------------------------------------------------------------------------

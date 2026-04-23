@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct WriteFileTool {
@@ -102,17 +103,11 @@ impl Tool for WriteFileTool {
     }
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
-        let path_str = args
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("write_file: missing 'path' argument"))?;
+        let path_str = require_str(args, "write_file", "path")?;
         let target = validate_path(ctx.workspace, path_str)?;
         ctx.scope.check_fs_write(&target)?;
 
-        let content = args
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("write_file: missing 'content' argument"))?;
+        let content = require_str(args, "write_file", "content")?;
 
         // Block writes to skill directories to prevent LLM-crafted malicious skills.
         let normalized = path_str.replace('\\', "/");

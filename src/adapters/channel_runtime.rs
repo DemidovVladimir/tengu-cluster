@@ -70,6 +70,28 @@ pub(crate) fn rebuild_system_prompt(
     )
 }
 
+/// Register a plugin, logging failures as warnings. Returns `true` on
+/// success, `false` on failure.
+///
+/// Used by `build_tool_executor` — wraps the `futures::executor::block_on`
+/// bridge until the channel chain is fully async.
+// TODO(Phase B): drop the block_on once build_tool_executor is async.
+fn register_plugin_safe(
+    registry: &mut ToolRegistry,
+    plugin: &dyn crate::adapters::tool_plugin::ToolPlugin,
+    plugin_ctx: &PluginCtx<'_>,
+    allow_list: &[String],
+    failure_message: &str,
+) -> bool {
+    match futures::executor::block_on(registry.register_plugin(plugin, plugin_ctx, allow_list)) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "{}", failure_message);
+            false
+        }
+    }
+}
+
 /// Build the plugin-backed tool executor from workspace, skill, and memory executors.
 ///
 /// The `activity` port is channel-specific — each channel adapter provides its own
@@ -140,20 +162,18 @@ pub(crate) fn build_tool_executor(
     // Skill plugin (A8). Registers one `SkillShellTool` per active shell skill.
     // Documentation / API skills stay in the system-prompt path and do not
     // create tools.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let skill_plugin = SkillPlugin::from_registry(skill_registry);
-    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+    register_plugin_safe(
+        &mut registry,
         &skill_plugin,
         &plugin_ctx,
         &allowed_list,
-    )) {
-        tracing::warn!(error = %e, "Failed to register skill plugin — shell skills unavailable");
-    }
+        "Failed to register skill plugin — shell skills unavailable",
+    );
 
     // Memory plugin (A5). Registers `memory_ingest` when memory is enabled, plus
     // `persistent_store` when listed in `workspace_tools`. The plugin itself
     // gates on `ctx.memory.is_some()`.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let ps_chunk_size = memory_config
         .map(|mc| mc.persistent_store_chunk_size)
         .unwrap_or(1000);
@@ -161,75 +181,73 @@ pub(crate) fn build_tool_executor(
         .map(|mc| mc.persistent_store_chunk_overlap)
         .unwrap_or(200);
     let memory_plugin = MemoryPlugin::new(ps_chunk_size, ps_chunk_overlap);
-    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+    register_plugin_safe(
+        &mut registry,
         &memory_plugin,
         &plugin_ctx,
         &allowed_list,
-    )) {
-        tracing::warn!(error = %e, "Failed to register memory plugin — memory_ingest/persistent_store unavailable");
-    }
+        "Failed to register memory plugin — memory_ingest/persistent_store unavailable",
+    );
 
     // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
     // it (i.e. the agent's `workspace_tools` opt-in list).
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        register_plugin_safe(
+            &mut registry,
             &CachePlugin,
             &plugin_ctx,
             &allowed_list,
-        )) {
-            tracing::warn!(error = %e, "Failed to register cache plugin — shared_cache unavailable");
-        }
+            "Failed to register cache plugin — shared_cache unavailable",
+        );
     }
 
     // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
     // via `workspace_tools = ["skill_distill"]`. The tool writes a new skill
     // directory from the calling agent's in-context synthesis.
     if allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME) {
-        if let Err(e) = futures::executor::block_on(registry.register_plugin(
+        register_plugin_safe(
+            &mut registry,
             &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
             &plugin_ctx,
             &allowed_list,
-        )) {
-            tracing::warn!(error = %e, "Failed to register skill-lifecycle plugin — skill_distill unavailable");
-        }
+            "Failed to register skill-lifecycle plugin — skill_distill unavailable",
+        );
     }
 
     // HTTP plugin (A2). Registers `http_request`.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
-    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+    register_plugin_safe(
+        &mut registry,
         &HttpPlugin,
         &plugin_ctx,
         &allowed_list,
-    )) {
-        tracing::warn!(error = %e, "Failed to register http plugin — http_request unavailable");
-    }
+        "Failed to register http plugin — http_request unavailable",
+    );
 
     // Crypto plugin (A3). Registers sign_and_send_transaction, sign_message,
     // get_wallet_address, abi_encode, hex_to_uint256.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     let crypto_plugin = CryptoPlugin::new(cancel.clone());
-    if let Err(e) = futures::executor::block_on(registry.register_plugin(
+    register_plugin_safe(
+        &mut registry,
         &crypto_plugin,
         &plugin_ctx,
         &allowed_list,
-    )) {
-        tracing::warn!(error = %e, "Failed to register crypto plugin — crypto tools unavailable");
-    }
+        "Failed to register crypto plugin — crypto tools unavailable",
+    );
 
     // MCP plugin (A10). Inbound client — connects to each configured external
     // MCP server and registers its tools as `{server_name}.{tool_name}`. Only
     // wired in when at least one server is configured. An empty allow-list is
     // passed because MCP tool names are dynamic (discovered at runtime) and
     // would never appear in the static `tools` slice.
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async.
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
-        if let Err(e) =
-            futures::executor::block_on(registry.register_plugin(&mcp_plugin, &plugin_ctx, &[]))
-        {
-            tracing::warn!(error = %e, "Failed to register mcp plugin — external MCP tools unavailable");
-        }
+        register_plugin_safe(
+            &mut registry,
+            &mcp_plugin,
+            &plugin_ctx,
+            &[],
+            "Failed to register mcp plugin — external MCP tools unavailable",
+        );
     }
 
     // Per-tool scope map: permissive by default during A1 — pre-migration
@@ -597,14 +615,7 @@ pub(crate) fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
 /// Used by both CLI and Telegram orchestrators to embed previous step output
 /// inline in task prompts instead of referencing file paths.
 pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
-        return text.to_string();
-    }
-    let mut end = max_chars;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...(truncated)", &text[..end])
+    crate::adapters::token::truncate_with_suffix(text, max_chars, "...(truncated)")
 }
 
 // ---------------------------------------------------------------------------
@@ -691,14 +702,7 @@ pub(crate) fn build_activity_context(
 
 /// Truncate text to at most `max` chars on a char boundary, appending "…" if cut.
 pub(crate) fn truncate_summary(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
+    crate::adapters::token::truncate_with_suffix(text, max, "…")
 }
 
 // ---------------------------------------------------------------------------

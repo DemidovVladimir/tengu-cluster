@@ -17,6 +17,7 @@ use std::sync::Arc;
 use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 /// Tool name (kept constant for cross-module reference).
@@ -34,42 +35,7 @@ pub(crate) struct MemorySearchTool {
 impl MemorySearchTool {
     pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
         Self {
-            def: ToolDef::new(
-                MEMORY_SEARCH_TOOL_NAME,
-                "Targeted vector search of long-term memory. Returns hits with \
-                 text, similarity score, and metadata. Use when you need to \
-                 look up specific prior content (documents ingested by other \
-                 agents, past turn summaries, etc.). Optional `agent`, \
-                 `source`, and `kind` filters restrict matches to entries \
-                 whose metadata has the exact given value.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Natural-language search query embedded by the memory backend."
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max hits to return (default: 5).",
-                            "default": 5
-                        },
-                        "agent": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `agent` metadata equals this value."
-                        },
-                        "source": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `source` metadata equals this value."
-                        },
-                        "kind": {
-                            "type": "string",
-                            "description": "Optional metadata filter: only return hits whose `kind` metadata equals this value."
-                        }
-                    },
-                    "required": ["query"]
-                }),
-            ),
+            def: super::memory_search_def(),
             memory_manager,
         }
     }
@@ -84,10 +50,7 @@ impl Tool for MemorySearchTool {
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // scope: pure-compute — same rationale as `memory_ingest`.
 
-        let query = args
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("memory_search: missing required 'query' string"))?;
+        let query = require_str(args, "memory_search", "query")?;
 
         if query.trim().is_empty() {
             anyhow::bail!("memory_search: 'query' must be a non-empty string");
