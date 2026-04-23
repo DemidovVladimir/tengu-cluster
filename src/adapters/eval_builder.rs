@@ -2414,10 +2414,7 @@ workspace = "{TMP_WORKSPACE}"
             .await
             .unwrap();
         assert_eq!(r, "live-result-for-memory_ingest");
-        assert_eq!(
-            inner.counter.lock().unwrap().as_slice(),
-            &["memory_ingest"]
-        );
+        assert_eq!(inner.counter.lock().unwrap().as_slice(), &["memory_ingest"]);
     }
 
     #[test]

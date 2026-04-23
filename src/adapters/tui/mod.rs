@@ -663,8 +663,7 @@ pub fn run_tui(
                         // is safe to share across spawned orchestrator tasks.
                         let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
                             current_executor.take().map(|exec| {
-                                let inner: Arc<dyn ToolExecutor> =
-                                    exec as Arc<dyn ToolExecutor>;
+                                let inner: Arc<dyn ToolExecutor> = exec as Arc<dyn ToolExecutor>;
                                 let wrapped: Arc<dyn ToolExecutor> = Arc::new(
                                     crate::adapters::engine_builder::SanitizedToolExecutor::new(
                                         Arc::clone(&inner),

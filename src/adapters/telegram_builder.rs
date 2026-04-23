@@ -1450,11 +1450,9 @@ impl TelegramSession {
                     )
                     .map(|e| {
                         let inner: Arc<dyn ToolExecutor> = Arc::new(e);
-                        let sanitized: Arc<dyn ToolExecutor> =
-                            Arc::new(SanitizedToolExecutor::new(
-                                inner,
-                                Arc::clone(&self.secret_registry),
-                            ));
+                        let sanitized: Arc<dyn ToolExecutor> = Arc::new(
+                            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry)),
+                        );
                         sanitized
                     })
                 });
