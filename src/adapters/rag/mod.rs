@@ -24,6 +24,12 @@
 //! All of those are tracked in `docs/IMPLEMENTATION_PLAN.md`.
 
 #![cfg(feature = "qdrant")]
+// Many items in this module are "staging APIs" for Phase 4 of the redesign —
+// they exist (RagStore::messages/outputs/cfg, MemoryKind variants, store_memory)
+// so Phase 4 wiring is a pure-compile addition, not a new-code addition. Silence
+// dead_code at the module level until Phase 4 lights them up. Removing this
+// allow-list in Phase 4 is a quick signal that the wire-up was complete.
+#![allow(dead_code)]
 
 pub mod cleanup;
 pub mod indexer;

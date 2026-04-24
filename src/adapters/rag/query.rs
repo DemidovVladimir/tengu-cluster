@@ -2,6 +2,7 @@
 //! back into the RAG-shaped [`RagResult`] the planner will consume.
 
 #![cfg(feature = "qdrant")]
+#![allow(dead_code)]  // Phase 4 wires search_memory from replan.rs.
 
 use anyhow::Result;
 

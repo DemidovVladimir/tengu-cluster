@@ -27,7 +27,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run interactive chat loop.
-    Chat,
+    Chat {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
     /// Print static runtime status snapshot.
     Status,
     /// Run runtime/environment diagnostics.
@@ -252,7 +256,7 @@ async fn main() -> Result<()> {
 
     // In TUI mode, persist logs to file only so interactive output stays clean.
     // In Telegram mode, log to both file and stderr so operators can monitor.
-    let is_tui = matches!(cli.command, None | Some(Commands::Chat));
+    let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
@@ -326,8 +330,9 @@ async fn main() -> Result<()> {
 
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
-    match cli.command.unwrap_or(Commands::Chat) {
-        Commands::Chat => {
+    match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
+        Commands::Chat { sandbox } => {
+            let config = load_sandbox_or(sandbox, config)?;
             tokio::task::block_in_place(|| adapters::tui::run_tui(config, profile, secret_registry))
         }
         Commands::Status => {

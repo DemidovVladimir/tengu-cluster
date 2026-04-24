@@ -11,7 +11,7 @@
 //! `run-agent` subcommand and the `TENGU_AGENT_IPC=1` environment guard. The
 //! guard prevents accidental fork-bomb-style re-entry.
 
-#![cfg_attr(not(feature = "qdrant"), allow(dead_code))]
+#![allow(dead_code)]  // SubprocessRunner is wired by the DagExecutor in Phase 4.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};

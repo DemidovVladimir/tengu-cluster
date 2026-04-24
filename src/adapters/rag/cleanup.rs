@@ -10,6 +10,7 @@
 //! opted in, at which point the warning tells them what's missing.
 
 #![cfg(feature = "qdrant")]
+#![allow(dead_code)]  // Phase 4 wires ttl_cleanup via the orchestrator startup hook.
 
 use anyhow::Result;
 

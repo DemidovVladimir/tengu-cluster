@@ -11,6 +11,7 @@
 //! Phase 3 run-agent stub (no LLM) — same write, no tool dispatch.
 
 #![cfg(feature = "qdrant")]
+#![allow(dead_code)]  // definition() becomes live in Phase 4 LLM mini-loop; write_summary already used.
 
 use anyhow::Result;
 
