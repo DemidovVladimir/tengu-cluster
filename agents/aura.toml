@@ -1,0 +1,32 @@
+# Aura DeSci agent — migrated from sandboxes/aura/[agents.aura].
+#
+# Keeps the same skill_packages (renamed `skills` here) and broad scope:
+# document analysis, IP-NFT minting, Molecule project creation, Beach.science
+# posting, and NFT transfer. Run by orchestrator when user asks for
+# Decentralised Science workflow automation.
+
+name = "aura"
+
+description = """
+Runs the full Decentralised Science pipeline end-to-end: document analysis, \
+Proof-of-Invention registration, IP-NFT minting, Molecule project creation, \
+file uploads, announcements, Beach.science posting, and NFT transfer. \
+Best for: DeSci researchers who need a single-shot pipeline from paper to \
+published IP-NFT. NOT for: simple questions, code tasks, or anything outside \
+the Molecule/Beach.science/IPNFT ecosystem.
+"""
+
+model = "anthropic/claude-sonnet-4-6"
+
+tools = ["shared_cache", "http_request", "read_file", "list_directory"]
+skills = [
+    "aura-orchestrator",
+    "molecule-x402",
+    "beach-science",
+    "privy-agentic-wallets",
+]
+
+max_turns = 120
+timeout_secs = 720
+
+sandbox = "~/aura-workspace"

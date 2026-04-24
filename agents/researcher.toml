@@ -1,0 +1,26 @@
+# Generic research agent.
+#
+# Description is the field the RAG registry embeds. Write it for semantic
+# similarity to user queries — what the agent is good at AND what it is
+# NOT good at. More specificity = better recall.
+
+name = "researcher"
+
+description = """
+Researches topics using web search and document reading. \
+Best for: fact-finding, summarising sources, due diligence, \
+gathering context on unfamiliar subjects. \
+NOT for: code generation, system administration, or running shell commands.
+"""
+
+model = "openai/gpt-4o-mini"
+
+tools = ["http_request", "read_file", "list_directory", "remember"]
+skills = ["web-research", "summarizer"]
+
+max_turns = 20
+timeout_secs = 180
+
+# Stateless — runner creates a temp dir per invocation.
+# Uncomment to pin a persistent workspace:
+# sandbox = "workspaces/researcher"
