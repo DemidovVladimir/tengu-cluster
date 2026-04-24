@@ -1,0 +1,228 @@
+//! Embed + upsert into `tengu_registry`.
+//!
+//! Phase 1 indexed only `ToolDef`s (and cleared the registry first). Phase 2
+//! adds two more indexers — [`index_agents`] and [`index_skills`] — and
+//! splits `clear` out as a separate step so the caller can wipe once then
+//! write all three categories.
+//!
+//! None of these functions implement content-hash dedup yet; that lands in
+//! a later phase (see `docs/IMPLEMENTATION_PLAN.md`). Tools/agents/skills are
+//! fully re-written each call. The small-N case means this is acceptable.
+
+#![cfg(feature = "qdrant")]
+
+use anyhow::Result;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+use crate::adapters::agents::AgentSpec;
+use crate::adapters::rag::{registry_metadata, RagKind, RagStore, SkillEntry};
+use crate::adapters::types::ToolDef;
+
+/// Upsert `ToolDef`s into `tengu_registry` as `kind = tool`. Does not clear.
+pub async fn index_tools(rag: &RagStore, tools: Vec<ToolDef>) -> Result<usize> {
+    let mut count = 0usize;
+    for tool in &tools {
+        let text = format!("{}\n\n{}", tool.name, tool.description);
+        let vec = match rag.embedder().embed(&text).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(tool = %tool.name, error = %e, "embed failed; skipping");
+                continue;
+            }
+        };
+        let meta = registry_metadata(RagKind::Tool, &tool.name, None);
+        if let Err(e) = rag.registry().write(vec, &text, meta).await {
+            tracing::warn!(tool = %tool.name, error = %e, "registry write failed");
+            continue;
+        }
+        count += 1;
+    }
+    tracing::info!(total = tools.len(), indexed = count, "rag index_tools complete");
+    Ok(count)
+}
+
+/// Upsert agent specs into `tengu_registry` as `kind = agent`. Does not clear.
+pub async fn index_agents(rag: &RagStore, agents: Vec<AgentSpec>) -> Result<usize> {
+    let mut count = 0usize;
+    for agent in &agents {
+        let text = format!("{}\n\n{}", agent.name, agent.description);
+        let vec = match rag.embedder().embed(&text).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(agent = %agent.name, error = %e, "embed failed; skipping");
+                continue;
+            }
+        };
+        let source = agent.source_path.as_deref().map(|p| p.to_string_lossy().to_string());
+        let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
+        if let Err(e) = rag.registry().write(vec, &text, meta).await {
+            tracing::warn!(agent = %agent.name, error = %e, "registry write failed");
+            continue;
+        }
+        count += 1;
+    }
+    tracing::info!(total = agents.len(), indexed = count, "rag index_agents complete");
+    Ok(count)
+}
+
+/// Upsert skill descriptions into `tengu_registry` as `kind = skill`. Does not clear.
+pub async fn index_skills(rag: &RagStore, skills: Vec<SkillEntry>) -> Result<usize> {
+    let mut count = 0usize;
+    for skill in &skills {
+        let text = format!("{}\n\n{}", skill.name, skill.description);
+        let vec = match rag.embedder().embed(&text).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(skill = %skill.name, error = %e, "embed failed; skipping");
+                continue;
+            }
+        };
+        let source = skill.source_path.to_string_lossy().to_string();
+        let meta = registry_metadata(RagKind::Skill, &skill.name, Some(&source));
+        if let Err(e) = rag.registry().write(vec, &text, meta).await {
+            tracing::warn!(skill = %skill.name, error = %e, "registry write failed");
+            continue;
+        }
+        count += 1;
+    }
+    tracing::info!(total = skills.len(), indexed = count, "rag index_skills complete");
+    Ok(count)
+}
+
+// -------------------------------------------------------------------------
+// Skill discovery — three-tier scanner with shadowing.
+// -------------------------------------------------------------------------
+
+/// Fields we extract from a SKILL.md's YAML frontmatter.
+#[derive(Debug, Deserialize, Default)]
+struct SkillFrontmatter {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// Scan the three-tier skill hierarchy and return one `SkillEntry` per unique
+/// `name`. Later tiers shadow earlier ones. The tiers are:
+///
+/// 1. Managed — `~/.tengu/skills/` (lowest priority)
+/// 2. Workspace dotdir — `<workspace>/.tengu/skills/`
+/// 3. Workspace root — `<workspace>/skills/` (highest priority)
+///
+/// Missing tiers are skipped silently. A SKILL.md with no usable frontmatter
+/// `description` is logged and skipped.
+pub fn scan_skills(workspace: &Path) -> Vec<SkillEntry> {
+    let mut by_name: std::collections::HashMap<String, SkillEntry> =
+        std::collections::HashMap::new();
+
+    let tier1 = dirs_next::home_dir().map(|h| h.join(".tengu").join("skills"));
+    let tier2 = Some(workspace.join(".tengu").join("skills"));
+    let tier3 = Some(workspace.join("skills"));
+
+    // Scan in precedence order — later writes overwrite earlier ones.
+    for root in [tier1, tier2, tier3].into_iter().flatten() {
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in scan_one_skill_root(&root) {
+            by_name.insert(entry.name.clone(), entry);
+        }
+    }
+
+    let mut out: Vec<SkillEntry> = by_name.into_values().collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+fn scan_one_skill_root(root: &Path) -> Vec<SkillEntry> {
+    let mut entries = Vec::new();
+    let read_dir = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(root = %root.display(), error = %e, "skill root unreadable");
+            return entries;
+        }
+    };
+    for dir_entry in read_dir.flatten() {
+        let skill_md = dir_entry.path().join("SKILL.md");
+        if !skill_md.is_file() {
+            continue;
+        }
+        match parse_skill_md(&skill_md) {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => {
+                tracing::debug!(path = %skill_md.display(), "SKILL.md has no frontmatter; skipping");
+            }
+            Err(e) => {
+                tracing::warn!(path = %skill_md.display(), error = %e, "SKILL.md parse failed");
+            }
+        }
+    }
+    entries
+}
+
+fn parse_skill_md(path: &Path) -> Result<Option<SkillEntry>> {
+    let content = std::fs::read_to_string(path)?;
+
+    // Expect `---\n<yaml>\n---\n<body>`. Anything else → no frontmatter.
+    if !content.starts_with("---") {
+        return Ok(None);
+    }
+    let rest = &content[3..];
+    let end = match rest.find("\n---") {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    // Trim leading newline after opening `---`.
+    let yaml_text = rest[..end].trim_start_matches('\n');
+    let fm: SkillFrontmatter = serde_yaml::from_str(yaml_text).unwrap_or_default();
+
+    let name = fm.name.unwrap_or_else(|| {
+        // Fallback: parent directory name.
+        path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    });
+    let description = match fm.description {
+        Some(d) if !d.trim().is_empty() => d,
+        _ => return Ok(None),
+    };
+    Ok(Some(SkillEntry {
+        name,
+        description,
+        source_path: PathBuf::from(path),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_skill_md_reads_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let skill_md = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            "---\nname: my-skill\ndescription: \"Does things.\"\n---\n\n# Body",
+        )
+        .unwrap();
+        let entry = parse_skill_md(&skill_md).unwrap().unwrap();
+        assert_eq!(entry.name, "my-skill");
+        assert_eq!(entry.description, "Does things.");
+    }
+
+    #[test]
+    fn parse_skill_md_returns_none_without_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        std::fs::write(&skill_md, "# Body only, no frontmatter.").unwrap();
+        let entry = parse_skill_md(&skill_md).unwrap();
+        assert!(entry.is_none());
+    }
+}

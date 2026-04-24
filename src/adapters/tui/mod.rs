@@ -765,9 +765,15 @@ pub fn run_tui(
                                 ..
                             }) => {
                                 // Pull fresh memory stats from the manager.
-                                let memory_stats: Option<(usize, u64)> = memory_manager_handle
-                                    .as_ref()
-                                    .and_then(|mgr| rt.block_on(mgr.stats()));
+                                // NOTE: we're already inside `rt.block_on(async { ... })`
+                                // at line ~728. Calling `rt.block_on(...)` again here
+                                // panics with "Cannot start a runtime from within a
+                                // runtime". Use .await instead.
+                                let memory_stats: Option<(usize, u64)> =
+                                    match memory_manager_handle.as_ref() {
+                                        Some(mgr) => mgr.stats().await,
+                                        None => None,
+                                    };
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {

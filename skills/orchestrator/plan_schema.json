@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "title": "Tengu orchestrator plan",
+  "description": "Discriminated union over direct-response vs multi-step plan. The harness validates every planner LLM output against this schema.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "direct" },
+        "response": {
+          "type": "string",
+          "description": "The text to show the user directly."
+        }
+      },
+      "required": ["kind", "response"]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "plan" },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Plan-local identifier referenced by later steps' depends_on."
+              },
+              "agent": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Exact agent name from the ranked RAG roster."
+              },
+              "goal": {
+                "type": "string",
+                "minLength": 1,
+                "description": "One-sentence instruction for the subagent."
+              },
+              "depends_on": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Step ids whose completed_outputs this step will consume."
+              }
+            },
+            "required": ["id", "agent", "goal", "depends_on"]
+          }
+        }
+      },
+      "required": ["kind", "steps"]
+    }
+  ]
+}
