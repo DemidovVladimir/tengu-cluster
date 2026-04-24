@@ -1,12 +1,13 @@
 # Tengu-cluster manual smoke test
 
-Run this at the end of every implementation phase. Both the TUI and Telegram channels must pass before a phase is considered landed. Phase 0 captures the baseline outputs in the "Regression baselines" section at the bottom so that later phases have a concrete diff target; if a later phase changes wording or behaviour, record whether the delta is expected and update the baseline only when the new behaviour is the intended one.
+Run this at the end of every implementation phase. Both the TUI and Telegram channels must pass before a phase is considered landed. Phase 0 captures the baseline outputs in the "Regression baselines" section at the bottom so later phases have a concrete diff target; if a later phase changes wording or behaviour, record whether the delta is expected and only update the baseline when the new behaviour is the intended one.
 
 ## Pre-flight
 
+- [ ] `bash scripts/phase-0-checks.sh` exits 0
 - [ ] `cargo build --release` completes with no errors or warnings
 - [ ] `cargo test` passes with no failures
-- [ ] `cargo clippy --all-targets -- -D warnings` passes with no warnings
+- [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] `tests/scope_lint.rs` passes (required structural test for the repo)
 - [ ] Qdrant reachable: `curl http://localhost:6334/collections` returns HTTP 200
 - [ ] `git status --short` shows only the changes expected for the current phase
@@ -39,37 +40,35 @@ Launch with `cargo run -- telegram`. From the phone client associated with the c
 
 ## Telegram smoke (aura)
 
-Launch with `cargo run -- telegram --sandbox aura`. This minimal probe confirms the `--sandbox` flag is respected in Telegram mode as well as TUI mode.
+Launch with `cargo run -- telegram --sandbox aura`. The sandbox flag must take effect for the Telegram channel too.
 
-- [ ] Bot starts without panic and logs indicate the aura sandbox config was loaded
-- [ ] `/start` returns a welcome message
-- [ ] A single aura-scoped probe (e.g. `summarize what this sandbox is for`) returns a coherent response
+- [ ] Bot starts against the aura roster without panic
+- [ ] A short message from the phone gets a coherent reply grounded in the aura sandbox context
+- [ ] Ctrl-C shuts down cleanly
 
-## Debug probes (land in Phase 1+)
+## Debug probes (become available in later phases)
 
-These commands do not yet exist in Phase 0. Leave them unchecked with the noted phase annotation until the corresponding phase has landed, then flip them on during that phase's checklist run.
-
-- [ ] `tengu registry list` shows agents + skills + tools — Phase 1+
-- [ ] `tengu registry search "<query>"` returns sensible rankings — Phase 1+
-- [ ] Qdrant dashboard at http://localhost:6334/dashboard shows the `tengu_registry`, `tengu_messages`, and `tengu_outputs` collections — Phase 1-2+
+- [ ] `tengu registry list` (Phase 1+): lists compiled-in tools + MCP tools + agents + skills
+- [ ] `tengu registry search "<query>"` (Phase 1+): returns top-10 ranked entries
+- [ ] Qdrant dashboard at http://localhost:6334/dashboard shows `tengu_registry`, `tengu_messages`, `tengu_outputs` (Phase 1–2)
 
 ## Regression baselines
 
-Fill these once during Phase 0. On every later phase, re-run the same commands and compare. Minor wording differences from the model are acceptable; missing events, new warnings, panics, or dropped functionality are not.
+Fill these in on the first run of Phase 0, then treat them as the diff target for every later phase. Record any intentional change inline as a comment.
 
-### Phase 0 baseline: `cargo run -- chat` with `> hello`
-
-```
-<!-- paste actual output here -->
-```
-
-### Phase 0 baseline: `cargo run -- telegram` with `/start`
+### Phase 0 baseline — `cargo run -- chat` `> hello`
 
 ```
 <!-- paste actual output here -->
 ```
 
-### Phase 0 baseline: stderr on clean startup (first 20 lines)
+### Phase 0 baseline — `cargo run -- telegram` + `/start`
+
+```
+<!-- paste actual output here -->
+```
+
+### Phase 0 baseline — stderr on clean startup (first 20 lines)
 
 ```
 <!-- paste actual output here -->
@@ -77,4 +76,6 @@ Fill these once during Phase 0. On every later phase, re-run the same commands a
 
 ## Rollback procedure
 
-If a new phase breaks a check above, `git checkout main` to return to the last known-good state. Re-run this checklist against `main` to confirm the baseline is still healthy and the regression is specific to the in-progress branch. Then debug the branch in isolation.
+1. `git checkout main` — restore the last known-good state.
+2. Re-run this checklist against `main` to confirm it is healthy.
+3. Debug the broken phase branch off `main` with a clean slate.

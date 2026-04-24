@@ -36,12 +36,12 @@ Startup
   ├── scan skills/, agents/
   ├── connect to each MCP server → tools/list
   ├── embed descriptions → Qdrant (tengu_registry, permanent)
-  ├── TTL cleanup: delete from tengu_memory older than 7 days
+  ├── TTL cleanup: delete from tengu_memory older than ttl_days (0 = never)
   └── if tengu_registry empty → cold-start fallback (see §Cold Start)
 
 User message arrives (TUI / Telegram)
   │
-  ├── embed message → store in tengu_memory (TTL 7 days)
+  ├── embed message → store in tengu_memory (ttl_days if > 0, else permanent)
   │
   ├── Orchestrator loads:
   │     skills/orchestrator/SKILL.md       ← system prompt
@@ -71,14 +71,14 @@ User message arrives (TUI / Telegram)
                     max_turns, sandbox? }
                 assemble system prompt:
                   base_agent_template
-                  + body of each skill (loaded from disk)
+                  + body of each skill (loaded from disk, three-tier)
                   + mandatory suffix: "When done, call compress_and_store(summary)."
                 start LLM mini-loop:
                   tools available = resolved compiled-in tools + MCP tools from spec
                   workspace = sandbox path (if spec.sandbox) OR temp dir (default)
                   run until: compress_and_store called OR max_turns reached OR error
                 on compress_and_store(summary):
-                  write summary to tengu_memory (Qdrant, TTL 7 days)
+                  write summary to tengu_outputs (Qdrant)
                 exit, write stdout JSON:
                   { status: "ok"|"failed", output: "<full text>", summary: "<compressed>" }
 
@@ -87,7 +87,7 @@ User message arrives (TUI / Telegram)
           (used for within-plan step dependency injection — not fuzzy)
 
         On step failure:
-          NeedsReplan → orchestrator recalls tengu_memory for relevant context
+          NeedsReplan → orchestrator recalls tengu_outputs for relevant context
                       → replan(user_message, prior_plan, failed_step, error)
                       → repeat (max N replans, configured per orchestrator skill)
 
@@ -137,9 +137,9 @@ The orchestrator has no agent spec file. It is the entry point — always runnin
 | `agents/*.toml` (description field) | `tengu_registry` | permanent | startup + file added |
 | MCP tool descriptions (from `tools/list`) | `tengu_registry` | permanent | startup |
 | Compiled-in tool descriptions | `tengu_registry` | permanent | startup (hardcoded) |
-| User messages | `tengu_memory` | 7 days | each user turn |
-| Subagent `compress_and_store` summaries | `tengu_memory` | 7 days | step completion |
-| User-provided file contents (chunked) | `tengu_memory` | 7 days | file input event |
+| User messages | `tengu_messages` | configurable | each user turn |
+| Subagent `compress_and_store` summaries | `tengu_outputs` | configurable | step completion |
+| User-provided file contents (chunked) | `tengu_outputs` | configurable | file input event |
 
 ### Qdrant collections
 
@@ -152,8 +152,9 @@ tengu_registry   skills, agents, tools
     content_hash: string      ← sha256 of source; skip re-embed if unchanged
     description:  string      ← what was embedded
 
-tengu_memory     communications, step outputs, files
-  payload:
+tengu_messages   raw user turns (noisy, conversational)
+tengu_outputs    compress_and_store summaries + file chunks (signal)
+  payload (both):
     type:         "message" | "step_output" | "file_chunk"
     session_id:   string
     step_id:      string      ← for step outputs
@@ -177,14 +178,20 @@ No file watcher. No daemon. Re-index runs at startup and when the user provides 
 
 ### TTL cleanup
 
-Runs at startup before indexing:
+Runs at startup before indexing. Controlled by `[memory] ttl_days` in `config.toml`. Default is `0` — never purge (MemPalace-style permanent memory). A positive value enables sweep:
 
 ```rust
-let cutoff = Utc::now() - Duration::days(7);
-qdrant.delete(
-    collection: "tengu_memory",
-    filter: created_at < cutoff
-)
+if cfg.memory.ttl_days > 0 {
+    let cutoff = Utc::now() - Duration::days(cfg.memory.ttl_days as i64);
+    qdrant.delete(
+        collection: "tengu_messages",
+        filter: created_at < cutoff
+    );
+    qdrant.delete(
+        collection: "tengu_outputs",
+        filter: created_at < cutoff
+    );
+}
 ```
 
 ---
@@ -207,27 +214,31 @@ The orchestrator is not a peer agent. It is the harness entry point for every us
 
 ### Plan schema contract
 
-The orchestrator LLM must output JSON matching `plan_schema.json`. The harness validates strictly. On parse failure the harness retries the planning call (max 3 retries, logged). The schema is version-controlled beside `SKILL.md` — users can read it, they should not edit it without understanding the harness parser.
+The orchestrator LLM must output JSON matching `plan_schema.json`. The harness validates strictly. On parse failure the harness retries the planning call (max 3 retries, logged) with the previous output and validator error appended. The schema is version-controlled beside `SKILL.md`.
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema",
-  "type": "object",
   "oneOf": [
     {
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "kind": { "const": "direct" },
+        "kind":     { "const": "direct" },
         "response": { "type": "string" }
       },
       "required": ["kind", "response"]
     },
     {
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "kind": { "const": "plan" },
         "steps": {
           "type": "array",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "id":         { "type": "string" },
               "agent":      { "type": "string" },
@@ -250,7 +261,7 @@ When RAG returns no agent above the similarity threshold:
 
 1. **C** — Orchestrator asks user: *"I don't have an agent for this task. The closest I have is `<name>` (confidence: X%). Do you want me to try with it, or describe what kind of agent you need?"*
 2. User responds. If user confirms or refines:
-3. **B** — Orchestrator composes a generic agent config on the fly using the closest-matching agent spec as base, augmented with the highest-scoring skills and tools from the RAG results. The composed config is used for this run only — it is not persisted as a new agent spec unless the user explicitly asks.
+3. **B** — Orchestrator composes a generic agent config on the fly using the closest-matching agent spec as base, augmented with the highest-scoring skills and tools from the RAG results. Used for this run only; not persisted unless the user explicitly asks.
 
 ---
 
@@ -293,7 +304,7 @@ The runner never uses a static system prompt. It assembles one per invocation:
                                    summary of what you accomplished and found."
 ```
 
-Skills are loaded from disk in the order declared in the agent spec. The runner respects the 3-tier skill loading order (managed → workspace-dotdir → workspace-root); later tiers shadow earlier ones.
+Skills are loaded from disk in the order declared in the agent spec. The runner respects the three-tier skill loading order (managed → workspace-dotdir → workspace-root); later tiers shadow earlier ones.
 
 ---
 
@@ -307,8 +318,9 @@ The runner is a thin Rust module (`src/adapters/runner.rs`) that bridges the orc
 let child = Command::new(current_exe())
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
-    .stderr(Stdio::inherit())
-    .arg("run-agent")          // dedicated subcommand, not the full TUI
+    .stderr(Stdio::piped())        // piped — runner forwards to StepProgress
+    .env("TENGU_AGENT_IPC", "1")   // re-entry guard; main.rs refuses run-agent without it
+    .arg("run-agent")              // dedicated subcommand
     .spawn()?;
 ```
 
@@ -321,12 +333,14 @@ Each subagent is an isolated child process. A panic in the child does not crash 
   "goal":        "Find the three most cited papers on protein folding from 2023.",
   "agent_name":  "researcher",
   "model":       "openai/gpt-4o",
-  "tools":       ["http_request", "read_file", "remember", "compress_and_store"],
+  "tools":       ["http_request", "read_file", "remember"],
   "skills":      ["web-research", "summarizer"],
   "max_turns":   20,
   "sandbox":     null
 }
 ```
+
+`compress_and_store` is NOT in this list — it is appended implicitly by the runner for every invocation. The runner computes `effective_tools = spec.tools ∩ ipc.tools ∪ {compress_and_store}`.
 
 ### Output (stdout JSON)
 
@@ -363,7 +377,7 @@ A compiled-in tool, always registered for every subagent invocation. Not optiona
 }
 ```
 
-On call: writes `{summary}` to `tengu_memory` (Qdrant) with `type: "step_output"`, `session_id`, `step_id`, `created_at`. Then sets an internal flag that the runner checks — if this flag is set when the mini-loop ends, the runner knows the step completed cleanly.
+On call: writes `{summary}` to `tengu_outputs` (Qdrant) with `type: "step_output"`, `session_id`, `step_id`, `created_at`. Then sets an internal flag that the runner checks — if this flag is set when the mini-loop ends, the runner knows the step completed cleanly.
 
 ---
 
@@ -386,6 +400,8 @@ pub trait WorkerHandle: Send + Sync {
     async fn run_step(&self, step: &Step, step_inputs: &str) -> anyhow::Result<String>;
 }
 ```
+
+One event added to support debugging: `OrchestratorEvent::RagQueried { query, results: Vec<(String, f32)> }` is broadcast before every planner LLM call so the TUI can show what the planner saw.
 
 ---
 
@@ -461,26 +477,32 @@ tengu_registry (permanent)
   ├── Updated when user adds new agent spec or skill
   └── Entry deleted only when source file is deleted
 
-tengu_memory (ephemeral)
-  ├── Expires 7 days after created_at
-  ├── Written by:
-  │     - user message handler (each turn)
-  │     - compress_and_store tool (step completion)
-  │     - file input handler (chunked file content)
-  └── Purged at startup before indexing
+tengu_messages (TTL configurable — default 0 = never)
+  └── Raw user turns, kept for multi-turn dialogue coherence
+      Multi-turn is deterministic: last-N by session_id + timestamp,
+      not by vector similarity — embedding noise doesn't matter.
+
+tengu_outputs (TTL configurable — default 0 = never)
+  ├── compress_and_store summaries (signal)
+  ├── Chunked file content
+  └── Written by:
+        - compress_and_store tool (step completion)
+        - file input handler
 ```
 
 ### Cross-plan recall
 
-When the orchestrator replans after a step failure, it queries `tengu_memory` for relevant context:
+When the orchestrator replans after a step failure, it queries `tengu_outputs` for relevant context:
 
 ```
 query = embed(user_message + " " + failed_step.goal + " " + error)
-results = qdrant.search("tengu_memory", query, top_k=5)
+results = qdrant.search("tengu_outputs", query, top_k=cross_plan_top_k)
 → inject into replan() call as additional context
 ```
 
-This is fuzzy. Correctness of direct step dependencies uses the `completed_outputs` HashMap, not this query. The RAG recall here is supplemental context for the orchestrator LLM, not a correctness-critical lookup.
+Messages are excluded from this query to keep signal and noise separated.
+
+This recall is fuzzy. Correctness of direct step dependencies uses the `completed_outputs` HashMap, not this query.
 
 ---
 
@@ -492,9 +514,7 @@ These modules are removed. Their functionality is either replaced by the new des
 |---------|--------|
 | `orchestrator/roster.rs` | Replaced by RAG agent discovery |
 | `orchestrator/wiring.rs` | Replaced by RAG-based plan assembly |
-| `sandbox/` configs (per-agent `config.toml` dirs) | Replaced by `agents/*.toml` specs |
-| `agent_builder.rs` (Telegram per-agent builder) | Absorbed into Runner |
-| `task_builder.rs` (Telegram task/plan management) | Absorbed into orchestrator + DagExecutor |
+| `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 |
 | `eval_builder.rs` | Deferred — moved to `tengu/ideas/` |
 | `skill_lifecycle/evolve.rs` | Deferred — moved to `tengu/ideas/` |
 
@@ -502,7 +522,7 @@ These modules are **kept**:
 
 | Kept | Why |
 |------|-----|
-| `orchestrator/events.rs` | Progress streaming (TUI/Telegram) |
+| `orchestrator/events.rs` | Progress streaming (TUI/Telegram); add `RagQueried` variant |
 | `orchestrator/executor.rs` | DagExecutor — already correct |
 | `orchestrator/planner.rs` | Planner trait + OrchestratorAgentPlanner |
 | `orchestrator/replan.rs` | Outer drive loop — already correct |
@@ -514,7 +534,7 @@ These modules are **kept**:
 | `tui/` | Unchanged |
 | `telegram_builder.rs` | Unchanged |
 | `mcp/` | Unchanged |
-| `types.rs`, `ports.rs`, `config.rs` | Unchanged |
+| `types.rs`, `ports.rs`, `config.rs` | Unchanged (config.rs extended in Phase 0) |
 
 ---
 
@@ -529,15 +549,15 @@ On startup, if `tengu_registry` returns zero results for any query:
 3. Use static roster for this session
 4. Index from `skills/` and `agents/` proceeds in background; next session uses RAG
 
-The sandbox fallback is a temporary compatibility shim. The intent is that once `agents/*.toml` files exist and are indexed, the cold-start path is never hit again. Sandbox configs are not deleted automatically — the user migrates at their own pace.
+The sandbox fallback is a temporary compatibility shim. Once `agents/*.toml` files exist and are indexed, the cold-start path is never hit again. Sandbox configs are not deleted automatically — the user migrates at their own pace.
 
 ### Migration path from v1
 
 1. For each `sandboxes/<name>/config.toml`, create `agents/<name>.toml` with equivalent fields.
-2. Move any workspace-specific SKILL.md files from sandbox directories to `skills/` or `agents/` (skills are per-workspace, not per-sandbox).
+2. Move any workspace-specific SKILL.md files from sandbox directories to `skills/`.
 3. Run `tengu` once — startup indexer picks up new agents and skills.
 4. Verify RAG is populated: `tengu registry list`.
-5. Delete sandbox directories.
+5. Delete sandbox directories (Phase 5 of the implementation plan).
 
 ---
 
@@ -558,21 +578,21 @@ The sandbox fallback is a temporary compatibility shim. The intent is that once 
 
 | Module | Change |
 |--------|--------|
-| `memory/mod.rs` | Elevated to central RAG — `tengu_registry` + `tengu_memory` |
-| `orchestrator/planner.rs` | Calls RAG for roster instead of static `roster_md` |
+| `memory/mod.rs` | Elevated to central RAG — `tengu_registry` + `tengu_messages` + `tengu_outputs` |
+| `orchestrator/planner.rs` | Calls RAG for roster instead of static `roster_md`; flag-gated `engine` field |
 | `orchestrator/wiring.rs` | Deleted — replaced by `rag/` + `runner.rs` |
 | `channel_runtime.rs` | Simplified — no sandbox resolution, no roster building |
 | `main.rs` | Adds `run-agent` subcommand for subprocess mode |
 
 ### Unchanged
 
-`orchestrator/executor.rs`, `orchestrator/events.rs`, `orchestrator/replan.rs`, `orchestrator/retry.rs`, `plugins/` (all), `tui/`, `telegram_builder.rs`, `mcp/`, `types.rs`, `ports.rs`, `config.rs`, `skill_builder.rs`, `shell_executor.rs`, `secret_builder.rs`, `scaffold.rs`
+`orchestrator/executor.rs`, `orchestrator/events.rs` (extended only), `orchestrator/replan.rs`, `orchestrator/retry.rs`, `plugins/` (all), `tui/`, `telegram_builder.rs`, `mcp/`, `types.rs`, `ports.rs`, `config.rs` (extended only), `skill_builder.rs`, `shell_executor.rs`, `secret_builder.rs`, `scaffold.rs`
 
 ---
 
 ## Related
 
-- [[configuration]] — config.toml reference (to be updated for v2)
+- [[configuration]] — config.toml reference (updated for v2 extensions)
 - [[skills]] — skill format and loading (mostly unchanged)
 - [[engine-backends]] — OpenRouter and Claude Code engines (unchanged)
 - [[mcp-bridge]] — MCP tool bridge (unchanged)

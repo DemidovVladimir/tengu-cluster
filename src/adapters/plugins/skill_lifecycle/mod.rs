@@ -10,6 +10,8 @@ use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
 use crate::adapters::types::ToolDef;
 
 pub(crate) mod distill;
+#[cfg(feature = "qdrant")]
+pub mod compress_and_store;
 
 #[allow(unused_imports)]
 pub(crate) use distill::{SkillDistillTool, SKILL_DISTILL_TOOL_NAME};

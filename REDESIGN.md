@@ -71,12 +71,13 @@ Startup
   ├── scan skills/, agents/
   ├── connect to each MCP server → tools/list
   ├── embed descriptions → Qdrant (tengu_registry, permanent)
-  ├── TTL cleanup: delete from tengu_memory older than 7 days
-  └── if tengu_registry empty → cold-start fallback (see §Cold Start)
+  ├── TTL cleanup: delete from tengu_messages/tengu_outputs older than ttl_days
+  │   (skipped entirely if ttl_days == 0 — the default)
+  └── if tengu_registry empty → cold-start fallback (see §16)
 
 User message arrives (TUI / Telegram)
   │
-  ├── embed message → store in tengu_memory (TTL 7 days)
+  ├── embed message → store in tengu_messages (ttl_days if > 0, else permanent)
   │
   ├── Orchestrator loads:
   │     skills/orchestrator/SKILL.md       ← system prompt (user-editable)
@@ -87,13 +88,19 @@ User message arrives (TUI / Telegram)
   │     results = qdrant.search(tengu_registry, query, top_k=20)
   │     → ranked list of agents + skills + tools by cosine similarity
   │
+  ├── Orchestrator loads recent dialogue (deterministic, not vector):
+  │     qdrant.scroll(tengu_messages,
+  │                   filter: session_id == this_session,
+  │                   order: created_at DESC,
+  │                   limit: session_recent_n)
+  │
   ├── If no agent above similarity threshold:
   │     C → ask user: "Closest match is X (confidence Y%). Use it or describe what you need?"
   │     user confirms → B → compose generic agent from closest-matching spec + top RAG hits
   │     (composed config used for this run only — not persisted unless user asks)
   │
   ├── Orchestrator LLM call:
-  │     input  = [system_prompt, roster_of_retrieved_items, user_message]
+  │     input  = [system_prompt, roster_of_retrieved_items, recent_dialogue, user_message]
   │     output = PlannerVerdict (validated against plan_schema.json):
   │               Direct { response: String }    ← respond immediately
   │             | Plan   { steps: Vec<Step> }    ← pass to DagExecutor
@@ -109,17 +116,17 @@ User message arrives (TUI / Telegram)
                     max_turns, sandbox? }
                 assembles system prompt:
                   [base_agent_template]          ← hardcoded in runner.rs
-                  [skill body 1..N]              ← loaded from disk
+                  [skill body 1..N]              ← loaded from disk (three-tier)
                   [mandatory suffix]             ← hardcoded:
                     "When you have completed your task, your FINAL action
                      MUST be to call compress_and_store(summary) with a
                      concise summary of what you accomplished."
                 starts LLM mini-loop:
-                  tools = resolved compiled-in + MCP tools from agent spec
+                  tools = (spec.tools ∩ ipc.tools) ∪ {compress_and_store}
                   workspace = spec.sandbox path OR temp dir (default)
                   runs until: compress_and_store called OR max_turns OR error
                 on compress_and_store(summary):
-                  write to tengu_memory (Qdrant, TTL 7 days)
+                  write to tengu_outputs (Qdrant)
                   type: "step_output", session_id, step_id, created_at
                 exit → stdout JSON:
                   ok:     { status:"ok", output:"<full text>", summary:"<compressed>" }
@@ -131,7 +138,7 @@ User message arrives (TUI / Telegram)
           ← NOT RAG. NOT fuzzy. Always reliable for direct dependencies.
 
         On step failure:
-          NeedsReplan → orchestrator queries tengu_memory for context
+          NeedsReplan → orchestrator queries tengu_outputs for context
                       → replan(user_message, prior_plan, failed_step, error)
                       → repeat until max_replans reached
 
@@ -174,6 +181,9 @@ The orchestrator has NO agent spec file. It is the entry point — hardcoded to 
 
 ## 5. Qdrant Collections
 
+Three collections — registry for permanent stuff, messages and outputs split so signal
+and noise stay apart.
+
 ### tengu_registry (permanent — skills, agents, tools)
 
 ```
@@ -185,10 +195,12 @@ payload:
   description:  string      ← the text that was embedded
 ```
 
-### tengu_memory (ephemeral — messages, step outputs, files)
+### tengu_messages (raw user turns, noisy)
+
+### tengu_outputs (step summaries + file chunks, high signal)
 
 ```
-payload:
+payload (both):
   type:         "message" | "step_output" | "file_chunk"
   session_id:   string
   step_id:      string      ← for step_output entries
@@ -196,11 +208,15 @@ payload:
   content:      string      ← the text that was embedded
 ```
 
-TTL = 7 days. Purged at startup before indexing:
+TTL configurable via `[memory] ttl_days` (default `0` = never purge). When set > 0,
+purge runs at startup before indexing:
 
 ```rust
-let cutoff = Utc::now() - Duration::days(7);
-qdrant.delete(collection: "tengu_memory", filter: created_at < cutoff)
+if cfg.memory.ttl_days > 0 {
+    let cutoff = Utc::now() - Duration::days(cfg.memory.ttl_days as i64);
+    qdrant.delete(collection: "tengu_messages", filter: created_at < cutoff);
+    qdrant.delete(collection: "tengu_outputs",  filter: created_at < cutoff);
+}
 ```
 
 ### Startup indexer
@@ -274,6 +290,9 @@ let child = Command::new(current_exe())
 }
 ```
 
+`compress_and_store` is NOT in this list — the runner appends it implicitly for every
+invocation. See §8 and §15.
+
 ### stdout (JSON)
 
 Success:
@@ -311,9 +330,8 @@ failure → DagExecutor retry policy kicks in.
 ```
 
 The mandatory suffix is appended by the runner, not the skill. The LLM cannot avoid it.
-This is the harness-enforced approach (the design session called it "Option C"):
-the prompt suffix is owned by the harness, not by SKILL.md authors, so the behaviour
-cannot be lost by a skill edit.
+This is the harness-enforced approach (called "Option C" in the design session) — skill
+edits cannot lose the behaviour.
 
 ### Three-tier skill loader (required — mirrors `docs/architecture-v2.md`)
 
@@ -369,13 +387,12 @@ Compiled-in. Always registered for every subagent. Not optional. Not user-config
 ```
 
 On call:
-1. Writes `{summary}` to `tengu_memory` (Qdrant), payload: `type:"step_output"`, `session_id`, `step_id`, `created_at:now`
+1. Writes `{summary}` to `tengu_outputs` (Qdrant), payload: `type:"step_output"`, `session_id`, `step_id`, `created_at:now`
 2. Sets an internal flag in the runner
 3. Runner checks this flag when mini-loop ends — if set, step completed cleanly
 
 There is NO separate compression LLM call. The subagent writes its own summary. Latency
-is zero beyond what the LLM already does. (Decision from design session: Option B for
-who compresses — subagent itself.)
+is zero beyond what the LLM already does.
 
 ---
 
@@ -539,15 +556,14 @@ Remove these. Their functionality is replaced or deferred.
 | `src/adapters/orchestrator/wiring.rs` | Replaced by RAG + runner.rs |
 | `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 |
 | `src/adapters/eval_builder.rs` | Deferred → move to `tengu/ideas/` |
-| `src/adapters/skill_lifecycle/evolve.rs` | Deferred → move to `tengu/ideas/` (path corrected — evolve.rs lives under `skill_lifecycle/`, NOT under `plugins/skill_lifecycle/`) |
+| `src/adapters/skill_lifecycle/evolve.rs` | Deferred → move to `tengu/ideas/` (path verified — evolve.rs lives under `skill_lifecycle/`, NOT under `plugins/skill_lifecycle/`) |
 
 > **Reconciled with repo, 2026-04-24 (revised):** verified against the actual
 > checkout. `sandboxes/` DOES exist (contains `aura/` and `storage-test/`) — those
 > two files ARE in scope for deletion in Phase 5 after migration. The paths
 > `src/adapters/agent_builder.rs` and `src/adapters/task_builder.rs` do NOT
 > exist — they were cleaned up before this document was written, so earlier
-> drafts of this table were stale. The four paths above are the confirmed
-> deletion set.
+> drafts of this table were stale.
 
 ---
 
@@ -558,7 +574,7 @@ violation.
 
 | Keep | Why |
 |------|-----|
-| `src/adapters/orchestrator/events.rs` | Progress streaming (TUI/Telegram) |
+| `src/adapters/orchestrator/events.rs` | Progress streaming (TUI/Telegram); add `RagQueried` variant |
 | `src/adapters/orchestrator/executor.rs` | DagExecutor — parallel DAG, retry, cancel |
 | `src/adapters/orchestrator/planner.rs` | Planner trait — CHANGE the implementation, not the trait |
 | `src/adapters/orchestrator/replan.rs` | drive() loop — already correct |
@@ -570,7 +586,7 @@ violation.
 | `src/adapters/tui/` | Unchanged |
 | `src/adapters/telegram_builder.rs` | Unchanged |
 | `src/adapters/mcp/` | Unchanged |
-| `src/types.rs`, `src/ports.rs`, `src/config.rs` | Unchanged |
+| `src/types.rs`, `src/ports.rs`, `src/config.rs` | Extended only (Phase 0 scaffold) |
 | `src/adapters/skill_builder.rs` | Unchanged |
 | `src/adapters/shell_executor.rs` | Unchanged |
 
@@ -635,7 +651,7 @@ pub struct RagStore { /* Qdrant client + config */ }
 
 impl RagStore {
     pub async fn startup_index(&self, skills: &[Skill], agents: &[AgentSpec], tools: &[ToolDef]) -> Result<()>;
-    pub async fn ttl_cleanup(&self) -> Result<u64>; // returns count deleted
+    pub async fn ttl_cleanup(&self) -> Result<u64>; // returns count deleted (0 if ttl_days == 0)
     pub async fn search_registry(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>>;
     pub async fn store_memory(&self, entry: MemoryEntry) -> Result<()>;
     pub async fn search_memory(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>>;
@@ -669,7 +685,7 @@ Thin wrapper over Qdrant search. Deserializes payload into `RagResult`.
 
 ### `src/adapters/rag/cleanup.rs`
 
-TTL purge. Runs at startup before indexing.
+TTL purge. Runs at startup before indexing. No-op when `ttl_days == 0`.
 
 ### `src/adapters/runner.rs`
 
@@ -714,22 +730,23 @@ pub struct AgentSpec {
 ### Changes to `src/adapters/orchestrator/planner.rs`
 
 The `Planner` trait stays unchanged. Change `OrchestratorAgentPlanner`:
-- Replace `roster_md: String` (static) with `rag: Arc<RagStore>`
-- In `plan()`: call `rag.search_registry(user_message, 20)`, format results into the
-  ranked roster markdown block, build system prompt from `skills/orchestrator/SKILL.md`
-- In `replan()`: additionally query `rag.search_memory(...)` for cross-plan context,
-  inject as additional context block
+- Branch on `config.orchestrator.engine` ("static" or "rag") — see IMPLEMENTATION_PLAN.md Phase 4.
+- In `rag` mode: call `rag.search_registry(user_message, 20)`, format results into the
+  ranked roster markdown block, build system prompt from `skills/orchestrator/SKILL.md`.
+- In `rag` mode replan: additionally query `rag.search_memory(...)` for cross-plan context,
+  inject as additional context block.
 
 ### Changes to `src/main.rs`
 
 Add `run-agent` subcommand that:
-1. Reads stdin as JSON (`AgentIpcInput`)
-2. Loads specified skills from disk
-3. Assembles system prompt (base + skills + mandatory suffix)
-4. Resolves tools from compiled-in registry filtered by `ipc_input.tools`
-5. Runs LLM mini-loop
-6. On `compress_and_store` call: stores to Qdrant, sets flag
-7. Writes stdout JSON (`AgentIpcOutput`) and exits
+1. Refuses to run unless `TENGU_AGENT_IPC=1` (re-entry guard).
+2. Reads stdin as JSON (`AgentIpcInput`)
+3. Loads specified skills from disk (three-tier lookup)
+4. Assembles system prompt (base + skills + mandatory suffix)
+5. Resolves tools: `(spec.tools ∩ ipc.tools) ∪ {compress_and_store}`
+6. Runs LLM mini-loop
+7. On `compress_and_store` call: stores to Qdrant, sets flag
+8. Writes stdout JSON (`AgentIpcOutput`) and exits
 
 ---
 
@@ -791,7 +808,7 @@ tengu_memory (TTL configurable — default 0 = never purge; set ttl_days > 0 to 
                                      (N default = 10, configurable), injected into
                                      system prompt as "recent dialogue" block
     - Orchestrator on replan       → tengu_outputs, fuzzy RAG top_k for planner context
-  Purged: at startup, all entries older than the configured TTL
+  Purged: at startup, all entries older than the configured TTL (no-op if ttl_days == 0)
 ```
 
 **Multi-turn dialogue is explicit, not fuzzy.** Each orchestrator turn loads the last
@@ -819,48 +836,18 @@ embedding_model     = "openai/text-embedding-3-small"
 
 ## 18. Implementation Phases
 
+> Detailed phase-by-phase plan with commands, acceptance criteria, and rollback
+> lives in `docs/IMPLEMENTATION_PLAN.md`. This section is a summary only.
+
 Execute in order. Each phase is independently shippable (tests pass, binary builds).
 
-### Phase 0 — Delete the dead weight
-
-Delete files listed in §12. Move `eval_builder.rs` and `evolve.rs` to `tengu/ideas/`.
-Fix compilation errors from removed modules. No new functionality yet.
-**Acceptance**: `cargo build` passes, `cargo test` passes.
-
-### Phase 1 — RAG layer
-
-Build `src/adapters/rag/` (mod, indexer, query, cleanup). Wire to Qdrant client
-(already available in `memory/` — extend or wrap it). Add startup sequence:
-TTL cleanup → indexing → done.
-**Acceptance**: `cargo test` for rag module passes. `tengu registry list` shows skills.
-
-### Phase 2 — Agent specs
-
-Build `src/adapters/agents/mod.rs`. Create 2-3 example `agents/*.toml` files matching
-current sandbox configs. Wire startup indexer to read these.
-**Acceptance**: `tengu registry list` shows agents. Descriptions searchable via `search_registry`.
-
-### Phase 3 — Runner + IPC
-
-Build `src/adapters/runner.rs` implementing `WorkerHandle`. Add `run-agent` subcommand
-to `main.rs`. Wire `compress_and_store` to Qdrant write.
-**Acceptance**: Manual test — spawn runner subprocess with a simple goal, confirm JSON output
-and Qdrant write.
-
-### Phase 4 — Orchestrator wiring
-
-Change `OrchestratorAgentPlanner` to use RAG instead of static roster. Update
-`channel_runtime.rs` (or wherever planner is constructed) to pass `RagStore`.
-User action: rewrite `skills/orchestrator/SKILL.md` for RAG-based roster format.
-**Acceptance**: Full end-to-end test — send user message via TUI, orchestrator retrieves
-agents from RAG, produces plan, DagExecutor runs runner subprocess, compress_and_store
-writes to Qdrant, final response delivered.
-
-### Phase 5 — Polish and migration
-
-Remove sandbox fallback code if no longer needed. Migrate remaining sandbox configs.
-Wire unknown agent fallback (C → B). Add `tengu registry search <query>` CLI command.
-**Acceptance**: All existing TUI and Telegram functionality works. No regressions.
+- **Phase 0** — baseline & safety net. Record current TUI + Telegram behaviour; add inert config scaffolding.
+- **Phase 1** — RAG facade + Qdrant collections (read-only).
+- **Phase 2** — agents + skills on disk (indexed, unused).
+- **Phase 3** — runner subprocess + `compress_and_store` (standalone, unused).
+- **Phase 4** — dual-mode orchestrator (flag-gated cutover).
+- **Phase 5** — flip default + delete legacy.
+- **Phase 6** — polish (C→B fallback, TUI RagQueried panel, optional BM25 hybrid).
 
 ---
 
@@ -879,6 +866,9 @@ scope manageable:
   → Manual save is sufficient for now
 - **MCP tool creation by user** (user-defined MCP in config.toml)
   → MCP bridge already exists; user configures `config.toml` directly
+- **MemPalace integration** — considered and parked (see IMPLEMENTATION_PLAN.md
+  "Deferred decisions"). Revisit after Phase 5; plugs in as an MCP server without
+  rewriting the Qdrant code.
 
 ---
 
@@ -889,20 +879,24 @@ it in a comment but implement what is specified here.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Orchestrator context growth | **Option B**: clean context before each new orchestrator prompt | Prevents unbounded context growth; orchestrator is stateless per turn |
-| Who compresses subagent output | **Subagent itself** (no extra LLM call) | Zero added latency; LLM already knows what it did; model writes summary as final tool call |
-| Cold start | **Fallback to sandbox configs** temporarily | Backwards compatibility; user migrates at their own pace |
-| When to index new files | **At startup + when user provides files via channel** | RAG is the central authority; all user-provided content goes into tengu_memory immediately |
-| Plan schema location | **File beside SKILL.md** (`plan_schema.json`) | User can read it; version-controlled; harness loads from disk |
-| Agent spec format | **`.toml` files in `agents/`** | Simple, readable, file-based — no Rust changes to add an agent |
-| Unknown agent handling | **C → B** | Ask user first (C), then compose generic agent (B); never silently use wrong agent |
-| Sandbox for agents | **Optional in agent spec**; if absent use temp dir | Keeps stateless agents stateless; persistent agents declare their workspace |
-| Tool access for orchestrator | **Orchestrator has no separate config** — it is the default user entry point | Orchestrator is not a peer agent; it loads SKILL.md and that's it |
-| Skill/tool storage duration | **Skills, agents, tools = permanent**; conversations/outputs/files = 7 days | Registry is configuration; memory is ephemeral context |
-| Event bus | **Keep** — `tokio::sync::broadcast` | TUI and Telegram both subscribe; subprocess model doesn't eliminate the need for streaming |
-| MCP tools | **User configures `config.toml`** | MCP bridge already exists; no new infrastructure needed |
-| Within-plan step dependencies | **Exact `HashMap<StepId, String>`** — NOT RAG | Correctness-critical; fuzzy search is wrong for "step A's exact output → step B's input" |
-| compress_and_store enforcement | **Harness appends mandatory suffix** (Option C) | Skill-independent; harness-enforced; LLM cannot avoid it regardless of skill content |
+| Orchestrator context growth | Clean context before each new orchestrator prompt | Prevents unbounded context growth; orchestrator is stateless per turn |
+| Who compresses subagent output | Subagent itself (no extra LLM call) | Zero added latency; LLM already knows what it did; model writes summary as final tool call |
+| Cold start | Fallback to sandbox configs temporarily | Backwards compatibility; user migrates at their own pace |
+| When to index new files | At startup + when user provides files via channel | RAG is the central authority; all user-provided content goes into memory immediately |
+| Plan schema location | File beside SKILL.md (`plan_schema.json`) | User can read it; version-controlled; harness loads from disk |
+| Agent spec format | `.toml` files in `agents/` | Simple, readable, file-based — no Rust changes to add an agent |
+| Unknown agent handling | C → B | Ask user first (C), then compose generic agent (B); never silently use wrong agent |
+| Sandbox for agents | Optional in agent spec; if absent use temp dir | Keeps stateless agents stateless; persistent agents declare their workspace |
+| Tool access for orchestrator | Orchestrator has no separate config — it is the default user entry point | Orchestrator is not a peer agent; it loads SKILL.md and that's it |
+| Skill/tool storage duration | Skills, agents, tools = permanent; conversations/outputs/files = configurable TTL (default 0 = never) | Registry is configuration; memory defaults to permanent, opt-in expiry |
+| Event bus | Keep — `tokio::sync::broadcast` | TUI and Telegram both subscribe; subprocess model doesn't eliminate the need for streaming |
+| MCP tools | User configures `config.toml` | MCP bridge already exists; no new infrastructure needed |
+| Within-plan step dependencies | Exact `HashMap<StepId, String>` — NOT RAG | Correctness-critical; fuzzy search is wrong for "step A's exact output → step B's input" |
+| compress_and_store enforcement | Harness appends mandatory suffix (Option C) | Skill-independent; harness-enforced; LLM cannot avoid it regardless of skill content |
+| Memory collections | Split `tengu_messages` (noise) from `tengu_outputs` (signal) | Fuzzy cross-plan recall queries only the high-signal collection |
+| Multi-turn dialogue | Deterministic last-N by session_id + timestamp | Conversational coherence does not depend on embedding quality |
+| compress_and_store on IPC | Implicit, not in stdin tools list | Trust boundary: runner intersects stdin with spec + always adds compress_and_store |
+| stderr handling | Piped, forwarded as `StepProgress` — NEVER inherited | Inheriting stderr from a subagent would clobber the TUI |
 
 ---
 
@@ -913,12 +907,12 @@ Before beginning implementation, confirm:
 1. Is Qdrant already running and reachable? Check `config.toml` for the connection URL.
 2. Is the default embedding model (`openai/text-embedding-3-small` — see `[memory]`
    block in §17) the right choice, or should it be a local Ollama model?
-3. Are the two or three agent specs you want as the first `agents/*.toml` examples
-   derived from anything, or should they be drafted from scratch against the §6 format?
+3. Are the two example agent specs for Phase 2 (`agents/*.toml`) derived from the
+   existing `sandboxes/aura/` and `sandboxes/storage-test/`, or drafted from scratch?
 4. Is the minimum-viable `skills/orchestrator/SKILL.md` template in §10 acceptable as
    the initial landing, or do you want to author one yourself before Phase 4 lands?
 
-If no answer, proceed with the §17 defaults: Qdrant at `localhost:6333`,
+If no answer, proceed with the §17 defaults: Qdrant at `localhost:6334`,
 `openai/text-embedding-3-small`, and land the §10 template verbatim in Phase 4.
 
 ---
@@ -928,12 +922,12 @@ If no answer, proceed with the §17 defaults: Qdrant at `localhost:6333`,
 ```bash
 # Understand what exists and what to keep:
 cat src/adapters/orchestrator/executor.rs    # DagExecutor — keep as-is
-cat src/adapters/orchestrator/events.rs      # OrchestratorEvent — keep as-is
+cat src/adapters/orchestrator/events.rs      # OrchestratorEvent — extend (RagQueried)
 cat src/adapters/orchestrator/planner.rs     # Planner trait — change implementation
 cat src/adapters/orchestrator/replan.rs      # drive() — keep as-is
 cat src/adapters/memory/mod.rs               # Existing memory layer — extend for RAG
 cat src/adapters/plugins/skill_lifecycle/distill.rs  # compress_and_store predecessor — keep
-cat src/config.rs                            # Config struct — understand Qdrant config
+cat src/adapters/config.rs                   # Config struct — understand MemoryConfig extensions
 cat src/main.rs                              # Entry point — add run-agent subcommand here
 ```
 
@@ -943,6 +937,9 @@ The authoritative architecture reference is `docs/architecture-v2.md` in this re
 This REDESIGN.md is the implementation brief. If there is a conflict between the two,
 `docs/architecture-v2.md` is the doctrine and this document provides the implementation
 detail. Neither supersedes the other — they are complementary.
+
+The day-to-day execution plan with commands, acceptance criteria, and rollback steps
+is `docs/IMPLEMENTATION_PLAN.md`.
 
 ---
 
