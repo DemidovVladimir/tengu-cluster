@@ -114,6 +114,53 @@ enum Commands {
     },
     /// Apply a saved evolve proposal (reserved for future auto-trigger work).
     SkillAcceptProposal { path: PathBuf },
+    /// Inspect and manage the RAG registry (tengu_registry + tengu_messages + tengu_outputs).
+    /// Phase 1 of the redesign — see docs/IMPLEMENTATION_PLAN.md.
+    Registry {
+        #[command(subcommand)]
+        action: RegistryAction,
+    },
+    /// INTERNAL — subprocess mode invoked by SubprocessRunner. Not intended for
+    /// direct user invocation. Refuses to run unless TENGU_AGENT_IPC=1 is set.
+    /// Phase 3 of the redesign ships a stub body; Phase 4 wires the real LLM
+    /// mini-loop.
+    #[command(hide = true)]
+    RunAgent,
+}
+
+#[derive(Subcommand)]
+enum RegistryAction {
+    /// List entries in tengu_registry (type | name | score=N/A).
+    List {
+        /// Filter by entry type: "skill", "agent", or "tool".
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Max entries to list (by a broad search over the collection).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Semantic search across tengu_registry. Prints top-K ranked hits.
+    Search {
+        /// Free-text query.
+        query: String,
+        /// How many hits to return.
+        #[arg(long, default_value_t = 10)]
+        top_k: usize,
+    },
+    /// Phase 1 bootstrap: re-index a small hardcoded set of placeholder tool
+    /// descriptions so the registry has something to search. Phase 2 replaces
+    /// this with real enumeration of compiled-in + MCP tool descriptions.
+    ReindexTools,
+    /// Phase 2: wipe tengu_registry, then re-index:
+    ///   - `agents/*.toml`                    → kind = agent
+    ///   - `skills/**/SKILL.md` (3-tier merge) → kind = skill
+    ///   - Phase-1 placeholder tools           → kind = tool
+    ReindexAll {
+        /// Workspace root (defaults to cwd). agents/ and skills/ are looked
+        /// up relative to this path.
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,6 +196,19 @@ async fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
         return adapters::mcp_bridge::run_mcp_bridge().await;
+    }
+
+    if matches!(cli.command, Some(Commands::RunAgent)) {
+        // Subprocess mode — stdout is JSON only, everything else goes to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return run_agent_subprocess().await;
     }
 
     let tengu_home = resolve_tengu_home();
@@ -450,7 +510,278 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
+        Commands::Registry { action } => run_registry_command(&config, action).await,
+        Commands::RunAgent => {
+            // Handled by the early-return in main(); this arm is for
+            // exhaustiveness only.
+            unreachable!("Commands::RunAgent is dispatched earlier in main()")
+        }
     }
+}
+
+/// `tengu run-agent` stub handler — Phase 3 scaffold.
+///
+/// **What this does today:**
+/// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
+/// 2. Reads one JSON `AgentIpcInput` from stdin.
+/// 3. Constructs a canned summary (no LLM).
+/// 4. If the `qdrant` feature is on and `OPENROUTER_API_KEY` is set,
+///    writes the summary to `tengu_outputs` via `compress_and_store`.
+/// 5. Writes one `AgentIpcOutput` JSON line to stdout and exits 0.
+///
+/// Phase 4 replaces the canned step with a real LLM mini-loop.
+async fn run_agent_subprocess() -> Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    if std::env::var("TENGU_AGENT_IPC").ok().as_deref() != Some("1") {
+        anyhow::bail!(
+            "`tengu run-agent` is a subprocess mode not meant for direct invocation. \
+             Set TENGU_AGENT_IPC=1 if you really want to run it (e.g. via scripts/test-runner.sh)."
+        );
+    }
+
+    // Read stdin to EOF.
+    let mut buf = Vec::new();
+    tokio::io::stdin()
+        .read_to_end(&mut buf)
+        .await
+        .context("read IPC input from stdin")?;
+    let input: adapters::runner::AgentIpcInput = serde_json::from_slice(&buf)
+        .context("parse IPC input JSON")?;
+
+    tracing::info!(
+        agent = %input.agent_name,
+        session = %input.session_id,
+        step = %input.step_id,
+        "run-agent stub received"
+    );
+
+    // Phase 3 canned output: no LLM, no tool calls.
+    let summary = format!(
+        "[phase-3 stub] agent={} goal={} (LLM mini-loop lands in Phase 4)",
+        input.agent_name, input.goal
+    );
+    let output_text = format!(
+        "Phase 3 scaffold ran for agent `{}`. Goal received: {}\n\n\
+         (No LLM was invoked. The subprocess IPC boundary is what is being tested.)",
+        input.agent_name, input.goal
+    );
+
+    // Optional: write the summary to tengu_outputs if Qdrant is compiled in
+    // and reachable. Failure is logged but does not break the IPC contract.
+    #[cfg(feature = "qdrant")]
+    {
+        let config = load_config_or_default();
+        match adapters::rag::RagStore::from_config(config.memory.clone()).await {
+            Ok(rag) => {
+                if let Err(e) = adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
+                    &rag,
+                    &input.session_id,
+                    &input.step_id,
+                    &summary,
+                )
+                .await
+                {
+                    tracing::warn!(error = %e, "compress_and_store write failed (non-fatal for Phase 3 stub)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "RagStore unavailable; skipping tengu_outputs write");
+            }
+        }
+    }
+
+    let out = adapters::runner::AgentIpcOutput::Ok {
+        output: output_text,
+        summary,
+    };
+    let json = serde_json::to_string(&out).context("serialise IPC output")?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Best-effort config load for the run-agent subprocess.
+/// Falls back to defaults if the user's config.toml is absent or malformed.
+#[cfg(feature = "qdrant")]
+fn load_config_or_default() -> Config {
+    let path = resolve_tengu_home().join("config.toml");
+    if !path.is_file() {
+        return Config::default();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(s) => toml::from_str(&s).unwrap_or_else(|_| Config::default()),
+        Err(_) => Config::default(),
+    }
+}
+
+/// Dispatcher for `tengu registry ...` subcommands.
+///
+/// Phase 1 of the redesign: thin wrapper over `adapters::rag::RagStore`. Only
+/// compiled when the `qdrant` feature is enabled — without it we bail with a
+/// clear error so users know what's missing.
+#[cfg(feature = "qdrant")]
+async fn run_registry_command(config: &Config, action: RegistryAction) -> Result<()> {
+    use crate::adapters::rag::{RagStore, REGISTRY_COLLECTION};
+
+    let rag = RagStore::from_config(config.memory.clone())
+        .await
+        .context("failed to open RagStore — is Qdrant running and OPENROUTER_API_KEY set?")?;
+
+    match action {
+        RegistryAction::List { r#type, limit } => {
+            // Phase 1 approximation: we don't have a native list-by-filter yet,
+            // so we do a broad search with a neutral query. Phase 2 will add a
+            // proper scroll. The type filter is applied client-side.
+            let hits = rag.search_registry("list all", limit.max(1)).await?;
+            let filtered: Vec<_> = hits
+                .into_iter()
+                .filter(|h| match &r#type {
+                    Some(t) => h.kind.as_str() == t,
+                    None => true,
+                })
+                .collect();
+            println!("# tengu_registry ({} entries shown)", filtered.len());
+            for h in filtered {
+                println!(
+                    "  [{:<5}] {:<32}  score={:.3}  {}",
+                    h.kind.as_str(),
+                    h.name,
+                    h.score,
+                    h.source_path.as_deref().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        RegistryAction::Search { query, top_k } => {
+            let hits = rag.search_registry(&query, top_k).await?;
+            println!(
+                "# search '{}' in {} — top {}",
+                query, REGISTRY_COLLECTION, top_k
+            );
+            for (i, h) in hits.iter().enumerate() {
+                println!(
+                    "{:>2}. [{:<5}] {:<32}  score={:.3}",
+                    i + 1,
+                    h.kind.as_str(),
+                    h.name,
+                    h.score
+                );
+                let snippet: String = h.description.chars().take(120).collect();
+                println!("    {}", snippet);
+            }
+            Ok(())
+        }
+        RegistryAction::ReindexTools => {
+            let n = rag.startup_index(placeholder_tools()).await?;
+            println!("reindexed {} placeholder tool descriptions into tengu_registry", n);
+            println!("(Phase 1 scaffold — Phase 2 also indexes agents/ and skills/ via `reindex-all`)");
+            Ok(())
+        }
+        RegistryAction::ReindexAll { workspace } => {
+            let root = workspace
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .context("could not resolve workspace root (pass --workspace)")?;
+            let agents_dir = root.join("agents");
+            let specs = crate::adapters::agents::load_agents_dir(&agents_dir)
+                .with_context(|| format!("load agents from {}", agents_dir.display()))?;
+            let skills = crate::adapters::rag::indexer::scan_skills(&root);
+
+            rag.clear_registry().await?;
+            let tool_count = rag.index_tools(placeholder_tools()).await?;
+            let agent_count = rag.index_agents(specs.clone()).await?;
+            let skill_count = rag.index_skills(skills.clone()).await?;
+
+            println!("reindexed tengu_registry from {}", root.display());
+            println!("  tools  : {} (placeholder set — Phase 3 will enumerate real ones)", tool_count);
+            println!("  agents : {} (from {})", agent_count, agents_dir.display());
+            for a in &specs {
+                println!(
+                    "           - {:<20} {}",
+                    a.name,
+                    a.source_path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                );
+            }
+            println!("  skills : {} (3-tier scan)", skill_count);
+            for s in &skills {
+                println!("           - {:<20} {}", s.name, s.source_path.display());
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Phase 2 placeholder tool descriptions. Phase 3 replaces this with a real
+/// enumeration of compiled-in + MCP tools (the current tool registry is built
+/// inside channel_runtime.rs — exposing it requires a small refactor that is
+/// deliberately deferred).
+#[cfg(feature = "qdrant")]
+fn placeholder_tools() -> Vec<crate::adapters::types::ToolDef> {
+    use crate::adapters::types::ToolDef;
+    vec![
+        ToolDef {
+            name: "http_request".to_string(),
+            description:
+                "Perform an HTTP request (GET/POST/PUT/DELETE). Use for web scraping, \
+                 REST API calls, fetching documents. Not for file I/O."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "read_file".to_string(),
+            description:
+                "Read a file from the local workspace. Returns text content. \
+                 Scoped to agent workspace by default."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "list_directory".to_string(),
+            description:
+                "List the contents of a directory on the local workspace. Returns \
+                 filenames and types. Scoped to agent workspace."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "run_command".to_string(),
+            description:
+                "Run a shell command inside the agent workspace. For builds, tests, \
+                 git operations, and other filesystem-local work."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "remember".to_string(),
+            description:
+                "Store a short fact for cross-session recall via the memory provider. \
+                 Use for user preferences and facts that should persist."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "persistent_store".to_string(),
+            description:
+                "Store, search, list, or delete files against a semantic index. \
+                 Use for longer-lived document storage that should be queryable by \
+                 natural language."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+    ]
+}
+
+/// Stub when the `qdrant` feature is off — `tengu registry` is a no-op and
+/// tells the user how to rebuild with support.
+#[cfg(not(feature = "qdrant"))]
+async fn run_registry_command(_config: &Config, _action: RegistryAction) -> Result<()> {
+    anyhow::bail!(
+        "`tengu registry` requires the 'qdrant' cargo feature. \
+         Rebuild with: cargo build --features qdrant"
+    );
 }
 
 fn format_diagnostics_compact(d: &crate::adapters::EngineDiagnostics) -> String {

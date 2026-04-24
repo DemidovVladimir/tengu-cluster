@@ -1075,6 +1075,7 @@ impl Default for Config {
             hub: HubConfig::default(),
             agents,
             orchestrator: None,
+            rag: RagConfig::default(),
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             scaffold: None,

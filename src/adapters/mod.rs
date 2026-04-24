@@ -27,6 +27,10 @@ pub(crate) mod eval_builder;
 pub(crate) mod mcp_bridge;
 pub mod orchestrator;
 pub(crate) mod plugins;
+#[cfg(feature = "qdrant")]
+pub mod rag;
+pub mod agents;
+pub mod runner;
 pub(crate) mod prune;
 pub(crate) mod scaffold;
 pub(crate) mod shell_executor;
