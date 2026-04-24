@@ -125,6 +125,12 @@ pub struct Config {
     #[serde(default)]
     pub orchestrator: Option<OrchestratorConfig>,
 
+    /// RAG startup indexer configuration. Inert until Phase 1 lands a
+    /// consumer. Safe to enable early — the indexer only reads from disk
+    /// and writes to Qdrant; it never changes planner behaviour.
+    #[serde(default)]
+    pub rag: RagConfig,
+
     #[serde(default)]
     pub memory: MemoryConfig,
 
@@ -446,6 +452,12 @@ pub struct OrchestratorConfig {
     /// preserves the "talk to this agent specifically" escape hatch.
     #[serde(default)]
     pub route_explicit_agents: bool,
+
+    /// Planner engine: `"static"` (legacy roster.rs/wiring.rs, default) or
+    /// `"rag"` (new RAG + subprocess runner, gated). Flipped to `"rag"` in
+    /// Phase 4 of the redesign; default flipped in Phase 5.
+    #[serde(default = "default_orchestrator_engine")]
+    pub engine: String,
 }
 
 fn default_max_attempts_per_step() -> u32 {
@@ -453,6 +465,20 @@ fn default_max_attempts_per_step() -> u32 {
 }
 fn default_max_replans() -> u32 {
     2
+}
+fn default_orchestrator_engine() -> String {
+    "static".to_string()
+}
+
+/// RAG startup indexer configuration. Inert until a consumer calls it.
+/// Safe to enable early — the indexer only reads from disk and writes
+/// to Qdrant.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RagConfig {
+    /// Enable the startup indexer (scans skills/, agents/, MCP tools,
+    /// embeds descriptions, upserts into `tengu_registry`). Off by default.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// Telegram bot adapter configuration.
@@ -572,6 +598,22 @@ pub struct MemoryConfig {
     /// Persistent store: overlap in characters between consecutive chunks.
     #[serde(default = "default_persistent_store_chunk_overlap")]
     pub persistent_store_chunk_overlap: usize,
+
+    /// TTL in days for `tengu_memory` entries. `0` means never purge
+    /// (default, MemPalace-style permanent memory). Set to a positive
+    /// integer to enable startup sweep of older messages/step outputs.
+    #[serde(default = "default_ttl_days")]
+    pub ttl_days: u64,
+    /// Number of most-recent session messages the orchestrator reloads
+    /// each turn (by `session_id`, ordered by timestamp) for multi-turn
+    /// dialogue coherence. Deterministic, not vector-search based.
+    #[serde(default = "default_session_recent_n")]
+    pub session_recent_n: usize,
+    /// Top-K breadth for fuzzy cross-plan recall during replan (vector
+    /// search over `tengu_outputs` only; messages are excluded to keep
+    /// signal/noise apart).
+    #[serde(default = "default_cross_plan_top_k")]
+    pub cross_plan_top_k: usize,
 }
 
 impl Default for MemoryConfig {
@@ -590,8 +632,21 @@ impl Default for MemoryConfig {
             vector_size: default_vector_size(),
             persistent_store_chunk_size: default_persistent_store_chunk_size(),
             persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
+            ttl_days: default_ttl_days(),
+            session_recent_n: default_session_recent_n(),
+            cross_plan_top_k: default_cross_plan_top_k(),
         }
     }
+}
+
+fn default_ttl_days() -> u64 {
+    0
+}
+fn default_session_recent_n() -> usize {
+    10
+}
+fn default_cross_plan_top_k() -> usize {
+    5
 }
 
 fn default_embedding_model() -> String {

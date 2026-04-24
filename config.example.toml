@@ -82,6 +82,11 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # qdrant_collection = "tengu-memory"          # collection name
 # vector_size = 1536                          # must match embedding model output dim
 # qdrant_api_key = "${QDRANT_API_KEY}"        # for Qdrant Cloud (optional)
+#
+# --- Redesign additions (Phase 0 scaffold, inert until later phases wire them) ---
+# ttl_days = 0                                # 0 = never purge; set >0 to enable startup sweep of tengu_memory
+# session_recent_n = 10                       # last-N messages reloaded each orchestrator turn for dialogue coherence
+# cross_plan_top_k = 5                        # fuzzy recall breadth during replan (vector search over tengu_outputs)
 
 # --- Telegram Bot ---
 # Run with: tengu telegram
@@ -103,6 +108,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that acts as the orchestrator
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
 # max_replans = 2                       # Tier 2: how many times the orchestrator is re-invoked to replan before bailing out
+# engine = "static"                     # "static" (default, legacy roster) or "rag" (new RAG + runner; Phase 4+)
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
@@ -205,3 +211,11 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.fixture-runner.identity]
 # name = "Fixture Runner"
 # instructions = "You execute a single skill fixture and return the final assistant output."
+
+# --- RAG (redesign Phase 1+) ---
+# Turns on the startup indexer which embeds skill/agent/tool descriptions into
+# Qdrant (`tengu_registry`). Inert until Phase 4 wires the RAG planner path.
+# Safe to enable early: indexer is read-from-disk + write-to-Qdrant only.
+#
+# [rag]
+# enabled = false
