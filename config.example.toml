@@ -72,6 +72,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_recall_entries = 5
 # max_recall_tokens = 600
 # store_path = "~/.tengu/memory/"
+# ttl_days = 0                                # 0 = never purge (permanent memory, default)
+# session_recent_n = 10                       # most-recent session entries surfaced without a vector query
+# cross_plan_top_k = 5                        # top-K cross-plan entries when planning across sessions
 #
 # --- Qdrant vector store backend (optional) ---
 # Requires: cargo build --features qdrant
@@ -103,6 +106,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that acts as the orchestrator
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
 # max_replans = 2                       # Tier 2: how many times the orchestrator is re-invoked to replan before bailing out
+# engine = "static"                     # Planner engine: "static" (legacy roster.rs/wiring.rs, default) or "rag" (new RAG + subprocess runner, gated)
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
@@ -205,3 +209,11 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.fixture-runner.identity]
 # name = "Fixture Runner"
 # instructions = "You execute a single skill fixture and return the final assistant output."
+
+# --- RAG Startup Indexer ---
+# Inert until a consumer calls it. Safe to enable early — the indexer only
+# reads from disk (skills/, agents/, MCP tools) and writes to Qdrant's
+# `tengu_registry` collection. Off by default.
+
+# [rag]
+# enabled = false

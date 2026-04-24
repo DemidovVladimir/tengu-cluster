@@ -126,6 +126,9 @@ pub struct Config {
     pub orchestrator: Option<OrchestratorConfig>,
 
     #[serde(default)]
+    pub rag: RagConfig,
+
+    #[serde(default)]
     pub memory: MemoryConfig,
 
     #[serde(default)]
@@ -446,6 +449,10 @@ pub struct OrchestratorConfig {
     /// preserves the "talk to this agent specifically" escape hatch.
     #[serde(default)]
     pub route_explicit_agents: bool,
+
+    /// Planner engine: "static" (legacy roster.rs/wiring.rs, default) or "rag" (new RAG + subprocess runner, gated).
+    #[serde(default = "default_orchestrator_engine")]
+    pub engine: String,
 }
 
 fn default_max_attempts_per_step() -> u32 {
@@ -453,6 +460,19 @@ fn default_max_attempts_per_step() -> u32 {
 }
 fn default_max_replans() -> u32 {
     2
+}
+fn default_orchestrator_engine() -> String {
+    "static".to_string()
+}
+
+/// RAG startup indexer configuration. Inert until a consumer calls it.
+/// Safe to enable early — indexer only reads from disk and writes to Qdrant.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RagConfig {
+    /// Enable the startup indexer (scans skills/, agents/, MCP tools, embeds
+    /// descriptions, upserts into `tengu_registry`). Off by default.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// Telegram bot adapter configuration.
@@ -572,6 +592,18 @@ pub struct MemoryConfig {
     /// Persistent store: overlap in characters between consecutive chunks.
     #[serde(default = "default_persistent_store_chunk_overlap")]
     pub persistent_store_chunk_overlap: usize,
+    /// Time-to-live in days for memory entries. `0` means never purge
+    /// (permanent memory, the default).
+    #[serde(default = "default_ttl_days")]
+    pub ttl_days: u64,
+    /// Number of most-recent session entries to surface for fast recall
+    /// without a vector query.
+    #[serde(default = "default_session_recent_n")]
+    pub session_recent_n: usize,
+    /// Top-K cross-plan memory entries to pull in when planning across
+    /// sessions/plans.
+    #[serde(default = "default_cross_plan_top_k")]
+    pub cross_plan_top_k: usize,
 }
 
 impl Default for MemoryConfig {
@@ -590,6 +622,9 @@ impl Default for MemoryConfig {
             vector_size: default_vector_size(),
             persistent_store_chunk_size: default_persistent_store_chunk_size(),
             persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
+            ttl_days: default_ttl_days(),
+            session_recent_n: default_session_recent_n(),
+            cross_plan_top_k: default_cross_plan_top_k(),
         }
     }
 }
@@ -632,6 +667,18 @@ fn default_persistent_store_chunk_size() -> usize {
 
 fn default_persistent_store_chunk_overlap() -> usize {
     200
+}
+
+fn default_ttl_days() -> u64 {
+    0
+}
+
+fn default_session_recent_n() -> usize {
+    10
+}
+
+fn default_cross_plan_top_k() -> usize {
+    5
 }
 
 /// System prompt token budget configuration.
