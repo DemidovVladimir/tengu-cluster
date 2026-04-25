@@ -45,6 +45,12 @@ content = """# DeSci Project
 - `posts/` — Beach.science post records
 """
 
+ [orchestrator]
+   agent = "aura"
+   engine = "rag"
+   max_attempts_per_step = 3
+   max_replans = 2
+
 [agents.aura]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"

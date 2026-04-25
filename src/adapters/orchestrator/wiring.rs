@@ -29,6 +29,26 @@ use crate::adapters::orchestrator::planner::OrchestratorChatPort;
 #[async_trait]
 pub trait ChatServiceFactory: Send + Sync {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String>;
+
+    /// Like `run_turn`, but with the supplied `system_prompt` replacing the
+    /// agent's configured `identity.instructions` for this single call.
+    ///
+    /// Phase 4c of the redesign: the RAG planner loads
+    /// `skills/orchestrator/SKILL.md` and uses it as the planner system
+    /// prompt, so the orchestrator agent's "run the DeSci pipeline"-style
+    /// identity does not leak into the planning turn.
+    ///
+    /// Default impl delegates to `run_turn`, ignoring the override — so
+    /// existing implementations stay valid without changes. The runtime impl
+    /// (`RuntimeChatServiceFactory`) overrides this to actually swap.
+    async fn run_turn_with_system(
+        &self,
+        agent: &str,
+        _system_prompt: &str,
+        text: &str,
+    ) -> anyhow::Result<String> {
+        self.run_turn(agent, text).await
+    }
 }
 
 pub struct ChatWorker {
@@ -92,6 +112,30 @@ impl OrchestratorChatPort for ChatOrchestratorPortImpl {
             .trim()
             .to_string();
         let reply = self.chat.run_turn(agent, &user_content).await?;
+        writer::sync_turn(
+            Arc::clone(&self.memory),
+            agent.to_string(),
+            user_message.to_string(),
+            reply.clone(),
+        );
+        Ok(reply)
+    }
+
+    /// Phase 4c — pass through to `ChatServiceFactory::run_turn_with_system`,
+    /// also skipping memory injection (the planner does its own context
+    /// assembly via the ranked roster + dialogue, so we don't want the
+    /// pre-turn memory block stuffed in too).
+    async fn run_orchestrator_turn_with_system(
+        &self,
+        agent: &str,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> anyhow::Result<String> {
+        let reply = self
+            .chat
+            .run_turn_with_system(agent, system_prompt, user_message)
+            .await?;
+        // Still record the turn into memory so cross-plan recall has it.
         writer::sync_turn(
             Arc::clone(&self.memory),
             agent.to_string(),

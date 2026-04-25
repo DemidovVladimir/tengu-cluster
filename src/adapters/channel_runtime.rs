@@ -763,6 +763,9 @@ use crate::adapters::config::Config;
 use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::orchestrator::planner::OrchestratorAgentPlanner;
+#[cfg(feature = "qdrant")]
+use crate::adapters::orchestrator::planner::RagPlanner;
+use crate::adapters::orchestrator::planner::Planner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
 use crate::adapters::orchestrator::roster::render_roster;
 use crate::adapters::orchestrator::wiring::{
@@ -885,6 +888,30 @@ fn clone_chat_turn_inputs(src: &ChatTurnInputs) -> ChatTurnInputs {
 #[async_trait]
 impl ChatServiceFactory for RuntimeChatServiceFactory {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String> {
+        self.run_turn_inner(agent, None, text).await
+    }
+
+    async fn run_turn_with_system(
+        &self,
+        agent: &str,
+        system_prompt: &str,
+        text: &str,
+    ) -> anyhow::Result<String> {
+        self.run_turn_inner(agent, Some(system_prompt), text).await
+    }
+}
+
+impl RuntimeChatServiceFactory {
+    /// Shared body for `run_turn` and `run_turn_with_system`. When
+    /// `system_override` is `Some`, it replaces `inputs.system_prompt` for
+    /// this single call (Phase 4c — used by the RAG planner to inject
+    /// `skills/orchestrator/SKILL.md` instead of the agent's identity).
+    async fn run_turn_inner(
+        &self,
+        agent: &str,
+        system_override: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<String> {
         let inputs = (self.inputs_fn)(agent)?;
 
         // Wrap tool_observer Arc into the `&dyn Fn` form the service expects.
@@ -892,24 +919,44 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
         let observer_ref: Option<ToolResultObserver<'_>> =
             observer_arc.as_deref().map(|f| f as ToolResultObserver<'_>);
 
+        let (system_prompt, tools_slice) = match system_override {
+            Some(s) => {
+                // Phase 4c: a system-prompt override means this is a planner call.
+                // Strip tools entirely — we don't want the LLM dispatching
+                // http_request etc. when its job is to emit plan JSON. Memory
+                // injection is also disabled by passing memory_manager: None.
+                (s.to_string(), &[][..])
+            }
+            None => (inputs.system_prompt.clone(), inputs.tools.as_slice()),
+        };
+
         let service = ChatRuntimeService {
             engine: inputs.engine.as_ref(),
             agent_id: &inputs.agent_id,
             agent_config: inputs.agent_config.as_ref(),
             history_turn_limit: inputs.history_turn_limit,
             compaction_policy: inputs.compaction_policy,
-            system_prompt: inputs.system_prompt.clone(),
-            tools: &inputs.tools,
-            tool_executor: inputs
-                .tool_executor
-                .as_deref()
-                .map(|e| e as &dyn ToolExecutor),
-            memory_manager: inputs.memory_manager.as_deref(),
+            system_prompt,
+            tools: tools_slice,
+            tool_executor: if system_override.is_some() {
+                None
+            } else {
+                inputs
+                    .tool_executor
+                    .as_deref()
+                    .map(|e| e as &dyn ToolExecutor)
+            },
+            memory_manager: if system_override.is_some() {
+                None
+            } else {
+                inputs.memory_manager.as_deref()
+            },
             max_recall_entries: inputs.max_recall_entries,
             max_recall_tokens: inputs.max_recall_tokens,
             tool_observer: observer_ref,
             cancel: inputs.cancel.as_deref(),
             bridge_tools: inputs.bridge_tools.as_deref(),
+            suppress_grounding_nudge: system_override.is_some(),
         };
 
         let mut state = create_chat_loop_state(inputs.agent_config.as_ref());
@@ -933,21 +980,82 @@ pub(crate) fn build_orchestrator(
     memory: Arc<MemoryManager>,
 ) -> Option<Orchestrator> {
     let cfg = config.orchestrator.as_ref()?;
-    let worker = Arc::new(ChatWorker::new(
-        Arc::clone(&chat_factory),
-        Arc::clone(&memory),
-    ));
     let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
         Arc::clone(&chat_factory),
         Arc::clone(&memory),
     ));
-    let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
-    let planner = Arc::new(OrchestratorAgentPlanner::new(
-        cfg.agent.clone(),
-        chat_port,
-        Arc::clone(&memory),
-        roster,
-    ));
+
+    // Phase 4b: in `engine = "rag"` mode the worker is the SubprocessRunner
+    // (one subprocess per step via `tengu run-agent`). In every other mode
+    // (default static), it stays the in-process ChatWorker — UNCHANGED.
+    let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
+        if cfg.engine == "rag" {
+            #[cfg(feature = "qdrant")]
+            {
+                tracing::info!(
+                    "orchestrator worker = SubprocessRunner (Phase 4b — child returns canned \
+                     summary until Phase 5 wires the LLM)"
+                );
+                Arc::new(crate::adapters::runner::SubprocessRunner::new())
+            }
+            #[cfg(not(feature = "qdrant"))]
+            {
+                tracing::warn!(
+                    "engine = 'rag' requires the 'qdrant' feature; falling back to ChatWorker"
+                );
+                Arc::new(ChatWorker::new(
+                    Arc::clone(&chat_factory),
+                    Arc::clone(&memory),
+                ))
+            }
+        } else {
+            Arc::new(ChatWorker::new(
+                Arc::clone(&chat_factory),
+                Arc::clone(&memory),
+            ))
+        };
+
+    // Phase 4 + 4b: branch on `[orchestrator] engine`.
+    //   * "static" (default) — legacy planner + ChatWorker. UNCHANGED.
+    //   * "rag"              — RagPlanner (queries `tengu_registry` per turn
+    //                          for a ranked roster) + SubprocessRunner
+    //                          (one `tengu run-agent` child per step).
+    //
+    // The worker side branched above; the planner side branches here.
+    let planner: Arc<dyn Planner> = if cfg.engine == "rag" {
+        #[cfg(feature = "qdrant")]
+        {
+            tracing::info!("orchestrator engine = rag (Phase 4 — RagPlanner with lazy RagStore init)");
+            Arc::new(RagPlanner::new(
+                cfg.agent.clone(),
+                chat_port,
+                config.memory.clone(),
+            ))
+        }
+        #[cfg(not(feature = "qdrant"))]
+        {
+            tracing::warn!(
+                "orchestrator.engine = 'rag' requires the 'qdrant' cargo feature; \
+                 falling back to static planner"
+            );
+            let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
+            Arc::new(OrchestratorAgentPlanner::new(
+                cfg.agent.clone(),
+                chat_port,
+                Arc::clone(&memory),
+                roster,
+            ))
+        }
+    } else {
+        let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
+        Arc::new(OrchestratorAgentPlanner::new(
+            cfg.agent.clone(),
+            chat_port,
+            Arc::clone(&memory),
+            roster,
+        ))
+    };
+
     let policy = RetryPolicy::new(cfg.max_attempts_per_step);
     Some(Orchestrator::new(
         planner,

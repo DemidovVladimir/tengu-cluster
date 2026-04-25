@@ -62,12 +62,17 @@ pub enum AgentIpcOutput {
     Failed { error: String, output: String },
 }
 
-/// Thin Phase 3 spawner. Phase 4 wraps this in an `impl WorkerHandle`.
+/// Phase 3 spawner promoted to a `WorkerHandle` impl in Phase 4b. Each
+/// `SubprocessRunner` instance carries one session id (generated at
+/// construction); step ids come from each `Step` the executor passes in.
 pub struct SubprocessRunner {
     /// Explicit path to the tengu binary. None → `current_exe()`.
     pub tengu_path: Option<std::path::PathBuf>,
     /// Hard timeout for the child.
     pub timeout_secs: u64,
+    /// Stable session id for tagging memory writes from this orchestrator
+    /// instance. Generated once per runner construction.
+    pub session_id: String,
 }
 
 impl Default for SubprocessRunner {
@@ -75,7 +80,17 @@ impl Default for SubprocessRunner {
         Self {
             tengu_path: None,
             timeout_secs: 180,
+            session_id: uuid::Uuid::new_v4().to_string(),
         }
+    }
+}
+
+impl SubprocessRunner {
+    /// Convenience constructor matching the existing `ChatWorker::new` shape
+    /// so callers in `channel_runtime::build_orchestrator` can swap one for
+    /// the other behind the `engine` flag without other changes.
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -133,6 +148,57 @@ impl SubprocessRunner {
         let parsed: AgentIpcOutput = serde_json::from_str(stdout_str.trim())
             .with_context(|| format!("parse IPC output: {}", stdout_str.trim()))?;
         Ok(parsed)
+    }
+}
+
+// =====================================================================
+// WorkerHandle impl — Phase 4b cutover.
+//
+// Lets the DagExecutor drive `SubprocessRunner` exactly the same way it
+// drives `ChatWorker`. The only difference is the execution model: each
+// step spawns `tengu run-agent` as a child process via the existing IPC
+// (Phase 3). The child's body is still a stub that returns a canned
+// summary — Phase 5 replaces that body with a real LLM mini-loop.
+// =====================================================================
+
+#[async_trait::async_trait]
+impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner {
+    async fn run_step(
+        &self,
+        step: &crate::adapters::orchestrator::plan::Step,
+        step_inputs: &str,
+    ) -> anyhow::Result<String> {
+        let goal = if step_inputs.is_empty() {
+            step.goal.clone()
+        } else {
+            format!("{}\n\nUpstream context:\n{}", step.goal, step_inputs)
+        };
+
+        // Phase 4b: pass minimal IPC payload. Phase 5 will load
+        // `agents/<step.agent>.toml` here and populate model/tools/skills
+        // from the spec instead of leaving them empty.
+        let input = AgentIpcInput {
+            goal,
+            agent_name: step.agent.clone(),
+            model: String::new(),
+            tools: Vec::new(),
+            skills: Vec::new(),
+            max_turns: default_max_turns(),
+            sandbox: None,
+            session_id: self.session_id.clone(),
+            step_id: step.id.0.clone(),
+        };
+
+        match self.run(input).await? {
+            AgentIpcOutput::Ok { output, .. } => Ok(output),
+            AgentIpcOutput::Failed { error, output } => {
+                anyhow::bail!(
+                    "subagent failed: {}\npartial output:\n{}",
+                    error,
+                    output
+                )
+            }
+        }
     }
 }
 

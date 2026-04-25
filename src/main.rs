@@ -524,18 +524,21 @@ async fn main() -> Result<()> {
     }
 }
 
-/// `tengu run-agent` stub handler — Phase 3 scaffold.
+/// `tengu run-agent` handler — Phase 5a (real LLM, no tool loop yet).
 ///
-/// **What this does today:**
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
-/// 3. Constructs a canned summary (no LLM).
-/// 4. If the `qdrant` feature is on and `OPENROUTER_API_KEY` is set,
-///    writes the summary to `tengu_outputs` via `compress_and_store`.
-/// 5. Writes one `AgentIpcOutput` JSON line to stdout and exits 0.
-///
-/// Phase 4 replaces the canned step with a real LLM mini-loop.
+/// 3. Loads `agents/<name>.toml` to resolve model + skills + (later) tools.
+/// 4. Composes the system prompt: base template + skill bodies (three-tier
+///    loader, highest-precedence tier wins) + mandatory closing suffix.
+/// 5. Builds an OpenRouter engine for the spec's model.
+/// 6. Drives ONE engine turn with NO tools advertised — Phase 5b will add
+///    the multi-turn tool dispatch loop and `compress_and_store` flag.
+/// 7. Writes the assistant's reply to `tengu_outputs` (best-effort) and
+///    emits an `AgentIpcOutput::Ok` JSON line on stdout.
 async fn run_agent_subprocess() -> Result<()> {
+    use crate::adapters::types::{EngineContext, Message, Role, StreamEvent};
+    use futures::StreamExt;
     use tokio::io::AsyncReadExt;
 
     if std::env::var("TENGU_AGENT_IPC").ok().as_deref() != Some("1") {
@@ -551,29 +554,109 @@ async fn run_agent_subprocess() -> Result<()> {
         .read_to_end(&mut buf)
         .await
         .context("read IPC input from stdin")?;
-    let input: adapters::runner::AgentIpcInput = serde_json::from_slice(&buf)
-        .context("parse IPC input JSON")?;
+    let input: adapters::runner::AgentIpcInput =
+        serde_json::from_slice(&buf).context("parse IPC input JSON")?;
 
     tracing::info!(
         agent = %input.agent_name,
         session = %input.session_id,
         step = %input.step_id,
-        "run-agent stub received"
+        "run-agent received"
     );
 
-    // Phase 3 canned output: no LLM, no tool calls.
-    let summary = format!(
-        "[phase-3 stub] agent={} goal={} (LLM mini-loop lands in Phase 4)",
-        input.agent_name, input.goal
-    );
-    let output_text = format!(
-        "Phase 3 scaffold ran for agent `{}`. Goal received: {}\n\n\
-         (No LLM was invoked. The subprocess IPC boundary is what is being tested.)",
-        input.agent_name, input.goal
-    );
+    // ----- Resolve agent spec from agents/<name>.toml -----
+    let spec_path = std::path::PathBuf::from("agents")
+        .join(format!("{}.toml", input.agent_name));
+    let spec = adapters::agents::load_agent_file(&spec_path).with_context(|| {
+        format!("load agent spec from {}", spec_path.display())
+    })?;
 
-    // Optional: write the summary to tengu_outputs if Qdrant is compiled in
-    // and reachable. Failure is logged but does not break the IPC contract.
+    // IPC `model` overrides spec when non-empty (the orchestrator can swap
+    // models per-step in the future). Falls back to the spec's model.
+    let model = if input.model.is_empty() {
+        spec.model.clone()
+    } else {
+        input.model.clone()
+    };
+
+    // ----- Compose system prompt: base + skill bodies + suffix -----
+    let mut system_prompt = String::from(BASE_AGENT_TEMPLATE);
+    for skill_name in &spec.skills {
+        match load_skill_body_three_tier(skill_name) {
+            Some(body) => {
+                system_prompt.push_str("\n\n---\n\n");
+                system_prompt.push_str(&body);
+            }
+            None => {
+                tracing::warn!(skill = %skill_name, "skill body not found in any tier");
+            }
+        }
+    }
+    system_prompt.push_str(MANDATORY_SUFFIX);
+
+    // ----- Build engine -----
+    let engine = adapters::engine_builder::build_openrouter_engine(&model, 200_000)
+        .with_context(|| format!("build openrouter engine for model {}", model))?;
+
+    // ----- Build messages + context -----
+    let messages = vec![
+        Message {
+            role: Role::System,
+            content: system_prompt.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+        Message {
+            role: Role::User,
+            content: input.goal.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+        },
+    ];
+    let context = EngineContext {
+        workspace: spec.sandbox.clone(),
+        system_prompt: Some(system_prompt),
+        bridge_tools: None,
+        max_tool_rounds: Some(input.max_turns),
+        max_mcp_result_chars: None,
+    };
+
+    // ----- Run engine, drain stream, collect text -----
+    // Phase 5a: tools = empty. The LLM is told to answer directly. Phase 5b
+    // will add tools = effective_tools(spec ∩ ipc) ∪ {compress_and_store}
+    // and a multi-turn dispatch loop.
+    let mut stream = engine
+        .run(&messages, &[], &context)
+        .await
+        .context("engine.run failed")?;
+    let mut response_text = String::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            StreamEvent::TextDelta { text } => response_text.push_str(&text),
+            StreamEvent::Done => break,
+            StreamEvent::Error { message } => {
+                if response_text.is_empty() {
+                    return write_failed_output(
+                        &input,
+                        format!("engine stream error: {}", message),
+                        String::new(),
+                    );
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+    if response_text.is_empty() {
+        response_text = format!("[empty response from {}]", model);
+    }
+
+    // Phase 5a: the model produces ONE text reply, which we treat as both
+    // the full output and the summary. Phase 5b will route real
+    // compress_and_store calls to populate `summary` separately.
+    let summary = response_text.clone();
+
+    // Best-effort write to tengu_outputs (cross-plan recall fodder).
     #[cfg(feature = "qdrant")]
     {
         let config = load_config_or_default();
@@ -587,7 +670,7 @@ async fn run_agent_subprocess() -> Result<()> {
                 )
                 .await
                 {
-                    tracing::warn!(error = %e, "compress_and_store write failed (non-fatal for Phase 3 stub)");
+                    tracing::warn!(error = %e, "tengu_outputs write failed (non-fatal)");
                 }
             }
             Err(e) => {
@@ -597,12 +680,93 @@ async fn run_agent_subprocess() -> Result<()> {
     }
 
     let out = adapters::runner::AgentIpcOutput::Ok {
-        output: output_text,
+        output: response_text,
         summary,
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
     Ok(())
+}
+
+/// Phase 5a — write a Failed AgentIpcOutput when engine.run errors before any
+/// text is produced. Returns Ok(()) so the parent reads JSON normally rather
+/// than exiting non-zero (which the runner would treat as a hard crash).
+fn write_failed_output(
+    _input: &adapters::runner::AgentIpcInput,
+    error: String,
+    partial_output: String,
+) -> Result<()> {
+    let out = adapters::runner::AgentIpcOutput::Failed {
+        error,
+        output: partial_output,
+    };
+    let json = serde_json::to_string(&out).context("serialise IPC failed output")?;
+    println!("{}", json);
+    Ok(())
+}
+
+/// Hardcoded base prompt that applies to every subagent. Kept short — the
+/// real per-agent character comes from the loaded skill bodies.
+const BASE_AGENT_TEMPLATE: &str = "You are a focused subagent run as a single-shot process. \
+Read the user's goal, do exactly what is asked, and respond concisely with the result. \
+Do not ask follow-up questions — make reasonable assumptions and answer the user directly.";
+
+/// Mandatory suffix appended to every subagent system prompt. Phase 5b will
+/// turn this into the harness-enforced `compress_and_store(summary)` rule
+/// from REDESIGN.md §7. Phase 5a just asks for a clear text answer.
+const MANDATORY_SUFFIX: &str = "\n\n---\n\n\
+When you have completed your task, output a clear, concise final answer. \
+Phase 5b will introduce a `compress_and_store` tool that the harness will require — \
+for now, simply produce the result as plain text.";
+
+/// Three-tier skill loader: workspace root → workspace dotdir → managed
+/// (~/.tengu/skills). Returns the SKILL.md body with frontmatter stripped,
+/// from the FIRST tier that has the file (highest precedence wins).
+fn load_skill_body_three_tier(name: &str) -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = vec![
+        std::path::PathBuf::from("skills")
+            .join(name)
+            .join("SKILL.md"),
+        std::path::PathBuf::from(".tengu")
+            .join("skills")
+            .join(name)
+            .join("SKILL.md"),
+    ];
+    if let Some(home) = dirs_next::home_dir() {
+        candidates.push(
+            home.join(".tengu")
+                .join("skills")
+                .join(name)
+                .join("SKILL.md"),
+        );
+    }
+
+    for path in &candidates {
+        if !path.is_file() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "read SKILL.md failed");
+                continue;
+            }
+        };
+        // Strip frontmatter `---<yaml>---` if present.
+        if content.starts_with("---") {
+            let after_first = &content[3..];
+            if let Some(end) = after_first.find("\n---") {
+                let mut body_start = end + 4;
+                let bytes = after_first.as_bytes();
+                if body_start < bytes.len() && bytes[body_start] == b'\n' {
+                    body_start += 1;
+                }
+                return Some(after_first[body_start..].trim_start().to_string());
+            }
+        }
+        return Some(content);
+    }
+    None
 }
 
 /// Best-effort config load for the run-agent subprocess.

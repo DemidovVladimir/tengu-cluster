@@ -541,6 +541,7 @@ pub fn run_tui(
                                 } else {
                                     Some(&current_bridge_tools)
                                 },
+                                suppress_grounding_nudge: false,
                             };
 
                             match chat_runtime
@@ -751,6 +752,7 @@ pub fn run_tui(
                             tool_observer: None,
                             cancel: None,
                             bridge_tools: None,
+                            suppress_grounding_nudge: false,
                         };
 
                         match chat_runtime

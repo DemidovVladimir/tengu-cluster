@@ -1286,6 +1286,7 @@ impl TelegramSession {
             } else {
                 Some(&agent.current_bridge_tools)
             },
+            suppress_grounding_nudge: false,
         };
 
         let _ = self.pipe.send_chat_action(sender).await;
@@ -1924,6 +1925,7 @@ impl TelegramSession {
             } else {
                 Some(&agent.current_bridge_tools)
             },
+            suppress_grounding_nudge: false,
         };
 
         let result = chat_runtime.process_user_text(state, &injected).await;

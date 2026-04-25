@@ -238,6 +238,11 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
     /// Tools to expose via MCP bridge (Claude Code engine only).
     pub bridge_tools: Option<&'a [ToolDef]>,
+    /// Phase 4c: when `true`, the "last/latest/most recent" fresh-grounding
+    /// system message at the top of `process_user_text` is skipped. Set by
+    /// the planner path (`run_turn_with_system`) so the grounding nudge does
+    /// not compete with the SKILL.md "emit JSON only" instruction.
+    pub suppress_grounding_nudge: bool,
 }
 
 pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
@@ -313,7 +318,8 @@ impl<'a> ChatRuntimeService<'a> {
             });
         }
 
-        let needs_fresh_grounding = needs_fresh_history_grounding(text);
+        let needs_fresh_grounding =
+            !self.suppress_grounding_nudge && needs_fresh_history_grounding(text);
 
         // Recall relevant memories if a memory manager with a vector
         // backend is available.
