@@ -755,24 +755,42 @@ async fn run_agent_subprocess() -> Result<()> {
     // Choose the user-visible `output` text. Models that only emit tool
     // calls (no inline assistant text) leave `final_text` empty; in that
     // case the summary the model produced via compress_and_store is the
-    // most useful thing to show. Final fallback is a placeholder so the
-    // TUI never renders a blank bubble.
+    // most useful thing to show.
     let output = if !final_text.is_empty() {
-        final_text
+        final_text.clone()
     } else if !summary.is_empty() {
         summary.clone()
     } else {
-        format!("[no text response from {}]", model)
+        String::new()
     };
 
+    // Phase 5c — middle-ground protocol enforcement.
+    // Pass:    compress_and_store called              → Ok (the canonical good path)
+    // Pass:    no compress_and_store but text produced → Ok (model answered usefully)
+    // Fail:    no compress_and_store AND no text       → Failed (DagExecutor retries)
+    //
+    // The strict-doctrine version of REDESIGN §7 would flip the second row
+    // to Failed too; we deliberately stay pragmatic — many models produce
+    // good answers in pure-text turns without calling the protocol tool.
     if !compress_called {
-        // Soft warn — the model finished without protocol compliance. We
-        // still surface the response (Phase 5c can decide whether to
-        // escalate to AgentIpcOutput::Failed).
-        tracing::warn!("model did not call compress_and_store before finishing");
+        tracing::warn!(
+            agent = %input.agent_name,
+            "model finished without calling compress_and_store"
+        );
     }
-
-    let out = adapters::runner::AgentIpcOutput::Ok { output, summary };
+    let out = if compress_called || !final_text.is_empty() {
+        adapters::runner::AgentIpcOutput::Ok { output, summary }
+    } else {
+        // Genuinely empty run — no text, no protocol call, no useful output.
+        // Surface as Failed so the orchestrator can retry / replan.
+        adapters::runner::AgentIpcOutput::Failed {
+            error: format!(
+                "subagent '{}' produced no output and did not call compress_and_store",
+                input.agent_name
+            ),
+            output,
+        }
+    };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
     Ok(())
