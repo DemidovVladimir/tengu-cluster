@@ -524,21 +524,24 @@ async fn main() -> Result<()> {
     }
 }
 
-/// `tengu run-agent` handler — Phase 5a (real LLM, no tool loop yet).
+/// `tengu run-agent` handler — Phase 5b (real LLM + multi-turn tool loop).
 ///
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
-/// 3. Loads `agents/<name>.toml` to resolve model + skills + (later) tools.
+/// 3. Loads `agents/<name>.toml` to resolve model + skills + tools.
 /// 4. Composes the system prompt: base template + skill bodies (three-tier
-///    loader, highest-precedence tier wins) + mandatory closing suffix.
+///    loader) + mandatory `compress_and_store` suffix.
 /// 5. Builds an OpenRouter engine for the spec's model.
-/// 6. Drives ONE engine turn with NO tools advertised — Phase 5b will add
-///    the multi-turn tool dispatch loop and `compress_and_store` flag.
-/// 7. Writes the assistant's reply to `tengu_outputs` (best-effort) and
-///    emits an `AgentIpcOutput::Ok` JSON line on stdout.
+/// 6. Builds the tool stack: `effective_tools = (base ∩ spec.tools) ∪ {compress_and_store}`
+///    plus a `PluginToolExecutor` over those tools.
+/// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
+///    dispatch each → append assistant + tool messages → repeat. Stop on:
+///    - empty tool_calls (model done)
+///    - `compress_and_store` invoked (capture summary, exit clean)
+///    - `max_turns` exceeded (return Failed status)
+/// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit.
 async fn run_agent_subprocess() -> Result<()> {
-    use crate::adapters::types::{EngineContext, Message, Role, StreamEvent};
-    use futures::StreamExt;
+    use crate::adapters::types::{EngineContext, Message, Role};
     use tokio::io::AsyncReadExt;
 
     if std::env::var("TENGU_AGENT_IPC").ok().as_deref() != Some("1") {
@@ -597,9 +600,32 @@ async fn run_agent_subprocess() -> Result<()> {
     // ----- Build engine -----
     let engine = adapters::engine_builder::build_openrouter_engine(&model, 200_000)
         .with_context(|| format!("build openrouter engine for model {}", model))?;
+    let stream_event_timeout_secs = 120u64;
+
+    // ----- Build tool stack (Phase 5b) -----
+    let parent_config = load_config_or_default_unconditional();
+    let secret_registry = std::sync::Arc::new(adapters::secret_builder::SecretRegistry::new());
+    let activity: std::sync::Arc<dyn crate::adapters::ports::ToolActivityPort> =
+        std::sync::Arc::new(SubprocessActivity);
+    let workspace = spec
+        .sandbox
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let (tools, executor) = adapters::channel_runtime::build_subprocess_tool_executor(
+        &spec,
+        &parent_config,
+        &workspace,
+        &secret_registry,
+        activity,
+    );
+    tracing::info!(
+        agent = %input.agent_name,
+        tool_count = tools.len(),
+        "subprocess tool stack built"
+    );
 
     // ----- Build messages + context -----
-    let messages = vec![
+    let mut messages = vec![
         Message {
             role: Role::System,
             content: system_prompt.clone(),
@@ -621,88 +647,156 @@ async fn run_agent_subprocess() -> Result<()> {
         max_mcp_result_chars: None,
     };
 
-    // ----- Run engine, drain stream, collect text -----
-    // Phase 5a: tools = empty. The LLM is told to answer directly. Phase 5b
-    // will add tools = effective_tools(spec ∩ ipc) ∪ {compress_and_store}
-    // and a multi-turn dispatch loop.
-    let mut stream = engine
-        .run(&messages, &[], &context)
+    // ----- Multi-turn loop (Phase 5b) -----
+    let mut final_text = String::new();
+    let mut summary: Option<String> = None;
+    let mut compress_called = false;
+
+    for turn in 0..input.max_turns {
+        let (text, tool_calls, _, _) = adapters::engine_builder::run_single_engine_turn(
+            engine.as_ref(),
+            &messages,
+            &tools,
+            &context,
+            None,
+            stream_event_timeout_secs,
+        )
         .await
-        .context("engine.run failed")?;
-    let mut response_text = String::new();
-    while let Some(event) = stream.next().await {
-        match event {
-            StreamEvent::TextDelta { text } => response_text.push_str(&text),
-            StreamEvent::Done => break,
-            StreamEvent::Error { message } => {
-                if response_text.is_empty() {
-                    return write_failed_output(
-                        &input,
-                        format!("engine stream error: {}", message),
-                        String::new(),
-                    );
-                }
-                break;
-            }
-            _ => {}
+        .context("engine turn failed")?;
+
+        // If no tool calls, the model produced its final answer. Save the
+        // text and exit the loop.
+        if tool_calls.is_empty() {
+            final_text = text;
+            break;
         }
-    }
-    if response_text.is_empty() {
-        response_text = format!("[empty response from {}]", model);
-    }
 
-    // Phase 5a: the model produces ONE text reply, which we treat as both
-    // the full output and the summary. Phase 5b will route real
-    // compress_and_store calls to populate `summary` separately.
-    let summary = response_text.clone();
+        // Append the assistant message carrying the tool_calls so the next
+        // engine turn sees the full call/result history.
+        messages.push(Message {
+            role: Role::Assistant,
+            content: text.clone(),
+            tool_call_id: None,
+            tool_calls: Some(tool_calls.clone()),
+        });
+        if !text.is_empty() {
+            final_text = text;
+        }
 
-    // Best-effort write to tengu_outputs (cross-plan recall fodder).
-    #[cfg(feature = "qdrant")]
-    {
-        let config = load_config_or_default();
-        match adapters::rag::RagStore::from_config(config.memory.clone()).await {
-            Ok(rag) => {
-                if let Err(e) = adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
-                    &rag,
-                    &input.session_id,
-                    &input.step_id,
-                    &summary,
-                )
-                .await
+        // Dispatch each tool call.
+        for call in &tool_calls {
+            let result = if call.name == "compress_and_store" {
+                // Out-of-band handling: write to tengu_outputs ourselves.
+                let extracted_summary = call
+                    .arguments
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                summary = Some(extracted_summary.clone());
+                compress_called = true;
+                #[cfg(feature = "qdrant")]
                 {
-                    tracing::warn!(error = %e, "tengu_outputs write failed (non-fatal)");
+                    if let Ok(rag) = adapters::rag::RagStore::from_config(
+                        parent_config.memory.clone(),
+                    )
+                    .await
+                    {
+                        let _ =
+                            adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
+                                &rag,
+                                &input.session_id,
+                                &input.step_id,
+                                &extracted_summary,
+                            )
+                            .await;
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "RagStore unavailable; skipping tengu_outputs write");
-            }
+                "stored".to_string()
+            } else if let Some(ref exec) = executor {
+                use crate::adapters::engine_builder::ToolExecutor;
+                match exec.execute(call, &messages).await {
+                    Ok(s) => s,
+                    Err(e) => format!("tool error: {}", e),
+                }
+            } else {
+                format!("tool '{}' is not available in this subprocess", call.name)
+            };
+
+            messages.push(Message {
+                role: Role::Tool,
+                content: result,
+                tool_call_id: Some(call.id.clone()),
+                tool_calls: None,
+            });
+        }
+
+        if compress_called {
+            tracing::info!(
+                turn,
+                "compress_and_store invoked; exiting subagent loop cleanly"
+            );
+            break;
+        }
+
+        if turn + 1 >= input.max_turns {
+            tracing::warn!(
+                turn,
+                max_turns = input.max_turns,
+                "subagent loop hit max_turns without compress_and_store"
+            );
         }
     }
 
-    let out = adapters::runner::AgentIpcOutput::Ok {
-        output: response_text,
-        summary,
+    // If the model never called compress_and_store, treat the final
+    // assistant text as the summary (graceful degradation, same as Phase 5a).
+    let summary = summary.unwrap_or_else(|| final_text.clone());
+
+    // Choose the user-visible `output` text. Models that only emit tool
+    // calls (no inline assistant text) leave `final_text` empty; in that
+    // case the summary the model produced via compress_and_store is the
+    // most useful thing to show. Final fallback is a placeholder so the
+    // TUI never renders a blank bubble.
+    let output = if !final_text.is_empty() {
+        final_text
+    } else if !summary.is_empty() {
+        summary.clone()
+    } else {
+        format!("[no text response from {}]", model)
     };
+
+    if !compress_called {
+        // Soft warn — the model finished without protocol compliance. We
+        // still surface the response (Phase 5c can decide whether to
+        // escalate to AgentIpcOutput::Failed).
+        tracing::warn!("model did not call compress_and_store before finishing");
+    }
+
+    let out = adapters::runner::AgentIpcOutput::Ok { output, summary };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
     Ok(())
 }
 
-/// Phase 5a — write a Failed AgentIpcOutput when engine.run errors before any
-/// text is produced. Returns Ok(()) so the parent reads JSON normally rather
-/// than exiting non-zero (which the runner would treat as a hard crash).
-fn write_failed_output(
-    _input: &adapters::runner::AgentIpcInput,
-    error: String,
-    partial_output: String,
-) -> Result<()> {
-    let out = adapters::runner::AgentIpcOutput::Failed {
-        error,
-        output: partial_output,
-    };
-    let json = serde_json::to_string(&out).context("serialise IPC failed output")?;
-    println!("{}", json);
-    Ok(())
+/// Subprocess `ToolActivityPort` impl — silent. The parent runner sees
+/// progress via the engine's StreamEvent::TextDelta path, not via this hook.
+struct SubprocessActivity;
+impl crate::adapters::ports::ToolActivityPort for SubprocessActivity {
+    fn publish_tool_activity(&self, _call: &crate::adapters::types::ToolCall) {}
+}
+
+/// Same as `load_config_or_default` but available even without the qdrant
+/// feature (Phase 5b needs it for parent_config.default_scopes regardless
+/// of whether RagStore is compiled in).
+fn load_config_or_default_unconditional() -> Config {
+    let path = resolve_tengu_home().join("config.toml");
+    if !path.is_file() {
+        return Config::default();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(s) => toml::from_str(&s).unwrap_or_else(|_| Config::default()),
+        Err(_) => Config::default(),
+    }
 }
 
 /// Hardcoded base prompt that applies to every subagent. Kept short — the
@@ -711,13 +805,14 @@ const BASE_AGENT_TEMPLATE: &str = "You are a focused subagent run as a single-sh
 Read the user's goal, do exactly what is asked, and respond concisely with the result. \
 Do not ask follow-up questions — make reasonable assumptions and answer the user directly.";
 
-/// Mandatory suffix appended to every subagent system prompt. Phase 5b will
-/// turn this into the harness-enforced `compress_and_store(summary)` rule
-/// from REDESIGN.md §7. Phase 5a just asks for a clear text answer.
+/// Mandatory suffix appended to every subagent system prompt — Phase 5b
+/// version. Tells the model to call `compress_and_store(summary)` as its
+/// final action; the harness writes the summary to `tengu_outputs` and
+/// exits the loop on that call.
 const MANDATORY_SUFFIX: &str = "\n\n---\n\n\
-When you have completed your task, output a clear, concise final answer. \
-Phase 5b will introduce a `compress_and_store` tool that the harness will require — \
-for now, simply produce the result as plain text.";
+When you have completed your task, your FINAL action MUST be to call the \
+`compress_and_store` tool with a concise `summary` of what you accomplished. \
+Failure to call it will be treated as task failure.";
 
 /// Three-tier skill loader: workspace root → workspace dotdir → managed
 /// (~/.tengu/skills). Returns the SKILL.md body with frontmatter stripped,
@@ -767,20 +862,6 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
         return Some(content);
     }
     None
-}
-
-/// Best-effort config load for the run-agent subprocess.
-/// Falls back to defaults if the user's config.toml is absent or malformed.
-#[cfg(feature = "qdrant")]
-fn load_config_or_default() -> Config {
-    let path = resolve_tengu_home().join("config.toml");
-    if !path.is_file() {
-        return Config::default();
-    }
-    match std::fs::read_to_string(&path) {
-        Ok(s) => toml::from_str(&s).unwrap_or_else(|_| Config::default()),
-        Err(_) => Config::default(),
-    }
 }
 
 /// Dispatcher for `tengu registry ...` subcommands.

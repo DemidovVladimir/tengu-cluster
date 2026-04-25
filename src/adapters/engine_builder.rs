@@ -737,7 +737,9 @@ pub async fn collect_engine_response(
 }
 
 /// Run a single engine turn and collect text, tool calls, and usage.
-async fn run_single_engine_turn(
+/// Pub(crate) so the run-agent subprocess (Phase 5b) can reuse this stream-
+/// draining loop without duplicating the StreamEvent state machine.
+pub(crate) async fn run_single_engine_turn(
     engine: &dyn Engine,
     messages: &[Message],
     tools: &[ToolDef],

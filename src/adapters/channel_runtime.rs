@@ -1066,6 +1066,121 @@ pub(crate) fn build_orchestrator(
     ))
 }
 
+/// Phase 5b — synthesize an `AgentConfig` from an `AgentSpec` so the existing
+/// `build_tool_executor` can be reused inside the run-agent subprocess.
+///
+/// Most fields use sensible defaults; the few that matter for tool dispatch
+/// (workspace, model, scopes, workspace_tools) are propagated from the spec
+/// or from the parent `Config` (default_scopes).
+pub(crate) fn agent_config_from_spec(
+    spec: &crate::adapters::agents::AgentSpec,
+    parent_default_scopes: &HashMap<String, ToolScope>,
+) -> AgentConfig {
+    // Only the three opt-in workspace_tools are accepted by AgentConfig
+    // validation — drop any spec.tools entry that isn't one of them, since
+    // the others are always-on base tools.
+    const VALID_WORKSPACE_TOOLS: &[&str] = &["shared_cache", "persistent_store", "skill_distill"];
+    let workspace_tools: Vec<String> = spec
+        .tools
+        .iter()
+        .filter(|t| VALID_WORKSPACE_TOOLS.contains(&t.as_str()))
+        .cloned()
+        .collect();
+
+    AgentConfig {
+        default: false,
+        engine: "openrouter".to_string(),
+        model: spec.model.clone(),
+        workspace: spec.sandbox.clone(),
+        default_lens: "eco".to_string(),
+        identity: Default::default(),
+        flow: Default::default(),
+        limits: Default::default(),
+        lens: Default::default(),
+        role: None,
+        skill_packages: Vec::new(),
+        prompt_budget: Default::default(),
+        requires: Vec::new(),
+        workspace_tools,
+        // Inherit the parent's default_scopes so http_request etc. honour the
+        // permissive scope when the parent config has one.
+        scopes: parent_default_scopes.clone(),
+        claude_code: None,
+    }
+}
+
+/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`.
+///
+/// Resolves `effective_tools = (compute_base_tools ∩ spec.tools) ∪ {compress_and_store}`,
+/// then constructs a `PluginToolExecutor` over those tools. Returns the
+/// resolved ToolDef list (so `run-agent` can pass it to `engine.run`) plus
+/// the executor.
+///
+/// `compress_and_store` is dispatched out-of-band by the run-agent loop
+/// (it writes to `tengu_outputs` directly via a helper) so its `ToolDef`
+/// is appended to the advertised list but its execution path bypasses the
+/// `PluginToolExecutor`.
+pub(crate) fn build_subprocess_tool_executor(
+    spec: &crate::adapters::agents::AgentSpec,
+    config: &Config,
+    workspace: &Path,
+    secret_registry: &Arc<SecretRegistry>,
+    activity: Arc<dyn ToolActivityPort>,
+) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
+    let agent_cfg = agent_config_from_spec(spec, &config.default_scopes);
+
+    // Full base tool list (workspace + http + crypto + memory if enabled).
+    let base_tools = compute_base_tools(
+        true,                                                // uses_tools
+        config.memory.enabled,                               // has_memory
+        &agent_cfg.workspace_tools,
+    );
+
+    // Filter to spec.tools when the spec declares an allow-list. Empty
+    // spec.tools means "no allow-list" — keep all base tools available.
+    // compress_and_store is appended unconditionally regardless of spec.tools.
+    let mut effective: Vec<ToolDef> = if spec.tools.is_empty() {
+        base_tools
+    } else {
+        let allow: std::collections::HashSet<&str> =
+            spec.tools.iter().map(|s| s.as_str()).collect();
+        base_tools
+            .into_iter()
+            .filter(|t| allow.contains(t.name.as_str()))
+            .collect()
+    };
+
+    // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
+    // only need its description here for the LLM to see + call.
+    #[cfg(feature = "qdrant")]
+    {
+        effective.push(
+            crate::adapters::plugins::skill_lifecycle::compress_and_store::definition(),
+        );
+    }
+
+    // Skill registry is empty for the subprocess (skill bodies are loaded
+    // separately and merged into the system prompt; no shell-skills exposed
+    // as tools yet).
+    let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+
+    let executor = build_tool_executor(
+        workspace,
+        &effective,
+        &skill_registry,
+        &None,                          // memory_manager — Phase 5c
+        secret_registry,
+        activity,
+        None,                           // cancel
+        None,                           // shared_http_client
+        Some(&config.memory),
+        &agent_cfg,
+        &config.mcp_servers,
+    );
+
+    (effective, executor)
+}
+
 /// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to
 /// dispatch a turn against a named agent (e.g. `tengu skill evolve` targeting
 /// the skill-improver agent).
