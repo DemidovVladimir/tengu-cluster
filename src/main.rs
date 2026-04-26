@@ -940,7 +940,9 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
             Ok(())
         }
         RegistryAction::ReindexTools => {
-            let n = rag.startup_index(placeholder_tools()).await?;
+            let n = rag
+                .startup_index(crate::adapters::rag::indexer::placeholder_tools())
+                .await?;
             println!("reindexed {} placeholder tool descriptions into tengu_registry", n);
             println!("(Phase 1 scaffold — Phase 2 also indexes agents/ and skills/ via `reindex-all`)");
             Ok(())
@@ -951,19 +953,19 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
                 .or_else(|| std::env::current_dir().ok())
                 .context("could not resolve workspace root (pass --workspace)")?;
             let agents_dir = root.join("agents");
-            let specs = crate::adapters::agents::load_agents_dir(&agents_dir)
-                .with_context(|| format!("load agents from {}", agents_dir.display()))?;
-            let skills = crate::adapters::rag::indexer::scan_skills(&root);
-
-            rag.clear_registry().await?;
-            let tool_count = rag.index_tools(placeholder_tools()).await?;
-            let agent_count = rag.index_agents(specs.clone()).await?;
-            let skill_count = rag.index_skills(skills.clone()).await?;
+            let result = crate::adapters::rag::indexer::reindex_all_workspace(&rag, &root).await?;
 
             println!("reindexed tengu_registry from {}", root.display());
-            println!("  tools  : {} (placeholder set — Phase 3 will enumerate real ones)", tool_count);
-            println!("  agents : {} (from {})", agent_count, agents_dir.display());
-            for a in &specs {
+            println!(
+                "  tools  : {} (placeholder set — Phase 3 will enumerate real ones)",
+                result.tools_indexed
+            );
+            println!(
+                "  agents : {} (from {})",
+                result.agents_indexed,
+                agents_dir.display()
+            );
+            for a in &result.agent_specs {
                 println!(
                     "           - {:<20} {}",
                     a.name,
@@ -973,73 +975,13 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
                         .unwrap_or_default()
                 );
             }
-            println!("  skills : {} (3-tier scan)", skill_count);
-            for s in &skills {
+            println!("  skills : {} (3-tier scan)", result.skills_indexed);
+            for s in &result.skill_entries {
                 println!("           - {:<20} {}", s.name, s.source_path.display());
             }
             Ok(())
         }
     }
-}
-
-/// Phase 2 placeholder tool descriptions. Phase 3 replaces this with a real
-/// enumeration of compiled-in + MCP tools (the current tool registry is built
-/// inside channel_runtime.rs — exposing it requires a small refactor that is
-/// deliberately deferred).
-#[cfg(feature = "qdrant")]
-fn placeholder_tools() -> Vec<crate::adapters::types::ToolDef> {
-    use crate::adapters::types::ToolDef;
-    vec![
-        ToolDef {
-            name: "http_request".to_string(),
-            description:
-                "Perform an HTTP request (GET/POST/PUT/DELETE). Use for web scraping, \
-                 REST API calls, fetching documents. Not for file I/O."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "read_file".to_string(),
-            description:
-                "Read a file from the local workspace. Returns text content. \
-                 Scoped to agent workspace by default."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "list_directory".to_string(),
-            description:
-                "List the contents of a directory on the local workspace. Returns \
-                 filenames and types. Scoped to agent workspace."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "run_command".to_string(),
-            description:
-                "Run a shell command inside the agent workspace. For builds, tests, \
-                 git operations, and other filesystem-local work."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "remember".to_string(),
-            description:
-                "Store a short fact for cross-session recall via the memory provider. \
-                 Use for user preferences and facts that should persist."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "persistent_store".to_string(),
-            description:
-                "Store, search, list, or delete files against a semantic index. \
-                 Use for longer-lived document storage that should be queryable by \
-                 natural language."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-    ]
 }
 
 /// Stub when the `qdrant` feature is off — `tengu registry` is a no-op and

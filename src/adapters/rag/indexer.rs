@@ -19,6 +19,101 @@ use crate::adapters::agents::AgentSpec;
 use crate::adapters::rag::{registry_metadata, RagKind, RagStore, SkillEntry};
 use crate::adapters::types::ToolDef;
 
+/// Counts + loaded inputs returned from a full registry reindex. The CLI
+/// uses the spec/entry lists for its per-item listing; the auto-reindex
+/// path on chat startup only looks at the counts.
+pub struct RegistryReindexed {
+    pub tools_indexed: usize,
+    pub agents_indexed: usize,
+    pub skills_indexed: usize,
+    pub agent_specs: Vec<AgentSpec>,
+    pub skill_entries: Vec<SkillEntry>,
+}
+
+/// Phase 2 placeholder tool descriptions. Phase 3 (item 6.6 in the handoff)
+/// replaces this with a real enumeration of compiled-in + MCP tools.
+/// Kept here rather than `main.rs` so the auto-reindex on chat startup
+/// (`channel_runtime::build_orchestrator`) can reuse it without bouncing
+/// through the binary crate.
+pub fn placeholder_tools() -> Vec<ToolDef> {
+    vec![
+        ToolDef {
+            name: "http_request".to_string(),
+            description:
+                "Perform an HTTP request (GET/POST/PUT/DELETE). Use for web scraping, \
+                 REST API calls, fetching documents. Not for file I/O."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "read_file".to_string(),
+            description:
+                "Read a file from the local workspace. Returns text content. \
+                 Scoped to agent workspace by default."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "list_directory".to_string(),
+            description:
+                "List the contents of a directory on the local workspace. Returns \
+                 filenames and types. Scoped to agent workspace."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "run_command".to_string(),
+            description:
+                "Run a shell command inside the agent workspace. For builds, tests, \
+                 git operations, and other filesystem-local work."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "remember".to_string(),
+            description:
+                "Store a short fact for cross-session recall via the memory provider. \
+                 Use for user preferences and facts that should persist."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+        ToolDef {
+            name: "persistent_store".to_string(),
+            description:
+                "Store, search, list, or delete files against a semantic index. \
+                 Use for longer-lived document storage that should be queryable by \
+                 natural language."
+                    .to_string(),
+            parameters: serde_json::json!({}),
+        },
+    ]
+}
+
+/// Full registry reindex: clear, then index placeholder tools + every
+/// `agents/<name>.toml` under `<root>/agents/` + every discovered skill in
+/// the three-tier scan rooted at `<root>`. Called by both the manual
+/// `tengu registry reindex-all` CLI subcommand and the auto-reindex hook
+/// on chat startup. Caller decides whether to fail loudly or fail-soft.
+pub async fn reindex_all_workspace(rag: &RagStore, root: &Path) -> Result<RegistryReindexed> {
+    let agents_dir = root.join("agents");
+    let agent_specs = crate::adapters::agents::load_agents_dir(&agents_dir)
+        .map_err(|e| anyhow::anyhow!("load agents from {}: {}", agents_dir.display(), e))?;
+    let skill_entries = scan_skills(root);
+
+    rag.clear_registry().await?;
+    let tools_indexed = rag.index_tools(placeholder_tools()).await?;
+    let agents_indexed = rag.index_agents(agent_specs.clone()).await?;
+    let skills_indexed = rag.index_skills(skill_entries.clone()).await?;
+
+    Ok(RegistryReindexed {
+        tools_indexed,
+        agents_indexed,
+        skills_indexed,
+        agent_specs,
+        skill_entries,
+    })
+}
+
 /// Upsert `ToolDef`s into `tengu_registry` as `kind = tool`. Does not clear.
 pub async fn index_tools(rag: &RagStore, tools: Vec<ToolDef>) -> Result<usize> {
     let mut count = 0usize;

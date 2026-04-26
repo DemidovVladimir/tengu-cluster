@@ -284,14 +284,52 @@ impl RagPlanner {
     /// `OPENROUTER_API_KEY` and a reachable Qdrant on `memory.qdrant_url`; if
     /// either is missing the planner returns `Err` from this helper and the
     /// caller falls through to graceful degradation in `plan()`/`replan()`.
+    ///
+    /// Auto-reindex on first init: when the RagStore is built for the first
+    /// time in a process, we run the same `clear + index_tools + index_agents
+    /// + index_skills` sequence that `tengu registry reindex-all` does, so
+    /// freshly-edited `agents/*.toml` entries take effect without a manual
+    /// reindex step. Fail-soft — a reindex error (Qdrant write fault, OpenAI
+    /// rate-limit, missing agents/ directory) is logged and the planner keeps
+    /// going with whatever is already indexed.
     async fn rag(&self) -> anyhow::Result<&Arc<crate::adapters::rag::RagStore>> {
         self.rag
             .get_or_try_init(|| async {
-                crate::adapters::rag::RagStore::from_config(self.memory_config.clone())
-                    .await
-                    .map(Arc::new)
+                let store: Arc<crate::adapters::rag::RagStore> =
+                    crate::adapters::rag::RagStore::from_config(self.memory_config.clone())
+                        .await
+                        .map(Arc::new)?;
+                Self::auto_reindex_once(&store).await;
+                Ok::<_, anyhow::Error>(store)
             })
             .await
+    }
+
+    /// Run a one-shot registry reindex from the current working directory.
+    /// Called from `rag()` on first init. Errors are logged, never propagated —
+    /// the caller's planner pipeline must keep functioning even when the
+    /// registry is stale.
+    async fn auto_reindex_once(store: &crate::adapters::rag::RagStore) {
+        let root = match std::env::current_dir() {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "auto-reindex skipped: could not resolve current_dir");
+                return;
+            }
+        };
+        match crate::adapters::rag::indexer::reindex_all_workspace(store, &root).await {
+            Ok(r) => tracing::info!(
+                tools = r.tools_indexed,
+                agents = r.agents_indexed,
+                skills = r.skills_indexed,
+                root = %root.display(),
+                "auto-reindexed tengu_registry on first rag-mode use"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "auto-reindex failed; continuing with existing registry contents"
+            ),
+        }
     }
 
     /// Phase 6.4 (lite) — push the current user message into the session
