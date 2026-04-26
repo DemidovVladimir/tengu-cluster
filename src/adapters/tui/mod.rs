@@ -201,6 +201,13 @@ pub fn run_tui(
                                     })
                                 }
                                 OrchestratorEvent::StepProgress { .. } => None,
+                                // Phase 6.1 (full) — RagQueried events are
+                                // visible via `RUST_LOG=tengu=info` already;
+                                // surfacing them as TUI bubbles every turn
+                                // would clutter the chat. The dedicated
+                                // debug-panel render is the explicitly-
+                                // deferred follow-up. For now, swallow.
+                                OrchestratorEvent::RagQueried { .. } => None,
                             };
                             if let Some(text) = line {
                                 let _ = sink.send(Box::new(move |siv: &mut Cursive| {

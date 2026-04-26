@@ -1015,6 +1015,13 @@ pub(crate) fn build_orchestrator(
             ))
         };
 
+    // Phase 6.1 (full) — mint the orchestrator event bus *before* the
+    // planner so we can hand the same bus to both. RagPlanner emits
+    // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
+    // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
+    // (TUI, Telegram adapter) see one unified event stream.
+    let bus = crate::adapters::orchestrator::events::new_bus();
+
     // Phase 4 + 4b: branch on `[orchestrator] engine`.
     //   * "static" (default) — legacy planner + ChatWorker. UNCHANGED.
     //   * "rag"              — RagPlanner (queries `tengu_registry` per turn
@@ -1030,6 +1037,7 @@ pub(crate) fn build_orchestrator(
                 cfg.agent.clone(),
                 chat_port,
                 config.memory.clone(),
+                Some(bus.clone()),
             ))
         }
         #[cfg(not(feature = "qdrant"))]
@@ -1063,6 +1071,7 @@ pub(crate) fn build_orchestrator(
         policy,
         cfg.max_replans,
         memory,
+        bus,
     ))
 }
 

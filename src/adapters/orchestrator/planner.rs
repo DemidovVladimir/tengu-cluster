@@ -247,6 +247,11 @@ pub struct RagPlanner {
     /// concurrent Telegram chats sharing one RagPlanner. Phase 6.4 (full)
     /// will key by session_id and persist via `tengu_messages`.
     session_history: tokio::sync::Mutex<Vec<String>>,
+    /// Phase 6.1 (full) — optional event bus for emitting
+    /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
+    /// `None` means structured events are silently dropped (the
+    /// `tracing::info!` line still fires regardless).
+    bus: Option<crate::adapters::orchestrator::events::EventBus>,
 }
 
 #[cfg(feature = "qdrant")]
@@ -255,6 +260,7 @@ impl RagPlanner {
         orchestrator_agent: String,
         chat: Arc<dyn OrchestratorChatPort>,
         memory_config: crate::adapters::config::MemoryConfig,
+        bus: Option<crate::adapters::orchestrator::events::EventBus>,
     ) -> Self {
         let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
             tracing::warn!(
@@ -270,6 +276,7 @@ impl RagPlanner {
             top_k: 20,
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
+            bus,
         }
     }
 
@@ -420,8 +427,10 @@ impl Planner for RagPlanner {
             }
         };
 
-        // Phase 6.1 (lite) — log the planner's input roster for debug.
-        log_rag_hits("plan", user_message, &hits);
+        // Phase 6.1 (lite + full) — surface the planner's input roster on
+        // both the tracing channel (always) and the OrchestratorEvent bus
+        // (when one is wired into this planner).
+        emit_rag_query("plan", user_message, &hits, self.bus.as_ref());
 
         // Phase 6.4 (lite) — append current message to per-instance
         // history buffer, then format the last N for prompt injection.
@@ -457,7 +466,7 @@ impl Planner for RagPlanner {
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
         };
-        log_rag_hits("replan", user_message, &hits);
+        emit_rag_query("replan", user_message, &hits, self.bus.as_ref());
 
         // Phase 6.5 — cross-plan recall. Pull the top-K most similar
         // step outputs / file chunks from `tengu_outputs` so the planner
@@ -548,28 +557,59 @@ fn format_history(hist: &[String], limit: usize) -> String {
     s
 }
 
-/// Phase 6.1 (lite) — emit one info-level tracing line per planner call
-/// summarising the top-K RAG hits and their scores. Same data the future
-/// `OrchestratorEvent::RagQueried` variant will carry; for now this is
-/// surfaced via `RUST_LOG=tengu=info` only.
+/// Phase 6.1 (lite + full) — emit one info-level tracing line per planner
+/// call AND fire `OrchestratorEvent::RagQueried` on the bus if one was
+/// wired into this planner. The tracing line and the bus event carry the
+/// same payload (top-10 hits with kind/name/score), so subscribers can
+/// pick whichever transport suits them.
+///
+/// Bus send failure is non-fatal — `broadcast::Sender::send` returns
+/// `Err` only when there are no live receivers, which is the steady
+/// state on cold-start before the channel adapter subscribes; we silently
+/// ignore that case rather than spamming warnings.
 #[cfg(feature = "qdrant")]
-fn log_rag_hits(phase: &str, query: &str, hits: &[crate::adapters::rag::RagResult]) {
+fn emit_rag_query(
+    phase: &'static str,
+    query: &str,
+    hits: &[crate::adapters::rag::RagResult],
+    bus: Option<&crate::adapters::orchestrator::events::EventBus>,
+) {
+    // Tracing — same shape as the lite version, kept for `RUST_LOG=tengu=info`.
     if hits.is_empty() {
         tracing::info!(phase, query, "rag query returned 0 hits");
-        return;
+    } else {
+        let summary: Vec<String> = hits
+            .iter()
+            .take(10)
+            .map(|h| format!("{}:{}={:.2}", h.kind.as_str(), h.name, h.score))
+            .collect();
+        tracing::info!(
+            phase,
+            query,
+            hits = %summary.join(", "),
+            "rag query returned {} hits",
+            hits.len()
+        );
     }
-    let summary: Vec<String> = hits
-        .iter()
-        .take(10)
-        .map(|h| format!("{}:{}={:.2}", h.kind.as_str(), h.name, h.score))
-        .collect();
-    tracing::info!(
-        phase,
-        query,
-        hits = %summary.join(", "),
-        "rag query returned {} hits",
-        hits.len()
-    );
+
+    // Structured event — only when a bus is wired (the static-mode path
+    // and the standalone unit tests pass `None`).
+    if let Some(bus) = bus {
+        let payload_hits: Vec<crate::adapters::orchestrator::events::RagQueriedHit> = hits
+            .iter()
+            .take(10)
+            .map(|h| crate::adapters::orchestrator::events::RagQueriedHit {
+                kind: h.kind.as_str().to_string(),
+                name: h.name.clone(),
+                score: h.score,
+            })
+            .collect();
+        let _ = bus.send(crate::adapters::orchestrator::events::OrchestratorEvent::RagQueried {
+            phase,
+            query: query.to_string(),
+            hits: payload_hits,
+        });
+    }
 }
 
 #[cfg(test)]

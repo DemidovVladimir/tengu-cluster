@@ -4,6 +4,17 @@ use tokio::sync::broadcast;
 
 use crate::adapters::orchestrator::plan::{Plan, StepId};
 
+/// Phase 6.1 (full) — flat projection of a single RAG search hit attached
+/// to `OrchestratorEvent::RagQueried`. We deliberately don't ship the full
+/// `RagResult` (which carries the embedding vector + payload) on the event
+/// bus — subscribers that want richer detail can hit the registry directly.
+#[derive(Debug, Clone)]
+pub struct RagQueriedHit {
+    pub kind: String,
+    pub name: String,
+    pub score: f32,
+}
+
 #[derive(Debug, Clone)]
 pub enum OrchestratorEvent {
     PlanCreated {
@@ -39,6 +50,16 @@ pub enum OrchestratorEvent {
     PlanCompleted {
         final_response: String,
         cancelled: bool,
+    },
+    /// Phase 6.1 (full) — emitted by `RagPlanner` on every `plan()` and
+    /// `replan()` call, carrying the top-K registry hits the planner LLM
+    /// saw. `phase` is `"plan"` or `"replan"`. Subscribers (TUI debug
+    /// panel, future eval recorders) get the same data the existing
+    /// `tracing::info!` line surfaces, but in structured form.
+    RagQueried {
+        phase: &'static str,
+        query: String,
+        hits: Vec<RagQueriedHit>,
     },
 }
 

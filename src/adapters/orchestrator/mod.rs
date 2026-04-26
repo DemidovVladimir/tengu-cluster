@@ -49,19 +49,25 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
+    /// Phase 6.1 (full) — `bus` is now an explicit constructor argument
+    /// rather than being minted internally, so the same bus can be wired
+    /// into the `RagPlanner` (which emits `OrchestratorEvent::RagQueried`)
+    /// before the orchestrator owns it. Callers without a planner that
+    /// emits events can pass a fresh `events::new_bus()`.
     pub fn new(
         planner: Arc<dyn Planner>,
         worker: Arc<dyn WorkerHandle>,
         policy: RetryPolicy,
         max_replans: u32,
         memory: Arc<MemoryManager>,
+        bus: EventBus,
     ) -> Self {
         Self {
             planner,
             worker,
             policy,
             max_replans,
-            bus: events::new_bus(),
+            bus,
             memory,
             cancel_flag: Arc::new(AtomicBool::new(false)),
         }

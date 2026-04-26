@@ -1904,6 +1904,26 @@ async fn run_row_via_orchestrator(
                     format!("cancelled={} final_len={}", cancelled, final_response.len()),
                 ),
                 OrchestratorEvent::StepProgress { .. } => continue,
+                // Phase 6.1 (full) — record planner RAG queries so the judge
+                // sees what roster the planner LLM was given. Top-5 hits is
+                // enough signal to reproduce ranking decisions without
+                // ballooning the trace.
+                OrchestratorEvent::RagQueried { phase, query, hits } => {
+                    let top: Vec<String> = hits
+                        .iter()
+                        .take(5)
+                        .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
+                        .collect();
+                    (
+                        "orchestrator:rag_queried".to_string(),
+                        format!(
+                            "phase={} query={} hits=[{}]",
+                            phase,
+                            truncate(&query, 200),
+                            top.join(",")
+                        ),
+                    )
+                }
             };
             let n = event_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             event_obs.lock().unwrap().push(Observation {
