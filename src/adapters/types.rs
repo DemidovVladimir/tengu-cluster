@@ -189,6 +189,11 @@ pub struct EngineDiagnostics {
     pub capabilities: EngineCapabilities,
 }
 
+// Fields populated for engine builders that route through the Claude Code
+// MCP bridge. The OpenRouter / Sonnet path used by the v2 RagPlanner +
+// SubprocessRunner ignores everything except `system_prompt`. Kept for the
+// in-flight bridge engine refactor; no removal until that lands.
+#[allow(dead_code)]
 pub struct EngineContext {
     pub workspace: Option<std::path::PathBuf>,
     pub system_prompt: Option<String>,

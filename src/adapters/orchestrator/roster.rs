@@ -33,6 +33,7 @@ pub fn render_roster(agents: &HashMap<String, AgentConfig>, exclude: &[&str]) ->
     out
 }
 
+#[allow(dead_code)]
 pub fn substitute_roster(template: &str, roster_md: &str) -> String {
     template.replace("{{ roster }}", roster_md)
 }

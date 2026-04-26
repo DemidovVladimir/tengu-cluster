@@ -446,6 +446,10 @@ impl SkillTier {
 pub struct SkillUnderTest {
     pub name: String,
     pub tier: SkillTier,
+    /// Resolved during discovery for completeness; the eval runner navigates
+    /// from `skill_dir` rather than this directly. Kept on the struct so
+    /// downstream tools (skill-distill, telemetry) can reach the eval bundle.
+    #[allow(dead_code)]
     pub evals_dir: PathBuf,
     pub prompts_path: PathBuf,
     pub prompts_format: String, // "markdown" or "yaml"

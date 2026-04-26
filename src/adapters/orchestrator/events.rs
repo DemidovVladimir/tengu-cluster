@@ -13,6 +13,9 @@ pub enum OrchestratorEvent {
         step_id: StepId,
         agent: String,
     },
+    /// Reserved for future streaming-progress wiring (Phase 6.1 full event
+    /// bus); the SubprocessRunner does not emit incremental chunks today.
+    #[allow(dead_code)]
     StepProgress {
         step_id: StepId,
         chunk: String,

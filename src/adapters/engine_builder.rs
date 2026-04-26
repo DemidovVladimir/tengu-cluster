@@ -20,6 +20,7 @@ use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 // ---------------------------------------------------------------------------
 
 /// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
+#[allow(dead_code)]
 pub(crate) fn build_planner_engine(
     engine_type: &str,
     model: &str,

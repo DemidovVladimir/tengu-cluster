@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 
 /// Production default dimensionality (`text-embedding-3-small`). Used by
 /// `Embedder::null()` so test vectors match what the real backend returns.
+#[allow(dead_code)]
 pub const DEFAULT_DIM: usize = 1536;
 
 enum Mode {

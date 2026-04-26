@@ -8,6 +8,13 @@
 use async_trait::async_trait;
 use std::path::Path;
 
+// Several lifecycle methods on this trait (`is_available`, `initialize`,
+// `system_prompt_block`, `shutdown`) are unused on the v2 RagPlanner /
+// SubprocessRunner path — the v2 worker hits Qdrant directly via `RagStore`
+// rather than going through `MemoryProvider`. The trait is kept intact so
+// the static-mode path keeps compiling; Phase 7.1 will collapse this whole
+// hierarchy once the static path is deleted.
+#[allow(dead_code)]
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
     /// Short identifier (`"builtin"`, `"letta"`, …).

@@ -11,6 +11,7 @@ pub struct PinnedMemoryBlock {
 }
 
 impl PinnedMemoryBlock {
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.body.trim().is_empty()
     }

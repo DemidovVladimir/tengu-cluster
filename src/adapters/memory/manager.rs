@@ -182,6 +182,7 @@ impl MemoryManager {
 
     /// Returns the list of provider names currently registered, in
     /// registration order (builtin first).
+    #[allow(dead_code)]
     pub async fn providers(&self) -> Vec<String> {
         self.providers
             .read()
@@ -210,6 +211,7 @@ impl MemoryManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn shutdown_all(&self) {
         let providers = self.providers.read().await;
         for p in providers.iter().rev() {

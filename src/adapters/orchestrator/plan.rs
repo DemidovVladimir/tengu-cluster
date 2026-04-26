@@ -26,6 +26,11 @@ pub struct Plan {
     pub steps: Vec<Step>,
 }
 
+// `PlanError` and `Plan::validate` belong to the static-mode planner path
+// (`OrchestratorAgentPlanner`). The v2 RagPlanner emits plans pre-validated
+// by the LLM against `plan_schema.json` and surfaces structural problems
+// via the existing `parse_verdict` path. Phase 7.1 will delete this module.
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum PlanError {
     #[error("plan has a cycle including step {0:?}")]
@@ -57,6 +62,7 @@ impl Plan {
     /// Full topology validation: no duplicate IDs, no cycles, no unknown
     /// dependencies, exactly one leaf, every agent present in
     /// `known_agents`.
+    #[allow(dead_code)]
     pub fn validate(&self, known_agents: &[&str]) -> Result<(), PlanError> {
         // duplicate IDs
         let mut seen = HashSet::new();

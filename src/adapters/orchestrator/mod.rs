@@ -21,7 +21,11 @@ pub mod wiring;
 
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
-pub use plan::{Plan, Step, StepId};
+// `Plan`, `Step`, `StepId` are no longer re-exported — the v2 RagPlanner /
+// SubprocessRunner path consumes them via the internal `plan` module path.
+// Keep the module `pub mod plan` above so external consumers can still reach
+// them by full path if needed; Phase 7.1 will remove the static-mode plan
+// machinery wholesale.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,6 +41,9 @@ pub struct Orchestrator {
     policy: RetryPolicy,
     max_replans: u32,
     bus: EventBus,
+    /// Held to keep the manager alive for the lifetime of the orchestrator;
+    /// Phase 6.4 (full) will read from this for cross-session message recall.
+    #[allow(dead_code)]
     memory: Arc<MemoryManager>,
     cancel_flag: Arc<AtomicBool>,
 }
@@ -70,6 +77,7 @@ impl Orchestrator {
     /// `PlanCompleted { cancelled: true }` event. Channel-side wiring
     /// (`/stop` for Telegram, Ctrl-C for CLI) is deferred until the
     /// full dispatch path routes through `Orchestrator::handle`.
+    #[allow(dead_code)]
     pub fn cancel(&self) {
         self.cancel_flag.store(true, Ordering::SeqCst);
     }

@@ -13,10 +13,17 @@ use crate::adapters::memory::provider::MemoryProvider;
 use crate::adapters::memory::vector::{Embedder, VectorStore};
 
 pub struct BuiltinMemoryProvider {
+    // `workspace` and `system_block` are unused on the v2 path (the static
+    // pre-load was replaced by RAG queries on demand). They remain wired
+    // through the constructor so static-mode sandboxes that still call
+    // `load_system_prompt_files()` keep working until Phase 7.1 deletes
+    // the static path entirely.
+    #[allow(dead_code)]
     workspace: PathBuf,
     store: Arc<dyn VectorStore>,
     embedder: Arc<Embedder>,
     // cached system prompt block, computed during initialize()
+    #[allow(dead_code)]
     system_block: RwLock<String>,
 }
 
@@ -38,6 +45,7 @@ impl BuiltinMemoryProvider {
         Self::new(workspace, store, embedder)
     }
 
+    #[allow(dead_code)]
     async fn load_system_prompt_files(&self) -> String {
         // AGENTS.md, MEMORY.md, identity files, daily logs for today + yesterday.
         // Each file, if present and non-empty, gets a `## <name>` heading and is concatenated.
