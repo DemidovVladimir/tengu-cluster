@@ -21,3 +21,7 @@ lastrun.md
 # are intentional persistent state and remain tracked; only the per-run
 # detail dirs are transient.
 /skills/*/metrics/runs/
+
+# Claude Code per-user settings (settings.local.json holds approved tool
+# allow-lists for the local workstation; not portable across machines).
+/.claude/
