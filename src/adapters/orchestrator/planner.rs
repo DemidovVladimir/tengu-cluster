@@ -240,6 +240,13 @@ pub struct RagPlanner {
     /// stripped) used as the planner system prompt. Falls back to a
     /// hardcoded minimal instruction if the file is missing.
     system_prompt: String,
+    /// Phase 6.4 (lite) — in-memory ring buffer of recent user messages
+    /// for THIS RagPlanner instance. Lets the planner LLM see prior turns
+    /// when the user's current message refers to them ("on coingecko",
+    /// "those platforms"). Tradeoff: lost on restart; mixes turns from
+    /// concurrent Telegram chats sharing one RagPlanner. Phase 6.4 (full)
+    /// will key by session_id and persist via `tengu_messages`.
+    session_history: tokio::sync::Mutex<Vec<String>>,
 }
 
 #[cfg(feature = "qdrant")]
@@ -262,6 +269,7 @@ impl RagPlanner {
             rag: tokio::sync::OnceCell::new(),
             top_k: 20,
             system_prompt,
+            session_history: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -277,6 +285,31 @@ impl RagPlanner {
                     .map(Arc::new)
             })
             .await
+    }
+
+    /// Phase 6.4 (lite) — push the current user message into the session
+    /// history buffer and return the formatted "recent dialogue" block.
+    /// Returns an empty string for the first turn (no prior context to show).
+    async fn update_and_format_history(&self, user_message: &str) -> String {
+        let limit = self.memory_config.session_recent_n.max(1);
+        let mut hist = self.session_history.lock().await;
+        hist.push(user_message.to_string());
+        // Cap the buffer at 2× the limit so we keep some lookahead for
+        // unusual replan sequences without unbounded growth.
+        let cap = limit.saturating_mul(2).max(limit + 4);
+        if hist.len() > cap {
+            let drain = hist.len() - cap;
+            hist.drain(..drain);
+        }
+        format_history(&hist, limit)
+    }
+
+    /// Read-only sibling for paths that already pushed (e.g. replan() runs
+    /// after plan() within a single turn cycle and shouldn't double-append).
+    async fn format_history_only(&self) -> String {
+        let limit = self.memory_config.session_recent_n.max(1);
+        let hist = self.session_history.lock().await;
+        format_history(&hist, limit)
     }
 
     /// Build the ranked-roster markdown block injected before the user message.
@@ -386,8 +419,19 @@ impl Planner for RagPlanner {
                 Vec::new()
             }
         };
+
+        // Phase 6.1 (lite) — log the planner's input roster for debug.
+        log_rag_hits("plan", user_message, &hits);
+
+        // Phase 6.4 (lite) — append current message to per-instance
+        // history buffer, then format the last N for prompt injection.
+        let history_block = self.update_and_format_history(user_message).await;
+
         let roster = Self::format_roster(&hits);
-        let combined = format!("{}\n## User message\n\n{}", roster, user_message);
+        let combined = format!(
+            "{}{}\n## User message (current turn)\n\n{}",
+            roster, history_block, user_message
+        );
         let raw = self
             .chat
             .run_orchestrator_turn_with_system(
@@ -413,14 +457,52 @@ impl Planner for RagPlanner {
                 .unwrap_or_default(),
             Err(_) => Vec::new(),
         };
+        log_rag_hits("replan", user_message, &hits);
+
+        // Phase 6.5 — cross-plan recall. Pull the top-K most similar
+        // step outputs / file chunks from `tengu_outputs` so the planner
+        // sees relevant prior work before deciding the new plan. Failure
+        // is non-fatal — we still replan with whatever roster we have.
+        let recall_k = self.memory_config.cross_plan_top_k;
+        let recall_hits: Vec<crate::adapters::rag::RagResult> = match self.rag().await {
+            Ok(rag) if recall_k > 0 => {
+                let q = format!("{} {} {}", user_message, failed_step_id, error);
+                rag.search_memory(&q, recall_k).await.unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let recall_block = if recall_hits.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from("\n## Relevant prior step outputs (cross-plan recall)\n\n");
+            for (i, h) in recall_hits.iter().enumerate() {
+                let snippet: String = h.description.chars().take(400).collect();
+                s.push_str(&format!(
+                    "{}. score={:.2}  {}\n   {}\n\n",
+                    i + 1,
+                    h.score,
+                    h.name,
+                    snippet
+                ));
+            }
+            s
+        };
+
+        // Phase 6.4 (lite) — recent dialogue context for replan too.
+        // Don't append again (same user_message already pushed by plan()
+        // earlier in this turn cycle); just read the last N for injection.
+        let history_block = self.format_history_only().await;
+
         let roster = Self::format_roster(&hits);
         let context = format!(
-            "{}\n## A previous plan failed\n\n\
+            "{}{}{}\n## A previous plan failed\n\n\
              Failed step: {}\nError after retries: {}\n\n\
              Prior plan steps:\n{}\n\n\
              Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n\
              ## Original user message\n\n{}",
             roster,
+            history_block,
+            recall_block,
             failed_step_id,
             error,
             serde_json::to_string_pretty(prior_plan)?,
@@ -436,6 +518,58 @@ impl Planner for RagPlanner {
             .await?;
         OrchestratorAgentPlanner::parse_verdict(&raw)
     }
+}
+
+/// Phase 6.4 (lite) — render the planner's per-session history buffer as a
+/// markdown "recent dialogue" block. Shows the last `limit` user messages.
+/// Returns an empty string when there's only one entry (just the current
+/// turn — no prior context worth showing).
+#[cfg(feature = "qdrant")]
+fn format_history(hist: &[String], limit: usize) -> String {
+    if hist.len() <= 1 {
+        return String::new();
+    }
+    let start = hist.len().saturating_sub(limit + 1);
+    // Skip the LAST entry (the current message) — it's already shown to the
+    // model under "## User message (current turn)" in the prompt.
+    let prior = &hist[start..hist.len().saturating_sub(1)];
+    if prior.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n## Recent user messages this session\n\n");
+    for (i, msg) in prior.iter().enumerate() {
+        // Truncate very long messages so the planner prompt stays bounded.
+        let snippet: String = msg.chars().take(400).collect();
+        s.push_str(&format!("{}. {}\n", i + 1, snippet));
+        if msg.chars().count() > 400 {
+            s.push_str("   …(truncated)\n");
+        }
+    }
+    s
+}
+
+/// Phase 6.1 (lite) — emit one info-level tracing line per planner call
+/// summarising the top-K RAG hits and their scores. Same data the future
+/// `OrchestratorEvent::RagQueried` variant will carry; for now this is
+/// surfaced via `RUST_LOG=tengu=info` only.
+#[cfg(feature = "qdrant")]
+fn log_rag_hits(phase: &str, query: &str, hits: &[crate::adapters::rag::RagResult]) {
+    if hits.is_empty() {
+        tracing::info!(phase, query, "rag query returned 0 hits");
+        return;
+    }
+    let summary: Vec<String> = hits
+        .iter()
+        .take(10)
+        .map(|h| format!("{}:{}={:.2}", h.kind.as_str(), h.name, h.score))
+        .collect();
+    tracing::info!(
+        phase,
+        query,
+        hits = %summary.join(", "),
+        "rag query returned {} hits",
+        hits.len()
+    );
 }
 
 #[cfg(test)]

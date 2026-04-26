@@ -1,5 +1,22 @@
 # Tengu-Cluster: Redesign Briefing for Implementation
 
+> **Status (2026-04-25): functionally complete and end-to-end verified.**
+>
+> Phases 0, 1, 2, 3, 4, 4b, 4c, 5a, 5b, 5c, 6.1 (lite), 6.4 (lite), and
+> 6.5 are merged and proven working: a real BTC USD price was fetched via
+> the rag-mode pipeline (RagPlanner → SubprocessRunner → real LLM →
+> `http_request` → CoinGecko → `compress_and_store`). Multi-turn context
+> works in rag mode via an in-memory ring buffer of recent user messages
+> in `RagPlanner` (6.4 lite). The static path is preserved.
+>
+> Remaining items are polish, not capability: 6.1 (full event-bus
+> RagQueried), 6.2 (content-hash dedup), 6.3 (filter-based TTL purge),
+> 6.4 (full — durable persistence to `tengu_messages` keyed by
+> `session_id`), 6.6 (MCP tool indexing), 6.7 (C→B fallback B half),
+> 7.1 (delete legacy), 7.2 (v1 dead-code cleanup).
+>
+> **For session handoff context, read `docs/SESSION_HANDOFF.md` first.**
+
 > **Purpose of this document**: This is a cold-start briefing for a new Claude session.
 > It captures every design decision made in the prior architecture session so you can
 > begin implementation immediately without re-litigating any decisions.

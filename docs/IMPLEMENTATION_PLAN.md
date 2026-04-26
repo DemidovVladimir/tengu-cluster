@@ -1,5 +1,35 @@
 # Tengu-cluster — Implementation Plan
 
+> **Status (2026-04-25): Phases 0–6.5 done and verified end-to-end.**
+> Real BTC USD price fetched through the full RAG-mode pipeline. See
+> `docs/SESSION_HANDOFF.md` for the next-session cold-start brief.
+>
+> Per-phase status:
+>
+> | Phase | Status | Notes |
+> |---|---|---|
+> | 0 — baseline | ✅ done | Config blocks, manual checklist, phase-0-checks.sh |
+> | 1 — RAG facade | ✅ done | `src/adapters/rag/`, registry CLI |
+> | 2 — agents + orchestrator skill | ✅ done | `agents/*.toml`, `skills/orchestrator/` |
+> | 3 — runner subprocess | ✅ done | `runner.rs`, run-agent subcommand, IPC |
+> | 4 — dual-mode planner | ✅ done | `RagPlanner`, build_orchestrator branch |
+> | 4b — SubprocessRunner cutover | ✅ done | impl WorkerHandle for subprocess |
+> | 4c — SKILL.md as planner prompt | ✅ done | run_*_with_system + tool stripping |
+> | 5a — real LLM in subprocess | ✅ done | One-turn LLM call, no tools |
+> | 5b — multi-turn tool loop | ✅ done | Real tool dispatch, compress_and_store |
+> | 5c — protocol enforcement | ✅ done | Failed iff no compress AND no text |
+> | 6.1 (lite) — planner tracing | ✅ done | tracing::info per plan/replan |
+> | 6.5 — cross-plan recall | ✅ done | replan queries tengu_outputs |
+> | 6.4 (lite) — session history buffer | ✅ done | In-memory ring buffer of last-N user messages in RagPlanner; injected as "Recent user messages" block in plan/replan |
+> | 6.1 (full) — RagQueried event | ⏸ deferred | Needs event bus plumbed into RagPlanner |
+> | 6.2 — content-hash dedup | ⏸ deferred | Indexer always re-embeds today |
+> | 6.3 — filter-based TTL purge | ⏸ deferred | No-op when ttl_days == 0 (default) |
+> | 6.4 (full) — tengu_messages persistence | ⏸ deferred | Survives restart, keyed by session_id, supports cross-session recall |
+> | 6.6 — MCP tool indexing | ⏸ deferred | Replaces `placeholder_tools()` |
+> | 6.7 — C→B fallback (B half) | ⏸ deferred | Compose generic agent on confirmation |
+> | 7.1 — delete legacy | ⏸ deferred | Drop roster.rs / wiring.rs static path |
+> | 7.2 — v1 dead-code cleanup | ⏸ deferred | ~17 pre-existing warnings |
+
 > Companion to `REDESIGN.md`. Where REDESIGN says *what the target looks like*,
 > this plan says *what order to land it in so nothing breaks between commits*.
 > Every phase ends with a binary you can launch manually and exercise via TUI and
