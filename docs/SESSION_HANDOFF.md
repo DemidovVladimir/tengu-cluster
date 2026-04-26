@@ -21,12 +21,13 @@
 
 ## Last session (2026-04-26) — what landed
 
-**Four commits in `main`:**
+**Five commits in `main`:**
 
 - `8c38210 chore: gitignore .claude/ (per-user IDE settings)`
 - `25a1933 chore(warnings): #[allow(dead_code)] sweep — phase 7.2` — 16 pre-existing dead-code warnings annotated. Build is warning-clean.
 - `c3fe7fd phase 6.1 full: OrchestratorEvent::RagQueried + bus plumbing` — RagPlanner emits `OrchestratorEvent::RagQueried { phase, query, hits }` on every plan/replan, on the same bus as `PlanCreated`/`StepStarted`. `Orchestrator::new` now takes the bus as an explicit constructor arg. `eval_builder` records the event for the judge; TUI swallows it (debug-panel render is the explicitly-deferred follow-up).
 - `e248d82 registry recall: example_queries per agent + threshold realism` — three changes: (a) `agents/*.toml` gain an `example_queries` list; the indexer writes a SECOND vector per agent built from those examples; `search_registry` dedups by `(kind, name)` taking max score. (b) The 0.6 threshold in `SKILL.md` was unreachable with `text-embedding-3-small`; replaced with a ~0.15 floor and "use your judgement reading the description" guidance. (c) Researcher description rewritten to mention concrete domains (BTC/ETH/stocks/CoinGecko/weather/news) instead of generic "fact-finding".
+- *(commit hash TBD)* `auto-reindex tengu_registry on first rag-mode chat turn` — `RagPlanner::rag()`'s `OnceCell` init now runs `reindex_all_workspace` from `current_dir()` exactly once per chat process, fail-soft. Eliminates the silent-stale-index footgun: edit `agents/*.toml` and the next `tengu chat` picks it up without a manual `tengu registry reindex-all`. `placeholder_tools` and `reindex_all_workspace` moved from `main.rs` to `rag/indexer.rs` so the CLI subcommand and the auto-reindex path share one implementation.
 
 **Verified end-to-end this session (rag mode, sandbox=aura):**
 
@@ -34,7 +35,7 @@
 - Score lift on the same query against `researcher`: **0.21 → 0.355** (the example_queries vector is the matching one).
 - Multi-turn coherence (BTC → "what about ETH?" → "on coingecko") was NOT re-verified after the SKILL.md tune. It was working before the tune; the tune shouldn't have regressed it, but it's worth a smoke run when picking up.
 
-**Reminder:** there is no auto-reindex on startup. After editing any `agents/*.toml` (description, example_queries) or adding a new agent, you MUST run `tengu registry reindex-all` or routing scores silently degrade. Top of the polish list for the next session.
+**Reminder:** the registry is auto-reindexed on the first user message of each chat process (Phase 6.x, landed 2026-04-26 — see `RagPlanner::auto_reindex_once`). Editing `agents/*.toml` and restarting `tengu chat` is now sufficient. Manual `tengu registry reindex-all` is still available for one-shot CLI reindexing without starting a chat.
 
 ---
 
@@ -93,8 +94,9 @@ The static path is preserved as a safety net. Flipping `engine = "rag"` activate
 | 6.5 — cross-plan recall in replan | ✅ done | `RagPlanner::replan` queries `tengu_outputs` for top-K and injects as context block |
 | 6.4 (lite) — per-session history | ✅ done | In-memory ring buffer of last-N user messages on `RagPlanner`; injected as "Recent user messages" block before current turn so the planner sees prior context across multi-turn chats |
 | 7.2 — dead-code annotation sweep | ✅ done (committed `25a1933`) | 16 `#[allow(dead_code)]` annotations on the static-mode orchestrator path + v1 MemoryProvider hierarchy. Build is warning-clean. |
-| 6.1 (full) — RagQueried event + bus plumbing | ⏳ on disk, uncommitted | RagPlanner takes `Option<EventBus>`; `Orchestrator::new` takes explicit `bus`; eval_builder records the new variant, TUI swallows it |
-| Registry recall — example_queries + threshold | ⏳ on disk, uncommitted | Per-agent `example_queries` indexed as a 2nd vector; `search_registry` dedups by `(kind, name)` max-score; SKILL.md threshold dropped 0.6→~0.15 with LLM-judgement language; researcher description rewritten |
+| 6.1 (full) — RagQueried event + bus plumbing | ✅ done (committed `c3fe7fd`) | RagPlanner takes `Option<EventBus>`; `Orchestrator::new` takes explicit `bus`; eval_builder records the new variant, TUI swallows it |
+| Registry recall — example_queries + threshold | ✅ done (committed `e248d82`) | Per-agent `example_queries` indexed as a 2nd vector; `search_registry` dedups by `(kind, name)` max-score; SKILL.md threshold dropped 0.6→~0.15 with LLM-judgement language; researcher description rewritten |
+| Auto-reindex on first chat turn | ✅ done (commit hash TBD) | `RagPlanner::rag()` runs `reindex_all_workspace` once per chat process via OnceCell init; fail-soft; shared with CLI `tengu registry reindex-all` |
 
 **Pre-existing v1 bugs fixed along the way:**
 - TUI nested `rt.block_on` panic in memory-stats path (`src/adapters/tui/mod.rs:770`).
@@ -112,8 +114,7 @@ All optional. Pick by friction in real use, not theoretical completeness.
 
 - **6.1 (full) TUI debug panel** — The variant + bus plumbing landed this session. The remaining half is a TUI-side render: subscribe to `OrchestratorEvent::RagQueried`, show a small debug panel of the top-K hits per planner call so users can see WHY a routing decision was made. Currently TUI swallows the event (returns `None`).
 - **Per-example vectors (registry recall, v2)** — Today each agent's `example_queries` is embedded as ONE joined vector. A query like "what is the BTC price?" matches ~1/N of that vector (the BTC line is one of N examples), so the score caps around 0.35. Indexing each example as its OWN vector would push scores into the 0.5–0.7 range and widen the gap to non-matches. ~30 LOC in `indexer.rs`. Search-side dedup-by-(kind,name) already exists; this just adds more raw vectors per agent. Worth doing only if routing confidence becomes a real problem (it isn't today).
-- **Auto-reindex on startup** — `tengu registry reindex-all` is currently manual. Adding a new agent or editing a description silently produces stale registry vectors until the next manual reindex. A startup hook in `channel_runtime::build_orchestrator` (only when feature `qdrant` is on) would catch this. Need to decide: (a) full reindex every start (cheap with content-hash dedup, see 6.2), or (b) only when filesystem mtime > index timestamp.
-- **6.2 — content-hash dedup in indexer** — Currently `tengu registry reindex-all` clears + re-embeds every entry. Add sha256 of description in payload extras; skip re-embed when unchanged. Saves embedding API spend on every restart. **Caveat noted last session:** the registry uses UUID-on-write IDs, so dedup also needs an upfront scroll OR a switch to deterministic IDs (`sha256(kind,name)`). Not as small as the original handoff implied — see prior session's 2026-04-25 scoping for the three implementation paths.
+- **6.2 — content-hash dedup in indexer** — Currently `tengu registry reindex-all` clears + re-embeds every entry. Add sha256 of description in payload extras; skip re-embed when unchanged. Saves embedding API spend on every restart. Now more pressing because the auto-reindex shipped in 2026-04-26 means every chat startup hits the embedding API for ~17 entries — cheap but redundant when nothing changed. **Caveat noted last session:** the registry uses UUID-on-write IDs, so dedup also needs an upfront scroll OR a switch to deterministic IDs (`sha256(kind,name)`). Not as small as the original handoff implied — see prior session's 2026-04-25 scoping for the three implementation paths.
 - **6.3 — filter-based TTL purge** — Default `ttl_days = 0` (never purge). When set > 0, `cleanup.rs::ttl_cleanup` currently logs a TODO; it needs filter-based delete via direct Qdrant client (the `VectorStore` trait doesn't expose it).
 
 ### Architectural completeness (medium effort)
@@ -219,7 +220,7 @@ Turn 2 and 3 must succeed without needing repeated context. If they fall back to
 - **Aura's model is `anthropic/claude-sonnet-4-6`** — was haiku-4-5; haiku struggled with strict-format compliance and tool-use confidence. Keep on sonnet for any rag-mode work.
 - **Aura's identity instructions were broadened** — added "for general user questions outside the DeSci pipeline... use the http_request tool freely." Without this, aura's heavy-DeSci identity skewed it toward "punt with recommendations" instead of using HTTP.
 - **Registry score floor is `~0.15`, not `0.6`** (changed 2026-04-26 in `skills/orchestrator/SKILL.md`). `text-embedding-3-small` against short agent descriptions tops out around 0.30–0.40 even for clearly-relevant matches; `0.6` was unreachable and caused universal Direct fallback. The new SKILL.md asks the planner LLM to use its own judgement reading the description; the score is a noise floor, not a real gate. If you swap to a stronger embedding model later, revisit this number.
-- **No auto-reindex** — `tengu registry reindex-all` is manual. After editing any `agents/*.toml` (description, example_queries) or adding a new agent, you MUST reindex or the registry stays stale and routing scores silently degrade. Worth fixing — see "Auto-reindex on startup" in the polish list.
+- **Auto-reindex runs on first chat turn** — `RagPlanner::rag()`'s lazy `OnceCell` init calls `reindex_all_workspace` from `current_dir()` exactly once per chat process, fail-soft. So `tengu chat --sandbox aura` after editing `agents/*.toml` picks up the change automatically. Side effect: a chat startup with `engine = "rag"` makes ~17 OpenAI embedding API calls (one per registry entry); cheap but worth knowing. Content-hash dedup (handoff item 6.2) would skip the redundant re-embeds when nothing changed.
 - **Each agent gets up to TWO vectors in the registry now** (description + example_queries, when present). `search_registry` dedups by `(kind, name)` taking max score, so callers see one entry per agent. If you write a new search caller that walks raw `MemoryHit`s, mind the duplicate-name case.
 
 ---
@@ -298,7 +299,6 @@ If turns 2/3 fall back to "what platforms?" / "what do you want?", multi-turn co
 
 > "I'm continuing the tengu-cluster v2 redesign. Read `docs/SESSION_HANDOFF.md` first — it has the full state including two patches that were verified working last session and committed to disk. Pre-flight already done; build is warning-clean; rag-mode smoke passes. Today I want to work on **<pick one>**:
 > - **TUI debug panel** (the deferred half of 6.1 full) — render `OrchestratorEvent::RagQueried` as a live debug panel in the TUI showing top-K hits per planner call
-> - **Auto-reindex on startup** — eliminate the "edited an agent file, forgot to reindex, scores silently degraded" footgun
 > - **Per-example vectors** — push researcher's BTC-query score from 0.355 to 0.5+ by indexing each `example_queries` entry as its own vector
 > - **6.4 (full) user-message persistence to `tengu_messages`** — durable cross-restart memory keyed by session_id
 > - **6.6 real MCP tool indexing** — replace `placeholder_tools()` with enumerated compiled-in tools + MCP server `tools/list`
