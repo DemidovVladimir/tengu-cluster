@@ -15,8 +15,25 @@ pub async fn search_registry(
     top_k: usize,
 ) -> Result<Vec<RagResult>> {
     let vec = rag.embedder().embed(query).await?;
-    let hits = rag.registry().search(&vec, top_k, None).await?;
-    Ok(hits.into_iter().filter_map(hit_to_result).collect())
+    // Pull more raw hits than requested so the dedup pass below has room
+    // to merge per-agent duplicates (description + example_queries vectors)
+    // without dropping below the caller's requested top_k. 4× is empirical:
+    // each agent contributes at most 2 vectors today, so 2× would suffice
+    // for agents alone, but tools/skills are single-vector and we want to
+    // keep their representation fair after dedup.
+    let raw_k = top_k.saturating_mul(4).max(top_k + 8);
+    let hits = rag.registry().search(&vec, raw_k, None).await?;
+    let mut results: Vec<RagResult> = hits.into_iter().filter_map(hit_to_result).collect();
+
+    // Dedup by (kind, name) — keep the highest-scoring entry per identity.
+    // search() returns hits in score order, so the first time we see a
+    // given (kind, name) is also its best score. Stringly-typed key avoids
+    // having to derive Hash on RagKind.
+    let mut seen = std::collections::HashSet::<(String, String)>::new();
+    results.retain(|r| seen.insert((r.kind.as_str().to_string(), r.name.clone())));
+
+    results.truncate(top_k);
+    Ok(results)
 }
 
 pub async fn search_memory(rag: &RagStore, query: &str, top_k: usize) -> Result<Vec<RagResult>> {

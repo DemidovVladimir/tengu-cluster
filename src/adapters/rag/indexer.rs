@@ -43,24 +43,61 @@ pub async fn index_tools(rag: &RagStore, tools: Vec<ToolDef>) -> Result<usize> {
 }
 
 /// Upsert agent specs into `tengu_registry` as `kind = agent`. Does not clear.
+///
+/// Each agent gets ONE vector for its description; if `example_queries` is
+/// non-empty it ALSO gets a second vector built from those examples. Both
+/// vectors carry the same `(kind=agent, name)` so search-side dedup picks
+/// the higher-scoring one. The example-queries vector dramatically improves
+/// recall for short user questions, since the embedded text now mirrors the
+/// kind of phrasing the user actually types.
 pub async fn index_agents(rag: &RagStore, agents: Vec<AgentSpec>) -> Result<usize> {
     let mut count = 0usize;
     for agent in &agents {
-        let text = format!("{}\n\n{}", agent.name, agent.description);
-        let vec = match rag.embedder().embed(&text).await {
-            Ok(v) => v,
+        let source = agent.source_path.as_deref().map(|p| p.to_string_lossy().to_string());
+
+        // Vector 1 — description (always written).
+        let desc_text = format!("{}\n\n{}", agent.name, agent.description);
+        match rag.embedder().embed(&desc_text).await {
+            Ok(v) => {
+                let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
+                if let Err(e) = rag.registry().write(v, &desc_text, meta).await {
+                    tracing::warn!(agent = %agent.name, error = %e, "registry write (desc) failed");
+                    continue;
+                }
+                count += 1;
+            }
             Err(e) => {
-                tracing::warn!(agent = %agent.name, error = %e, "embed failed; skipping");
+                tracing::warn!(agent = %agent.name, error = %e, "embed (desc) failed; skipping");
                 continue;
             }
-        };
-        let source = agent.source_path.as_deref().map(|p| p.to_string_lossy().to_string());
-        let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
-        if let Err(e) = rag.registry().write(vec, &text, meta).await {
-            tracing::warn!(agent = %agent.name, error = %e, "registry write failed");
-            continue;
         }
-        count += 1;
+
+        // Vector 2 — example queries (only if the agent declared any).
+        if !agent.example_queries.is_empty() {
+            let ex_body = agent
+                .example_queries
+                .iter()
+                .map(|q| format!("- {}", q))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let ex_text = format!(
+                "{}\n\nExample questions this agent answers:\n{}",
+                agent.name, ex_body
+            );
+            match rag.embedder().embed(&ex_text).await {
+                Ok(v) => {
+                    let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
+                    if let Err(e) = rag.registry().write(v, &ex_text, meta).await {
+                        tracing::warn!(agent = %agent.name, error = %e, "registry write (examples) failed");
+                    } else {
+                        count += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(agent = %agent.name, error = %e, "embed (examples) failed; skipping examples vector");
+                }
+            }
+        }
     }
     tracing::info!(total = agents.len(), indexed = count, "rag index_agents complete");
     Ok(count)

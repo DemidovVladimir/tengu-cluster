@@ -40,10 +40,13 @@ Set `depends_on` to the ids of prior steps whose output this step needs. Paralle
 
 ## Rules
 
-- NEVER invent an agent name. If no agent is above score `0.6`, respond with a `direct` message asking the user to clarify, confirm the closest match, or describe the kind of agent they need.
+- NEVER invent an agent name — only use the exact `name` field of an agent listed in the ranked roster.
+- Score interpretation: this registry uses `text-embedding-3-small`, where realistic agent scores against well-formed user queries fall in the `0.15–0.40` range. A score of `0.6+` is rare and usually indicates a near-verbatim match. Do NOT require `0.6` to delegate.
+- Routing decision: if the top-ranked agent's description **plausibly fits** the request (use your own judgement reading the description, not the raw number) AND its score is above `~0.15`, route to it via a `plan` with one step. The score is a sanity floor; your reading of the description is the primary signal.
+- Direct response (instead of a plan) when: (a) the top agent's description clearly does NOT fit the request, (b) the top score is below ~0.15 (everything is noise), or (c) the request is a greeting / acknowledgement / something you can answer trivially yourself with no fetch or computation.
+- When you fall back to a direct response because no listed agent fits, ask the user to clarify, confirm the closest match, or describe the kind of agent they need — do not invent a substitute capability.
 - Keep plans minimal — if one step is enough, produce one step. Orchestration is not free.
 - Use `depends_on` only for true data dependencies, not for cosmetic ordering. Parallel steps finish faster.
-- For simple acknowledgements, greetings, or direct answers you can produce yourself, output a `direct` response — do not spawn a subagent.
 - When a step fails, you will be re-invoked via the `replan` loop with the prior plan, failure reason, and fuzzy cross-plan recall context. Revise the plan; do not repeat the same failing step.
 
 ## Example
@@ -51,7 +54,9 @@ Set `depends_on` to the ids of prior steps whose output this step needs. Paralle
 User message: "Find the three most-cited papers on protein folding from 2023 and summarise them."
 
 Top agents (ranked):
-1. `researcher` (0.91) — "Researches topics using web search and document reading. Best for: fact-finding, summarising sources, due diligence."
+1. `researcher` (0.27) — "Generic research and live-data agent. Fetches information from the public web via HTTP. Best for: looking up real-time prices, news, due diligence, fact-finding..."
+
+The score is modest (typical for this embedding model — see "Score interpretation" above), but the description plausibly fits the request, so route to it.
 
 Correct output:
 

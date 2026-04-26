@@ -25,6 +25,15 @@ pub struct AgentSpec {
     /// what it is NOT good for.
     pub description: String,
 
+    /// Optional list of example user questions this agent handles well.
+    /// Indexed as a SECOND vector per agent (alongside `description`)
+    /// so a query like "what is the BTC price?" can match a near-identical
+    /// example line directly, instead of fighting the asymmetry between
+    /// short casual queries and long formal descriptions. Empty by default —
+    /// when absent, the agent is matched on description only.
+    #[serde(default)]
+    pub example_queries: Vec<String>,
+
     /// OpenRouter-compatible model slug (e.g. `"openai/gpt-4o"`).
     pub model: String,
 

@@ -6,12 +6,41 @@
 
 name = "researcher"
 
+# The description is the field the RAG registry embeds. Write it so the
+# embedding lands close to typical user queries — include domain words
+# (prices, crypto, weather, news), example sources (CoinGecko, OpenWeather,
+# Wikipedia), and the kinds of HTTP fetches the agent does. Generic phrasing
+# ("fact-finding") doesn't embed near concrete queries like "BTC price USD".
 description = """
-Researches topics using web search and document reading. \
-Best for: fact-finding, summarising sources, due diligence, \
-gathering context on unfamiliar subjects. \
-NOT for: code generation, system administration, or running shell commands.
+Generic research and live-data agent. Fetches information from the public web \
+via HTTP. \
+Best for: looking up real-time prices (BTC, ETH, stocks, FX rates) from APIs \
+like CoinGecko, CoinMarketCap, or Yahoo Finance; checking weather; reading \
+news; summarising web pages; due diligence on companies, projects, or tokens; \
+fact-finding on unfamiliar subjects; gathering context from public REST APIs \
+or HTML pages. \
+Tools: http_request for any web API or page; read_file and list_directory for \
+local docs already on disk; remember to persist findings. \
+NOT for: writing code, system administration, shell commands, sending money, \
+or anything requiring authenticated/paid APIs.
 """
+
+# Indexed as a SECOND vector alongside the description above. Each line is a
+# template the planner LLM compares the user's actual question against — the
+# better the templates match real usage, the higher the routing score.
+# Add or refine these freely; they take effect after `tengu registry reindex-all`.
+example_queries = [
+    "what is the current BTC price in USD?",
+    "how much is ETH right now?",
+    "current price of AAPL stock",
+    "fetch the latest news about Anthropic",
+    "what's the weather in Tokyo today?",
+    "summarise this Wikipedia article on protein folding",
+    "find recent papers on diffusion models from arXiv",
+    "what is the EUR/USD exchange rate?",
+    "look up the GitHub stars for tokio-rs/tokio",
+    "due diligence on the Molecule Protocol project",
+]
 
 model = "openai/gpt-4o-mini"
 
