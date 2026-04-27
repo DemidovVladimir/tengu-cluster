@@ -1,27 +1,50 @@
-//! RAG facade over `memory/vector/qdrant.rs`.
+//! RAG facade — the **v2 high-level layer** that the planner uses.
 //!
-//! **Phase 1 scope.** This module is intentionally minimal: it wraps the
-//! existing `QdrantVectorStore` + `Embedder` pair, defines three Qdrant
-//! collections (`tengu_registry`, `tengu_messages`, `tengu_outputs`), and
-//! exposes a tiny API surface:
+//! ## Where this sits in the stack
 //!
-//! * [`RagStore::from_config`] — constructs the facade against Qdrant.
-//! * [`RagStore::store_memory`]  — write into the ephemeral collections.
-//! * [`RagStore::search_registry`] / [`RagStore::search_memory`] — read.
-//! * [`RagStore::startup_index`] — upsert a list of tool descriptions.
-//! * [`RagStore::ttl_cleanup`]   — no-op when `ttl_days == 0`.
+//! ```text
+//!  src/adapters/rag/      ← THIS MODULE. v2 facade. Owns three Qdrant
+//!         │                   collections (registry / messages / outputs).
+//!         │                   Indexer, query, cleanup, RagStore handle.
+//!         ▼
+//!  src/adapters/memory/   ← Low-level vector store + provider abstraction.
+//!                             `memory/vector/qdrant.rs` is what we wrap.
+//! ```
+//!
+//! `memory/` and `rag/` look like duplicates but they're layered. The
+//! distinction: `memory/vector` exposes a generic `VectorStore` trait
+//! (Qdrant or disk-backed bincode), while `rag/` is opinionated — it
+//! knows there are exactly THREE collections, what each one stores, and
+//! the auto-reindex / fingerprint / TTL / per-example-vector idioms that
+//! make the planner work.
+//!
+//! ## API surface (the four things callers reach for)
+//!
+//! * [`RagStore::from_config`]      — constructs the facade against Qdrant.
+//! * [`RagStore::store_memory`]     — write into the ephemeral collections.
+//! * [`RagStore::search_registry`]  — semantic search over agents/skills/tools.
+//! * [`RagStore::search_messages`] / [`RagStore::search_memory`] — read prior turns / step outputs.
+//!
+//! ## Three Qdrant collections
+//!
+//! | Collection         | Holds                                | Written by                                  | Read by                                   |
+//! |--------------------|--------------------------------------|---------------------------------------------|-------------------------------------------|
+//! | `tengu_registry`   | agent specs, skills, tool defs       | `indexer::reindex_all_workspace` (auto + CLI) | `RagPlanner::plan` for the ranked roster |
+//! | `tengu_messages`   | user messages keyed by `session_id`  | `RagPlanner::persist_user_message`           | (forward-compat — `search_messages`)     |
+//! | `tengu_outputs`    | step output summaries                | `compress_and_store` tool                    | `RagPlanner::replan` for cross-plan recall |
 //!
 //! The module is gated behind the `qdrant` cargo feature so builds without
-//! Qdrant still succeed. Consumers should call it via the `tengu registry`
-//! CLI subcommand or a future planner-side integration.
+//! Qdrant still succeed. Consumers reach this via the `tengu registry`
+//! CLI subcommand or via `RagPlanner` (the only `Planner` impl since
+//! Phase 7.1).
 //!
-//! **What Phase 1 intentionally does NOT do:**
-//! - Content-hash dedup (Phase 2).
-//! - Scanning `skills/` or `agents/` directories (Phase 2).
-//! - Startup-time indexing from the TUI/Telegram path (Phase 2+).
-//! - Filter-based TTL delete (Phase 2+ — Qdrant client API work).
+//! ## File map
 //!
-//! All of those are tracked in `docs/IMPLEMENTATION_PLAN.md`.
+//! - `mod.rs`     — `RagStore` facade, the three `MemoryEntry`/`MemoryKind` types.
+//! - `indexer.rs` — `enumerate_builtin_tools`, `enumerate_mcp_tools`, `index_*`,
+//!                  `reindex_all_workspace`, fingerprint dedup (Phase 6.2).
+//! - `query.rs`   — `search_registry` (with dedup), `search_memory`, `search_messages`.
+//! - `cleanup.rs` — `ttl_cleanup` (Phase 6.3 — Qdrant filter-based delete).
 
 #![cfg(feature = "qdrant")]
 // Many items in this module are "staging APIs" for Phase 4 of the redesign —
@@ -227,9 +250,18 @@ impl RagStore {
 
     /// Search `tengu_outputs` (the high-signal bucket) for cross-plan recall.
     /// `tengu_messages` is deliberately excluded — conversational noise
-    /// pollutes fuzzy recall quality.
+    /// pollutes fuzzy recall quality. Use [`Self::search_messages`] for the
+    /// messages collection explicitly.
     pub async fn search_memory(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
         query::search_memory(self, query, top_k).await
+    }
+
+    /// Phase 6.4 (full) — semantic search over `tengu_messages` for
+    /// cross-session conversational recall. No caller wires this into a
+    /// prompt yet; the immediate purpose is to give the next commit a
+    /// one-liner hook now that durable writes have landed.
+    pub async fn search_messages(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
+        query::search_messages(self, query, top_k).await
     }
 
     /// Clear every entry from `tengu_registry`. Used before a full reindex.

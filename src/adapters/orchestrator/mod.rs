@@ -16,7 +16,8 @@ pub mod plan;
 pub mod planner;
 pub mod replan;
 pub mod retry;
-pub mod roster;
+// Phase 7.1 (partial) — `pub mod roster` removed; the only runtime caller
+// (channel_runtime::build_orchestrator) now uses an inlined helper.
 pub mod wiring;
 
 // Public API re-exports
@@ -163,18 +164,21 @@ mod e2e_tests {
                     agent: "x".into(),
                     goal: "research".into(),
                     depends_on: vec![],
+                    compose: None,
                 },
                 Step {
                     id: StepId::new("b"),
                     agent: "x".into(),
                     goal: "parallel-research".into(),
                     depends_on: vec![],
+                    compose: None,
                 },
                 Step {
                     id: StepId::new("c"),
                     agent: "x".into(),
                     goal: "synthesize".into(),
                     depends_on: vec![StepId::new("a"), StepId::new("b")],
+                    compose: None,
                 },
             ],
         };

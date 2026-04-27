@@ -12,6 +12,36 @@ impl StepId {
     }
 }
 
+/// Phase 6.7 (C→B B-half) — optional override that lets the planner LLM
+/// compose a transient agent on the fly when no listed agent fits the
+/// request.
+///
+/// `base_agent` is the closest-matching `agents/<name>.toml` to use as a
+/// starting point (loaded normally — it must exist on disk). `skills` and
+/// `tools`, when present, REPLACE the corresponding fields on that base
+/// spec for THIS run only. The override is not persisted; the original
+/// `agents/<base_agent>.toml` is unchanged on disk.
+///
+/// Use case (REDESIGN §11): user asks a question no listed agent fits.
+/// Planner emits a Direct asking the user to confirm the closest match
+/// or describe what they need. On the next turn, when the user confirms,
+/// the planner emits a Plan whose single step has `compose: Some(...)`
+/// referencing the closest base agent + the most-relevant skills/tools
+/// from the rejected RAG roster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCompose {
+    /// Name of the base spec to load from `agents/<base_agent>.toml`.
+    pub base_agent: String,
+    /// Skills to attach for this run. Replaces the base spec's `skills`.
+    /// Must reference skills the three-tier scanner can find on disk.
+    #[serde(default)]
+    pub skills: Vec<String>,
+    /// Tools to attach for this run. Replaces the base spec's `tools`.
+    /// Must reference tools that exist in the registry / built-in set.
+    #[serde(default)]
+    pub tools: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     pub id: StepId,
@@ -19,6 +49,14 @@ pub struct Step {
     pub goal: String,
     #[serde(default)]
     pub depends_on: Vec<StepId>,
+    /// Phase 6.7 (C→B B-half) — if set, the runner builds a transient
+    /// agent spec from `compose.base_agent` overriding `skills`/`tools`,
+    /// rather than loading `agents/<step.agent>.toml` verbatim. `step.agent`
+    /// becomes a label for the composed agent (used in events / logs);
+    /// the actual base lives in `compose.base_agent`. None for normal
+    /// fixed-roster routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose: Option<AgentCompose>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +196,7 @@ mod tests {
             agent: agent.into(),
             goal: format!("goal-{}", id),
             depends_on: deps.iter().map(|d| StepId::new(*d)).collect(),
+            compose: None,
         }
     }
 

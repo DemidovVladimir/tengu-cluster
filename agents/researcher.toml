@@ -42,7 +42,8 @@ example_queries = [
     "due diligence on the Molecule Protocol project",
 ]
 
-model = "openai/gpt-4o-mini"
+engine = "claude_code"
+model = "claude-sonnet-4-6"
 
 tools = ["http_request", "read_file", "list_directory", "remember"]
 skills = ["web-research", "summarizer"]

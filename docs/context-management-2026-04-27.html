@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu-Cluster · Context Management Explorer · 2026-04-27</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --slate: #94A3B8;
+    --pink: #F472B6;
+    --teal: #2DD4BF;
+    --purple: #A78BFA;
+    --amber: #F59E0B;
+    --green: #4ADE80;
+    --blue: #60A5FA;
+    --orange: #FB923C;
+    --red: #F87171;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 36px 20px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .header .sub { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .header .sub a { color: var(--accent-mid); text-decoration: none; }
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 36px; overflow-x: auto;
+    position: sticky; top: 88px; z-index: 90;
+  }
+  .tab {
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .15s;
+    font-family: inherit;
+  }
+  .tab.active { color: #fff; border-bottom-color: var(--accent-mid); }
+  .tab:hover { color: var(--text); }
+  .content { padding: 28px 36px 80px; max-width: 1400px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: #fff; }
+  h3 { font-size: 13px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+  }
+  code {
+    background: var(--surface2);
+    padding: 2px 6px; border-radius: 3px;
+    color: var(--accent-light);
+  }
+  pre {
+    background: #0a0a14; border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px; margin: 10px 0;
+    overflow-x: auto; font-size: 12px; line-height: 1.55;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--accent-light);
+  }
+  pre .kw { color: var(--pink); }
+  pre .fn { color: var(--blue); }
+  pre .num { color: var(--amber); }
+  pre .str { color: var(--green); }
+  pre .cm { color: var(--text-dim); font-style: italic; }
+
+  /* ===== STAT BAR ===== */
+  .stat-row { display: flex; gap: 18px; margin-bottom: 22px; flex-wrap: wrap; }
+  .stat-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 20px;
+    min-width: 180px; flex: 1;
+  }
+  .stat-box .num {
+    font-size: 28px; font-weight: 700; color: var(--accent-mid);
+  }
+  .stat-box .lbl {
+    font-size: 11px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: .5px;
+    margin-top: 4px;
+  }
+
+  /* ===== LAYER COLORS ===== */
+  .l0 { color: var(--slate); }   .b-l0 { background: var(--slate); }   .br-l0 { border-color: var(--slate); }
+  .l1 { color: var(--pink); }    .b-l1 { background: var(--pink); }    .br-l1 { border-color: var(--pink); }
+  .l2 { color: var(--teal); }    .b-l2 { background: var(--teal); }    .br-l2 { border-color: var(--teal); }
+  .l3 { color: var(--purple); }  .b-l3 { background: var(--purple); }  .br-l3 { border-color: var(--purple); }
+  .l4 { color: var(--amber); }   .b-l4 { background: var(--amber); }   .br-l4 { border-color: var(--amber); }
+  .l5 { color: var(--green); }   .b-l5 { background: var(--green); }   .br-l5 { border-color: var(--green); }
+  .l6 { color: var(--blue); }    .b-l6 { background: var(--blue); }    .br-l6 { border-color: var(--blue); }
+  .l7 { color: var(--orange); }  .b-l7 { background: var(--orange); }  .br-l7 { border-color: var(--orange); }
+
+  /* ===== LAYER STACK (overview) ===== */
+  .layer-stack { display: flex; flex-direction: column; gap: 8px; }
+  .layer-stripe {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 6px solid var(--accent);
+    border-radius: 8px; padding: 16px 22px;
+    cursor: pointer; transition: all .15s;
+    display: flex; align-items: center; gap: 18px;
+  }
+  .layer-stripe:hover { background: var(--surface2); }
+  .layer-stripe .layer-num {
+    font-size: 26px; font-weight: 800; min-width: 38px; text-align: center;
+  }
+  .layer-stripe .layer-meta { flex: 1; }
+  .layer-stripe .layer-meta h3 {
+    font-size: 15px; margin-bottom: 4px; color: #fff;
+  }
+  .layer-stripe .layer-meta .where {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    color: var(--text-dim);
+  }
+  .layer-stripe .layer-count {
+    font-size: 11px; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: .5px;
+    background: var(--surface2); padding: 4px 10px;
+    border-radius: 12px;
+  }
+  .layer-stripe.expanded .layer-list { display: block; }
+  .layer-stripe .layer-list { display: none; flex-basis: 100%; margin-top: 14px; }
+  .layer-stripe.expanded {
+    flex-wrap: wrap; align-items: flex-start;
+  }
+  .layer-stripe .layer-list-inner {
+    background: var(--bg); border-radius: 6px;
+    padding: 10px 16px; margin-top: 4px;
+    border-left: 2px solid var(--border);
+  }
+  .layer-stripe .layer-list-inner .li {
+    padding: 6px 0; font-size: 12px; color: var(--text-muted);
+    display: flex; gap: 10px; border-bottom: 1px dotted var(--border);
+  }
+  .layer-stripe .layer-list-inner .li:last-child { border-bottom: none; }
+  .layer-stripe .layer-list-inner .li .num-pill {
+    font-weight: 700; min-width: 28px; text-align: center;
+    color: #0F0F1A; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px;
+  }
+  .layer-stripe .layer-list-inner .li .nm {
+    color: var(--accent-light); font-family: ui-monospace, monospace;
+    min-width: 220px;
+  }
+
+  /* ===== MECHANISM CARDS (mechs tab) ===== */
+  .mech-controls {
+    display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .mech-search {
+    flex: 1; min-width: 240px; padding: 9px 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px;
+    font-family: inherit;
+  }
+  .mech-search:focus { outline: none; border-color: var(--accent-mid); }
+  .layer-filter {
+    display: flex; gap: 4px; flex-wrap: wrap;
+  }
+  .filter-btn {
+    padding: 8px 12px; font-size: 11px; font-weight: 600;
+    background: var(--surface); color: var(--text-muted);
+    border: 1px solid var(--border); border-radius: 5px;
+    cursor: pointer; font-family: inherit;
+    transition: all .15s; text-transform: uppercase; letter-spacing: .5px;
+  }
+  .filter-btn:hover { color: #fff; }
+  .filter-btn.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .mech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 14px;
+  }
+  .mech-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px;
+    border-left: 4px solid var(--accent);
+    transition: all .15s; cursor: pointer;
+  }
+  .mech-card:hover { background: var(--surface2); }
+  .mech-card.hidden { display: none; }
+  .mech-card .card-h {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+  }
+  .mech-card .badge {
+    width: 28px; height: 28px; border-radius: 50%;
+    text-align: center; line-height: 28px;
+    font-size: 12px; font-weight: 700; color: #0F0F1A;
+    flex-shrink: 0;
+  }
+  .mech-card h3 {
+    font-size: 14px; color: #fff; flex: 1;
+  }
+  .mech-card .layer-tag {
+    font-size: 10px; font-weight: 700;
+    padding: 3px 8px; border-radius: 3px;
+    background: var(--surface2);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .mech-card .meta {
+    font-size: 11px; color: var(--text-dim);
+    margin-bottom: 10px;
+    font-family: ui-monospace, monospace;
+  }
+  .mech-card .body { color: var(--text-muted); font-size: 13px; }
+  .mech-card .pills { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .pill {
+    padding: 3px 9px; font-size: 11px;
+    background: var(--surface2); color: var(--accent-light);
+    border-radius: 4px; font-family: ui-monospace, monospace;
+  }
+  .mech-card .star { color: var(--amber); margin-left: 4px; }
+  .mech-card .more { font-size: 11px; color: var(--accent-mid); margin-top: 8px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  .mech-card.expanded .more::before { content: "▼ "; }
+  .mech-card:not(.expanded) .more::before { content: "▶ "; }
+  .mech-card .detail { display: none; margin-top: 12px; }
+  .mech-card.expanded .detail { display: block; }
+
+  /* ===== TABLES ===== */
+  .data-table {
+    width: 100%; border-collapse: collapse; margin-top: 8px;
+    background: var(--surface); border-radius: 8px; overflow: hidden;
+  }
+  .data-table th, .data-table td {
+    padding: 11px 14px; text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; vertical-align: top;
+  }
+  .data-table th {
+    background: var(--surface2); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px;
+    font-size: 10px; color: var(--text-dim);
+    cursor: pointer;
+  }
+  .data-table th:hover { color: #fff; }
+  .data-table td.path {
+    font-family: ui-monospace, monospace;
+    color: var(--accent-light); font-size: 11px;
+  }
+  .data-table td.layer-cell { text-align: center; width: 60px; }
+  .layer-pill {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 10px; font-size: 10px; font-weight: 700;
+    color: #0F0F1A;
+  }
+  .data-table tr.hidden { display: none; }
+
+  /* ===== WALK ===== */
+  .walk-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+  .step-pill {
+    padding: 8px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-muted); font-family: inherit;
+  }
+  .step-pill:hover { border-color: var(--accent-mid); color: #fff; }
+  .step-pill.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .step-detail {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 22px; min-height: 320px;
+  }
+  .step-detail .step-num {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    background: var(--accent); color: #fff;
+    padding: 3px 10px; border-radius: 12px; letter-spacing: .5px;
+  }
+  .step-detail h3 { font-size: 18px; margin: 8px 0 12px; color: #fff; }
+  .step-detail .what { color: var(--text); font-size: 14px; margin-bottom: 16px; }
+  .step-detail .hits {
+    background: var(--bg); border-radius: 6px; padding: 12px 16px;
+    margin-bottom: 14px; border-left: 3px solid var(--accent-mid);
+  }
+  .step-detail .hits .label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-dim); font-weight: 700; margin-bottom: 6px;
+  }
+  .step-detail .hit-row { font-size: 12px; padding: 3px 0; color: var(--text); }
+  .nav-buttons { margin-top: 18px; display: flex; gap: 10px; }
+  .nav-btn {
+    padding: 8px 18px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; font-size: 13px;
+    font-family: inherit;
+  }
+  .nav-btn:hover:not(:disabled) {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* ===== SYMPTOM LOOKUP ===== */
+  .symptoms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 14px;
+  }
+  .sym-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px 18px;
+    border-left: 3px solid var(--red);
+  }
+  .sym-card .symptom {
+    font-size: 13px; color: var(--text); font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .sym-card .cause {
+    font-size: 12px; color: var(--text-muted);
+    border-top: 1px dotted var(--border); padding-top: 8px;
+  }
+  .sym-card .layer {
+    display: inline-block; padding: 2px 8px;
+    border-radius: 10px; font-size: 10px; font-weight: 700;
+    color: #0F0F1A; margin-right: 6px;
+  }
+
+  /* ===== NOT-HAVE BOX ===== */
+  .not-have {
+    background: rgba(248, 113, 113, 0.07);
+    border: 1px solid rgba(248, 113, 113, 0.4);
+    border-left: 4px solid var(--red);
+    padding: 18px 22px; border-radius: 8px;
+  }
+  .not-have h3 { color: var(--red); margin-bottom: 12px; font-size: 14px; }
+  .not-have ul { list-style: none; padding: 0; }
+  .not-have li {
+    padding: 6px 0 6px 18px; position: relative;
+    color: var(--text-muted); font-size: 13px;
+  }
+  .not-have li::before {
+    content: "✗"; position: absolute; left: 0; color: var(--red);
+    font-weight: 700;
+  }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--surface3); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tengu-Cluster · Context Management Explorer</h1>
+  <div class="sub">2026-04-27 · canonical reference · 7 layers · ~25 mechanisms · companion to <a href="context-management-2026-04-27.md">.md</a> + <a href="context-management-2026-04-27.svg">.svg</a></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="overview">Layers Overview</button>
+  <button class="tab" data-tab="mechs">All Mechanisms</button>
+  <button class="tab" data-tab="walk">Walk a Turn</button>
+  <button class="tab" data-tab="config">Config Knobs</button>
+  <button class="tab" data-tab="symptoms">Symptom → Cause</button>
+  <button class="tab" data-tab="missing">What's Missing</button>
+</div>
+
+<div class="content">
+
+<!-- ============ OVERVIEW ============ -->
+<div class="panel active" id="panel-overview">
+  <div class="stat-row">
+    <div class="stat-box"><div class="num">7</div><div class="lbl">Layers</div></div>
+    <div class="stat-box"><div class="num" id="stat-mechs">…</div><div class="lbl">Mechanisms</div></div>
+    <div class="stat-box"><div class="num">0</div><div class="lbl">LLM-driven summarisers</div></div>
+    <div class="stat-box"><div class="num">10</div><div class="lbl">Tunable knobs</div></div>
+  </div>
+
+  <h2>The seven layers</h2>
+  <p>Click any layer to expand its mechanism list. Top-down ordering matches the per-turn execution path (Layer 1 first, then 2, then 3…).</p>
+  <div class="layer-stack" id="layer-stack"></div>
+
+  <p style="margin-top: 22px;">There is <strong>no LLM-driven summariser</strong> anywhere in the harness. Every "summary" is either truncated concatenation (Layer 1 #4, Layer 3 #15) or written by the model as a tool call (Layer 5 #21). The closest thing tengu has to Claude Code's <code>/compact</code> is the combo of <strong>Layer 1 #4</strong> (replaces older messages with a synthetic summary message) plus <strong>Layer 3 #15</strong> (rewrites prior-round tool results to first-line-only mid-loop).</p>
+</div>
+
+<!-- ============ MECHANISMS ============ -->
+<div class="panel" id="panel-mechs">
+  <h2>All ~25 mechanisms — searchable, filterable</h2>
+  <div class="mech-controls">
+    <input type="text" class="mech-search" id="mech-search" placeholder="Filter by name, file, knob, description…">
+    <div class="layer-filter" id="layer-filter"></div>
+  </div>
+  <div class="mech-grid" id="mech-grid"></div>
+</div>
+
+<!-- ============ WALK ============ -->
+<div class="panel" id="panel-walk">
+  <h2>Walking a single chat turn through all 7 layers</h2>
+  <p>Click each step to see which mechanisms fire and what they do. Arrow keys navigate.</p>
+  <div class="walk-bar" id="walk-bar"></div>
+  <div class="step-detail" id="walk-detail"></div>
+  <div class="nav-buttons">
+    <button class="nav-btn" id="prev-btn" onclick="walkStep(-1)">← Previous</button>
+    <button class="nav-btn" id="next-btn" onclick="walkStep(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ============ CONFIG ============ -->
+<div class="panel" id="panel-config">
+  <h2>All tunable knobs — defaults from <code>config.rs</code></h2>
+  <input type="text" class="mech-search" id="config-search" placeholder="Filter knobs…" style="margin-bottom: 16px;">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th data-sort="layer">Layer</th>
+        <th data-sort="knob">Knob</th>
+        <th data-sort="default">Default</th>
+        <th data-sort="where">Where</th>
+        <th>What it gates</th>
+      </tr>
+    </thead>
+    <tbody id="config-rows"></tbody>
+  </table>
+</div>
+
+<!-- ============ SYMPTOMS ============ -->
+<div class="panel" id="panel-symptoms">
+  <h2>Symptom → likely cause</h2>
+  <p>Use these when something looks wrong. Each card maps a user-visible symptom to the layer + mechanism most likely responsible.</p>
+  <div class="symptoms-grid" id="symptoms-grid"></div>
+</div>
+
+<!-- ============ MISSING ============ -->
+<div class="panel" id="panel-missing">
+  <h2>What tengu does NOT have</h2>
+  <p>Comparison points for future sessions and design discussions.</p>
+  <div class="not-have">
+    <h3>Missing context-management features</h3>
+    <ul>
+      <li><strong>No LLM-driven auto-summarise pass.</strong> Every "summary" in the harness is either truncated concatenation (<code>maybe_compact_flow</code>, <code>compact_tool_result</code>) or written by the model itself as a tool call (<code>compress_and_store</code>). There is no in-harness LLM call whose only job is to compress prior context.</li>
+      <li><strong>No <code>/compact</code> slash command in the TUI.</strong></li>
+      <li><strong>No semantic dedupe of repeated tool calls.</strong> Two identical <code>http_request</code> calls keep both full responses.</li>
+      <li><strong>No retrieval over prior turns of the current session for the chat loop.</strong> <code>tengu_messages</code> exists, but only <code>cross_session_recall_block</code> (planner-side, opt-in) reads it.</li>
+      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RagPlanner::replan</code> reads it for cross-plan recall.</li>
+      <li><strong>Claude Code engine has zero in-loop compaction.</strong> Layer 4's <code>max_mcp_result_chars</code> is the only governor on that path. If a Claude Code subagent fans out a lot of tool calls, Claude's own context fills up — the harness can only cap individual results, not compact prior ones.</li>
+      <li><strong>No per-skill dedup.</strong> If two skills duplicate content (e.g. shared boilerplate), both go in the system prompt at full size up to <code>max_skill_context_tokens</code>.</li>
+      <li><strong>No sliding window over <code>tengu_outputs</code>.</strong> <code>cross_plan_top_k</code> is a top-K, not a recency-weighted window — old summaries stick around as long as TTL allows.</li>
+    </ul>
+  </div>
+</div>
+
+</div>
+
+<script>
+// =====================================================================
+// DATA
+// =====================================================================
+const LAYERS = [
+  { n: 0, key: "l0", color: "#94A3B8", title: "Token primitives",
+    where: "src/adapters/token.rs",
+    desc: "Heuristic token estimation + UTF-8-safe truncation utilities used by every layer above." },
+  { n: 1, key: "l1", color: "#F472B6", title: "Per-flow lifecycle",
+    where: "src/adapters/flow_builder.rs · chat_builder.rs::process_user_text",
+    desc: "Auto-compact layer. Runs at the top of every chat turn before per-turn assembly. Three guards: turn-count trim, threshold-triggered prefix compaction, hard token-budget stop." },
+  { n: 2, key: "l2", color: "#2DD4BF", title: "Per-turn assembly",
+    where: "src/adapters/prompt_budget.rs · chat_builder.rs",
+    desc: "What the model actually sees. Sliding history window, memory recall, fencing, grounding, skill bodies." },
+  { n: 3, key: "l3", color: "#A78BFA", title: "Inner tool-calling loop",
+    where: "src/adapters/engine_builder.rs::collect_engine_response",
+    desc: "Round-by-round mid-loop compaction. Per-result truncation + first-line-clipping of older rounds. Closest thing to /compact." },
+  { n: 4, key: "l4", color: "#F59E0B", title: "MCP bridge (Claude Code path)",
+    where: "src/adapters/claude_code_engine.rs",
+    desc: "Single hard cap on bridge-routed tool results. Only governor on the Claude Code engine path — Layer 3 doesn't fire there." },
+  { n: 5, key: "l5", color: "#4ADE80", title: "Subagent IPC",
+    where: "src/adapters/runner.rs · main.rs::run_agent_subprocess",
+    desc: "compress_and_store durable per-step summary. Subprocess gets fresh context. Phase 5c middle-ground protocol decides Ok/Failed." },
+  { n: 6, key: "l6", color: "#60A5FA", title: "RAG storage hygiene",
+    where: "src/adapters/rag/cleanup.rs · rag/indexer.rs",
+    desc: "What stays in Qdrant. TTL pruning of messages/outputs + workspace fingerprint dedup to avoid re-embedding unchanged registries." },
+  { n: 7, key: "l7", color: "#FB923C", title: "File chunking",
+    where: "src/adapters/plugins/memory/persistent_store.rs",
+    desc: "Char-window file splitter for vector-storage. Orthogonal to LLM context — surfaces only via memory_recall." },
+];
+
+const MECHS = [
+  // Layer 0
+  { n: 1, layer: 0, title: "estimate_tokens_approx", where: "token.rs:4",
+    body: "<code>text.len() / 4</code> heuristic. Used everywhere a token count is needed.",
+    pills: ["~4 chars/token", "no tokeniser"], tags: ["token", "estimate", "heuristic"] },
+  { n: 2, layer: 0, title: "truncate_at_boundary / truncate_with_suffix", where: "token.rs:24-38",
+    body: "UTF-8-safe slice point + \"truncate + append marker only when actually clipped\". Used by all per-call truncations.",
+    pills: ["UTF-8 safe", "lazy suffix"], tags: ["truncate", "boundary", "utf8"] },
+
+  // Layer 1
+  { n: 3, layer: 1, title: "enforce_history_turn_limit", where: "flow_builder.rs:61",
+    body: "Drains everything before the Nth user-turn from the end. Per-scope defaults.",
+    pills: ["main=40", "group=30", "pipe=25", "default=20"], tags: ["turn", "limit", "history", "scope"] },
+  { n: 4, layer: 1, title: "maybe_compact_flow ★", where: "flow_builder.rs:165",
+    star: true,
+    body: "<strong>Closest thing to /compact.</strong> When flow_token_usage ≥ threshold: replace older messages with a single synthetic Assistant message containing a truncated concatenation of those messages. Not LLM-summarised.",
+    pills: ["ratio 0.82-0.88", "keep 24-60 turns", "summary 15% input"], tags: ["compact", "flow", "auto", "summary", "threshold"] },
+  { n: 5, layer: 1, title: "max_tokens_per_flow hard stop", where: "chat_builder.rs:309",
+    body: "If flow_token_usage ≥ max_tokens_per_flow after Layer 1 compaction, the turn returns a system notice <em>\"Flow token limit reached. Use /reset…\"</em>",
+    pills: ["100_000 tokens"], tags: ["budget", "flow", "stop", "reset"] },
+
+  // Layer 2
+  { n: 6, layer: 2, title: "compute_total_input_budget", where: "prompt_budget.rs:82",
+    body: "<code>min(ctx_window − reserved_output, remaining_flow_tokens)</code>. Reserved output uses adaptive floor and headroom.",
+    pills: ["adaptive floor", "headroom"], tags: ["budget", "arithmetic", "reserved"] },
+  { n: 7, layer: 2, title: "assemble_recent_history", where: "prompt_budget.rs:8",
+    body: "Newest contiguous suffix of <code>state.messages</code> that fits <code>history_budget</code>. Hard ceiling of 20 messages.",
+    pills: ["MAX_HISTORY_MESSAGES = 20"], tags: ["history", "window", "sliding", "suffix"] },
+  { n: 8, layer: 2, title: "Memory recall block (Qdrant)", where: "chat_builder.rs:326",
+    body: "Top-K semantic search over the memory backend. Bounded by total token budget.",
+    pills: ["top-K = 5", "max_recall_tokens = 600", "session_recent_n = 10", "cross_plan_top_k = 5"],
+    tags: ["recall", "memory", "rag", "qdrant", "top-k"] },
+  { n: 9, layer: 2, title: "cross_session_msg_top_k", where: "MemoryConfig",
+    body: "When > 0, planner-side surfaces semantically similar messages from prior sessions. Off by default.",
+    pills: ["default 0 (off)"], tags: ["recall", "cross-session", "planner", "messages"] },
+  { n: 10, layer: 2, title: "&lt;memory-context&gt; fencing", where: "fencing.rs",
+    body: "Wraps recall in <code>&lt;memory-context&gt;...&lt;/memory-context&gt;</code> + system note. Prevents the model from treating recalled text as new user input.",
+    pills: ["+50 tok overhead"], tags: ["fencing", "memory", "recall", "context"] },
+  { n: 11, layer: 2, title: "Grounding nudge / suppress_grounding_nudge", where: "chat_builder.rs:248-322",
+    body: "If user message contains <em>last/latest/recent/...</em>, inject a system msg \"verify, do not trust recall\" AND skip memory recall this turn. Planner-side <code>run_turn_with_system</code> sets suppress=true.",
+    pills: ["7 trigger words", "skips recall when triggered"], tags: ["grounding", "nudge", "fresh", "planner"] },
+  { n: 12, layer: 2, title: "Skill body / file caps", where: "skill_builder.rs:1120-1150",
+    body: "Three nested truncations: per-file in a skill, per-skill-set total, per-skill recall context.",
+    pills: ["max_skill_context_tokens = 16_000", "max_file_tokens = 2_000"],
+    tags: ["skill", "file", "system-prompt", "truncate"] },
+  { n: 13, layer: 2, title: "truncate_to_token_budget", where: "prompt_budget.rs:41",
+    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by skill_builder + maybe_compact_flow.",
+    pills: ["char-cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
+
+  // Layer 3
+  { n: 14, layer: 3, title: "truncate_tool_result", where: "engine_builder.rs:878",
+    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe.",
+    pills: ["max_tool_result_chars = 300_000"], tags: ["truncate", "tool", "result", "char"] },
+  { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "engine_builder.rs:855",
+    star: true,
+    body: "<strong>Closest to /compact at the inner-loop level.</strong> After round ≥ 1, walks <code>messages[..compact_cutoff]</code> and rewrites every Role::Tool to first-line-only.",
+    pills: ["compact_result_limit = 200", "fires round ≥ 1", "first-line clip"],
+    tags: ["compact", "tool", "result", "loop", "first-line"],
+    code: `<span class="kw">fn</span> <span class="fn">compact_tool_result</span>(content: &amp;<span class="kw">str</span>, limit: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
+    <span class="kw">if</span> content.len() &lt;= limit { <span class="kw">return</span> content.to_string(); }
+    <span class="cm">// Take the first line — most tool results put key info there.</span>
+    <span class="kw">let</span> first_line = content.lines().next().unwrap_or(content);
+    <span class="kw">if</span> first_line.len() &lt;= limit { <span class="kw">return</span> first_line.to_string(); }
+    <span class="kw">let</span> <span class="kw">mut</span> end = limit;
+    <span class="kw">while</span> end &gt; <span class="num">0</span> &amp;&amp; !first_line.is_char_boundary(end) { end -= <span class="num">1</span>; }
+    <span class="fn">format!</span>(<span class="str">"{}…"</span>, &amp;first_line[..end])
+}` },
+  { n: 16, layer: 3, title: "[OUTPUT_TRUNCATED] auto-continue", where: "engine_builder.rs:637",
+    body: "Inverse mechanism. When the model's text response ends with the sentinel, inject a user msg \"Continue from where you left off\" and re-roll. Extends, doesn't cut.",
+    pills: ["sentinel literal", "extends not cuts"], tags: ["truncate", "auto-continue", "sentinel"] },
+  { n: 17, layer: 3, title: "max_tool_rounds hard stop", where: "engine_builder.rs:599",
+    body: "Hard cap on inner-loop rounds. After exhaust, forces one final <code>tools=[]</code> turn to extract a closing message.",
+    pills: ["default = 70"], tags: ["rounds", "limit", "tool", "loop"] },
+  { n: 18, layer: 3, title: "token_budget mid-loop early-exit", where: "engine_builder.rs:617",
+    body: "If <code>total_input_delta + total_output_delta &gt; budget</code>, break loop with warn log. Used on the eval path; chat path passes None today.",
+    pills: ["per-flow", "warn log on exit"], tags: ["budget", "early-exit", "tokens", "eval"] },
+
+  // Layer 4
+  { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "claude_code_engine.rs:520",
+    body: "Caps each tool result returned to the Claude Code CLI through the MCP bridge. <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire on OpenRouter.",
+    pills: ["50_000 chars", "TENGU_BRIDGE_MAX_RESULT_CHARS"], tags: ["mcp", "bridge", "claude-code", "cap"] },
+
+  // Layer 5
+  { n: 20, layer: 5, title: "Fresh subprocess context", where: "runner.rs::AgentIpcInput",
+    body: "Child <code>tengu run-agent</code> starts with empty messages. Inherits only goal/agent/tools/skills/session_id/step_id/sandbox_config. By design — no parent-history leakage.",
+    pills: ["IPC over JSON stdin/stdout"], tags: ["subprocess", "ipc", "fresh", "isolation"] },
+  { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "plugins/skill_lifecycle/compress_and_store.rs",
+    star: true,
+    body: "Implicitly appended to every subagent's tools. Two paths converge on <code>write_summary</code>: out-of-band (OpenRouter) + plugin (Claude Code via MCP bridge). Writes to Qdrant <code>tengu_outputs</code> keyed by session_id + step_id.",
+    pills: ["implicit append", "two dispatch paths", "Qdrant tengu_outputs"], tags: ["compress", "summary", "subagent", "qdrant", "step"] },
+  { n: 22, layer: 5, title: "Phase 5c middle-ground protocol", where: "main.rs:900",
+    body: "Three-row verdict table: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed. Graceful degradation lets non-protocol-respecting models still succeed if they produce text.",
+    pills: ["3 rows", "graceful degradation"], tags: ["protocol", "verdict", "ipc", "phase-5c"] },
+  { n: 23, layer: 5, title: "Subprocess max_turns", where: "runner.rs:39",
+    body: "Hard cap on the subagent mini-loop. Hits the compress_and_store warn path on exhaust.",
+    pills: ["default = 20"], tags: ["subagent", "turns", "limit"] },
+
+  // Layer 6
+  { n: 24, layer: 6, title: "ttl_cleanup (Phase 6.3)", where: "rag/cleanup.rs:24",
+    body: "Qdrant filter-based delete over <code>tengu_messages</code> + <code>tengu_outputs</code> where <code>rag_created_at &lt; (now - ttl_days * 86_400)</code>. Trigger: <code>ttl_days &gt; 0</code>. Default 0 (permanent retention). Runs at chat cold-start.",
+    pills: ["ttl_days = 0 default", "filter-based delete", "cold-start trigger"], tags: ["ttl", "cleanup", "qdrant", "filter"] },
+  { n: 25, layer: 6, title: "Workspace fingerprint dedup (Phase 6.2)", where: "rag/indexer.rs:64",
+    body: "<code>&lt;workspace&gt;/.tengu/registry-fingerprint</code>. SHA-256 over agents + skills + tools. <code>reindex_all_workspace</code> skips full embed when fingerprint matches.",
+    pills: ["sha256", "TENGU_REGISTRY_FORCE_REINDEX=1 bypass"], tags: ["fingerprint", "dedup", "registry", "indexer"] },
+
+  // Layer 7
+  { n: 26, layer: 7, title: "persistent_store::chunk_text", where: "plugins/memory/persistent_store.rs:54",
+    body: "Char-window splitter with overlap. Used when an agent calls <code>persistent_store</code> to save a file. Mechanical — no LLM, no summarisation.",
+    pills: ["chunk_size = 1000", "overlap = 200"], tags: ["chunk", "persistent_store", "file", "embed"] },
+];
+
+const STEPS = [
+  { title: "User types message", layer: null,
+    what: "TUI / Telegram / chat builder pushes the new message into <code>state.messages</code>. flow_token_usage += estimate(content).",
+    hits: ["chat_builder.rs:296 — flow_token_usage tracking", "Layer 0 #1 — token estimation"] },
+  { title: "Layer 1 — turn-count trim", layer: 1,
+    what: "<code>enforce_history_turn_limit</code> drops everything before the Nth user turn (default 20-40 per scope). If <code>max_history_turns = 0</code>, clears all.",
+    hits: ["#3 enforce_history_turn_limit"] },
+  { title: "Layer 1 — auto-compact", layer: 1,
+    what: "If <code>flow_token_usage &gt;= threshold</code> (~85% of max), <code>maybe_compact_flow</code> replaces the prefix with a synthetic <code>[Flow compaction summary]</code> message. Concatenates older messages, truncates to ~15% of input budget.",
+    hits: ["#4 maybe_compact_flow ★", "#13 truncate_to_token_budget", "#5 max_tokens_per_flow hard stop (if exceeded after compaction → return notice)"] },
+  { title: "Layer 2 — budget arithmetic", layer: 2,
+    what: "<code>compute_total_input_budget</code> calculates remaining input budget after reserved output, system prompt, and memory block. <code>history_budget</code> is what's left for the sliding window.",
+    hits: ["#6 compute_total_input_budget", "#13 truncate_to_token_budget (skill bodies in system prompt)"] },
+  { title: "Layer 2 — memory recall", layer: 2,
+    what: "If memory manager is configured AND grounding nudge wasn't triggered, query Qdrant for top-K relevant entries. Bounded by <code>max_recall_tokens</code>. Wrap in <code>&lt;memory-context&gt;</code> fence.",
+    hits: ["#8 memory recall block", "#10 fencing", "#9 cross_session_msg_top_k"] },
+  { title: "Layer 2 — sliding history + grounding", layer: 2,
+    what: "<code>assemble_recent_history</code> picks newest 1-20 messages that fit <code>history_budget</code>. If user said \"latest/recent/...\", inject grounding nudge AND skip memory recall.",
+    hits: ["#7 assemble_recent_history", "#11 grounding nudge"] },
+  { title: "Layer 3 — engine call (round 0)", layer: 3,
+    what: "Stream model. Get back text + tool_calls. If model emits <code>[OUTPUT_TRUNCATED]</code> sentinel, inject continue and re-roll.",
+    hits: ["#16 [OUTPUT_TRUNCATED] auto-continue"] },
+  { title: "Layer 3 — execute tools (round 0)", layer: 3,
+    what: "<code>compact_cutoff = messages.len()</code>. For each tool_call: execute, then <code>truncate_tool_result</code> at 300K chars, push as Role::Tool. Round 0 keeps full bodies.",
+    hits: ["#14 truncate_tool_result"] },
+  { title: "Layer 3 — round 1 + compaction", layer: 3,
+    what: "Engine call again. Execute new tool calls. Then: <code>if round &gt;= 1</code>, walk <code>messages[..compact_cutoff]</code>, rewrite every Role::Tool in place via <code>compact_tool_result</code> at 200 chars (first-line only). This repeats every subsequent round.",
+    hits: ["#15 compact_tool_result ★", "#17 max_tool_rounds (default 70)", "#18 token_budget early-exit"] },
+  { title: "Layer 4 — bridge cap (Claude Code path)", layer: 4,
+    what: "If running on Claude Code engine, every tool result returned through the MCP bridge is capped at <code>max_mcp_result_chars</code> (50K) before Claude even sees it. <strong>Layer 3 doesn't fire on this path.</strong>",
+    hits: ["#19 max_mcp_result_chars"] },
+  { title: "Layer 5 — subagent dispatch", layer: 5,
+    what: "If the planner emits a multi-step plan, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> per step. Child gets fresh empty messages — never inherits parent history. compress_and_store is implicitly appended to its tools.",
+    hits: ["#20 fresh subprocess context", "#21 compress_and_store ★", "#23 subprocess max_turns"] },
+  { title: "Layer 5 — step verdict", layer: 5,
+    what: "When the subagent finishes (or <code>compress_and_store</code> fires), Phase 5c protocol decides: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed (DagExecutor retries).",
+    hits: ["#22 Phase 5c protocol"] },
+  { title: "Layer 6 — RAG hygiene", layer: 6,
+    what: "On chat cold-start: <code>ttl_cleanup</code> purges expired entries from <code>tengu_messages</code> and <code>tengu_outputs</code> if <code>ttl_days &gt; 0</code>. <code>reindex_all_workspace</code> checks fingerprint and skips re-embedding if nothing changed.",
+    hits: ["#24 ttl_cleanup", "#25 fingerprint dedup"] },
+];
+
+const SYMPTOMS = [
+  { layer: 1, sym: "Model claims it doesn't know about something user said 5 turns ago",
+    cause: "Layer 1 #3 (turn limit) or Layer 2 #7 (history budget). Default per-scope 20-40 user turns; bump <code>flow.max_history_turns</code>." },
+  { layer: 1, sym: "\"Flow token limit reached\" notice appears",
+    cause: "Layer 1 #5. Bump <code>limits.max_tokens_per_flow</code> or run /reset to start fresh flow_key." },
+  { layer: 1, sym: "Suspicious \"[Flow compaction summary]\" message appears in history",
+    cause: "Layer 1 #4 fired — flow tokens crossed compaction threshold. Adjust <code>compaction_threshold_ratio</code> or <code>compaction_keep_turns</code>." },
+  { layer: 2, sym: "Model ignores recalled memory and re-asks for info user already gave",
+    cause: "Layer 2 #11 — grounding nudge triggered by trigger words (last/latest/etc.). Memory recall was skipped this turn by design." },
+  { layer: 2, sym: "<code>&lt;memory-context&gt;</code> fences leak into the model's reply",
+    cause: "Layer 2 #10 — model is treating fence as text not as a system signal. The instruction note exists; bug is upstream (model not respecting fences)." },
+  { layer: 2, sym: "Skills look truncated mid-paragraph in system prompt",
+    cause: "Layer 2 #12 — <code>max_file_tokens</code> = 2_000 default cap on per-file skill content. Bump or split the skill." },
+  { layer: 3, sym: "<code>[truncated — showing X of Y chars]</code> appears in tool output",
+    cause: "Layer 3 #14 — <code>max_tool_result_chars</code> = 300K. Bump or paginate tool implementation." },
+  { layer: 3, sym: "Model loops on the same tool call",
+    cause: "Layer 3 #15 — earlier round's result got first-line-clipped, model can't see what previously returned. Bump <code>compact_result_limit</code>." },
+  { layer: 3, sym: "\"Engine stream timed out\" without progress",
+    cause: "Not strictly context-management but related: <code>stream_event_timeout_secs</code> = 120. Slow first-token latency on big context." },
+  { layer: 4, sym: "Claude Code subagent stops citing old tool results",
+    cause: "Layer 4 #19 — bridge cap hides them. Bump <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>." },
+  { layer: 5, sym: "\"model finished without calling compress_and_store\" warn",
+    cause: "Layer 5 #22 (Phase 5c) — graceful path; final assistant text became the summary. Common with Claude Code subagents." },
+  { layer: 5, sym: "Planner picks the same agent on replan despite obvious progress",
+    cause: "Layer 5 #21 — subagent didn't call <code>compress_and_store</code>, so no entry in <code>tengu_outputs</code>. Recall returns nothing. OR <code>cross_plan_top_k</code> = 0." },
+  { layer: 6, sym: "Stale agents/skills in planner roster",
+    cause: "Layer 6 #25 — fingerprint dedup is suppressing reindex. Run <code>TENGU_REGISTRY_FORCE_REINDEX=1 tengu chat</code>." },
+  { layer: 6, sym: "Old session messages keep resurfacing in cross-session recall",
+    cause: "Layer 6 #24 — <code>ttl_days</code> = 0 default means permanent retention. Set to e.g. 30 to auto-purge." },
+];
+
+const CONFIG = [
+  { layer: 1, knob: "flow.max_history_turns", def: "20-40 (per-scope)", where: "agents/*.toml + flow_builder.rs:46", what: "User-turn count cap on history before per-turn assembly." },
+  { layer: 1, knob: "flow.compaction_threshold_ratio", def: "0.82-0.88 (per-scope)", where: "flow_builder.rs:97", what: "Fraction of max_tokens_per_flow that triggers maybe_compact_flow." },
+  { layer: 1, knob: "flow.compaction_keep_turns", def: "24-60 (per-scope)", where: "flow_builder.rs:97", what: "Number of recent user turns kept verbatim during flow compaction." },
+  { layer: 1, knob: "flow.compaction_summary_max_tokens", def: "auto (15% input budget)", where: "flow_builder.rs:130", what: "Max tokens for the compaction summary message." },
+  { layer: 1, knob: "limits.max_tokens_per_flow", def: "100_000", where: "config.rs:440", what: "Per-flow lifetime budget. Hard stop returns reset notice." },
+  { layer: 2, knob: "limits.context_window", def: "1_000_000", where: "config.rs:421", what: "Model context window. Feeds reserved_output_tokens arithmetic." },
+  { layer: 2, knob: "limits.max_output_tokens_per_turn", def: "engine-default", where: "config.rs:387", what: "Reserved output tokens per turn." },
+  { layer: 2, knob: "MAX_HISTORY_MESSAGES", def: "20 (hardcoded)", where: "prompt_budget.rs:12", what: "Hard ceiling on history-window mechanism." },
+  { layer: 2, knob: "memory.max_recall_entries", def: "5", where: "config.rs:592", what: "Top-K results from memory recall." },
+  { layer: 2, knob: "memory.max_recall_tokens", def: "600", where: "config.rs:594", what: "Total token budget for recall block." },
+  { layer: 2, knob: "memory.session_recent_n", def: "10", where: "config.rs:625", what: "Recent same-session messages reloaded each turn." },
+  { layer: 2, knob: "memory.cross_session_msg_top_k", def: "0 (off)", where: "config.rs:641", what: "Cross-session message recall — opt-in." },
+  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config.rs:630", what: "Top-K for cross-plan recall over tengu_outputs." },
+  { layer: 2, knob: "prompt_budget.max_skill_context_tokens", def: "16_000", where: "config.rs:727", what: "Total skill-body cap in system prompt." },
+  { layer: 2, knob: "prompt_budget.max_file_tokens", def: "2_000", where: "config.rs:725", what: "Per-file cap inside a skill." },
+  { layer: 3, knob: "limits.max_tool_rounds", def: "70", where: "config.rs:424", what: "Hard cap on inner-loop rounds." },
+  { layer: 3, knob: "limits.max_tool_result_chars", def: "300_000", where: "config.rs:427", what: "Per-tool-result char cap (mechanism #14)." },
+  { layer: 3, knob: "limits.compact_result_limit", def: "200", where: "config.rs:433", what: "First-line clip threshold for in-place compaction (#15)." },
+  { layer: 4, knob: "limits.max_mcp_result_chars", def: "50_000", where: "config.rs:436", what: "MCP bridge cap for Claude Code engine." },
+  { layer: 5, knob: "AgentIpcInput.max_turns", def: "20", where: "runner.rs:39", what: "Subagent mini-loop turn cap." },
+  { layer: 6, knob: "memory.ttl_days", def: "0 (permanent)", where: "config.rs", what: "Days before tengu_messages/outputs entries are purged." },
+  { layer: 6, knob: "TENGU_REGISTRY_FORCE_REINDEX", def: "(unset)", where: "rag/indexer.rs", what: "Bypass fingerprint dedup — set to 1 to force reindex." },
+  { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config.rs:610", what: "File chunk window in chars." },
+  { layer: 7, knob: "memory.persistent_store_chunk_overlap", def: "200", where: "config.rs:613", what: "Overlap between adjacent chunks." },
+];
+
+// =====================================================================
+// RENDERING
+// =====================================================================
+document.getElementById("stat-mechs").textContent = MECHS.length;
+
+// ---- LAYER STACK ----
+const layerStack = document.getElementById("layer-stack");
+LAYERS.forEach((L) => {
+  const stripe = document.createElement("div");
+  stripe.className = "layer-stripe";
+  stripe.style.borderLeftColor = L.color;
+  const layerMechs = MECHS.filter((m) => m.layer === L.n);
+  stripe.innerHTML = `
+    <div class="layer-num" style="color: ${L.color};">${L.n}</div>
+    <div class="layer-meta">
+      <h3>${L.title}</h3>
+      <div class="where">${L.where}</div>
+      <p style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">${L.desc}</p>
+    </div>
+    <div class="layer-count">${layerMechs.length} mech${layerMechs.length !== 1 ? "s" : ""}</div>
+    <div class="layer-list">
+      <div class="layer-list-inner">
+        ${layerMechs.map((m) => `
+          <div class="li">
+            <span class="num-pill" style="background: ${L.color};">${m.n}</span>
+            <span class="nm">${m.title.replace("★", "")}${m.star ? '<span style="color: var(--amber);">★</span>' : ""}</span>
+            <span style="color: var(--text-dim); font-size: 11px;">${m.where}</span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
+  stripe.onclick = () => stripe.classList.toggle("expanded");
+  layerStack.appendChild(stripe);
+});
+
+// ---- MECHS ----
+const mechGrid = document.getElementById("mech-grid");
+const mechSearch = document.getElementById("mech-search");
+const layerFilter = document.getElementById("layer-filter");
+let activeLayer = "all";
+
+function makeFilterBtn(n, label) {
+  const b = document.createElement("button");
+  b.className = "filter-btn" + (activeLayer === String(n) ? " active" : (n === "all" && activeLayer === "all" ? " active" : ""));
+  b.textContent = label;
+  if (n !== "all") {
+    b.style.borderColor = LAYERS.find((L) => L.n === n).color;
+    b.style.color = LAYERS.find((L) => L.n === n).color;
+  }
+  b.onclick = () => {
+    activeLayer = String(n);
+    [...layerFilter.children].forEach((c) => c.classList.remove("active"));
+    b.classList.add("active");
+    renderMechs();
+  };
+  return b;
+}
+layerFilter.appendChild(makeFilterBtn("all", "All"));
+LAYERS.forEach((L) => layerFilter.appendChild(makeFilterBtn(L.n, `L${L.n}`)));
+
+function renderMechs() {
+  const q = mechSearch.value.toLowerCase().trim();
+  mechGrid.innerHTML = "";
+  MECHS.forEach((m) => {
+    const matchesLayer = activeLayer === "all" || String(m.layer) === activeLayer;
+    const haystack = (m.title + " " + m.where + " " + m.body + " " + m.pills.join(" ") + " " + (m.tags || []).join(" ")).toLowerCase();
+    const matchesQ = !q || haystack.includes(q);
+    if (!matchesLayer || !matchesQ) return;
+    const L = LAYERS.find((l) => l.n === m.layer);
+    const card = document.createElement("div");
+    card.className = "mech-card";
+    card.style.borderLeftColor = L.color;
+    card.innerHTML = `
+      <div class="card-h">
+        <span class="badge" style="background: ${L.color};">${m.n}</span>
+        <h3>${m.title}</h3>
+        <span class="layer-tag" style="color: ${L.color};">L${m.layer}</span>
+      </div>
+      <div class="meta">${m.where}</div>
+      <div class="body">${m.body}</div>
+      <div class="pills">${m.pills.map((p) => `<span class="pill">${p}</span>`).join("")}</div>
+      ${m.code ? `<div class="more">show source</div><div class="detail"><pre>${m.code}</pre></div>` : ""}
+    `;
+    if (m.code) {
+      card.onclick = () => card.classList.toggle("expanded");
+    }
+    mechGrid.appendChild(card);
+  });
+  if (mechGrid.children.length === 0) {
+    mechGrid.innerHTML = `<div style="padding: 40px; text-align: center; color: var(--text-dim);">No mechanisms match.</div>`;
+  }
+}
+mechSearch.addEventListener("input", renderMechs);
+renderMechs();
+
+// ---- WALK ----
+const walkBar = document.getElementById("walk-bar");
+const walkDetail = document.getElementById("walk-detail");
+let walkActive = 0;
+STEPS.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.className = "step-pill";
+  if (s.layer !== null) b.style.borderLeft = `3px solid ${LAYERS.find((L) => L.n === s.layer).color}`;
+  b.textContent = `${i + 1}. ${s.title}`;
+  b.onclick = () => setWalk(i);
+  walkBar.appendChild(b);
+});
+function setWalk(i) {
+  walkActive = i;
+  [...walkBar.children].forEach((p, j) => p.classList.toggle("active", j === i));
+  const s = STEPS[i];
+  const L = s.layer !== null ? LAYERS.find((l) => l.n === s.layer) : null;
+  walkDetail.innerHTML = `
+    <div class="step-num" style="${L ? `background: ${L.color}; color: #0F0F1A;` : ""}">STEP ${i + 1}${L ? ` · LAYER ${L.n}` : ""}</div>
+    <h3>${s.title}</h3>
+    <div class="what">${s.what}</div>
+    <div class="hits">
+      <div class="label">Mechanisms that fire</div>
+      ${s.hits.map((h) => `<div class="hit-row">→ ${h}</div>`).join("")}
+    </div>
+  `;
+  document.getElementById("prev-btn").disabled = i === 0;
+  document.getElementById("next-btn").disabled = i === STEPS.length - 1;
+}
+function walkStep(d) { setWalk(Math.max(0, Math.min(STEPS.length - 1, walkActive + d))); }
+setWalk(0);
+
+document.addEventListener("keydown", (e) => {
+  if (document.querySelector(".tab.active").dataset.tab !== "walk") return;
+  if (e.key === "ArrowLeft") walkStep(-1);
+  if (e.key === "ArrowRight") walkStep(1);
+});
+
+// ---- CONFIG ----
+const configRows = document.getElementById("config-rows");
+const configSearch = document.getElementById("config-search");
+function renderConfig() {
+  const q = configSearch.value.toLowerCase().trim();
+  configRows.innerHTML = CONFIG.filter((c) => {
+    if (!q) return true;
+    return (c.knob + " " + c.def + " " + c.where + " " + c.what).toLowerCase().includes(q);
+  }).map((c) => {
+    const L = LAYERS.find((l) => l.n === c.layer);
+    return `<tr>
+      <td class="layer-cell"><span class="layer-pill" style="background: ${L.color};">L${c.layer}</span></td>
+      <td class="path">${c.knob}</td>
+      <td><code>${c.def}</code></td>
+      <td class="path">${c.where}</td>
+      <td>${c.what}</td>
+    </tr>`;
+  }).join("");
+}
+configSearch.addEventListener("input", renderConfig);
+renderConfig();
+
+// ---- SYMPTOMS ----
+const symptomsGrid = document.getElementById("symptoms-grid");
+SYMPTOMS.forEach((s) => {
+  const L = LAYERS.find((l) => l.n === s.layer);
+  const card = document.createElement("div");
+  card.className = "sym-card";
+  card.style.borderLeftColor = L.color;
+  card.innerHTML = `
+    <div class="symptom">${s.sym}</div>
+    <div class="cause">
+      <span class="layer" style="background: ${L.color};">Layer ${s.layer}</span>
+      ${s.cause}
+    </div>
+  `;
+  symptomsGrid.appendChild(card);
+});
+
+// ---- TABS ----
+document.querySelectorAll(".tab").forEach((t) => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    document.getElementById("panel-" + t.dataset.tab).classList.add("active");
+  };
+});
+</script>
+</body>
+</html>

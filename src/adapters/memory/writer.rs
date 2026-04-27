@@ -1,4 +1,9 @@
 //! Post-turn memory writes — spawned, non-blocking.
+//!
+//! **Phase 7.1 note:** like `injector.rs`, this module's only remaining
+//! caller is `ChatOrchestratorPortImpl` (the planner-side LLM turn). Subagent
+//! step output writes go through `compress_and_store` → `tengu_outputs`
+//! instead.
 
 use crate::adapters::memory::manager::MemoryManager;
 use std::sync::Arc;

@@ -101,6 +101,7 @@ mod tests {
             agent: "x".into(),
             goal: "g".into(),
             depends_on: vec![],
+            compose: None,
         }
     }
 

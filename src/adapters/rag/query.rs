@@ -16,12 +16,20 @@ pub async fn search_registry(
 ) -> Result<Vec<RagResult>> {
     let vec = rag.embedder().embed(query).await?;
     // Pull more raw hits than requested so the dedup pass below has room
-    // to merge per-agent duplicates (description + example_queries vectors)
-    // without dropping below the caller's requested top_k. 4× is empirical:
-    // each agent contributes at most 2 vectors today, so 2× would suffice
-    // for agents alone, but tools/skills are single-vector and we want to
-    // keep their representation fair after dedup.
-    let raw_k = top_k.saturating_mul(4).max(top_k + 8);
+    // to merge per-agent duplicates (description + per-example vectors)
+    // without dropping below the caller's requested top_k.
+    //
+    // Worst-case shape after the per-example-vector landing: an agent with
+    // N example queries contributes 1 + N raw vectors. Today's max is 10
+    // examples → 11 vectors per agent. If the query is highly relevant to
+    // one agent, all of its vectors can crowd the head of the result list,
+    // and the dedup pass collapses them into ONE row. To leave room for
+    // tools/skills/other agents after dedup, we over-fetch generously.
+    //
+    // 6× is empirical: it covers up to ~16 example queries per agent at
+    // top_k=10 without starving the result. Bump if you push example_queries
+    // counts higher.
+    let raw_k = top_k.saturating_mul(6).max(top_k + 16);
     let hits = rag.registry().search(&vec, raw_k, None).await?;
     let mut results: Vec<RagResult> = hits.into_iter().filter_map(hit_to_result).collect();
 
@@ -37,10 +45,29 @@ pub async fn search_registry(
 }
 
 pub async fn search_memory(rag: &RagStore, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
-    // Phase 1: searches `tengu_outputs` only. `tengu_messages` is loaded
-    // deterministically elsewhere (last-N by session_id, Phase 4).
+    // Phase 1: searches `tengu_outputs` only. `tengu_messages` has its own
+    // accessor (`search_messages`, Phase 6.4 full) so callers can choose
+    // explicitly which bucket they want — outputs are high-signal step
+    // results, messages are conversational and noisier.
     let vec = rag.embedder().embed(query).await?;
     let hits = rag.outputs().search(&vec, top_k, None).await?;
+    Ok(hits.into_iter().filter_map(hit_to_result).collect())
+}
+
+/// Phase 6.4 (full) — semantic search over `tengu_messages`. Forward-compat
+/// hook: today no caller injects these into a planner prompt, but the
+/// persistence side (`RagPlanner::persist_user_message`) writes to this
+/// collection on every turn, so the data is accumulating. A follow-up
+/// commit can wire this into the planner prompt as a "Cross-session
+/// message recall" block, gated on a config knob.
+///
+/// Returns hits without any session_id filtering — single-user case is the
+/// dominant deployment, and pulling all-sessions lets the planner reason
+/// about long-running threads. Multi-tenant deployments will want to add
+/// a session_id filter via `ChunkMetadata` once VectorStore exposes it.
+pub async fn search_messages(rag: &RagStore, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
+    let vec = rag.embedder().embed(query).await?;
+    let hits = rag.messages().search(&vec, top_k, None).await?;
     Ok(hits.into_iter().filter_map(hit_to_result).collect())
 }
 

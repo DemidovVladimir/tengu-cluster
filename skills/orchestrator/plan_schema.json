@@ -46,6 +46,29 @@
                 "type": "array",
                 "items": { "type": "string" },
                 "description": "Step ids whose completed_outputs this step will consume."
+              },
+              "compose": {
+                "type": "object",
+                "description": "Phase 6.7 (C→B B-half) — optional. When present, the runner loads agents/<base_agent>.toml as the spec then OVERRIDES skills+tools with these values for THIS run only. Use ONLY after a prior turn asked the user to confirm a generic-agent fallback (REDESIGN §11). For normal routing, leave out.",
+                "additionalProperties": false,
+                "properties": {
+                  "base_agent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Exact agent name to load from agents/<name>.toml as the base spec — typically the closest-matching agent from the RAG roster."
+                  },
+                  "skills": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Skill names to attach for this run. Replaces the base spec's skills list. Each must be a real skill the three-tier scanner can find."
+                  },
+                  "tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Tool names to attach for this run. Replaces the base spec's tools list. Each must be a real registered tool."
+                  }
+                },
+                "required": ["base_agent"]
               }
             },
             "required": ["id", "agent", "goal", "depends_on"]

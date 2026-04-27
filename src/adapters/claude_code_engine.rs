@@ -132,6 +132,20 @@ impl ClaudeCodeEngine {
         if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP") {
             env["TENGU_PERSISTENT_STORE_CHUNK_OVERLAP"] = serde_json::Value::String(v);
         }
+        // Phase 7.6 — forward session id so the bridge's compress_and_store
+        // handler stamps writes to tengu_outputs with the right key.
+        // Without this the plugin falls back to the placeholder "subagent".
+        if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
+            env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
+        }
+        // Forward OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
+        // + Embedder) and the compress_and_store plugin's RagStore both need it.
+        // The MCP config replaces inherited env, so without explicit forwarding
+        // the bridge process boots without API access and memory tools silently
+        // fail to register.
+        if let Ok(v) = std::env::var("OPENROUTER_API_KEY") {
+            env["OPENROUTER_API_KEY"] = serde_json::Value::String(v);
+        }
         serde_json::json!({
             "mcpServers": {
                 "tengu-tools": {

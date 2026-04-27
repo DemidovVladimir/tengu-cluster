@@ -16,94 +16,266 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::agents::AgentSpec;
+use crate::adapters::config::McpServerConfig;
 use crate::adapters::rag::{registry_metadata, RagKind, RagStore, SkillEntry};
 use crate::adapters::types::ToolDef;
 
 /// Counts + loaded inputs returned from a full registry reindex. The CLI
 /// uses the spec/entry lists for its per-item listing; the auto-reindex
 /// path on chat startup only looks at the counts.
+///
+/// Phase 6.2 — `unchanged: true` means the workspace fingerprint
+/// (sha256 over all agent TOMLs + skill MDs + tool defs) matched the
+/// cached value at `<root>/.tengu/registry-fingerprint`, and the heavy
+/// reindex (clear + re-embed every entry) was skipped. In that case
+/// `*_indexed` counts are 0 — they describe what THIS call wrote, not
+/// what's already in the registry. `agent_specs` and `skill_entries`
+/// are still populated so the CLI listing still works.
 pub struct RegistryReindexed {
     pub tools_indexed: usize,
     pub agents_indexed: usize,
     pub skills_indexed: usize,
     pub agent_specs: Vec<AgentSpec>,
     pub skill_entries: Vec<SkillEntry>,
+    pub unchanged: bool,
 }
 
-/// Phase 2 placeholder tool descriptions. Phase 3 (item 6.6 in the handoff)
-/// replaces this with a real enumeration of compiled-in + MCP tools.
-/// Kept here rather than `main.rs` so the auto-reindex on chat startup
-/// (`channel_runtime::build_orchestrator`) can reuse it without bouncing
-/// through the binary crate.
-pub fn placeholder_tools() -> Vec<ToolDef> {
-    vec![
-        ToolDef {
-            name: "http_request".to_string(),
-            description:
-                "Perform an HTTP request (GET/POST/PUT/DELETE). Use for web scraping, \
-                 REST API calls, fetching documents. Not for file I/O."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "read_file".to_string(),
-            description:
-                "Read a file from the local workspace. Returns text content. \
-                 Scoped to agent workspace by default."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "list_directory".to_string(),
-            description:
-                "List the contents of a directory on the local workspace. Returns \
-                 filenames and types. Scoped to agent workspace."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "run_command".to_string(),
-            description:
-                "Run a shell command inside the agent workspace. For builds, tests, \
-                 git operations, and other filesystem-local work."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "remember".to_string(),
-            description:
-                "Store a short fact for cross-session recall via the memory provider. \
-                 Use for user preferences and facts that should persist."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-        ToolDef {
-            name: "persistent_store".to_string(),
-            description:
-                "Store, search, list, or delete files against a semantic index. \
-                 Use for longer-lived document storage that should be queryable by \
-                 natural language."
-                    .to_string(),
-            parameters: serde_json::json!({}),
-        },
-    ]
+/// Phase 6.2 — relative path inside the workspace where the fingerprint
+/// is persisted. Same dotdir other tengu state goes into.
+const FINGERPRINT_PATH: &str = ".tengu/registry-fingerprint";
+
+/// Phase 6.2 — env var to bypass the fingerprint check and force a full
+/// reindex even when nothing changed. Useful for recovery (e.g. after a
+/// botched manual write to Qdrant) or for testing.
+const FORCE_REINDEX_ENV: &str = "TENGU_REGISTRY_FORCE_REINDEX";
+
+/// Phase 6.2 — compute a stable workspace fingerprint over every input
+/// the indexer would consume, returning a hex sha256.
+///
+/// What goes in (sorted-by-name for order stability):
+/// - Each agent spec serialized as `(name, description, model, joined skills/tools, joined example_queries)`.
+/// - Each skill entry serialized as `(name, description)`.
+/// - Each tool def (built-in + MCP) serialized as `(name, description)`.
+///
+/// Order matters for stability: any change to ordering would invalidate
+/// every previous fingerprint. The serialization is deliberately tab/
+/// newline-separated to make hash collisions across legitimately-different
+/// inputs vanishingly unlikely while staying easy to reason about.
+fn compute_workspace_fingerprint(
+    agent_specs: &[AgentSpec],
+    skill_entries: &[SkillEntry],
+    tool_defs: &[ToolDef],
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+
+    let mut agents: Vec<&AgentSpec> = agent_specs.iter().collect();
+    agents.sort_by(|a, b| a.name.cmp(&b.name));
+    for a in agents {
+        hasher.update(b"AGENT\t");
+        hasher.update(a.name.as_bytes());
+        hasher.update(b"\t");
+        hasher.update(a.description.as_bytes());
+        hasher.update(b"\t");
+        hasher.update(a.model.as_bytes());
+        hasher.update(b"\t");
+        hasher.update(a.skills.join(",").as_bytes());
+        hasher.update(b"\t");
+        hasher.update(a.tools.join(",").as_bytes());
+        hasher.update(b"\t");
+        hasher.update(a.example_queries.join("|").as_bytes());
+        hasher.update(b"\n");
+    }
+
+    let mut skills: Vec<&SkillEntry> = skill_entries.iter().collect();
+    skills.sort_by(|a, b| a.name.cmp(&b.name));
+    for s in skills {
+        hasher.update(b"SKILL\t");
+        hasher.update(s.name.as_bytes());
+        hasher.update(b"\t");
+        hasher.update(s.description.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    let mut tools: Vec<&ToolDef> = tool_defs.iter().collect();
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    for t in tools {
+        hasher.update(b"TOOL\t");
+        hasher.update(t.name.as_bytes());
+        hasher.update(b"\t");
+        hasher.update(t.description.as_bytes());
+        hasher.update(b"\n");
+    }
+
+    let bytes = hasher.finalize();
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Full registry reindex: clear, then index placeholder tools + every
-/// `agents/<name>.toml` under `<root>/agents/` + every discovered skill in
-/// the three-tier scan rooted at `<root>`. Called by both the manual
-/// `tengu registry reindex-all` CLI subcommand and the auto-reindex hook
-/// on chat startup. Caller decides whether to fail loudly or fail-soft.
-pub async fn reindex_all_workspace(rag: &RagStore, root: &Path) -> Result<RegistryReindexed> {
+/// Phase 6.2 — read the cached fingerprint at `<root>/.tengu/registry-fingerprint`.
+/// Returns `None` if the file is missing or unreadable (treated as
+/// fingerprint-mismatch downstream).
+fn read_cached_fingerprint(root: &Path) -> Option<String> {
+    std::fs::read_to_string(root.join(FINGERPRINT_PATH))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Phase 6.2 — write the new fingerprint, creating parent dirs as needed.
+/// Failure is logged and swallowed because the worst case is a redundant
+/// reindex on next startup, never a data-correctness issue.
+fn write_cached_fingerprint(root: &Path, fingerprint: &str) {
+    let path = root.join(FINGERPRINT_PATH);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::warn!(error = %e, path = %path.display(), "fingerprint write skipped: mkdir failed");
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(&path, fingerprint) {
+        tracing::warn!(error = %e, path = %path.display(), "fingerprint write skipped: write failed");
+    }
+}
+
+/// Phase 6.6 — real built-in tool enumeration. Returns the FULL roster of
+/// tools compiled into the binary (workspace + memory + cache +
+/// persistent_store + skill_distill + http + crypto). We use
+/// `compute_bridge_tools` rather than `compute_base_tools` so the
+/// registry sees every built-in regardless of whether the active agent
+/// has memory or specific workspace_tools opt-ins — the registry's job is
+/// to advertise capability, not gate it.
+///
+/// Replaces the prior `placeholder_tools()` set of 6 hardcoded `ToolDef`s.
+/// The `has_memory` flag is `true` so the memory plugin's tools (e.g.
+/// `remember`) are included; `workspace_tools` lists every opt-in name so
+/// `compute_bridge_tools` includes their tool defs too.
+pub fn enumerate_builtin_tools() -> Vec<ToolDef> {
+    let workspace_tools = [
+        "shared_cache".to_string(),
+        "persistent_store".to_string(),
+        crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME.to_string(),
+    ];
+    crate::adapters::channel_runtime::compute_bridge_tools(true, &workspace_tools)
+}
+
+/// Phase 6.6 — enumerate tools from every configured external MCP server.
+///
+/// For each `McpServerConfig`:
+/// - dial the server (stdio or HTTP transport, per `McpClient::connect`),
+/// - call `tools/list` over JSON-RPC,
+/// - flatten each remote tool into a `ToolDef` named `{server}.{tool}`
+///   (matching the qualifier the runtime `McpProxyTool` uses, so the
+///   registry name and the tool-call name stay in lockstep).
+///
+/// Fail-soft per server — a misconfigured / unreachable server logs a
+/// warning and is skipped, never aborting the whole registry reindex.
+/// Returns an empty `Vec` when `servers` is empty.
+pub async fn enumerate_mcp_tools(servers: &[McpServerConfig]) -> Vec<ToolDef> {
+    use crate::adapters::plugins::mcp::client::{McpCaller, McpClient};
+
+    let mut out: Vec<ToolDef> = Vec::new();
+    for cfg in servers {
+        let client = match McpClient::connect(cfg).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    server = %cfg.name,
+                    error = %e,
+                    "rag indexer: MCP server connect failed; skipping (other servers continue)"
+                );
+                continue;
+            }
+        };
+        let manifest = match client.list_tools().await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    server = %cfg.name,
+                    error = %e,
+                    "rag indexer: MCP tools/list failed; skipping (other servers continue)"
+                );
+                continue;
+            }
+        };
+        for remote in manifest {
+            let qualified = format!("{}.{}", cfg.name, remote.name);
+            out.push(ToolDef {
+                name: qualified,
+                description: remote.description,
+                parameters: remote.input_schema,
+            });
+        }
+    }
+    out
+}
+
+/// Full registry reindex: clear, then index built-in tools + MCP tools (if
+/// any servers are configured) + every `agents/<name>.toml` under
+/// `<root>/agents/` + every discovered skill in the three-tier scan rooted
+/// at `<root>`. Called by both the manual `tengu registry reindex-all` CLI
+/// subcommand and the auto-reindex hook on chat startup. Caller decides
+/// whether to fail loudly or fail-soft.
+///
+/// `mcp_servers` is the `Config.mcp_servers` slice. Pass an empty slice
+/// (`&[]`) to skip MCP enumeration — Phase 6.6 made this a first-class
+/// arg so editing `mcp_servers` in the sandbox config and restarting
+/// `tengu chat` automatically refreshes registry MCP entries (same
+/// auto-reindex hook that already covers agents/skills).
+pub async fn reindex_all_workspace(
+    rag: &RagStore,
+    root: &Path,
+    mcp_servers: &[McpServerConfig],
+) -> Result<RegistryReindexed> {
     let agents_dir = root.join("agents");
     let agent_specs = crate::adapters::agents::load_agents_dir(&agents_dir)
         .map_err(|e| anyhow::anyhow!("load agents from {}: {}", agents_dir.display(), e))?;
     let skill_entries = scan_skills(root);
 
+    // Built-in + MCP tools combined. Built-in is sync; MCP enumeration is
+    // async + fail-soft (a dead server doesn't abort reindex).
+    let mut tools = enumerate_builtin_tools();
+    let mcp_tools = enumerate_mcp_tools(mcp_servers).await;
+    tools.extend(mcp_tools);
+
+    // Phase 6.2 — fingerprint-based dedup. Compute a stable hash of every
+    // input the indexer would feed Qdrant, compare with the cached value.
+    // On match, skip the heavy clear+embed+upsert sequence entirely (the
+    // entries are already in tengu_registry from a prior run). On miss,
+    // do the full reindex and update the cache. `TENGU_REGISTRY_FORCE_REINDEX=1`
+    // bypasses the cache for recovery.
+    let fingerprint = compute_workspace_fingerprint(&agent_specs, &skill_entries, &tools);
+    let force = matches!(
+        std::env::var(FORCE_REINDEX_ENV).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("on")
+    );
+    if !force {
+        if let Some(cached) = read_cached_fingerprint(root) {
+            if cached == fingerprint {
+                tracing::info!(
+                    fingerprint = %&fingerprint[..16],
+                    root = %root.display(),
+                    "rag reindex skipped: workspace fingerprint matches cache (set TENGU_REGISTRY_FORCE_REINDEX=1 to override)"
+                );
+                return Ok(RegistryReindexed {
+                    tools_indexed: 0,
+                    agents_indexed: 0,
+                    skills_indexed: 0,
+                    agent_specs,
+                    skill_entries,
+                    unchanged: true,
+                });
+            }
+        }
+    }
+
     rag.clear_registry().await?;
-    let tools_indexed = rag.index_tools(placeholder_tools()).await?;
+    let tools_indexed = rag.index_tools(tools).await?;
     let agents_indexed = rag.index_agents(agent_specs.clone()).await?;
     let skills_indexed = rag.index_skills(skill_entries.clone()).await?;
+
+    // Cache write happens AFTER successful reindex so a partial-failure
+    // doesn't leave a fingerprint that masks an incomplete registry.
+    write_cached_fingerprint(root, &fingerprint);
 
     Ok(RegistryReindexed {
         tools_indexed,
@@ -111,6 +283,7 @@ pub async fn reindex_all_workspace(rag: &RagStore, root: &Path) -> Result<Regist
         skills_indexed,
         agent_specs,
         skill_entries,
+        unchanged: false,
     })
 }
 
@@ -139,23 +312,35 @@ pub async fn index_tools(rag: &RagStore, tools: Vec<ToolDef>) -> Result<usize> {
 
 /// Upsert agent specs into `tengu_registry` as `kind = agent`. Does not clear.
 ///
-/// Each agent gets ONE vector for its description; if `example_queries` is
-/// non-empty it ALSO gets a second vector built from those examples. Both
-/// vectors carry the same `(kind=agent, name)` so search-side dedup picks
-/// the higher-scoring one. The example-queries vector dramatically improves
-/// recall for short user questions, since the embedded text now mirrors the
-/// kind of phrasing the user actually types.
+/// Each agent gets ONE vector for its description; in addition, every entry
+/// in `example_queries` is embedded as its OWN vector. All vectors carry the
+/// same `(kind=agent, name)` metadata so the search-side dedup in
+/// `query::search_registry` collapses them to one row at the requested agent's
+/// max score. Decoupling embedded text from stored snippet text lets us:
+/// - embed the BARE example string (tight cosine similarity to user queries),
+/// - store the FULL description as the snippet so the planner LLM sees the
+///   same context regardless of which vector won.
+///
+/// The previous design joined all examples into a single vector, which meant
+/// a query matching one example out of N only matched ~1/N of that vector and
+/// scores capped near 0.35. Per-example vectors push real matches into the
+/// 0.5–0.7 range — wider gap to non-matches, more decisive routing. See
+/// SESSION_HANDOFF.md "Per-example vectors (registry recall, v2)".
 pub async fn index_agents(rag: &RagStore, agents: Vec<AgentSpec>) -> Result<usize> {
     let mut count = 0usize;
     for agent in &agents {
         let source = agent.source_path.as_deref().map(|p| p.to_string_lossy().to_string());
 
-        // Vector 1 — description (always written).
-        let desc_text = format!("{}\n\n{}", agent.name, agent.description);
-        match rag.embedder().embed(&desc_text).await {
+        // The "snippet" text — what the planner LLM reads when this agent is
+        // surfaced. Stays identical across all of this agent's vectors so
+        // dedup-by-(kind,name) doesn't make snippet content score-dependent.
+        let snippet = format!("{}\n\n{}", agent.name, agent.description);
+
+        // Vector 1 — description (always written). Embedded text == snippet.
+        match rag.embedder().embed(&snippet).await {
             Ok(v) => {
                 let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
-                if let Err(e) = rag.registry().write(v, &desc_text, meta).await {
+                if let Err(e) = rag.registry().write(v, &snippet, meta).await {
                     tracing::warn!(agent = %agent.name, error = %e, "registry write (desc) failed");
                     continue;
                 }
@@ -167,29 +352,35 @@ pub async fn index_agents(rag: &RagStore, agents: Vec<AgentSpec>) -> Result<usiz
             }
         }
 
-        // Vector 2 — example queries (only if the agent declared any).
-        if !agent.example_queries.is_empty() {
-            let ex_body = agent
-                .example_queries
-                .iter()
-                .map(|q| format!("- {}", q))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let ex_text = format!(
-                "{}\n\nExample questions this agent answers:\n{}",
-                agent.name, ex_body
-            );
-            match rag.embedder().embed(&ex_text).await {
+        // Vectors 2..N — one per example query. Embed the BARE query string
+        // (no agent name, no preamble — preserves cosine similarity); store
+        // the same snippet so the planner reads the full description on hit.
+        for query in &agent.example_queries {
+            let trimmed = query.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match rag.embedder().embed(trimmed).await {
                 Ok(v) => {
                     let meta = registry_metadata(RagKind::Agent, &agent.name, source.as_deref());
-                    if let Err(e) = rag.registry().write(v, &ex_text, meta).await {
-                        tracing::warn!(agent = %agent.name, error = %e, "registry write (examples) failed");
+                    if let Err(e) = rag.registry().write(v, &snippet, meta).await {
+                        tracing::warn!(
+                            agent = %agent.name,
+                            example = %trimmed,
+                            error = %e,
+                            "registry write (example) failed"
+                        );
                     } else {
                         count += 1;
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(agent = %agent.name, error = %e, "embed (examples) failed; skipping examples vector");
+                    tracing::warn!(
+                        agent = %agent.name,
+                        example = %trimmed,
+                        error = %e,
+                        "embed (example) failed; skipping this example"
+                    );
                 }
             }
         }

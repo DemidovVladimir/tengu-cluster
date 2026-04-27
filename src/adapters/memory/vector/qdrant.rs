@@ -260,6 +260,76 @@ impl VectorStore for QdrantVectorStore {
         Ok(true)
     }
 
+    /// Phase 6.3 — filter-based delete by numeric payload field.
+    /// Uses a Qdrant `Filter` with a `Range { lt }` condition on the named
+    /// field (typically `"extra_rag_created_at"`). Two-phase implementation
+    /// because Qdrant's `delete_points(filter)` returns the operation id
+    /// but not a deleted-count: we first scroll the matching points (cap
+    /// at a generous limit per batch — defensive against unbounded purges),
+    /// then delete by id list, returning the precise count we removed.
+    /// On a clean collection (nothing to purge) this is a single empty
+    /// scroll round-trip.
+    async fn delete_older_than(&self, field: &str, cutoff: f64) -> Result<u64> {
+        use qdrant_client::qdrant::{
+            condition::ConditionOneOf, Condition, DeletePointsBuilder, FieldCondition, Filter,
+            PointsIdsList, Range, ScrollPointsBuilder,
+        };
+
+        let condition = Condition {
+            condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+                key: field.to_string(),
+                range: Some(Range {
+                    lt: Some(cutoff),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+        let filter = Filter {
+            must: vec![condition],
+            ..Default::default()
+        };
+
+        // Scroll matching points up to a per-call cap. 10_000 is generous
+        // for a single sweep — if a deployment ever exceeds this, the
+        // caller should run cleanup more often or extend this loop with
+        // pagination.
+        const SWEEP_LIMIT: u32 = 10_000;
+        let scroll = self
+            .client
+            .scroll(
+                ScrollPointsBuilder::new(&self.collection)
+                    .filter(filter.clone())
+                    .limit(SWEEP_LIMIT)
+                    .with_payload(false)
+                    .with_vectors(false),
+            )
+            .await
+            .context("Qdrant scroll for TTL purge failed")?;
+        let ids: Vec<qdrant_client::qdrant::PointId> = scroll
+            .result
+            .into_iter()
+            .filter_map(|p| p.id)
+            .collect();
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let count = ids.len() as u64;
+        // qdrant-client 1.17: `DeletePointsBuilder::points()` takes anything
+        // that implements `Into<PointsSelectorOneOf>`. `PointsIdsList`
+        // satisfies that directly — the same pattern the single-id `delete`
+        // method above uses. Don't wrap in a `PointsSelector` layer.
+        self.client
+            .delete_points(
+                DeletePointsBuilder::new(&self.collection)
+                    .points(PointsIdsList { ids })
+                    .wait(true),
+            )
+            .await
+            .context("Qdrant delete_points (TTL purge) failed")?;
+        Ok(count)
+    }
+
     async fn clear_all(&self) -> Result<()> {
         // Qdrant doesn't expose "delete all" per-collection as a single call;
         // delete the collection and recreate it. Preserves vector config.

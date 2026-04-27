@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu-Cluster · Context Cutting Explorer · 2026-04-27</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --teal: #2DD4BF;
+    --warn: #F59E0B;
+    --pink: #F472B6;
+    --green: #4ADE80;
+    --red: #F87171;
+    --blue: #60A5FA;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 36px 20px;
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .header .sub { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 36px; overflow-x: auto;
+    position: sticky; top: 88px; z-index: 90;
+  }
+  .tab {
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .15s;
+    font-family: inherit;
+  }
+  .tab.active { color: #fff; border-bottom-color: var(--accent-mid); }
+  .tab:hover { color: var(--text); }
+  .content { padding: 28px 36px 80px; max-width: 1320px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: #fff; }
+  h3 { font-size: 13px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+  }
+  code {
+    background: var(--surface2);
+    padding: 2px 6px; border-radius: 3px;
+    color: var(--accent-light);
+  }
+  pre {
+    background: #0a0a14; border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px; margin: 10px 0;
+    overflow-x: auto; font-size: 12px; line-height: 1.55;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--accent-light);
+  }
+  pre .kw { color: var(--pink); }
+  pre .fn { color: var(--blue); }
+  pre .num { color: var(--warn); }
+  pre .str { color: var(--green); }
+  pre .cm { color: var(--text-dim); font-style: italic; }
+
+  /* ===== TOP-LEVEL DIAGRAM ===== */
+  .diagram-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-bottom: 22px;
+  }
+  .diagram-wrap svg { display: block; width: 100%; height: auto; }
+
+  /* ===== MECHANISM CARDS ===== */
+  .mech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+  }
+  .mech-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px;
+    border-left: 4px solid var(--accent);
+    transition: all .15s;
+    cursor: pointer;
+  }
+  .mech-card:hover { background: var(--surface2); }
+  .mech-card.t1 { border-left-color: var(--teal); }
+  .mech-card.t2 { border-left-color: var(--accent-mid); }
+  .mech-card.t3 { border-left-color: var(--warn); }
+  .mech-card.t4 { border-left-color: var(--warn); }
+  .mech-card.t5 { border-left-color: var(--green); }
+  .mech-card .badge {
+    display: inline-block; width: 26px; height: 26px;
+    border-radius: 50%; text-align: center; line-height: 26px;
+    font-size: 13px; font-weight: 700; margin-right: 10px;
+    color: #0a0a14;
+  }
+  .mech-card.t1 .badge { background: var(--teal); }
+  .mech-card.t2 .badge { background: var(--accent-mid); }
+  .mech-card.t3 .badge { background: var(--warn); }
+  .mech-card.t4 .badge { background: var(--warn); }
+  .mech-card.t5 .badge { background: var(--green); }
+  .mech-card h3 {
+    display: flex; align-items: center;
+    font-size: 15px; margin-bottom: 12px; font-weight: 700; color: #fff;
+  }
+  .mech-card .meta {
+    font-size: 11px; color: var(--text-dim);
+    margin-bottom: 12px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .mech-card .meta a { color: var(--accent-mid); text-decoration: none; }
+  .mech-card .body { color: var(--text-muted); font-size: 13px; }
+  .mech-card .config-row {
+    display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap;
+  }
+  .config-pill {
+    padding: 4px 10px; font-size: 11px;
+    background: var(--surface2); color: var(--accent-light);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .mech-card .body-detail { display: none; margin-top: 14px; }
+  .mech-card.expanded .body-detail { display: block; }
+  .mech-card .more-hint {
+    font-size: 11px; color: var(--accent-mid); margin-top: 10px;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .mech-card.expanded .more-hint::before { content: "▼ "; }
+  .mech-card:not(.expanded) .more-hint::before { content: "▶ "; }
+
+  /* ===== WALK-A-TURN PILLS ===== */
+  .walk-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+  .step-pill {
+    padding: 8px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-muted); font-family: inherit;
+  }
+  .step-pill:hover { border-color: var(--accent-mid); color: #fff; }
+  .step-pill.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .step-detail {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 22px; min-height: 320px;
+  }
+  .step-detail .step-num {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    background: var(--accent); color: #fff;
+    padding: 3px 10px; border-radius: 12px; letter-spacing: .5px;
+  }
+  .step-detail h3 { font-size: 18px; margin: 8px 0 12px; color: #fff; }
+  .step-detail .what { color: var(--text); font-size: 14px; margin-bottom: 16px; }
+  .step-detail .files {
+    background: var(--surface2); border-radius: 6px;
+    padding: 12px 16px; margin-bottom: 14px;
+  }
+  .step-detail .files-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-dim); font-weight: 700; margin-bottom: 6px;
+  }
+  .step-detail .file-row {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; padding: 3px 0; color: var(--accent-light);
+  }
+  .step-detail .file-row .desc {
+    color: var(--text-muted); margin-left: 8px;
+    font-family: inherit; font-size: 11px;
+  }
+  .nav-buttons { margin-top: 18px; display: flex; gap: 10px; }
+  .nav-btn {
+    padding: 8px 18px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; font-size: 13px;
+    font-family: inherit; transition: all .15s;
+  }
+  .nav-btn:hover:not(:disabled) {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* ===== TABLES ===== */
+  .data-table {
+    width: 100%; border-collapse: collapse; margin-top: 8px;
+    background: var(--surface); border-radius: 8px; overflow: hidden;
+  }
+  .data-table th, .data-table td {
+    padding: 12px 14px; text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; vertical-align: top;
+  }
+  .data-table th {
+    background: var(--surface2); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px;
+    font-size: 10px; color: var(--text-dim);
+  }
+  .data-table td.path {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--accent-light); font-size: 11px;
+  }
+  .data-table tr:last-child td { border-bottom: none; }
+
+  /* ===== NOT-HAVE BOX ===== */
+  .not-have {
+    background: rgba(248, 113, 113, 0.07);
+    border: 1px solid rgba(248, 113, 113, 0.4);
+    border-left: 4px solid var(--red);
+    padding: 18px 22px; border-radius: 8px;
+    margin-top: 24px;
+  }
+  .not-have h3 { color: var(--red); margin-bottom: 12px; font-size: 14px; }
+  .not-have ul { list-style: none; padding: 0; }
+  .not-have li {
+    padding: 6px 0 6px 18px; position: relative;
+    color: var(--text-muted); font-size: 13px;
+  }
+  .not-have li::before {
+    content: "✗"; position: absolute; left: 0; color: var(--red);
+    font-weight: 700;
+  }
+
+  /* ===== INTERACTIVE DEMO ===== */
+  .demo-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-top: 16px;
+  }
+  .demo-controls {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .demo-controls label { font-size: 12px; color: var(--text-muted); }
+  .demo-controls input[type="range"] { vertical-align: middle; }
+  .demo-controls .val {
+    display: inline-block; min-width: 36px;
+    color: var(--accent-mid); font-weight: 700;
+    font-family: ui-monospace, monospace;
+  }
+  .demo-msgs {
+    background: #0a0a14; border-radius: 6px; padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; line-height: 1.7;
+    max-height: 380px; overflow-y: auto;
+  }
+  .msg {
+    padding: 6px 10px; border-radius: 4px; margin-bottom: 4px;
+    border-left: 3px solid var(--border); transition: all .25s;
+  }
+  .msg.role-system { border-left-color: var(--accent-mid); color: var(--accent-light); }
+  .msg.role-user   { border-left-color: var(--warn); color: var(--warn); }
+  .msg.role-asst   { border-left-color: var(--blue); color: var(--blue); }
+  .msg.role-tool   { border-left-color: var(--green); color: var(--green); }
+  .msg.compacted   {
+    opacity: .55; text-decoration: line-through wavy var(--accent-mid);
+    color: var(--text-dim) !important;
+  }
+  .msg.dropped     {
+    opacity: .25;
+    background: repeating-linear-gradient(45deg, transparent, transparent 6px, var(--surface2) 6px, var(--surface2) 7px);
+  }
+  .label-tag {
+    display: inline-block; font-size: 9px;
+    font-weight: 700; padding: 1px 6px; border-radius: 3px;
+    margin-left: 6px; text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .label-tag.cut { background: var(--accent); color: #fff; }
+  .label-tag.drop { background: var(--red); color: #0a0a14; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--surface3); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tengu-Cluster · Context-Cutting Explorer · <em style="color: var(--text-muted); font-weight: 400;">(Layer 3 only — focused slice)</em></h1>
+  <div class="sub">2026-04-27 · for ALL 7 layers and ~25 mechanisms see <a href="context-management-2026-04-27.html" style="color: var(--accent-mid); text-decoration: none;">context-management-2026-04-27.html</a> · companion svg: <code>context-cutting-flow-2026-04-27.svg</code></div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="overview">Overview</button>
+  <button class="tab" data-tab="walk">Walk the Loop</button>
+  <button class="tab" data-tab="mechs">5 Mechanisms</button>
+  <button class="tab" data-tab="demo">Live Demo</button>
+  <button class="tab" data-tab="config">Config Knobs</button>
+  <button class="tab" data-tab="missing">What's Missing</button>
+</div>
+
+<div class="content">
+
+<!-- ============ OVERVIEW ============ -->
+<div class="panel active" id="panel-overview">
+  <h2>Five mechanisms — at a glance</h2>
+  <p>None of these are LLM-driven. Tengu has no auto-summarise pass. Old context just falls off the end via <strong>#1</strong>, and old tool results get reduced to their first line via <strong>#2</strong>.</p>
+
+  <div class="diagram-wrap" id="overview-svg"></div>
+
+  <p style="margin-top: 14px;">Each mechanism has a different scope and trigger. Mechanism #2 is the closest tengu has to Claude Code's <code>/compact</code> — and it runs automatically every round of the inner tool loop.</p>
+</div>
+
+<!-- ============ WALK THE LOOP ============ -->
+<div class="panel" id="panel-walk">
+  <h2>Inside <code>collect_engine_response</code> — round by round</h2>
+  <p>Click each step to see what runs. The mid-loop compaction kicks in at round ≥ 1 and walks the prefix every round after that.</p>
+
+  <div class="walk-bar" id="walk-bar"></div>
+  <div class="step-detail" id="walk-detail"></div>
+  <div class="nav-buttons">
+    <button class="nav-btn" id="prev-btn" onclick="walkStep(-1)">← Previous</button>
+    <button class="nav-btn" id="next-btn" onclick="walkStep(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ============ MECHANISMS ============ -->
+<div class="panel" id="panel-mechs">
+  <h2>The five context-cutting mechanisms</h2>
+  <p>Click any card to see the actual code and rationale.</p>
+  <div class="mech-grid" id="mech-grid"></div>
+</div>
+
+<!-- ============ DEMO ============ -->
+<div class="panel" id="panel-demo">
+  <h2>Live demo — what survives the loop</h2>
+  <p>Drag the round slider to advance through the tool-calling loop. Watch which messages get compacted (<span style="color:var(--accent-mid)">strike-through</span>) and which fall off the history window (<span style="color:var(--red)">faded stripe</span>).</p>
+
+  <div class="demo-box">
+    <div class="demo-controls">
+      <label>Round: <span class="val" id="demo-round-val">0</span></label>
+      <input type="range" id="demo-round" min="0" max="5" value="0" step="1" style="width: 240px;">
+      <label style="margin-left: 24px;">history_budget (msgs): <span class="val" id="demo-budget-val">10</span></label>
+      <input type="range" id="demo-budget" min="3" max="15" value="10" step="1" style="width: 200px;">
+    </div>
+    <div class="demo-msgs" id="demo-msgs"></div>
+    <div style="margin-top: 12px; font-size: 11px; color: var(--text-dim);">
+      Legend:  <span class="label-tag cut">CUT</span> compacted via <code>compact_tool_result</code>  ·  <span class="label-tag drop">DROP</span> beyond <code>history_budget</code>
+    </div>
+  </div>
+</div>
+
+<!-- ============ CONFIG ============ -->
+<div class="panel" id="panel-config">
+  <h2>Tunables — defaults from <code>config.rs</code></h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th style="width: 30%;">Knob</th>
+        <th>Default</th>
+        <th>Where</th>
+        <th>What it gates</th>
+      </tr>
+    </thead>
+    <tbody id="config-rows"></tbody>
+  </table>
+</div>
+
+<!-- ============ MISSING ============ -->
+<div class="panel" id="panel-missing">
+  <h2>What tengu does NOT have</h2>
+  <p>For comparison with Claude Code / Cursor / similar harnesses.</p>
+  <div class="not-have">
+    <h3>Missing context-management features</h3>
+    <ul>
+      <li><strong>No LLM-driven auto-compact pass.</strong> The model never sees a summary of its own history. Old turns just drop off via the sliding window.</li>
+      <li><strong>No <code>/compact</code> slash-command equivalent</strong> in the TUI. The user cannot manually trigger a compaction pass.</li>
+      <li><strong>No semantic dedupe</strong> of repeated tool calls. If the model calls <code>http_request</code> with the same URL twice in one turn, both full responses sit in context.</li>
+      <li><strong>No retrieval over prior turns of the current session</strong> for the chat loop. <code>tengu_messages</code> exists but <code>cross_session_recall_block</code> is the only consumer (planner-side, opt-in).</li>
+      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RagPlanner::replan</code> reads it (cross-plan recall) — not the per-turn chat history.</li>
+      <li><strong>Claude Code engine has no in-loop compaction at all.</strong> That's why <code>max_mcp_result_chars</code> exists as a hard cap on bridge-routed tool results — it's the only context governor on that path.</li>
+    </ul>
+  </div>
+
+  <h2 style="margin-top: 28px;">Compare: durable per-step summarisation</h2>
+  <p><code>compress_and_store</code> looks similar but is on a different axis. It writes a one-shot LLM-produced summary of a finished subagent step to Qdrant <code>tengu_outputs</code> for cross-plan recall — it never trims any LLM's input. See <a href="compression-flow-2026-04-27.svg" style="color: var(--accent-mid);">compression-flow-2026-04-27.svg</a>.</p>
+</div>
+
+</div>
+
+<script>
+// =====================================================================
+// DATA
+// =====================================================================
+const STEPS = [
+  {
+    title: "Turn assembly",
+    where: "chat_builder.rs::ChatTurn::run",
+    what: "Before any engine call, the chat layer arithmetics out a token budget for the message history and picks the newest contiguous suffix that fits.",
+    files: [
+      ["src/adapters/chat_builder.rs", "L370 — assemble_recent_history(messages, history_budget)"],
+      ["src/adapters/prompt_budget.rs", "compute_base_input_budget, assemble_recent_history"],
+    ],
+    cuts: ["1"],
+    detail: "history_budget = total_input − system_tokens − memory_tokens. The window is capped at 20 messages even when budget would allow more — bounding pathological-history cases."
+  },
+  {
+    title: "Round 0 — first engine call",
+    where: "engine_builder.rs::collect_engine_response",
+    what: "Stream the model. Get back text + tool_calls + token usage. No compaction yet.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L599 — for round in 0..tool_rounds"],
+      ["src/adapters/engine_builder.rs", "L610 — run_single_engine_turn"],
+    ],
+    cuts: [],
+    detail: "If tool_calls is empty AND response ends with [OUTPUT_TRUNCATED], inject a 'continue from where you left off' user message and loop. That's mechanism #5 — extends, doesn't cut."
+  },
+  {
+    title: "Round 0 — execute tool calls",
+    where: "engine_builder.rs L682",
+    what: "compact_cutoff snapshot. Push assistant msg with tool_calls. For each call: execute, then truncate_tool_result(result, max_tool_result_chars), push as Role::Tool.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L673 — compact_cutoff = messages.len()"],
+      ["src/adapters/engine_builder.rs", "L702 — truncate_tool_result(&result, result_chars_limit)"],
+      ["src/adapters/engine_builder.rs", "L878 — fn truncate_tool_result"],
+    ],
+    cuts: ["3", "4"],
+    detail: "compact_cutoff is the watermark the next round's compaction pass uses. truncate_tool_result is char-cap with [truncated — showing X of Y chars] footer; max_mcp_result_chars (#4) caps bridge-routed results separately inside Claude Code engine."
+  },
+  {
+    title: "Round 1 — repeat",
+    where: "engine_builder.rs (round=1)",
+    what: "Engine call again. Model sees: system + memory + history-suffix + assistant(round0) + tool_results(round0) + new context. New tool_calls dispatched, new results pushed.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L673-L709 — same body, round 2"],
+    ],
+    cuts: [],
+    detail: "Tool results from round 0 are still at FULL size at this point — they were pushed before the round 1 engine call. Only AFTER round 1's tool calls run does compaction kick in."
+  },
+  {
+    title: "Round 1 — IN-PLACE COMPACTION",
+    where: "engine_builder.rs L714",
+    what: "if round >= 1: walk messages[..compact_cutoff]. For each Role::Tool message in that prefix, rewrite content via compact_tool_result(content, 200). First-line-only.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L714-L723 — in-place rewrite"],
+      ["src/adapters/engine_builder.rs", "L855 — fn compact_tool_result"],
+    ],
+    cuts: ["2"],
+    detail: "This is the closest tengu has to Claude Code's /compact. The rationale (in the inline comment): tool results 'typically put key info on the first line' — tx hashes, IDs, status — so keeping the first line preserves the model's working memory of what happened without paying for the body."
+  },
+  {
+    title: "Round 2..N",
+    where: "engine_builder.rs (round=2+)",
+    what: "Same pattern. Every round re-walks the prefix. Already-compacted results stay short. New round's results are full size until the round AFTER them.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L599-L724"],
+    ],
+    cuts: [],
+    detail: "Loop exits when: model emits no tool_calls, token_budget exceeded, max_tool_rounds hit (default 70), or cancel flag set. On token-budget exceeded, returns immediately with a warn log."
+  },
+  {
+    title: "Loop exit",
+    where: "engine_builder.rs L727",
+    what: "If we exhausted all rounds without the model producing a final text, force one last engine turn with tools=[] to extract a closing message.",
+    files: [
+      ["src/adapters/engine_builder.rs", "L727 — force final turn"],
+    ],
+    cuts: [],
+    detail: "Most well-behaved sessions exit normally on round k where the model produces text instead of tool_calls. The fallback at L727 catches the model-stuck-calling-tools case."
+  },
+];
+
+const MECHS = [
+  {
+    n: 1, tier: "t1",
+    title: "Sliding history window",
+    where: "prompt_budget.rs::assemble_recent_history",
+    file: "src/adapters/prompt_budget.rs:8",
+    body: "Picks the newest contiguous suffix of <code>state.messages</code> whose token estimate fits <code>history_budget</code>. Hard ceiling of 20 messages even when budget allows more.",
+    config: ["MAX_HISTORY_MESSAGES = 20", "history_budget computed per turn"],
+    code: `<span class="kw">pub(crate) fn</span> <span class="fn">assemble_recent_history</span>(
+    messages: &[Message],
+    history_budget: <span class="kw">usize</span>,
+) -&gt; HistoryAssembly {
+    <span class="kw">const</span> MAX_HISTORY_MESSAGES: <span class="kw">usize</span> = <span class="num">20</span>;
+    <span class="cm">// ...</span>
+    <span class="kw">for</span> msg <span class="kw">in</span> recent.iter().rev() {
+        <span class="kw">let</span> msg_tokens = estimate_tokens_approx_min1(&amp;msg.content);
+        <span class="kw">if</span> used + msg_tokens &gt; history_budget { <span class="kw">break</span>; }
+        used += msg_tokens;
+        selected_rev.push(msg.clone());
+    }
+    selected_rev.reverse();
+    <span class="cm">// ...</span>
+}`,
+  },
+  {
+    n: 2, tier: "t2",
+    title: "Mid-loop in-place compaction",
+    where: "engine_builder.rs::compact_tool_result",
+    file: "src/adapters/engine_builder.rs:855",
+    body: "After round ≥ 1 of the tool-calling loop, walks <code>messages[..compact_cutoff]</code> and rewrites every <code>Role::Tool</code> message in place to its first line, capped at <code>compact_result_limit</code> (default 200 chars). The closest tengu has to Claude Code's <code>/compact</code>.",
+    config: ["compact_result_limit = 200 chars", "kicks in at round &gt;= 1"],
+    code: `<span class="kw">fn</span> <span class="fn">compact_tool_result</span>(content: &amp;<span class="kw">str</span>, limit: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
+    <span class="kw">if</span> content.len() &lt;= limit { <span class="kw">return</span> content.to_string(); }
+    <span class="cm">// Take the first line — most tool results put key info there.</span>
+    <span class="kw">let</span> first_line = content.lines().next().unwrap_or(content);
+    <span class="kw">if</span> first_line.len() &lt;= limit { <span class="kw">return</span> first_line.to_string(); }
+    <span class="cm">// First line itself is too long — truncate it.</span>
+    <span class="kw">let</span> <span class="kw">mut</span> end = limit;
+    <span class="kw">while</span> end &gt; <span class="num">0</span> &amp;&amp; !first_line.is_char_boundary(end) { end -= <span class="num">1</span>; }
+    <span class="fn">format!</span>(<span class="str">"{}…"</span>, &amp;first_line[..end])
+}
+
+<span class="cm">// Caller (engine_builder.rs L714):</span>
+<span class="kw">if</span> round &gt;= <span class="num">1</span> {
+    <span class="kw">for</span> msg <span class="kw">in</span> &amp;<span class="kw">mut</span> messages[..compact_cutoff] {
+        <span class="kw">if</span> <span class="fn">matches!</span>(msg.role, Role::Tool) {
+            <span class="kw">let</span> compacted = compact_tool_result(&amp;msg.content, compact_limit);
+            <span class="kw">if</span> compacted != msg.content { msg.content = compacted; }
+        }
+    }
+}`,
+  },
+  {
+    n: 3, tier: "t3",
+    title: "Per-result truncation",
+    where: "engine_builder.rs::truncate_tool_result",
+    file: "src/adapters/engine_builder.rs:878",
+    body: "Each tool result is char-capped at <code>max_tool_result_chars</code> (default 300_000) when it's first inserted into <code>messages</code>. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe.",
+    config: ["max_tool_result_chars = 300_000", "applied on every tool result"],
+    code: `<span class="kw">fn</span> <span class="fn">truncate_tool_result</span>(result: &amp;<span class="kw">str</span>, max_chars: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
+    <span class="kw">match</span> token::<span class="fn">truncate_at_boundary</span>(result, max_chars) {
+        <span class="kw">None</span> =&gt; result.to_string(),
+        <span class="kw">Some</span>((prefix, end)) =&gt; <span class="fn">format!</span>(
+            <span class="str">"{}\\n\\n[truncated — showing {} of {} chars]"</span>,
+            prefix, end, result.len()
+        ),
+    }
+}`,
+  },
+  {
+    n: 4, tier: "t4",
+    title: "MCP bridge cap",
+    where: "claude_code_engine.rs (env <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>)",
+    file: "src/adapters/claude_code_engine.rs:520",
+    body: "Caps tool results returned to the Claude Code CLI through the MCP bridge. Default <strong>50_000 chars / ~12.5K tokens</strong>. Exists because the Claude Code engine has NO per-turn compaction of its own — without this, bridge-routed tools would leak unbounded context into Claude.",
+    config: ["max_mcp_result_chars = 50_000", "TENGU_BRIDGE_MAX_RESULT_CHARS env"],
+    code: `<span class="cm">// claude_code_engine.rs L520:</span>
+<span class="kw">let</span> mcp_limit = context.max_mcp_result_chars.unwrap_or(<span class="num">50_000</span>);
+
+<span class="cm">// Forwarded to the bridge subprocess as env (L120):</span>
+<span class="str">"TENGU_BRIDGE_MAX_RESULT_CHARS"</span>: max_mcp_result_chars.to_string()`,
+  },
+  {
+    n: 5, tier: "t5",
+    title: "[OUTPUT_TRUNCATED] auto-continue",
+    where: "engine_builder.rs (L637)",
+    file: "src/adapters/engine_builder.rs:637",
+    body: "Not really cutting — the inverse. When the model's own response ends with the truncation sentinel, the engine appends <code>\"Your output was truncated. Continue from where you left off.\"</code> as a user turn and re-rolls.",
+    config: ["sentinel: [OUTPUT_TRUNCATED]", "extends, doesn't cut"],
+    code: `<span class="kw">if</span> tool_calls.is_empty()
+    &amp;&amp; !tools.is_empty()
+    &amp;&amp; round &lt; tool_rounds - <span class="num">1</span>
+    &amp;&amp; response_text.ends_with(<span class="str">"[OUTPUT_TRUNCATED]"</span>)
+{
+    <span class="kw">let</span> clean_text = response_text
+        .trim_end_matches(<span class="str">"[OUTPUT_TRUNCATED]"</span>)
+        .trim().to_string();
+    messages.push(Message { role: Role::Assistant, content: clean_text, .. });
+    messages.push(Message {
+        role: Role::User,
+        content: <span class="str">"Your output was truncated. Continue from where you left off."</span>.into(),
+        ..
+    });
+    <span class="kw">continue</span>;
+}`,
+  },
+];
+
+const CONFIG = [
+  ["limits.max_tool_rounds", "70", "config.rs:424", "Hard cap on tool-calling rounds inside collect_engine_response."],
+  ["limits.max_tool_result_chars", "300_000", "config.rs:427", "Per-tool-result char cap (mechanism #3)."],
+  ["limits.compact_result_limit", "200", "config.rs:433", "First-line clip threshold for in-place compaction (mechanism #2)."],
+  ["limits.max_mcp_result_chars", "50_000", "config.rs:436", "Bridge-side cap for Claude Code engine (mechanism #4)."],
+  ["limits.context_window", "1_000_000", "config.rs:421", "Model context window — feeds reserved_output_tokens arithmetic."],
+  ["limits.max_tokens_per_flow", "100_000", "config.rs:440", "Flow-level token budget. Caps total_input_budget."],
+  ["limits.stream_event_timeout_secs", "120", "config.rs:430", "Idle-stream timeout — orthogonal to context but lives in the same struct."],
+  ["MAX_HISTORY_MESSAGES", "20 (hardcoded)", "prompt_budget.rs:12", "Hard ceiling on history-window mechanism (#1)."],
+  ["memory.persistent_store_chunk_size", "1000 chars", "config.rs:610", "File chunking — orthogonal to in-turn cutting."],
+  ["memory.persistent_store_chunk_overlap", "200 chars", "config.rs:613", "File chunking — orthogonal to in-turn cutting."],
+];
+
+// =====================================================================
+// SVG (top-level overview diagram, embedded inline)
+// =====================================================================
+const OVERVIEW_SVG = `
+<svg viewBox="0 0 1280 580" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, monospace">
+  <defs>
+    <marker id="oArr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+  <style>
+    .ov-panel { fill: #1A1A2E; stroke: #2D2D4A; stroke-width: 1.4; rx: 8; }
+    .ov-mech { stroke-width: 2; rx: 8; }
+    .ov-t1 { stroke: #2DD4BF; }
+    .ov-t2 { stroke: #A78BFA; }
+    .ov-t3 { stroke: #F59E0B; }
+    .ov-t4 { stroke: #F59E0B; }
+    .ov-t5 { stroke: #4ADE80; }
+    .ov-text { fill: #E2E8F0; font-size: 12px; }
+    .ov-title { fill: #FFFFFF; font-size: 14px; font-weight: 700; }
+    .ov-small { fill: #94A3B8; font-size: 10px; }
+    .ov-edge { stroke: #94A3B8; stroke-width: 1.4; fill: none; }
+    .ov-bx { fill: #242438; }
+    .ov-circle { font-size: 13px; font-weight: 700; }
+  </style>
+
+  <!-- Phase A panel -->
+  <rect class="ov-panel" x="20" y="40" width="540" height="200"/>
+  <text x="36" y="64" class="ov-title">A. Turn assembly  (chat_builder)</text>
+  <text x="36" y="84" class="ov-small">runs once per chat turn before the engine call</text>
+
+  <rect class="ov-bx" x="36" y="100" width="240" height="50" rx="6"/>
+  <text x="48" y="122" class="ov-text">system + memory + history</text>
+  <text x="48" y="138" class="ov-small">budget arithmetic in prompt_budget.rs</text>
+
+  <rect class="ov-mech ov-t1" x="296" y="100" width="248" height="50" fill="#1A1A2E"/>
+  <circle cx="316" cy="125" r="14" fill="#2DD4BF"/>
+  <text x="316" y="130" text-anchor="middle" class="ov-circle" fill="#0a0a14">1</text>
+  <text x="338" y="120" class="ov-text" font-weight="700">CUT — sliding window</text>
+  <text x="338" y="138" class="ov-small">assemble_recent_history (≤ 20 msgs)</text>
+
+  <text x="36" y="180" class="ov-text">Output: <tspan font-family="ui-monospace" fill="#A78BFA">prompt_messages</tspan> → handed to engine</text>
+  <text x="36" y="200" class="ov-small">— this is what the model sees as "history"</text>
+
+  <!-- Arrow A → B -->
+  <path class="ov-edge" d="M 560 140 L 612 140" marker-end="url(#oArr)"/>
+
+  <!-- Phase B panel -->
+  <rect class="ov-panel" x="620" y="40" width="640" height="380"/>
+  <text x="636" y="64" class="ov-title">B. Tool-calling loop  (engine_builder::collect_engine_response)</text>
+  <text x="636" y="84" class="ov-small">for round in 0..max_tool_rounds (default 70)</text>
+
+  <!-- Round 0 -->
+  <rect class="ov-bx" x="636" y="100" width="608" height="60" rx="6"/>
+  <text x="648" y="122" class="ov-text" font-weight="700">Round 0</text>
+  <text x="648" y="142" class="ov-small">engine call → text + tool_calls → execute → push tool results</text>
+
+  <!-- #3 + #4 + #5 callouts -->
+  <rect class="ov-mech ov-t3" x="636" y="170" width="190" height="56" fill="#1A1A2E"/>
+  <circle cx="656" cy="198" r="13" fill="#F59E0B"/>
+  <text x="656" y="203" text-anchor="middle" class="ov-circle" fill="#0a0a14">3</text>
+  <text x="676" y="192" class="ov-text" font-weight="700" font-size="11">truncate_tool_result</text>
+  <text x="676" y="210" class="ov-small">cap 300_000 chars / result</text>
+
+  <rect class="ov-mech ov-t4" x="836" y="170" width="190" height="56" fill="#1A1A2E"/>
+  <circle cx="856" cy="198" r="13" fill="#F59E0B"/>
+  <text x="856" y="203" text-anchor="middle" class="ov-circle" fill="#0a0a14">4</text>
+  <text x="876" y="192" class="ov-text" font-weight="700" font-size="11">MCP bridge cap</text>
+  <text x="876" y="210" class="ov-small">50_000 chars (Claude Code)</text>
+
+  <rect class="ov-mech ov-t5" x="1036" y="170" width="208" height="56" fill="#1A1A2E"/>
+  <circle cx="1056" cy="198" r="13" fill="#4ADE80"/>
+  <text x="1056" y="203" text-anchor="middle" class="ov-circle" fill="#0a0a14">5</text>
+  <text x="1076" y="192" class="ov-text" font-weight="700" font-size="11">[OUTPUT_TRUNCATED]</text>
+  <text x="1076" y="210" class="ov-small">auto-continue (extends)</text>
+
+  <!-- Round 1 -->
+  <rect class="ov-bx" x="636" y="240" width="608" height="60" rx="6"/>
+  <text x="648" y="262" class="ov-text" font-weight="700">Round 1+</text>
+  <text x="648" y="282" class="ov-small">engine call → execute → push results → THEN compact prefix</text>
+
+  <!-- #2 callout (the BIG one) -->
+  <rect class="ov-mech ov-t2" x="636" y="310" width="608" height="92" fill="#1A1A2E" stroke-width="2.5"/>
+  <circle cx="664" cy="340" r="18" fill="#A78BFA"/>
+  <text x="664" y="346" text-anchor="middle" class="ov-circle" fill="#0a0a14" font-size="16">2</text>
+  <text x="694" y="334" class="ov-text" font-weight="700" font-size="14">CUT — mid-loop in-place compaction (the main one)</text>
+  <text x="694" y="354" class="ov-small">if round &gt;= 1: walk messages[..compact_cutoff], rewrite every Role::Tool to first line</text>
+  <text x="694" y="372" class="ov-small">capped at compact_result_limit = 200 chars · UTF-8 safe · idempotent across rounds</text>
+  <text x="694" y="390" class="ov-small" fill="#A78BFA">closest thing tengu has to Claude Code's /compact</text>
+
+  <!-- Bottom note -->
+  <rect class="ov-panel" x="20" y="450" width="1240" height="100" stroke="#F87171"/>
+  <text x="36" y="476" class="ov-title" fill="#F87171">What we DO NOT have</text>
+  <text x="36" y="500" class="ov-small">— No LLM-driven auto-summarise pass. No /compact slash command. No semantic dedupe of repeated tool calls.</text>
+  <text x="36" y="518" class="ov-small">— Subagent step traces never feed back into the planner's history. Only the compress_and_store summary survives.</text>
+  <text x="36" y="536" class="ov-small">— Claude Code engine has zero in-loop compaction; max_mcp_result_chars (#4) is the only governor on that path.</text>
+</svg>
+`;
+
+// =====================================================================
+// RENDERING
+// =====================================================================
+document.getElementById("overview-svg").innerHTML = OVERVIEW_SVG;
+
+// ---- WALK ----
+const walkBar = document.getElementById("walk-bar");
+const walkDetail = document.getElementById("walk-detail");
+let walkActive = 0;
+STEPS.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.className = "step-pill";
+  b.textContent = `${i + 1}. ${s.title}`;
+  b.onclick = () => setWalk(i);
+  walkBar.appendChild(b);
+});
+function setWalk(i) {
+  walkActive = i;
+  [...walkBar.children].forEach((p, j) => p.classList.toggle("active", j === i));
+  const s = STEPS[i];
+  const cuts = s.cuts.length
+    ? `<div style="margin-top: 14px; padding: 10px 14px; background: rgba(124,58,237,0.1); border-left: 3px solid var(--accent); border-radius: 4px;">
+         <strong style="color: var(--accent-mid);">Triggers cut${s.cuts.length > 1 ? "s" : ""}: #${s.cuts.join(", #")}</strong>
+       </div>` : "";
+  walkDetail.innerHTML = `
+    <div class="step-num">STEP ${i + 1}</div>
+    <h3>${s.title}</h3>
+    <div class="what">${s.what}</div>
+    <div class="files">
+      <div class="files-label">Files</div>
+      ${s.files.map(([p, d]) => `<div class="file-row">${p}<span class="desc">${d}</span></div>`).join("")}
+    </div>
+    <p style="font-size: 13px; color: var(--text-muted);">${s.detail}</p>
+    ${cuts}
+  `;
+  document.getElementById("prev-btn").disabled = i === 0;
+  document.getElementById("next-btn").disabled = i === STEPS.length - 1;
+}
+function walkStep(d) { setWalk(Math.max(0, Math.min(STEPS.length - 1, walkActive + d))); }
+setWalk(0);
+
+document.addEventListener("keydown", (e) => {
+  if (document.querySelector(".tab.active").dataset.tab !== "walk") return;
+  if (e.key === "ArrowLeft") walkStep(-1);
+  if (e.key === "ArrowRight") walkStep(1);
+});
+
+// ---- MECHS ----
+const mechGrid = document.getElementById("mech-grid");
+MECHS.forEach((m) => {
+  const card = document.createElement("div");
+  card.className = `mech-card ${m.tier}`;
+  card.innerHTML = `
+    <h3><span class="badge">${m.n}</span>${m.title}</h3>
+    <div class="meta">${m.where} <br>${m.file}</div>
+    <div class="body">${m.body}</div>
+    <div class="config-row">
+      ${m.config.map((c) => `<span class="config-pill">${c}</span>`).join("")}
+    </div>
+    <div class="more-hint">show source</div>
+    <div class="body-detail"><pre>${m.code}</pre></div>
+  `;
+  card.onclick = () => card.classList.toggle("expanded");
+  mechGrid.appendChild(card);
+});
+
+// ---- CONFIG ----
+const configRows = document.getElementById("config-rows");
+CONFIG.forEach(([k, v, w, d]) => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td class="path">${k}</td><td><code>${v}</code></td><td class="path">${w}</td><td>${d}</td>`;
+  configRows.appendChild(tr);
+});
+
+// ---- DEMO ----
+const demoMsgs = document.getElementById("demo-msgs");
+const demoRoundEl = document.getElementById("demo-round");
+const demoBudgetEl = document.getElementById("demo-budget");
+const demoRoundVal = document.getElementById("demo-round-val");
+const demoBudgetVal = document.getElementById("demo-budget-val");
+
+// Simulated message log: per round, what gets added.
+// Each entry: { round, role, label, content }
+const DEMO_TIMELINE = [
+  { r: 0, role: "system", label: "system",       content: "You are a helpful research agent. Tools: http_request, persistent_store..." },
+  { r: 0, role: "user",   label: "user (turn 1)",content: "Find me the BTC price and save it to a file." },
+  { r: 0, role: "asst",   label: "round 0 ↓ asst", content: "I'll fetch the price first." },
+  { r: 0, role: "tool",   label: "round 0 tool: http_request", content: "{ \"bitcoin\": { \"usd\": 91234.56 } }   <... 47kb of headers, rate-limit info, etag ...>" },
+  { r: 1, role: "asst",   label: "round 1 ↓ asst", content: "Now saving to file." },
+  { r: 1, role: "tool",   label: "round 1 tool: persistent_store", content: "stored as file_id=f7a2  (chunks: 1, total chars: 38)   <... full manifest JSON ...>" },
+  { r: 2, role: "asst",   label: "round 2 ↓ asst", content: "Verifying the saved value." },
+  { r: 2, role: "tool",   label: "round 2 tool: read_file", content: "91234.56\n<... timestamp, source, more ...>" },
+  { r: 3, role: "asst",   label: "round 3 ↓ asst", content: "Cross-referencing CoinGecko." },
+  { r: 3, role: "tool",   label: "round 3 tool: http_request", content: "{ \"price\": 91240.10 }   <... 30kb response body ...>" },
+  { r: 4, role: "asst",   label: "round 4 ↓ asst", content: "Final answer ready." },
+  { r: 5, role: "asst",   label: "round 5 ↓ asst", content: "BTC is approximately $91,234.56 (CoinGecko)." },
+];
+
+function renderDemo() {
+  const round = parseInt(demoRoundEl.value);
+  const budget = parseInt(demoBudgetEl.value);
+  demoRoundVal.textContent = round;
+  demoBudgetVal.textContent = budget;
+
+  const visible = DEMO_TIMELINE.filter((m) => m.r <= round);
+  const dropFrom = Math.max(0, visible.length - budget);
+
+  demoMsgs.innerHTML = visible.map((m, idx) => {
+    const dropped = idx < dropFrom;
+    // compaction: at round R >= 1, all Role::Tool with m.r < R get compacted (first-line, cap 200)
+    const compacted = !dropped && m.role === "tool" && round >= 1 && m.r < round;
+    let content = m.content;
+    if (compacted) {
+      // simulate first-line, ≤200 chars
+      const firstLine = content.split("\n")[0];
+      content = firstLine.length <= 200 ? firstLine : firstLine.slice(0, 200) + "…";
+    }
+    const tag = dropped
+      ? `<span class="label-tag drop">DROP</span>`
+      : compacted
+      ? `<span class="label-tag cut">CUT</span>`
+      : "";
+    return `<div class="msg role-${m.role} ${dropped ? "dropped" : ""} ${compacted ? "compacted" : ""}">
+      <strong>[${m.label}]</strong>${tag} ${escape(content)}
+    </div>`;
+  }).join("");
+}
+function escape(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+demoRoundEl.addEventListener("input", renderDemo);
+demoBudgetEl.addEventListener("input", renderDemo);
+renderDemo();
+
+// ---- TABS ----
+document.querySelectorAll(".tab").forEach((t) => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    document.getElementById("panel-" + t.dataset.tab).classList.add("active");
+  };
+});
+</script>
+</body>
+</html>

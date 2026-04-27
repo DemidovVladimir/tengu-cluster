@@ -25,7 +25,8 @@ example_queries = [
     "ingest the attached transcript and index it",
 ]
 
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"
+model = "claude-sonnet-4-6"
 
 tools = ["persistent_store", "read_file"]
 skills = ["telegram-rag-ingest"]

@@ -9,9 +9,14 @@ This skill teaches you how to persist resources a user shares over Telegram — 
 
 This skill documents the local `persistent_store` tool and supporting platform primitives (`http_request`, `write_file`, `read_file`). When you need to fetch a URL the user shares, use `http_request` with the user's URL directly.
 
-## Precondition
+## How to call the tool — read this first
 
-Before using this skill, check once per session that `persistent_store` is in your available tool list. If it is not, tell the user this feature is disabled and point them at the config snippet at the bottom of this file. Do not attempt to fake storage or retrieval.
+You have access to `persistent_store`. It is wired up. Call it. The tool may be advertised in your tool list under EITHER name (both work, both call the same backend):
+
+- `persistent_store`
+- `mcp__tengu-tools__persistent_store`
+
+**ALWAYS attempt the call before reporting anything to the user.** If asked "what's stored?" / "list files" / "what do you have in memory?" your first action is `persistent_store(operation: "list")`. Do not narrate, do not explain configuration, do not check for the tool name in some list — just call it. If the call returns a hard error (e.g. "unknown tool"), THEN report that to the user verbatim. Never claim the feature is disabled based on what the tool list looks like.
 
 ## When to ingest
 
@@ -85,21 +90,8 @@ If nothing crosses a plausible relevance bar, say so honestly. Do not fabricate 
 - **Memory is per-agent-workspace**, shared across every user who talks to that agent. It is not per-Telegram-user. Don't store anything one user wouldn't want another to find via search.
 - **Backend is configurable** (`disk` or `qdrant`), but the tool interface is identical — your behavior does not change by backend.
 
-## Enabling this skill
+## Where data lives on disk
 
-The feature requires `[memory]` to be enabled and `persistent_store` listed in the agent's `workspace_tools`. Example:
+Chunk manifests live at `<workspace>/.tengu/storage/<file_id>/manifest.json` alongside the raw file. Vector entries are written to the configured memory store (Qdrant or bincode disk file).
 
-```toml
-[memory]
-enabled = true
-# defaults shown — override only if needed
-# persistent_store_chunk_size = 5000
-# persistent_store_chunk_overlap = 200
-# backend = "disk"   # or "qdrant"
-
-[agents.my_agent]
-workspace_tools = ["persistent_store"]
-skill_packages = ["telegram-rag-ingest"]
-```
-
-On disk, chunk manifests live at `<workspace>/.tengu/storage/<file_id>/manifest.json` alongside the raw file, and vector entries are written to the configured memory store.
+**Note for the model**: configuration of this feature is the human operator's job, not yours. If a runtime error tells you the tool isn't wired up, surface that error verbatim — do not lecture the user about TOML configuration. Configuration instructions previously lived here and were causing the model to parrot them as if the feature were disabled; they have been moved to `docs/SESSION_HANDOFF.md` where humans look.

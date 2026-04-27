@@ -159,6 +159,20 @@ pub struct Config {
     /// Absent by default — the subsystem is fully opt-in.
     #[serde(default)]
     pub skill_lifecycle: Option<crate::adapters::skill_lifecycle::config::SkillLifecycleConfig>,
+
+    /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
+    /// `None` for the default user config. Populated by `load_sandbox_or` in
+    /// `main.rs`. Plumbed through `SubprocessRunner` and the IPC payload so
+    /// `tengu run-agent` children resolve `sandboxes/<name>/config.toml` for
+    /// scopes/secrets/MCP servers — without this the parent + child would
+    /// see different scope rules and tool calls would scope-deny in the
+    /// child even when the sandbox config in the parent allows them.
+    ///
+    /// `#[serde(skip)]` because this is a runtime-resolved field, never
+    /// written to the TOML on disk. Skip on serialise too so dumping the
+    /// config doesn't leak it.
+    #[serde(skip)]
+    pub sandbox_name: Option<String>,
 }
 
 /// A single external MCP server that tengu connects to as a client.
@@ -614,6 +628,17 @@ pub struct MemoryConfig {
     /// signal/noise apart).
     #[serde(default = "default_cross_plan_top_k")]
     pub cross_plan_top_k: usize,
+    /// Top-K breadth for fuzzy cross-session message recall (vector
+    /// search over `tengu_messages`). Defaults to `0` = off — the planner
+    /// prompt stays unchanged for users who haven't opted in. Pair with
+    /// Phase 6.4 (full) durable user-message persistence: setting this
+    /// to e.g. `3` injects a "Cross-session message recall" block of the
+    /// top-3 semantically-similar prior user messages before the current
+    /// turn, surviving across restarts and across `session_id`s. Use
+    /// sparingly — values >5 inflate the planner prompt without much
+    /// signal gain because conversational text tends to cluster.
+    #[serde(default = "default_cross_session_msg_top_k")]
+    pub cross_session_msg_top_k: usize,
 }
 
 impl Default for MemoryConfig {
@@ -635,6 +660,7 @@ impl Default for MemoryConfig {
             ttl_days: default_ttl_days(),
             session_recent_n: default_session_recent_n(),
             cross_plan_top_k: default_cross_plan_top_k(),
+            cross_session_msg_top_k: default_cross_session_msg_top_k(),
         }
     }
 }
@@ -647,6 +673,9 @@ fn default_session_recent_n() -> usize {
 }
 fn default_cross_plan_top_k() -> usize {
     5
+}
+fn default_cross_session_msg_top_k() -> usize {
+    0
 }
 
 fn default_embedding_model() -> String {
@@ -1083,6 +1112,7 @@ impl Default for Config {
             default_scopes: HashMap::new(),
             mcp_servers: Vec::new(),
             skill_lifecycle: None,
+            sandbox_name: None,
         }
     }
 }

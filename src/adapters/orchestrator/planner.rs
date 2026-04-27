@@ -34,18 +34,6 @@ pub trait Planner: Send + Sync {
 
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
-
-/// Runs the orchestrator as an actual agent (LLM call with memory_search tool).
-pub struct OrchestratorAgentPlanner {
-    orchestrator_agent: String,
-    chat: Arc<dyn OrchestratorChatPort>,
-    #[allow(dead_code)]
-    memory: Arc<MemoryManager>,
-    #[allow(dead_code)]
-    roster_md: String, // cached — computed once at construction time
-}
-
 /// Minimal port the planner needs from the chat runtime (avoids cyclic deps).
 #[async_trait]
 pub trait OrchestratorChatPort: Send + Sync {
@@ -73,61 +61,83 @@ pub trait OrchestratorChatPort: Send + Sync {
     }
 }
 
-impl OrchestratorAgentPlanner {
-    pub fn new(
-        orchestrator_agent: String,
-        chat: Arc<dyn OrchestratorChatPort>,
-        memory: Arc<MemoryManager>,
-        roster_md: String,
-    ) -> Self {
-        Self {
-            orchestrator_agent,
-            chat,
-            memory,
-            roster_md,
+/// Parse the orchestrator LLM's response into a [`PlannerVerdict`].
+///
+/// Tolerates four common sloppiness patterns from LLMs:
+///   1. Raw JSON — parses directly.
+///   2. JSON wrapped in markdown fences (```json ... ```).
+///   3. JSON embedded in prose ("Here's my plan: {...}. Let me know if…").
+///   4. **Phase 7.4 — pure-prose fallback.** Some engines (notably
+///      Claude Code CLI) return conversational text even when the system
+///      prompt says JSON-only. When NO balanced `{...}` substring exists
+///      at all, we wrap the whole text as a `Direct { response: ... }`
+///      verdict. This is a safety net — much better UX than a hard parse
+///      error, and the user still gets the model's reply.
+///
+/// Phase 7.1 — promoted from `OrchestratorAgentPlanner::parse_verdict`
+/// (associated function with no `self`) to a free function when that
+/// type was deleted. RagPlanner is the only remaining caller.
+pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
+    let trimmed = raw.trim();
+
+    // Path 1: raw JSON (covers the happy case).
+    if let Ok(v) = serde_json::from_str::<PlannerVerdict>(trimmed) {
+        return Ok(v);
+    }
+
+    // Path 2: markdown fences.
+    let stripped = trimmed.strip_prefix("```json").unwrap_or(trimmed);
+    let stripped = stripped.strip_prefix("```").unwrap_or(stripped);
+    let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
+    if let Ok(v) = serde_json::from_str::<PlannerVerdict>(stripped.trim()) {
+        return Ok(v);
+    }
+
+    // Path 3: JSON embedded in prose. Find the largest balanced {...}
+    // substring (considers brace nesting + string literals with escapes
+    // so "{" inside a string doesn't unbalance the tracker).
+    if let Some(json) = extract_balanced_json_object(trimmed) {
+        if let Ok(v) = serde_json::from_str::<PlannerVerdict>(&json) {
+            return Ok(v);
         }
     }
 
-    /// Parse the orchestrator LLM's response into a `PlannerVerdict`.
-    ///
-    /// Tolerates three common sloppiness patterns from LLMs:
-    ///   1. Raw JSON — parses directly.
-    ///   2. JSON wrapped in markdown fences (```json ... ```).
-    ///   3. JSON embedded in prose ("Here's my plan: {...}. Let me know if…").
-    ///
-    /// For #3, extracts the largest balanced `{...}` substring and parses
-    /// that. Returns a parse error only when no balanced JSON object is
-    /// present at all.
-    pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
-        let trimmed = raw.trim();
-
-        // Path 1: raw JSON (covers the happy case).
-        if let Ok(v) = serde_json::from_str::<PlannerVerdict>(trimmed) {
-            return Ok(v);
-        }
-
-        // Path 2: markdown fences.
-        let stripped = trimmed.strip_prefix("```json").unwrap_or(trimmed);
-        let stripped = stripped.strip_prefix("```").unwrap_or(stripped);
-        let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
-        if let Ok(v) = serde_json::from_str::<PlannerVerdict>(stripped.trim()) {
-            return Ok(v);
-        }
-
-        // Path 3: JSON embedded in prose. Find the largest balanced {...}
-        // substring (considers brace nesting + string literals with escapes
-        // so "{" inside a string doesn't unbalance the tracker).
-        if let Some(json) = extract_balanced_json_object(trimmed) {
-            if let Ok(v) = serde_json::from_str::<PlannerVerdict>(&json) {
-                return Ok(v);
-            }
-        }
-
-        // No viable path — return the serde error for the original trimmed
-        // text (most informative).
-        let verdict: PlannerVerdict = serde_json::from_str(trimmed)?;
-        Ok(verdict)
+    // Path 4 (Phase 7.4): pure-prose fallback. Some engines (Claude Code
+    // CLI in particular) return conversational text even when told to
+    // emit JSON-only. Rather than failing the whole turn, wrap the text
+    // as a Direct verdict — same as if the planner had said
+    // {"kind":"direct","response":"<this prose>"} explicitly.
+    //
+    // Logged at warn-level so users can see this is happening and tune
+    // the SKILL.md or switch engines. Truncated to keep the log line
+    // bounded.
+    if !trimmed.is_empty() {
+        let preview: String = trimmed.chars().take(300).collect();
+        let suffix = if trimmed.chars().count() > 300 { "…" } else { "" };
+        tracing::warn!(
+            preview = %preview,
+            suffix = %suffix,
+            len = trimmed.len(),
+            "planner LLM returned non-JSON text; wrapping as Direct verdict (Phase 7.4 fallback)"
+        );
+        return Ok(PlannerVerdict::Direct {
+            response: trimmed.to_string(),
+        });
     }
+
+    // Truly empty output — return a parse error with the raw text included
+    // so the user can see what the planner LLM actually said.
+    let verdict: PlannerVerdict = serde_json::from_str(trimmed).map_err(|e| {
+        let preview: String = raw.chars().take(300).collect();
+        let suffix = if raw.chars().count() > 300 { "…" } else { "" };
+        anyhow::anyhow!(
+            "planner LLM returned empty/unparseable output: {} (raw: {:?}{})",
+            e,
+            preview,
+            suffix
+        )
+    })?;
+    Ok(verdict)
 }
 
 /// Find the largest `{...}` substring in `s` that is JSON-brace-balanced.
@@ -173,58 +183,12 @@ fn extract_balanced_json_object(s: &str) -> Option<String> {
     None
 }
 
-#[async_trait]
-impl Planner for OrchestratorAgentPlanner {
-    async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
-        let raw = self
-            .chat
-            .run_orchestrator_turn(&self.orchestrator_agent, user_message)
-            .await?;
-        Self::parse_verdict(&raw)
-    }
-
-    async fn replan(
-        &self,
-        user_message: &str,
-        prior_plan: &Plan,
-        failed_step_id: &str,
-        error: &str,
-    ) -> anyhow::Result<PlannerVerdict> {
-        let context = format!(
-            "A previous plan failed.\n\n\
-             Failed step: {}\nError after retries: {}\n\n\
-             Prior plan steps:\n{}\n\n\
-             Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n\
-             Original user message:\n{}",
-            failed_step_id,
-            error,
-            serde_json::to_string_pretty(&prior_plan)?,
-            user_message,
-        );
-        let raw = self
-            .chat
-            .run_orchestrator_turn(&self.orchestrator_agent, &context)
-            .await?;
-        Self::parse_verdict(&raw)
-    }
-}
-
 // =====================================================================
-// RagPlanner — Phase 4 of the redesign.
+// RagPlanner — the only Planner implementation as of Phase 7.1.
 //
-// Same `Planner` trait, same `OrchestratorChatPort` for the LLM call,
-// same `parse_verdict` for tolerant JSON parsing. The ONLY difference
-// from `OrchestratorAgentPlanner` is the roster: instead of a static
-// markdown table baked at startup, the planner queries `tengu_registry`
-// per turn and prepends a top-K ranked list to the user message.
-//
-// What Phase 4 deliberately does NOT do (tracked for later):
-//   - Load skills/orchestrator/SKILL.md as a custom system prompt
-//     (today the orchestrator agent's identity.instructions is used).
-//   - Persist user messages to tengu_messages.
-//   - Inject cross-plan recall context from tengu_outputs on replan.
-//   - Swap ChatWorker for SubprocessRunner (that's Phase 4b).
-//   - Emit OrchestratorEvent::RagQueried.
+// Queries `tengu_registry` per turn and prepends a top-K ranked list to
+// the user message; uses `parse_verdict` (free fn above) for tolerant
+// JSON parsing of the LLM's plan output.
 // =====================================================================
 
 #[cfg(feature = "qdrant")]
@@ -241,12 +205,27 @@ pub struct RagPlanner {
     /// hardcoded minimal instruction if the file is missing.
     system_prompt: String,
     /// Phase 6.4 (lite) — in-memory ring buffer of recent user messages
-    /// for THIS RagPlanner instance. Lets the planner LLM see prior turns
-    /// when the user's current message refers to them ("on coingecko",
-    /// "those platforms"). Tradeoff: lost on restart; mixes turns from
-    /// concurrent Telegram chats sharing one RagPlanner. Phase 6.4 (full)
-    /// will key by session_id and persist via `tengu_messages`.
+    /// for THIS RagPlanner instance. Survives within one channel session,
+    /// lost on restart; mixes turns from concurrent Telegram chats sharing
+    /// one RagPlanner. Used as the source of the "## Recent user messages
+    /// this session" prompt block. Phase 6.4 (full) writes to `tengu_messages`
+    /// in addition for cross-restart durability.
     session_history: tokio::sync::Mutex<Vec<String>>,
+    /// Phase 6.4 (full) — id stamped on every user message we persist to
+    /// `tengu_messages`. Resolution order at construction:
+    /// 1. `TENGU_SESSION_ID` env var if set (lets tests pin a known id;
+    ///    advanced ops users can stitch sessions across restarts manually).
+    /// 2. fresh `Uuid::new_v4()` — matches `SubprocessRunner` per-instance
+    ///    behaviour. NOTE: a fresh UUID per process means restart-pickup
+    ///    does NOT magically work via `WHERE session_id = ?` — the value
+    ///    of writing it now is forward-compat: the writes are durable, and
+    ///    a future commit can wire `search_messages` into the planner
+    ///    prompt for cross-session semantic recall regardless of session_id.
+    session_id: String,
+    /// Phase 6.6 — passed through to `auto_reindex_once` so the registry
+    /// reindex on first chat turn enumerates real MCP tools alongside the
+    /// built-ins. Cloned from `Config.mcp_servers` at planner construction.
+    mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
     /// Phase 6.1 (full) — optional event bus for emitting
     /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
     /// `None` means structured events are silently dropped (the
@@ -260,6 +239,7 @@ impl RagPlanner {
         orchestrator_agent: String,
         chat: Arc<dyn OrchestratorChatPort>,
         memory_config: crate::adapters::config::MemoryConfig,
+        mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
         bus: Option<crate::adapters::orchestrator::events::EventBus>,
     ) -> Self {
         let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
@@ -268,6 +248,18 @@ impl RagPlanner {
             );
             FALLBACK_PLANNER_PROMPT.to_string()
         });
+        // Phase 6.4 (full) — resolve session_id once at construction.
+        // Env override > fresh UUID. Logged at info-level so users can
+        // stitch tracing output back to a specific persisted thread.
+        let session_id = std::env::var("TENGU_SESSION_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        tracing::info!(
+            session_id = %session_id,
+            source = if std::env::var("TENGU_SESSION_ID").is_ok() { "env" } else { "fresh" },
+            "RagPlanner session_id resolved"
+        );
         Self {
             orchestrator_agent,
             chat,
@@ -276,6 +268,8 @@ impl RagPlanner {
             top_k: 20,
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
+            session_id,
+            mcp_servers,
             bus,
         }
     }
@@ -299,7 +293,7 @@ impl RagPlanner {
                     crate::adapters::rag::RagStore::from_config(self.memory_config.clone())
                         .await
                         .map(Arc::new)?;
-                Self::auto_reindex_once(&store).await;
+                self.auto_reindex_once(&store).await;
                 Ok::<_, anyhow::Error>(store)
             })
             .await
@@ -309,7 +303,12 @@ impl RagPlanner {
     /// Called from `rag()` on first init. Errors are logged, never propagated —
     /// the caller's planner pipeline must keep functioning even when the
     /// registry is stale.
-    async fn auto_reindex_once(store: &crate::adapters::rag::RagStore) {
+    ///
+    /// Phase 6.6 — passes `self.mcp_servers` through so the reindex
+    /// includes real MCP tools alongside the built-ins. Connecting to
+    /// dead/misconfigured MCP servers is tolerated downstream
+    /// (`enumerate_mcp_tools` is fail-soft per server).
+    async fn auto_reindex_once(&self, store: &crate::adapters::rag::RagStore) {
         let root = match std::env::current_dir() {
             Ok(p) => p,
             Err(e) => {
@@ -317,11 +316,22 @@ impl RagPlanner {
                 return;
             }
         };
-        match crate::adapters::rag::indexer::reindex_all_workspace(store, &root).await {
+        match crate::adapters::rag::indexer::reindex_all_workspace(
+            store,
+            &root,
+            &self.mcp_servers,
+        )
+        .await
+        {
+            Ok(r) if r.unchanged => tracing::info!(
+                root = %root.display(),
+                "auto-reindex skipped: workspace fingerprint unchanged (Phase 6.2 cache hit)"
+            ),
             Ok(r) => tracing::info!(
                 tools = r.tools_indexed,
                 agents = r.agents_indexed,
                 skills = r.skills_indexed,
+                mcp_servers = self.mcp_servers.len(),
                 root = %root.display(),
                 "auto-reindexed tengu_registry on first rag-mode use"
             ),
@@ -329,6 +339,17 @@ impl RagPlanner {
                 error = %e,
                 "auto-reindex failed; continuing with existing registry contents"
             ),
+        }
+
+        // Phase 6.3 — TTL purge on the same cold-start hook. Internally
+        // a no-op when `memory.ttl_days == 0` (default), so this is
+        // free for users who haven't opted in. When >0, sweeps entries
+        // older than the cutoff from tengu_messages + tengu_outputs.
+        // Fail-soft: a Qdrant error logs warn and continues.
+        match store.ttl_cleanup().await {
+            Ok(0) => {} // either ttl_days=0 or nothing to purge — silent
+            Ok(n) => tracing::info!(purged = n, "rag ttl_cleanup purged old entries"),
+            Err(e) => tracing::warn!(error = %e, "rag ttl_cleanup failed; continuing"),
         }
     }
 
@@ -355,6 +376,114 @@ impl RagPlanner {
         let limit = self.memory_config.session_recent_n.max(1);
         let hist = self.session_history.lock().await;
         format_history(&hist, limit)
+    }
+
+    /// Phase 6.4 (full, read-back) — semantic recall over `tengu_messages`.
+    /// Returns a formatted prompt block of the top-K semantically-similar
+    /// prior user messages, or an empty string when:
+    /// - the config knob `memory.cross_session_msg_top_k` is 0 (default,
+    ///   so existing users see no behaviour change),
+    /// - the RagStore is unavailable (Qdrant down, OPENROUTER_API_KEY missing),
+    /// - the search returns nothing (collection empty / cold start), or
+    /// - every hit is a near-duplicate of the current message (filtered out
+    ///   so the LLM doesn't see "the user already asked this").
+    ///
+    /// Called from BOTH `plan()` and `replan()` BEFORE
+    /// `persist_user_message()` so the just-written current message can
+    /// never appear in its own recall block. (The semantic embedder will
+    /// happily return a self-match at score ~1.0 if we read after writing.)
+    async fn cross_session_recall_block(&self, user_message: &str) -> String {
+        let k = self.memory_config.cross_session_msg_top_k;
+        if k == 0 {
+            return String::new();
+        }
+        let rag = match self.rag().await {
+            Ok(r) => r.clone(),
+            Err(e) => {
+                tracing::debug!(error = %e, "skip cross_session_recall: RagStore unavailable");
+                return String::new();
+            }
+        };
+        // Over-fetch a couple slots so we have headroom after dedup-filter.
+        let raw_hits = match rag.search_messages(user_message, k.saturating_add(2)).await {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "cross_session_recall: search_messages failed");
+                return String::new();
+            }
+        };
+        // Filter out exact-content duplicates — the planner has no use for
+        // "the user previously asked X" where X is exactly the current
+        // message. (Edge case: a Qdrant write that already propagated by
+        // the time we read; or genuine repeat queries from the user.)
+        let trimmed_current = user_message.trim();
+        let filtered: Vec<_> = raw_hits
+            .into_iter()
+            .filter(|h| h.description.trim() != trimmed_current)
+            .take(k)
+            .collect();
+        if filtered.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from("\n## Cross-session message recall\n\n");
+        s.push_str("_(semantically-similar prior user messages from `tengu_messages`)_\n\n");
+        for (i, h) in filtered.iter().enumerate() {
+            // Truncate so the planner prompt stays bounded — same 400-char
+            // budget as the lite per-session history block.
+            let snippet: String = h.description.chars().take(400).collect();
+            s.push_str(&format!("{}. score={:.2}  {}\n", i + 1, h.score, snippet));
+            if h.description.chars().count() > 400 {
+                s.push_str("   …(truncated)\n");
+            }
+        }
+        s.push('\n');
+        s
+    }
+
+    /// Phase 6.4 (full) — durably persist a user message to `tengu_messages`.
+    /// Called from `plan()` only (not `replan()`, which receives the same
+    /// `user_message` in the same turn cycle — a second write would create
+    /// a duplicate row). Fail-soft: any error path (RagStore unavailable,
+    /// embedder rate-limit, Qdrant unreachable) is logged and swallowed
+    /// because the planner must still be able to plan + respond.
+    ///
+    /// `step_id` is `None` because this is a top-of-turn user message,
+    /// not a step output. `created_at` is unix-seconds at write time.
+    async fn persist_user_message(&self, user_message: &str) {
+        let trimmed = user_message.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let rag = match self.rag().await {
+            Ok(r) => r.clone(),
+            Err(e) => {
+                tracing::debug!(error = %e, "skip persist_user_message: RagStore unavailable");
+                return;
+            }
+        };
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = crate::adapters::rag::MemoryEntry {
+            kind: crate::adapters::rag::MemoryKind::Message,
+            session_id: self.session_id.clone(),
+            step_id: None,
+            content: trimmed.to_string(),
+            created_at,
+        };
+        match rag.store_memory(entry).await {
+            Ok(id) => tracing::debug!(
+                id = %id,
+                session_id = %self.session_id,
+                "persisted user message to tengu_messages"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                session_id = %self.session_id,
+                "persist_user_message failed; continuing without durable write"
+            ),
+        }
     }
 
     /// Build the ranked-roster markdown block injected before the user message.
@@ -470,14 +599,27 @@ impl Planner for RagPlanner {
         // (when one is wired into this planner).
         emit_rag_query("plan", user_message, &hits, self.bus.as_ref());
 
+        // Phase 6.4 (full, read-back) — semantic recall of prior user
+        // messages from `tengu_messages` BEFORE we persist the current
+        // one, so the just-written message can never appear in its own
+        // recall block by construction. Off when `cross_session_msg_top_k`
+        // is 0 (default). Fail-soft.
+        let cross_session_block = self.cross_session_recall_block(user_message).await;
+
+        // Phase 6.4 (full, write) — durable persist of user message AFTER
+        // the read above. Fail-soft: if embedder or Qdrant is unavailable
+        // we still want to plan and respond (in-memory buffer covers this
+        // turn for "Recent user messages this session" injection).
+        self.persist_user_message(user_message).await;
+
         // Phase 6.4 (lite) — append current message to per-instance
         // history buffer, then format the last N for prompt injection.
         let history_block = self.update_and_format_history(user_message).await;
 
         let roster = Self::format_roster(&hits);
         let combined = format!(
-            "{}{}\n## User message (current turn)\n\n{}",
-            roster, history_block, user_message
+            "{}{}{}\n## User message (current turn)\n\n{}",
+            roster, cross_session_block, history_block, user_message
         );
         let raw = self
             .chat
@@ -487,7 +629,7 @@ impl Planner for RagPlanner {
                 &combined,
             )
             .await?;
-        OrchestratorAgentPlanner::parse_verdict(&raw)
+        parse_verdict(&raw)
     }
 
     async fn replan(
@@ -540,14 +682,20 @@ impl Planner for RagPlanner {
         // earlier in this turn cycle); just read the last N for injection.
         let history_block = self.format_history_only().await;
 
+        // Phase 6.4 (full, read-back) — semantic recall over `tengu_messages`.
+        // Same shape as the plan() call. Independent of the cross-plan
+        // (`tengu_outputs`) recall above; both can appear in the prompt.
+        let cross_session_block = self.cross_session_recall_block(user_message).await;
+
         let roster = Self::format_roster(&hits);
         let context = format!(
-            "{}{}{}\n## A previous plan failed\n\n\
+            "{}{}{}{}\n## A previous plan failed\n\n\
              Failed step: {}\nError after retries: {}\n\n\
              Prior plan steps:\n{}\n\n\
              Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n\
              ## Original user message\n\n{}",
             roster,
+            cross_session_block,
             history_block,
             recall_block,
             failed_step_id,
@@ -563,7 +711,7 @@ impl Planner for RagPlanner {
                 &context,
             )
             .await?;
-        OrchestratorAgentPlanner::parse_verdict(&raw)
+        parse_verdict(&raw)
     }
 }
 
@@ -658,7 +806,7 @@ mod tests {
     #[test]
     fn parses_direct() {
         let raw = r#"{"kind": "direct", "response": "hi"}"#;
-        match OrchestratorAgentPlanner::parse_verdict(raw).unwrap() {
+        match parse_verdict(raw).unwrap() {
             PlannerVerdict::Direct { response } => assert_eq!(response, "hi"),
             _ => panic!(),
         }
@@ -667,7 +815,7 @@ mod tests {
     #[test]
     fn parses_plan() {
         let raw = r#"{"kind": "plan", "steps": [{"id": "s1", "agent": "x", "goal": "g", "depends_on": []}]}"#;
-        match OrchestratorAgentPlanner::parse_verdict(raw).unwrap() {
+        match parse_verdict(raw).unwrap() {
             PlannerVerdict::Plan { plan } => assert_eq!(plan.steps[0].id, StepId::new("s1")),
             _ => panic!(),
         }
@@ -676,18 +824,18 @@ mod tests {
     #[test]
     fn strips_markdown_fences() {
         let raw = "```json\n{\"kind\": \"direct\", \"response\": \"hi\"}\n```";
-        assert!(OrchestratorAgentPlanner::parse_verdict(raw).is_ok());
+        assert!(parse_verdict(raw).is_ok());
     }
 
     #[test]
     fn rejects_malformed_json() {
-        assert!(OrchestratorAgentPlanner::parse_verdict("{").is_err());
+        assert!(parse_verdict("{").is_err());
     }
 
     #[test]
     fn extracts_json_from_prose() {
         let raw = r#"Here's my plan: {"kind": "direct", "response": "hi there"}. Let me know if that works!"#;
-        match OrchestratorAgentPlanner::parse_verdict(raw).unwrap() {
+        match parse_verdict(raw).unwrap() {
             PlannerVerdict::Direct { response } => assert_eq!(response, "hi there"),
             _ => panic!("expected direct"),
         }
@@ -698,7 +846,7 @@ mod tests {
         // String literal contains { and } — must not unbalance the extractor.
         let raw =
             r#"Sure: {"kind": "direct", "response": "the answer has a { brace in it"}. Done."#;
-        let v = OrchestratorAgentPlanner::parse_verdict(raw).unwrap();
+        let v = parse_verdict(raw).unwrap();
         match v {
             PlannerVerdict::Direct { response } => {
                 assert!(response.contains("brace"));
@@ -711,7 +859,7 @@ mod tests {
     fn prefers_raw_json_over_embedded() {
         // Raw JSON should parse without invoking the prose extractor.
         let raw = r#"{"kind": "direct", "response": "{\"embedded\": true}"}"#;
-        let v = OrchestratorAgentPlanner::parse_verdict(raw).unwrap();
+        let v = parse_verdict(raw).unwrap();
         match v {
             PlannerVerdict::Direct { response } => assert_eq!(response, r#"{"embedded": true}"#),
             _ => panic!(),

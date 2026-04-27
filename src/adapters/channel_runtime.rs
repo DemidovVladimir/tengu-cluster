@@ -22,13 +22,14 @@ use std::sync::Arc;
 
 use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
-use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
-use crate::adapters::plugins::crypto::CryptoPlugin;
-use crate::adapters::plugins::http::HttpPlugin;
+// Phase 7.7 — most plugin type imports moved into `register_core_plugins`'s
+// local `use` block. Only McpPlugin + SkillPlugin stay top-level because
+// build_tool_executor still registers them outside the shared helper
+// (they need extra inputs the bridge doesn't have). persistent_store_tool_defs
+// is a module-level helper used by compute_*_tools below.
 use crate::adapters::plugins::mcp::McpPlugin;
-use crate::adapters::plugins::memory::{persistent_store_tool_defs, MemoryPlugin};
+use crate::adapters::plugins::memory::persistent_store_tool_defs;
 use crate::adapters::plugins::skill::SkillPlugin;
-use crate::adapters::plugins::workspace::WorkspacePlugin;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
@@ -146,22 +147,26 @@ pub(crate) fn build_tool_executor(
         memory_manager: memory_manager.clone(),
         secret_registry: Arc::clone(secret_registry),
     };
-    // TODO(Phase B): make build_tool_executor async once the TUI/telegram/orchestrator chain is fully async
-    if let Err(e) = futures::executor::block_on(registry.register_plugin(
-        &WorkspacePlugin,
-        &plugin_ctx,
-        &allowed_list,
-    )) {
-        // Fail closed: if the workspace plugin can't register, return None so
-        // callers treat this agent as having no tools rather than handing the
-        // LLM a registry missing its advertised workspace primitives.
-        tracing::error!(error = %e, "Failed to register workspace plugin — returning no executor");
-        return None;
-    }
 
-    // Skill plugin (A8). Registers one `SkillShellTool` per active shell skill.
-    // Documentation / API skills stay in the system-prompt path and do not
-    // create tools.
+    // Phase 7.7 — register the seven shared plugins via the consolidated
+    // helper (workspace, memory, cache, skill-lifecycle, compress_and_store,
+    // http, crypto). Adding a new shared plugin only requires editing
+    // `register_core_plugins` — both this builder and the MCP bridge pick
+    // it up.
+    futures::executor::block_on(register_core_plugins(
+        &mut registry,
+        &plugin_ctx,
+        &allowed_names,
+        &allowed_list,
+        CoreRegistrationOpts {
+            cancel: cancel.clone(),
+            memory_config,
+        },
+    ));
+
+    // SkillPlugin — in-process only (the bridge has no skill registry).
+    // Registers one `SkillShellTool` per active shell skill. Doc/API skills
+    // stay in the system-prompt path and do not create tools.
     let skill_plugin = SkillPlugin::from_registry(skill_registry);
     register_plugin_safe(
         &mut registry,
@@ -171,74 +176,9 @@ pub(crate) fn build_tool_executor(
         "Failed to register skill plugin — shell skills unavailable",
     );
 
-    // Memory plugin (A5). Registers `memory_ingest` when memory is enabled, plus
-    // `persistent_store` when listed in `workspace_tools`. The plugin itself
-    // gates on `ctx.memory.is_some()`.
-    let ps_chunk_size = memory_config
-        .map(|mc| mc.persistent_store_chunk_size)
-        .unwrap_or(1000);
-    let ps_chunk_overlap = memory_config
-        .map(|mc| mc.persistent_store_chunk_overlap)
-        .unwrap_or(200);
-    let memory_plugin = MemoryPlugin::new(ps_chunk_size, ps_chunk_overlap);
-    register_plugin_safe(
-        &mut registry,
-        &memory_plugin,
-        &plugin_ctx,
-        &allowed_list,
-        "Failed to register memory plugin — memory_ingest/persistent_store unavailable",
-    );
-
-    // Cache plugin (A4). Registers `shared_cache` when `allowed_names` includes
-    // it (i.e. the agent's `workspace_tools` opt-in list).
-    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        register_plugin_safe(
-            &mut registry,
-            &CachePlugin,
-            &plugin_ctx,
-            &allowed_list,
-            "Failed to register cache plugin — shared_cache unavailable",
-        );
-    }
-
-    // Skill-lifecycle plugin. Registers `skill_distill` when the agent opts in
-    // via `workspace_tools = ["skill_distill"]`. The tool writes a new skill
-    // directory from the calling agent's in-context synthesis.
-    if allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME) {
-        register_plugin_safe(
-            &mut registry,
-            &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
-            &plugin_ctx,
-            &allowed_list,
-            "Failed to register skill-lifecycle plugin — skill_distill unavailable",
-        );
-    }
-
-    // HTTP plugin (A2). Registers `http_request`.
-    register_plugin_safe(
-        &mut registry,
-        &HttpPlugin,
-        &plugin_ctx,
-        &allowed_list,
-        "Failed to register http plugin — http_request unavailable",
-    );
-
-    // Crypto plugin (A3). Registers sign_and_send_transaction, sign_message,
-    // get_wallet_address, abi_encode, hex_to_uint256.
-    let crypto_plugin = CryptoPlugin::new(cancel.clone());
-    register_plugin_safe(
-        &mut registry,
-        &crypto_plugin,
-        &plugin_ctx,
-        &allowed_list,
-        "Failed to register crypto plugin — crypto tools unavailable",
-    );
-
-    // MCP plugin (A10). Inbound client — connects to each configured external
-    // MCP server and registers its tools as `{server_name}.{tool_name}`. Only
-    // wired in when at least one server is configured. An empty allow-list is
-    // passed because MCP tool names are dynamic (discovered at runtime) and
-    // would never appear in the static `tools` slice.
+    // MCP plugin — in-process only (the bridge would create double-hop
+    // routing if it advertised inbound MCP). Connects to each configured
+    // external server and registers tools as `{server_name}.{tool_name}`.
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
         register_plugin_safe(
@@ -271,19 +211,141 @@ pub(crate) fn build_tool_executor(
     })
 }
 
+/// Phase 7.7 refactor #5 — single source of truth for the three opt-in
+/// workspace tools. Pre-7.7 this list was duplicated in
+/// `agent_config_from_spec` (as `VALID_WORKSPACE_TOOLS`) and
+/// `mcp_bridge::build_bridge_executor` (as `SYNTHESIZED_WORKSPACE_TOOLS`),
+/// with a real risk that adding a fourth opt-in would silently work in one
+/// path and not the other. Now both filter against this constant.
+///
+/// Adding a new opt-in workspace tool: append the name here, then add
+/// the matching plugin registration in `register_core_plugins`.
+pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] =
+    &["shared_cache", "persistent_store", "skill_distill"];
+
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
 /// the workspace root is writable, any host is reachable, any binary is
 /// runnable, any env var is readable, and the canonical wallet label is
 /// granted so the crypto plugin's `check_wallet` guard succeeds. Phase A
 /// tasks tighten this once each plugin ships.
+///
+/// Phase 7.7 — `pub(crate)` so the MCP bridge calls this instead of
+/// inlining its own copy. Both paths share the same scope shape.
 // TODO(Phase B): replace with per-agent scope once config-scopes land
-fn permissive_scope(workspace: &Path) -> ToolScope {
+pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
         net_hosts: vec!["*".to_string()],
         env_reads: vec!["*".to_string()],
         shell_bins: vec!["*".to_string()],
         wallets: vec![crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string()],
+    }
+}
+
+/// Phase 7.7 — opts struct for `register_core_plugins`. Carries the few
+/// inputs that differ between in-process and bridge call sites (cancel
+/// flag, memory config). The plugin SET registered here is identical
+/// across paths; `SkillPlugin` and `McpPlugin` (which need extra inputs
+/// that don't make sense in the bridge) stay outside this function and
+/// are registered by callers that need them.
+pub(crate) struct CoreRegistrationOpts<'a> {
+    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    pub memory_config: Option<&'a crate::adapters::config::MemoryConfig>,
+}
+
+/// Phase 7.7 — register the SEVEN plugins shared by every executor:
+/// workspace, memory, cache (opt-in), skill-lifecycle (opt-in),
+/// compress_and_store (opt-in, qdrant), http, crypto.
+///
+/// Before this consolidation, `channel_runtime::build_tool_executor` and
+/// `mcp_bridge::build_bridge_executor` each had their own copy of this
+/// registration loop, with subtle drift (different error messages,
+/// different gating order, the bridge missing the compress_and_store
+/// plugin entirely until Phase 7.6 etc.). The "Bug B / Bug C" loop in
+/// `docs/SESSION_HANDOFF.md` was caused by fixing one copy and forgetting
+/// the other. Adding a new shared plugin now means editing this function
+/// once — both call sites pick it up.
+pub(crate) async fn register_core_plugins(
+    registry: &mut crate::adapters::tool_plugin::ToolRegistry,
+    ctx: &crate::adapters::tool_plugin::PluginCtx<'_>,
+    allowed_names: &HashSet<String>,
+    allowed_list: &[String],
+    opts: CoreRegistrationOpts<'_>,
+) {
+    use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
+    use crate::adapters::plugins::crypto::CryptoPlugin;
+    use crate::adapters::plugins::http::HttpPlugin;
+    use crate::adapters::plugins::memory::MemoryPlugin;
+    use crate::adapters::plugins::workspace::WorkspacePlugin;
+
+    // Workspace — read_file, list_directory, write_file, run_command.
+    if let Err(e) = registry.register_plugin(&WorkspacePlugin, ctx, allowed_list).await {
+        tracing::warn!(error = %e, "register_core_plugins: workspace plugin failed");
+    }
+
+    // Memory — memory_ingest unconditionally; persistent_store gated by
+    // ctx.config.workspace_tools (the plugin handles that gating itself).
+    let chunk_size = opts
+        .memory_config
+        .map(|mc| mc.persistent_store_chunk_size)
+        .unwrap_or(1000);
+    let chunk_overlap = opts
+        .memory_config
+        .map(|mc| mc.persistent_store_chunk_overlap)
+        .unwrap_or(200);
+    let memory_plugin = MemoryPlugin::new(chunk_size, chunk_overlap);
+    if let Err(e) = registry.register_plugin(&memory_plugin, ctx, allowed_list).await {
+        tracing::warn!(error = %e, "register_core_plugins: memory plugin failed");
+    }
+
+    // Cache — shared_cache (opt-in via workspace_tools).
+    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
+        if let Err(e) = registry.register_plugin(&CachePlugin, ctx, allowed_list).await {
+            tracing::warn!(error = %e, "register_core_plugins: cache plugin failed");
+        }
+    }
+
+    // Skill-lifecycle — skill_distill (opt-in via workspace_tools).
+    if allowed_names
+        .contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
+    {
+        if let Err(e) = registry
+            .register_plugin(
+                &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
+                ctx,
+                allowed_list,
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "register_core_plugins: skill-lifecycle plugin failed");
+        }
+    }
+
+    // Compress-and-store — qdrant-only, gated on allow-list. Subagents have
+    // it appended implicitly by the runner, so this branch fires for them.
+    #[cfg(feature = "qdrant")]
+    if allowed_names.contains("compress_and_store") {
+        if let Some(mc) = opts.memory_config {
+            let plugin =
+                crate::adapters::plugins::skill_lifecycle::compress_and_store::CompressAndStorePlugin {
+                    memory_config: mc.clone(),
+                };
+            if let Err(e) = registry.register_plugin(&plugin, ctx, allowed_list).await {
+                tracing::warn!(error = %e, "register_core_plugins: compress_and_store plugin failed");
+            }
+        }
+    }
+
+    // HTTP — http_request.
+    if let Err(e) = registry.register_plugin(&HttpPlugin, ctx, allowed_list).await {
+        tracing::warn!(error = %e, "register_core_plugins: http plugin failed");
+    }
+
+    // Crypto — sign_and_send_transaction, sign_message, get_wallet_address,
+    // abi_encode, hex_to_uint256.
+    let crypto_plugin = CryptoPlugin::new(opts.cancel);
+    if let Err(e) = registry.register_plugin(&crypto_plugin, ctx, allowed_list).await {
+        tracing::warn!(error = %e, "register_core_plugins: crypto plugin failed");
     }
 }
 
@@ -399,64 +461,17 @@ pub(crate) fn resolve_qdrant_collection(
 /// backend fails to initialize. Consumed by `build_memory_manager`
 /// (which registers the pair into a `BuiltinMemoryProvider` + the
 /// manager's shared vector backend).
+/// Phase 7.7 refactor #4 — sync wrapper around `build_vector_stack_async`.
+/// Pre-7.7 this was a 60-line copy of the async version with `rt.block_on`
+/// inlined at the Qdrant call. Now it just block_on's the async function.
+/// The duplication of API-key check + path resolution + backend matching
+/// is gone; one source of truth.
 fn build_vector_stack(
     memory_config: &crate::adapters::config::MemoryConfig,
-    #[allow(unused_variables)] rt: &tokio::runtime::Runtime,
+    rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
 ) -> Option<(Arc<Embedder>, Arc<dyn VectorStore>)> {
-    if !memory_config.enabled {
-        return None;
-    }
-
-    let api_key = match std::env::var("OPENROUTER_API_KEY") {
-        Ok(k) => k,
-        Err(_) => {
-            tracing::warn!("OPENROUTER_API_KEY not set, memory disabled");
-            return None;
-        }
-    };
-
-    let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
-    #[allow(unused_variables)]
-    let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
-
-    let store: Option<Arc<dyn VectorStore>> = match memory_config.backend.as_str() {
-        #[cfg(feature = "qdrant")]
-        "qdrant" => {
-            use crate::adapters::memory::vector::QdrantVectorStore;
-            match rt.block_on(QdrantVectorStore::new(
-                &memory_config.qdrant_url,
-                memory_config.qdrant_api_key.as_deref(),
-                &resolved_collection,
-                memory_config.vector_size,
-            )) {
-                Ok(s) => Some(Arc::new(s)),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to init Qdrant vector store, memory disabled");
-                    None
-                }
-            }
-        }
-        #[cfg(not(feature = "qdrant"))]
-        "qdrant" => {
-            tracing::warn!(
-                "Qdrant backend requested but 'qdrant' feature not enabled, falling back to disk"
-            );
-            DiskVectorStore::new(&resolved_store_path)
-                .ok()
-                .map(|s| Arc::new(s) as Arc<dyn VectorStore>)
-        }
-        _ => DiskVectorStore::new(&resolved_store_path)
-            .ok()
-            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
-    };
-
-    let store = store?;
-    let embedder = Arc::new(Embedder::new(
-        api_key,
-        memory_config.embedding_model.clone(),
-    ));
-    Some((embedder, store))
+    rt.block_on(build_vector_stack_async(memory_config, workspace))
 }
 
 /// Build a `MemoryManager` populated with a `BuiltinMemoryProvider` that
@@ -468,9 +483,13 @@ fn build_vector_stack(
 /// Workspace defaults to the current directory when `None` so the
 /// `BuiltinMemoryProvider` has a real path to read AGENTS.md / MEMORY.md
 /// / daily logs from.
-pub(crate) fn build_memory_manager(
+/// Phase 7.6 — async sibling of `build_memory_manager` for callers that
+/// already live inside a tokio context (notably `run_agent_subprocess`,
+/// which can't take a `&Runtime` arg without re-entrant block-on hazards).
+/// Returns the same fully-wired `MemoryManager` — backed by Qdrant or
+/// bincode-disk per `memory_config.backend`.
+pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::adapters::config::MemoryConfig,
-    rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
 ) -> Arc<crate::adapters::memory::manager::MemoryManager> {
     use crate::adapters::memory::builtin::BuiltinMemoryProvider;
@@ -478,7 +497,7 @@ pub(crate) fn build_memory_manager(
 
     let manager = Arc::new(MemoryManager::new());
 
-    let Some((embedder, store)) = build_vector_stack(memory_config, rt, workspace) else {
+    let Some((embedder, store)) = build_vector_stack_async(memory_config, workspace).await else {
         return manager;
     };
 
@@ -491,13 +510,72 @@ pub(crate) fn build_memory_manager(
         Arc::clone(&embedder),
     ));
 
-    let mgr_for_task = Arc::clone(&manager);
-    rt.block_on(async move {
-        mgr_for_task.add_provider(provider).await;
-        mgr_for_task.set_vector_backend(embedder, store).await;
-    });
-
+    manager.add_provider(provider).await;
+    manager.set_vector_backend(embedder, store).await;
     manager
+}
+
+/// Phase 7.6 — async sibling of `build_vector_stack`.
+async fn build_vector_stack_async(
+    memory_config: &crate::adapters::config::MemoryConfig,
+    workspace: Option<&Path>,
+) -> Option<(Arc<Embedder>, Arc<dyn VectorStore>)> {
+    if !memory_config.enabled {
+        return None;
+    }
+    let api_key = match std::env::var("OPENROUTER_API_KEY") {
+        Ok(k) => k,
+        Err(_) => {
+            tracing::warn!("OPENROUTER_API_KEY not set, memory disabled");
+            return None;
+        }
+    };
+    let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
+    #[allow(unused_variables)]
+    let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
+
+    let store: Option<Arc<dyn VectorStore>> = match memory_config.backend.as_str() {
+        #[cfg(feature = "qdrant")]
+        "qdrant" => {
+            use crate::adapters::memory::vector::QdrantVectorStore;
+            match QdrantVectorStore::new(
+                &memory_config.qdrant_url,
+                memory_config.qdrant_api_key.as_deref(),
+                &resolved_collection,
+                memory_config.vector_size,
+            )
+            .await
+            {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to init Qdrant vector store, memory disabled");
+                    None
+                }
+            }
+        }
+        #[cfg(not(feature = "qdrant"))]
+        "qdrant" => DiskVectorStore::new(&resolved_store_path)
+            .ok()
+            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
+        _ => DiskVectorStore::new(&resolved_store_path)
+            .ok()
+            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
+    };
+    let store = store?;
+    let embedder = Arc::new(Embedder::new(api_key, memory_config.embedding_model.clone()));
+    Some((embedder, store))
+}
+
+/// Phase 7.7 refactor #4 — sync wrapper around `build_memory_manager_async`.
+/// Pre-7.7 this duplicated the BuiltinMemoryProvider construction + the
+/// `add_provider` / `set_vector_backend` call sequence. Now those live in
+/// the async function exclusively; this wrapper just block_on's it.
+pub(crate) fn build_memory_manager(
+    memory_config: &crate::adapters::config::MemoryConfig,
+    rt: &tokio::runtime::Runtime,
+    workspace: Option<&Path>,
+) -> Arc<crate::adapters::memory::manager::MemoryManager> {
+    rt.block_on(build_memory_manager_async(memory_config, workspace))
 }
 
 // ---------------------------------------------------------------------------
@@ -762,15 +840,16 @@ use crate::adapters::chat_builder::ChatRuntimeService;
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orchestrator::planner::OrchestratorAgentPlanner;
 #[cfg(feature = "qdrant")]
 use crate::adapters::orchestrator::planner::RagPlanner;
 use crate::adapters::orchestrator::planner::Planner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
-use crate::adapters::orchestrator::roster::render_roster;
-use crate::adapters::orchestrator::wiring::{
-    ChatOrchestratorPortImpl, ChatServiceFactory, ChatWorker,
-};
+// Phase 7.1 (full) — `OrchestratorAgentPlanner`, `ChatWorker`, and the
+// `render_roster` helper were deleted along with the static-mode path.
+// `build_orchestrator` now constructs only `RagPlanner` + `SubprocessRunner`
+// when the qdrant feature is on; without qdrant, orchestration is unavailable
+// (build_orchestrator returns None and channels fall back to direct dispatch).
+use crate::adapters::orchestrator::wiring::{ChatOrchestratorPortImpl, ChatServiceFactory};
 use crate::adapters::orchestrator::Orchestrator;
 use crate::adapters::types::FlowCompactionPolicy;
 use crate::adapters::Engine;
@@ -972,107 +1051,85 @@ impl RuntimeChatServiceFactory {
 
 /// Build the harness-owned `Orchestrator` from config + factory + memory.
 ///
-/// Returns `None` when `config.orchestrator` is absent (orchestration
-/// disabled — channels fall back to direct default-agent dispatch).
+/// Phase 7.1 (full) — only one path remains: `RagPlanner` + `SubprocessRunner`,
+/// gated on the `qdrant` cargo feature. Returns `None` when:
+///   - `config.orchestrator` is absent (orchestration disabled — channels
+///     fall back to direct default-agent dispatch), OR
+///   - the `qdrant` feature is off (orchestration requires the registry +
+///     Qdrant for the planner's RAG roster).
+///
+/// `cfg.engine` is left in the config schema for forward-compatibility (a
+/// future engine variant could land here without a config break) but the
+/// only currently-supported value is `"rag"`. Anything else logs a warning
+/// and disables orchestration for that channel.
 pub(crate) fn build_orchestrator(
     config: &Config,
     chat_factory: Arc<dyn ChatServiceFactory>,
     memory: Arc<MemoryManager>,
 ) -> Option<Orchestrator> {
     let cfg = config.orchestrator.as_ref()?;
-    let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
-        Arc::clone(&chat_factory),
-        Arc::clone(&memory),
-    ));
 
-    // Phase 4b: in `engine = "rag"` mode the worker is the SubprocessRunner
-    // (one subprocess per step via `tengu run-agent`). In every other mode
-    // (default static), it stays the in-process ChatWorker — UNCHANGED.
-    let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
-        if cfg.engine == "rag" {
-            #[cfg(feature = "qdrant")]
-            {
-                tracing::info!(
-                    "orchestrator worker = SubprocessRunner (Phase 4b — child returns canned \
-                     summary until Phase 5 wires the LLM)"
-                );
-                Arc::new(crate::adapters::runner::SubprocessRunner::new())
-            }
-            #[cfg(not(feature = "qdrant"))]
-            {
-                tracing::warn!(
-                    "engine = 'rag' requires the 'qdrant' feature; falling back to ChatWorker"
-                );
-                Arc::new(ChatWorker::new(
-                    Arc::clone(&chat_factory),
-                    Arc::clone(&memory),
-                ))
-            }
-        } else {
-            Arc::new(ChatWorker::new(
-                Arc::clone(&chat_factory),
-                Arc::clone(&memory),
-            ))
-        };
+    if cfg.engine != "rag" {
+        tracing::warn!(
+            engine = %cfg.engine,
+            "[orchestrator] engine != \"rag\" — only the rag engine remains since Phase 7.1; \
+             orchestration disabled for this channel"
+        );
+        return None;
+    }
 
-    // Phase 6.1 (full) — mint the orchestrator event bus *before* the
-    // planner so we can hand the same bus to both. RagPlanner emits
-    // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
-    // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
-    // (TUI, Telegram adapter) see one unified event stream.
-    let bus = crate::adapters::orchestrator::events::new_bus();
+    #[cfg(not(feature = "qdrant"))]
+    {
+        // chat_factory + memory are unused on this path but Rust does not
+        // warn on unused fn parameters — they're dropped when the function
+        // returns. No suppression needed.
+        tracing::warn!(
+            "[orchestrator] engine = \"rag\" requires the 'qdrant' cargo feature; \
+             rebuild with --features qdrant. Orchestration disabled for this channel."
+        );
+        return None;
+    }
 
-    // Phase 4 + 4b: branch on `[orchestrator] engine`.
-    //   * "static" (default) — legacy planner + ChatWorker. UNCHANGED.
-    //   * "rag"              — RagPlanner (queries `tengu_registry` per turn
-    //                          for a ranked roster) + SubprocessRunner
-    //                          (one `tengu run-agent` child per step).
-    //
-    // The worker side branched above; the planner side branches here.
-    let planner: Arc<dyn Planner> = if cfg.engine == "rag" {
-        #[cfg(feature = "qdrant")]
-        {
-            tracing::info!("orchestrator engine = rag (Phase 4 — RagPlanner with lazy RagStore init)");
-            Arc::new(RagPlanner::new(
-                cfg.agent.clone(),
-                chat_port,
-                config.memory.clone(),
-                Some(bus.clone()),
-            ))
-        }
-        #[cfg(not(feature = "qdrant"))]
-        {
-            tracing::warn!(
-                "orchestrator.engine = 'rag' requires the 'qdrant' cargo feature; \
-                 falling back to static planner"
-            );
-            let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
-            Arc::new(OrchestratorAgentPlanner::new(
-                cfg.agent.clone(),
-                chat_port,
-                Arc::clone(&memory),
-                roster,
-            ))
-        }
-    } else {
-        let roster = render_roster(&config.agents, &[cfg.agent.as_str()]);
-        Arc::new(OrchestratorAgentPlanner::new(
+    #[cfg(feature = "qdrant")]
+    {
+        let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
+            Arc::clone(&chat_factory),
+            Arc::clone(&memory),
+        ));
+
+        // Phase 6.1 (full) — mint the orchestrator event bus *before* the
+        // planner so we can hand the same bus to both. RagPlanner emits
+        // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
+        // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
+        // (TUI, Telegram adapter) see one unified event stream.
+        let bus = crate::adapters::orchestrator::events::new_bus();
+
+        tracing::info!(
+            sandbox = ?config.sandbox_name,
+            "orchestrator: engine=rag, planner=RagPlanner, worker=SubprocessRunner"
+        );
+        let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
+            Arc::new(crate::adapters::runner::SubprocessRunner::new(
+                config.sandbox_name.clone(),
+            ));
+        let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
             cfg.agent.clone(),
             chat_port,
-            Arc::clone(&memory),
-            roster,
-        ))
-    };
+            config.memory.clone(),
+            config.mcp_servers.clone(),
+            Some(bus.clone()),
+        ));
 
-    let policy = RetryPolicy::new(cfg.max_attempts_per_step);
-    Some(Orchestrator::new(
-        planner,
-        worker,
-        policy,
-        cfg.max_replans,
-        memory,
-        bus,
-    ))
+        let policy = RetryPolicy::new(cfg.max_attempts_per_step);
+        Some(Orchestrator::new(
+            planner,
+            worker,
+            policy,
+            cfg.max_replans,
+            memory,
+            bus,
+        ))
+    }
 }
 
 /// Phase 5b — synthesize an `AgentConfig` from an `AgentSpec` so the existing
@@ -1085,20 +1142,21 @@ pub(crate) fn agent_config_from_spec(
     spec: &crate::adapters::agents::AgentSpec,
     parent_default_scopes: &HashMap<String, ToolScope>,
 ) -> AgentConfig {
-    // Only the three opt-in workspace_tools are accepted by AgentConfig
-    // validation — drop any spec.tools entry that isn't one of them, since
-    // the others are always-on base tools.
-    const VALID_WORKSPACE_TOOLS: &[&str] = &["shared_cache", "persistent_store", "skill_distill"];
+    // Phase 7.7 refactor #5 — single shared constant (was duplicated in
+    // mcp_bridge::build_bridge_executor as SYNTHESIZED_WORKSPACE_TOOLS).
     let workspace_tools: Vec<String> = spec
         .tools
         .iter()
-        .filter(|t| VALID_WORKSPACE_TOOLS.contains(&t.as_str()))
+        .filter(|t| WORKSPACE_TOOLS_ALLOWLIST.contains(&t.as_str()))
         .cloned()
         .collect();
 
     AgentConfig {
         default: false,
-        engine: "openrouter".to_string(),
+        // Phase 7.3 — propagate spec.engine so subagents honour the
+        // engine field declared in their TOML (`openrouter` default for
+        // back-compat; `claude_code` available when --features claude_code).
+        engine: spec.engine.clone(),
         model: spec.model.clone(),
         workspace: spec.sandbox.clone(),
         default_lens: "eco".to_string(),
@@ -1114,6 +1172,10 @@ pub(crate) fn agent_config_from_spec(
         // Inherit the parent's default_scopes so http_request etc. honour the
         // permissive scope when the parent config has one.
         scopes: parent_default_scopes.clone(),
+        // Per-agent claude_code override left at None — uses the top-level
+        // [claude_code] block defaults when engine = "claude_code". Add a
+        // `claude_code: Option<AgentClaudeCodeConfig>` to AgentSpec if you
+        // need per-agent profile control later.
         claude_code: None,
     }
 }
@@ -1135,6 +1197,13 @@ pub(crate) fn build_subprocess_tool_executor(
     workspace: &Path,
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
+    // Phase 7.6 (Bug A) — caller provides a real MemoryManager so the
+    // MemoryPlugin can register `persistent_store` / `memory_ingest`.
+    // Pre-7.6 this was hardcoded `None`, which meant MCP-routed Claude Code
+    // tool calls returned "Tool not available" even when the tool def was
+    // advertised. Pass `None` only when the agent definitively has no memory
+    // tools in its allow-list.
+    memory_manager: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
     let agent_cfg = agent_config_from_spec(spec, &config.default_scopes);
 
@@ -1177,7 +1246,7 @@ pub(crate) fn build_subprocess_tool_executor(
         workspace,
         &effective,
         &skill_registry,
-        &None,                          // memory_manager — Phase 5c
+        &memory_manager,                // Phase 7.6 — passed in by caller
         secret_registry,
         activity,
         None,                           // cancel

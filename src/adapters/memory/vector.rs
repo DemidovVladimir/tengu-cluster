@@ -47,6 +47,25 @@ pub trait VectorStore: Send + Sync {
     /// Approximate on-disk (or over-the-wire) size in bytes. Implementations
     /// that can't cheaply compute this may return `0`.
     async fn storage_bytes(&self) -> Result<u64>;
+
+    /// Phase 6.3 — delete every entry whose payload's `field` (a numeric
+    /// extras key like `"extra_rag_created_at"`) is strictly less than
+    /// `cutoff`. Returns the number of entries deleted (0 when nothing
+    /// matched). Implementations that can't push the filter down to the
+    /// store should return `Ok(0)` and log a debug line — callers must
+    /// not treat `0` as failure.
+    ///
+    /// The default impl is the "can't" path so each backend opts in
+    /// explicitly. Today Qdrant overrides; the disk store leaves the
+    /// default in place (filter-based delete on a flat bincode file
+    /// would mean a full rewrite — a separate cleanup story).
+    async fn delete_older_than(&self, _field: &str, _cutoff: f64) -> Result<u64> {
+        tracing::debug!(
+            "VectorStore::delete_older_than: backend has no filter-based delete; \
+             returning 0 (callers fall through to no-op)"
+        );
+        Ok(0)
+    }
 }
 
 pub mod disk;

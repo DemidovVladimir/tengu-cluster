@@ -16,6 +16,12 @@ enabled = true
 [telegram]
 tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
+allowed_users = ['848344935']  # your sender id from the log
+
+# At the top level, alongside [hub], [memory], etc.
+[claude_code]
+cli_path = "claude"          # or absolute path if `claude` isn't in PATH
+timeout_secs = 120
 
 # --- Tool scopes (fallback applied when an agent has no per-tool scope) ---
 # The http_request tool refuses any host not on its allow-list. `"*"` is the
@@ -52,6 +58,11 @@ content = """# DeSci Project
    max_replans = 2
 
 [agents.aura]
+# Aura is the orchestrator agent. It runs the planner LLM call which has tools
+# stripped via run_turn_with_system. OpenRouter respects per-turn tool=[]; the
+# Claude Code CLI gets MCP tools from a config file at engine-construction
+# time and ignores per-turn stripping, so it tries to do the work itself
+# instead of emitting plan JSON. Keep aura on OpenRouter for the planner role.
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 role = "aura"
@@ -60,6 +71,12 @@ requires = []
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
+
+# [agents.aura.claude_code] block kept here as documentation — has no effect
+# when engine = "openrouter", but lets you flip the engine field above to
+# "claude_code" without re-adding it. Profile would be editor_shell on flip.
+# [agents.aura.claude_code]
+# builtin_tools_profile = "editor_shell"
 
 [agents.aura.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.

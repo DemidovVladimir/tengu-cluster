@@ -567,12 +567,43 @@ async fn run_agent_subprocess() -> Result<()> {
         "run-agent received"
     );
 
+    // Phase 7.6 Bug B — expose session_id via env so plugins (notably
+    // CompressAndStoreTool) can stamp it on their writes without needing it
+    // threaded through ToolCtx. Set BEFORE building the tool executor so any
+    // plugin construction that reads it sees the right value.
+    std::env::set_var("TENGU_SESSION_ID", &input.session_id);
+
     // ----- Resolve agent spec from agents/<name>.toml -----
+    //
+    // Phase 6.7 (C→B B-half): when `input.compose` is set, the parent has
+    // composed a transient agent. Load the BASE spec from
+    // `agents/<compose.base_agent>.toml` (not `agents/<input.agent_name>.toml`,
+    // which may be a synthetic label for events/logs), then override the
+    // base's `skills` and `tools` with the values the planner picked from
+    // the rejected RAG roster. The override is in-memory only — the file
+    // on disk is unchanged.
+    let (spec_load_name, compose_override) = match &input.compose {
+        Some(c) => {
+            tracing::info!(
+                base = %c.base_agent,
+                label = %input.agent_name,
+                skill_override_count = c.skills.len(),
+                tool_override_count = c.tools.len(),
+                "run-agent: composed agent (C→B B-half)"
+            );
+            (c.base_agent.clone(), Some(c.clone()))
+        }
+        None => (input.agent_name.clone(), None),
+    };
     let spec_path = std::path::PathBuf::from("agents")
-        .join(format!("{}.toml", input.agent_name));
-    let spec = adapters::agents::load_agent_file(&spec_path).with_context(|| {
+        .join(format!("{}.toml", spec_load_name));
+    let mut spec = adapters::agents::load_agent_file(&spec_path).with_context(|| {
         format!("load agent spec from {}", spec_path.display())
     })?;
+    if let Some(c) = compose_override {
+        spec.skills = c.skills;
+        spec.tools = c.tools;
+    }
 
     // IPC `model` overrides spec when non-empty (the orchestrator can swap
     // models per-step in the future). Falls back to the spec's model.
@@ -597,13 +628,71 @@ async fn run_agent_subprocess() -> Result<()> {
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
-    // ----- Build engine -----
-    let engine = adapters::engine_builder::build_openrouter_engine(&model, 200_000)
-        .with_context(|| format!("build openrouter engine for model {}", model))?;
+    // ----- Resolve parent config (Phase 7.2 sandbox inheritance) -----
+    //
+    // Phase 7.7 refactor #2 — was a duplicate of `load_sandbox_or` inlined
+    // here with a fallback path; now delegates to the canonical loader so
+    // a single change to sandbox path resolution stays consistent across
+    // parent + child. `load_sandbox_or` returns `Err` only when the file
+    // exists but fails to parse; we fall back to the default config in
+    // that case (warn-and-continue, same as before).
+    //
+    // Done BEFORE engine construction (Phase 7.3) because the engine
+    // builder needs `parent_config.claude_code` when spec.engine = "claude_code".
+    let parent_config = match load_sandbox_or(
+        input.sandbox_config.clone(),
+        load_config_or_default_unconditional(),
+    ) {
+        Ok(cfg) => {
+            if let Some(ref name) = input.sandbox_config {
+                tracing::info!(
+                    sandbox = %name,
+                    "subprocess loaded sandbox config (Phase 7.2)"
+                );
+            }
+            cfg
+        }
+        Err(e) => {
+            tracing::warn!(
+                sandbox = ?input.sandbox_config,
+                error = %e,
+                "subprocess failed to load sandbox config; falling back to default"
+            );
+            load_config_or_default_unconditional()
+        }
+    };
+
+    // ----- Build engine (Phase 7.3 — honour spec.engine) -----
+    //
+    // Pre-7.3 this hardcoded `build_openrouter_engine`, so an agent
+    // declaring `engine = "claude_code"` in its TOML was silently ignored
+    // when dispatched as a subagent step. Now we synthesize an `AgentConfig`
+    // from the spec (propagating spec.engine) and let `build_engine` route
+    // to the right backend.
+    let agent_cfg_for_engine = adapters::channel_runtime::agent_config_from_spec(
+        &spec,
+        &parent_config.default_scopes,
+    );
+    let engine = adapters::engine_builder::build_engine(
+        &input.agent_name,
+        &agent_cfg_for_engine,
+        parent_config.claude_code.as_ref(),
+    )
+    .with_context(|| {
+        format!(
+            "build engine for agent {} (engine={}, model={})",
+            input.agent_name, spec.engine, model
+        )
+    })?;
+    tracing::info!(
+        agent = %input.agent_name,
+        engine = %spec.engine,
+        model = %model,
+        "subprocess engine built"
+    );
     let stream_event_timeout_secs = 120u64;
 
     // ----- Build tool stack (Phase 5b) -----
-    let parent_config = load_config_or_default_unconditional();
     let secret_registry = std::sync::Arc::new(adapters::secret_builder::SecretRegistry::new());
     let activity: std::sync::Arc<dyn crate::adapters::ports::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
@@ -611,16 +700,45 @@ async fn run_agent_subprocess() -> Result<()> {
         .sandbox
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
+    // the MemoryPlugin can register persistent_store / memory_ingest as
+    // callable handlers (not just advertised tool defs). Without this,
+    // MCP-routed Claude Code calls to those tools fail with
+    // "Tool 'X' is not available to this agent" even though the tool def is
+    // in the advertised list.
+    let memory_manager = if parent_config.memory.enabled {
+        Some(
+            adapters::channel_runtime::build_memory_manager_async(
+                &parent_config.memory,
+                Some(&workspace),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
     let (tools, executor) = adapters::channel_runtime::build_subprocess_tool_executor(
         &spec,
         &parent_config,
         &workspace,
         &secret_registry,
         activity,
+        memory_manager.clone(),
     );
+    // Diagnostic: log the actual tool NAMES the subprocess can call, so we
+    // can verify (in the parent log) whether expected tools like
+    // `persistent_store` made it through the spec.tools allow-list +
+    // workspace_tools opt-in machinery. Critical for debugging "agent says
+    // tool unavailable" symptoms — without this we have no visibility into
+    // the subprocess's tool world.
+    let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     tracing::info!(
         agent = %input.agent_name,
+        engine = %spec.engine,
         tool_count = tools.len(),
+        tools = ?tool_names,
         "subprocess tool stack built"
     );
 
@@ -639,10 +757,25 @@ async fn run_agent_subprocess() -> Result<()> {
             tool_calls: None,
         },
     ];
+    // Phase 7.4 — when running on Claude Code engine, expose tengu's plugin
+    // tools to the CLI via its MCP bridge. Without this the Claude CLI only
+    // has its built-in tools (Read/Write/Edit/Bash) and treats tengu tools
+    // (http_request, compress_and_store, persistent_store, etc.) as unknown
+    // — agents end up calling them as bash commands and failing.
+    //
+    // OpenRouter path leaves bridge_tools = None (the ToolDef list is
+    // registered through the OpenAI-compatible function-calling API
+    // instead, handled by `tools` passed to run_single_engine_turn).
+    let bridge_tools_for_ctx: Option<Vec<crate::adapters::types::ToolDef>> =
+        if spec.engine == "claude_code" {
+            Some(tools.clone())
+        } else {
+            None
+        };
     let context = EngineContext {
         workspace: spec.sandbox.clone(),
         system_prompt: Some(system_prompt),
-        bridge_tools: None,
+        bridge_tools: bridge_tools_for_ctx,
         max_tool_rounds: Some(input.max_turns),
         max_mcp_result_chars: None,
     };
@@ -940,11 +1073,20 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
             Ok(())
         }
         RegistryAction::ReindexTools => {
-            let n = rag
-                .startup_index(crate::adapters::rag::indexer::placeholder_tools())
-                .await?;
-            println!("reindexed {} placeholder tool descriptions into tengu_registry", n);
-            println!("(Phase 1 scaffold — Phase 2 also indexes agents/ and skills/ via `reindex-all`)");
+            // Phase 6.6 — clear + write the FULL real tool roster: built-in
+            // (compute_bridge_tools) + MCP servers from config.
+            use crate::adapters::rag::indexer::{enumerate_builtin_tools, enumerate_mcp_tools};
+            let mut tools = enumerate_builtin_tools();
+            let mcp = enumerate_mcp_tools(&config.mcp_servers).await;
+            let mcp_count = mcp.len();
+            tools.extend(mcp);
+            rag.clear_registry().await?;
+            let n = rag.index_tools(tools).await?;
+            println!(
+                "reindexed {} tool descriptions into tengu_registry (built-in + {} MCP)",
+                n, mcp_count
+            );
+            println!("(Phase 6.6 — `reindex-all` additionally indexes agents/ and skills/)");
             Ok(())
         }
         RegistryAction::ReindexAll { workspace } => {
@@ -953,12 +1095,33 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
                 .or_else(|| std::env::current_dir().ok())
                 .context("could not resolve workspace root (pass --workspace)")?;
             let agents_dir = root.join("agents");
-            let result = crate::adapters::rag::indexer::reindex_all_workspace(&rag, &root).await?;
+            let result = crate::adapters::rag::indexer::reindex_all_workspace(
+                &rag,
+                &root,
+                &config.mcp_servers,
+            )
+            .await?;
+
+            if result.unchanged {
+                println!(
+                    "tengu_registry unchanged at {} — workspace fingerprint matches \
+                     (set TENGU_REGISTRY_FORCE_REINDEX=1 to override)",
+                    root.display()
+                );
+                println!(
+                    "  agents loaded: {} from {}",
+                    result.agent_specs.len(),
+                    agents_dir.display()
+                );
+                println!("  skills loaded: {} (3-tier scan)", result.skill_entries.len());
+                return Ok(());
+            }
 
             println!("reindexed tengu_registry from {}", root.display());
             println!(
-                "  tools  : {} (placeholder set — Phase 3 will enumerate real ones)",
-                result.tools_indexed
+                "  tools  : {} (built-in + {} MCP server(s))",
+                result.tools_indexed,
+                config.mcp_servers.len()
             );
             println!(
                 "  agents : {} (from {})",
@@ -1069,15 +1232,23 @@ fn run_doctor(config: &Config) {
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
 ///
 /// Sandbox configs are loaded from `sandboxes/<name>/config.toml` relative to the
-/// current working directory.
+/// current working directory. Phase 7.2 — when a sandbox config is loaded, the
+/// `Config.sandbox_name` runtime-only field is set to the resolved name so
+/// downstream code (notably `SubprocessRunner` → `tengu run-agent` IPC) can
+/// re-resolve the same config in the child process. Without this, child
+/// subagents fall through to the default user config and lose sandbox-specific
+/// scopes/secrets/MCP servers — concretely, http_request scope-denies in the
+/// child even when the parent's sandbox allows it.
 fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
     match sandbox {
         None => Ok(default),
         Some(name) => {
             let path = PathBuf::from("sandboxes").join(&name).join("config.toml");
-            Config::load(&path).with_context(|| {
+            let mut cfg = Config::load(&path).with_context(|| {
                 format!("Failed to load sandbox '{}' from {}", name, path.display())
-            })
+            })?;
+            cfg.sandbox_name = Some(name);
+            Ok(cfg)
         }
     }
 }

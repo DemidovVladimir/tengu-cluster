@@ -45,6 +45,57 @@ fn disable_terminal_mouse_capture() -> Result<()> {
 struct SendEngine(Box<dyn crate::adapters::Engine>);
 unsafe impl Send for SendEngine {}
 
+/// Format a single `OrchestratorEvent::RagQueried` event as one compact line
+/// suitable for a System bubble. Shape:
+///
+/// ```text
+/// rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) skill/web-research(0.18)
+/// ```
+///
+/// The query is truncated to 60 chars (with ellipsis) so a long user message
+/// doesn't blow the line width. Top 3 hits shown — anything below that
+/// rarely matters for routing-judgement debugging and adding more would
+/// wrap awkwardly in the chat pane. Score formatted to 2 decimals to keep
+/// the line tight while preserving the resolution that matters at the
+/// 0.15–0.6 typical-score range.
+fn format_rag_debug_line(
+    phase: &str,
+    query: &str,
+    hits: &[crate::adapters::orchestrator::events::RagQueriedHit],
+) -> String {
+    const MAX_QUERY_LEN: usize = 60;
+    const TOP_N: usize = 3;
+
+    let truncated_query: String = if query.chars().count() > MAX_QUERY_LEN {
+        let head: String = query.chars().take(MAX_QUERY_LEN).collect();
+        format!("{}…", head)
+    } else {
+        query.to_string()
+    };
+
+    let hits_str = if hits.is_empty() {
+        "(no hits)".to_string()
+    } else {
+        hits.iter()
+            .take(TOP_N)
+            .map(|h| {
+                // Tool / skill kinds get a `kind/` prefix so they're
+                // distinguishable from agent hits at a glance. Agent hits
+                // omit the prefix because that's the most common case and
+                // the line stays narrower without it.
+                if h.kind == "agent" {
+                    format!("{}({:.2})", h.name, h.score)
+                } else {
+                    format!("{}/{}({:.2})", h.kind, h.name, h.score)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    format!("rag-{} \"{}\" → {}", phase, truncated_query, hits_str)
+}
+
 /// TUI adapter for publishing tool activity lines.
 struct CursiveToolActivityAdapter {
     cb_sink: cursive::CbSink,
@@ -157,6 +208,13 @@ pub fn run_tui(
     if let Some(orch) = orchestrator.as_ref() {
         let mut rx = orch.subscribe();
         let sink = siv.cb_sink().clone();
+        // RagQueried debug-panel render is opt-in: setting
+        // `TENGU_TUI_RAG_DEBUG=1` flips it on. Default off so the
+        // System bubble stream stays uncluttered for normal use; flip on
+        // when you want to see WHY a routing decision happened.
+        let render_rag_debug = std::env::var("TENGU_TUI_RAG_DEBUG")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 use crate::adapters::orchestrator::OrchestratorEvent;
@@ -201,13 +259,19 @@ pub fn run_tui(
                                     })
                                 }
                                 OrchestratorEvent::StepProgress { .. } => None,
-                                // Phase 6.1 (full) — RagQueried events are
-                                // visible via `RUST_LOG=tengu=info` already;
-                                // surfacing them as TUI bubbles every turn
-                                // would clutter the chat. The dedicated
-                                // debug-panel render is the explicitly-
-                                // deferred follow-up. For now, swallow.
-                                OrchestratorEvent::RagQueried { .. } => None,
+                                // Phase 6.1 (full) — RagQueried debug panel.
+                                // Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`.
+                                // When on, render a single compact System bubble
+                                // showing the top-K registry hits the planner LLM
+                                // saw, so the user can see WHY a routing decision
+                                // was made (which agent / score / phase).
+                                OrchestratorEvent::RagQueried { phase, query, hits } => {
+                                    if render_rag_debug {
+                                        Some(format_rag_debug_line(phase, &query, &hits))
+                                    } else {
+                                        None
+                                    }
+                                }
                             };
                             if let Some(text) = line {
                                 let _ = sink.send(Box::new(move |siv: &mut Cursive| {

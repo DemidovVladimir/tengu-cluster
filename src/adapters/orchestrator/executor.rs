@@ -186,12 +186,14 @@ mod tests {
                     agent: "x".into(),
                     goal: "one".into(),
                     depends_on: vec![],
+                    compose: None,
                 },
                 Step {
                     id: StepId::new("s2"),
                     agent: "x".into(),
                     goal: "two".into(),
                     depends_on: vec![StepId::new("s1")],
+                    compose: None,
                 },
             ],
         }

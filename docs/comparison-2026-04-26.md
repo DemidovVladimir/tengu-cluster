@@ -1,0 +1,156 @@
+# Tengu-Cluster vs Hermes Agent vs PI/Cowork — 2026-04-26 Snapshot
+
+> Companion to `docs/tengu-analysis.html` (the deep version). This doc is the
+> obsidian-friendly **state snapshot** taken at the end of the 2026-04-26
+> session that landed per-example vectors, TUI debug panel, and durable
+> user-message persistence. See also: `docs/comparison-2026-04-26.svg` for
+> the visual.
+
+---
+
+## TL;DR per project
+
+| | Tengu-Cluster | Hermes Agent | PI / Cowork |
+|---|---|---|---|
+| **Language** | Rust | Python | TypeScript + Claude Agent SDK |
+| **Origin** | Vibe-coded v2 redesign | Nous Research, mature | Anthropic, this product |
+| **Surfaces** | TUI (cursive), Telegram | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
+| **Models** | OpenRouter (any) + Claude Code engine | 200+ providers, multi-backend terminal | Sonnet / Opus / Haiku |
+| **Persistence** | Qdrant 3-collection (registry / messages / outputs) | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
+| **Strength** | Doctrine clarity (LLM=heart, RAG=brain, tools=hands) | Breadth: platforms, scheduler, self-improving skills | UX: artifacts, computer-use, MCP marketplace |
+| **Weakness** | Agent-layer features partial / vibecoded gaps | Heavier deployment surface, Python perf | No vector memory; no autonomous skill evolution |
+
+---
+
+## Memory model
+
+### Tengu
+
+Three Qdrant collections:
+
+- `tengu_registry` — agents, skills, tools indexed for semantic routing. Auto-reindexed on every chat process startup since 2026-04-26 (`RagPlanner::auto_reindex_once`).
+- `tengu_messages` — user messages durably persisted **as of today**. `RagPlanner::persist_user_message` writes on every `plan()`. Forward-compat: a follow-up commit can wire `RagStore::search_messages` into the planner prompt for cross-session semantic recall.
+- `tengu_outputs` — step output summaries via `compress_and_store`, used for cross-plan recall in `replan()` (Phase 6.5).
+
+Plus an in-memory ring buffer in `RagPlanner` for within-session "recent user messages" (Phase 6.4 lite). Lost on restart; mixes turns from concurrent Telegram chats sharing one planner.
+
+**What's missing**: cross-restart hydration. Today's commit makes the writes durable, but nothing reads them back yet.
+
+### Hermes
+
+SQLite database with FTS5 full-text search across all sessions. LLM-summarisation pass condenses old conversations into a compact, queryable form. **Honcho** provides a dialectic model of the user (preferences, projects, tone). Periodic memory nudges prompt the agent to persist facts that should outlive the current session.
+
+**What it does that Tengu doesn't**: continuous self-improving user-model, automatic summarisation, queryable across years.
+
+### PI / Cowork
+
+Plain Markdown files in a memory directory. The `consolidate-memory` skill periodically merges duplicates and prunes the index. CLAUDE.md anchors per-project context.
+
+**What it does that the others don't**: human-readable memory the user can grep, edit, version-control directly.
+
+**What it lacks**: vector recall. The agent can't ask "what did I learn about X six months ago that's semantically similar to this question?"
+
+---
+
+## Skills + self-adjustment
+
+| | Tengu | Hermes | PI/Cowork |
+|---|---|---|---|
+| **Discovery** | 3-tier scanner (managed `~/.tengu/skills`, workspace dotdir, workspace root) | Skills Hub + agentskills.io standard | Plugin marketplace + per-session skill list |
+| **Trigger** | RAG over registry, planner LLM picks | Description-match + slash command | Description-match (slash commands) |
+| **Creation** | `skill_distill` tool exists but not wired into a loop | Autonomous skill creation after complex tasks | `skill-creator` skill, manual / LLM-assisted |
+| **Self-improvement** | none yet | live in-use refinement | none |
+| **Standard** | own format (SKILL.md + frontmatter) | agentskills.io | SKILL.md + frontmatter (close to Hermes) |
+
+The big gap for Tengu here: **Hermes has a closed learning loop** — it creates skills from experience, refines them as it uses them, and persists the refinements. Tengu has the *building blocks* (`skill_distill`, three-tier scanner, registry indexer) but they aren't connected into a loop. Closing that loop is one of the highest-leverage open items.
+
+PI/Cowork takes a different path: rather than autonomous evolution, it leans on a curated **plugin marketplace** so users adopt vetted skills.
+
+---
+
+## Tools
+
+### Tengu
+- `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped.
+- `compute_base_tools` returns http+crypto+workspace + the three-element `workspace_tools` allow-list (`shared_cache`, `persistent_store`, `skill_distill`).
+- `compress_and_store` is implicitly appended to every subagent — never list it in `agents/*.toml`.
+- Real MCP bridge via `mcp/client.rs::tools/list`, but the planner's registry currently uses `placeholder_tools()` (6 hardcoded). **Open item 6.6** is to enumerate real tools instead.
+
+### Hermes
+- 40+ tools, **6 terminal backends** (local, Docker, SSH, Daytona, Singularity, Modal). Daytona and Modal give you serverless persistence — agent environment hibernates between sessions.
+- Built-in **cron scheduler** with delivery to any platform.
+- Voice memo transcription as a first-class input.
+- Subagents spawn isolated parallel workstreams.
+- Python RPC tool calls (Hermes lets the agent write a script that calls tools, collapsing multi-step pipelines into a single context-cheap turn).
+
+### PI / Cowork
+- Built-ins: Read, Write, Edit, Bash, Grep, Glob, NotebookEdit.
+- MCP marketplace + connector ecosystem (Atlassian, Notion, Linear, Slack, GitHub, Asana, etc.).
+- Chrome extension and computer-use for desktop control; tiered access (read / click / full).
+- Visual artifacts as a first-class deliverable.
+
+---
+
+## Routing model
+
+The biggest architectural difference. All three solve the same problem (which tool/skill/agent should run for this user message) very differently.
+
+- **Tengu** — RAG-first. The registry stores embeddings for every agent/skill/tool. On each user message, `RagPlanner` queries `tengu_registry`, ranks the top-K, builds a roster, and asks a "planner" LLM (using `skills/orchestrator/SKILL.md` as system prompt, no tools/memory/grounding) to emit plan JSON. The planner has no soft-or-hard score gate — score `~0.15` is a noise floor; the LLM uses its judgement reading the description.
+- **Hermes** — single-agent loop with rich tool choice. The model decides which tool to call; subagents are spawned by the model itself when parallelism helps. No upstream router.
+- **PI / Cowork** — two-tier: the orchestration model picks slash-commands / skills via description-match; the `Agent` tool spawns subagents. `AskUserQuestion` is used to gate ambiguity rather than guess.
+
+Each is suited to its product's context. Tengu's RAG-first design wins for a fixed roster of specialised agents; Hermes wins for a single rich agent that grows; PI wins for breadth without lock-in.
+
+---
+
+## What landed today (2026-04-26)
+
+| # | Item | Files | Purpose |
+|---|---|---|---|
+| 1 | Per-example vectors | `src/adapters/rag/indexer.rs`, `src/adapters/rag/query.rs` | Each `agents/*.toml::example_queries` entry indexed as its own vector. Embed bare query text (tight cosine), store snippet = full description (planner sees full context after dedup). Over-fetch margin in `query::search_registry` bumped 4× → 6× for the wider per-agent vector count. Expected score lift on BTC query: 0.355 → 0.5+. |
+| 2 | TUI debug panel | `src/adapters/tui/mod.rs` | Renders `OrchestratorEvent::RagQueried` as a single compact System bubble: `rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) ...`. Top-3 of top-10 hits. Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`. |
+| 3 | Durable user-message persistence | `src/adapters/orchestrator/planner.rs`, `src/adapters/rag/{mod.rs,query.rs}` | `RagPlanner` mints `session_id` (`TENGU_SESSION_ID` override or fresh UUID). `plan()` writes the user message to `tengu_messages` with `MemoryKind::Message` via `RagStore::store_memory`. Fail-soft on errors. New `RagStore::search_messages` is forward-compat for the next commit (prompt-side read-back). |
+
+Carryover from earlier this session (already committed):
+
+- `c3fe7fd` — Phase 6.1 full: `OrchestratorEvent::RagQueried` variant + bus plumbing.
+- `e248d82` — registry recall: example_queries per agent + threshold realism.
+- `7d1fa55` — auto-reindex `tengu_registry` on first rag-mode chat turn.
+
+---
+
+## What's still open — prioritised
+
+The smaller-effort polish items are at the top; structural work below.
+
+### Polish
+
+1. **6.4 read-back hydration** — The durable writes shipped today; nothing reads them yet. One-line wiring of `RagStore::search_messages` into the planner prompt (with a config knob `memory.cross_session_msg_top_k`, default 0 = off) lights up cross-session semantic recall. Per-example vectors and the persistence design make this a small commit.
+2. **6.2 content-hash dedup** — Auto-reindex now hits the embedding API ~29 times per chat startup with per-example vectors, up from ~6. Cheap absolute cost, but redundant when nothing changed. Hash description text in payload extras; skip re-embed when unchanged. Caveat noted in earlier sessions: registry uses UUID-on-write IDs, so dedup needs an upfront scroll OR a switch to deterministic IDs.
+3. **6.3 filter-based TTL purge** — Default `ttl_days = 0` (never purge). When set > 0, `cleanup.rs::ttl_cleanup` logs a TODO; needs filter-based delete via direct Qdrant client.
+
+### Architectural completeness
+
+4. **6.6 real MCP tool indexing** — Replace `placeholder_tools()` (6 hardcoded) with `compute_base_tools()` for real compiled-in tools plus enumerated MCP server tools via `mcp/client.rs::tools/list`. Touches the registry CLI subcommand.
+5. **6.7 C→B unknown-agent fallback (B half)** — REDESIGN §11. When all RAG hits score below the threshold, today the SKILL.md tells the planner to ask the user. The B half — compose generic agent on user confirmation, run for one turn — isn't implemented. Multi-turn UX, deserves its own session.
+6. **session_id sharing with `SubprocessRunner`** — The open question from the original handoff is still open. Today the planner and child subprocess each mint their own UUID. Pass via IPC env or stdin payload to unify the conversation across the entire orchestration.
+
+### Cleanup (do last)
+
+7. **7.1 delete legacy** — Drop `src/adapters/orchestrator/roster.rs`, the `engine = "static"` branch in `OrchestratorAgentPlanner` and `build_orchestrator`, the `ChatWorker` static-mode branch. Make `engine = "rag"` the only path. Requires confidence rag mode is bulletproof for every sandbox you care about — needs full manual checklist run on each sandbox + Telegram + cancel/replan flows.
+
+---
+
+## What can be improved (analytical)
+
+Beyond the open items above, three architectural directions where Tengu lags behind one of the other two:
+
+1. **Borrow Hermes's closed learning loop.** Tengu has `skill_distill` and the three-tier scanner — the building blocks of in-use refinement — but no orchestrator wiring that says "after this complex task, propose a skill update." Adding a post-turn hook that runs `skill_distill` against successful long sessions (gated on user confirmation, like PI's `AskUserQuestion`) would close the same loop without going fully autonomous.
+2. **Borrow Hermes's session search + summarisation.** With durable msg persistence shipped today, the data is now there. A follow-up that runs LLM summarisation on session-old messages and writes back into `tengu_outputs` would make Tengu's recall comparable to Hermes's FTS5 + summary path, while keeping the vector-first design.
+3. **Borrow PI's MCP marketplace shape.** Tengu has the MCP bridge but no UX for discovering or installing servers. A `tengu mcp install <name>` subcommand backed by a tiny registry (even just a JSON manifest) would let users adopt connectors without editing TOML.
+
+These are all additive — they don't conflict with the doctrine ("LLM = heart, RAG = brain, tools = hands"). They just fill in the agent-layer features Tengu's `tengu-analysis.html` flagged as missing.
+
+---
+
+*Last updated 2026-04-26. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*

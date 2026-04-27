@@ -172,6 +172,7 @@ mod tests {
                 agent: "x".into(),
                 goal: "g".into(),
                 depends_on: vec![],
+                compose: None,
             }],
         };
         let good_plan = Plan {
@@ -180,6 +181,7 @@ mod tests {
                 agent: "x".into(),
                 goal: "g".into(),
                 depends_on: vec![],
+                compose: None,
             }],
         };
         let planner = Arc::new(ScriptedPlanner {
@@ -207,6 +209,7 @@ mod tests {
                 agent: "x".into(),
                 goal: "g".into(),
                 depends_on: vec![],
+                compose: None,
             }],
         };
         let planner = Arc::new(ScriptedPlanner {
@@ -237,6 +240,7 @@ mod tests {
                         agent: "x".into(),
                         goal: "g".into(),
                         depends_on: vec![],
+                        compose: None,
                     }],
                 },
             }]),

@@ -45,6 +45,27 @@ pub struct AgentIpcInput {
     pub session_id: String,
     /// Parent-assigned step id for tagging memory writes.
     pub step_id: String,
+    /// Phase 6.7 (C→B B-half) — when set, the child loads
+    /// `agents/<compose.base_agent>.toml` and overrides its `skills` and
+    /// `tools` with the values supplied here. `agent_name` above remains
+    /// the label used for events/logs (typically the same as
+    /// `compose.base_agent`, but kept separate so the parent can pass
+    /// a synthetic label like "composed-researcher" if it wants).
+    /// Skipped on the wire when None so existing IPC payloads stay
+    /// byte-compatible with prior versions of the binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose: Option<crate::adapters::orchestrator::plan::AgentCompose>,
+    /// Phase 7.2 — name of the sandbox the parent was loaded from
+    /// (`--sandbox <name>` on the parent CLI). When `Some`, the child
+    /// re-loads `sandboxes/<name>/config.toml` instead of falling
+    /// through to the default user config — without this the child
+    /// loses sandbox-specific scopes/secrets/MCP servers and tool
+    /// calls scope-deny in the child even when the parent allows them.
+    /// Distinct from the legacy `sandbox` field above (which was a
+    /// workspace-path override, never wired up — kept for backward IPC
+    /// compatibility).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_config: Option<String>,
 }
 
 fn default_max_turns() -> u32 {
@@ -73,6 +94,12 @@ pub struct SubprocessRunner {
     /// Stable session id for tagging memory writes from this orchestrator
     /// instance. Generated once per runner construction.
     pub session_id: String,
+    /// Phase 7.2 — name of the sandbox the parent was loaded from
+    /// (`--sandbox <name>`). Forwarded into every IPC payload so the child
+    /// process re-resolves the same `sandboxes/<name>/config.toml` and
+    /// inherits the parent's scopes/secrets/MCP servers. `None` when the
+    /// parent is running with the default user config.
+    pub sandbox_name: Option<String>,
 }
 
 impl Default for SubprocessRunner {
@@ -81,16 +108,20 @@ impl Default for SubprocessRunner {
             tengu_path: None,
             timeout_secs: 180,
             session_id: uuid::Uuid::new_v4().to_string(),
+            sandbox_name: None,
         }
     }
 }
 
 impl SubprocessRunner {
-    /// Convenience constructor matching the existing `ChatWorker::new` shape
-    /// so callers in `channel_runtime::build_orchestrator` can swap one for
-    /// the other behind the `engine` flag without other changes.
-    pub fn new() -> Self {
-        Self::default()
+    /// Convenience constructor that propagates the parent's sandbox name into
+    /// the IPC payload of every step. Pass `None` when running with the
+    /// default user config.
+    pub fn new(sandbox_name: Option<String>) -> Self {
+        Self {
+            sandbox_name,
+            ..Self::default()
+        }
     }
 }
 
@@ -107,7 +138,12 @@ impl SubprocessRunner {
             .env("TENGU_AGENT_IPC", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            // Forward subprocess stderr (tracing logs) to the parent's
+            // stderr so users running with RUST_LOG=debug can see what the
+            // subagent did — tool calls, engine spawn, etc. Previously
+            // piped, which hid all subprocess detail unless the child
+            // exited non-zero. Phase 7.5 diagnostic.
+            .stderr(Stdio::inherit())
             .kill_on_drop(true);
 
         let mut child = cmd.spawn().context("spawn tengu run-agent")?;
@@ -177,6 +213,8 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
         // Phase 4b: pass minimal IPC payload. Phase 5 will load
         // `agents/<step.agent>.toml` here and populate model/tools/skills
         // from the spec instead of leaving them empty.
+        // Phase 6.7: forward `step.compose` so a composed agent (C→B B-half)
+        // reaches the child as an explicit override rather than a renamed spec.
         let input = AgentIpcInput {
             goal,
             agent_name: step.agent.clone(),
@@ -187,6 +225,11 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
             sandbox: None,
             session_id: self.session_id.clone(),
             step_id: step.id.0.clone(),
+            compose: step.compose.clone(),
+            // Phase 7.2 — propagate the parent's sandbox into the child so
+            // the subagent sees the same scopes/secrets/MCP servers as the
+            // parent process did.
+            sandbox_config: self.sandbox_name.clone(),
         };
 
         match self.run(input).await? {
@@ -218,6 +261,8 @@ mod tests {
             sandbox: None,
             session_id: "s1".to_string(),
             step_id: "step-1".to_string(),
+            compose: None,
+            sandbox_config: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         let back: AgentIpcInput = serde_json::from_str(&json).unwrap();

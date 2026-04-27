@@ -34,7 +34,19 @@ pub struct AgentSpec {
     #[serde(default)]
     pub example_queries: Vec<String>,
 
-    /// OpenRouter-compatible model slug (e.g. `"openai/gpt-4o"`).
+    /// Engine the subagent runs on. Default `"openrouter"` for backward
+    /// compatibility — pre-existing agents/*.toml without an `engine` field
+    /// continue to use OpenRouter unchanged. Set to `"claude_code"` to run
+    /// the agent through the Claude Code CLI engine instead. Phase 7.3.
+    #[serde(default = "default_agent_engine")]
+    pub engine: String,
+
+    /// Model slug. Format depends on `engine`:
+    ///   - `engine = "openrouter"` → OpenRouter slug, e.g. `"openai/gpt-4o"` or
+    ///     `"anthropic/claude-sonnet-4-6"`.
+    ///   - `engine = "claude_code"` → bare Claude model name, e.g.
+    ///     `"claude-sonnet-4-6"` (no `anthropic/` prefix). Empty string → use
+    ///     the Claude CLI's default.
     pub model: String,
 
     /// Tool allow-list. The runner registers only tools whose name is in
@@ -63,6 +75,10 @@ pub struct AgentSpec {
     /// present in the TOML file itself.
     #[serde(skip_deserializing, default)]
     pub source_path: Option<PathBuf>,
+}
+
+fn default_agent_engine() -> String {
+    "openrouter".to_string()
 }
 
 fn default_agent_max_turns() -> u32 {

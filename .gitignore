@@ -11,6 +11,7 @@ secrets.env
 lastrun.md
 .tengu/worktrees/
 .tengu/scratch/
+.tengu/registry-fingerprint
 
 # Eval runner artifacts (per-run transcripts + report.json). The eval
 # runner auto-prunes to `--keep-runs` (default 10), but gitignore keeps

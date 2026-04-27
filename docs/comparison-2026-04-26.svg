@@ -1,0 +1,249 @@
+<svg viewBox="0 0 980 880" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture comparison, April 2026</title>
+  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, and four deltas landed today (per-example vectors, TUI debug panel, durable user-message persistence, plus the registry recall + auto-reindex from earlier this session).</desc>
+  <style>
+    .h1 { font-size: 16px; font-weight: 700; fill: #0f172a; }
+    .h2 { font-size: 12px; font-weight: 700; fill: #0f172a; letter-spacing: .4px; text-transform: uppercase; }
+    .h3 { font-size: 11px; font-weight: 600; fill: #334155; }
+    .body { font-size: 11px; fill: #334155; }
+    .small { font-size: 10px; fill: #64748b; }
+    .mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; fill: #334155; }
+    .col-tengu { fill: #f5f3ff; stroke: #c4b5fd; }
+    .col-hermes { fill: #f0f9ff; stroke: #7dd3fc; }
+    .col-pi { fill: #ecfdf5; stroke: #6ee7b7; }
+    .pill-tengu { fill: #7c3aed; }
+    .pill-hermes { fill: #0284c7; }
+    .pill-pi { fill: #059669; }
+    .row { fill: #ffffff; stroke: #e2e8f0; }
+    .row-alt { fill: #f8fafc; stroke: #e2e8f0; }
+    .ok { fill: #16a34a; }
+    .warn { fill: #ca8a04; }
+    .miss { fill: #dc2626; }
+    .new { fill: #0891b2; }
+  </style>
+
+  <text x="20" y="26" class="h1">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture snapshot</text>
+  <text x="20" y="44" class="small">April 26, 2026 · post per-example vectors + TUI debug panel + durable msg persistence (today) · companion to docs/tengu-analysis.html</text>
+
+  <g transform="translate(20, 58)">
+    <rect width="940" height="22" rx="4" class="row" />
+    <circle cx="14" cy="11" r="4" class="ok" />
+    <text x="24" y="14" class="small">shipped, working</text>
+    <circle cx="135" cy="11" r="4" class="warn" />
+    <text x="145" y="14" class="small">partial / lite version</text>
+    <circle cx="265" cy="11" r="4" class="miss" />
+    <text x="275" y="14" class="small">not yet built</text>
+    <circle cx="365" cy="11" r="4" class="new" />
+    <text x="375" y="14" class="small">landed today (2026-04-26)</text>
+    <text x="540" y="14" class="small">Each column is one project, top to bottom is the request → response path.</text>
+  </g>
+
+  <g transform="translate(20, 92)">
+    <rect x="0" y="0" width="305" height="28" rx="4" class="pill-tengu" />
+    <text x="12" y="18" font-size="13" font-weight="700" fill="#fff">Tengu-Cluster · Rust · vibe-coded v2</text>
+    <rect x="317" y="0" width="305" height="28" rx="4" class="pill-hermes" />
+    <text x="329" y="18" font-size="13" font-weight="700" fill="#fff">Hermes Agent · Python · Nous Research</text>
+    <rect x="635" y="0" width="305" height="28" rx="4" class="pill-pi" />
+    <text x="647" y="18" font-size="13" font-weight="700" fill="#fff">PI / Cowork · TS+Claude SDK · Anthropic</text>
+  </g>
+
+  <g transform="translate(20, 132)">
+    <rect x="0" y="0" width="305" height="44" rx="4" class="col-tengu" />
+    <text x="10" y="16" class="h3">Surfaces</text>
+    <text x="10" y="30" class="body">TUI (cursive) · Telegram</text>
+    <text x="10" y="42" class="small">cargo run -- chat / telegram</text>
+    <rect x="317" y="0" width="305" height="44" rx="4" class="col-hermes" />
+    <text x="327" y="16" class="h3">Surfaces</text>
+    <text x="327" y="30" class="body">CLI · TG · Discord · Slack · WA · Signal</text>
+    <text x="327" y="42" class="small">single gateway process · voice memo support</text>
+    <rect x="635" y="0" width="305" height="44" rx="4" class="col-pi" />
+    <text x="645" y="16" class="h3">Surfaces</text>
+    <text x="645" y="30" class="body">Desktop app · Browser ext · MCP host</text>
+    <text x="645" y="42" class="small">Cowork mode · computer-use · artifacts</text>
+
+    <rect x="0" y="50" width="305" height="56" rx="4" class="col-tengu" />
+    <text x="10" y="66" class="h3">Orchestration / planner</text>
+    <text x="10" y="80" class="body">RagPlanner → SubprocessRunner → run-agent</text>
+    <text x="10" y="92" class="mono">engine = "rag" | "static"</text>
+    <circle cx="296" cy="98" r="3" class="new" />
+    <text x="10" y="103" class="small">+ event bus, RagQueried, auto-reindex</text>
+    <rect x="317" y="50" width="305" height="56" rx="4" class="col-hermes" />
+    <text x="327" y="66" class="h3">Orchestration / planner</text>
+    <text x="327" y="80" class="body">run_agent() loop · memory prefetch + sync</text>
+    <text x="327" y="92" class="mono">subagent.spawn() · ACP adapter</text>
+    <text x="327" y="103" class="small">closed learning loop with periodic nudges</text>
+    <rect x="635" y="50" width="305" height="56" rx="4" class="col-pi" />
+    <text x="645" y="66" class="h3">Orchestration / planner</text>
+    <text x="645" y="80" class="body">Claude Agent SDK · TaskList tool</text>
+    <text x="645" y="92" class="mono">Agent tool spawns subagents</text>
+    <text x="645" y="103" class="small">user-driven; AskUserQuestion gates ambiguity</text>
+
+    <rect x="0" y="112" width="305" height="56" rx="4" class="col-tengu" />
+    <text x="10" y="128" class="h3">Model + tools</text>
+    <text x="10" y="142" class="body">OpenRouter (any model) + Claude Code engine</text>
+    <text x="10" y="154" class="mono">PluginToolExecutor · http · crypto · MCP</text>
+    <text x="10" y="165" class="small">workspace_tools allow-list of THREE</text>
+    <rect x="317" y="112" width="305" height="56" rx="4" class="col-hermes" />
+    <text x="327" y="128" class="h3">Model + tools</text>
+    <text x="327" y="142" class="body">200+ providers · 6 terminal backends</text>
+    <text x="327" y="154" class="mono">40+ tools · agentskills.io standard</text>
+    <text x="327" y="165" class="small">Daytona/Modal serverless persistence</text>
+    <rect x="635" y="112" width="305" height="56" rx="4" class="col-pi" />
+    <text x="645" y="128" class="h3">Model + tools</text>
+    <text x="645" y="142" class="body">Sonnet/Opus/Haiku · ToolSearch deferred</text>
+    <text x="645" y="154" class="mono">MCP marketplace · Read/Write/Edit/Bash</text>
+    <text x="645" y="165" class="small">Chrome ext + computer-use tiers</text>
+
+    <rect x="0" y="174" width="305" height="44" rx="4" class="col-tengu" />
+    <text x="10" y="190" class="h3">State / persistence</text>
+    <text x="10" y="204" class="body">Qdrant: tengu_registry/messages/outputs</text>
+    <text x="10" y="216" class="small">embeds via OpenAI text-embedding-3-small</text>
+    <rect x="317" y="174" width="305" height="44" rx="4" class="col-hermes" />
+    <text x="327" y="190" class="h3">State / persistence</text>
+    <text x="327" y="204" class="body">SQLite (FTS5) + Honcho dialectic model</text>
+    <text x="327" y="216" class="small">session search + LLM-summarised recall</text>
+    <rect x="635" y="174" width="305" height="44" rx="4" class="col-pi" />
+    <text x="645" y="190" class="h3">State / persistence</text>
+    <text x="645" y="204" class="body">CLAUDE.md + plain-text memory files</text>
+    <text x="645" y="216" class="small">consolidate-memory skill periodically</text>
+  </g>
+
+  <line x1="20" y1="370" x2="960" y2="370" stroke="#e2e8f0" />
+  <text x="20" y="388" class="h2">Four axes the user asked about</text>
+
+  <g transform="translate(20, 400)">
+    <rect x="0" y="0" width="160" height="26" rx="4" class="row-alt" />
+    <text x="10" y="17" class="h3">Axis</text>
+    <rect x="162" y="0" width="265" height="26" rx="4" class="row-alt" />
+    <text x="172" y="17" class="h3" fill="#7c3aed">Tengu</text>
+    <rect x="429" y="0" width="265" height="26" rx="4" class="row-alt" />
+    <text x="439" y="17" class="h3" fill="#0284c7">Hermes</text>
+    <rect x="696" y="0" width="244" height="26" rx="4" class="row-alt" />
+    <text x="706" y="17" class="h3" fill="#059669">PI / Cowork</text>
+  </g>
+
+  <g transform="translate(20, 428)">
+    <rect x="0" y="0" width="160" height="68" rx="4" class="row" />
+    <text x="10" y="18" class="h3">Memory</text>
+    <text x="10" y="34" class="small">how state persists</text>
+    <text x="10" y="50" class="small">across turns/sessions</text>
+    <rect x="162" y="0" width="265" height="68" rx="4" class="row" />
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3 Qdrant collections</text>
+    <circle cx="172" cy="32" r="4" class="warn" /><text x="182" y="36" class="body">in-mem ring buffer (lite)</text>
+    <circle cx="172" cy="50" r="4" class="new" /><text x="182" y="54" class="body">durable msg writes (today)</text>
+    <text x="172" y="65" class="small">no cross-restart read-back yet</text>
+    <rect x="429" y="0" width="265" height="68" rx="4" class="row" />
+    <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">FTS5 session search</text>
+    <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">LLM summarisation pass</text>
+    <circle cx="439" cy="50" r="4" class="ok" /><text x="449" y="54" class="body">Honcho user model</text>
+    <text x="449" y="65" class="small">periodic memory nudges</text>
+    <rect x="696" y="0" width="244" height="68" rx="4" class="row" />
+    <circle cx="706" cy="14" r="4" class="warn" /><text x="716" y="18" class="body">CLAUDE.md + .md memory</text>
+    <circle cx="706" cy="32" r="4" class="warn" /><text x="716" y="36" class="body">consolidate-memory skill</text>
+    <circle cx="706" cy="50" r="4" class="miss" /><text x="716" y="54" class="body">no vector store</text>
+    <text x="716" y="65" class="small">manual file tending</text>
+  </g>
+
+  <g transform="translate(20, 500)">
+    <rect x="0" y="0" width="160" height="68" rx="4" class="row" />
+    <text x="10" y="18" class="h3">Skills + self-adjust</text>
+    <text x="10" y="34" class="small">how the agent grows</text>
+    <text x="10" y="50" class="small">its own capabilities</text>
+    <rect x="162" y="0" width="265" height="68" rx="4" class="row" />
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3-tier scanner (managed/ws/dot)</text>
+    <circle cx="172" cy="32" r="4" class="ok" /><text x="182" y="36" class="body">orchestrator SKILL.md as prompt</text>
+    <circle cx="172" cy="50" r="4" class="miss" /><text x="182" y="54" class="body">no autonomous evolution</text>
+    <text x="172" y="65" class="small">skill_distill exists, not in loop</text>
+    <rect x="429" y="0" width="265" height="68" rx="4" class="row" />
+    <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">autonomous skill creation</text>
+    <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">in-use self-improvement</text>
+    <circle cx="439" cy="50" r="4" class="ok" /><text x="449" y="54" class="body">agentskills.io standard</text>
+    <text x="449" y="65" class="small">closed learning loop · live</text>
+    <rect x="696" y="0" width="244" height="68" rx="4" class="row" />
+    <circle cx="706" cy="14" r="4" class="ok" /><text x="716" y="18" class="body">skill-creator skill (manual)</text>
+    <circle cx="706" cy="32" r="4" class="warn" /><text x="716" y="36" class="body">user-guided LLM-assisted</text>
+    <circle cx="706" cy="50" r="4" class="miss" /><text x="716" y="54" class="body">no autonomous evolution</text>
+    <text x="716" y="65" class="small">plugin marketplace fills gap</text>
+  </g>
+
+  <g transform="translate(20, 572)">
+    <rect x="0" y="0" width="160" height="60" rx="4" class="row" />
+    <text x="10" y="18" class="h3">Tools</text>
+    <text x="10" y="34" class="small">what the agent</text>
+    <text x="10" y="50" class="small">can DO</text>
+    <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">PluginToolExecutor + MCP bridge</text>
+    <circle cx="172" cy="32" r="4" class="ok" /><text x="182" y="36" class="body">Privy crypto + http + workspace</text>
+    <circle cx="172" cy="50" r="4" class="warn" /><text x="182" y="54" class="body">placeholder_tools (6 hardcoded)</text>
+    <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">40+ tools · 6 terminal backends</text>
+    <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">cron scheduler + voice + RPC</text>
+    <circle cx="439" cy="50" r="4" class="ok" /><text x="449" y="54" class="body">parallel subagents</text>
+    <rect x="696" y="0" width="244" height="60" rx="4" class="row" />
+    <circle cx="706" cy="14" r="4" class="ok" /><text x="716" y="18" class="body">MCP marketplace + connectors</text>
+    <circle cx="706" cy="32" r="4" class="ok" /><text x="716" y="36" class="body">Read/Write/Edit/Bash + Chrome</text>
+    <circle cx="706" cy="50" r="4" class="ok" /><text x="716" y="54" class="body">computer-use tiered</text>
+  </g>
+
+  <g transform="translate(20, 636)">
+    <rect x="0" y="0" width="160" height="60" rx="4" class="row" />
+    <text x="10" y="18" class="h3">Routing model</text>
+    <text x="10" y="34" class="small">how the agent</text>
+    <text x="10" y="50" class="small">decides what to do</text>
+    <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">RAG over registry · cosine ≥ ~0.15</text>
+    <circle cx="172" cy="32" r="4" class="new" /><text x="182" y="36" class="body">per-example vectors (today)</text>
+    <text x="172" y="52" class="small">LLM judges roster (no hard gate)</text>
+    <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">single-agent loop · tool choice</text>
+    <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">subagent.spawn() for parallel work</text>
+    <text x="449" y="52" class="small">no router — model picks tools/skills</text>
+    <rect x="696" y="0" width="244" height="60" rx="4" class="row" />
+    <circle cx="706" cy="14" r="4" class="ok" /><text x="716" y="18" class="body">skill-trigger via description match</text>
+    <circle cx="706" cy="32" r="4" class="ok" /><text x="716" y="36" class="body">Agent tool dispatches subagents</text>
+    <text x="716" y="52" class="small">user-mediated when ambiguous</text>
+  </g>
+
+  <line x1="20" y1="710" x2="960" y2="710" stroke="#e2e8f0" />
+  <text x="20" y="730" class="h2">What landed today (2026-04-26 — extends prior commits c3fe7fd, e248d82, 7d1fa55)</text>
+
+  <g transform="translate(20, 740)">
+    <rect x="0" y="0" width="225" height="86" rx="4" class="col-tengu" />
+    <circle cx="14" cy="14" r="4" class="new" />
+    <text x="24" y="18" class="h3">Per-example vectors</text>
+    <text x="10" y="36" class="body">indexer.rs writes one vector per</text>
+    <text x="10" y="48" class="body">agents/*.toml example_queries entry</text>
+    <text x="10" y="64" class="small">tighter cosine to user phrasing;</text>
+    <text x="10" y="76" class="small">expect 0.355 → 0.5+ on BTC query</text>
+    <rect x="237" y="0" width="225" height="86" rx="4" class="col-tengu" />
+    <circle cx="251" cy="14" r="4" class="new" />
+    <text x="261" y="18" class="h3">TUI debug panel</text>
+    <text x="247" y="36" class="body">RagQueried event rendered as</text>
+    <text x="247" y="48" class="body">compact System bubble in cursive</text>
+    <text x="247" y="64" class="small">opt-in via TENGU_TUI_RAG_DEBUG=1;</text>
+    <text x="247" y="76" class="small">top-3 hits w/ scores per planner call</text>
+    <rect x="474" y="0" width="225" height="86" rx="4" class="col-tengu" />
+    <circle cx="488" cy="14" r="4" class="new" />
+    <text x="498" y="18" class="h3">Durable msg persistence</text>
+    <text x="484" y="36" class="body">RagPlanner mints session_id;</text>
+    <text x="484" y="48" class="body">plan() writes to tengu_messages</text>
+    <text x="484" y="64" class="small">forward-compat search_messages;</text>
+    <text x="484" y="76" class="small">no read-back hydration yet</text>
+    <rect x="711" y="0" width="229" height="86" rx="4" class="col-tengu" />
+    <circle cx="725" cy="14" r="4" class="warn" />
+    <text x="735" y="18" class="h3">Still open · prioritised</text>
+    <text x="721" y="36" class="small">6.4 read-back · 6.6 MCP indexing ·</text>
+    <text x="721" y="48" class="small">6.7 C→B fallback B-half ·</text>
+    <text x="721" y="60" class="small">6.2 content-hash dedup ·</text>
+    <text x="721" y="72" class="small">7.1 delete legacy static path</text>
+  </g>
+
+  <g transform="translate(20, 838)">
+    <rect x="0" y="0" width="940" height="32" rx="4" class="row-alt" />
+    <text x="10" y="20" class="small">
+      <tspan font-weight="700" fill="#7c3aed">Tengu</tspan> is doctrinally sharp (LLM=heart · RAG=brain · tools=hands) but light on agent-layer features —
+      <tspan font-weight="700" fill="#0284c7">Hermes</tspan> wins on breadth (platforms, scheduler, self-improving skills, multi-tenant);
+      <tspan font-weight="700" fill="#059669">PI/Cowork</tspan> wins on UX (artifacts, computer-use, MCP marketplace).
+    </text>
+  </g>
+</svg>
