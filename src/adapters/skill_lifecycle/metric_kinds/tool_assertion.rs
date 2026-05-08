@@ -87,6 +87,8 @@ impl MetricKind for ToolAssertionKind {
             secret_registry,
             activity,
             conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            // Eval-time tool dispatch: no calling-agent context to thread.
+            agent_config: None,
         };
 
         match registry.invoke(&tool_name, &args, &tool_ctx).await {

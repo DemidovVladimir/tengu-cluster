@@ -1527,7 +1527,8 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let mut metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
     if !ctx.skill_metrics.is_empty() {
         use crate::adapters::skill_lifecycle::metric_kinds::{
-            LlmJudgeKind, ScriptKind, ShellCheckKind, ToolAssertionKind,
+            DescriptionTriggerKind, DialogReplayKind, LlmJudgeKind, ScriptKind, ShellCheckKind,
+            ToolAssertionKind,
         };
         use crate::adapters::skill_lifecycle::metrics::{
             FixtureContext, MetricKind, MetricOutcome, MetricRunCtx,
@@ -1550,6 +1551,9 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             secret_registry: None,
             activity: None,
             tool_scopes: None,
+            // Pre-authored fixture path: no live conversation, no sibling lookup.
+            conversation: None,
+            sibling_metrics: Some(ctx.skill_metrics),
         };
         for spec in ctx.skill_metrics {
             let outcome: anyhow::Result<MetricOutcome> = match spec {
@@ -1559,6 +1563,12 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                     ToolAssertionKind.run(spec, &fixture, &run_ctx).await
                 }
                 MetricSpec::Script { .. } => ScriptKind.run(spec, &fixture, &run_ctx).await,
+                MetricSpec::DialogReplay { .. } => {
+                    DialogReplayKind.run(spec, &fixture, &run_ctx).await
+                }
+                MetricSpec::DescriptionTrigger { .. } => {
+                    DescriptionTriggerKind.run(spec, &fixture, &run_ctx).await
+                }
             };
             let o = outcome.unwrap_or_else(|e| MetricOutcome {
                 pass: false,
@@ -1924,6 +1934,22 @@ async fn run_row_via_orchestrator(
                         ),
                     )
                 }
+                // Metrics — record one observation per LLM/embedding call so
+                // eval rows can compare token consumption across runs. The
+                // canonical analysis surface is the tracing log + global
+                // metrics bus; this is the eval-judge mirror.
+                OrchestratorEvent::MetricsRecorded { record } => (
+                    "orchestrator:metrics_recorded".to_string(),
+                    format!(
+                        "kind={} agent={} model={} tok in/out={}/{} latency_ms={}",
+                        record.kind.as_str(),
+                        record.agent,
+                        record.model,
+                        record.prompt_tokens,
+                        record.completion_tokens,
+                        record.latency_ms,
+                    ),
+                ),
             };
             let n = event_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             event_obs.lock().unwrap().push(Observation {

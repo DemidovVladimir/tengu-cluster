@@ -46,7 +46,7 @@ engine = "claude_code"
 model = "claude-sonnet-4-6"
 
 tools = ["http_request", "read_file", "list_directory", "remember"]
-skills = ["web-research", "summarizer"]
+skills = []
 
 max_turns = 20
 timeout_secs = 180

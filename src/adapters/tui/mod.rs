@@ -215,6 +215,17 @@ pub fn run_tui(
         let render_rag_debug = std::env::var("TENGU_TUI_RAG_DEBUG")
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
             .unwrap_or(false);
+        // Metrics panel — opt-in via `TENGU_TUI_METRICS=1`. When on, every
+        // `MetricsRecorded` event is absorbed into a per-bus aggregator and
+        // a compact one-line status (tokens in/out, last call, session
+        // total, top agent) is pushed as a System bubble. Off by default so
+        // the chat pane stays uncluttered for normal use.
+        let render_metrics = std::env::var("TENGU_TUI_METRICS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        // Per-spawn aggregator — owned by the spawned task, not shared. Kept
+        // simple because there's exactly one TUI subscriber per process.
+        let mut metrics_state = crate::adapters::metrics::AggregatorState::default();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 use crate::adapters::orchestrator::OrchestratorEvent;
@@ -268,6 +279,21 @@ pub fn run_tui(
                                 OrchestratorEvent::RagQueried { phase, query, hits } => {
                                     if render_rag_debug {
                                         Some(format_rag_debug_line(phase, &query, &hits))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                // Metrics — opt-in via TENGU_TUI_METRICS=1.
+                                // The aggregator absorbs every record so even
+                                // when the panel is OFF the totals are kept
+                                // accurate (so flipping it on mid-session
+                                // shows real numbers, not zero).
+                                OrchestratorEvent::MetricsRecorded { record } => {
+                                    metrics_state.absorb(record);
+                                    if render_metrics {
+                                        metrics_state
+                                            .format_status_line()
+                                            .map(|line| format!("metrics: {}", line))
                                     } else {
                                         None
                                     }

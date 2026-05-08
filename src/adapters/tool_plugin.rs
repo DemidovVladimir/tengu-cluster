@@ -94,6 +94,12 @@ pub(crate) struct ToolCtx<'a> {
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
     pub conversation: ConversationView<'a>,
+    /// Calling agent's resolved config. `Some(_)` for tool calls dispatched
+    /// from inside an agent loop (populated by `PluginToolExecutor` from the
+    /// `AgentConfig` it was built with); `None` for harness-level invocations
+    /// (e.g. `tengu eval` runner construction, MetricRunCtx-degraded paths,
+    /// most unit tests).
+    pub agent_config: Option<&'a crate::adapters::config::AgentConfig>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
@@ -192,6 +198,13 @@ pub(crate) struct PluginToolExecutor {
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
+    /// Owned copy of the calling agent's config — borrowed into every
+    /// `ToolCtx` so tools (e.g. `skill_distill`) can read the agent's
+    /// engine + model when seeding generated artefacts. `None` only for
+    /// harness-built executors that have no associated agent (currently
+    /// none in production paths; some tests construct a stub executor
+    /// without one).
+    pub agent_config: Option<crate::adapters::config::AgentConfig>,
 }
 
 impl PluginToolExecutor {
@@ -236,6 +249,7 @@ impl ToolExecutor for PluginToolExecutor {
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
             conversation: ConversationView::new(messages),
+            agent_config: self.agent_config.as_ref(),
         };
 
         let output = self
@@ -290,6 +304,7 @@ mod tests {
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
+            agent_config: None,
         }
     }
 

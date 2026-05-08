@@ -37,7 +37,7 @@ To skip the master password prompt, set `TENGU_MASTER_PASSWORD` env var.
 | `[telegram]` | Telegram bot adapter |
 | `[scaffold]` | Workspace directory/file scaffolding |
 | `[claude_code]` | Global Claude Code backend settings |
-| `[skill_lifecycle]` | Skill eval / metrics / evolve (required to activate `tengu skill-evolve`) |
+| `[skill_lifecycle]` | Skill eval / metrics / evolve (required to activate `tengu skill evolve`) |
 
 ## Agent Configuration
 
@@ -217,7 +217,7 @@ Config is validated at load time. Invalid values produce clear error messages:
 
 ## Skill Lifecycle
 
-Enables `tengu eval <skill>`, `tengu skill-metrics <skill>`, and `tengu skill-evolve <skill>`. See [[skills#Metrics & Evolution]] for the frontmatter contract. This block is optional — absence disables the evolve CLI but does not affect chat/eval of skills that don't declare metrics.
+Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and `tengu skill evolve <skill>`. See [[skills#Metrics & Evolution]] for the frontmatter contract. This block is optional — absence disables the evolve CLI but does not affect chat/eval of skills that don't declare metrics.
 
 ```toml
 [skill_lifecycle]

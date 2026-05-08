@@ -24,6 +24,16 @@ pub(crate) struct MetricRollup {
     pub n: u32,
     pub min_pass_rate: Option<f32>,
     pub gated: bool,
+    /// Standard deviation of pass_rate over the rolling window.
+    /// `None` when the window has < 2 entries (variance undefined).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stddev: Option<f32>,
+    /// Min pass_rate observed in the rolling window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f32>,
+    /// Max pass_rate observed in the rolling window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,15 +223,35 @@ fn compute_rollups(
         } else {
             series.iter().sum::<f32>() / series.len() as f32
         };
-        let min = spec.min_pass_rate();
-        let gated = min.is_some_and(|m| pass_rate < m);
+        // Sample stddev (n-1 denominator) only when the window has >= 2
+        // entries; variance over a single point is undefined.
+        let stddev = if series.len() >= 2 {
+            let mean = pass_rate;
+            let sumsq: f32 = series.iter().map(|x| (x - mean).powi(2)).sum();
+            Some((sumsq / (series.len() as f32 - 1.0)).sqrt())
+        } else {
+            None
+        };
+        let win_min = series
+            .iter()
+            .copied()
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let win_max = series
+            .iter()
+            .copied()
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let min_floor = spec.min_pass_rate();
+        let gated = min_floor.is_some_and(|m| pass_rate < m);
         out.insert(
             name.clone(),
             MetricRollup {
                 pass_rate,
                 n: *per_metric_n.get(&name).unwrap_or(&0),
-                min_pass_rate: min,
+                min_pass_rate: min_floor,
                 gated,
+                stddev,
+                min: win_min,
+                max: win_max,
             },
         );
     }
@@ -378,6 +408,85 @@ mod tests {
         // history.jsonl still has all 7 lines — retention only touches run dirs.
         let h = std::fs::read_to_string(history_path(skill_dir)).unwrap();
         assert_eq!(h.lines().count(), 7);
+    }
+
+    #[test]
+    fn compute_rollups_emits_stddev_when_n_ge_2() {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path();
+        let specs = vec![shell_spec("m1", None)];
+        // Five runs with pass rates: 1, 0, 1, 0, 1 (alternating).
+        // Mean = 0.6, sample stddev = sqrt((4 * 0.16 + 1 * 0.36 - wait)
+        //   deviations: 0.4, -0.6, 0.4, -0.6, 0.4
+        //   sq devs: 0.16, 0.36, 0.16, 0.36, 0.16  → sum = 1.20
+        //   sample var = 1.20 / 4 = 0.30 → stddev ≈ 0.5477226
+        for i in 0..5 {
+            let ok = i % 2 == 0;
+            let samples = vec![sample("m1", ok)];
+            finalize_run(skill_dir, "s", &format!("t{i}"), &specs, &samples, 10, 0).unwrap();
+        }
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
+        let r = mj.metrics.get("m1").unwrap();
+        let s = r.stddev.expect("stddev should be Some when n >= 2");
+        assert!(
+            (s - 0.547_722_6).abs() < 1e-3,
+            "expected ~0.5477, got {}",
+            s
+        );
+    }
+
+    #[test]
+    fn compute_rollups_omits_stddev_when_n_lt_2() {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path();
+        let specs = vec![shell_spec("m1", None)];
+        let samples = vec![sample("m1", true)];
+        finalize_run(skill_dir, "s", "t0", &specs, &samples, 10, 0).unwrap();
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
+        let r = mj.metrics.get("m1").unwrap();
+        assert!(r.stddev.is_none(), "stddev should be None for n < 2");
+    }
+
+    #[test]
+    fn compute_rollups_emits_min_max_over_window() {
+        let dir = TempDir::new().unwrap();
+        let skill_dir = dir.path();
+        // Use llm_judge-style multi-fixture rates by writing aggregated
+        // history.jsonl entries directly through finalize_run with crafted
+        // sample sets: 2/5, 5/5 pass; for shell_check we get 0 or 1 only,
+        // so build three runs hitting 0.4, 0.7, 0.9 by varying fixture mix.
+        let specs = vec![shell_spec("m1", None)];
+        let make = |passes: u32, total: u32| -> Vec<RunSample> {
+            (0..total).map(|i| sample("m1", i < passes)).collect()
+        };
+        // 0.4 = 2/5, 0.7 ≈ 7/10, 0.9 = 9/10
+        finalize_run(skill_dir, "s", "t0", &specs, &make(2, 5), 10, 0).unwrap();
+        finalize_run(skill_dir, "s", "t1", &specs, &make(7, 10), 10, 0).unwrap();
+        finalize_run(skill_dir, "s", "t2", &specs, &make(9, 10), 10, 0).unwrap();
+        let mj: MetricsJson =
+            serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
+        let r = mj.metrics.get("m1").unwrap();
+        assert!((r.min.unwrap() - 0.4).abs() < 1e-4, "min={:?}", r.min);
+        assert!((r.max.unwrap() - 0.9).abs() < 1e-4, "max={:?}", r.max);
+    }
+
+    #[test]
+    fn metrics_json_back_compat_for_old_files_without_variance() {
+        // Old shape — no stddev/min/max keys.
+        let raw = r#"{
+            "pass_rate": 0.75,
+            "n": 4,
+            "min_pass_rate": 0.5,
+            "gated": false
+        }"#;
+        let r: MetricRollup = serde_json::from_str(raw).expect("must deserialize old shape");
+        assert!((r.pass_rate - 0.75).abs() < 1e-4);
+        assert_eq!(r.n, 4);
+        assert!(r.stddev.is_none());
+        assert!(r.min.is_none());
+        assert!(r.max.is_none());
     }
 
     #[test]

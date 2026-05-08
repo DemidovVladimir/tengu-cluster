@@ -732,9 +732,9 @@ Spec refers to `tengu skill evolve`, `tengu skill metrics`, `tengu skill accept-
 | Spec | Real |
 |------|------|
 | `tengu eval <skill>` | `tengu eval <skill>` (unchanged) |
-| `tengu skill metrics <skill>` | `tengu skill-metrics <skill>` |
-| `tengu skill evolve <skill>` | `tengu skill-evolve <skill>` |
-| `tengu skill accept-proposal <path>` | `tengu skill-accept-proposal <path>` |
+| `tengu skill metrics <skill>` | `tengu skill metrics <skill>` |
+| `tengu skill evolve <skill>` | `tengu skill evolve <skill>` |
+| `tengu skill accept-proposal <path>` | `tengu skill accept-proposal <path>` |
 
 Re-shaping to nested `Commands::Skill { action: SkillAction { Evolve, ... } }` is a small future cleanup if you want the spec's form.
 
@@ -765,7 +765,7 @@ Re-shaping to nested `Commands::Skill { action: SkillAction { Evolve, ... } }` i
 
 `tengu eval skill-creator` ran against real OpenRouter — 2/2 rows passed the row-judge, `distill_quality` metric returned substantive per-row verdicts, `metrics.json` + `history.jsonl` persisted correctly.
 
-`tengu skill-evolve skill-creator --max-cycles 1` ran against real OpenRouter — baseline + scratch worktree + improver dispatch (claude-opus-4-7) + cycle rescore + best-cycle selection + approval gate all worked. Discard path committed a rejection entry to `evolve_log.md`. Apply path + multi-cycle path + all-cycles-regress path remain unexercised against real API; their logic is unit-tested.
+`tengu skill evolve skill-creator --max-cycles 1` ran against real OpenRouter — baseline + scratch worktree + improver dispatch (claude-opus-4-7) + cycle rescore + best-cycle selection + approval gate all worked. Discard path committed a rejection entry to `evolve_log.md`. Apply path + multi-cycle path + all-cycles-regress path remain unexercised against real API; their logic is unit-tested.
 
 ### 15.7 Two bug fixes found via smoke
 

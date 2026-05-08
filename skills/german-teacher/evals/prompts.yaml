@@ -1,0 +1,7 @@
+schema_version: 1
+fixtures:
+- id: f1
+  prompt: '<TODO: a typical question a learner would ask>'
+  expected_tool_calls: []
+  expected_outcome: ''
+  metrics: []

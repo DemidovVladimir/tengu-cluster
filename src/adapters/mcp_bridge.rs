@@ -25,7 +25,6 @@ use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
 // `channel_runtime::register_core_plugins` which has its own local imports.
 // Keeps the bridge file focused on stdio JSON-RPC + executor wiring rather
 // than re-listing the plugin set.
-use crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME;
 use crate::adapters::ports::{ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
@@ -452,5 +451,9 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,
+        // Stream M — bridge has only the synthesized default-main config;
+        // hand it to ToolCtx so distill (if invoked through the bridge)
+        // sees the engine/model the bridge inherited rather than nothing.
+        agent_config: Some(agent_config),
     })
 }

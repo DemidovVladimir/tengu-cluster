@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1000 1820" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+<svg viewBox="0 0 1000 1900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
   <title id="title">tengu-cluster architecture — feature workflow + file correlations, 2026-04-27</title>
   <desc id="desc">Three stacked sections plus a key-mechanics panel: per-turn flow, the five subsystems, the three Qdrant collections, and surprising mechanics readers should know.</desc>
   <style>
@@ -267,7 +267,7 @@
     <text x="10" y="268" class="file">events.rs</text>
     <text x="10" y="280" class="small">OrchestratorEvent + EventBus</text>
     <text x="10" y="294" class="small">PlanCreated, StepStarted, ok/fail,</text>
-    <text x="10" y="306" class="small">RagQueried (top-K hits)</text>
+    <text x="10" y="306" class="small">RagQueried, MetricsRecorded (2026-04-28)</text>
   </g>
 
   <text x="20" y="940" class="h2">section 3 - the three Qdrant collections - writers and readers</text>
@@ -391,9 +391,19 @@
   </g>
 
   <g transform="translate(20, 1640)">
+    <rect width="960" height="100" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">G. Context/token metrics observability (2026-04-28) - new metrics.rs subsystem</text>
+    <text x="10" y="36" class="small">Every LLM and embedding call emits one MetricsRecord with kind in {Planner, Subagent, Embedding}, prompt/completion/total tokens,</text>
+    <text x="10" y="50" class="small">latency, prompt chars/bytes, and (for Planner) per-context-layer breakdown (system / roster / cross_session / history /</text>
+    <text x="10" y="64" class="small">recall / failure / user_message). Three surfaces: tracing baseline (RUST_LOG=tengu=info, always on), in-process broadcast bus</text>
+    <text x="10" y="78" class="small">(OrchestratorEvent::MetricsRecorded, re-broadcast from the global sink), TUI bottom bubble (TENGU_TUI_METRICS=1, opt-in).</text>
+    <text x="10" y="92" class="file">src/adapters/metrics.rs  -  emit_planner_metrics  -  AgentIpcOutput.metrics  -  embedder reads usage.total_tokens</text>
+  </g>
+
+  <g transform="translate(20, 1760)">
     <rect width="960" height="80" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
-    <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything. Pick `cargo run --release --features qdrant -- chat --sandbox aura`,</text>
+    <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything. Pick `cargo run --release --features qdrant,claude_code -- chat --sandbox aura`,</text>
     <text x="10" y="54" class="small">type "what is the BTC price?", and follow it: tui/mod.rs - channel_runtime::build_orchestrator - RagPlanner::plan -</text>
     <text x="10" y="68" class="small">SubprocessRunner::run_step - main.rs::run_agent_subprocess - http plugin - compress_and_store. That is the whole story.</text>
   </g>

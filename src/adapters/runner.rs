@@ -73,14 +73,29 @@ fn default_max_turns() -> u32 {
 }
 
 /// JSON schema of the IPC output stream (stdout of `tengu run-agent`).
+///
+/// `metrics` carries per-turn LLM telemetry collected during the subagent's
+/// inner tool loop — empty for the legacy/test paths that don't fill it in.
+/// `#[serde(default, skip_serializing_if = "Vec::is_empty")]` keeps the IPC
+/// payload byte-compatible with prior versions of the binary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum AgentIpcOutput {
     /// Step completed cleanly. `summary` was already written to `tengu_outputs`
     /// by the child (via compress_and_store).
-    Ok { output: String, summary: String },
+    Ok {
+        output: String,
+        summary: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        metrics: Vec<crate::adapters::metrics::MetricsRecord>,
+    },
     /// Step failed. `output` contains partial text up to the failure.
-    Failed { error: String, output: String },
+    Failed {
+        error: String,
+        output: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        metrics: Vec<crate::adapters::metrics::MetricsRecord>,
+    },
 }
 
 /// Phase 3 spawner promoted to a `WorkerHandle` impl in Phase 4b. Each
@@ -204,6 +219,29 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
         step: &crate::adapters::orchestrator::plan::Step,
         step_inputs: &str,
     ) -> anyhow::Result<String> {
+        // Fail fast when the planner picked a name that has no `agents/<name>.toml`
+        // on disk. Without this we burn 3 retry attempts × subprocess spawn cost
+        // before the orchestrator gives up and replans. The most common cause is
+        // the planner LLM putting a SKILL or TOOL name in the `agent` field
+        // (the orchestrator SKILL.md forbids it but enforcement is still useful).
+        // We only check when there's no `compose` override — composed plans
+        // resolve `compose.base_agent` instead of `step.agent`.
+        if step.compose.is_none() {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let toml_path = cwd.join("agents").join(format!("{}.toml", step.agent));
+            if !toml_path.exists() {
+                anyhow::bail!(
+                    "no agent spec at {} — the planner picked '{}' but there is no \
+                     `agents/{}.toml` on disk. Likely cause: a SKILL or TOOL name was \
+                     placed in the plan's `agent` field. The agent field MUST come \
+                     from the `## Available agents` section of the roster.",
+                    toml_path.display(),
+                    step.agent,
+                    step.agent
+                );
+            }
+        }
+
         let goal = if step_inputs.is_empty() {
             step.goal.clone()
         } else {
@@ -233,8 +271,25 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
         };
 
         match self.run(input).await? {
-            AgentIpcOutput::Ok { output, .. } => Ok(output),
-            AgentIpcOutput::Failed { error, output } => {
+            AgentIpcOutput::Ok {
+                output, metrics, ..
+            } => {
+                // Re-emit per-turn subagent telemetry on the parent's global
+                // metrics sink. The IPC boundary is the only path these
+                // records can take from the child to the TUI / aggregator.
+                for rec in metrics {
+                    crate::adapters::metrics::record(rec);
+                }
+                Ok(output)
+            }
+            AgentIpcOutput::Failed {
+                error,
+                output,
+                metrics,
+            } => {
+                for rec in metrics {
+                    crate::adapters::metrics::record(rec);
+                }
                 anyhow::bail!(
                     "subagent failed: {}\npartial output:\n{}",
                     error,
@@ -275,9 +330,13 @@ mod tests {
         let out = AgentIpcOutput::Ok {
             output: "full text".to_string(),
             summary: "summary".to_string(),
+            metrics: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"ok\""));
+        // `metrics` is `skip_serializing_if = "Vec::is_empty"` so the empty
+        // case stays byte-compatible with prior IPC payloads.
+        assert!(!json.contains("\"metrics\""));
         let back: AgentIpcOutput = serde_json::from_str(&json).unwrap();
         matches!(back, AgentIpcOutput::Ok { .. });
     }
@@ -287,8 +346,43 @@ mod tests {
         let out = AgentIpcOutput::Failed {
             error: "timeout".to_string(),
             output: "partial".to_string(),
+            metrics: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"failed\""));
+    }
+
+    #[test]
+    fn ipc_output_with_metrics_round_trips() {
+        let m = crate::adapters::metrics::MetricsRecord {
+            ts_unix: 0,
+            session_id: "s".into(),
+            kind: crate::adapters::metrics::MetricsKind::Subagent,
+            agent: "researcher".into(),
+            model: "anthropic/claude-sonnet-4-6".into(),
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            prompt_chars: 500,
+            prompt_bytes: 600,
+            response_chars: 200,
+            latency_ms: 1234,
+            layers: Vec::new(),
+            step_id: Some("s1".into()),
+        };
+        let out = AgentIpcOutput::Ok {
+            output: "full text".to_string(),
+            summary: "summary".to_string(),
+            metrics: vec![m],
+        };
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(json.contains("\"metrics\""));
+        let back: AgentIpcOutput = serde_json::from_str(&json).unwrap();
+        if let AgentIpcOutput::Ok { metrics, .. } = back {
+            assert_eq!(metrics.len(), 1);
+            assert_eq!(metrics[0].total_tokens, 150);
+        } else {
+            panic!("expected Ok variant");
+        }
     }
 }

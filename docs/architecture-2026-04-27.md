@@ -77,6 +77,23 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 
 Output flows back to the executor (step 4); on success the next ready step starts.
 
+### Across all steps — metrics emission (added 2026-04-28)
+
+Every step that calls an LLM or embedding API emits a `MetricsRecord` via
+`adapters::metrics::record()`:
+- Step 3 (planner): `emit_planner_metrics` builds a record with full layer
+  breakdown after the LLM responds.
+- Step 6 (subagent): `run_agent_subprocess` records one per
+  `run_single_engine_turn` and ships them in `AgentIpcOutput.metrics`.
+  `SubprocessRunner::run_step` re-emits each on the parent's global sink.
+- Embedder: every `embed_batch_openrouter` call reads `usage.total_tokens`
+  and emits a record.
+
+A bridge task (spawned in `build_orchestrator`) subscribes to the global
+metrics sink and republishes each record as `OrchestratorEvent::MetricsRecorded`
+on the orchestrator bus, so subscribers (TUI, eval recorder, future ones)
+see one unified event stream.
+
 ---
 
 ## §2 — The five subsystems (file-by-file)
@@ -138,13 +155,28 @@ Walks all three, parses each `SKILL.md`'s YAML frontmatter (`name`, `description
 | File | What it owns |
 |---|---|
 | `mod.rs` | `Orchestrator` (top-level handle) |
-| `planner.rs` | `RagPlanner` (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block` |
+| `planner.rs` | `RagPlanner` (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block`, `emit_planner_metrics` |
 | `plan.rs` | `Plan`, `Step`, `AgentCompose` (C→B B-half), `StepId` |
 | `executor.rs` | `DagExecutor` — parallel `ready_steps` with cancel |
 | `retry.rs` | `RetryPolicy` |
 | `replan.rs` | `drive()` loop — replan-on-exhausted |
-| `events.rs` | `OrchestratorEvent` enum + bus (PlanCreated, StepStarted, RagQueried, etc.) |
-| `wiring.rs` | `ChatServiceFactory` trait + `ChatOrchestratorPortImpl` (planner-side LLM turn glue) |
+| `events.rs` | `OrchestratorEvent` enum + bus (PlanCreated, StepStarted, RagQueried, **MetricsRecorded**, etc.) |
+| `wiring.rs` | `ChatServiceFactory` trait + `TurnTelemetry` + `ChatOrchestratorPortImpl` (planner-side LLM turn glue) |
+
+### `src/adapters/metrics.rs` — context/token observability (added 2026-04-28)
+
+Process-wide observability layer. Every LLM and embedding call emits a
+`MetricsRecord` with token counts, latency, and (for the planner) per-context-layer
+breakdown. Three surfaces — tracing baseline (`RUST_LOG=tengu=info`), in-process
+broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorder.
+
+| Item | What it is |
+|---|---|
+| `MetricsRecord` | Per-call telemetry: ts, session_id, kind, agent, model, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layer breakdown, optional step_id. Serde-friendly so it crosses the subagent IPC boundary. |
+| `MetricsKind` | `Planner` (one per user turn) / `Subagent` (one per inner-loop turn) / `Embedding` (one per OpenRouter `/embeddings` call). |
+| `MetricsLayer` | One row in the planner's per-context-layer breakdown. Names: `system`, `roster`, `cross_session`, `history`, `recall`, `failure`, `user_message`. Approximate — engine-side framing isn't counted. |
+| `install_global_sink` / `record` / `subscribe` | Process-global broadcast sink (`OnceLock<broadcast::Sender>`). `record()` always emits a `tracing::info!` line; bus broadcast is best-effort. |
+| `AggregatorState` | Lightweight in-process rollup: overall + by-agent + by-kind. Used by the TUI. |
 
 ---
 
@@ -155,6 +187,31 @@ Walks all three, parses each `SKILL.md`'s YAML frontmatter (`name`, `description
 | `tengu_registry` | agent specs + skills + tool defs | `indexer::reindex_all_workspace` (CLI + auto on first chat turn) | `RagPlanner::plan/replan` via `search_registry` | NO — registry is deterministic, never time-decays |
 | `tengu_messages` | user messages keyed by `session_id` | `RagPlanner::persist_user_message` on every plan() | `RagPlanner::cross_session_recall_block` (opt-in) | YES — `cleanup::ttl_cleanup` |
 | `tengu_outputs` | compressed step output summaries | `compress_and_store` tool (implicit on every subagent) | `RagPlanner::replan` for cross-plan recall | YES — `cleanup::ttl_cleanup` |
+
+---
+
+## §3.5 — Context/token metrics (2026-04-28)
+
+Three surfaces, one record:
+
+1. **Tracing baseline (always on)** — every `metrics::record()` writes a
+   structured `tracing::info!` with `kind`, `agent`, `model`,
+   `prompt_tokens`, `completion_tokens`, `latency_ms`, `prompt_chars`. Run
+   `RUST_LOG=tengu=info` to see every LLM and embedding call inline.
+2. **In-process broadcast bus** — `OnceLock<broadcast::Sender<MetricsRecord>>`
+   in `metrics.rs`. Installed once by `build_orchestrator`. Subscribers
+   (`metrics::subscribe()`) get the live stream; lagging subscribers see
+   `RecvError::Lagged` and skip ahead (standard broadcast semantics).
+3. **TUI bottom panel** — opt-in via `TENGU_TUI_METRICS=1`. Renders a compact
+   one-liner as a System bubble: `metrics: tok in/out 4.5k/812 · last
+   planner (1.2k) · session 5.6k · researcher 4.0k`. Aggregator absorbs
+   records even when the panel is OFF, so flipping it on mid-session shows
+   real numbers, not zero.
+
+The subagent's per-turn records cross the IPC boundary in
+`AgentIpcOutput.metrics` (new field with `default + skip_serializing_if`
+so older child binaries stay compatible). The parent's runner re-emits
+each one on the global sink.
 
 ---
 

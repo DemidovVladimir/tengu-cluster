@@ -2,6 +2,7 @@
 
 use tokio::sync::broadcast;
 
+use crate::adapters::metrics::MetricsRecord;
 use crate::adapters::orchestrator::plan::{Plan, StepId};
 
 /// Phase 6.1 (full) — flat projection of a single RAG search hit attached
@@ -60,6 +61,17 @@ pub enum OrchestratorEvent {
         phase: &'static str,
         query: String,
         hits: Vec<RagQueriedHit>,
+    },
+    /// Metrics — context/token consumption for one LLM or embedding call.
+    /// Carried inline so subscribers (the TUI bottom bar, future eval
+    /// recorders) get the same record as the global metrics bus and the
+    /// `tracing::info!` baseline. Emitted by:
+    /// - `RagPlanner::plan/replan` after the planner LLM returns,
+    /// - `SubprocessRunner::run_step` once per IPC-returned subagent record,
+    /// - `Embedder::embed_batch` after every API call (re-broadcast from the
+    ///   global sink onto the orchestrator bus when an aggregator is wired).
+    MetricsRecorded {
+        record: MetricsRecord,
     },
 }
 

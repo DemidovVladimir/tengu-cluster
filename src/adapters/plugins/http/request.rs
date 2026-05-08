@@ -423,6 +423,7 @@ mod tests {
                 secret_registry: &self.secrets,
                 activity: self.activity.as_ref(),
                 conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+                agent_config: None,
             }
         }
     }

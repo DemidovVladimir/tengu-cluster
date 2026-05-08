@@ -141,6 +141,28 @@ The smaller-effort polish items are at the top; structural work below.
 
 ---
 
+## Observability — context/token telemetry
+
+Added 2026-04-28 to Tengu; included here so the comparison stays current.
+
+### Tengu
+
+First-class. `src/adapters/metrics.rs` records one `MetricsRecord` per LLM call (planner + each subagent inner-loop turn) and per embedding call. Three surfaces: `RUST_LOG=tengu=info` baseline (always-on), in-process broadcast bus (`OnceLock<broadcast::Sender>`), and `OrchestratorEvent::MetricsRecorded` re-broadcast on the event bus. Per-call telemetry includes prompt/completion/total tokens, prompt chars + bytes, response chars, latency, and (for the planner) per-context-layer breakdown (`system` / `roster` / `cross_session` / `history` / `recall` / `failure` / `user_message`). Subagent records cross the IPC boundary in `AgentIpcOutput.metrics`. TUI bubble opt-in via `TENGU_TUI_METRICS=1`.
+
+### Hermes
+
+`UsageRecord` per LLM call (input/output/total tokens, latency, model). Persisted to SQLite alongside the session log. Strong on persistence, weak on per-context-layer attribution — Hermes doesn't decompose the prompt into components since its assembly pipeline is more linear than Tengu's roster + recall + history layering.
+
+### PI / Cowork
+
+Token counts surface in the conversation transcript (Cowork's UI shows them inline) but there is no public per-context-layer breakdown or programmatic API for cost analysis. The closed-source equivalent of Tengu's `MetricsRecord` is reportedly internal; users see a final "session cost" rather than a turn-by-turn ledger.
+
+### Net comparison
+
+Tengu now has the most granular *attribution* (per-context-layer planner breakdown is unique to it). Hermes has the strongest *durability* (SQLite). PI has the smoothest *UX* (inline cost in the chat pane). The follow-up to close the durability gap would be a JSONL writer subscribing to the metrics bus — see `docs/SESSION_HANDOFF.md` "Open follow-ups" 2026-04-28.
+
+---
+
 ## What can be improved (analytical)
 
 Beyond the open items above, three architectural directions where Tengu lags behind one of the other two:
@@ -153,4 +175,4 @@ These are all additive — they don't conflict with the doctrine ("LLM = heart, 
 
 ---
 
-*Last updated 2026-04-26. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*
+*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above. The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*

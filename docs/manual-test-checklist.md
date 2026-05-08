@@ -74,6 +74,13 @@ Fill these in on the first run of Phase 0, then treat them as the diff target fo
 <!-- paste actual output here -->
 ```
 
+## Skill lifecycle smoke
+
+```
+SKL-15  tengu skill seed german-teacher ./materials/ → skills/german-teacher/ exists with SKILL.md (frontmatter editable_by_learner=true, learner_facing=true) + resources/<copied files> + evals/prompts.yaml stub.
+SKL-16  tengu skill seed against an existing skill name → refuses with clear error.
+```
+
 ## Rollback procedure
 
 1. `git checkout main` — restore the last known-good state.

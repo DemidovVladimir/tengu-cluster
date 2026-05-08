@@ -190,7 +190,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.skill-improver]
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
-# workspace_tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
+# # `workspace_tools` is a 3-item allowlist (shared_cache / persistent_store /
+# # skill_distill). Regular tools like read_file / list_directory go in `tools`.
+# tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #
 # [agents.skill-improver.identity]
 # name = "Skill Improver"
@@ -206,7 +208,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.fixture-runner]
 # engine = "openrouter"
 # model = "anthropic/claude-sonnet-4-6"
-# workspace_tools = ["read_file", "list_directory", "run_command"]
+# tools = ["read_file", "list_directory", "run_command"]
 #
 # [agents.fixture-runner.identity]
 # name = "Fixture Runner"

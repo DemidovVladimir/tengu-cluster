@@ -100,6 +100,10 @@ async fn embed_batch_openrouter(
         "input": texts,
     });
 
+    let started = std::time::Instant::now();
+    let total_chars: u32 = texts.iter().map(|t| t.chars().count() as u32).sum();
+    let total_bytes: u32 = texts.iter().map(|t| t.len() as u32).sum();
+
     let resp = client
         .post("https://openrouter.ai/api/v1/embeddings")
         .header("Authorization", format!("Bearer {}", api_key))
@@ -141,6 +145,33 @@ async fn embed_batch_openrouter(
             .collect::<Vec<f32>>();
         out.push(embedding);
     }
+
+    // OpenRouter's /embeddings endpoint is OpenAI-compatible; it returns
+    //   "usage": { "prompt_tokens": N, "total_tokens": N }
+    // Pull `total_tokens` (= `prompt_tokens` for embeddings — no completion).
+    // Falls back to a `chars / 4` heuristic if the field is missing.
+    let prompt_tokens = json["usage"]["total_tokens"]
+        .as_u64()
+        .map(|v| v as u32)
+        .unwrap_or_else(|| total_chars / 4);
+
+    crate::adapters::metrics::record(crate::adapters::metrics::MetricsRecord {
+        ts_unix: crate::adapters::metrics::now_unix(),
+        session_id: std::env::var("TENGU_SESSION_ID").unwrap_or_else(|_| "-".to_string()),
+        kind: crate::adapters::metrics::MetricsKind::Embedding,
+        agent: "embedder".to_string(),
+        model: model.to_string(),
+        prompt_tokens,
+        completion_tokens: 0,
+        total_tokens: prompt_tokens,
+        prompt_chars: total_chars,
+        prompt_bytes: total_bytes,
+        response_chars: 0,
+        latency_ms: started.elapsed().as_millis() as u64,
+        layers: Vec::new(),
+        step_id: None,
+    });
+
     Ok(out)
 }
 

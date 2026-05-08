@@ -494,6 +494,9 @@ const LAYERS = [
   { n: 7, key: "l7", color: "#FB923C", title: "File chunking",
     where: "src/adapters/plugins/memory/persistent_store.rs",
     desc: "Char-window file splitter for vector-storage. Orthogonal to LLM context — surfaces only via memory_recall." },
+  { n: 8, key: "l8", color: "#22D3EE", title: "Observability (metrics)",
+    where: "src/adapters/metrics.rs",
+    desc: "Records what every other layer produced — token counts, latency, per-context-layer attribution. Tracing baseline always-on; bus broadcast + TUI bubble opt-in. Never mutates a prompt. Added 2026-04-28." },
 ];
 
 const MECHS = [
@@ -605,6 +608,29 @@ const MECHS = [
   { n: 26, layer: 7, title: "persistent_store::chunk_text", where: "plugins/memory/persistent_store.rs:54",
     body: "Char-window splitter with overlap. Used when an agent calls <code>persistent_store</code> to save a file. Mechanical — no LLM, no summarisation.",
     pills: ["chunk_size = 1000", "overlap = 200"], tags: ["chunk", "persistent_store", "file", "embed"] },
+
+  // Layer 8 (added 2026-04-28)
+  { n: 27, layer: 8, title: "MetricsRecord — one per LLM/embedding call ★", where: "metrics.rs",
+    star: true,
+    body: "<strong>The unit of observability.</strong> kind in {Planner, Subagent, Embedding}, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layers, step_id, session_id. Token counts come from <code>StreamEvent::Usage</code> the engine layer already produced. <code>record()</code> always emits a structured tracing line + best-effort bus broadcast.",
+    pills: ["3 kinds", "tracing always-on", "bus best-effort", "fail-soft"],
+    tags: ["metrics", "tokens", "telemetry", "record"] },
+  { n: 28, layer: 8, title: "Per-context-layer attribution (planner only)", where: "orchestrator/planner.rs::emit_planner_metrics",
+    body: "<code>MetricsRecord.layers</code> carries one <code>MetricsLayer { name, chars, bytes }</code> per planner-prompt section: system / roster / cross_session / history / recall / failure / user_message. Built BEFORE the LLM call from the same strings the planner just composed. <strong>Approximate</strong> — engine-side framing isn't counted; sum-of-layers ≠ prompt_tokens. Treat as relative attribution for \"which planner block bloated this turn\".",
+    pills: ["7 layer names", "approximate", "planner-only"],
+    tags: ["metrics", "layers", "attribution", "planner", "approximate"] },
+  { n: 29, layer: 8, title: "Three surfaces, one record", where: "metrics.rs + tui/mod.rs",
+    body: "Tracing baseline (RUST_LOG=tengu=info — info line per call, debug for layer detail), in-process broadcast bus (<code>OnceLock&lt;broadcast::Sender&gt;</code>), orchestrator-event bus (bridge in build_orchestrator re-broadcasts as <code>OrchestratorEvent::MetricsRecorded</code>). TUI bubble opt-in via <code>TENGU_TUI_METRICS=1</code>.",
+    pills: ["RUST_LOG=tengu=info", "TENGU_TUI_METRICS=1", "OrchestratorEvent::MetricsRecorded"],
+    tags: ["metrics", "surfaces", "tracing", "bus", "tui"] },
+  { n: 30, layer: 8, title: "AgentIpcOutput.metrics — IPC plumbing", where: "runner.rs + main.rs::run_agent_subprocess",
+    body: "Subagent records cross the subprocess boundary in <code>AgentIpcOutput::{Ok,Failed}.metrics: Vec&lt;MetricsRecord&gt;</code>. <code>run_agent_subprocess</code> records one per <code>run_single_engine_turn</code>; <code>SubprocessRunner::run_step</code> re-emits each on the parent's global sink. <code>#[serde(default, skip_serializing_if = \"Vec::is_empty\")]</code> keeps the payload byte-compatible with older child binaries.",
+    pills: ["one record per inner-loop turn", "byte-compatible", "default empty"],
+    tags: ["metrics", "ipc", "subagent", "subprocess", "round-trip"] },
+  { n: 31, layer: 8, title: "AggregatorState — TUI rollup", where: "metrics.rs + tui/mod.rs",
+    body: "Lightweight in-process rollup: overall + by-agent + by-kind + last record. Renders one System bubble per call when <code>TENGU_TUI_METRICS=1</code>: <code>metrics: tok in/out 4.5k/812 · last subagent (2.1k) · session 12.3k · researcher 8.7k</code>. Aggregator absorbs records even when the panel is OFF — flipping it on mid-session shows real numbers, not zero.",
+    pills: ["overall + by-agent + by-kind", "absorbs even when off", "fmt_tokens compact"],
+    tags: ["metrics", "aggregator", "tui", "rollup", "bubble"] },
 ];
 
 const STEPS = [
@@ -647,6 +673,9 @@ const STEPS = [
   { title: "Layer 6 — RAG hygiene", layer: 6,
     what: "On chat cold-start: <code>ttl_cleanup</code> purges expired entries from <code>tengu_messages</code> and <code>tengu_outputs</code> if <code>ttl_days &gt; 0</code>. <code>reindex_all_workspace</code> checks fingerprint and skips re-embedding if nothing changed.",
     hits: ["#24 ttl_cleanup", "#25 fingerprint dedup"] },
+  { title: "Layer 8 — emit metrics (orthogonal — fires across the turn)", layer: 8,
+    what: "Each LLM and embedding call emits one <code>MetricsRecord</code>. Planner records carry per-context-layer breakdown captured BEFORE the call. Subagent records cross IPC and are re-emitted on the parent's sink. Embedding records read <code>usage.total_tokens</code> from the OpenRouter response. Always-on tracing line + opt-in bus subscribers + opt-in TUI bubble.",
+    hits: ["#27 MetricsRecord ★", "#28 per-layer attribution (planner)", "#29 three surfaces", "#30 IPC plumbing"] },
 ];
 
 const SYMPTOMS = [
@@ -678,6 +707,14 @@ const SYMPTOMS = [
     cause: "Layer 6 #25 — fingerprint dedup is suppressing reindex. Run <code>TENGU_REGISTRY_FORCE_REINDEX=1 tengu chat</code>." },
   { layer: 6, sym: "Old session messages keep resurfacing in cross-session recall",
     cause: "Layer 6 #24 — <code>ttl_days</code> = 0 default means permanent retention. Set to e.g. 30 to auto-purge." },
+  { layer: 8, sym: "\"Why is this turn so big?\" — diagnose context bloat",
+    cause: "Layer 8 #28. Set <code>RUST_LOG=tengu=debug</code> and read the <code>metrics.layer</code> lines for the planner call. The biggest <code>chars=</code> value tells you which planner block to trim (e.g. roster too verbose, history block too long)." },
+  { layer: 8, sym: "Need rolling token totals in the TUI for cost tracking",
+    cause: "Layer 8 #29/#31. Set <code>TENGU_TUI_METRICS=1</code>. The aggregator absorbs records even when the panel is off, so flipping it on mid-session shows real numbers." },
+  { layer: 8, sym: "Subagent token counts missing in parent logs",
+    cause: "Layer 8 #30 — child binary may be old (no <code>metrics</code> field in IPC output). Rebuild both parent and child from the same commit." },
+  { layer: 8, sym: "Sum of layer chars doesn't match prompt_tokens × 4",
+    cause: "Layer 8 #28 — engine-side framing (Anthropic <code>&lt;thinking&gt;</code>, function-calling wrappers) isn't counted in layer attribution. Treat layers as relative attribution, not byte-perfect tokenisation." },
 ];
 
 const CONFIG = [
@@ -705,6 +742,8 @@ const CONFIG = [
   { layer: 6, knob: "TENGU_REGISTRY_FORCE_REINDEX", def: "(unset)", where: "rag/indexer.rs", what: "Bypass fingerprint dedup — set to 1 to force reindex." },
   { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config.rs:610", what: "File chunk window in chars." },
   { layer: 7, knob: "memory.persistent_store_chunk_overlap", def: "200", where: "config.rs:613", what: "Overlap between adjacent chunks." },
+  { layer: 8, knob: "RUST_LOG=tengu=info", def: "(unset)", where: "metrics.rs::record", what: "Always-on tracing baseline. One info line per LLM/embedding call. Bump to debug to also see per-layer breakdown." },
+  { layer: 8, knob: "TENGU_TUI_METRICS", def: "(unset)", where: "tui/mod.rs", what: "Set to 1 to enable the TUI rolling-totals System bubble after each call." },
 ];
 
 // =====================================================================

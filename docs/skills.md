@@ -87,9 +87,9 @@ An agent with `workspace_tools = ["skill_distill"]` can author a new skill mid-c
 | Command | Purpose |
 |---------|---------|
 | `tengu eval <skill>` | Replay `evals/prompts.yaml` fixtures, score each via the skill's metrics, write `metrics.json` + append to `metrics/history.jsonl`, emit per-row transcripts under `evals/runs/<ts>/`. |
-| `tengu skill-metrics <skill>` | Show rolling `metrics.json` + recent history entries (read-only, no API calls). |
-| `tengu skill-evolve <skill>` | Bounded rewrite→rescore loop. Baseline-evals, picks the lowest-gated metric as target, spawns `skill-improver` in a scratch git worktree for N cycles, picks the best cycle (no regression > 0.05 on other gated metrics), shows a diff + metric delta, prompts y/n/d/o. |
-| `tengu skill-accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1). |
+| `tengu skill metrics <skill>` | Show rolling `metrics.json` + recent history entries (read-only, no API calls). |
+| `tengu skill evolve <skill>` | Bounded rewrite→rescore loop. Baseline-evals, picks the lowest-gated metric as target, spawns `skill-improver` in a scratch git worktree for N cycles, picks the best cycle (no regression > 0.05 on other gated metrics), shows a diff + metric delta, prompts y/n/d/o. |
+| `tengu skill accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1). |
 
 Activating evolve requires `[skill_lifecycle]` + `[agents.skill-improver]` + `[agents.fixture-runner]` in `tengu.toml` — see [[configuration]].
 

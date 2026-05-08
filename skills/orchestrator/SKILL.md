@@ -1,6 +1,7 @@
 ---
 name: orchestrator
 description: "Plans and dispatches multi-agent work from a ranked RAG roster. Produces direct responses to simple questions and multi-step plans for everything else."
+editable_by_learner: false
 ---
 
 # Orchestrator
@@ -55,7 +56,8 @@ Set `depends_on` to the ids of prior steps whose output this step needs. Paralle
 
 ## Rules
 
-- NEVER invent an agent name — only use the exact `name` field of an agent listed in the ranked roster.
+- NEVER invent an agent name — only use the exact `name` field of an agent listed in the **`## Available agents`** section of the roster.
+- **The `agent` field of every plan step MUST come from the `## Available agents` section, NEVER from `## Available skills` or `## Available tools`.** A skill with name `spanish-teacher` cannot be put in the `agent` field — there is no `agents/spanish-teacher.toml` and the runner will fail. If the only relevant match is a skill, route to `researcher` (or whichever existing agent is closest) and let it consult that skill via its skill loader. Skills are reference material loaded by an agent at runtime; tools are functions an agent calls; only AGENTS run as subprocesses.
 - Score interpretation: this registry uses `text-embedding-3-small`, where realistic agent scores against well-formed user queries fall in the `0.15–0.40` range. A score of `0.6+` is rare and usually indicates a near-verbatim match. Do NOT require `0.6` to delegate.
 - Routing decision: if the top-ranked agent's description **plausibly fits** the request (use your own judgement reading the description, not the raw number) AND its score is above `~0.15`, route to it via a `plan` with one step. The score is a sanity floor; your reading of the description is the primary signal.
 - Direct response (instead of a plan) when: (a) the top agent's description clearly does NOT fit the request, (b) the top score is below ~0.15 (everything is noise), or (c) the request is a greeting / acknowledgement / something you can answer trivially yourself with no fetch or computation.
@@ -129,6 +131,21 @@ Rules:
 - `compose.skills` and `compose.tools` REPLACE the base spec's lists for this run only — the file on disk is unchanged. Pick the highest-scoring entries from the RAG roster that look applicable.
 - The top-level `agent` field is just a label for events/logs (use something readable like `composed-<base>`); the actual base lives in `compose.base_agent`.
 - Use `compose` ONLY after a prior C-style Direct asked the user to confirm. Do NOT compose silently — that defeats the purpose of asking.
+
+## Lifecycle verbs (in-chat skill management)
+
+Some user phrases route to the skill-lifecycle subsystem instead of the regular roster. When you see one, emit a Plan with the agent shown below — the harness wires the rest. Cache discipline still holds: distilled / improved skills do NOT activate in the current conversation. Tell the user what will land on the next session.
+
+| User says | Plan shape | Notes |
+|---|---|---|
+| "create skill from our dialog [as `<name>`]" / "save this as a skill" / "let's distill this" | `{steps: [{agent: "learning-agent", goal: "Create a new skill via manage_skill(action='create', name='<name>', ...). Use the workflow that has been demonstrated in messages [N..current] as the basis for the SKILL.md body. If the user didn't specify a name, infer one (kebab-case)."}]}` | One step. The agent reads the dialog, calls manage_skill(create) directly. Cache discipline: skill activates next session. |
+| "evaluate" / "evaluate this skill" / "evaluate the `<name>` skill" | `{steps: [{agent: "learning-agent", goal: "Evaluate skill <name> against this session. Use view_skill(read) and view_skill(read_resource) to ground in the actual skill body and resources. Report what worked, what didn't, what's missing."}]}` | One step. Pure read + reflect; no writes. |
+| "fix it" / "adjust yourself" / "improve the skill we just used" / "adjust yourself for the `<name>` skill" | `{steps: [{agent: "learning-agent", goal: "Adjust skill <name> based on this session's dialog. Use view_skill to inspect current state, http_request to fetch new web resources if the dialog reveals topic gaps, manage_skill(action='patch' | 'add_resource' | 'edit_body') to apply atomically. Tell the user what was done and that changes activate on next session start."}]}` | One step. Agent decides what to read, fetch, and write. |
+| "rollback" | Direct, surface `git checkout skills/<name>/SKILL.md` | Harness does not auto-rollback. |
+
+**How to pick `<name>`:** look back in recent session history for the most-recently-used skill. If the user named it explicitly in the request, use that name (kebab-case). If genuinely unclear, fall back to a Direct asking which skill — DO NOT default to the orchestrator skill or guess from the roster.
+
+Refuse when the dialog is too short to distill (under ~2 user turns) or when the request is ambiguous about which skill — fall back to a Direct asking for clarification.
 
 ## Notes on evolving this file
 

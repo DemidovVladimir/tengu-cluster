@@ -105,6 +105,7 @@ mod tests {
             secret_registry: &secrets,
             activity: activity.as_ref(),
             conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            agent_config: None,
         };
 
         let args = json!({"title": "bug"});

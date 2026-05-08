@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 2050" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 2200" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#94A3B8"/>
@@ -396,6 +396,37 @@
       <text x="62" y="32" class="mech">token.rs (estimate, truncate_at_boundary, truncate_with_suffix)</text>
       <text x="20" y="56" class="small mono">~4 chars/token heuristic — used everywhere a token count is needed</text>
       <text x="20" y="76" class="small">UTF-8 safe slicing primitives for all the Layer 1-3 caps above</text>
+    </g>
+  </g>
+
+  <!-- ============== LAYER 8 — OBSERVABILITY (added 2026-04-28) ============== -->
+  <text x="40" y="2030" class="layer-n" fill="#22D3EE">8</text>
+  <text x="100" y="2020" class="layer-t">Observability — context/token metrics (records, never mutates)</text>
+  <g transform="translate(40,2050)">
+    <rect class="layer L0" width="1520" height="130" fill="#0e7490" fill-opacity="0.07" stroke="#22D3EE"/>
+    <g transform="translate(20,15)">
+      <circle cx="28" cy="28" r="14" fill="#22D3EE"/>
+      <text x="28" y="33" text-anchor="middle" class="badge">27</text>
+      <text x="52" y="32" class="mech">MetricsRecord — one per LLM/embedding call ★</text>
+      <text x="20" y="56" class="small mono">src/adapters/metrics.rs · kind in {Planner, Subagent, Embedding}</text>
+      <text x="20" y="76" class="small">prompt/completion/total tokens · prompt chars+bytes · response chars · latency_ms · layers · step_id</text>
+      <text x="20" y="96" class="small">Always-on tracing line + best-effort bus broadcast. Fail-soft.</text>
+    </g>
+    <g transform="translate(440,15)">
+      <circle cx="28" cy="28" r="14" fill="#22D3EE"/>
+      <text x="28" y="33" text-anchor="middle" class="badge">28</text>
+      <text x="52" y="32" class="mech">Per-context-layer attribution (planner only)</text>
+      <text x="20" y="56" class="small mono">orchestrator/planner.rs::emit_planner_metrics</text>
+      <text x="20" y="76" class="small">7 layer names: system / roster / cross_session / history / recall / failure / user_message</text>
+      <text x="20" y="96" class="small">Approximate — engine framing isn't counted; sum-of-layers ≠ prompt_tokens.</text>
+    </g>
+    <g transform="translate(860,15)">
+      <circle cx="28" cy="28" r="14" fill="#22D3EE"/>
+      <text x="28" y="33" text-anchor="middle" class="badge">29·30·31</text>
+      <text x="98" y="32" class="mech">Three surfaces · IPC plumbing · TUI rollup</text>
+      <text x="20" y="56" class="small mono">RUST_LOG=tengu=info · OrchestratorEvent::MetricsRecorded · TENGU_TUI_METRICS=1</text>
+      <text x="20" y="76" class="small">Subagent records cross IPC in AgentIpcOutput.metrics (skip-if-empty).</text>
+      <text x="20" y="96" class="small">AggregatorState absorbs records even when TUI panel is OFF.</text>
     </g>
   </g>
 

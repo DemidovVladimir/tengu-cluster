@@ -1,0 +1,48 @@
+# Labeled queries for the `triggers_correctly` metric.
+# `should_trigger: true` means the planner SHOULD route to skill-creator.
+# `should_trigger: false` means a near-miss that must NOT trigger this skill.
+# 60/40 train/test split is applied at eval time (DescriptionTriggerKind).
+queries:
+  # --- should_trigger: true (10) -----------------------------------------
+  - query: "let's save this conversation as a skill"
+    should_trigger: true
+  - query: "create a skill from our dialog called eth-balance-check"
+    should_trigger: true
+  - query: "distill what we just did into a reusable skill"
+    should_trigger: true
+  - query: "turn this workflow into a skill"
+    should_trigger: true
+  - query: "I want to capture this as a skill for next time"
+    should_trigger: true
+  - query: "make a new skill that does the videojet order generation"
+    should_trigger: true
+  - query: "modify the skill-creator skill's description so it triggers more reliably"
+    should_trigger: true
+  - query: "the deploy-contract skill is broken — let's update it"
+    should_trigger: true
+  - query: "package the steps we just figured out into a skill called mint-ipnft"
+    should_trigger: true
+  - query: "edit the mint-ipnft skill to add a new step"
+    should_trigger: true
+
+  # --- should_trigger: false (10) — near-misses --------------------------
+  - query: "save this file to disk"
+    should_trigger: false
+  - query: "distill this argument down to the key claim"
+    should_trigger: false
+  - query: "create a docker container for the api"
+    should_trigger: false
+  - query: "modify the skill's metric threshold to 0.9"
+    should_trigger: false
+  - query: "evaluate the skill-creator skill against its prompts"
+    should_trigger: false
+  - query: "what skills are loaded right now?"
+    should_trigger: false
+  - query: "delete the old mint-ipnft skill"
+    should_trigger: false
+  - query: "show me the description of the skill-creator skill"
+    should_trigger: false
+  - query: "run the eval suite on every skill in the workspace"
+    should_trigger: false
+  - query: "search the registry for an agent that handles BTC prices"
+    should_trigger: false

@@ -153,7 +153,7 @@ Specific test groups worth knowing:
 ./target/debug/tengu --help
 ```
 
-Expected: `eval`, `skill-evolve`, `skill-metrics`, `skill-accept-proposal` all listed.
+Expected: `eval`, `skill` (with subcommands: `evolve`, `metrics`, `accept-proposal`, `remove`, `list`, `doctor`, `export`, `install`) all listed.
 
 ```bash
 ./target/debug/tengu eval --help
@@ -172,9 +172,9 @@ Expected flags:
 - `--max-runs <N>` — retain N most recent under `skills/<skill>/metrics/runs/` (default 10)
 
 ```bash
-./target/debug/tengu skill-evolve --help
-./target/debug/tengu skill-metrics --help
-./target/debug/tengu skill-accept-proposal --help
+./target/debug/tengu skill evolve --help
+./target/debug/tengu skill metrics --help
+./target/debug/tengu skill accept-proposal --help
 ```
 
 All should return without error.
@@ -195,12 +195,12 @@ If `skill-improver` or `fixture-runner` is missing → your `~/.tengu/config.tom
 
 ---
 
-## 4. `tengu skill-metrics` (no API key, no cost)
+## 4. `tengu skill metrics` (no API key, no cost)
 
 Read-only inspection. Works with or without a prior eval run.
 
 ```bash
-./target/debug/tengu skill-metrics skill-creator
+./target/debug/tengu skill metrics skill-creator
 ```
 
 **Expected when no prior run exists:**
@@ -233,7 +233,7 @@ No metrics.json yet for skill 'skill-creator'. Run `tengu eval skill-creator` fi
 ```
 
 The `gated` field is the key signal:
-- `gated: true` → `pass_rate < min_pass_rate` → this metric is a candidate target for `tengu skill-evolve`.
+- `gated: true` → `pass_rate < min_pass_rate` → this metric is a candidate target for `tengu skill evolve`.
 - `gated: false` → above threshold → evolve won't touch it unless explicitly `--target-metric`'d.
 
 ---
@@ -328,14 +328,14 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 
 ---
 
-## 7. Full `tengu skill-evolve` (live, ~$0.30 per cycle; `--max-cycles 1` recommended for first smoke)
+## 7. Full `tengu skill evolve` (live, ~$0.30 per cycle; `--max-cycles 1` recommended for first smoke)
 
 Requires a **gated** metric — `distill_quality` will be gated if you haven't yet achieved `pass_rate >= 0.7` rolling. The easiest way to prove this end-to-end: run eval once (step 6) to seed `metrics.json`, then evolve.
 
 ### 7.1 Discard path (safe, non-mutating)
 
 ```bash
-echo "n" | ./target/debug/tengu skill-evolve skill-creator --max-cycles 1
+echo "n" | ./target/debug/tengu skill evolve skill-creator --max-cycles 1
 ```
 
 Expected behaviour:
@@ -378,7 +378,7 @@ Expected behaviour:
 ### 7.2 Apply path (mutating — use with care)
 
 ```bash
-echo "y" | ./target/debug/tengu skill-evolve skill-creator --max-cycles 1
+echo "y" | ./target/debug/tengu skill evolve skill-creator --max-cycles 1
 ```
 
 Difference from 7.1:
@@ -407,7 +407,7 @@ Worktree is **not** removed — you can cd in and inspect what the improver prod
 ### 7.4 Multi-cycle
 
 ```bash
-echo "n" | ./target/debug/tengu skill-evolve skill-creator --max-cycles 3
+echo "n" | ./target/debug/tengu skill evolve skill-creator --max-cycles 3
 ```
 
 Expected: logs show `cycle 1`, `cycle 2`, `cycle 3`. On cycle 2+, the improver's user message includes a `Previous attempts in this session:` section listing prior rationales + metric movements — so it doesn't repeat a failed angle.
@@ -421,7 +421,7 @@ Early exits: if any cycle hits `target_metric pass_rate = 1.0`, or if all gated 
 | "no gated metrics failing; nothing to evolve" | All metrics above threshold | This is a success, not a bug. Lower `min_pass_rate` or break the skill deliberately to smoke evolve. |
 | "skill-improver returned malformed JSON" | Model didn't follow the JSON-only instruction | Check `[agents.skill-improver].identity.instructions` — it must tell the model to emit one JSON object only. |
 | "git worktree add failed" | Workspace is a git repo but something else is wrong (permissions, disk, corrupt index) | Check `git status` manually in workspace root. The non-git fallback kicks in automatically for non-git repos. |
-| Hangs forever at the prompt | Stdin isn't interactive (e.g. run inside a subshell that captured stdin) | Pipe your decision: `echo "n" \| tengu skill-evolve …` |
+| Hangs forever at the prompt | Stdin isn't interactive (e.g. run inside a subshell that captured stdin) | Pipe your decision: `echo "n" \| tengu skill evolve …` |
 
 ---
 
@@ -469,7 +469,7 @@ Manually plant a stale worktree dir to exercise the sweep:
 mkdir -p .tengu/worktrees/evolve-fake-old
 touch -d '30 hours ago' .tengu/worktrees/evolve-fake-old
 
-./target/debug/tengu skill-evolve skill-creator --max-cycles 1 --dry-run 2>&1 | head
+./target/debug/tengu skill evolve skill-creator --max-cycles 1 --dry-run 2>&1 | head
 # (then Ctrl-C after startup to avoid a real eval run, OR pipe 'n')
 
 # The stale dir should be gone:
@@ -553,13 +553,13 @@ cargo test --bin tengu plugins:: --quiet
 ./target/debug/tengu eval skill-creator
 
 # Inspect
-./target/debug/tengu skill-metrics skill-creator
+./target/debug/tengu skill metrics skill-creator
 
 # Evolve discard path (~$0.30)
-echo "n" | ./target/debug/tengu skill-evolve skill-creator --max-cycles 1
+echo "n" | ./target/debug/tengu skill evolve skill-creator --max-cycles 1
 
 # Evolve apply path (~$0.30 + whatever sanity re-eval costs)
-echo "y" | ./target/debug/tengu skill-evolve skill-creator --max-cycles 1
+echo "y" | ./target/debug/tengu skill evolve skill-creator --max-cycles 1
 # Revert if needed:
 git checkout skills/skill-creator/SKILL.md
 

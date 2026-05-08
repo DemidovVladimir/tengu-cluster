@@ -43,6 +43,51 @@ pub(crate) enum MetricSpec {
         #[serde(default)]
         min_pass_rate: Option<f32>,
     },
+    /// Reflective eval — score the *current dialog slice* by delegating to a
+    /// sibling metric (`llm_judge` or `tool_assertion`) on the same skill.
+    /// See `metric_kinds/dialog_replay.rs` and Batch 8 of
+    /// `docs/skill-research-2026-04-28.md`.
+    DialogReplay {
+        name: String,
+        /// 0-based message index where the slice starts. End is current
+        /// end-of-conversation.
+        from_message_index: usize,
+        /// Name of an `llm_judge` or `tool_assertion` metric on the same
+        /// skill that this replay delegates to for actual scoring.
+        delegate_metric: String,
+        #[serde(default)]
+        expected_outcome: Option<String>,
+        #[serde(default)]
+        min_pass_rate: Option<f32>,
+    },
+    /// Description-triggering eval — Cowork `run_loop.py` pattern as a
+    /// declarative metric kind. Asks a judge LLM whether the planner would
+    /// route to this skill given a curated should/shouldn't-trigger query
+    /// list. See `metric_kinds/description_trigger.rs` and Batch 4 of
+    /// `docs/skill-research-2026-04-28.md`.
+    DescriptionTrigger {
+        name: String,
+        /// Path (relative to skill_dir) to a YAML queries file with
+        /// `{queries: [{query, should_trigger}]}`.
+        queries_file: String,
+        #[serde(default)]
+        judge_model: Option<String>,
+        #[serde(default = "default_runs_per_query")]
+        runs_per_query: u32,
+        /// Holdout fraction for the test split (0.0 = use all queries as test).
+        /// Default 0.4 mirrors Cowork's 60/40.
+        #[serde(default = "default_holdout")]
+        holdout: f32,
+        #[serde(default)]
+        min_pass_rate: Option<f32>,
+    },
+}
+
+fn default_runs_per_query() -> u32 {
+    3
+}
+fn default_holdout() -> f32 {
+    0.4
 }
 
 impl MetricSpec {
@@ -51,7 +96,9 @@ impl MetricSpec {
             Self::ShellCheck { name, .. }
             | Self::LlmJudge { name, .. }
             | Self::ToolAssertion { name, .. }
-            | Self::Script { name, .. } => name,
+            | Self::Script { name, .. }
+            | Self::DialogReplay { name, .. }
+            | Self::DescriptionTrigger { name, .. } => name,
         }
     }
 
@@ -60,7 +107,9 @@ impl MetricSpec {
             Self::ShellCheck { min_pass_rate, .. }
             | Self::LlmJudge { min_pass_rate, .. }
             | Self::ToolAssertion { min_pass_rate, .. }
-            | Self::Script { min_pass_rate, .. } => *min_pass_rate,
+            | Self::Script { min_pass_rate, .. }
+            | Self::DialogReplay { min_pass_rate, .. }
+            | Self::DescriptionTrigger { min_pass_rate, .. } => *min_pass_rate,
         }
     }
 }
@@ -106,6 +155,14 @@ pub(crate) struct MetricRunCtx<'a> {
     pub activity: Option<&'a dyn crate::adapters::ports::ToolActivityPort>,
     pub tool_scopes:
         Option<&'a std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
+    /// Conversation slice the metric may inspect (used by `dialog_replay`).
+    /// `None` outside of in-chat reflective evals; pre-authored fixtures
+    /// don't need it.
+    pub conversation: Option<&'a [crate::adapters::types::Message]>,
+    /// Sibling metric specs on the same skill, used by `dialog_replay` to
+    /// resolve the named `delegate_metric`. `None` falls through to
+    /// "delegate not found".
+    pub sibling_metrics: Option<&'a [MetricSpec]>,
 }
 
 #[async_trait]
@@ -163,6 +220,38 @@ pub(crate) fn validate_metrics(specs: &[MetricSpec], skill_dir: &Path) -> Result
             MetricSpec::ToolAssertion { tool, .. } => {
                 if tool.trim().is_empty() {
                     bail!("metric '{}' tool name empty", name);
+                }
+            }
+            MetricSpec::DialogReplay {
+                delegate_metric, ..
+            } => {
+                if delegate_metric.trim().is_empty() {
+                    bail!("metric '{}' delegate_metric empty", name);
+                }
+            }
+            MetricSpec::DescriptionTrigger {
+                queries_file,
+                runs_per_query,
+                holdout,
+                ..
+            } => {
+                let p = skill_dir.join(queries_file);
+                if !p.exists() {
+                    bail!(
+                        "metric '{}' queries_file missing: {}",
+                        name,
+                        p.display()
+                    );
+                }
+                if *runs_per_query == 0 {
+                    bail!("metric '{}' runs_per_query must be >= 1", name);
+                }
+                if !(0.0..=1.0).contains(holdout) {
+                    bail!(
+                        "metric '{}' holdout {} outside [0,1]",
+                        name,
+                        holdout
+                    );
                 }
             }
         }

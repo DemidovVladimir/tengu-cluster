@@ -59,6 +59,29 @@ pub trait OrchestratorChatPort: Send + Sync {
     ) -> anyhow::Result<String> {
         self.run_orchestrator_turn(agent, user_message).await
     }
+
+    /// Metered variant — returns `(reply, telemetry)` so callers can build
+    /// a `MetricsRecord` with prompt/completion tokens and wall-clock
+    /// latency. Default impl falls back to `run_orchestrator_turn_with_system`
+    /// and returns zeroed telemetry. The runtime impl
+    /// (`ChatOrchestratorPortImpl`) overrides this to plumb real numbers.
+    async fn run_orchestrator_turn_with_system_metered(
+        &self,
+        agent: &str,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> anyhow::Result<(
+        String,
+        crate::adapters::orchestrator::wiring::TurnTelemetry,
+    )> {
+        let reply = self
+            .run_orchestrator_turn_with_system(agent, system_prompt, user_message)
+            .await?;
+        Ok((
+            reply,
+            crate::adapters::orchestrator::wiring::TurnTelemetry::default(),
+        ))
+    }
 }
 
 /// Parse the orchestrator LLM's response into a [`PlannerVerdict`].
@@ -621,14 +644,40 @@ impl Planner for RagPlanner {
             "{}{}{}\n## User message (current turn)\n\n{}",
             roster, cross_session_block, history_block, user_message
         );
-        let raw = self
+
+        // Per-layer breakdown captured BEFORE the LLM call so the metric
+        // record represents what the planner actually sent (the prompt is
+        // immutable from here on). System prompt is a fifth layer — not
+        // part of `combined` but still part of what the LLM sees.
+        let layers = vec![
+            crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
+            crate::adapters::metrics::MetricsLayer::from_text("roster", &roster),
+            crate::adapters::metrics::MetricsLayer::from_text(
+                "cross_session",
+                &cross_session_block,
+            ),
+            crate::adapters::metrics::MetricsLayer::from_text("history", &history_block),
+            crate::adapters::metrics::MetricsLayer::from_text("user_message", user_message),
+        ];
+
+        let (raw, telemetry) = self
             .chat
-            .run_orchestrator_turn_with_system(
+            .run_orchestrator_turn_with_system_metered(
                 &self.orchestrator_agent,
                 &self.system_prompt,
                 &combined,
             )
             .await?;
+        emit_planner_metrics(
+            "plan",
+            &self.session_id,
+            &self.orchestrator_agent,
+            &combined,
+            &self.system_prompt,
+            layers,
+            &telemetry,
+            &raw,
+        );
         parse_verdict(&raw)
     }
 
@@ -688,31 +737,101 @@ impl Planner for RagPlanner {
         let cross_session_block = self.cross_session_recall_block(user_message).await;
 
         let roster = Self::format_roster(&hits);
-        let context = format!(
-            "{}{}{}{}\n## A previous plan failed\n\n\
+        let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
+        let failure_block = format!(
+            "\n## A previous plan failed\n\n\
              Failed step: {}\nError after retries: {}\n\n\
              Prior plan steps:\n{}\n\n\
-             Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n\
-             ## Original user message\n\n{}",
+             Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n",
+            failed_step_id, error, prior_plan_text,
+        );
+        let context = format!(
+            "{}{}{}{}{}## Original user message\n\n{}",
             roster,
             cross_session_block,
             history_block,
             recall_block,
-            failed_step_id,
-            error,
-            serde_json::to_string_pretty(prior_plan)?,
+            failure_block,
             user_message,
         );
-        let raw = self
+
+        let layers = vec![
+            crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
+            crate::adapters::metrics::MetricsLayer::from_text("roster", &roster),
+            crate::adapters::metrics::MetricsLayer::from_text(
+                "cross_session",
+                &cross_session_block,
+            ),
+            crate::adapters::metrics::MetricsLayer::from_text("history", &history_block),
+            crate::adapters::metrics::MetricsLayer::from_text("recall", &recall_block),
+            crate::adapters::metrics::MetricsLayer::from_text("failure", &failure_block),
+            crate::adapters::metrics::MetricsLayer::from_text("user_message", user_message),
+        ];
+
+        let (raw, telemetry) = self
             .chat
-            .run_orchestrator_turn_with_system(
+            .run_orchestrator_turn_with_system_metered(
                 &self.orchestrator_agent,
                 &self.system_prompt,
                 &context,
             )
             .await?;
+        emit_planner_metrics(
+            "replan",
+            &self.session_id,
+            &self.orchestrator_agent,
+            &context,
+            &self.system_prompt,
+            layers,
+            &telemetry,
+            &raw,
+        );
         parse_verdict(&raw)
     }
+}
+
+/// Build a `MetricsRecord` from the planner's per-layer breakdown +
+/// engine telemetry and emit it via the global metrics sink. Pure side-effect
+/// — never returns an error and never blocks. Phase metrics — landed
+/// alongside the metrics module.
+#[cfg(feature = "qdrant")]
+#[allow(clippy::too_many_arguments)]
+fn emit_planner_metrics(
+    phase: &'static str,
+    session_id: &str,
+    orchestrator_agent: &str,
+    combined_prompt: &str,
+    system_prompt: &str,
+    layers: Vec<crate::adapters::metrics::MetricsLayer>,
+    telemetry: &crate::adapters::orchestrator::wiring::TurnTelemetry,
+    raw_response: &str,
+) {
+    let prompt_chars = (combined_prompt.chars().count() + system_prompt.chars().count()) as u32;
+    let prompt_bytes = (combined_prompt.len() + system_prompt.len()) as u32;
+    let total_tokens = telemetry
+        .prompt_tokens
+        .saturating_add(telemetry.completion_tokens);
+    let agent_label = if phase == "plan" {
+        format!("planner/{}", orchestrator_agent)
+    } else {
+        format!("replanner/{}", orchestrator_agent)
+    };
+    crate::adapters::metrics::record(crate::adapters::metrics::MetricsRecord {
+        ts_unix: crate::adapters::metrics::now_unix(),
+        session_id: session_id.to_string(),
+        kind: crate::adapters::metrics::MetricsKind::Planner,
+        agent: agent_label,
+        model: telemetry.model.clone(),
+        prompt_tokens: telemetry.prompt_tokens,
+        completion_tokens: telemetry.completion_tokens,
+        total_tokens,
+        prompt_chars,
+        prompt_bytes,
+        response_chars: telemetry.response_chars.max(raw_response.chars().count() as u32),
+        latency_ms: telemetry.latency_ms,
+        layers,
+        step_id: None,
+    });
 }
 
 /// Phase 6.4 (lite) — render the planner's per-session history buffer as a

@@ -9,11 +9,18 @@
 
 ## TL;DR
 
-Tengu shapes LLM context across **seven layers**, with about **25 distinct
-mechanisms**. None of them is LLM-driven — there is no "summarise the
+Tengu shapes LLM context across **seven layers**, with about **27 distinct
+mechanisms** (the original 25 + the metrics observability layer added
+2026-04-28). None of them is LLM-driven — there is no "summarise the
 conversation" pass. Everything is mechanical: char/token caps, sliding
 windows, threshold-triggered concatenation, first-line clipping. The
 pieces compose; no single entry point owns "context management".
+
+**Layer 8 (added 2026-04-28) is observability, not shaping.** It records
+what every other layer produced — token counts, latency, per-context-layer
+attribution — without changing the bytes. Read it before debugging "why
+is this turn so big": the `metrics` info line tells you which layer ran
+heaviest before you go fishing through code.
 
 The closest tengu has to Claude Code's `/compact` is a **two-mechanism
 combo**: `maybe_compact_flow` (Layer 1, replaces older messages with a
@@ -34,12 +41,16 @@ prior-round tool results to first-line-only mid-loop).
 │ Layer 5  Subagent IPC            runner.rs, main.rs::run_agent   │
 │ Layer 6  RAG storage hygiene     rag/cleanup.rs, rag/indexer.rs  │
 │ Layer 7  File chunking           plugins/memory/persistent_store │
+│ Layer 8  Observability           metrics.rs (added 2026-04-28)   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 A user message hits Layers 1→2→3 (potentially →4) on the planner-side
 turn, then Layers 5→3 (→4) on each subagent step. Layers 0, 6, 7 are
-infrastructure consumed by the others.
+infrastructure consumed by the others. **Layer 8 is orthogonal** — it
+observes the output of layers 2/3/5 (LLM calls) and the embedder, then
+emits records onto a process-global broadcast bus + tracing. It never
+mutates a prompt.
 
 ---
 
@@ -344,6 +355,84 @@ surfaces via vector search through `memory_recall` (Layer 2 #6).
 
 ---
 
+## Layer 8 — Observability (metrics)
+
+`src/adapters/metrics.rs` (added 2026-04-28). Records what every other
+layer produced; never mutates a prompt.
+
+### 27. `MetricsRecord` — one per LLM/embedding call
+
+The struct that carries telemetry across the in-process bus and the
+subagent IPC boundary. Fields: `ts_unix`, `session_id`, `kind`
+(`Planner` | `Subagent` | `Embedding`), `agent`, `model`,
+`prompt_tokens`, `completion_tokens`, `total_tokens`, `prompt_chars`,
+`prompt_bytes`, `response_chars`, `latency_ms`, `layers`, `step_id`.
+
+Token counts come from `StreamEvent::Usage` frames the engine layer
+already produced (Layer 3) — the metrics layer just routes them to a
+record. For embeddings, `usage.total_tokens` is read from the
+OpenRouter response (was previously discarded). Falls back to
+`prompt_chars / 4` when the field is missing.
+
+### 28. Per-context-layer attribution (planner only)
+
+`MetricsRecord.layers` carries one `MetricsLayer { name, chars, bytes }`
+row per planner-prompt section: `system`, `roster`, `cross_session`,
+`history`, `recall`, `failure`, `user_message`. Built by
+`emit_planner_metrics` in `orchestrator/planner.rs` from the same
+strings the planner just composed for the LLM call.
+
+**Approximate by design.** The layer measures only what the planner
+built — it does not see engine-side framing (Anthropic `<thinking>`
+blocks, OpenAI `tools` schema, function-calling message wrappers,
+provider tokenisation overhead). Sum-of-layers ≠ `prompt_tokens`.
+Treat layers as relative attribution ("which planner block bloated
+this turn") not as a byte-perfect tokeniser. Subagent records leave
+`layers` empty; embedding records too.
+
+### 29. Three surfaces, one record
+
+| Surface | Trigger | Use |
+|---|---|---|
+| Tracing baseline | Always on. Emitted by `metrics::record()` | `RUST_LOG=tengu=info` for the info line, `=debug` to also see per-layer breakdown |
+| In-process broadcast bus | `OnceLock<broadcast::Sender<MetricsRecord>>` installed by `build_orchestrator` | Subscribers — TUI aggregator, eval recorder |
+| Orchestrator event bus | Bridge task in `build_orchestrator` republishes records as `OrchestratorEvent::MetricsRecorded` | Anything already subscribed to the orchestrator bus (TUI, Telegram channel) sees metrics with no extra wiring |
+
+`record()` is fail-soft — `tx.send()` returns Err only when zero
+subscribers are attached, which is fine. The tracing line is the
+load-bearing surface.
+
+### 30. Subagent IPC — `AgentIpcOutput.metrics`
+
+Subagent records cross the subprocess boundary in
+`AgentIpcOutput::{Ok,Failed}.metrics: Vec<MetricsRecord>` (new field
+added 2026-04-28). `run_agent_subprocess` records one per
+`run_single_engine_turn` and packs them into the IPC payload.
+`SubprocessRunner::run_step` re-emits each via `metrics::record()`
+on the parent's global sink — so the TUI sees a unified stream
+regardless of which side of the IPC boundary the LLM call ran on.
+
+`#[serde(default, skip_serializing_if = "Vec::is_empty")]` keeps the
+IPC payload byte-compatible with older child binaries that don't
+emit metrics — they produce JSON without the `metrics` key, and the
+parent's serde fills in an empty vec.
+
+### 31. `AggregatorState` — in-process rollup (TUI bottom bubble)
+
+`AggregatorState` keeps overall + by-agent + by-kind running totals
+plus the last record. Used by the TUI when `TENGU_TUI_METRICS=1` is
+set — renders one System bubble per call:
+
+```
+metrics: tok in/out 4.5k/812 · last subagent (2.1k) · session 12.3k · researcher 8.7k
+```
+
+The aggregator absorbs records even when the panel is OFF, so flipping
+it on mid-session shows real numbers, not zero. Bumping the panel up to
+the chat-pane bottom (a true status bar) is on the open list.
+
+---
+
 ## Mechanism summary table
 
 | # | Layer | Mechanism | File | Default knob |
@@ -374,6 +463,11 @@ surfaces via vector search through `memory_recall` (Layer 2 #6).
 | 24 | 6 | `ttl_cleanup` | rag/cleanup.rs:24 | `ttl_days=0` |
 | 25 | 6 | fingerprint dedup | rag/indexer.rs:64 | sha256 |
 | 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
+| 27 | 8 | `MetricsRecord` (Planner/Subagent/Embedding) | metrics.rs | always-on |
+| 28 | 8 | Per-context-layer attribution | orchestrator/planner.rs::emit_planner_metrics | approximate |
+| 29 | 8 | Three surfaces (trace + bus + TUI bubble) | metrics.rs + tui/mod.rs | `TENGU_TUI_METRICS=1` |
+| 30 | 8 | `AgentIpcOutput.metrics` IPC plumbing | runner.rs + main.rs | skip-if-empty |
+| 31 | 8 | `AggregatorState` rollup (overall + by-agent + by-kind) | metrics.rs | in-memory only |
 
 ---
 
@@ -401,6 +495,10 @@ Comparison points for future sessions:
   Code subagent fans out a lot of tool calls, Claude's own context
   fills up — the harness can only cap individual results, not compact
   prior ones.
+- **No persistent metrics store.** Layer 8 records are tracing-only +
+  in-memory aggregator. Persisting to a JSONL file (or a
+  `tengu metrics` CLI subcommand that prints rolled-up totals) is on
+  the open list — easy bolt-on via `metrics::subscribe()`.
 
 ---
 
@@ -416,6 +514,9 @@ Comparison points for future sessions:
 | "model finished without calling compress_and_store" warn | Layer 5 #22 (Phase 5c) — graceful path; final text became the summary |
 | Planner picks the same agent on replan despite obvious progress | Layer 5 #19 (`cross_plan_top_k`) — recall not surfacing the prior summary |
 | Stale agents/skills in the planner roster | Layer 6 #25 (fingerprint dedup) — `TENGU_REGISTRY_FORCE_REINDEX=1` |
+| "Why is this turn so big?" — diagnose context bloat | Layer 8 #28 — set `RUST_LOG=tengu=debug` and read the `metrics.layer` lines for the planner call (chars per layer) |
+| Need rolling totals for cost analysis in the TUI | Layer 8 #29/#31 — set `TENGU_TUI_METRICS=1`; aggregator absorbs records even when panel is off |
+| Subagent token counts missing in parent logs | Layer 8 #30 — child binary may be old (no `metrics` field). Rebuild both parent and child. |
 
 ---
 

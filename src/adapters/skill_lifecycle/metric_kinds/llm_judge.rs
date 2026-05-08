@@ -154,6 +154,8 @@ mod tests {
             secret_registry: None,
             activity: None,
             tool_scopes: None,
+            conversation: None,
+            sibling_metrics: None,
         };
         let spec = MetricSpec::LlmJudge {
             name: "j".into(),
@@ -212,6 +214,8 @@ mod tests {
             secret_registry: None,
             activity: None,
             tool_scopes: None,
+            conversation: None,
+            sibling_metrics: None,
         };
         let spec = MetricSpec::LlmJudge {
             name: "j".into(),

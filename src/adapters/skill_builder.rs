@@ -994,10 +994,19 @@ impl FileSystemSkillSource {
     }
 
     fn skill_directories(&self) -> Vec<PathBuf> {
-        let mut dirs = vec![
-            self.workspace.join(".tengu/skills"),
-            self.workspace.join("skills"),
-        ];
+        // Three-tier scan, highest priority first (first-wins via
+        // `seen_names.insert()` in `discover_skill_files`):
+        //   1. Managed — `~/.tengu/skills/` (set by `tengu skill install --tier managed`)
+        //   2. Workspace dotdir — `<workspace>/.tengu/skills/`
+        //   3. Project — `<workspace>/skills/`
+        // Mirrors `rag::indexer::scan_skills_with_counts` so the planner-side
+        // RAG registry and the in-process skill loader see the same set.
+        let mut dirs = Vec::new();
+        if let Some(home) = dirs_next::home_dir() {
+            dirs.push(home.join(".tengu/skills"));
+        }
+        dirs.push(self.workspace.join(".tengu/skills"));
+        dirs.push(self.workspace.join("skills"));
         if let Ok(cwd) = std::env::current_dir() {
             let global = cwd.join("skills");
             if global != self.workspace.join("skills") {

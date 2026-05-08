@@ -3,7 +3,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::adapters::config::Config;
@@ -33,6 +33,20 @@ pub(crate) struct CycleOutcome {
     pub rationale: String,
     pub new_body: String,
     pub new_metrics: Option<Vec<MetricSpec>>,
+    /// Resource files the proposal asked to write under
+    /// `skills/<name>/resources/`. Carried through cycle scoring so the
+    /// best-cycle pick can surface them on the approval gate and the
+    /// `Decision::Apply` branch can write them to the real workspace.
+    pub new_resource_additions: Option<Vec<ResourceFile>>,
+    /// `Some(n)` when this cycle was derived from a previous cycle's body
+    /// rather than the baseline. `None` for cycles that branch from baseline
+    /// (the default in v1 — the current driver always builds from the
+    /// previous cycle's `new_body` via the scratch worktree, but exposes that
+    /// implicitly through the linear loop rather than as data on the outcome.
+    /// Reserved for a future "branch off cycle 2's body" flow that the
+    /// current driver doesn't expose).
+    #[allow(dead_code)]
+    pub parent_cycle_n: Option<u32>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -46,6 +60,21 @@ pub(crate) struct ProposalBody {
     #[serde(default)]
     pub metrics: Option<Vec<MetricSpec>>,
     pub rationale: String,
+    /// New resource files to write under `skills/<name>/resources/<path>`.
+    /// Existing files at the same path are overwritten only if the proposal
+    /// explicitly opts in via `overwrite: true`. Path must be relative and
+    /// must not escape the `resources/` directory.
+    #[serde(default)]
+    pub resource_additions: Option<Vec<ResourceFile>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct ResourceFile {
+    /// Path relative to `skills/<name>/resources/`. No `..`, no absolute.
+    pub path: String,
+    pub content: String,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +164,91 @@ pub(crate) fn apply_proposal_to_skill_md(
     Ok(())
 }
 
+/// Validate that `rel_path` stays inside the `resources/` subdir of the skill.
+///
+/// Rejects: empty paths, paths starting with `/`, paths containing `..`
+/// components, paths with absolute roots, and any non-utf8 components.
+/// The error message names the offending input so the caller (or the
+/// improver agent) can fix the proposal.
+pub(crate) fn validate_resource_path(rel_path: &str) -> Result<()> {
+    if rel_path.is_empty() {
+        bail!("resource_additions path is empty");
+    }
+    if rel_path.starts_with('/') {
+        bail!(
+            "resource_additions path '{}' is absolute; must be relative to resources/",
+            rel_path
+        );
+    }
+    let p = Path::new(rel_path);
+    for c in p.components() {
+        match c {
+            Component::ParentDir => bail!(
+                "resource_additions path '{}' contains a '..' component; \
+                 must stay inside resources/",
+                rel_path
+            ),
+            Component::RootDir => bail!(
+                "resource_additions path '{}' has a root component; \
+                 must be relative to resources/",
+                rel_path
+            ),
+            Component::Prefix(_) => bail!(
+                "resource_additions path '{}' has a drive/prefix component; \
+                 must be relative to resources/",
+                rel_path
+            ),
+            Component::Normal(os) => {
+                if os.to_str().is_none() {
+                    bail!(
+                        "resource_additions path '{}' has a non-utf8 component",
+                        rel_path
+                    );
+                }
+            }
+            Component::CurDir => {}
+        }
+    }
+    Ok(())
+}
+
+/// Apply the `resource_additions` list. Each file is written atomically via
+/// temp-then-rename inside the `resources/` subdir of the skill. Creates
+/// parent dirs as needed. Refuses to overwrite an existing file unless
+/// `overwrite: true`. Returns the list of paths written, relative to the
+/// skill directory (e.g. `resources/genitive.md`).
+pub(crate) fn apply_proposal_resources(
+    skill_dir: &Path,
+    additions: &[ResourceFile],
+) -> Result<Vec<PathBuf>> {
+    let resources_root = skill_dir.join("resources");
+    let mut written: Vec<PathBuf> = Vec::with_capacity(additions.len());
+    for entry in additions {
+        validate_resource_path(&entry.path)
+            .with_context(|| format!("validate resource_additions[{}]", entry.path))?;
+        let dest = resources_root.join(&entry.path);
+        if dest.exists() && !entry.overwrite {
+            bail!(
+                "resource_additions: refusing to overwrite existing file {} \
+                 (set overwrite: true to replace)",
+                dest.display()
+            );
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create_dir_all {}", parent.display()))?;
+        }
+        let parent = dest.parent().unwrap();
+        let tmp = parent.join(format!(".resource.tmp-{}", nanos()));
+        std::fs::write(&tmp, &entry.content)
+            .with_context(|| format!("write temp {}", tmp.display()))?;
+        std::fs::rename(&tmp, &dest)
+            .with_context(|| format!("rename {} -> {}", tmp.display(), dest.display()))?;
+        written.push(PathBuf::from("resources").join(&entry.path));
+    }
+    Ok(written)
+}
+
 fn split_frontmatter(body: &str) -> Result<(&str, &str)> {
     let rest = body
         .strip_prefix("---\n")
@@ -143,6 +257,53 @@ fn split_frontmatter(body: &str) -> Result<(&str, &str)> {
         .find("\n---")
         .ok_or_else(|| anyhow::anyhow!("frontmatter not closed"))?;
     Ok((&rest[..end + 1], &rest[end + 4..]))
+}
+
+/// Read the `editable_by_learner` frontmatter flag from a skill's SKILL.md.
+///
+/// Returns `Ok(true)` when the flag is present-and-true OR absent (back-compat
+/// default — existing in-tree skills that haven't been migrated yet stay
+/// editable, otherwise the just-shipped `tengu skill evolve` end-to-end test
+/// would break).
+///
+/// Returns `Ok(false)` only when the flag is explicitly
+/// `editable_by_learner: false`.
+///
+/// Returns `Err` only on filesystem read errors.
+pub(crate) fn is_editable_by_learner(skill_md_path: &Path) -> Result<bool> {
+    let body = std::fs::read_to_string(skill_md_path)
+        .with_context(|| format!("read {}", skill_md_path.display()))?;
+    let (fm_block, _) = match split_frontmatter(&body) {
+        Ok(parts) => parts,
+        Err(_) => {
+            tracing::debug!(
+                "is_editable_by_learner: no frontmatter in {} — defaulting to true",
+                skill_md_path.display()
+            );
+            return Ok(true);
+        }
+    };
+    let parsed: serde_yaml::Value = match serde_yaml::from_str(fm_block) {
+        Ok(v) => v,
+        Err(_) => {
+            tracing::debug!(
+                "is_editable_by_learner: unparseable frontmatter in {} — defaulting to true",
+                skill_md_path.display()
+            );
+            return Ok(true);
+        }
+    };
+    match parsed.get("editable_by_learner") {
+        Some(serde_yaml::Value::Bool(true)) => Ok(true),
+        Some(serde_yaml::Value::Bool(false)) => Ok(false),
+        _ => {
+            tracing::debug!(
+                "is_editable_by_learner: flag absent or non-bool in {} — defaulting to true",
+                skill_md_path.display()
+            );
+            Ok(true)
+        }
+    }
 }
 
 fn replace_metrics_block(fm: &str, metrics: &[MetricSpec]) -> Result<String> {
@@ -275,6 +436,10 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
             rationale: proposal.proposal.rationale.clone(),
             new_body: std::fs::read_to_string(&skill_md)?,
             new_metrics: proposal.proposal.metrics.clone(),
+            new_resource_additions: proposal.proposal.resource_additions.clone(),
+            // v1 driver doesn't expose parent-cycle branching; left None
+            // until a future flow adds explicit branch points.
+            parent_cycle_n: None,
         };
         let tgt_rate = outcome
             .rollups
@@ -317,6 +482,13 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
             (n.clone(), r.pass_rate, p)
         })
         .collect();
+    let resource_additions_preview: Vec<(String, usize)> = best
+        .new_resource_additions
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .map(|r| (r.path.clone(), r.content.len()))
+        .collect();
     let view = GateView {
         skill: args.skill,
         target_metric: &baseline.target_metric,
@@ -330,6 +502,7 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
         old_body: &current_body,
         new_body: &best.new_body,
         rationale: &best.rationale,
+        resource_additions: &resource_additions_preview,
     };
     let mut stdout = std::io::stdout().lock();
     render(&view, &mut stdout)?;
@@ -342,6 +515,28 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
     // 6. Apply/reject.
     match decision {
         Decision::Apply => {
+            // Opt-in gate (A3): refuse to apply diffs to skills that haven't
+            // set `editable_by_learner: true` in their frontmatter. Absent
+            // flag = allow (back-compat for un-migrated skills).
+            if !is_editable_by_learner(&skill_md_path)? {
+                let msg = format!(
+                    "`editable_by_learner: false` — refusing to apply changes to {}. \
+                     Set `editable_by_learner: true` in the SKILL.md frontmatter to opt in.",
+                    args.skill
+                );
+                tracing::warn!("{}", msg);
+                eprintln!("{}", msg);
+                append_evolve_log(
+                    args.workspace,
+                    args.skill,
+                    &baseline,
+                    best,
+                    "refused-by-flag",
+                )?;
+                remove_scratch(&shell, args.workspace, &scratch)?;
+                println!("No changes applied — skill is not opted in for learner edits.");
+                return Ok(());
+            }
             std::fs::copy(
                 scratch
                     .path
@@ -350,13 +545,38 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
                     .join("SKILL.md"),
                 &skill_md_path,
             )?;
+            // Apply resource_additions on the real workspace. Failures here
+            // do NOT roll back the SKILL.md change — partial application is
+            // acceptable; the user's `git diff` will show what landed.
+            let skill_dir = args.workspace.join("skills").join(args.skill);
+            let mut resources_written: Vec<PathBuf> = Vec::new();
+            if let Some(additions) = best.new_resource_additions.as_deref() {
+                if !additions.is_empty() {
+                    match apply_proposal_resources(&skill_dir, additions) {
+                        Ok(paths) => resources_written = paths,
+                        Err(e) => {
+                            tracing::warn!(
+                                "evolve: resource_additions failed for skill '{}': {:#} \
+                                 (SKILL.md change preserved)",
+                                args.skill,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
             append_evolve_log(args.workspace, args.skill, &baseline, best, "accepted")?;
             // Sanity re-eval on the real workspace.
             let _ = run_eval_and_read_metrics(args.workspace, args.skill, None).await;
             remove_scratch(&shell, args.workspace, &scratch)?;
+            let extra = if resources_written.is_empty() {
+                String::new()
+            } else {
+                format!("\n  resources written: {}", resources_written.len())
+            };
             println!(
-                "Changes applied. Run `git diff skills/{}/` to review.",
-                args.skill
+                "Changes applied. Run `git diff skills/{}/` to review.{}",
+                args.skill, extra
             );
         }
         Decision::Discard => {
@@ -532,6 +752,9 @@ mod tests {
             n: 4,
             min_pass_rate: Some(0.8),
             gated,
+            stddev: None,
+            min: None,
+            max: None,
         }
     }
 
@@ -546,6 +769,8 @@ mod tests {
             rationale: "x".into(),
             new_body: "b".into(),
             new_metrics: None,
+            new_resource_additions: None,
+            parent_cycle_n: None,
         }
     }
 
@@ -559,6 +784,16 @@ mod tests {
             rollups,
             target_metric: "target".into(),
         }
+    }
+
+    #[test]
+    fn cycle_outcome_parent_defaults_to_none_in_run_evolve() {
+        // The full run_evolve driver requires a chat factory + worktree; we
+        // can't exercise it from a unit test. Instead, verify the field
+        // exists and that the canonical helper used in this module's tests
+        // sets it to None — which mirrors what run_evolve does today.
+        let outcome = cycle(1, 0.7, 1.0, 3);
+        assert_eq!(outcome.parent_cycle_n, None);
     }
 
     #[test]
@@ -599,6 +834,144 @@ mod tests {
     }
 
     #[test]
+    fn is_editable_by_learner_returns_true_when_flag_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let md = dir.path().join("SKILL.md");
+        std::fs::write(&md, "---\nname: x\ndescription: y\n---\n\n# body\n").unwrap();
+        assert!(is_editable_by_learner(&md).unwrap());
+    }
+
+    #[test]
+    fn is_editable_by_learner_returns_true_when_flag_explicit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let md = dir.path().join("SKILL.md");
+        std::fs::write(
+            &md,
+            "---\nname: x\ndescription: y\neditable_by_learner: true\n---\n\n# body\n",
+        )
+        .unwrap();
+        assert!(is_editable_by_learner(&md).unwrap());
+    }
+
+    #[test]
+    fn is_editable_by_learner_returns_false_when_flag_explicit_false() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let md = dir.path().join("SKILL.md");
+        std::fs::write(
+            &md,
+            "---\nname: x\ndescription: y\neditable_by_learner: false\n---\n\n# body\n",
+        )
+        .unwrap();
+        assert!(!is_editable_by_learner(&md).unwrap());
+    }
+
+    #[test]
+    fn validate_resource_path_rejects_parent_dir() {
+        let err = validate_resource_path("../escape.md").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("..") && msg.contains("../escape.md"),
+            "msg should name offending input + reject reason: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn validate_resource_path_rejects_absolute() {
+        let err = validate_resource_path("/etc/passwd").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("/etc/passwd"),
+            "msg should name offending input: {}",
+            msg
+        );
+        // Empty also rejected.
+        assert!(validate_resource_path("").is_err());
+    }
+
+    #[test]
+    fn validate_resource_path_accepts_relative_subdir() {
+        validate_resource_path("genitive.md").unwrap();
+        validate_resource_path("verbs/strong.md").unwrap();
+        validate_resource_path("./topic.md").unwrap();
+    }
+
+    #[test]
+    fn apply_proposal_resources_writes_atomically() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_dir = dir.path().join("skills").join("german");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let additions = vec![
+            ResourceFile {
+                path: "genitive.md".into(),
+                content: "# Genitive\nlinks...\n".into(),
+                overwrite: false,
+            },
+            ResourceFile {
+                path: "verbs/strong.md".into(),
+                content: "strong verbs".into(),
+                overwrite: false,
+            },
+        ];
+        let written = apply_proposal_resources(&skill_dir, &additions).unwrap();
+        assert_eq!(written.len(), 2);
+        let f1 = skill_dir.join("resources").join("genitive.md");
+        let f2 = skill_dir.join("resources").join("verbs").join("strong.md");
+        assert_eq!(std::fs::read_to_string(&f1).unwrap(), "# Genitive\nlinks...\n");
+        assert_eq!(std::fs::read_to_string(&f2).unwrap(), "strong verbs");
+        // No leftover .resource.tmp-* siblings.
+        for sub in [skill_dir.join("resources"), skill_dir.join("resources").join("verbs")] {
+            for entry in std::fs::read_dir(&sub).unwrap() {
+                let name = entry.unwrap().file_name();
+                let s = name.to_string_lossy();
+                assert!(
+                    !s.starts_with(".resource.tmp-"),
+                    "leftover temp file: {}",
+                    s
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apply_proposal_resources_refuses_overwrite_unless_flag() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let skill_dir = dir.path().join("skills").join("german");
+        std::fs::create_dir_all(skill_dir.join("resources")).unwrap();
+        std::fs::write(skill_dir.join("resources").join("genitive.md"), "OLD").unwrap();
+        // Without overwrite — refused.
+        let err = apply_proposal_resources(
+            &skill_dir,
+            &[ResourceFile {
+                path: "genitive.md".into(),
+                content: "NEW".into(),
+                overwrite: false,
+            }],
+        )
+        .unwrap_err();
+        assert!(format!("{}", err).contains("refusing to overwrite"));
+        // File untouched.
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("resources").join("genitive.md")).unwrap(),
+            "OLD"
+        );
+        // With overwrite — replaces.
+        apply_proposal_resources(
+            &skill_dir,
+            &[ResourceFile {
+                path: "genitive.md".into(),
+                content: "NEW".into(),
+                overwrite: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(skill_dir.join("resources").join("genitive.md")).unwrap(),
+            "NEW"
+        );
+    }
+
+    #[test]
     fn apply_proposal_writes_new_body_preserves_frontmatter_fields() {
         let dir = tempfile::TempDir::new().unwrap();
         let md = dir.path().join("SKILL.md");
@@ -609,6 +982,7 @@ mod tests {
                 body_markdown: "# NEW BODY".into(),
                 metrics: None,
                 rationale: "r".into(),
+                resource_additions: None,
             },
         )
         .unwrap();

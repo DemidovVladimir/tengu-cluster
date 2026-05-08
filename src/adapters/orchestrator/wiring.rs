@@ -16,6 +16,24 @@ use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::memory::writer;
 use crate::adapters::orchestrator::planner::OrchestratorChatPort;
 
+/// Pure-data telemetry returned alongside an LLM-call response so the caller
+/// can construct a [`crate::adapters::metrics::MetricsRecord`]. Defaults to
+/// all-zero so trait impls that don't (yet) wire telemetry stay valid.
+///
+/// Token counts come from the engine's `StreamEvent::Usage` frame; latency is
+/// wall-clock around the full `process_user_text` call (which includes
+/// memory recall + the engine round trip). For the planner path this is the
+/// only telemetry available — the planner itself attributes the prompt to
+/// per-context-layer breakdown separately.
+#[derive(Debug, Clone, Default)]
+pub struct TurnTelemetry {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub model: String,
+    pub latency_ms: u64,
+    pub response_chars: u32,
+}
+
 /// Abstracts "run a conversation turn against a named agent." Implementors
 /// construct the agent-scoped `ChatRuntimeService<'a>` per call with a fresh
 /// `ChatLoopState::default()` and extract the final assistant text.
@@ -49,6 +67,24 @@ pub trait ChatServiceFactory: Send + Sync {
         text: &str,
     ) -> anyhow::Result<String> {
         self.run_turn(agent, text).await
+    }
+
+    /// Like `run_turn_with_system` but additionally returns [`TurnTelemetry`]
+    /// (token counts, latency, model slug) so the caller — typically the
+    /// planner — can build a full `MetricsRecord`. Default impl falls back
+    /// to `run_turn_with_system` and returns zeroed telemetry; the runtime
+    /// impl (`RuntimeChatServiceFactory`) overrides this to wire real numbers.
+    async fn run_turn_with_system_metered(
+        &self,
+        agent: &str,
+        system_prompt: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<(String, TurnTelemetry)> {
+        let reply = match system_prompt {
+            Some(s) => self.run_turn_with_system(agent, s, text).await?,
+            None => self.run_turn(agent, text).await?,
+        };
+        Ok((reply, TurnTelemetry::default()))
     }
 }
 
@@ -106,6 +142,25 @@ impl OrchestratorChatPort for ChatOrchestratorPortImpl {
             reply.clone(),
         );
         Ok(reply)
+    }
+
+    async fn run_orchestrator_turn_with_system_metered(
+        &self,
+        agent: &str,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> anyhow::Result<(String, TurnTelemetry)> {
+        let (reply, telemetry) = self
+            .chat
+            .run_turn_with_system_metered(agent, Some(system_prompt), user_message)
+            .await?;
+        writer::sync_turn(
+            Arc::clone(&self.memory),
+            agent.to_string(),
+            user_message.to_string(),
+            reply.clone(),
+        );
+        Ok((reply, telemetry))
     }
 }
 

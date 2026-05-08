@@ -229,7 +229,8 @@ pub async fn reindex_all_workspace(
     let agents_dir = root.join("agents");
     let agent_specs = crate::adapters::agents::load_agents_dir(&agents_dir)
         .map_err(|e| anyhow::anyhow!("load agents from {}: {}", agents_dir.display(), e))?;
-    let skill_entries = scan_skills(root);
+    let scan = scan_skills_with_counts(root, None);
+    let skill_entries = scan.entries;
 
     // Built-in + MCP tools combined. Built-in is sync; MCP enumeration is
     // async + fail-soft (a dead server doesn't abort reindex).
@@ -272,6 +273,18 @@ pub async fn reindex_all_workspace(
     let tools_indexed = rag.index_tools(tools).await?;
     let agents_indexed = rag.index_agents(agent_specs.clone()).await?;
     let skills_indexed = rag.index_skills(skill_entries.clone()).await?;
+
+    tracing::info!(
+        total = skills_indexed,
+        managed = scan.managed_count,
+        workspace = scan.workspace_count,
+        project = scan.project_count,
+        "reindexed {} skills ({} managed, {} workspace, {} project)",
+        skills_indexed,
+        scan.managed_count,
+        scan.workspace_count,
+        scan.project_count
+    );
 
     // Cache write happens AFTER successful reindex so a partial-failure
     // doesn't leave a fingerprint that masks an incomplete registry.
@@ -426,36 +439,101 @@ struct SkillFrontmatter {
     description: Option<String>,
 }
 
+/// Per-tier counts + entries from a three-tier skill scan. Used internally by
+/// `reindex_all_workspace` so the per-tier breakdown can be logged.
+pub(crate) struct SkillScan {
+    pub entries: Vec<SkillEntry>,
+    pub managed_count: usize,
+    pub workspace_count: usize,
+    pub project_count: usize,
+}
+
 /// Scan the three-tier skill hierarchy and return one `SkillEntry` per unique
-/// `name`. Later tiers shadow earlier ones. The tiers are:
+/// `name`. Higher tiers shadow lower ones using **first-occurrence wins**
+/// semantics — same as `skill_builder::FileSystemSkillSource::discover_skill_files`.
+/// The tiers, scanned in this order:
 ///
-/// 1. Managed — `~/.tengu/skills/` (lowest priority)
+/// 1. Managed — `~/.tengu/skills/` (highest priority — installed via `tengu skill install --tier managed`)
 /// 2. Workspace dotdir — `<workspace>/.tengu/skills/`
-/// 3. Workspace root — `<workspace>/skills/` (highest priority)
+/// 3. Project — `<workspace>/skills/` (lowest priority)
 ///
 /// Missing tiers are skipped silently. A SKILL.md with no usable frontmatter
-/// `description` is logged and skipped.
+/// `description` is logged and skipped. When the same skill name appears in
+/// multiple tiers, the first-seen wins and a `tracing::debug!` line is logged
+/// for each shadowed copy.
 pub fn scan_skills(workspace: &Path) -> Vec<SkillEntry> {
+    scan_skills_with_counts(workspace, None).entries
+}
+
+/// Three-tier scan with per-tier counts and an optional injected `managed_root`
+/// for tests. When `managed_root` is `None`, the managed tier is resolved via
+/// `dirs_next::home_dir().map(|h| h.join(".tengu/skills"))`; if `home_dir()`
+/// returns `None`, the managed tier is skipped silently. When `managed_root`
+/// is `Some(path)`, that path is used verbatim — no `home_dir()` call. Tests
+/// pass a `TempDir` here to avoid touching the real `~/.tengu/skills/`.
+pub(crate) fn scan_skills_with_counts(
+    workspace: &Path,
+    managed_root: Option<&Path>,
+) -> SkillScan {
     let mut by_name: std::collections::HashMap<String, SkillEntry> =
         std::collections::HashMap::new();
 
-    let tier1 = dirs_next::home_dir().map(|h| h.join(".tengu").join("skills"));
-    let tier2 = Some(workspace.join(".tengu").join("skills"));
-    let tier3 = Some(workspace.join("skills"));
+    let managed: Option<PathBuf> = match managed_root {
+        Some(p) => Some(p.to_path_buf()),
+        None => dirs_next::home_dir().map(|h| h.join(".tengu").join("skills")),
+    };
+    let workspace_dir = workspace.join(".tengu").join("skills");
+    let project_dir = workspace.join("skills");
 
-    // Scan in precedence order — later writes overwrite earlier ones.
-    for root in [tier1, tier2, tier3].into_iter().flatten() {
+    let tiers: [(&str, Option<PathBuf>); 3] = [
+        ("managed", managed),
+        ("workspace", Some(workspace_dir)),
+        ("project", Some(project_dir)),
+    ];
+
+    let mut managed_count = 0usize;
+    let mut workspace_count = 0usize;
+    let mut project_count = 0usize;
+
+    // First-occurrence wins. managed > workspace > project.
+    for (label, root_opt) in tiers.into_iter() {
+        let root = match root_opt {
+            Some(r) => r,
+            None => continue,
+        };
         if !root.is_dir() {
             continue;
         }
         for entry in scan_one_skill_root(&root) {
+            if let Some(existing) = by_name.get(&entry.name) {
+                tracing::debug!(
+                    skill = %entry.name,
+                    shadowed_by = %existing.source_path.display(),
+                    shadowed = %entry.source_path.display(),
+                    "skill '{}' shadowed by higher-tier copy at {}",
+                    entry.name,
+                    existing.source_path.display()
+                );
+                continue;
+            }
+            match label {
+                "managed" => managed_count += 1,
+                "workspace" => workspace_count += 1,
+                "project" => project_count += 1,
+                _ => {}
+            }
             by_name.insert(entry.name.clone(), entry);
         }
     }
 
     let mut out: Vec<SkillEntry> = by_name.into_values().collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    SkillScan {
+        entries: out,
+        managed_count,
+        workspace_count,
+        project_count,
+    }
 }
 
 fn scan_one_skill_root(root: &Path) -> Vec<SkillEntry> {
@@ -547,5 +625,109 @@ mod tests {
         std::fs::write(&skill_md, "# Body only, no frontmatter.").unwrap();
         let entry = parse_skill_md(&skill_md).unwrap();
         assert!(entry.is_none());
+    }
+
+    /// Helper: write `<root>/<skill_name>/SKILL.md` with a minimal valid
+    /// frontmatter (name + description). Description is templated so each
+    /// fixture is uniquely identifiable in shadowing assertions.
+    fn write_skill(root: &Path, skill_name: &str, description: &str) -> PathBuf {
+        let dir = root.join(skill_name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            format!("---\nname: {}\ndescription: \"{}\"\n---\n\n# Body\n", skill_name, description),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn scan_skills_walks_all_three_tiers() {
+        let ws = tempfile::tempdir().unwrap();
+        let managed = tempfile::tempdir().unwrap();
+
+        // Project tier: <ws>/skills/foo
+        write_skill(&ws.path().join("skills"), "foo", "project foo");
+        // Workspace tier: <ws>/.tengu/skills/bar
+        write_skill(&ws.path().join(".tengu/skills"), "bar", "workspace bar");
+        // Managed tier: <managed>/baz
+        write_skill(managed.path(), "baz", "managed baz");
+
+        let scan = scan_skills_with_counts(ws.path(), Some(managed.path()));
+        let names: Vec<&str> = scan.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["bar", "baz", "foo"]); // sorted alphabetically
+        assert_eq!(scan.managed_count, 1);
+        assert_eq!(scan.workspace_count, 1);
+        assert_eq!(scan.project_count, 1);
+    }
+
+    #[test]
+    fn scan_skills_managed_shadows_workspace() {
+        let ws = tempfile::tempdir().unwrap();
+        let managed = tempfile::tempdir().unwrap();
+
+        // Same skill name in BOTH managed and workspace.
+        write_skill(managed.path(), "shared", "from managed");
+        write_skill(&ws.path().join(".tengu/skills"), "shared", "from workspace");
+
+        let scan = scan_skills_with_counts(ws.path(), Some(managed.path()));
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.entries[0].name, "shared");
+        assert_eq!(scan.entries[0].description, "from managed");
+        assert_eq!(scan.managed_count, 1);
+        assert_eq!(scan.workspace_count, 0);
+        assert_eq!(scan.project_count, 0);
+    }
+
+    #[test]
+    fn scan_skills_workspace_shadows_project() {
+        let ws = tempfile::tempdir().unwrap();
+        let managed = tempfile::tempdir().unwrap();
+
+        // No managed; workspace and project share a name.
+        write_skill(&ws.path().join(".tengu/skills"), "shared", "from workspace");
+        write_skill(&ws.path().join("skills"), "shared", "from project");
+
+        let scan = scan_skills_with_counts(ws.path(), Some(managed.path()));
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.entries[0].name, "shared");
+        assert_eq!(scan.entries[0].description, "from workspace");
+        assert_eq!(scan.managed_count, 0);
+        assert_eq!(scan.workspace_count, 1);
+        assert_eq!(scan.project_count, 0);
+    }
+
+    #[test]
+    fn scan_skills_handles_missing_managed_dir() {
+        let ws = tempfile::tempdir().unwrap();
+        let bogus_managed = ws.path().join("does-not-exist");
+
+        write_skill(&ws.path().join("skills"), "foo", "project foo");
+
+        // Managed root points at a path that doesn't exist — must not error.
+        let scan = scan_skills_with_counts(ws.path(), Some(&bogus_managed));
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.entries[0].name, "foo");
+        assert_eq!(scan.managed_count, 0);
+        assert_eq!(scan.project_count, 1);
+    }
+
+    #[test]
+    fn scan_skills_handles_missing_home() {
+        // Simulate `dirs_next::home_dir()` returning None by passing
+        // `Some(<nonexistent path>)` — same code path for "managed tier
+        // skipped silently" because `is_dir()` returns false. The "real"
+        // None branch (callers pass `managed_root: None` AND `home_dir()`
+        // returns None) converges on the same skip — but exercising it
+        // directly would touch the real `~/.tengu/skills/`, so we don't.
+        let ws = tempfile::tempdir().unwrap();
+        write_skill(&ws.path().join("skills"), "foo", "project foo");
+
+        // Path that does not exist — equivalent to home_dir() returning None.
+        let nowhere = PathBuf::from("/this/path/should/never/exist/tengu-test");
+        let scan = scan_skills_with_counts(ws.path(), Some(&nowhere));
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.managed_count, 0);
     }
 }

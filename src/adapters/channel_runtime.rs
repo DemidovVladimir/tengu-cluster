@@ -208,6 +208,10 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,
+        // Stream M — clone into the executor so tools (e.g. skill_distill)
+        // can read engine + model when seeding generated artefacts. The
+        // borrow into ToolCtx happens in PluginToolExecutor::execute.
+        agent_config: Some(agent_config.clone()),
     })
 }
 
@@ -220,8 +224,13 @@ pub(crate) fn build_tool_executor(
 ///
 /// Adding a new opt-in workspace tool: append the name here, then add
 /// the matching plugin registration in `register_core_plugins`.
-pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] =
-    &["shared_cache", "persistent_store", "skill_distill"];
+pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
+    "shared_cache",
+    "persistent_store",
+    "skill_distill",
+    "apply_improver_proposal",
+    "manage_skill",
+];
 
 /// Build a permissive `ToolScope` that preserves pre-migration behaviour:
 /// the workspace root is writable, any host is reachable, any binary is
@@ -305,10 +314,17 @@ pub(crate) async fn register_core_plugins(
         }
     }
 
-    // Skill-lifecycle — skill_distill (opt-in via workspace_tools).
-    if allowed_names
-        .contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
-    {
+    // Skill-lifecycle — skill_distill and/or apply_improver_proposal (each
+    // opt-in via workspace_tools). Plugin registers BOTH tools; the
+    // allowlist filter inside `register_plugin` keeps only the names listed
+    // in `allowed_list`. We just need to register the plugin once when
+    // either name is opted in.
+    let want_distill = allowed_names
+        .contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME);
+    let want_apply_improver = allowed_names.contains(
+        crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME,
+    );
+    if want_distill || want_apply_improver {
         if let Err(e) = registry
             .register_plugin(
                 &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
@@ -347,6 +363,55 @@ pub(crate) async fn register_core_plugins(
     if let Err(e) = registry.register_plugin(&crypto_plugin, ctx, allowed_list).await {
         tracing::warn!(error = %e, "register_core_plugins: crypto plugin failed");
     }
+
+    // Skill-resource — skill_resource (always-on; no opt-in). Lets agents
+    // read files under `skills/<name>/resources/` regardless of their own
+    // workspace path. See `plugins/skill_resource/mod.rs`.
+    // KEPT FOR BACK-COMPAT: see `plugins/view_skill/` for the unified read API.
+    if let Err(e) = registry
+        .register_plugin(
+            &crate::adapters::plugins::skill_resource::SkillResourcePlugin,
+            ctx,
+            allowed_list,
+        )
+        .await
+    {
+        tracing::warn!(error = %e, "register_core_plugins: skill_resource plugin failed");
+    }
+
+    // View-skill — view_skill (always-on; no opt-in). Unified read API for
+    // listing / reading skills + their resources. Replaces `skill_resource`
+    // (which stays alive for back-compat). See `plugins/view_skill/mod.rs`.
+    if let Err(e) = registry
+        .register_plugin(
+            &crate::adapters::plugins::view_skill::ViewSkillPlugin,
+            ctx,
+            allowed_list,
+        )
+        .await
+    {
+        tracing::warn!(error = %e, "register_core_plugins: view_skill plugin failed");
+    }
+
+    // Manage-skill — manage_skill (opt-in via workspace_tools). Unified write
+    // API: create / edit_body / patch / add_resource / remove_resource /
+    // delete. Atomic + audit-logged + editable_by_learner gated. Supersedes
+    // `apply_improver_proposal` (kept for back-compat) and is the canonical
+    // in-chat skill mutation path. See `plugins/manage_skill/mod.rs`.
+    if allowed_names
+        .contains(crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
+    {
+        if let Err(e) = registry
+            .register_plugin(
+                &crate::adapters::plugins::manage_skill::ManageSkillPlugin,
+                ctx,
+                allowed_list,
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "register_core_plugins: manage_skill plugin failed");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -381,10 +446,23 @@ pub(crate) fn compute_base_tools(
         .iter()
         .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
     {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
+        tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
+    }
+    if workspace_tools.iter().any(|t| {
+        t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME
+    }) {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
+    }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::manage_skill::tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
+    tools.extend(crate::adapters::plugins::skill_resource::tool_defs());
+    tools.extend(crate::adapters::plugins::view_skill::tool_defs());
     tools
 }
 
@@ -408,10 +486,23 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
         .iter()
         .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
     {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::tool_defs());
+        tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
+    }
+    if workspace_tools.iter().any(|t| {
+        t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME
+    }) {
+        tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
+    }
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::manage_skill::tool_defs());
     }
     tools.extend(crate::adapters::plugins::http::tool_defs());
     tools.extend(crate::adapters::plugins::crypto::tool_defs());
+    tools.extend(crate::adapters::plugins::skill_resource::tool_defs());
+    tools.extend(crate::adapters::plugins::view_skill::tool_defs());
     tools
 }
 
@@ -967,7 +1058,8 @@ fn clone_chat_turn_inputs(src: &ChatTurnInputs) -> ChatTurnInputs {
 #[async_trait]
 impl ChatServiceFactory for RuntimeChatServiceFactory {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String> {
-        self.run_turn_inner(agent, None, text).await
+        let (reply, _) = self.run_turn_inner(agent, None, text).await?;
+        Ok(reply)
     }
 
     async fn run_turn_with_system(
@@ -976,7 +1068,22 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
         system_prompt: &str,
         text: &str,
     ) -> anyhow::Result<String> {
-        self.run_turn_inner(agent, Some(system_prompt), text).await
+        let (reply, _) = self
+            .run_turn_inner(agent, Some(system_prompt), text)
+            .await?;
+        Ok(reply)
+    }
+
+    async fn run_turn_with_system_metered(
+        &self,
+        agent: &str,
+        system_prompt: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<(
+        String,
+        crate::adapters::orchestrator::wiring::TurnTelemetry,
+    )> {
+        self.run_turn_inner(agent, system_prompt, text).await
     }
 }
 
@@ -990,8 +1097,13 @@ impl RuntimeChatServiceFactory {
         agent: &str,
         system_override: Option<&str>,
         text: &str,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<(
+        String,
+        crate::adapters::orchestrator::wiring::TurnTelemetry,
+    )> {
         let inputs = (self.inputs_fn)(agent)?;
+        let model_slug = inputs.agent_config.model.clone();
+        let started = std::time::Instant::now();
 
         // Wrap tool_observer Arc into the `&dyn Fn` form the service expects.
         let observer_arc = inputs.tool_observer.clone();
@@ -1045,7 +1157,18 @@ impl RuntimeChatServiceFactory {
         // inspect `system_notice` via a dedicated path when that matters.
         // The orchestrator always wants *some* string to feed back into the
         // next step.
-        Ok(result.assistant_text.unwrap_or_default())
+        let reply = result.assistant_text.unwrap_or_default();
+        let telemetry = crate::adapters::orchestrator::wiring::TurnTelemetry {
+            // `process_user_text` writes per-turn deltas onto state.total_*;
+            // we read them here so the value reflects only this turn (the
+            // caller mints a fresh ChatLoopState per call).
+            prompt_tokens: state.total_input_tokens,
+            completion_tokens: state.total_output_tokens,
+            model: model_slug,
+            latency_ms: started.elapsed().as_millis() as u64,
+            response_chars: reply.chars().count() as u32,
+        };
+        Ok((reply, telemetry))
     }
 }
 
@@ -1103,6 +1226,37 @@ pub(crate) fn build_orchestrator(
         // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
         // (TUI, Telegram adapter) see one unified event stream.
         let bus = crate::adapters::orchestrator::events::new_bus();
+
+        // Metrics — install the process-global metrics sink and bridge it
+        // onto the orchestrator event bus so a single subscriber can render
+        // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
+        // subsequent `build_orchestrator` calls reuse the already-installed
+        // sink. Bridge task lives as long as the metrics sink exists.
+        let metrics_tx = crate::adapters::metrics::install_global_sink();
+        {
+            let mut metrics_rx = metrics_tx.subscribe();
+            let bus_tx = bus.clone();
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    match metrics_rx.recv().await {
+                        Ok(record) => {
+                            // `bus.send` returns Err only when zero
+                            // subscribers — fine, drop and keep listening.
+                            let _ = bus_tx.send(
+                                crate::adapters::orchestrator::events::OrchestratorEvent::MetricsRecorded {
+                                    record,
+                                },
+                            );
+                        }
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "metrics sink subscriber lagged");
+                        }
+                        Err(RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         tracing::info!(
             sandbox = ?config.sandbox_name,
@@ -1217,11 +1371,20 @@ pub(crate) fn build_subprocess_tool_executor(
     // Filter to spec.tools when the spec declares an allow-list. Empty
     // spec.tools means "no allow-list" — keep all base tools available.
     // compress_and_store is appended unconditionally regardless of spec.tools.
+    //
+    // Workspace-tools opt-ins are always-on for this agent regardless of
+    // whether they appear in spec.tools — they're separately gated by the
+    // workspace_tools allowlist + per-agent declaration. Pre-fix bug: an
+    // agent with `tools = ["read_file", ...]` and `workspace_tools = ["foo"]`
+    // would NOT get `foo` because `tools` filtered it out.
     let mut effective: Vec<ToolDef> = if spec.tools.is_empty() {
         base_tools
     } else {
-        let allow: std::collections::HashSet<&str> =
+        let mut allow: std::collections::HashSet<&str> =
             spec.tools.iter().map(|s| s.as_str()).collect();
+        for wt in &agent_cfg.workspace_tools {
+            allow.insert(wt.as_str());
+        }
         base_tools
             .into_iter()
             .filter(|t| allow.contains(t.name.as_str()))

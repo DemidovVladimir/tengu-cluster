@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "skill": "skill-creator",
+  "last_run": "2026-04-28T18-47-28Z",
+  "last_run_ref": "metrics/runs/2026-04-28T18-47-28Z",
+  "rolling_window": 10,
+  "metrics": {
+    "distill_quality": {
+      "pass_rate": 0.0,
+      "n": 2,
+      "min_pass_rate": 0.7,
+      "gated": true
+    }
+  }
+}

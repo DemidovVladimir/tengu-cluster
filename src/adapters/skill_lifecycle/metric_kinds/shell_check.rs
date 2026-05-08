@@ -130,6 +130,8 @@ mod tests {
             secret_registry: None,
             activity: None,
             tool_scopes: None,
+            conversation: None,
+            sibling_metrics: None,
         };
         ShellCheckKind.run(&spec, &fixture, &ctx).await.unwrap()
     }

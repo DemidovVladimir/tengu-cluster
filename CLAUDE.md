@@ -28,6 +28,25 @@ strips tools/memory/grounding on the planner-side LLM call).
 
 ---
 
+## Output style — read this before writing ANY doc or response
+
+The user does not have time to read walls of prose. Default to terse, scannable, table-driven output. Applies to docs, chat replies, and commit messages.
+
+| Rule | Applied as |
+|---|---|
+| Tables over prose | If it can be a table, it must be. |
+| One-line decisions, not justifications | Cite a §-ref instead of recapping reasoning. |
+| Cap new docs at one screen | Unless the user explicitly asks for depth. |
+| Cut "why this matters" / "honest read" / recap preambles | The table is the explanation. |
+| Bullets, not paragraphs | Three sentences in a row → convert. |
+| Use existing pointers | Don't re-explain `skill_distill` if a § already does. |
+
+**Test**: would a busy operator skim this in 30 seconds and know what to do next? If not, cut more.
+
+Why this rule exists: an earlier draft of `docs/skill-research-2026-04-28.md` ballooned past 700 lines of prose. The user pushed back twice. Don't make them push back again.
+
+---
+
 ## REQUIRED reading before any code changes
 
 Read in this order. Do not skip.
@@ -78,18 +97,42 @@ flow, audit these for staleness **before declaring done**:
 | `docs/architecture-2026-04-27.svg` | If you changed the per-turn flow OR added/removed a file in a subsystem panel |
 | `docs/architecture-2026-04-27.html` | Same triggers as the svg + md. The SUBSYSTEMS / STEPS / FILE_MAP arrays in the inline `<script>` need to stay in sync |
 | `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing |
+| `docs/skill-research-2026-04-28.md` | If the skill-lifecycle plan, gap inventory, or learning-platform A1/A2/A3 decisions change. |
 | `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `flow_builder.rs`, `engine_builder.rs::collect_engine_response`, `chat_builder.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
 | `CLAUDE.md` (this file) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc |
 | Inline `mod.rs` doc comments in `src/adapters/memory/` and `src/adapters/rag/` | If you changed the layering between memory/ (low-level) and rag/ (v2 facade) |
 | `agents/*.toml` | If you changed the AgentSpec schema, document the new field in `src/adapters/agents/mod.rs` and update each agent file |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
+| `src/adapters/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
 
 **Rule of thumb:** if a future Claude opening this project would learn the
 "wrong" thing from a doc, the doc is stale. Fix it in the same commit that
 made the doc stale, not later.
 
 ---
+
+## How to read context/token metrics
+
+Every LLM and embedding call emits a `MetricsRecord` (see
+`src/adapters/metrics.rs`). Three surfaces:
+
+1. **Always-on tracing** — `RUST_LOG=tengu=info` prints one structured line
+   per call: `kind=`, `agent=`, `model=`, `prompt_tokens=`,
+   `completion_tokens=`, `latency_ms=`, `prompt_chars=`. Per-layer breakdown
+   (system / roster / cross_session / history / user_message) goes to `debug`
+   so the info line stays narrow.
+2. **TUI bottom panel** — opt-in via `TENGU_TUI_METRICS=1`. Renders a
+   compact aggregated status line as a System bubble after every call. The
+   in-process aggregator (`AggregatorState`) absorbs records even when the
+   panel is off.
+3. **OrchestratorEvent::MetricsRecorded** — the same record bridged onto the
+   orchestrator bus (subscribers like `eval_builder` consume it directly).
+
+Subagent records cross the IPC boundary in `AgentIpcOutput.metrics` (new
+field; `default + skip_serializing_if = Vec::is_empty` keeps the payload
+byte-compatible). The parent's `SubprocessRunner` re-emits each one on the
+global metrics sink so the TUI sees a unified stream.
 
 ## How to add a new tool (single source of truth — Phase 7.7)
 
@@ -142,9 +185,22 @@ These are not preferences. They're load-bearing.
 
 ## Key gotchas (compiled from SESSION_HANDOFF + scars)
 
-- **`workspace_tools` is a narrow allow-list of THREE values** —
-  `shared_cache`, `persistent_store`, `skill_distill`. Anything else fails
-  config validation.
+- **`workspace_tools` is a narrow allow-list of FIVE values** —
+  `shared_cache`, `persistent_store`, `skill_distill`,
+  `apply_improver_proposal`, `manage_skill`. Anything else fails config
+  validation. The first four are legacy / single-purpose; `manage_skill`
+  is the canonical unified write API (see `plugins/manage_skill/`).
+- **`agents/*.toml` has NO `workspace_tools` field** — `AgentSpec`
+  (`src/adapters/agents/mod.rs`) defines only `tools`. Workspace-tool
+  opt-ins go in `tools = [...]` for subagent specs; `agent_config_from_spec`
+  derives the synthesized `workspace_tools` by filtering `tools` against
+  `WORKSPACE_TOOLS_ALLOWLIST`. A `workspace_tools = […]` line in an
+  agents/*.toml file is silently ignored by serde — confusing because
+  the parent's `[agents.*]` block in `sandboxes/<name>/config.toml`
+  DOES have a real `workspace_tools` field on `AgentConfig`. If you're
+  wiring a subagent (`agents/foo.toml`) to use `skill_distill` /
+  `apply_improver_proposal` / `persistent_store` / `shared_cache`,
+  put the name in the `tools` array, not `workspace_tools`.
 - **`compress_and_store` is appended IMPLICITLY** — never list it in
   `agents/*.toml::tools`. The runner appends it itself for every subagent.
 - **Planner LLM call strips tools/memory/grounding** —
@@ -175,6 +231,25 @@ These are not preferences. They're load-bearing.
 - **TUI debug panel is opt-in via `TENGU_TUI_RAG_DEBUG=1`** — when on,
   `OrchestratorEvent::RagQueried` renders as a compact System bubble showing
   top-3 hits per planner call.
+- **TUI metrics panel is opt-in via `TENGU_TUI_METRICS=1`** — when on,
+  every `OrchestratorEvent::MetricsRecorded` updates the in-process
+  `AggregatorState` and a compact one-liner is pushed as a System bubble
+  (`metrics: tok in/out 4.5k/812 · last planner (1.2k) · session 5.6k · researcher 4.0k`).
+  Aggregator absorbs events even when the panel is OFF — flipping it on
+  mid-session shows real numbers, not zero. Tracing baseline
+  (`RUST_LOG=tengu=info` → one `metrics` info line per call) is always-on.
+- **Per-context-layer metric attribution is approximate** — `MetricsLayer`
+  only sees the strings the planner builds (system / roster / cross_session
+  / history / recall / failure / user_message). Engine-side framing
+  (Anthropic `<thinking>` blocks, OpenAI tool-call schema, function-calling
+  message wrappers) isn't counted. Treat layers as relative attribution
+  for "which planner block bloated this turn", not absolute byte-perfect
+  accounting against `prompt_tokens`.
+- **Metrics records cross the IPC boundary via `AgentIpcOutput.metrics`** —
+  added 2026-04-28. Old child binaries produce JSON without the field;
+  serde's `#[serde(default)]` gives the parent an empty vec. Re-emission
+  happens in `SubprocessRunner::run_step` for both the Ok and Failed paths,
+  so a partial subagent run still surfaces its consumed tokens.
 - **Two senses of `session_id`** — RagPlanner mints one (env override
   `TENGU_SESSION_ID` or fresh UUID). SubprocessRunner mints its own. They
   don't share today — open question in the handoff.

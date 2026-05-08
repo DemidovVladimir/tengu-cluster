@@ -21,6 +21,11 @@ pub(crate) struct GateView<'a> {
     pub old_body: &'a str,
     pub new_body: &'a str,
     pub rationale: &'a str,
+    /// Preview of new files the proposal asked to write under
+    /// `skills/<name>/resources/`. Each entry is `(path, byte_size)`.
+    /// Empty slice when the proposal had no `resource_additions` (the
+    /// renderer omits the section in that case).
+    pub resource_additions: &'a [(String, usize)],
 }
 
 pub(crate) fn render(view: &GateView, w: &mut dyn Write) -> Result<()> {
@@ -61,6 +66,13 @@ pub(crate) fn render(view: &GateView, w: &mut dyn Write) -> Result<()> {
         write!(w, "  {sign}{}", change)?;
     }
     writeln!(w)?;
+    if !view.resource_additions.is_empty() {
+        writeln!(w, "New resources to write:")?;
+        for (path, size) in view.resource_additions {
+            writeln!(w, "  + resources/{}  ({} bytes)", path, size)?;
+        }
+        writeln!(w)?;
+    }
     writeln!(w, "Rationale:\n  {}", view.rationale)?;
     writeln!(w)?;
     write!(
@@ -110,6 +122,7 @@ mod tests {
             old_body: "a\nb\n",
             new_body: "a\nc\n",
             rationale: "added scope-check",
+            resource_additions: &[],
         };
         let mut out = Vec::new();
         render(&view, &mut out).unwrap();
@@ -117,5 +130,29 @@ mod tests {
         assert!(s.contains("plan_quality"));
         assert!(s.contains("added scope-check"));
         assert!(s.contains("+0.17"));
+        // No-additions case must not render the section header.
+        assert!(!s.contains("New resources to write"));
+    }
+
+    #[test]
+    fn render_includes_resource_additions_when_present() {
+        let additions = vec![("genitive.md".to_string(), 2048usize)];
+        let view = GateView {
+            skill: "german",
+            target_metric: "case_accuracy",
+            baseline_target: 0.5,
+            best_target: 0.8,
+            gated_snapshots: &[],
+            old_body: "a\n",
+            new_body: "a\nb\n",
+            rationale: "add genitive resource",
+            resource_additions: &additions,
+        };
+        let mut out = Vec::new();
+        render(&view, &mut out).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("New resources to write"));
+        assert!(s.contains("resources/genitive.md"));
+        assert!(s.contains("2048 bytes"));
     }
 }

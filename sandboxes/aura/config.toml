@@ -97,3 +97,41 @@ name = "Aura DeSci Agent"
 instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
 
 For general user questions that fall outside the DeSci pipeline — looking up prices, fetching facts from the web, quick research, or any simple question where an HTTP call would answer it — use the `http_request` tool freely. You are not locked to the pipeline; you can also be a helpful general-purpose agent when the user asks something off-topic."""
+
+# --- Skill Lifecycle ---
+# Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
+# `tengu skill evolve <skill>`. See
+# `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
+
+[skill_lifecycle]
+improver_agent = "skill-improver"        # Required for `tengu skill evolve`
+fixture_runner_agent = "fixture-runner"  # Required for `tengu eval`
+default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
+default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
+
+[agents.skill-improver]
+engine = "openrouter"
+model = "anthropic/claude-opus-4-7"
+# `read_file` / `list_directory` are normal tools, not workspace_tools.
+# The workspace_tools allowlist is just shared_cache / persistent_store / skill_distill.
+tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
+
+[agents.skill-improver.identity]
+name = "Skill Improver"
+instructions = """
+You are a skill-improver. Given a skill that is under-performing on a specific
+metric, you propose a REVISED skill body that should raise that metric's pass
+rate without regressing other metrics. Emit ONE JSON object and nothing else:
+{"proposal":{"body_markdown":"...","metrics":[...]?,"rationale":"..."}}
+Preserve name + description unchanged. Do not remove metrics. Prefer small
+targeted revisions over wholesale rewrites.
+"""
+
+[agents.fixture-runner]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+tools = ["read_file", "list_directory", "run_command"]
+
+[agents.fixture-runner.identity]
+name = "Fixture Runner"
+instructions = "You execute a single skill fixture and return the final assistant output."

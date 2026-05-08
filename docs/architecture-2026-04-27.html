@@ -451,7 +451,7 @@ const STEPS = [
       { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
       { path: "skills/orchestrator/plan_schema.json", desc: "validates the plan JSON output" },
     ],
-    deep: "The planner LLM call uses run_turn_with_system, which strips tools/memory/grounding so the model has exactly one job. Output is one of two shapes: PlannerVerdict::Direct { response } or PlannerVerdict::Plan { steps }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+    deep: "The planner LLM call uses run_turn_with_system_metered (post 2026-04-28) — same as run_turn_with_system but additionally returns TurnTelemetry with prompt/completion tokens, model slug, latency. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after parsing. Output is one of two shapes: PlannerVerdict::Direct { response } or PlannerVerdict::Plan { steps }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
   },
   {
     num: 4, title: "DagExecutor", lane: "exec",
@@ -483,7 +483,7 @@ const STEPS = [
       { path: "src/adapters/plugins/{http,workspace,memory,crypto,mcp,...}", desc: "the actual tools" },
       { path: "src/adapters/engine_builder::run_single_engine_turn", desc: "one LLM turn" },
     ],
-    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Most agents are well-behaved; the warn path catches the rest."
+    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Most agents are well-behaved; the warn path catches the rest. Each run_single_engine_turn emits a MetricsRecord with kind=Subagent (post 2026-04-28); records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
   },
   {
     num: 7, title: "compress_and_store → tengu_outputs", lane: "mem",
@@ -556,15 +556,31 @@ const SUBSYSTEMS = [
     subtitle: "the harness brain. Heart of the v2 redesign.",
     files: [
       ["mod.rs", "Orchestrator — top-level handle"],
-      ["planner.rs", "RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block"],
+      ["planner.rs", "RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, emit_planner_metrics"],
       ["plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId"],
       ["executor.rs", "DagExecutor — parallel ready_steps with cancel"],
       ["retry.rs", "RetryPolicy"],
       ["replan.rs", "drive() loop — replan-on-exhausted"],
-      ["events.rs", "OrchestratorEvent enum + bus"],
-      ["wiring.rs", "ChatServiceFactory trait + ChatOrchestratorPortImpl"],
+      ["events.rs", "OrchestratorEvent enum + bus (incl. MetricsRecorded)"],
+      ["wiring.rs", "ChatServiceFactory trait + TurnTelemetry + ChatOrchestratorPortImpl"],
     ],
     deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RagPlanner is the only Planner impl now. SubprocessRunner is the only WorkerHandle. The static-mode tests in retry.rs/executor.rs/replan.rs/wiring.rs have been pruned to those that don't depend on the deleted types.",
+  },
+  {
+    key: "metrics", title: "metrics.rs — context/token observability (2026-04-28)",
+    subtitle: "MetricsRecord + global broadcast sink + AggregatorState. Observes every LLM and embedding call.",
+    files: [
+      ["src/adapters/metrics.rs", "MetricsRecord, MetricsKind {Planner,Subagent,Embedding}, MetricsLayer, install_global_sink, record(), subscribe(), AggregatorState (overall + by-agent + by-kind rollups)"],
+      ["orchestrator/events.rs::OrchestratorEvent::MetricsRecorded", "bus variant — re-broadcast of the global sink onto the orchestrator bus, so TUI/eval recorder see one unified event stream"],
+      ["channel_runtime.rs::build_orchestrator", "installs global sink, spawns bridge task to forward records onto the orchestrator bus"],
+      ["orchestrator/planner.rs::emit_planner_metrics", "captures per-context-layer breakdown (system/roster/cross_session/history/recall/failure/user_message) BEFORE the LLM call, emits one MetricsRecord with kind=Planner after parsing"],
+      ["main.rs::run_agent_subprocess", "records one MetricsRecord per run_single_engine_turn, packs into AgentIpcOutput.metrics for IPC return"],
+      ["runner.rs::SubprocessRunner::run_step", "drains output.metrics and re-emits via metrics::record() on the parent's global sink"],
+      ["memory/vector/embedder.rs", "embed_batch_openrouter reads usage.total_tokens from response, emits kind=Embedding record (chars/4 fallback)"],
+      ["tui/mod.rs", "TENGU_TUI_METRICS=1 — absorbs records into AggregatorState, renders compact one-liner as System bubble"],
+      ["eval_builder.rs", "records one Observation per MetricsRecorded event for cross-run cost comparison"],
+    ],
+    deep: "Three surfaces, one record. Tracing baseline (RUST_LOG=tengu=info — every record() call emits a structured info line) is always-on. Bus broadcast is best-effort — record() is fail-soft. AggregatorState absorbs even when the TUI panel is OFF so flipping it on mid-session shows real numbers. Subagent records cross the IPC boundary in AgentIpcOutput.metrics (default + skip_serializing_if = Vec::is_empty keeps the payload byte-compatible with older child binaries). Per-context-layer attribution is approximate — engine-side framing (Anthropic <thinking> blocks, function-calling wrappers) isn't counted; treat layers as relative attribution, not byte-perfect accounting against prompt_tokens.",
   },
 ];
 
@@ -581,8 +597,9 @@ const FILE_MAP = [
   ["src/adapters/orchestrator/executor.rs", "orchestrator", "DagExecutor, WorkerHandle trait"],
   ["src/adapters/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
   ["src/adapters/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop with replan-on-exhausted"],
-  ["src/adapters/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum, EventBus, RagQueriedHit"],
-  ["src/adapters/orchestrator/wiring.rs", "orchestrator", "ChatServiceFactory trait, ChatOrchestratorPortImpl"],
+  ["src/adapters/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
+  ["src/adapters/orchestrator/wiring.rs", "orchestrator", "ChatServiceFactory trait + run_turn_with_system_metered, TurnTelemetry, ChatOrchestratorPortImpl"],
+  ["src/adapters/metrics.rs", "metrics", "MetricsRecord, MetricsKind, MetricsLayer, install_global_sink/record/subscribe, AggregatorState (per-agent + per-kind rollups). Observes every LLM and embedding call; tracing info baseline + bus broadcast + TUI bubble (TENGU_TUI_METRICS=1)."],
   ["src/adapters/rag/mod.rs", "rag", "RagStore facade, MemoryEntry, MemoryKind, RagKind, three collection name constants"],
   ["src/adapters/rag/indexer.rs", "rag", "enumerate_builtin_tools, enumerate_mcp_tools, index_*, reindex_all_workspace (with fingerprint dedup), scan_skills"],
   ["src/adapters/rag/query.rs", "rag", "search_registry (dedup-by-(kind,name)), search_messages, search_memory"],

@@ -50,10 +50,10 @@ flowchart TB
     OR[(OpenRouter<br/>claude-opus-4-7<br/>claude-sonnet-4-6)]
 
     U -->|message| TUI & TG
-    U -->|tengu eval / skill-evolve / skill-metrics| CLI
+    U -->|tengu eval / skill evolve / skill metrics| CLI
     TUI & TG --> CR
     CLI --> Eval
-    CLI -->|skill-evolve| SLC
+    CLI -->|skill evolve| SLC
 
     CR -->|builds| Engine
     CR -->|builds factory for| Orch
@@ -78,7 +78,7 @@ flowchart TB
 
 **Key insights from the diagram:**
 
-- **Two entry points for the subsystem** — agents call `skill_distill` via the normal tool loop (from a live chat), or the user runs `tengu eval / skill-evolve` from the CLI.
+- **Two entry points for the subsystem** — agents call `skill_distill` via the normal tool loop (from a live chat), or the user runs `tengu eval / skill evolve` from the CLI.
 - **`ChatServiceFactory::run_turn(agent, text)`** at [orchestrator/wiring.rs:30](../src/adapters/orchestrator/wiring.rs) is the one-call seam for evolve's skill-improver dispatch. No `Orchestrator` DAG needed for that — it's a single-turn RPC.
 - **`eval_builder.rs` owns row execution** (per-row agent dispatch, per-row LLM judge); **`skill_lifecycle/` owns the typed `metrics:` contract** and rolling storage. Integration point: [eval_builder.rs:1215-ish](../src/adapters/eval_builder.rs) in `run_skill`, where `finalize_run` is called.
 
@@ -102,7 +102,7 @@ flowchart LR
     end
 
     subgraph Evolve["③ Evolve — improve a gated metric"]
-        v1[tengu skill-evolve &lt;skill&gt;] --> v2[baseline eval<br/>pick target]
+        v1[tengu skill evolve &lt;skill&gt;] --> v2[baseline eval<br/>pick target]
         v2 --> v3[scratch git<br/>worktree]
         v3 --> v4[for N cycles]
         v4 --> v5[improver agent<br/>proposes diff]
@@ -228,7 +228,7 @@ sequenceDiagram
 | Code | Meaning | Typical cause |
 |------|---------|---------------|
 | 0 | All gated metrics pass | Skill is healthy |
-| 1 | At least one gated metric failed | Candidate for `tengu skill-evolve` |
+| 1 | At least one gated metric failed | Candidate for `tengu skill evolve` |
 | 2 | Runner error | Config missing, LLM unavailable, fixture file broken |
 
 **Code pointers:**
@@ -304,7 +304,7 @@ sequenceDiagram
     participant AG as approval_gate::render<br/>+ read_decision
     participant FS as Filesystem
 
-    U->>CLI: tengu skill-evolve skill-creator --max-cycles 1
+    U->>CLI: tengu skill evolve skill-creator --max-cycles 1
     CLI->>EV: EvolveArgs { chat_factory, config, workspace, skill, … }
 
     Note over EV,SW: ⓪ Startup sweep — prevents leaked worktrees accumulating
@@ -587,13 +587,13 @@ flowchart LR
         cbt[channel_runtime::<br/>compute_base_tools]
         bte[build_tool_executor]
         reg[registry.register_plugin<br/>SkillLifecyclePlugin]
-        bccf[build_cli_chat_factory<br/>for tengu skill-evolve]
+        bccf[build_cli_chat_factory<br/>for tengu skill evolve]
     end
 
     subgraph Invoke["Per-command"]
         direction TB
         eval_inv[tengu eval &lt;skill&gt;]
-        evolve_inv[tengu skill-evolve &lt;skill&gt;]
+        evolve_inv[tengu skill evolve &lt;skill&gt;]
     end
 
     cfg_sl --> parse
@@ -754,7 +754,7 @@ If `procedure_quality` comes back below 0.7, it's `gated: true` in `metrics.json
 ### 9.5 Evolve if needed
 
 ```bash
-tengu skill-evolve eth-balance-check --max-cycles 2
+tengu skill evolve eth-balance-check --max-cycles 2
 ```
 
 Flow (see Section 5):
