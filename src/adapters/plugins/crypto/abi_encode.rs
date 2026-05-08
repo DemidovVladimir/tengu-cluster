@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use crate::adapters::plugins::crypto::helpers::abi_encode_function_call;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct AbiEncodeTool {
@@ -47,10 +48,7 @@ impl Tool for AbiEncodeTool {
 
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // scope: pure-compute — no fs/net/shell/wallet access, deterministic hashing + encoding.
-        let signature = args
-            .get("function_signature")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("abi_encode: missing 'function_signature'"))?;
+        let signature = require_str(args, "abi_encode", "function_signature")?;
         let call_args = args
             .get("args")
             .and_then(|v| v.as_array())
@@ -93,7 +91,9 @@ mod tests {
         );
         // 4 bytes selector + 32 + 32 = 68 bytes → 136 hex chars + "0x" + "calldata: "
         assert!(
-            output.text.contains("000000000000000000000000000000000000000000000000000000000000002a"),
+            output
+                .text
+                .contains("000000000000000000000000000000000000000000000000000000000000002a"),
             "expected uint256 = 42 tail, got: {}",
             output.text
         );
@@ -113,6 +113,10 @@ mod tests {
                 &harness.ctx(),
             )
             .await;
-        assert!(result.is_err(), "expected arity mismatch, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected arity mismatch, got: {:?}",
+            result
+        );
     }
 }

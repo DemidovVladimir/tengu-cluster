@@ -1,0 +1,31 @@
+# Eval config for the skill-creator skill.
+#
+# Consumed by `tengu eval skill-creator`. The agent below answers each
+# fixture prompt; the judge scores the output against `expected` + the
+# `distill_quality` rubric declared in SKILL.md frontmatter.
+
+runtime_profile = "cloud"
+
+[agents.skill-creator-agent]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "{TMP_WORKSPACE}"
+workspace_tools = ["skill_distill"]
+
+[agents.skill-creator-agent.identity]
+name = "Skill Creator Eval Agent"
+instructions = """
+You are helping distill conversations into reusable skills. When the user asks you
+to save a workflow as a skill, compose a skill_distill tool call with:
+- A kebab-case name.
+- A "Use when..." description.
+- A body with four sections: Overview, When to Use, Procedure, Common Mistakes.
+- At least one metric (shell_check or llm_judge).
+
+For this eval you may not have access to tools — in that case, show the
+skill_distill call and its arguments as a JSON block.
+"""
+
+[agents.skill-creator-agent.limits]
+max_tokens_per_flow = 50_000

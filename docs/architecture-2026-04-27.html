@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu-Cluster · Architecture Explorer · 2026-04-27</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --user: #F59E0B;
+    --orch: #C084FC;
+    --plan: #60A5FA;
+    --exec: #22D3EE;
+    --sub: #4ADE80;
+    --tool: #FB7185;
+    --mem: #94A3B8;
+    --rag: #A78BFA;
+    --agt: #67E8F9;
+    --skl: #86EFAC;
+    --orc: #FB923C;
+    --ok: #16A34A;
+    --warn: #CA8A04;
+    --info: #0891B2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 36px 20px;
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .header h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .header .sub { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .tabs {
+    display: flex; gap: 2px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 36px; overflow-x: auto;
+    position: sticky; top: 88px; z-index: 90;
+  }
+  .tab {
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .15s;
+    font-family: inherit;
+  }
+  .tab.active { color: #fff; border-bottom-color: var(--accent-mid); }
+  .tab:hover { color: var(--text); }
+  .content { padding: 28px 36px 80px; max-width: 1320px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: #fff; }
+  h3 { font-size: 13px; font-weight: 700; margin-bottom: 8px; color: var(--text); }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; background: var(--surface2);
+    padding: 2px 6px; border-radius: 3px;
+    color: var(--accent-light);
+  }
+  /* ── walk-a-turn ── */
+  .walk-bar {
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px;
+  }
+  .step-pill {
+    padding: 8px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; cursor: pointer; transition: all .15s;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-muted);
+  }
+  .step-pill:hover { border-color: var(--accent-mid); color: #fff; }
+  .step-pill.active {
+    background: var(--accent); border-color: var(--accent);
+    color: #fff;
+  }
+  .step-detail {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 22px;
+    min-height: 260px;
+  }
+  .step-detail .step-num {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    background: var(--accent); color: #fff;
+    padding: 3px 10px; border-radius: 12px;
+    letter-spacing: .5px;
+  }
+  .step-detail h3 { font-size: 18px; margin: 8px 0 12px; }
+  .step-detail .what {
+    color: var(--text); font-size: 14px; margin-bottom: 16px;
+  }
+  .step-detail .files {
+    background: var(--surface2); border-radius: 6px;
+    padding: 12px 16px; margin-bottom: 14px;
+  }
+  .step-detail .files-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--text-dim); font-weight: 700; margin-bottom: 6px;
+  }
+  .step-detail .file-row {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px; padding: 3px 0; color: var(--accent-light);
+  }
+  .step-detail .file-row .desc {
+    color: var(--text-muted); margin-left: 8px; font-family: inherit; font-size: 11px;
+  }
+  .step-detail .deep {
+    border-left: 3px solid var(--accent-mid); padding-left: 14px;
+    margin-top: 14px; font-size: 12px; color: var(--text-muted);
+  }
+  .step-detail .deep strong { color: var(--text); }
+  .nav-buttons { margin-top: 18px; display: flex; gap: 10px; }
+  .nav-btn {
+    padding: 8px 18px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; font-size: 13px;
+    font-family: inherit; transition: all .15s;
+  }
+  .nav-btn:hover:not(:disabled) {
+    background: var(--accent); border-color: var(--accent);
+  }
+  .nav-btn:disabled { opacity: .35; cursor: not-allowed; }
+  /* ── subsystem cards ── */
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .grid-5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .sys-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px; cursor: pointer;
+    transition: all .15s; border-top-width: 3px;
+  }
+  .sys-card:hover { background: var(--surface2); }
+  .sys-card.expanded { background: var(--surface2); }
+  .sys-card.memory { border-top-color: var(--mem); }
+  .sys-card.rag    { border-top-color: var(--rag); }
+  .sys-card.agents { border-top-color: var(--agt); }
+  .sys-card.skills { border-top-color: var(--skl); }
+  .sys-card.orchestrator { border-top-color: var(--orc); }
+  .sys-card .title {
+    font-size: 14px; font-weight: 700; margin-bottom: 4px;
+  }
+  .sys-card .subtitle {
+    font-size: 11px; color: var(--text-dim); margin-bottom: 12px;
+  }
+  .sys-card .files-list { font-size: 12px; }
+  .sys-card .file-line {
+    padding: 4px 0; border-bottom: 1px dotted var(--border);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--accent-light);
+    font-size: 11px;
+  }
+  .sys-card .file-line:last-child { border-bottom: none; }
+  .sys-card .file-line .what {
+    color: var(--text-muted); margin-left: 6px;
+    font-family: inherit; font-size: 11px;
+  }
+  .sys-card .expand-detail {
+    display: none; margin-top: 12px;
+    padding: 12px; background: var(--bg);
+    border-radius: 6px; font-size: 12px;
+    color: var(--text-muted); border-left: 2px solid var(--accent-mid);
+  }
+  .sys-card.expanded .expand-detail { display: block; }
+  /* ── collection table ── */
+  .coll-table {
+    width: 100%; border-collapse: collapse; margin-top: 8px;
+    background: var(--surface); border-radius: 8px; overflow: hidden;
+  }
+  .coll-table th, .coll-table td {
+    padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border);
+    font-size: 12px; vertical-align: top;
+  }
+  .coll-table th {
+    background: var(--surface2); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px;
+    font-size: 10px; color: var(--text-dim);
+  }
+  .coll-table td:first-child { font-weight: 700; color: var(--accent-mid); }
+  /* ── file map ── */
+  .file-search {
+    width: 100%; padding: 10px 14px; margin-bottom: 14px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px;
+    font-family: inherit;
+  }
+  .file-search:focus { outline: none; border-color: var(--accent-mid); }
+  .file-table {
+    width: 100%; border-collapse: collapse; background: var(--surface);
+    border-radius: 8px; overflow: hidden;
+  }
+  .file-table th, .file-table td {
+    padding: 10px 14px; text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .file-table th {
+    background: var(--surface2); font-weight: 700;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--text-dim);
+  }
+  .file-table td:first-child {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--accent-light);
+  }
+  .file-table tr.hidden { display: none; }
+  /* ── mechanic cards ── */
+  .mech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+  .mech-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px;
+    border-left: 3px solid var(--accent);
+  }
+  .mech-card .label {
+    font-size: 11px; font-weight: 700; color: var(--accent-mid);
+    text-transform: uppercase; letter-spacing: .8px;
+    margin-bottom: 6px;
+  }
+  .mech-card h3 { font-size: 15px; margin-bottom: 10px; }
+  .mech-card p { font-size: 13px; line-height: 1.55; color: var(--text-muted); }
+  .mech-card .ref {
+    margin-top: 10px; font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px; color: var(--accent-light);
+    background: var(--surface2); padding: 6px 10px; border-radius: 4px;
+    display: inline-block;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--surface3); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tengu-Cluster · Architecture Explorer</h1>
+  <div class="sub">2026-04-27 · click pills, expand cards, search the file map · companion to architecture-2026-04-27.{md,svg}</div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" data-tab="walk">Walk a Turn</button>
+  <button class="tab" data-tab="systems">Subsystems</button>
+  <button class="tab" data-tab="collections">Collections</button>
+  <button class="tab" data-tab="mechanics">Key Mechanics</button>
+  <button class="tab" data-tab="filemap">File Map</button>
+</div>
+
+<div class="content">
+
+<!-- ============ WALK A TURN ============ -->
+<div class="panel active" id="panel-walk">
+  <h2>How a single user message becomes a response</h2>
+  <p>Click each step to see what runs, in which file. Use the buttons or arrow keys at the bottom to walk through.</p>
+
+  <div class="walk-bar" id="walk-bar"></div>
+  <div class="step-detail" id="walk-detail"></div>
+  <div class="nav-buttons">
+    <button class="nav-btn" id="prev-btn" onclick="walkStep(-1)">← Previous</button>
+    <button class="nav-btn" id="next-btn" onclick="walkStep(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ============ SUBSYSTEMS ============ -->
+<div class="panel" id="panel-systems">
+  <h2>The five subsystems</h2>
+  <p>Click any card to expand its file-by-file breakdown.</p>
+  <div class="grid-5" id="systems-grid"></div>
+</div>
+
+<!-- ============ COLLECTIONS ============ -->
+<div class="panel" id="panel-collections">
+  <h2>Three Qdrant collections — what's in each, who writes, who reads</h2>
+  <table class="coll-table">
+    <thead>
+      <tr>
+        <th>Collection</th>
+        <th>Holds</th>
+        <th>Written by</th>
+        <th>Read by</th>
+        <th>TTL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>tengu_registry</td>
+        <td>Agent specs, skills, tool defs (built-in + MCP)</td>
+        <td><code>indexer::reindex_all_workspace</code> (CLI + auto on first chat turn)</td>
+        <td><code>RagPlanner::plan/replan</code> via <code>search_registry</code></td>
+        <td>NO — deterministic</td>
+      </tr>
+      <tr>
+        <td>tengu_messages</td>
+        <td>User messages keyed by session_id</td>
+        <td><code>RagPlanner::persist_user_message</code> on every plan()</td>
+        <td><code>RagPlanner::cross_session_recall_block</code> (opt-in via <code>memory.cross_session_msg_top_k</code>)</td>
+        <td>YES — <code>cleanup::ttl_cleanup</code></td>
+      </tr>
+      <tr>
+        <td>tengu_outputs</td>
+        <td>Compressed step output summaries</td>
+        <td><code>compress_and_store</code> tool (implicit on every subagent)</td>
+        <td><code>RagPlanner::replan</code> for cross-plan recall</td>
+        <td>YES — <code>cleanup::ttl_cleanup</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="margin-top: 18px;">
+    All three live in Qdrant (gRPC). Embedding model: <code>text-embedding-3-small</code> (1536d). When the
+    <code>qdrant</code> cargo feature is off, this entire layer is unavailable and the orchestrator
+    cannot run — channels fall back to direct default-agent dispatch.
+  </p>
+</div>
+
+<!-- ============ MECHANICS ============ -->
+<div class="panel" id="panel-mechanics">
+  <h2>Six things that surprised me reading this code</h2>
+  <p>The doctrine is real and the boundaries are enforced. These are the load-bearing details that don't show up in any single function.</p>
+  <div class="mech-grid">
+    <div class="mech-card">
+      <div class="label">Doctrine</div>
+      <h3>A. LLM = heart, RAG = brain, tools = hands</h3>
+      <p>RagPlanner does ONE thing — pick the right agent. Its LLM call strips tools, tool_executor, memory_manager, and grounding so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
+      <div class="ref">channel_runtime::run_turn_with_system</div>
+    </div>
+    <div class="mech-card">
+      <div class="label">Open question</div>
+      <h3>B. Two senses of "session_id"</h3>
+      <p>RagPlanner mints one (TENGU_SESSION_ID env override or fresh UUID). SubprocessRunner mints its own. They don't share — open question in the handoff. Parent's id stamps user messages in tengu_messages; child's id stamps step outputs in tengu_outputs.</p>
+      <div class="ref">orchestrator/planner.rs:RagPlanner.session_id · runner.rs:session_id</div>
+    </div>
+    <div class="mech-card">
+      <div class="label">Phase 7.2 fix</div>
+      <h3>C. Sandbox config crosses the IPC boundary</h3>
+      <p>Without this, the child loaded ~/.tengu/config.toml not the parent's sandbox config. Symptom: http_request scope-denies in researcher even when the parent's sandbox allowed "*". Fix: AgentIpcInput.sandbox_config field, threaded from Config.sandbox_name → SubprocessRunner → IPC.</p>
+      <div class="ref">Config.sandbox_name (#[serde(skip)]) · load_sandbox_or sets it</div>
+    </div>
+    <div class="mech-card">
+      <div class="label">Implicit contract</div>
+      <h3>D. compress_and_store is implicit, not declared</h3>
+      <p>Never list compress_and_store in agents/*.toml::tools — the runner appends it to every subagent automatically. Used to mark "I'm done." Middle-ground protocol: only Failed when no text emitted AND no compress_and_store called. Otherwise OK with a tracing warn.</p>
+      <div class="ref">main.rs::run_agent_subprocess (Phase 5c)</div>
+    </div>
+    <div class="mech-card">
+      <div class="label">Two layers</div>
+      <h3>E. Two layers of recall in the planner prompt</h3>
+      <p>In-memory ring buffer (Phase 6.4 lite) — recent user msgs THIS process, lost on restart. Cross-session block (Phase 6.4 full) — semantic search over tengu_messages, opt-in via memory.cross_session_msg_top_k. Both inject before the current turn.</p>
+      <div class="ref">RagPlanner::update_and_format_history + cross_session_recall_block</div>
+    </div>
+    <div class="mech-card">
+      <div class="label">Multi-turn UX</div>
+      <h3>F. C → B fallback — composed agents, two turns</h3>
+      <p>Turn 1 (C): planner emits Direct asking the user to confirm closest match. Turn 2 (B): on confirmation, planner emits Plan with Step.compose set. Runner loads the base agent, OVERRIDES skills+tools for this run only. No persistence — file on disk unchanged.</p>
+      <div class="ref">orchestrator/plan.rs::AgentCompose (Phase 6.7)</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">Phase 7.3</div>
+      <h3>G. AgentSpec.engine — subagents pick their backend</h3>
+      <p>Each agent's TOML can declare <code>engine = "openrouter"</code> (default) or <code>engine = "claude_code"</code>. Subprocess honours it via <code>build_engine</code>. Model slug format depends on engine: OpenRouter wants <code>anthropic/claude-sonnet-4-6</code>; Claude Code wants bare <code>claude-sonnet-4-6</code>. Mixed-mode (planner = OpenRouter, subagents = Claude Code) is the verified pattern — Claude Code as planner bypasses orchestration because its MCP tool access is set at engine-construction time.</p>
+      <div class="ref">agents/&lt;name&gt;.toml::engine — agent_config_from_spec — build_engine</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">Phase 7.4</div>
+      <h3>H. Claude Code subagents see tengu's tools via MCP</h3>
+      <p>SubprocessRunner sets <code>EngineContext.bridge_tools = Some(tools)</code> when <code>spec.engine == "claude_code"</code>. Claude Code spawns <code>tengu mcp-bridge</code> as an MCP server, which advertises tengu's tools as <code>mcp__tengu-tools__&lt;name&gt;</code>. Claude Code calls those, the bridge dispatches to its own ToolRegistry, response flows back. Two key env vars forwarded to the bridge: <code>TENGU_SESSION_ID</code> and <code>OPENROUTER_API_KEY</code> (without them the bridge silently fails to register memory tools).</p>
+      <div class="ref">EngineContext.bridge_tools — claude_code_engine.rs::build_mcp_config_json — mcp_bridge.rs::build_bridge_executor</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">Phase 7.4</div>
+      <h3>I. parse_verdict prose-fallback</h3>
+      <p>Claude Code is conversational by default; even with the SKILL.md instructing JSON-only, the planner LLM sometimes emits prose. Pre-7.4 this produced <code>System error: orchestrator initial call failed</code>. Now <code>parse_verdict</code> wraps any unparseable text as <code>Direct { response }</code> with a warn log. User sees the model's reply; logs show when it's firing so you can tune.</p>
+      <div class="ref">orchestrator/planner.rs::parse_verdict — Path 4 fallback</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">Phase 7.7</div>
+      <h3>J. Adding a tool is a one-place edit</h3>
+      <p>Pre-7.7 tool registration was duplicated in <code>channel_runtime::build_tool_executor</code> AND <code>mcp_bridge::build_bridge_executor</code>; fixing one and forgetting the other was the root cause of the Bug B/Bug C debacle. Now <code>register_core_plugins</code> is the single registration site for the seven shared plugins (workspace, memory, cache, skill-lifecycle, compress_and_store, http, crypto). The bridge calls it; the in-process executor calls it. <code>SkillPlugin</code> + <code>McpPlugin</code> stay outside (they need inputs the bridge can't sensibly provide).</p>
+      <div class="ref">channel_runtime::register_core_plugins — CoreRegistrationOpts</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">Phase 7.7</div>
+      <h3>K. WORKSPACE_TOOLS_ALLOWLIST — single constant</h3>
+      <p>The three opt-in workspace tools (<code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>) used to live in two constants in two files. Now there's one <code>pub(crate) const WORKSPACE_TOOLS_ALLOWLIST</code> in <code>channel_runtime.rs</code>. Adding a fourth opt-in is a one-line edit. <code>agent_config_from_spec</code> filters <code>spec.tools</code> against it; the bridge filters <code>allowed_names</code> against it.</p>
+      <div class="ref">channel_runtime::WORKSPACE_TOOLS_ALLOWLIST</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ FILE MAP ============ -->
+<div class="panel" id="panel-filemap">
+  <h2>File map — searchable</h2>
+  <p>Type to filter. Every Rust file that matters and what it owns.</p>
+  <input class="file-search" id="file-search" placeholder="search file or feature... (e.g. planner, http, compress)" />
+  <table class="file-table" id="file-table">
+    <thead>
+      <tr><th>Path</th><th>Subsystem</th><th>What it owns</th></tr>
+    </thead>
+    <tbody id="file-tbody"></tbody>
+  </table>
+</div>
+
+</div>
+
+<script>
+// ============ DATA ============
+const STEPS = [
+  {
+    num: 1, title: "User input", lane: "user",
+    what: "User types a message into the TUI or sends a Telegram message. Both surfaces feed the same channel runtime.",
+    files: [
+      { path: "src/adapters/tui/mod.rs", desc: "cursive TUI loop, captures input, dispatches to engine thread" },
+      { path: "src/adapters/telegram_builder.rs", desc: "Telegram polling + per-chat dispatch" },
+    ],
+    deep: "Both surfaces also subscribe to the OrchestratorEvent bus so they can render plan progress lines (PlanCreated, StepStarted, ✓ step-N). The TUI additionally renders RagQueried as a debug bubble when TENGU_TUI_RAG_DEBUG=1 is set."
+  },
+  {
+    num: 2, title: "Channel runtime — build_orchestrator", lane: "orch",
+    what: "channel_runtime constructs the Orchestrator wrapping the planner + worker. Returns None when [orchestrator] is missing or qdrant feature is off — channels then fall back to direct default-agent dispatch.",
+    files: [
+      { path: "src/adapters/channel_runtime.rs::build_orchestrator", desc: "the wiring" },
+      { path: "src/adapters/channel_runtime.rs::ChatOrchestratorPortImpl", desc: "the planner-side LLM-call abstraction" },
+      { path: "src/adapters/orchestrator/events.rs", desc: "EventBus minted here, shared with planner" },
+    ],
+    deep: "Phase 7.1 made engine = \"rag\" the only path. There used to be a static-mode fallback (OrchestratorAgentPlanner + ChatWorker); both deleted. If you load a sandbox config with engine ≠ \"rag\" today, you get a warn log and the channel runs without orchestration."
+  },
+  {
+    num: 3, title: "Planner — RagPlanner::plan", lane: "plan",
+    what: "Search registry → emit RagQueried event → optional cross-session recall → persist user message → push to in-memory buffer → build prompt → LLM call → parse verdict.",
+    files: [
+      { path: "src/adapters/orchestrator/planner.rs::RagPlanner::plan", desc: "the orchestration of all the steps below" },
+      { path: "src/adapters/rag/query.rs::search_registry", desc: "top-K agents/skills/tools by cosine sim" },
+      { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
+      { path: "skills/orchestrator/plan_schema.json", desc: "validates the plan JSON output" },
+    ],
+    deep: "The planner LLM call uses run_turn_with_system_metered (post 2026-04-28) — same as run_turn_with_system but additionally returns TurnTelemetry with prompt/completion tokens, model slug, latency. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after parsing. Output is one of two shapes: PlannerVerdict::Direct { response } or PlannerVerdict::Plan { steps }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+  },
+  {
+    num: 4, title: "DagExecutor", lane: "exec",
+    what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RagPlanner::replan with failure context + cross-plan recall.",
+    files: [
+      { path: "src/adapters/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel" },
+      { path: "src/adapters/orchestrator/replan.rs::drive", desc: "the outer loop — replan-on-exhausted" },
+      { path: "src/adapters/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts with backoff" },
+      { path: "src/adapters/orchestrator/plan.rs::Plan::ready_steps", desc: "topology check" },
+    ],
+    deep: "Replan uses memory.cross_plan_top_k (default 5) hits from tengu_outputs as context for the new plan. The plan validator rejects unknown agent names — important guardrail post Phase 6.7 since composed agents now use Step.compose to declare a transient roster, NOT a renamed agent name."
+  },
+  {
+    num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
+    what: "Builds AgentIpcInput JSON, spawns child with TENGU_AGENT_IPC=1, pipes JSON over stdin, reads result over stdout. Kill on drop.",
+    files: [
+      { path: "src/adapters/runner.rs::SubprocessRunner::run_step", desc: "parent side" },
+      { path: "src/adapters/runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, optional compose" },
+      { path: "src/main.rs::run_agent_subprocess", desc: "child entry point" },
+    ],
+    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny."
+  },
+  {
+    num: 6, title: "Subagent tool loop", lane: "tool",
+    what: "Inside the child: load AgentSpec + override with compose (if any) → assemble system prompt (base + skills + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns.",
+    files: [
+      { path: "src/main.rs::run_agent_subprocess", desc: "the orchestrating function" },
+      { path: "src/adapters/channel_runtime::build_subprocess_tool_executor", desc: "intersects spec.tools with ipc.tools, appends compress_and_store" },
+      { path: "src/adapters/plugins/{http,workspace,memory,crypto,mcp,...}", desc: "the actual tools" },
+      { path: "src/adapters/engine_builder::run_single_engine_turn", desc: "one LLM turn" },
+    ],
+    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Most agents are well-behaved; the warn path catches the rest. Each run_single_engine_turn emits a MetricsRecord with kind=Subagent (post 2026-04-28); records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
+  },
+  {
+    num: 7, title: "compress_and_store → tengu_outputs", lane: "mem",
+    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it, embeds the LLM-summarised output, writes to Qdrant tengu_outputs tagged with step_id, and exits cleanly with the summary in the IPC output JSON.",
+    files: [
+      { path: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs", desc: "the tool def + write_summary helper" },
+      { path: "src/adapters/rag/mod.rs::RagStore::store_memory", desc: "the actual Qdrant write" },
+    ],
+    deep: "Output flows back to the parent via the IPC stdout, then to the DagExecutor (step 4). On step success the next ready step starts. The child's session_id and step_id are stamped on the Qdrant payload so cross-plan recall on replan can pull the right entries."
+  },
+];
+
+const SUBSYSTEMS = [
+  {
+    key: "memory", title: "memory/ — low-level vector store",
+    subtitle: "the foundation. Used by both the v2 RAG facade AND the legacy planner-side LLM turn.",
+    files: [
+      ["vector.rs", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes/delete_older_than"],
+      ["vector/qdrant.rs", "real backend, gRPC, scrolls + filters + range conditions"],
+      ["vector/disk.rs", "bincode fallback for non-qdrant builds"],
+      ["vector/embedder.rs", "OpenAI text-embedding-3-small client"],
+      ["manager.rs", "MemoryManager — provider holder"],
+      ["provider.rs", "MemoryProvider trait"],
+      ["builtin.rs", "BuiltinMemoryProvider (MEMORY.md, identity, daily logs)"],
+      ["injector.rs", "pre-turn fenced context injection (only ChatOrchestratorPortImpl uses post-7.1)"],
+      ["writer.rs", "post-turn spawned non-blocking memory writes (same Phase 7.1 note)"],
+      ["fencing.rs", "<memory-context> block helpers"],
+      ["context_block.rs", "shared types — MemoryHit, ChunkMetadata"],
+    ],
+    deep: "If you're touching vector reads/writes against Qdrant or disk, you're in memory/. If you're touching the v2 registry/messages/outputs flow that the planner uses, you're in rag/. The naming makes them look like duplicates but they're stacked — rag/ is a thin facade over memory/vector/.",
+  },
+  {
+    key: "rag", title: "rag/ — v2 facade (qdrant feature)",
+    subtitle: "owns three Qdrant collections, knows the v2 idioms.",
+    files: [
+      ["mod.rs", "RagStore facade, MemoryEntry/MemoryKind/RagKind types"],
+      ["indexer.rs", "enumerate_builtin_tools, enumerate_mcp_tools, index_*, reindex_all_workspace, scan_skills, fingerprint dedup"],
+      ["query.rs", "search_registry (with dedup-by-(kind,name)), search_messages, search_memory"],
+      ["cleanup.rs", "ttl_cleanup over tengu_messages + tengu_outputs"],
+    ],
+    deep: "The whole module is gated behind the qdrant cargo feature. Without it, build_orchestrator returns None and channels fall back to direct dispatch. The rag/ facade is opinionated (knows there are EXACTLY three collections, what each holds, the auto-reindex/fingerprint/TTL/per-example-vector idioms); memory/vector is generic.",
+  },
+  {
+    key: "agents", title: "agents/ — TOML specs",
+    subtitle: "edit a .toml and restart chat — auto-reindex picks it up.",
+    files: [
+      ["src/adapters/agents/mod.rs", "AgentSpec struct + load_agent_file + load_agents_dir"],
+      ["agents/aura.toml", "DeSci pipeline agent (heaviest)"],
+      ["agents/researcher.toml", "generic web/HTTP research"],
+      ["agents/storage.toml", "file ingest + semantic search"],
+    ],
+    deep: "Each spec carries: name, description (RAG-indexed), example_queries (each indexed as its OWN vector since 2026-04-26), model, tools, skills, max_turns, sandbox (workspace path). The runner intersects spec.tools with ipc.tools and always appends compress_and_store. Never list compress_and_store in tools — it's implicit.",
+  },
+  {
+    key: "skills", title: "skills/ — prompt fragments",
+    subtitle: "three-tier scanner with shadowing.",
+    files: [
+      ["~/.tengu/skills/", "TIER 1 — managed (lowest priority)"],
+      [".tengu/skills/", "TIER 2 — workspace dotdir"],
+      ["skills/", "TIER 3 — workspace root (highest priority)"],
+      ["skills/orchestrator/SKILL.md", "SPECIAL — used as planner system prompt"],
+      ["skills/orchestrator/plan_schema.json", "validates planner JSON output"],
+      ["src/adapters/rag/indexer.rs::scan_skills", "the scanner"],
+      ["src/main.rs::load_skill_body_three_tier", "called by run_agent_subprocess"],
+    ],
+    deep: "Each SKILL.md has YAML frontmatter (name, description). The scanner walks all three tiers, dedupes by name, later tiers shadow earlier. The body of each SKILL.md becomes part of the subagent's system prompt (assembled in run_agent_subprocess after the base template).",
+  },
+  {
+    key: "orchestrator", title: "orchestrator/ — planner + executor",
+    subtitle: "the harness brain. Heart of the v2 redesign.",
+    files: [
+      ["mod.rs", "Orchestrator — top-level handle"],
+      ["planner.rs", "RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, emit_planner_metrics"],
+      ["plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId"],
+      ["executor.rs", "DagExecutor — parallel ready_steps with cancel"],
+      ["retry.rs", "RetryPolicy"],
+      ["replan.rs", "drive() loop — replan-on-exhausted"],
+      ["events.rs", "OrchestratorEvent enum + bus (incl. MetricsRecorded)"],
+      ["wiring.rs", "ChatServiceFactory trait + TurnTelemetry + ChatOrchestratorPortImpl"],
+    ],
+    deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RagPlanner is the only Planner impl now. SubprocessRunner is the only WorkerHandle. The static-mode tests in retry.rs/executor.rs/replan.rs/wiring.rs have been pruned to those that don't depend on the deleted types.",
+  },
+  {
+    key: "metrics", title: "metrics.rs — context/token observability (2026-04-28)",
+    subtitle: "MetricsRecord + global broadcast sink + AggregatorState. Observes every LLM and embedding call.",
+    files: [
+      ["src/adapters/metrics.rs", "MetricsRecord, MetricsKind {Planner,Subagent,Embedding}, MetricsLayer, install_global_sink, record(), subscribe(), AggregatorState (overall + by-agent + by-kind rollups)"],
+      ["orchestrator/events.rs::OrchestratorEvent::MetricsRecorded", "bus variant — re-broadcast of the global sink onto the orchestrator bus, so TUI/eval recorder see one unified event stream"],
+      ["channel_runtime.rs::build_orchestrator", "installs global sink, spawns bridge task to forward records onto the orchestrator bus"],
+      ["orchestrator/planner.rs::emit_planner_metrics", "captures per-context-layer breakdown (system/roster/cross_session/history/recall/failure/user_message) BEFORE the LLM call, emits one MetricsRecord with kind=Planner after parsing"],
+      ["main.rs::run_agent_subprocess", "records one MetricsRecord per run_single_engine_turn, packs into AgentIpcOutput.metrics for IPC return"],
+      ["runner.rs::SubprocessRunner::run_step", "drains output.metrics and re-emits via metrics::record() on the parent's global sink"],
+      ["memory/vector/embedder.rs", "embed_batch_openrouter reads usage.total_tokens from response, emits kind=Embedding record (chars/4 fallback)"],
+      ["tui/mod.rs", "TENGU_TUI_METRICS=1 — absorbs records into AggregatorState, renders compact one-liner as System bubble"],
+      ["eval_builder.rs", "records one Observation per MetricsRecorded event for cross-run cost comparison"],
+    ],
+    deep: "Three surfaces, one record. Tracing baseline (RUST_LOG=tengu=info — every record() call emits a structured info line) is always-on. Bus broadcast is best-effort — record() is fail-soft. AggregatorState absorbs even when the TUI panel is OFF so flipping it on mid-session shows real numbers. Subagent records cross the IPC boundary in AgentIpcOutput.metrics (default + skip_serializing_if = Vec::is_empty keeps the payload byte-compatible with older child binaries). Per-context-layer attribution is approximate — engine-side framing (Anthropic <thinking> blocks, function-calling wrappers) isn't counted; treat layers as relative attribution, not byte-perfect accounting against prompt_tokens.",
+  },
+];
+
+const FILE_MAP = [
+  ["src/main.rs", "main", "CLI entrypoint, RegistryAction subcommand, run_agent_subprocess (the child process), load_sandbox_or"],
+  ["src/adapters/channel_runtime.rs", "channel_runtime", "build_orchestrator, build_subprocess_tool_executor, ChatOrchestratorPortImpl, agent_config_from_spec, RuntimeChatServiceFactory, register_core_plugins (Phase 7.7), WORKSPACE_TOOLS_ALLOWLIST (Phase 7.7), build_memory_manager_async, permissive_scope"],
+  ["src/adapters/chat_builder.rs", "channel_runtime", "ChatRuntimeService, handle_chat_command, slash-command routing"],
+  ["src/adapters/config.rs", "config", "Config struct, MemoryConfig, OrchestratorConfig, RagConfig, AgentConfig, McpServerConfig, sandbox_name (Phase 7.2)"],
+  ["src/adapters/engine_builder.rs", "engine", "build_engine, build_openrouter_engine, run_single_engine_turn, ToolExecutor"],
+  ["src/adapters/runner.rs", "orchestrator", "SubprocessRunner, AgentIpcInput, AgentIpcOutput — the IPC plumbing"],
+  ["src/adapters/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle"],
+  ["src/adapters/orchestrator/planner.rs", "orchestrator", "RagPlanner, parse_verdict (free fn), persist_user_message, cross_session_recall_block, auto_reindex_once"],
+  ["src/adapters/orchestrator/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7)"],
+  ["src/adapters/orchestrator/executor.rs", "orchestrator", "DagExecutor, WorkerHandle trait"],
+  ["src/adapters/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
+  ["src/adapters/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop with replan-on-exhausted"],
+  ["src/adapters/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
+  ["src/adapters/orchestrator/wiring.rs", "orchestrator", "ChatServiceFactory trait + run_turn_with_system_metered, TurnTelemetry, ChatOrchestratorPortImpl"],
+  ["src/adapters/metrics.rs", "metrics", "MetricsRecord, MetricsKind, MetricsLayer, install_global_sink/record/subscribe, AggregatorState (per-agent + per-kind rollups). Observes every LLM and embedding call; tracing info baseline + bus broadcast + TUI bubble (TENGU_TUI_METRICS=1)."],
+  ["src/adapters/rag/mod.rs", "rag", "RagStore facade, MemoryEntry, MemoryKind, RagKind, three collection name constants"],
+  ["src/adapters/rag/indexer.rs", "rag", "enumerate_builtin_tools, enumerate_mcp_tools, index_*, reindex_all_workspace (with fingerprint dedup), scan_skills"],
+  ["src/adapters/rag/query.rs", "rag", "search_registry (dedup-by-(kind,name)), search_messages, search_memory"],
+  ["src/adapters/rag/cleanup.rs", "rag", "ttl_cleanup over tengu_messages + tengu_outputs"],
+  ["src/adapters/memory/mod.rs", "memory", "module preamble explaining memory ↔ rag layering"],
+  ["src/adapters/memory/manager.rs", "memory", "MemoryManager — provider holder, prefetch_all, sync_all"],
+  ["src/adapters/memory/provider.rs", "memory", "MemoryProvider trait"],
+  ["src/adapters/memory/builtin.rs", "memory", "BuiltinMemoryProvider — MEMORY.md, identity, daily logs"],
+  ["src/adapters/memory/injector.rs", "memory", "for_turn — pre-turn fenced context injection (planner-side only post-7.1)"],
+  ["src/adapters/memory/writer.rs", "memory", "sync_turn — post-turn spawned non-blocking writes"],
+  ["src/adapters/memory/fencing.rs", "memory", "<memory-context> block helpers"],
+  ["src/adapters/memory/context_block.rs", "memory", "PinnedMemoryBlock, MemoryHit, ChunkMetadata"],
+  ["src/adapters/memory/vector.rs", "memory", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes/delete_older_than"],
+  ["src/adapters/memory/vector/qdrant.rs", "memory", "QdrantVectorStore — real backend, gRPC, filter-based delete"],
+  ["src/adapters/memory/vector/disk.rs", "memory", "DiskVectorStore — bincode fallback"],
+  ["src/adapters/memory/vector/embedder.rs", "memory", "Embedder — OpenAI text-embedding-3-small client"],
+  ["src/adapters/agents/mod.rs", "agents", "AgentSpec struct, load_agent_file, load_agents_dir"],
+  ["src/adapters/tui/mod.rs", "tui", "cursive TUI loop, event subscription, input dispatch"],
+  ["src/adapters/telegram_builder.rs", "telegram", "Telegram polling + per-chat dispatch"],
+  ["src/adapters/plugins/http/mod.rs", "plugins", "http_request tool"],
+  ["src/adapters/plugins/workspace/mod.rs", "plugins", "read_file, list_directory, run_command"],
+  ["src/adapters/plugins/memory/mod.rs", "plugins", "remember tool"],
+  ["src/adapters/plugins/cache/mod.rs", "plugins", "shared_cache tool"],
+  ["src/adapters/plugins/crypto/mod.rs", "plugins", "Privy crypto tools — sign_and_send_transaction, etc."],
+  ["src/adapters/plugins/mcp/mod.rs", "plugins", "MCP plugin — connects to external MCP servers as a client"],
+  ["src/adapters/plugins/mcp/client.rs", "plugins", "McpClient + McpCaller trait, stdio + http transports"],
+  ["src/adapters/plugins/skill_lifecycle/mod.rs", "plugins", "skill_lifecycle plugin — distill + compress_and_store"],
+  ["src/adapters/plugins/skill_lifecycle/compress_and_store.rs", "plugins", "the implicit-on-every-subagent compress_and_store tool"],
+  ["src/adapters/mcp_bridge.rs", "mcp", "OUTBOUND MCP server — exposes tengu's tools to Claude Code clients"],
+  ["agents/aura.toml", "agents", "DeSci pipeline agent — Sonnet, full DeSci skill packages"],
+  ["agents/researcher.toml", "agents", "generic web/HTTP research — gpt-4o-mini, http_request + summariser"],
+  ["agents/storage.toml", "agents", "file ingest + semantic search — Sonnet, persistent_store"],
+  ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],
+  ["skills/orchestrator/plan_schema.json", "skills", "JSON schema validating planner output"],
+];
+
+// ============ WALK A TURN ============
+const lane2color = { user: '--user', orch: '--orch', plan: '--plan', exec: '--exec', sub: '--sub', tool: '--tool', mem: '--mem' };
+let walkIdx = 0;
+function renderWalk() {
+  const bar = document.getElementById('walk-bar');
+  bar.innerHTML = STEPS.map((s, i) =>
+    `<button class="step-pill ${i===walkIdx?'active':''}" onclick="setWalk(${i})">${s.num}. ${s.title}</button>`
+  ).join('');
+  const s = STEPS[walkIdx];
+  const detail = document.getElementById('walk-detail');
+  detail.innerHTML = `
+    <span class="step-num">STEP ${s.num}</span>
+    <h3>${s.title}</h3>
+    <div class="what">${s.what}</div>
+    <div class="files">
+      <div class="files-label">Files involved</div>
+      ${s.files.map(f => `<div class="file-row">${f.path}<span class="desc">— ${f.desc}</span></div>`).join('')}
+    </div>
+    <div class="deep"><strong>Deep cut:</strong> ${s.deep}</div>
+  `;
+  document.getElementById('prev-btn').disabled = walkIdx === 0;
+  document.getElementById('next-btn').disabled = walkIdx === STEPS.length - 1;
+}
+function setWalk(i) { walkIdx = i; renderWalk(); }
+function walkStep(d) {
+  const next = walkIdx + d;
+  if (next >= 0 && next < STEPS.length) { walkIdx = next; renderWalk(); }
+}
+document.addEventListener('keydown', e => {
+  if (document.getElementById('panel-walk').classList.contains('active')) {
+    if (e.key === 'ArrowLeft') walkStep(-1);
+    if (e.key === 'ArrowRight') walkStep(1);
+  }
+});
+
+// ============ SUBSYSTEMS ============
+function renderSystems() {
+  const grid = document.getElementById('systems-grid');
+  grid.innerHTML = SUBSYSTEMS.map(s => `
+    <div class="sys-card ${s.key}" onclick="this.classList.toggle('expanded')">
+      <div class="title">${s.title}</div>
+      <div class="subtitle">${s.subtitle}</div>
+      <div class="files-list">
+        ${s.files.map(([p, w]) => `<div class="file-line">${p}<span class="what"> — ${w}</span></div>`).join('')}
+      </div>
+      <div class="expand-detail">${s.deep}</div>
+    </div>
+  `).join('');
+}
+
+// ============ FILE MAP ============
+function renderFileMap() {
+  const tbody = document.getElementById('file-tbody');
+  tbody.innerHTML = FILE_MAP.map(([p, sys, w]) =>
+    `<tr data-search="${(p+' '+sys+' '+w).toLowerCase()}"><td>${p}</td><td>${sys}</td><td>${w}</td></tr>`
+  ).join('');
+  document.getElementById('file-search').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('#file-tbody tr').forEach(tr => {
+      tr.classList.toggle('hidden', q && !tr.dataset.search.includes(q));
+    });
+  });
+}
+
+// ============ TABS ============
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+renderWalk();
+renderSystems();
+renderFileMap();
+</script>
+
+</body>
+</html>

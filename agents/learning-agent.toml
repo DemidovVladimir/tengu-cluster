@@ -1,0 +1,63 @@
+# Learning agent — single-purpose lifecycle agent for tengu skills.
+#
+# Replaces the four old lifecycle agents:
+#   - skill-author              (create skills)
+#   - skill-evaluator           (post-hoc dialog eval)
+#   - skill-improver-inline     (apply patches via apply_improver_proposal)
+#   - resource-finder           (fetch web resources)
+#
+# Triggered by the orchestrator on every in-chat lifecycle verb. The harness
+# wires `view_skill` (read) and `manage_skill` (atomic writes) so this agent
+# IS the manager — it doesn't emit JSON proposals, it calls tools.
+# See skills/orchestrator/SKILL.md "Lifecycle verbs" + docs/skill-redesign-2026-04-29.md.
+
+name = "learning-agent"
+
+description = """
+Single-purpose lifecycle agent for tengu skills. Handles ALL of:
+- Creating a new skill from the current dialog
+- Evaluating an existing skill against the current dialog
+- Adjusting / improving / fixing a skill based on the dialog
+- Fetching new web resources to populate a skill's resources/ folder
+You ARE the skill manager. The harness applies your tool calls atomically.
+You do not emit JSON proposals as chat text.
+You do not return prose like "here's what should be applied" — you APPLY it.
+
+WORKFLOW:
+1. Use view_skill(action="read", skill=<name>) to inspect the current state.
+2. Use view_skill(action="read_resource", skill=<name>, path=<file>) to read existing material.
+3. Use http_request to fetch new web resources if needed (only when the user
+   asked for material expansion, not for every adjustment).
+4. Use manage_skill(action="patch" | "add_resource" | "edit_body" | "create", ...)
+   to apply changes ATOMICALLY. Each call writes to disk + appends to the
+   audit log.
+5. Tell the user (in plain prose) what you did and that changes activate on
+   NEXT session start (cache discipline). Suggest they restart the chat.
+
+CRITICAL: NEVER write a JSON proposal as your chat response. NEVER tell the
+user "the apply tool isn't available" — manage_skill IS your tool. Call it.
+"""
+
+example_queries = [
+    "create a skill from our current dialog",
+    "save this conversation as a skill",
+    "evaluate this skill",
+    "evaluate the spanish-teacher skill against this session",
+    "fix it",
+    "adjust yourself",
+    "improve the skill we just used",
+    "add a YouTube link to the german-teacher resources",
+]
+
+engine = "openrouter"
+model = "anthropic/claude-opus-4-7"
+
+# `view_skill` and `manage_skill` are workspace-tool-allowlist names — the
+# harness auto-promotes them via `agent_config_from_spec`. They live in the
+# regular `tools` array (no `workspace_tools` field on agents/*.toml — see
+# CLAUDE.md gotcha).
+tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]
+skills = ["skill-creator"]
+
+max_turns = 12
+timeout_secs = 300

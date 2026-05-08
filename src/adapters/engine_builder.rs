@@ -15,12 +15,12 @@ use crate::adapters::types::{Message, ModelInfo, Role, StreamEvent, ToolCall, To
 use crate::adapters::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
 use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
 
-
 // ---------------------------------------------------------------------------
 // Factory — build engines from config
 // ---------------------------------------------------------------------------
 
 /// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
+#[allow(dead_code)]
 pub(crate) fn build_planner_engine(
     engine_type: &str,
     model: &str,
@@ -30,10 +30,12 @@ pub(crate) fn build_planner_engine(
         "claude_code" => {
             #[cfg(feature = "claude_code")]
             {
-                let cc = claude_code_config
-                    .cloned()
-                    .unwrap_or_default();
-                let model_opt = if model.is_empty() { None } else { Some(model.to_string()) };
+                let cc = claude_code_config.cloned().unwrap_or_default();
+                let model_opt = if model.is_empty() {
+                    None
+                } else {
+                    Some(model.to_string())
+                };
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
@@ -66,15 +68,17 @@ pub(crate) fn build_engine(
         "claude_code" => {
             #[cfg(feature = "claude_code")]
             {
-                let cc = claude_code_config
-                    .cloned()
-                    .unwrap_or_default();
+                let cc = claude_code_config.cloned().unwrap_or_default();
                 let profile = agent_config
                     .claude_code
                     .as_ref()
                     .map(|c| c.builtin_tools_profile.as_str())
                     .unwrap_or("editor_shell");
-                let model_opt = if agent_config.model.is_empty() { None } else { Some(agent_config.model.clone()) };
+                let model_opt = if agent_config.model.is_empty() {
+                    None
+                } else {
+                    Some(agent_config.model.clone())
+                };
                 let timeout = agent_config.limits.stream_event_timeout_secs;
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
@@ -98,10 +102,7 @@ pub(crate) fn build_engine(
     }
 }
 
-fn build_openrouter_engine(
-    model: &str,
-    context_window: usize,
-) -> Result<Box<dyn Engine>> {
+pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box<dyn Engine>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is required"))?;
     let base_url = std::env::var("OPENROUTER_BASE_URL")
@@ -198,12 +199,7 @@ struct OpenRouterUsage {
 }
 
 impl OpenRouterEngine {
-    pub fn new(
-        base_url: &str,
-        model: &str,
-        api_key: &str,
-        context_window: usize,
-    ) -> Self {
+    pub fn new(base_url: &str, model: &str, api_key: &str, context_window: usize) -> Self {
         let context_window_tokens = context_window;
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -267,7 +263,9 @@ impl OpenRouterEngine {
             false
         };
         if truncated {
-            tracing::warn!("Model output truncated by output token limit (finish_reason=length/max_tokens)");
+            tracing::warn!(
+                "Model output truncated by output token limit (finish_reason=length/max_tokens)"
+            );
         }
 
         // Signal truncation via a special marker in the text stream so the tool
@@ -519,7 +517,7 @@ fn convert_messages_openai_compatible(
 // ---------------------------------------------------------------------------
 
 /// Result of a single engine call including response text and token usage delta.
-pub(crate) struct EngineResponse {
+pub struct EngineResponse {
     pub text: String,
     pub input_tokens_delta: u32,
     pub output_tokens_delta: u32,
@@ -529,38 +527,51 @@ pub(crate) struct EngineResponse {
 
 /// Trait for executing tool calls.
 #[async_trait]
-pub(crate) trait ToolExecutor: Send + Sync {
-    async fn execute(&self, call: &ToolCall) -> Result<String>;
+pub trait ToolExecutor: Send + Sync {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String>;
 }
 
 /// Decorator that redacts registered secret values from all tool output.
-pub(crate) struct SanitizedToolExecutor<'a> {
-    inner: &'a dyn ToolExecutor,
-    registry: &'a crate::adapters::secret_builder::SecretRegistry,
+///
+/// Owns its dependencies behind `Arc` so the decorator is `'static` —
+/// required by the orchestrator chat-factory path. Per-turn borrowed
+/// callers wrap their inner executor + registry in `Arc` at the call
+/// site.
+pub(crate) struct SanitizedToolExecutor {
+    inner: std::sync::Arc<dyn ToolExecutor>,
+    registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
 }
 
-impl<'a> SanitizedToolExecutor<'a> {
+impl SanitizedToolExecutor {
     pub fn new(
-        inner: &'a dyn ToolExecutor,
-        registry: &'a crate::adapters::secret_builder::SecretRegistry,
+        inner: std::sync::Arc<dyn ToolExecutor>,
+        registry: std::sync::Arc<crate::adapters::secret_builder::SecretRegistry>,
     ) -> Self {
         Self { inner, registry }
     }
 }
 
 #[async_trait]
-impl<'a> ToolExecutor for SanitizedToolExecutor<'a> {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
-        let result = self.inner.execute(call).await?;
+impl ToolExecutor for SanitizedToolExecutor {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String> {
+        let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
     }
 }
 
 /// Optional callback invoked after each tool execution.
-pub(crate) type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
+pub type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 
 /// Execute one or more engine rounds, handling tool calls automatically.
-pub(crate) async fn collect_engine_response(
+pub async fn collect_engine_response(
     engine: &dyn Engine,
     prompt_messages: &[Message],
     tools: &[ToolDef],
@@ -597,7 +608,8 @@ pub(crate) async fn collect_engine_response(
         }
 
         let (response_text, tool_calls, input_delta, output_delta) =
-            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout).await?;
+            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout)
+                .await?;
 
         total_input_delta += input_delta;
         total_output_delta += output_delta;
@@ -640,7 +652,8 @@ pub(crate) async fn collect_engine_response(
                 });
                 messages.push(Message {
                     role: Role::User,
-                    content: "Your output was truncated. Continue from where you left off.".to_string(),
+                    content: "Your output was truncated. Continue from where you left off."
+                        .to_string(),
                     tool_call_id: None,
                     tool_calls: None,
                 });
@@ -677,7 +690,7 @@ pub(crate) async fn collect_engine_response(
                 });
             }
 
-            let result = match executor.execute(tc).await {
+            let result = match executor.execute(tc, &messages).await {
                 Ok(output) => output,
                 Err(e) => format!("ERROR: {}", e),
             };
@@ -725,7 +738,9 @@ pub(crate) async fn collect_engine_response(
 }
 
 /// Run a single engine turn and collect text, tool calls, and usage.
-async fn run_single_engine_turn(
+/// Pub(crate) so the run-agent subprocess (Phase 5b) can reuse this stream-
+/// draining loop without duplicating the StreamEvent state machine.
+pub(crate) async fn run_single_engine_turn(
     engine: &dyn Engine,
     messages: &[Message],
     tools: &[ToolDef],
@@ -861,19 +876,15 @@ fn compact_tool_result(content: &str, limit: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn truncate_tool_result(result: &str, max_chars: usize) -> String {
-    if result.len() <= max_chars {
-        return result.to_string();
+    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+        None => result.to_string(),
+        Some((prefix, end)) => format!(
+            "{}\n\n[truncated — showing {} of {} chars]",
+            prefix,
+            end,
+            result.len()
+        ),
     }
-    let mut end = max_chars;
-    while end > 0 && !result.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n\n[truncated — showing {} of {} chars]",
-        &result[..end],
-        end,
-        result.len()
-    )
 }
 
 fn flush_pending_tool_call(

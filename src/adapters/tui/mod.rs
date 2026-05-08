@@ -10,19 +10,20 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use crate::adapters::channel_runtime;
+use crate::adapters::chat_builder::{
+    handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
+};
+use crate::adapters::config::{Config, RuntimeProfile};
 use crate::adapters::engine_builder::build_engine;
+use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
+use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
+use crate::adapters::ports::ToolActivityPort;
+use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
-use crate::adapters::chat_builder::{handle_chat_command, CommandResult, EngineInfo, ChatRuntimeService, ChatTurnResult};
-use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
-use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::memory_builder::MemoryService;
-use crate::adapters::ports::ToolActivityPort;
-use crate::adapters::secret_builder::SecretRegistry;
-use app::{BubbleRole, ChatRequest, SkillCommand};
-use crate::adapters::config::{Config, RuntimeProfile};
 use crate::adapters::types::{ToolCall, ToolDef};
+use app::{BubbleRole, ChatRequest, SkillCommand};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -44,6 +45,57 @@ fn disable_terminal_mouse_capture() -> Result<()> {
 struct SendEngine(Box<dyn crate::adapters::Engine>);
 unsafe impl Send for SendEngine {}
 
+/// Format a single `OrchestratorEvent::RagQueried` event as one compact line
+/// suitable for a System bubble. Shape:
+///
+/// ```text
+/// rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) skill/web-research(0.18)
+/// ```
+///
+/// The query is truncated to 60 chars (with ellipsis) so a long user message
+/// doesn't blow the line width. Top 3 hits shown — anything below that
+/// rarely matters for routing-judgement debugging and adding more would
+/// wrap awkwardly in the chat pane. Score formatted to 2 decimals to keep
+/// the line tight while preserving the resolution that matters at the
+/// 0.15–0.6 typical-score range.
+fn format_rag_debug_line(
+    phase: &str,
+    query: &str,
+    hits: &[crate::adapters::orchestrator::events::RagQueriedHit],
+) -> String {
+    const MAX_QUERY_LEN: usize = 60;
+    const TOP_N: usize = 3;
+
+    let truncated_query: String = if query.chars().count() > MAX_QUERY_LEN {
+        let head: String = query.chars().take(MAX_QUERY_LEN).collect();
+        format!("{}…", head)
+    } else {
+        query.to_string()
+    };
+
+    let hits_str = if hits.is_empty() {
+        "(no hits)".to_string()
+    } else {
+        hits.iter()
+            .take(TOP_N)
+            .map(|h| {
+                // Tool / skill kinds get a `kind/` prefix so they're
+                // distinguishable from agent hits at a glance. Agent hits
+                // omit the prefix because that's the most common case and
+                // the line stays narrower without it.
+                if h.kind == "agent" {
+                    format!("{}({:.2})", h.name, h.score)
+                } else {
+                    format!("{}/{}({:.2})", h.kind, h.name, h.score)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    format!("rag-{} \"{}\" → {}", phase, truncated_query, hits_str)
+}
+
 /// TUI adapter for publishing tool activity lines.
 struct CursiveToolActivityAdapter {
     cb_sink: cursive::CbSink,
@@ -60,7 +112,6 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
         }));
     }
 }
-
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
 pub fn run_tui(
@@ -121,12 +172,161 @@ pub fn run_tui(
     let memory_config = config.memory.clone();
     let mcp_servers = config.mcp_servers.clone();
 
+    // Harness-owned orchestration (Track A — factory-closure wiring).
+    //
+    // `MemoryManager` stays empty (no providers) — Track B owns the port
+    // wiring that registers `BuiltinMemoryProvider`. An empty manager is a
+    // no-op for `prefetch_all` / `sync_all`, which is correct for now.
+    //
+    // `orchestrator_snapshots` is shared between this main thread (where
+    // the orchestrator + factory are constructed) and the engine thread
+    // (where snapshots are written before each user-message dispatch).
+    // The engine thread runs `rt.block_on(orchestrator.handle(...))` and the
+    // orchestrator spawns step tasks that call our factory closure, which
+    // reads inputs back from the same map.
+    let _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager> =
+        Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+    let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
+        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+    let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
+        let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
+        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+            Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
+        channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
+            .map(Arc::new)
+    };
+    if orchestrator.is_some() {
+        tracing::info!("TUI orchestrator constructed with per-turn snapshot factory");
+    }
+
+    // Task 5.4 — verbose event rendering for CLI. Subscribe to the
+    // orchestrator bus (if configured) and push each progress event as a
+    // System bubble into the TUI. When the factory-closure refactor lands,
+    // this will render the live DAG progress tree from the same subscriber.
+    // Cursive owns stdout, so we render through `cb_sink` rather than
+    // printing directly — avoids corrupting the TUI frame buffer.
+    if let Some(orch) = orchestrator.as_ref() {
+        let mut rx = orch.subscribe();
+        let sink = siv.cb_sink().clone();
+        // RagQueried debug-panel render is opt-in: setting
+        // `TENGU_TUI_RAG_DEBUG=1` flips it on. Default off so the
+        // System bubble stream stays uncluttered for normal use; flip on
+        // when you want to see WHY a routing decision happened.
+        let render_rag_debug = std::env::var("TENGU_TUI_RAG_DEBUG")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        // Metrics panel — opt-in via `TENGU_TUI_METRICS=1`. When on, every
+        // `MetricsRecorded` event is absorbed into a per-bus aggregator and
+        // a compact one-line status (tokens in/out, last call, session
+        // total, top agent) is pushed as a System bubble. Off by default so
+        // the chat pane stays uncluttered for normal use.
+        let render_metrics = std::env::var("TENGU_TUI_METRICS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        // Per-spawn aggregator — owned by the spawned task, not shared. Kept
+        // simple because there's exactly one TUI subscriber per process.
+        let mut metrics_state = crate::adapters::metrics::AggregatorState::default();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                use crate::adapters::orchestrator::OrchestratorEvent;
+                loop {
+                    match rx.recv().await {
+                        Ok(event) => {
+                            let line: Option<String> = match event {
+                                OrchestratorEvent::PlanCreated { plan } => Some(format!(
+                                    "orch: plan created ({} step{})",
+                                    plan.steps.len(),
+                                    if plan.steps.len() == 1 { "" } else { "s" },
+                                )),
+                                OrchestratorEvent::StepStarted { step_id, agent } => {
+                                    Some(format!("orch: ▶ {} [{}]", step_id.0, agent))
+                                }
+                                OrchestratorEvent::StepSucceeded { step_id, .. } => {
+                                    Some(format!("orch: ✓ {}", step_id.0))
+                                }
+                                OrchestratorEvent::StepFailed {
+                                    step_id,
+                                    attempt,
+                                    error,
+                                } => Some(format!(
+                                    "orch: ✗ {} (attempt {}): {}",
+                                    step_id.0, attempt, error
+                                )),
+                                OrchestratorEvent::StepExhausted {
+                                    step_id,
+                                    final_error,
+                                } => Some(format!(
+                                    "orch: ⊘ {} exhausted: {}",
+                                    step_id.0, final_error
+                                )),
+                                OrchestratorEvent::ReplanTriggered { reason } => {
+                                    Some(format!("orch: ↻ replan — {}", reason))
+                                }
+                                OrchestratorEvent::PlanCompleted { cancelled, .. } => {
+                                    Some(if cancelled {
+                                        "orch: plan cancelled".to_string()
+                                    } else {
+                                        "orch: plan completed".to_string()
+                                    })
+                                }
+                                OrchestratorEvent::StepProgress { .. } => None,
+                                // Phase 6.1 (full) — RagQueried debug panel.
+                                // Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`.
+                                // When on, render a single compact System bubble
+                                // showing the top-K registry hits the planner LLM
+                                // saw, so the user can see WHY a routing decision
+                                // was made (which agent / score / phase).
+                                OrchestratorEvent::RagQueried { phase, query, hits } => {
+                                    if render_rag_debug {
+                                        Some(format_rag_debug_line(phase, &query, &hits))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                // Metrics — opt-in via TENGU_TUI_METRICS=1.
+                                // The aggregator absorbs every record so even
+                                // when the panel is OFF the totals are kept
+                                // accurate (so flipping it on mid-session
+                                // shows real numbers, not zero).
+                                OrchestratorEvent::MetricsRecorded { record } => {
+                                    metrics_state.absorb(record);
+                                    if render_metrics {
+                                        metrics_state
+                                            .format_status_line()
+                                            .map(|line| format!("metrics: {}", line))
+                                    } else {
+                                        None
+                                    }
+                                }
+                            };
+                            if let Some(text) = line {
+                                let _ = sink.send(Box::new(move |siv: &mut Cursive| {
+                                    view::push_bubble(siv, BubbleRole::System, &text);
+                                }));
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "orch event subscriber lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        } else {
+            tracing::warn!(
+                "TUI orchestrator configured but no tokio runtime — event subscriber not spawned"
+            );
+        }
+    }
+
     // Spawn engine thread
     let cb_sink = siv.cb_sink().clone();
     let send_engine = SendEngine(engine);
     let engine_agent_id = agent_id.clone();
     let engine_agent_config = agent_config.clone();
     let secret_registry_clone = Arc::clone(&secret_registry);
+    let engine_orchestrator = orchestrator.clone();
+    let engine_orchestrator_snapshots = Arc::clone(&orchestrator_snapshots);
 
     std::thread::spawn(move || {
         let secret_registry = secret_registry_clone;
@@ -135,7 +335,8 @@ pub fn run_tui(
             .build()
             .expect("Failed to create tokio runtime for engine thread");
 
-        let engine = send_engine.0;
+        // Promote the engine to an Arc so orchestrator snapshots can share it.
+        let engine: Arc<dyn crate::adapters::Engine> = Arc::from(send_engine.0);
 
         // Resolve workspace path (expand tilde)
         let workspace: Option<PathBuf> = engine_agent_config
@@ -143,14 +344,24 @@ pub fn run_tui(
             .as_ref()
             .map(|p| crate::adapters::tool_builder::expand_tilde(p));
 
-        // Build memory subsystem if enabled.
-        let memory_handle =
-            channel_runtime::build_memory_handle(&memory_config, &rt, workspace.as_deref());
+        // Build memory subsystem if enabled. Backed by a shared
+        // `Embedder` + `VectorStore` pair via `MemoryManager`.
+        let memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>> = {
+            let mgr =
+                channel_runtime::build_memory_manager(&memory_config, &rt, workspace.as_deref());
+            let vector_ready =
+                futures::executor::block_on(async { mgr.has_vector_backend().await });
+            if vector_ready {
+                Some(mgr)
+            } else {
+                None
+            }
+        };
 
         // Base workspace tools (built-in + memory, without skills).
         let uses_tools =
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
-        let has_memory = memory_handle.is_some();
+        let has_memory = memory_manager_handle.is_some();
         let manages_workspace = engine.manages_own_workspace();
         let mut base_tools = channel_runtime::compute_base_tools(
             uses_tools,
@@ -159,15 +370,13 @@ pub fn run_tui(
         );
         // For engines that manage their own workspace (claude_code), build bridge
         // tools so Tengu-native tools are still accessible via MCP bridge.
-        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> =
-            if manages_workspace && workspace.is_some() {
-                channel_runtime::compute_bridge_tools(
-                    has_memory,
-                    &engine_agent_config.workspace_tools,
-                )
-            } else {
-                vec![]
-            };
+        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> = if manages_workspace
+            && workspace.is_some()
+        {
+            channel_runtime::compute_bridge_tools(has_memory, &engine_agent_config.workspace_tools)
+        } else {
+            vec![]
+        };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> = workspace
@@ -192,15 +401,14 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<crate::adapters::tool_plugin::PluginToolExecutor> = None;
+        let mut current_executor: Option<Arc<crate::adapters::tool_plugin::PluginToolExecutor>> =
+            None;
         let mut current_system_prompt = system_prompt;
 
         let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);
 
-        // Create MemoryService from handle if available.
-        let memory_service_instance = memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
+        // Memory recall during chat turns goes through the
+        // `MemoryManager` directly (ChatRuntimeService::memory_manager).
 
         while let Ok(request) = request_rx.recv() {
             match request {
@@ -239,9 +447,9 @@ pub fn run_tui(
                     if text == "/purge" {
                         runtime_state.reset_for_new_session();
                         let mut lines = vec!["Conversation cleared.".to_string()];
-                        if let Some(ref handle) = memory_handle {
-                            match rt.block_on(handle.store.clear_all()) {
-                                Ok(()) => lines.push("Persistent memory purged.".to_string()),
+                        if let Some(ref mgr) = memory_manager_handle {
+                            match rt.block_on(mgr.clear_all()) {
+                                Ok(()) => lines.push("Persistent memory cleared.".to_string()),
                                 Err(e) => lines.push(format!("Memory clear failed: {}", e)),
                             }
                         } else {
@@ -283,24 +491,22 @@ pub fn run_tui(
 
                         // Always force a full rebuild to pick up env + skill changes.
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(
-                                &base_tools,
-                                &skill_registry,
-                            );
+                            current_tools =
+                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
-                                &memory_handle,
+                                &memory_manager_handle,
                                 &secret_registry,
                                 Arc::clone(&activity),
                                 None,
                                 None,
                                 Some(&memory_config),
                                 &engine_agent_config,
-                                None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
-                            );
+                            )
+                            .map(Arc::new);
                             if let Some(ref exec) = current_executor {
                                 let extra = exec.additional_tool_defs(&current_tools);
                                 if !extra.is_empty() {
@@ -364,24 +570,22 @@ pub fn run_tui(
                         }
                         if tools_dirty {
                             if let Some(ref ws) = workspace {
-                                current_tools = channel_runtime::rebuild_tools(
-                                    &base_tools,
-                                    &skill_registry,
-                                );
+                                current_tools =
+                                    channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                                 current_executor = channel_runtime::build_tool_executor(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
-                                    &memory_handle,
+                                    &memory_manager_handle,
                                     &secret_registry,
                                     Arc::clone(&activity),
                                     None,
                                     None,
                                     Some(&memory_config),
                                     &engine_agent_config,
-                                    None, // subagents: A7 wires via orchestrator path only.
                                     &mcp_servers,
-                                );
+                                )
+                                .map(Arc::new);
                                 if let Some(ref exec) = current_executor {
                                     let extra = exec.additional_tool_defs(&current_tools);
                                     if !extra.is_empty() {
@@ -407,7 +611,9 @@ pub fn run_tui(
                         // Process as a chat turn with the injected prompt.
                         rt.block_on(async {
                             let sanitized_executor = current_executor.as_ref().map(|e| {
-                                SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                                let inner: std::sync::Arc<dyn ToolExecutor> =
+                                    Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
+                                SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
                             });
                             let tool_defs = current_tools.clone();
 
@@ -422,12 +628,17 @@ pub fn run_tui(
                                 tool_executor: sanitized_executor
                                     .as_ref()
                                     .map(|e| e as &dyn ToolExecutor),
-                                memory_service: memory_service_instance.as_ref(),
+                                memory_manager: memory_manager_handle.as_deref(),
                                 max_recall_entries: memory_config.max_recall_entries,
                                 max_recall_tokens: memory_config.max_recall_tokens,
                                 tool_observer: None,
                                 cancel: None,
-                                bridge_tools: if current_bridge_tools.is_empty() { None } else { Some(&current_bridge_tools) },
+                                bridge_tools: if current_bridge_tools.is_empty() {
+                                    None
+                                } else {
+                                    Some(&current_bridge_tools)
+                                },
+                                suppress_grounding_nudge: false,
                             };
 
                             match chat_runtime
@@ -435,13 +646,11 @@ pub fn run_tui(
                                 .await
                             {
                                 Ok(res) => {
-                                    let memory_stats = if let Some(ref h) = memory_handle {
-                                        let count = h.store.entry_count().await;
-                                        let bytes = h.store.storage_bytes().await;
-                                        Some((count, bytes))
-                                    } else {
-                                        None
-                                    };
+                                    // Pull fresh memory stats from the
+                                    // manager (entry_count + storage_bytes).
+                                    let memory_stats: Option<(usize, u64)> = memory_manager_handle
+                                        .as_ref()
+                                        .and_then(|mgr| rt.block_on(mgr.stats()));
                                     let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                         view::hide_thinking(siv);
                                         if let Some(notice) = res.system_notice {
@@ -503,24 +712,22 @@ pub fn run_tui(
                     // Rebuild tools/executor/prompt when dirty.
                     if tools_dirty {
                         if let Some(ref ws) = workspace {
-                            current_tools = channel_runtime::rebuild_tools(
-                                &base_tools,
-                                &skill_registry,
-                            );
+                            current_tools =
+                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
                             current_executor = channel_runtime::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
-                                &memory_handle,
+                                &memory_manager_handle,
                                 &secret_registry,
                                 Arc::clone(&activity),
                                 None,
                                 None,
                                 Some(&memory_config),
                                 &engine_agent_config,
-                                None, // subagents: A7 wires via orchestrator path only.
                                 &mcp_servers,
-                            );
+                            )
+                            .map(Arc::new);
                             if let Some(ref exec) = current_executor {
                                 let extra = exec.additional_tool_defs(&current_tools);
                                 if !extra.is_empty() {
@@ -539,10 +746,89 @@ pub fn run_tui(
 
                     let text = user_text;
 
+                    // Orchestrator dispatch path. When orchestration is
+                    // configured we route the user message through
+                    // `Orchestrator::handle` instead of a single
+                    // `ChatRuntimeService` turn. The snapshot map is shared
+                    // with the factory closure; we publish a fresh entry for
+                    // this agent each turn so hot-reloaded tools / system
+                    // prompt / owned executor are visible when the DAG
+                    // executor spawns a step.
+                    if let Some(ref orch) = engine_orchestrator {
+                        // Move the current executor into an `Arc` and wrap
+                        // with the owned sanitizer. Because the executor is
+                        // rebuilt whenever `tools_dirty` fires, this snapshot
+                        // is safe to share across spawned orchestrator tasks.
+                        let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
+                            current_executor.take().map(|exec| {
+                                let inner: Arc<dyn ToolExecutor> = exec as Arc<dyn ToolExecutor>;
+                                let wrapped: Arc<dyn ToolExecutor> = Arc::new(
+                                    crate::adapters::engine_builder::SanitizedToolExecutor::new(
+                                        Arc::clone(&inner),
+                                        Arc::clone(&secret_registry),
+                                    ),
+                                );
+                                wrapped
+                            });
+
+                        let bridge_tools_opt = if current_bridge_tools.is_empty() {
+                            None
+                        } else {
+                            Some(current_bridge_tools.clone())
+                        };
+
+                        let snapshot = channel_runtime::ChatTurnInputs {
+                            engine: Arc::clone(&engine),
+                            agent_id: engine_agent_id.clone(),
+                            agent_config: Arc::new(engine_agent_config.clone()),
+                            history_turn_limit,
+                            compaction_policy,
+                            system_prompt: current_system_prompt.clone(),
+                            tools: current_tools.clone(),
+                            tool_executor: sanitized_exec_arc,
+                            memory_manager: memory_manager_handle.clone(),
+                            max_recall_entries: memory_config.max_recall_entries,
+                            max_recall_tokens: memory_config.max_recall_tokens,
+                            bridge_tools: bridge_tools_opt,
+                            tool_observer: None,
+                            cancel: None,
+                        };
+                        if let Ok(mut guard) = engine_orchestrator_snapshots.write() {
+                            guard.insert(engine_agent_id.clone(), snapshot);
+                        } else {
+                            tracing::error!("orchestrator snapshots lock poisoned");
+                        }
+
+                        let final_output = rt.block_on(orch.handle(text.clone()));
+
+                        let redacted = secret_registry.redact(&final_output);
+                        let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
+                            view::hide_thinking(siv);
+                            if redacted.trim().is_empty() {
+                                view::push_bubble(
+                                    siv,
+                                    BubbleRole::System,
+                                    "(Orchestrator returned no response)",
+                                );
+                            } else {
+                                view::push_bubble(siv, BubbleRole::Assistant, &redacted);
+                            }
+                        }));
+
+                        // The orchestrator took ownership of the executor
+                        // (via the sanitized Arc). Mark tools dirty so the
+                        // next direct or orchestrator turn rebuilds a fresh
+                        // one against the latest skill registry.
+                        tools_dirty = true;
+                        continue;
+                    }
+
                     rt.block_on(async {
                         // Wrap tool executor with secret redaction decorator.
                         let sanitized_executor = current_executor.as_ref().map(|e| {
-                            SanitizedToolExecutor::new(e as &dyn ToolExecutor, &secret_registry)
+                            let inner: std::sync::Arc<dyn ToolExecutor> =
+                                Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
+                            SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
                         });
                         let tool_defs = current_tools.clone();
 
@@ -557,12 +843,13 @@ pub fn run_tui(
                             tool_executor: sanitized_executor
                                 .as_ref()
                                 .map(|e| e as &dyn ToolExecutor),
-                            memory_service: memory_service_instance.as_ref(),
+                            memory_manager: memory_manager_handle.as_deref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
                             cancel: None,
                             bridge_tools: None,
+                            suppress_grounding_nudge: false,
                         };
 
                         match chat_runtime
@@ -576,13 +863,16 @@ pub fn run_tui(
                                 total_output_tokens,
                                 ..
                             }) => {
-                                let memory_stats = if let Some(ref h) = memory_handle {
-                                    let count = h.store.entry_count().await;
-                                    let bytes = h.store.storage_bytes().await;
-                                    Some((count, bytes))
-                                } else {
-                                    None
-                                };
+                                // Pull fresh memory stats from the manager.
+                                // NOTE: we're already inside `rt.block_on(async { ... })`
+                                // at line ~728. Calling `rt.block_on(...)` again here
+                                // panics with "Cannot start a runtime from within a
+                                // runtime". Use .await instead.
+                                let memory_stats: Option<(usize, u64)> =
+                                    match memory_manager_handle.as_ref() {
+                                        Some(mgr) => mgr.stats().await,
+                                        None => None,
+                                    };
                                 let _ = cb_sink.send(Box::new(move |siv: &mut Cursive| {
                                     view::hide_thinking(siv);
                                     if let Some(notice) = system_notice {

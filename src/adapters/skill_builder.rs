@@ -374,7 +374,6 @@ fn extract_fenced_code(lines: &[&str]) -> Result<String> {
     Ok(code.join("\n").trim().to_string())
 }
 
-
 // --- Frontmatter parsing ---
 
 fn validate_base_url(url: &str) -> bool {
@@ -657,10 +656,7 @@ fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
 // Diff (internal to registry reload)
 // ===========================================================================
 
-fn diff_skill_sets(
-    current: &HashMap<String, SkillEntry>,
-    fresh: &[FreshSkillEntry],
-) -> SkillDiff {
+fn diff_skill_sets(current: &HashMap<String, SkillEntry>, fresh: &[FreshSkillEntry]) -> SkillDiff {
     let fresh_names: HashSet<&str> = fresh.iter().map(|f| f.name.as_str()).collect();
     let current_names: HashSet<&str> = current.keys().map(|n| n.as_str()).collect();
 
@@ -998,10 +994,19 @@ impl FileSystemSkillSource {
     }
 
     fn skill_directories(&self) -> Vec<PathBuf> {
-        let mut dirs = vec![
-            self.workspace.join(".tengu/skills"),
-            self.workspace.join("skills"),
-        ];
+        // Three-tier scan, highest priority first (first-wins via
+        // `seen_names.insert()` in `discover_skill_files`):
+        //   1. Managed — `~/.tengu/skills/` (set by `tengu skill install --tier managed`)
+        //   2. Workspace dotdir — `<workspace>/.tengu/skills/`
+        //   3. Project — `<workspace>/skills/`
+        // Mirrors `rag::indexer::scan_skills_with_counts` so the planner-side
+        // RAG registry and the in-process skill loader see the same set.
+        let mut dirs = Vec::new();
+        if let Some(home) = dirs_next::home_dir() {
+            dirs.push(home.join(".tengu/skills"));
+        }
+        dirs.push(self.workspace.join(".tengu/skills"));
+        dirs.push(self.workspace.join("skills"));
         if let Ok(cwd) = std::env::current_dir() {
             let global = cwd.join("skills");
             if global != self.workspace.join("skills") {
@@ -1104,9 +1109,7 @@ pub(crate) fn build_system_prompt_with_tools(
     let mut total_tokens = 0usize;
 
     // 1. Default preamble.
-    let preamble = format!(
-        "You are {name}. Use tools to execute actions. Never fabricate data."
-    );
+    let preamble = format!("You are {name}. Use tools to execute actions. Never fabricate data.");
     total_tokens += estimate_tokens_approx_min1(&preamble);
     parts.push(preamble);
 
@@ -1220,12 +1223,18 @@ mod tests {
                 context_body,
                 ..
             } => {
-                assert!(matches!(definition.execution, SkillExecution::Documentation));
+                assert!(matches!(
+                    definition.execution,
+                    SkillExecution::Documentation
+                ));
                 assert_eq!(definition.name, "my_doc_skill");
                 assert!(context_body.contains("Body content"));
                 assert!(definition.parameters.is_empty());
             }
-            other => panic!("expected ParsedSkill::Api (frontmatter path), got {:?}", other),
+            other => panic!(
+                "expected ParsedSkill::Api (frontmatter path), got {:?}",
+                other
+            ),
         }
     }
 

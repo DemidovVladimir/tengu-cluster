@@ -25,23 +25,21 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::adapters::channel_runtime;
+use crate::adapters::chat_builder::{
+    handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
+    EngineInfo,
+};
+use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
+use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
+use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
+use crate::adapters::ports::ToolActivityPort;
+use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
-use crate::adapters::chat_builder::{
-    needs_fresh_history_grounding, handle_chat_command, CommandResult,
-    ChatRuntimeService, EngineInfo,
-};
-use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
-use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::memory_builder::MemoryService;
-use crate::adapters::ports::ToolActivityPort;
-use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::config::Config;
 use crate::adapters::types::{
-    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient,
-    ToolCall, ToolDef,
+    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
 };
 use crate::adapters::Engine;
 
@@ -51,7 +49,6 @@ use crate::adapters::Engine;
 
 /// Maximum characters per Telegram message (with safety margin).
 const TELEGRAM_MAX_LEN: usize = 4000;
-
 
 /// How often to sweep for idle user states.
 const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
@@ -101,10 +98,7 @@ impl TelegramPipe {
     }
 
     /// Start the teloxide dispatcher and forward incoming messages to `inbound_tx`.
-    async fn connect(
-        &self,
-        inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>,
-    ) -> Result<()> {
+    async fn connect(&self, inbound_tx: tokio::sync::mpsc::Sender<InboundMessage>) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::requests::Requester;
 
@@ -135,160 +129,155 @@ impl TelegramPipe {
 
             let cancel_for_handler = turn_cancel.clone();
             let groups_ref = Arc::clone(&media_groups);
-            let msg_handler =
-                Update::filter_message().endpoint(move |msg: Message, bot: Bot| {
-                    let tx = inbound_tx.clone();
-                    let cancel = cancel_for_handler.clone();
-                    let groups = Arc::clone(&groups_ref);
-                    async move {
-                        let text = msg.text().or(msg.caption()).unwrap_or_default().to_string();
+            let msg_handler = Update::filter_message().endpoint(move |msg: Message, bot: Bot| {
+                let tx = inbound_tx.clone();
+                let cancel = cancel_for_handler.clone();
+                let groups = Arc::clone(&groups_ref);
+                async move {
+                    let text = msg.text().or(msg.caption()).unwrap_or_default().to_string();
 
-                        if text == "/stop" || text.starts_with("/stop@") {
-                            if let Some(ref flag) = cancel {
-                                flag.store(true, Ordering::Relaxed);
-                            }
-                            let chat_id = msg.chat.id.0;
-                            let _ = bot
-                                .send_message(
-                                    teloxide::types::ChatId(chat_id),
-                                    "⏹ Stopping current operation...",
-                                )
-                                .await;
-                            return Ok(());
+                    if text == "/stop" || text.starts_with("/stop@") {
+                        if let Some(ref flag) = cancel {
+                            flag.store(true, Ordering::Relaxed);
                         }
+                        let chat_id = msg.chat.id.0;
+                        let _ = bot
+                            .send_message(
+                                teloxide::types::ChatId(chat_id),
+                                "⏹ Stopping current operation...",
+                            )
+                            .await;
+                        return Ok(());
+                    }
 
-                        let mut media_payloads: Vec<MediaPayload> = Vec::new();
+                    let mut media_payloads: Vec<MediaPayload> = Vec::new();
 
-                        if let Some(doc) = msg.document() {
+                    if let Some(doc) = msg.document() {
+                        match download_telegram_file(
+                            &bot,
+                            &doc.file.id,
+                            doc.mime_type.as_ref().map(|m| m.to_string()),
+                            doc.file_name.clone(),
+                        )
+                        .await
+                        {
+                            Ok(payload) => media_payloads.push(payload),
+                            Err(e) => error!("Failed to download Telegram document: {}", e),
+                        }
+                    }
+
+                    if let Some(photos) = msg.photo() {
+                        if let Some(photo) = photos.last() {
                             match download_telegram_file(
                                 &bot,
-                                &doc.file.id,
-                                doc.mime_type.as_ref().map(|m| m.to_string()),
-                                doc.file_name.clone(),
+                                &photo.file.id,
+                                Some("image/jpeg".to_string()),
+                                Some("photo.jpg".to_string()),
                             )
                             .await
                             {
                                 Ok(payload) => media_payloads.push(payload),
-                                Err(e) => error!("Failed to download Telegram document: {}", e),
+                                Err(e) => error!("Failed to download Telegram photo: {}", e),
                             }
                         }
+                    }
 
-                        if let Some(photos) = msg.photo() {
-                            if let Some(photo) = photos.last() {
-                                match download_telegram_file(
-                                    &bot,
-                                    &photo.file.id,
-                                    Some("image/jpeg".to_string()),
-                                    Some("photo.jpg".to_string()),
-                                )
-                                .await
-                                {
-                                    Ok(payload) => media_payloads.push(payload),
-                                    Err(e) => error!("Failed to download Telegram photo: {}", e),
-                                }
-                            }
-                        }
+                    if text.is_empty() && media_payloads.is_empty() {
+                        return Ok::<(), teloxide::RequestError>(());
+                    }
 
-                        if text.is_empty() && media_payloads.is_empty() {
-                            return Ok::<(), teloxide::RequestError>(());
-                        }
+                    let chat_id = msg.chat.id.0.to_string();
+                    let sender_id = msg
+                        .from
+                        .as_ref()
+                        .map(|u| u.id.0.to_string())
+                        .unwrap_or_else(|| chat_id.clone());
 
-                        let chat_id = msg.chat.id.0.to_string();
-                        let sender_id = msg
-                            .from
-                            .as_ref()
-                            .map(|u| u.id.0.to_string())
-                            .unwrap_or_else(|| chat_id.clone());
-
-                        if let Some(group_id) = msg.media_group_id() {
-                            let group_id = group_id.to_string();
-                            let is_first = {
-                                let mut map = groups.lock().await;
-                                let entry = map.entry(group_id.clone()).or_insert_with(|| {
-                                    MediaGroupState {
+                    if let Some(group_id) = msg.media_group_id() {
+                        let group_id = group_id.to_string();
+                        let is_first = {
+                            let mut map = groups.lock().await;
+                            let entry =
+                                map.entry(group_id.clone())
+                                    .or_insert_with(|| MediaGroupState {
                                         text: String::new(),
                                         media: Vec::new(),
                                         chat_id: chat_id.clone(),
                                         sender_id: sender_id.clone(),
-                                    }
-                                });
-                                if !text.is_empty() && entry.text.is_empty() {
-                                    entry.text = text;
-                                }
-                                entry.media.extend(media_payloads);
-                                entry.media.len() == 1
-                            };
-
-                            if is_first {
-                                let flush_tx = tx.clone();
-                                let flush_groups = Arc::clone(&groups);
-                                let flush_group_id = group_id;
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(1500))
-                                        .await;
-                                    let state =
-                                        flush_groups.lock().await.remove(&flush_group_id);
-                                    if let Some(state) = state {
-                                        debug!(
-                                            group_id = %flush_group_id,
-                                            attachments = state.media.len(),
-                                            "Flushing media group"
-                                        );
-                                        let inbound = InboundMessage {
-                                            sender: Recipient {
-                                                pipe_id: "telegram".to_string(),
-                                                peer_id: state.sender_id,
-                                                account_id: None,
-                                                thread_id: Some(state.chat_id),
-                                            },
-                                            content: state.text,
-                                            timestamp: chrono::Utc::now(),
-                                            media: if state.media.is_empty() {
-                                                None
-                                            } else {
-                                                Some(state.media)
-                                            },
-                                        };
-                                        if flush_tx.send(inbound).await.is_err() {
-                                            error!(
-                                                "Failed to forward media group to inbound channel"
-                                            );
-                                        }
-                                    }
-                                });
+                                    });
+                            if !text.is_empty() && entry.text.is_empty() {
+                                entry.text = text;
                             }
-                            return Ok(());
-                        }
-
-                        debug!(
-                            chat_id = %chat_id,
-                            sender = %sender_id,
-                            attachments = media_payloads.len(),
-                            "Telegram message received"
-                        );
-
-                        let inbound = InboundMessage {
-                            sender: Recipient {
-                                pipe_id: "telegram".to_string(),
-                                peer_id: sender_id,
-                                account_id: None,
-                                thread_id: Some(chat_id),
-                            },
-                            content: text,
-                            timestamp: chrono::Utc::now(),
-                            media: if media_payloads.is_empty() {
-                                None
-                            } else {
-                                Some(media_payloads)
-                            },
+                            entry.media.extend(media_payloads);
+                            entry.media.len() == 1
                         };
 
-                        if tx.send(inbound).await.is_err() {
-                            error!("Failed to forward Telegram message to inbound channel");
+                        if is_first {
+                            let flush_tx = tx.clone();
+                            let flush_groups = Arc::clone(&groups);
+                            let flush_group_id = group_id;
+                            tokio::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                                let state = flush_groups.lock().await.remove(&flush_group_id);
+                                if let Some(state) = state {
+                                    debug!(
+                                        group_id = %flush_group_id,
+                                        attachments = state.media.len(),
+                                        "Flushing media group"
+                                    );
+                                    let inbound = InboundMessage {
+                                        sender: Recipient {
+                                            pipe_id: "telegram".to_string(),
+                                            peer_id: state.sender_id,
+                                            account_id: None,
+                                            thread_id: Some(state.chat_id),
+                                        },
+                                        content: state.text,
+                                        timestamp: chrono::Utc::now(),
+                                        media: if state.media.is_empty() {
+                                            None
+                                        } else {
+                                            Some(state.media)
+                                        },
+                                    };
+                                    if flush_tx.send(inbound).await.is_err() {
+                                        error!("Failed to forward media group to inbound channel");
+                                    }
+                                }
+                            });
                         }
-                        Ok(())
+                        return Ok(());
                     }
-                });
+
+                    debug!(
+                        chat_id = %chat_id,
+                        sender = %sender_id,
+                        attachments = media_payloads.len(),
+                        "Telegram message received"
+                    );
+
+                    let inbound = InboundMessage {
+                        sender: Recipient {
+                            pipe_id: "telegram".to_string(),
+                            peer_id: sender_id,
+                            account_id: None,
+                            thread_id: Some(chat_id),
+                        },
+                        content: text,
+                        timestamp: chrono::Utc::now(),
+                        media: if media_payloads.is_empty() {
+                            None
+                        } else {
+                            Some(media_payloads)
+                        },
+                    };
+
+                    if tx.send(inbound).await.is_err() {
+                        error!("Failed to forward Telegram message to inbound channel");
+                    }
+                    Ok(())
+                }
+            });
 
             let handler = dptree::entry().branch(msg_handler);
 
@@ -335,7 +324,12 @@ impl TelegramPipe {
     }
 
     /// Send a plain text message to the target chat.
-    async fn send_text(&self, target: &Recipient, text: &str, _opts: &DeliveryOptions) -> Result<()> {
+    async fn send_text(
+        &self,
+        target: &Recipient,
+        text: &str,
+        _opts: &DeliveryOptions,
+    ) -> Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::ChatId;
 
@@ -404,8 +398,7 @@ struct TelegramToolActivityAdapter {
 
 impl ToolActivityPort for TelegramToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        let (title, detail) =
-            crate::adapters::tool_builder::build_tool_activity_text(call);
+        let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
         let mut text = format!("[{}] {}", self.agent_label, title);
         if let Some(detail) = detail {
             text.push_str(": ");
@@ -420,14 +413,11 @@ impl ToolActivityPort for TelegramToolActivityAdapter {
     }
 }
 
-fn make_tool_activity_adapter(
-    agent_label: impl Into<String>,
-) -> Arc<dyn ToolActivityPort> {
+fn make_tool_activity_adapter(agent_label: impl Into<String>) -> Arc<dyn ToolActivityPort> {
     Arc::new(TelegramToolActivityAdapter {
         agent_label: agent_label.into(),
     })
 }
-
 
 // ===========================================================================
 // Per-agent runtime state
@@ -464,107 +454,6 @@ impl TelegramAgentState {
 }
 
 // ===========================================================================
-// TelegramTaskExecutor (for event-bus orchestration)
-// ===========================================================================
-
-struct TelegramTaskExecutor {
-    engine: Arc<dyn Engine>,
-    tools: Vec<crate::adapters::types::ToolDef>,
-    tool_executor: Option<Arc<dyn ToolExecutor>>,
-    system_prompt: String,
-    workspace: Option<std::path::PathBuf>,
-    secret_registry: Arc<SecretRegistry>,
-    cancel: Arc<AtomicBool>,
-    token_budget: Option<u32>,
-    max_tool_rounds: u32,
-    max_tool_result_chars: u32,
-    stream_event_timeout_secs: u64,
-    compact_result_limit: u32,
-    pipe: Arc<TelegramPipe>,
-    sender: Recipient,
-    agent_label: String,
-}
-
-#[async_trait::async_trait]
-impl crate::adapters::types::AgentTaskExecutor for TelegramTaskExecutor {
-    async fn execute(
-        &self,
-        description: &str,
-    ) -> std::result::Result<(String, Vec<(String, String)>), String> {
-        if self.cancel.load(Ordering::Relaxed) {
-            return Err("Stopped by user".into());
-        }
-
-        let typing_pipe = Arc::clone(&self.pipe);
-        let typing_sender = self.sender.clone();
-        let typing_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-                let _ = typing_pipe.send_chat_action(&typing_sender).await;
-            }
-        });
-
-        let obs_sr = Arc::clone(&self.secret_registry);
-        let obs_label = self.agent_label.clone();
-        let observer = move |call: &ToolCall, result: &str| {
-            let preview = channel_runtime::truncate_summary(&obs_sr.redact(result), 500);
-            tracing::debug!(
-                agent = %obs_label,
-                tool = %call.name,
-                result = %preview,
-                "Orchestrated Telegram tool result"
-            );
-        };
-
-        let messages = vec![crate::adapters::types::Message {
-            role: crate::adapters::types::Role::User,
-            content: description.to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }];
-
-        let context = crate::adapters::EngineContext {
-            workspace: self.workspace.clone(),
-            system_prompt: Some(self.system_prompt.clone()),
-            bridge_tools: None,
-            max_tool_rounds: Some(self.max_tool_rounds),
-            max_mcp_result_chars: None,
-        };
-
-        let sanitized = self
-            .tool_executor
-            .as_ref()
-            .map(|e| SanitizedToolExecutor::new(e.as_ref(), &self.secret_registry));
-
-        let result = crate::adapters::engine_builder::collect_engine_response(
-            self.engine.as_ref(),
-            &messages,
-            &self.tools,
-            &context,
-            sanitized.as_ref().map(|s| s as &dyn ToolExecutor),
-            Some(&observer),
-            Some(&self.cancel),
-            self.token_budget,
-            self.max_tool_rounds,
-            self.max_tool_result_chars,
-            self.stream_event_timeout_secs,
-            self.compact_result_limit,
-        )
-        .await;
-
-        typing_handle.abort();
-
-        match result {
-            Ok(resp) => {
-                let combined = resp.text;
-                Ok((combined, resp.tool_outcomes))
-            }
-            Err(e) => Err(e.to_string()),
-        }
-    }
-}
-
-// ===========================================================================
 // TelegramSession — shared state for the message loop
 // ===========================================================================
 
@@ -585,13 +474,26 @@ struct TelegramSession {
     // Agents
     agent_states: HashMap<String, TelegramAgentState>,
     default_agent_id: String,
-    agent_descriptions: HashMap<String, String>,
     role_to_agent: HashMap<String, String>,
-    planner_engine: Option<Arc<dyn Engine>>,
 
     // Services
-    memory_handle: Option<Arc<crate::adapters::memory_builder::MemoryServiceHandle>>,
+    memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
     secret_registry: Arc<SecretRegistry>,
+
+    // Harness-owned orchestration. Constructed when
+    // `config.orchestrator.is_some()`.
+    //
+    // `orchestrator_snapshots` is the shared state the per-message factory
+    // closure reads from. `execute_chat_turn` populates it with fresh
+    // per-agent `ChatTurnInputs` after hot-reload fires, then calls
+    // `orchestrator.handle`. The factory (embedded in the orchestrator)
+    // looks up agent inputs by name through the same `Arc<RwLock<...>>`.
+    //
+    // `_memory_manager` is held so it stays alive for the lifetime of the
+    // orchestrator (which holds an `Arc<MemoryManager>` internally).
+    orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>>,
+    orchestrator_snapshots: channel_runtime::OrchestratorSnapshots,
+    _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager>,
 
     // Per-user mutable state
     user_states: HashMap<String, ChatLoopState>,
@@ -632,9 +534,13 @@ impl TelegramSession {
                 .map(|p| crate::adapters::tool_builder::expand_tilde(p))
         });
 
-        let memory_handle =
-            channel_runtime::build_memory_handle(&memory_config, rt, first_workspace.as_deref());
-        let has_memory = memory_handle.is_some();
+        // Memory backend (shared `Embedder` + `VectorStore`) exposed via
+        // `MemoryManager`. The manager is always constructed (so the
+        // orchestrator has a valid handle), but `has_memory` gates tool
+        // registration on whether the vector backend actually installed.
+        let memory_manager_early =
+            channel_runtime::build_memory_manager(&memory_config, rt, first_workspace.as_deref());
+        let has_memory = rt.block_on(async { memory_manager_early.has_vector_backend().await });
 
         crate::adapters::scaffold::maybe_apply_scaffold(&config);
 
@@ -644,13 +550,14 @@ impl TelegramSession {
         let mut default_agent_id: Option<String> = None;
 
         for (agent_id, agent_config) in &config.agents {
-            let engine: Arc<dyn Engine> = match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
-                Ok(e) => Arc::from(e),
-                Err(e) => {
-                    warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
-                    continue;
-                }
-            };
+            let engine: Arc<dyn Engine> =
+                match build_engine(agent_id, agent_config, config.claude_code.as_ref()) {
+                    Ok(e) => Arc::from(e),
+                    Err(e) => {
+                        warn!(agent_id = %agent_id, error = %e, "Failed to build engine, skipping");
+                        continue;
+                    }
+                };
 
             let engine_info = EngineInfo {
                 context_window: engine.context_window(),
@@ -671,15 +578,11 @@ impl TelegramSession {
                 has_memory,
                 &agent_config.workspace_tools,
             );
-            let bridge_base_tools: Vec<ToolDef> =
-                if manages_workspace && workspace.is_some() {
-                    channel_runtime::compute_bridge_tools(
-                        has_memory,
-                        &agent_config.workspace_tools,
-                    )
-                } else {
-                    vec![]
-                };
+            let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
+                channel_runtime::compute_bridge_tools(has_memory, &agent_config.workspace_tools)
+            } else {
+                vec![]
+            };
 
             let skill_source: Option<FileSystemSkillSource> = workspace
                 .as_ref()
@@ -792,70 +695,11 @@ impl TelegramSession {
             }
         }
 
-        // Build agent descriptions for the planner prompt.
-        let agent_descriptions: HashMap<String, String> = agent_states
-            .iter()
-            .map(|(aid, astate)| {
-                let role_key = astate.role.as_deref().unwrap_or(aid).to_string();
-                let name = astate.agent_config.identity.name.as_deref().unwrap_or(aid);
-                let instructions = astate
-                    .agent_config
-                    .identity
-                    .instructions
-                    .as_deref()
-                    .unwrap_or("AI assistant");
-                let truncated = if instructions.len() > 500 {
-                    let mut end = 500;
-                    while end > 0 && !instructions.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    format!("{}…", &instructions[..end])
-                } else {
-                    instructions.to_string()
-                };
-                let mut desc = format!("{}\nInstructions: {}", name, truncated);
-                if !astate.agent_config.requires.is_empty() {
-                    desc.push_str(&format!(
-                        "\nREQUIRES (must depend on): {}",
-                        astate.agent_config.requires.join(", ")
-                    ));
-                }
-                (role_key, desc)
-            })
-            .collect();
-
-        // Build dedicated planner engine if configured.
-        let planner_engine: Option<Arc<dyn Engine>> = match (
-            config
-                .orchestrator
-                .as_ref()
-                .and_then(|o| o.planner_engine.as_ref()),
-            config
-                .orchestrator
-                .as_ref()
-                .and_then(|o| o.planner_model.as_ref()),
-        ) {
-            (Some(engine_type), Some(model)) => {
-                match crate::adapters::engine_builder::build_planner_engine(engine_type, model, config.claude_code.as_ref()) {
-                    Ok(e) => {
-                        info!(engine = %engine_type, model = %model, "Built dedicated planner engine");
-                        Some(Arc::from(e))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to build planner engine, falling back to default agent");
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
-
         let is_multi_agent = agent_states.len() > 1;
 
         info!(
             agents = agent_states.len(),
             default = %default_agent_id,
-            planner = planner_engine.as_ref().map(|_| "dedicated").unwrap_or("default agent"),
             "Telegram multi-agent setup complete"
         );
 
@@ -876,6 +720,39 @@ impl TelegramSession {
 
         info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
 
+        // Harness-owned orchestration (Track A — factory-closure wiring).
+        //
+        // `MemoryManager` is currently left empty — see Track B (memory
+        // vector port) for the provider wiring. Empty manager just means
+        // no memory injection; orchestration dispatch still works.
+        //
+        // `orchestrator_snapshots` is an `Arc<RwLock<HashMap<agent,
+        // ChatTurnInputs>>>` shared between this session and the factory
+        // closure. Before each `orchestrator.handle(...)` call we populate
+        // the map with fresh per-agent snapshots (after hot-reload fires);
+        // the factory reads back from the same map when the DAG executor
+        // spawns a step for a given agent.
+        //
+        // `memory_manager_early` comes from Track B's `build_memory_manager`
+        // which registers `BuiltinMemoryProvider` and installs the vector
+        // backend. Reusing it here means orchestrator turns get real memory
+        // injection/writes through the same provider the LLM-callable tools
+        // use.
+        let memory_manager = memory_manager_early;
+        let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
+            Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
+            let inputs_fn =
+                channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
+            let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+                Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
+            channel_runtime::build_orchestrator(&config, factory, Arc::clone(&memory_manager))
+                .map(Arc::new)
+        };
+        if orchestrator.is_some() {
+            info!("Telegram orchestrator constructed with per-message snapshot factory");
+        }
+
         let session = TelegramSession {
             pipe,
             turn_cancel,
@@ -888,11 +765,16 @@ impl TelegramSession {
             delivery_opts: DeliveryOptions::default(),
             agent_states,
             default_agent_id,
-            agent_descriptions,
             role_to_agent,
-            planner_engine,
-            memory_handle,
+            memory_manager_handle: if has_memory {
+                Some(Arc::clone(&memory_manager))
+            } else {
+                None
+            },
             secret_registry,
+            orchestrator,
+            orchestrator_snapshots,
+            _memory_manager: memory_manager,
             user_states: HashMap::new(),
             user_state_last_active: HashMap::new(),
             last_eviction_check: std::time::Instant::now(),
@@ -914,6 +796,39 @@ impl TelegramSession {
         mut inbound_rx: tokio::sync::mpsc::Receiver<InboundMessage>,
     ) -> Result<()> {
         rt.block_on(async {
+            // Task 5.3 — quiet event rendering. Subscribe to the orchestrator
+            // bus (if configured) and log progress events at `info!` level so
+            // operators can observe harness-owned orchestration while the
+            // actual per-message dispatch wiring is pending. When the
+            // factory-closure refactor lands, replace this with a per-turn
+            // subscription that edits a "Thinking..." message in place (or a
+            // single-response fallback if teloxide edit-in-place is not wired
+            // into `TelegramPipe`).
+            if let Some(orch) = self.orchestrator.as_ref() {
+                let mut rx = orch.subscribe();
+                tokio::spawn(async move {
+                    use crate::adapters::orchestrator::OrchestratorEvent;
+                    loop {
+                        match rx.recv().await {
+                            Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {
+                                info!(step = %step_id.0, agent = %agent, "orch StepStarted");
+                            }
+                            Ok(OrchestratorEvent::ReplanTriggered { reason }) => {
+                                info!(reason = %reason, "orch ReplanTriggered");
+                            }
+                            Ok(OrchestratorEvent::PlanCompleted { cancelled, .. }) => {
+                                info!(cancelled, "orch PlanCompleted");
+                            }
+                            Ok(_) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                warn!(dropped = n, "orch event subscriber lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+
             let ctrl_c = tokio::signal::ctrl_c();
             tokio::pin!(ctrl_c);
 
@@ -1001,26 +916,6 @@ impl TelegramSession {
             return;
         }
 
-        if msg.content.starts_with("/team") {
-            let goal = msg.content.trim_start_matches("/team").trim();
-            if goal.is_empty() || !self.is_multi_agent {
-                let hint = if !self.is_multi_agent {
-                    "Only one agent configured — /team requires multiple agents."
-                } else {
-                    "Usage: /team <goal>\nExample: /team build a full stack Rust app"
-                };
-                let _ = self
-                    .pipe
-                    .send_text(&msg.sender, hint, &self.delivery_opts)
-                    .await;
-                return;
-            }
-            let _ = self
-                .handle_team(&msg.sender, goal, msg.media.as_ref())
-                .await;
-            return;
-        }
-
         if msg.content.starts_with("/project") {
             let name = msg.content.trim_start_matches("/project").trim();
             let _ = self.handle_project(&msg.sender, name, sender_id).await;
@@ -1067,7 +962,12 @@ impl TelegramSession {
                 .insert(sender_id.to_string(), active_aid.clone());
             let _ = self
                 .handle_skill_cmd(
-                    &msg.sender, sender_id, &active_aid, &skill_name, &cmd_name, &args,
+                    &msg.sender,
+                    sender_id,
+                    &active_aid,
+                    &skill_name,
+                    &cmd_name,
+                    &args,
                 )
                 .await;
             return;
@@ -1122,72 +1022,8 @@ impl TelegramSession {
     // -------------------------------------------------------------------
 
     async fn route_and_chat(&mut self, msg: InboundMessage, sender_id: &str) {
-        let (mut routed_role, user_text) =
+        let (routed_role, user_text) =
             channel_runtime::parse_agent_routing(&msg.content, Some(&self.role_to_agent));
-
-        // Multi-agent classifier routing.
-        if routed_role.is_none() && self.is_multi_agent {
-            let decision = {
-                let engine_ref: Option<&dyn Engine> =
-                    if let Some(ref dedicated) = self.planner_engine {
-                        Some(dedicated.as_ref())
-                    } else {
-                        self.agent_states
-                            .get(&self.default_agent_id)
-                            .map(|a| a.engine.as_ref())
-                    };
-                match engine_ref {
-                    Some(eng) => {
-                        crate::adapters::task_builder::classify_request(
-                            eng,
-                            &user_text,
-                            &self.agent_descriptions,
-                        )
-                        .await
-                    }
-                    None => Ok(crate::adapters::types::RouteDecision::MultiAgent),
-                }
-            };
-
-            match decision {
-                Ok(crate::adapters::types::RouteDecision::SingleAgent(role_key)) => {
-                    let orchestrator_enabled = self
-                        .config
-                        .orchestrator
-                        .as_ref()
-                        .is_some_and(|o| o.enabled);
-                    if self.role_to_agent.contains_key(&role_key) && !orchestrator_enabled {
-                        info!(role = %role_key, "Classifier routed to single agent");
-                        routed_role = Some(role_key);
-                    } else if self.role_to_agent.contains_key(&role_key) && orchestrator_enabled {
-                        info!(role = %role_key, "Classifier routed to single agent, but orchestrator enabled — using planner");
-                        let _ = self
-                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                            .await;
-                        return;
-                    } else {
-                        warn!(role = %role_key, "Classifier returned unknown role, falling back to planner");
-                        let _ = self
-                            .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                            .await;
-                        return;
-                    }
-                }
-                Ok(crate::adapters::types::RouteDecision::MultiAgent) => {
-                    let _ = self
-                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                        .await;
-                    return;
-                }
-                Err(e) => {
-                    warn!(error = %e, "Classifier failed, falling back to planner");
-                    let _ = self
-                        .handle_team(&msg.sender, &user_text, msg.media.as_ref())
-                        .await;
-                    return;
-                }
-            }
-        }
 
         // Resolve target agent.
         let target_agent_id = if let Some(ref role_key) = routed_role {
@@ -1221,8 +1057,14 @@ impl TelegramSession {
         self.user_active_agent
             .insert(sender_id.to_string(), target_agent_id.clone());
 
-        self.execute_chat_turn(&msg.sender, sender_id, &target_agent_id, &user_text, msg.media.as_ref())
-            .await;
+        self.execute_chat_turn(
+            &msg.sender,
+            sender_id,
+            &target_agent_id,
+            &user_text,
+            msg.media.as_ref(),
+        )
+        .await;
     }
 
     async fn execute_chat_turn(
@@ -1254,43 +1096,71 @@ impl TelegramSession {
         }
 
         // Save attached files.
-        let user_content =
-            if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
-                let attachments_dir = ws.join(".tengu-attachments");
-                std::fs::create_dir_all(&attachments_dir).ok();
+        let user_content = if let (Some(ref ws), Some(media_items)) = (&agent.workspace, &media) {
+            let attachments_dir = ws.join(".tengu-attachments");
+            std::fs::create_dir_all(&attachments_dir).ok();
 
-                let mut file_notes = Vec::new();
-                for m in *media_items {
-                    let fname = sanitize_attachment_filename(
-                        m.filename.as_deref().unwrap_or("attachment"),
-                    );
-                    let path = attachments_dir.join(&fname);
-                    match std::fs::write(&path, &m.data) {
-                        Ok(()) => {
-                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
-                            file_notes.push(format!(
-                                "[Attached file: {} ({}, {} bytes)]",
-                                path.display(),
-                                m.mime_type,
-                                m.data.len()
-                            ));
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to save Telegram attachment");
-                        }
+            let mut file_notes = Vec::new();
+            for m in *media_items {
+                let fname =
+                    sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
+                let path = attachments_dir.join(&fname);
+                match std::fs::write(&path, &m.data) {
+                    Ok(()) => {
+                        info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment");
+                        file_notes.push(format!(
+                            "[Attached file: {} ({}, {} bytes)]",
+                            path.display(),
+                            m.mime_type,
+                            m.data.len()
+                        ));
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to save Telegram attachment");
                     }
                 }
+            }
 
-                if file_notes.is_empty() {
-                    user_text.to_string()
-                } else {
-                    format!("{}\n{}", file_notes.join("\n"), user_text)
-                }
-            } else {
+            if file_notes.is_empty() {
                 user_text.to_string()
-            };
+            } else {
+                format!("{}\n{}", file_notes.join("\n"), user_text)
+            }
+        } else {
+            user_text.to_string()
+        };
 
         *self.current_recipient.lock().unwrap() = Some(sender.clone());
+
+        // Orchestrator dispatch path. When orchestration is configured we
+        // route the user message through `Orchestrator::handle` instead of a
+        // single-agent `ChatRuntimeService` turn. The orchestrator's DAG
+        // executor spawns each step and calls our factory closure to resolve
+        // per-agent inputs via `orchestrator_snapshots`.
+        //
+        // Orchestrator dispatch:
+        //   - default agent message → always through the orchestrator
+        //     (when one is configured)
+        //   - `@role:`-prefixed message → by default bypasses the
+        //     orchestrator (explicit routing = "talk to this agent
+        //     directly"), UNLESS `orchestrator.route_explicit_agents = true`
+        //     which flips the toggle so the planner sees everything.
+        let explicit_route = target_agent_id != self.default_agent_id;
+        let route_through_orchestrator = self.orchestrator.is_some()
+            && (!explicit_route
+                || self
+                    .config
+                    .orchestrator
+                    .as_ref()
+                    .map(|c| c.route_explicit_agents)
+                    .unwrap_or(false));
+        if route_through_orchestrator {
+            // Release the mutable borrow on `agent` so we can build snapshots
+            // for every agent below.
+            let _ = agent;
+            self.execute_orchestrator_turn(sender, &user_content).await;
+            return;
+        }
 
         let activity_adapter = make_tool_activity_adapter(
             agent
@@ -1305,14 +1175,13 @@ impl TelegramSession {
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
-                &self.memory_handle,
+                &self.memory_manager_handle,
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
                 None,
                 Some(&self.memory_config),
                 &agent.agent_config,
-                None, // subagents: wired by orchestrator path only for A7.
                 &self.config.mcp_servers,
             )
         });
@@ -1323,9 +1192,10 @@ impl TelegramSession {
             }
         }
 
-        let sanitized_executor = current_executor
-            .as_ref()
-            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
+        let sanitized_executor = current_executor.map(|e| {
+            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
+            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
+        });
 
         let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1396,11 +1266,6 @@ impl TelegramSession {
             );
         }
 
-        let memory_service = self
-            .memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
         let turn_tools = agent.current_tools.clone();
         let chat_runtime = ChatRuntimeService {
             engine: agent.engine.as_ref(),
@@ -1410,15 +1275,18 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: turn_system_prompt,
             tools: &turn_tools,
-            tool_executor: sanitized_executor
-                .as_ref()
-                .map(|e| e as &dyn ToolExecutor),
-            memory_service: memory_service.as_ref(),
+            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+            memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: Some(&tool_result_observer),
             cancel: Some(&self.turn_cancel),
-            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
+            bridge_tools: if agent.current_bridge_tools.is_empty() {
+                None
+            } else {
+                Some(&agent.current_bridge_tools)
+            },
+            suppress_grounding_nudge: false,
         };
 
         let _ = self.pipe.send_chat_action(sender).await;
@@ -1454,8 +1322,10 @@ impl TelegramSession {
                 if let Some(ref text) = result.assistant_text {
                     let reply = self.secret_registry.redact(text);
                     for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
-                        if let Err(e) =
-                            self.pipe.send_text(sender, chunk, &self.delivery_opts).await
+                        if let Err(e) = self
+                            .pipe
+                            .send_text(sender, chunk, &self.delivery_opts)
+                            .await
                         {
                             error!(error = %e, "Failed to send Telegram reply chunk");
                         }
@@ -1517,303 +1387,169 @@ impl TelegramSession {
     }
 
     // -------------------------------------------------------------------
-    // /team — multi-agent orchestration via event-bus
+    // Orchestrator dispatch (per-message snapshot factory)
     // -------------------------------------------------------------------
 
-    async fn handle_team(
-        &mut self,
-        sender: &Recipient,
-        goal: &str,
-        media: Option<&Vec<MediaPayload>>,
-    ) -> Result<()> {
-        use crate::adapters::event_orchestrator::{self, OrchestratorConfig};
-        use crate::adapters::types::{AgentTaskExecutor, TaskStatus};
+    /// Populate `orchestrator_snapshots` with fresh per-agent inputs and
+    /// dispatch `user_content` through `Orchestrator::handle`. Hot-reload is
+    /// performed for every agent here so the planner can delegate to agents
+    /// other than the initial target without stale skill/tool state.
+    async fn execute_orchestrator_turn(&mut self, sender: &Recipient, user_content: &str) {
+        let orchestrator = match self.orchestrator.clone() {
+            Some(o) => o,
+            None => return,
+        };
 
-        *self.current_recipient.lock().unwrap() = Some(sender.clone());
-
-        // Handle attachments.
-        let mut attachment_notes: Vec<String> = Vec::new();
-        if let Some(media) = media {
-            let ws = self
-                .agent_states
-                .get(&self.default_agent_id)
-                .and_then(|a| a.workspace.as_ref());
-            if let Some(ws) = ws {
-                let attachments_dir = ws.join(".tengu-attachments");
-                std::fs::create_dir_all(&attachments_dir).ok();
-                for m in media {
-                    let fname =
-                        sanitize_attachment_filename(m.filename.as_deref().unwrap_or("attachment"));
-                    let path = attachments_dir.join(&fname);
-                    match std::fs::write(&path, &m.data) {
-                        Ok(()) => {
-                            info!(path = %path.display(), size = m.data.len(), "Saved Telegram attachment for orchestration");
-                            attachment_notes.push(format!(
-                                "[Attached file: {} ({}, {} bytes)]",
-                                path.display(),
-                                m.mime_type,
-                                m.data.len()
-                            ));
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "Failed to save Telegram attachment for orchestration");
-                        }
-                    }
+        // Hot-reload every agent's skill registry so snapshots capture the
+        // latest tools / system prompt.
+        for agent in self.agent_states.values_mut() {
+            if let Some(ref src) = agent.skill_source {
+                if agent.skill_registry.reload(src) {
+                    agent.current_tools =
+                        channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.rebuild_bridge_tools();
+                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                        &agent.agent_config,
+                        agent.advertise_workspace_tools,
+                        &agent.skill_registry,
+                        &agent.current_tools,
+                    );
                 }
             }
         }
 
-        let goal = if attachment_notes.is_empty() {
-            goal.to_string()
-        } else {
-            format!("{}\n{}", attachment_notes.join("\n"), goal)
-        };
-
-        self.pipe
-            .send_text(sender, "Planning…", &self.delivery_opts)
-            .await?;
-
-        let fallback_engine;
-        let planner_engine: &dyn Engine =
-            if let Some(ref dedicated) = self.planner_engine {
-                dedicated.as_ref()
-            } else {
-                match self.agent_states.get(&self.default_agent_id) {
-                    Some(a) => {
-                        fallback_engine = a.engine.clone();
-                        fallback_engine.as_ref()
-                    }
-                    None => {
-                        self.pipe
-                            .send_text(sender, "Planner engine unavailable.", &self.delivery_opts)
-                            .await?;
-                        return Ok(());
-                    }
-                }
-            };
-
-        // Build role dependency constraints from agent configs.
-        let role_deps: crate::adapters::types::RoleDependencies = self
-            .agent_states
-            .iter()
-            .filter_map(|(_, astate)| {
-                let role_key = astate.role.as_deref()?;
-                if astate.agent_config.requires.is_empty() {
-                    return None;
-                }
-                Some((role_key.to_string(), astate.agent_config.requires.clone()))
-            })
-            .collect();
-
-        // Phase 1: Generate and validate plan.
-        let prepared = match event_orchestrator::prepare_plan(
-            &goal,
-            planner_engine,
-            &self.agent_descriptions,
-            &role_deps,
-            &self.memory_handle,
-        )
-        .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                self.pipe
-                    .send_text(sender, &format!("Plan failed: {}", e), &self.delivery_opts)
-                    .await?;
-                return Ok(());
-            }
-        };
-
-        self.pipe
-            .send_text(sender, &prepared.summary, &self.delivery_opts)
-            .await?;
         self.turn_cancel.store(false, Ordering::Relaxed);
 
-        // Hot-reload skills for needed agents.
-        let needed_agent_ids: Vec<String> = prepared
-            .plan
-            .tasks
-            .values()
-            .filter_map(|t| self.role_to_agent.get(&t.role).cloned())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-
-        for agent_id in &needed_agent_ids {
-            if let Some(agent) = self.agent_states.get_mut(agent_id) {
-                if let Some(ref src) = agent.skill_source {
-                    if agent.skill_registry.reload(src) {
-                        agent.current_tools = channel_runtime::rebuild_tools(
-                            &agent.base_tools,
-                            &agent.skill_registry,
-                        );
-                        agent.rebuild_bridge_tools();
-                        agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
-                            &agent.agent_config,
-                            agent.advertise_workspace_tools,
-                            &agent.skill_registry,
-                            &agent.current_tools,
-                        );
-                    }
-                }
-            }
-        }
-
-        // Build TelegramTaskExecutor per agent.
-        let mut executors: HashMap<String, Arc<dyn AgentTaskExecutor>> = HashMap::new();
-        for agent_id in &needed_agent_ids {
-            let agent = match self.agent_states.get(agent_id) {
-                Some(a) => a,
-                None => continue,
-            };
-            let agent_label = agent
-                .agent_config
-                .identity
-                .name
-                .clone()
-                .unwrap_or_else(|| agent.agent_id.clone());
-
-            let activity_adapter = make_tool_activity_adapter(agent_label.clone());
-            let mut turn_tools = agent.current_tools.clone();
-            let tool_executor: Option<Arc<dyn ToolExecutor>> =
+        // Build a snapshot for every agent. Snapshots own all the inputs the
+        // factory closure returns — so once the map is populated, the
+        // orchestrator's DAG executor can spawn tasks that look up any agent
+        // by name without borrowing from `self`.
+        let mut snapshot_map: HashMap<String, channel_runtime::ChatTurnInputs> = HashMap::new();
+        for (agent_id, agent) in &self.agent_states {
+            let activity_adapter = make_tool_activity_adapter(
+                agent
+                    .agent_config
+                    .identity
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| agent.agent_id.clone()),
+            );
+            let current_executor: Option<Arc<dyn ToolExecutor>> =
                 agent.workspace.as_ref().and_then(|ws| {
                     channel_runtime::build_tool_executor(
                         ws,
                         &agent.current_tools,
                         &agent.skill_registry,
-                        &self.memory_handle,
+                        &self.memory_manager_handle,
                         &self.secret_registry,
                         activity_adapter,
                         Some(Arc::clone(&self.turn_cancel)),
                         None,
                         Some(&self.memory_config),
                         &agent.agent_config,
-                        None, // subagents: wired by orchestrator path only for A7.
                         &self.config.mcp_servers,
                     )
                     .map(|e| {
-                        let extra = e.additional_tool_defs(&turn_tools);
-                        if !extra.is_empty() {
-                            turn_tools.extend(extra);
-                        }
-                        Arc::new(e) as Arc<dyn ToolExecutor>
+                        let inner: Arc<dyn ToolExecutor> = Arc::new(e);
+                        let sanitized: Arc<dyn ToolExecutor> = Arc::new(
+                            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry)),
+                        );
+                        sanitized
                     })
                 });
 
-            executors.insert(
-                agent_id.clone(),
-                Arc::new(TelegramTaskExecutor {
-                    engine: Arc::clone(&agent.engine),
-                    tools: turn_tools,
-                    tool_executor,
-                    system_prompt: agent.current_system_prompt.clone(),
-                    workspace: agent.workspace.clone(),
-                    secret_registry: Arc::clone(&self.secret_registry),
-                    cancel: Arc::clone(&self.turn_cancel),
-                    token_budget: Some(agent.agent_config.limits.max_tokens_per_flow as u32),
-                    max_tool_rounds: agent.agent_config.limits.max_tool_rounds,
-                    max_tool_result_chars: agent.agent_config.limits.max_tool_result_chars,
-                    stream_event_timeout_secs: agent.agent_config.limits.stream_event_timeout_secs,
-                    compact_result_limit: agent.agent_config.limits.compact_result_limit,
-                    pipe: Arc::clone(&self.pipe),
-                    sender: sender.clone(),
-                    agent_label,
-                }),
-            );
+            let bridge_tools = if agent.current_bridge_tools.is_empty() {
+                None
+            } else {
+                Some(agent.current_bridge_tools.clone())
+            };
+
+            // Cross-agent Recent Team Activity — preserved on the
+            // orchestrator path (addresses limitation #6). Each snapshot
+            // gets its own agent-scoped view (build_activity_context
+            // filters out the target agent's own entries).
+            let mut snapshot_system_prompt = agent.current_system_prompt.clone();
+            if self.is_multi_agent {
+                let activity_ctx =
+                    channel_runtime::build_activity_context(&self.activity_log, agent_id);
+                if !activity_ctx.is_empty() {
+                    snapshot_system_prompt.push_str(&activity_ctx);
+                }
+            }
+
+            let inputs = channel_runtime::ChatTurnInputs {
+                engine: Arc::clone(&agent.engine),
+                agent_id: agent.agent_id.clone(),
+                agent_config: Arc::new(agent.agent_config.clone()),
+                history_turn_limit: agent.history_turn_limit,
+                compaction_policy: agent.compaction_policy,
+                system_prompt: snapshot_system_prompt,
+                tools: agent.current_tools.clone(),
+                tool_executor: current_executor,
+                memory_manager: self.memory_manager_handle.clone(),
+                max_recall_entries: self.memory_config.max_recall_entries,
+                max_recall_tokens: self.memory_config.max_recall_tokens,
+                bridge_tools,
+                tool_observer: None,
+                cancel: Some(Arc::clone(&self.turn_cancel)),
+            };
+            snapshot_map.insert(agent_id.clone(), inputs);
         }
 
-        // Phase 2: Execute plan via EventBus.
-        let workspace_name = self
-            .agent_states
-            .get(&self.default_agent_id)
-            .and_then(|a| a.workspace.as_ref())
-            .and_then(|ws| ws.file_name())
-            .map(|n| n.to_string_lossy().to_string());
+        // Publish snapshots atomically.
+        {
+            let mut guard = match self.orchestrator_snapshots.write() {
+                Ok(g) => g,
+                Err(e) => {
+                    error!(error = %e, "orchestrator snapshots lock poisoned");
+                    let _ = self
+                        .pipe
+                        .send_text(
+                            sender,
+                            "Internal error: orchestrator state unavailable.",
+                            &self.delivery_opts,
+                        )
+                        .await;
+                    return;
+                }
+            };
+            *guard = snapshot_map;
+        }
 
-        // Notification channel: orchestrator sends immediate failure messages here.
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<String>(16);
-        let notify_pipe = Arc::clone(&self.pipe);
-        let notify_sender = sender.clone();
-        let notify_opts = self.delivery_opts.clone();
-        let notify_handle = tokio::spawn(async move {
-            while let Some(msg) = notify_rx.recv().await {
-                let _ = notify_pipe.send_text(&notify_sender, &msg, &notify_opts).await;
+        let _ = self.pipe.send_chat_action(sender).await;
+        let typing_pipe = Arc::clone(&self.pipe);
+        let typing_sender = sender.clone();
+        let typing_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                let _ = typing_pipe.send_chat_action(&typing_sender).await;
             }
         });
 
-        let ev_config = OrchestratorConfig {
-            max_retries: 2,
-            task_timeout: std::time::Duration::from_secs(300),
-            cancel: Some(Arc::clone(&self.turn_cancel)),
-            notifications_tx: Some(notify_tx),
-            ..OrchestratorConfig::default()
-        };
+        let final_output = orchestrator.handle(user_content.to_string()).await;
+        typing_handle.abort();
 
-        let outcome = event_orchestrator::execute_plan(
-            prepared,
-            &self.role_to_agent,
-            &executors,
-            &self.memory_handle,
-            &goal,
-            workspace_name.as_deref(),
-            &ev_config,
-        )
-        .await;
-
-        // Drop config (closes notifications_tx), then drain any remaining messages.
-        drop(ev_config);
-        let _ = notify_handle.await;
-
-        // Present results.
-        match outcome {
-            Ok(plan_outcome) => {
-                let completed = plan_outcome
-                    .tasks
-                    .iter()
-                    .filter(|t| t.status == TaskStatus::Completed)
-                    .count();
-                let mut summary = format!(
-                    "Team completed — {}/{} tasks done.\n",
-                    completed,
-                    plan_outcome.tasks.len()
-                );
-                for t in &plan_outcome.tasks {
-                    let mark = match t.status {
-                        TaskStatus::Completed => "✓",
-                        TaskStatus::Failed => "✗",
-                        TaskStatus::Skipped => "⊘",
-                        _ => "?",
-                    };
-                    summary.push_str(&format!("\n{} {}", mark, t.id));
-                    if let Some(ref out) = t.output {
-                        summary.push_str(&format!(
-                            ": {}",
-                            channel_runtime::truncate_output(out, 300)
-                        ));
-                    }
-                    summary.push('\n');
-                }
-
-                let summary = self.secret_registry.redact(&summary);
-                for chunk in channel_runtime::chunk_message(&summary, TELEGRAM_MAX_LEN) {
-                    let _ = self
-                        .pipe
-                        .send_text(sender, chunk, &self.delivery_opts)
-                        .await;
-                }
-            }
-            Err(e) => {
-                self.pipe
-                    .send_text(
-                        sender,
-                        &format!("Orchestration failed: {}", e),
-                        &self.delivery_opts,
-                    )
-                    .await?;
+        let reply = self.secret_registry.redact(&final_output);
+        if reply.trim().is_empty() {
+            let _ = self
+                .pipe
+                .send_text(
+                    sender,
+                    "(Orchestrator returned no response)",
+                    &self.delivery_opts,
+                )
+                .await;
+            return;
+        }
+        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+            if let Err(e) = self
+                .pipe
+                .send_text(sender, chunk, &self.delivery_opts)
+                .await
+            {
+                error!(error = %e, "Failed to send orchestrator reply chunk");
             }
         }
-
-        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2005,9 +1741,9 @@ impl TelegramSession {
             }
         }
         let mut lines = vec!["All conversations cleared.".to_string()];
-        if let Some(ref handle) = self.memory_handle {
-            match handle.store.clear_all().await {
-                Ok(()) => lines.push("Persistent memory purged.".to_string()),
+        if let Some(ref mgr) = self.memory_manager_handle {
+            match mgr.clear_all().await {
+                Ok(()) => lines.push("Persistent memory cleared.".to_string()),
                 Err(e) => lines.push(format!("Memory clear failed: {}", e)),
             }
         } else {
@@ -2025,9 +1761,7 @@ impl TelegramSession {
                 if p.exists() {
                     match std::fs::remove_dir_all(&p) {
                         Ok(()) => lines.push(format!("Cleaned {}", p.display())),
-                        Err(e) => {
-                            lines.push(format!("Failed to clean {}: {}", p.display(), e))
-                        }
+                        Err(e) => lines.push(format!("Failed to clean {}: {}", p.display(), e)),
                     }
                 }
             }
@@ -2130,14 +1864,13 @@ impl TelegramSession {
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
-                &self.memory_handle,
+                &self.memory_manager_handle,
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
                 None,
                 Some(&self.memory_config),
                 &agent.agent_config,
-                None, // subagents: wired by orchestrator path only for A7.
                 &self.config.mcp_servers,
             )
         });
@@ -2147,9 +1880,10 @@ impl TelegramSession {
                 agent.current_tools.extend(extra);
             }
         }
-        let sanitized_executor = current_executor
-            .as_ref()
-            .map(|e| SanitizedToolExecutor::new(e as &dyn ToolExecutor, &self.secret_registry));
+        let sanitized_executor = current_executor.map(|e| {
+            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
+            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
+        });
 
         self.turn_cancel.store(false, Ordering::Relaxed);
 
@@ -2171,11 +1905,6 @@ impl TelegramSession {
             }
         });
 
-        let memory_service = self
-            .memory_handle
-            .as_ref()
-            .map(|h| MemoryService::new(h.embedding.as_ref(), h.store.as_ref()));
-
         let active_tools = agent.current_tools.clone();
         let chat_runtime = ChatRuntimeService {
             engine: agent.engine.as_ref(),
@@ -2185,15 +1914,18 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: agent.current_system_prompt.clone(),
             tools: &active_tools,
-            tool_executor: sanitized_executor
-                .as_ref()
-                .map(|e| e as &dyn ToolExecutor),
-            memory_service: memory_service.as_ref(),
+            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+            memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
             tool_observer: None,
             cancel: Some(&self.turn_cancel),
-            bridge_tools: if agent.current_bridge_tools.is_empty() { None } else { Some(&agent.current_bridge_tools) },
+            bridge_tools: if agent.current_bridge_tools.is_empty() {
+                None
+            } else {
+                Some(&agent.current_bridge_tools)
+            },
+            suppress_grounding_nudge: false,
         };
 
         let result = chat_runtime.process_user_text(state, &injected).await;

@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu-Cluster · Deep Architecture Analysis</title>
+<style>
+  :root {
+    --tengu: #7C3AED;
+    --tengu-light: #EDE9FE;
+    --tengu-mid: #A78BFA;
+    --hermes: #0284C7;
+    --hermes-light: #E0F2FE;
+    --hermes-mid: #38BDF8;
+    --pi: #059669;
+    --pi-light: #D1FAE5;
+    --pi-mid: #34D399;
+    --warn: #DC2626;
+    --warn-light: #FEE2E2;
+    --ok: #16A34A;
+    --ok-light: #DCFCE7;
+    --yellow: #CA8A04;
+    --yellow-light: #FEF9C3;
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #94A3B8;
+    --text-dim: #64748B;
+    --radius: 10px;
+    --gap: 20px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  /* ── HEADER ── */
+  .header {
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 40px 24px;
+    position: sticky; top: 0; z-index: 100;
+    backdrop-filter: blur(8px);
+  }
+  .header h1 { font-size: 22px; font-weight: 700; color: #fff; }
+  .header .sub { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+  .badges { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
+    letter-spacing: .4px; text-transform: uppercase;
+  }
+  .badge.tengu { background: var(--tengu); color: #fff; }
+  .badge.hermes { background: var(--hermes); color: #fff; }
+  .badge.pi { background: var(--pi); color: #fff; }
+  .badge.rust { background: #B7410E; color: #fff; }
+  .badge.python { background: #3776AB; color: #fff; }
+  .badge.ts { background: #3178C6; color: #fff; }
+  /* ── NAV TABS ── */
+  .tab-bar {
+    display: flex; gap: 2px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 40px; overflow-x: auto;
+  }
+  .tab-btn {
+    padding: 12px 20px; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    white-space: nowrap; transition: all .2s;
+  }
+  .tab-btn.active { color: #fff; border-bottom-color: var(--tengu-mid); }
+  .tab-btn:hover { color: var(--text); }
+  /* ── MAIN CONTENT ── */
+  .content { padding: 32px 40px; max-width: 1400px; margin: 0 auto; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  /* ── GRID LAYOUTS ── */
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--gap); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .grid-auto { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--gap); }
+  /* ── CARDS ── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px;
+  }
+  .card.tengu-card { border-left: 3px solid var(--tengu); }
+  .card.hermes-card { border-left: 3px solid var(--hermes); }
+  .card.pi-card { border-left: 3px solid var(--pi); }
+  .card-title {
+    font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .8px; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-title.tengu { color: var(--tengu-mid); }
+  .card-title.hermes { color: var(--hermes-mid); }
+  .card-title.pi { color: var(--pi-mid); }
+  /* ── SECTION HEADERS ── */
+  .section-header {
+    margin: 36px 0 18px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .section-header h2 { font-size: 18px; font-weight: 700; color: #fff; }
+  .section-header .line {
+    flex: 1; height: 1px; background: var(--border);
+  }
+  /* ── STATUS TAGS ── */
+  .tag {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    padding: 2px 7px; border-radius: 4px; letter-spacing: .4px;
+    text-transform: uppercase; margin-left: 6px;
+  }
+  .tag.done { background: var(--ok-light); color: var(--ok); }
+  .tag.partial { background: var(--yellow-light); color: var(--yellow); }
+  .tag.missing { background: var(--warn-light); color: var(--warn); }
+  .tag.planned { background: #E0F2FE; color: #0369A1; }
+  /* ── COMPARISON TABLE ── */
+  .cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .cmp-table th {
+    padding: 10px 14px; text-align: left; font-weight: 700;
+    border-bottom: 2px solid var(--border);
+    background: var(--surface2);
+    position: sticky; top: 0;
+  }
+  .cmp-table th:nth-child(2) { color: var(--tengu-mid); }
+  .cmp-table th:nth-child(3) { color: var(--hermes-mid); }
+  .cmp-table th:nth-child(4) { color: var(--pi-mid); }
+  .cmp-table td {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .cmp-table tr:hover td { background: rgba(255,255,255,.02); }
+  .cmp-table td:first-child { color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+  /* ── FLOW DIAGRAM (SVG-free, CSS boxes) ── */
+  .flow {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 16px;
+  }
+  .flow-row {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  }
+  .flow-box {
+    padding: 6px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; white-space: nowrap;
+  }
+  .flow-box.tengu { background: var(--tengu); color: #fff; }
+  .flow-box.hermes { background: var(--hermes); color: #fff; }
+  .flow-box.pi { background: var(--pi); color: #fff; }
+  .flow-box.gray { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .flow-box.warn { background: var(--warn); color: #fff; }
+  .flow-box.ok { background: var(--ok); color: #fff; }
+  .flow-box.yellow { background: #854D0E; color: #FEF9C3; }
+  .flow-arrow { color: var(--text-dim); font-size: 16px; }
+  .flow-down { text-align: center; color: var(--text-dim); font-size: 16px; padding: 2px 0; }
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram {
+    display: grid;
+    grid-template-rows: auto auto auto auto auto;
+    gap: 8px;
+    padding: 20px;
+  }
+  .arch-row {
+    display: flex; gap: 8px; justify-content: center; align-items: stretch;
+  }
+  .arch-layer-label {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--text-dim);
+    padding: 4px; border-right: 1px solid var(--border);
+    margin-right: 4px;
+  }
+  .arch-block {
+    flex: 1; border-radius: 8px; padding: 10px 14px; text-align: center;
+    font-size: 12px; font-weight: 600; min-width: 100px;
+  }
+  .arch-block.tengu-main { background: var(--tengu); color: #fff; }
+  .arch-block.tengu-dim { background: rgba(124,58,237,.25); color: var(--tengu-mid); border: 1px solid var(--tengu); }
+  .arch-block.hermes-main { background: var(--hermes); color: #fff; }
+  .arch-block.hermes-dim { background: rgba(2,132,199,.25); color: var(--hermes-mid); border: 1px solid var(--hermes); }
+  .arch-block.neutral { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .arch-block.warn-block { background: rgba(220,38,38,.2); color: #FCA5A5; border: 1px solid var(--warn); }
+  /* ── MEMORY DIAGRAM ── */
+  .mem-tier {
+    border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 10px; overflow: hidden;
+  }
+  .mem-tier-header {
+    padding: 10px 16px; font-weight: 700; font-size: 12px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .mem-tier-body { padding: 12px 16px; font-size: 12px; color: var(--text-muted); }
+  .mem-tier.t0 .mem-tier-header { background: rgba(100,116,139,.2); }
+  .mem-tier.t1 .mem-tier-header { background: rgba(2,132,199,.2); color: var(--hermes-mid); }
+  .mem-tier.t2 .mem-tier-header { background: rgba(124,58,237,.2); color: var(--tengu-mid); }
+  .mem-tier.permanent .mem-tier-header { background: rgba(220,38,38,.2); color: #FCA5A5; }
+  /* ── SKILL EVOLUTION LOOP ── */
+  .evo-loop {
+    position: relative; padding: 30px;
+    background: var(--surface2); border-radius: var(--radius);
+    border: 1px solid var(--border);
+  }
+  .evo-nodes {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 16px; align-items: start;
+  }
+  .evo-node {
+    background: var(--surface); border-radius: 8px;
+    border: 1px solid var(--border); padding: 14px; text-align: center;
+  }
+  .evo-node .icon { font-size: 24px; margin-bottom: 6px; }
+  .evo-node .label { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+  .evo-node .desc { font-size: 11px; color: var(--text-muted); }
+  .evo-node.active-tengu { border-color: var(--tengu); }
+  .evo-node.active-hermes { border-color: var(--hermes); }
+  .evo-node.missing-node { border-color: var(--warn); background: rgba(220,38,38,.05); }
+  .evo-node.partial-node { border-color: var(--yellow); background: rgba(202,138,4,.05); }
+  /* ── TOOL PLUGIN DIAGRAM ── */
+  .plugin-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .plugin-box {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; text-align: center;
+  }
+  .plugin-box .picon { font-size: 20px; margin-bottom: 6px; }
+  .plugin-box .pname { font-size: 11px; font-weight: 700; }
+  .plugin-box .pdesc { font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+  .plugin-box.tengu-plugin { border-left: 3px solid var(--tengu); }
+  .plugin-box.hermes-plugin { border-left: 3px solid var(--hermes); }
+  .plugin-box.both-plugin { border-left: 3px solid var(--pi-mid); }
+  /* ── GAP ANALYSIS ── */
+  .gap-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 12px;
+    display: flex; gap: 14px; align-items: flex-start;
+  }
+  .gap-icon { font-size: 22px; flex-shrink: 0; }
+  .gap-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+  .gap-desc { font-size: 13px; color: var(--text-muted); }
+  .gap-fix { font-size: 12px; margin-top: 8px; color: var(--pi-mid); font-style: italic; }
+  .gap-item.critical { border-left: 3px solid var(--warn); }
+  .gap-item.medium { border-left: 3px solid var(--yellow); }
+  .gap-item.low { border-left: 3px solid var(--hermes-mid); }
+  /* ── PROGRESS BARS ── */
+  .progress-wrap { margin-bottom: 14px; }
+  .progress-label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; margin-bottom: 4px;
+  }
+  .progress-bar { height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+  .progress-fill.tengu { background: var(--tengu); }
+  .progress-fill.hermes { background: var(--hermes); }
+  .progress-fill.pi { background: var(--pi); }
+  /* ── CODE SNIPPETS ── */
+  pre {
+    background: #0d0d17; border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px; font-size: 11px;
+    overflow-x: auto; color: #A5B4FC; line-height: 1.7;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+  }
+  code { font-family: inherit; }
+  /* ── VIBECODED BANNER ── */
+  .vibe-banner {
+    background: linear-gradient(90deg, rgba(220,38,38,.15), rgba(124,58,237,.15));
+    border: 1px solid rgba(220,38,38,.3);
+    border-radius: 8px; padding: 14px 18px; margin-bottom: 24px;
+    font-size: 13px;
+  }
+  .vibe-banner strong { color: #FCA5A5; }
+  /* ── UTIL ── */
+  ul.check-list { list-style: none; padding: 0; }
+  ul.check-list li { padding: 4px 0; font-size: 13px; display: flex; align-items: flex-start; gap: 8px; }
+  ul.check-list li::before { content: '✓'; color: var(--pi-mid); flex-shrink: 0; margin-top: 1px; }
+  ul.check-list li.missing::before { content: '✗'; color: var(--warn); }
+  ul.check-list li.partial::before { content: '◑'; color: var(--yellow); }
+  .mt-16 { margin-top: 16px; }
+  .mt-24 { margin-top: 24px; }
+  .label-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.tengu { background: var(--tengu); }
+  .dot.hermes { background: var(--hermes); }
+  .dot.pi { background: var(--pi); }
+  small { color: var(--text-muted); font-size: 11px; }
+  .tooltip-hint { font-size: 11px; color: var(--text-dim); font-style: italic; margin-top: 4px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+  /* ── ARCH COLUMN LAYOUT ── */
+  .three-col {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px;
+  }
+  .col-title {
+    text-align: center; font-size: 16px; font-weight: 800;
+    padding: 12px; border-radius: 8px; margin-bottom: 16px;
+  }
+  .col-title.tengu { background: var(--tengu); }
+  .col-title.hermes { background: var(--hermes); }
+  .col-title.pi { background: var(--pi); }
+  /* Stack diagram */
+  .stack { display: flex; flex-direction: column; gap: 6px; }
+  .stack-item {
+    padding: 10px 14px; border-radius: 6px; font-size: 12px;
+    font-weight: 600; text-align: center;
+  }
+  .stack-item.level-0 { background: #1e293b; color: var(--text-muted); border: 1px solid var(--border); }
+  .stack-item.level-1 { opacity: .85; }
+  .stack-item.level-2 { opacity: .9; }
+  .stack-item.level-3 { opacity: 1; }
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  /* responsive */
+  @media (max-width: 900px) {
+    .grid-3, .three-col { grid-template-columns: 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .evo-nodes { grid-template-columns: 1fr 1fr; }
+    .content { padding: 20px; }
+    .header { padding: 16px 20px; }
+    .tab-bar { padding: 0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>🧭 Tengu-Cluster · Deep Architecture Analysis</h1>
+  <div class="sub">Comparative study: Tengu vs Hermes Agent vs Cowork/PI · April 2026</div>
+  <div class="badges">
+    <span class="badge tengu">Tengu-Cluster</span>
+    <span class="badge rust">Rust</span>
+    <span class="badge hermes">Hermes Agent</span>
+    <span class="badge python">Python</span>
+    <span class="badge pi">Cowork / PI</span>
+    <span class="badge ts">TypeScript</span>
+  </div>
+</div>
+
+<!-- TAB BAR -->
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="showTab('overview')">🏗 Overview</button>
+  <button class="tab-btn" onclick="showTab('memory')">🧠 Memory</button>
+  <button class="tab-btn" onclick="showTab('skills')">⚡ Skills & Self-Adjustment</button>
+  <button class="tab-btn" onclick="showTab('tools')">🔧 Tools</button>
+  <button class="tab-btn" onclick="showTab('gaps')">🚨 Gaps & Improvements</button>
+  <button class="tab-btn" onclick="showTab('maturity')">📊 Maturity Scores</button>
+</div>
+
+<!-- ═══════════════════════════════ OVERVIEW TAB ═══════════════════════════════ -->
+<div class="content">
+<div class="panel active" id="tab-overview">
+
+  <div class="vibe-banner">
+    <strong>⚠ Note:</strong> Tengu-Cluster is "vibecoded" — architecturally ambitious, doctrinally sound, but has significant gaps vs Hermes Agent. The Rust core is clean and well-principled; the agent-layer features (memory tiers, skill evolution, scheduling) are <em>partially implemented or still in design docs</em>.
+  </div>
+
+  <!-- Architecture Three Columns -->
+  <div class="section-header"><h2>Architecture Overview</h2><div class="line"></div></div>
+
+  <div class="three-col">
+    <!-- TENGU COLUMN -->
+    <div>
+      <div class="col-title tengu">🔮 Tengu-Cluster</div>
+      <div class="stack">
+        <div class="stack-item level-0">CLI / TUI (cursive) &nbsp;·&nbsp; Telegram</div>
+        <div class="stack-item level-1" style="background:rgba(124,58,237,.35);color:#C4B5FD;">Channel Runtime Layer</div>
+        <div class="stack-item level-2" style="background:rgba(124,58,237,.5);color:#DDD6FE;">ChatRuntimeService · PromptBudget</div>
+        <div class="stack-item level-3" style="background:var(--tengu);color:#fff;">Engine (OpenRouter / Claude Code)</div>
+        <div class="stack-item level-2" style="background:rgba(124,58,237,.5);color:#DDD6FE;">PluginToolExecutor · ToolRegistry</div>
+        <div class="stack-item level-1" style="background:rgba(124,58,237,.35);color:#C4B5FD;">Tool Plugins (workspace/http/crypto/mcp)</div>
+        <div class="stack-item level-0">Skills · Memory · Subagents · Secrets</div>
+      </div>
+      <div class="mt-16">
+        <ul class="check-list">
+          <li>Single Rust binary, compiled</li>
+          <li>Ports/Adapters architecture</li>
+          <li>Dual engine: OpenRouter + Claude Code</li>
+          <li>Blockchain/crypto tools (Privy)</li>
+          <li>Skill distill tool implemented</li>
+          <li class="partial">Memory: basic vector store</li>
+          <li class="missing">No cron scheduler</li>
+          <li class="missing">No voice / multi-platform</li>
+          <li class="missing">Skill evolution loop incomplete</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- HERMES COLUMN -->
+    <div>
+      <div class="col-title hermes">☤ Hermes Agent</div>
+      <div class="stack">
+        <div class="stack-item level-0">CLI TUI · Telegram · Discord · Slack · WhatsApp · Signal</div>
+        <div class="stack-item level-1" style="background:rgba(2,132,199,.35);color:#7DD3FC;">Gateway / ACP Adapter</div>
+        <div class="stack-item level-2" style="background:rgba(2,132,199,.5);color:#BAE6FD;">ContextEngine · PromptBuilder · Compression</div>
+        <div class="stack-item level-3" style="background:var(--hermes);color:#fff;">Multi-Provider LLM Adapters</div>
+        <div class="stack-item level-2" style="background:rgba(2,132,199,.5);color:#BAE6FD;">ToolRegistry · 40+ Tools</div>
+        <div class="stack-item level-1" style="background:rgba(2,132,199,.35);color:#7DD3FC;">Terminal Backends (local/docker/ssh/modal)</div>
+        <div class="stack-item level-0">Memory · Skills · Cron · Subagents · Honcho UX</div>
+      </div>
+      <div class="mt-16">
+        <ul class="check-list">
+          <li>6 messaging platforms</li>
+          <li>6 terminal backends</li>
+          <li>200+ LLM providers via OpenRouter</li>
+          <li>Built-in cron scheduler</li>
+          <li>FTS5 session search + LLM summary</li>
+          <li>Honcho user modeling</li>
+          <li>Autonomous skill creation (live)</li>
+          <li>ACP protocol adapter</li>
+          <li>RL trajectory generation</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- PI / COWORK COLUMN -->
+    <div>
+      <div class="col-title pi">🌐 Cowork / PI Platform</div>
+      <div class="stack">
+        <div class="stack-item level-0">Desktop App / Browser Extension</div>
+        <div class="stack-item level-1" style="background:rgba(5,150,105,.35);color:#6EE7B7;">Cowork Orchestration Layer</div>
+        <div class="stack-item level-2" style="background:rgba(5,150,105,.5);color:#A7F3D0;">Claude Agent SDK · Task Tracking</div>
+        <div class="stack-item level-3" style="background:var(--pi);color:#fff;">Claude Sonnet / Opus / Haiku</div>
+        <div class="stack-item level-2" style="background:rgba(5,150,105,.5);color:#A7F3D0;">Skill System · Plugin System</div>
+        <div class="stack-item level-1" style="background:rgba(5,150,105,.35);color:#6EE7B7;">MCP Server Framework</div>
+        <div class="stack-item level-0">File Tools · WebFetch · Bash · Computer Use</div>
+      </div>
+      <div class="mt-16">
+        <ul class="check-list">
+          <li>Desktop app + browser control</li>
+          <li>Visual artifact rendering</li>
+          <li>Plugin marketplace</li>
+          <li>Scheduled tasks built-in</li>
+          <li>MCP connector ecosystem</li>
+          <li class="partial">Memory: file-based (consolidate skill)</li>
+          <li class="partial">Skill creator (manual, LLM-guided)</li>
+          <li class="missing">No autonomous skill evolution</li>
+          <li class="missing">No vector memory store</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Core Loop Comparison -->
+  <div class="section-header mt-24"><h2>Core Agent Loop Comparison</h2><div class="line"></div></div>
+  <div class="grid-3">
+    <div class="card tengu-card">
+      <div class="card-title tengu">⚡ Tengu Core Loop</div>
+      <div class="flow">
+        <div class="flow-row"><div class="flow-box gray">User Input</div><span class="flow-arrow">→</span><div class="flow-box gray">Channel (TUI/Telegram)</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box tengu">ChatRuntimeService</div></div>
+        <div class="flow-down">↓ (memory recall + prompt budget)</div>
+        <div class="flow-row"><div class="flow-box tengu">Engine.run()</div></div>
+        <div class="flow-down">↓ StreamEvents</div>
+        <div class="flow-row"><div class="flow-box gray">collect_engine_response</div><span class="flow-arrow">→</span><div class="flow-box tengu">Tool Loop</div></div>
+        <div class="flow-down">↓ ToolOutput → back to Engine</div>
+        <div class="flow-row"><div class="flow-box gray">Response to User</div></div>
+      </div>
+    </div>
+    <div class="card hermes-card">
+      <div class="card-title hermes">☤ Hermes Core Loop</div>
+      <div class="flow">
+        <div class="flow-row"><div class="flow-box gray">User Message</div><span class="flow-arrow">→</span><div class="flow-box gray">CLI / Gateway</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box hermes">run_agent()</div></div>
+        <div class="flow-down">↓ prefetch memory + build context</div>
+        <div class="flow-row"><div class="flow-box hermes">LLM Adapter</div><span class="flow-arrow">→</span><div class="flow-box gray">API call</div></div>
+        <div class="flow-down">↓ streaming response</div>
+        <div class="flow-row"><div class="flow-box hermes">Tool Dispatcher</div></div>
+        <div class="flow-down">↓ sync memory + queue next prefetch</div>
+        <div class="flow-row"><div class="flow-box hermes">Memory nudge check</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box gray">Response to User</div></div>
+      </div>
+    </div>
+    <div class="card pi-card">
+      <div class="card-title pi">🌐 Cowork / PI Loop</div>
+      <div class="flow">
+        <div class="flow-row"><div class="flow-box gray">User Request</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box pi">AskUserQuestion → clarify</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box pi">TodoWrite → task list</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box pi">Read Skill → follow instructions</div></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-row"><div class="flow-box pi">Claude API + Tool Calls</div></div>
+        <div class="flow-down">↓ verify → share artifact</div>
+        <div class="flow-row"><div class="flow-box gray">Output to User</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key Doctrine Differences -->
+  <div class="section-header mt-24"><h2>Philosophy & Doctrine</h2><div class="line"></div></div>
+  <table class="cmp-table">
+    <thead>
+      <tr><th>Principle</th><th>🔮 Tengu</th><th>☤ Hermes</th><th>🌐 Cowork/PI</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Core philosophy</td>
+        <td>LLM is heart, skills are brain, tools are hands. No Rust encodes policy.</td>
+        <td>Self-improving loop. Agent creates & improves its own skills from experience.</td>
+        <td>Human-AI collaboration. Clarify first, plan, execute, verify.</td>
+      </tr>
+      <tr>
+        <td>Implementation language</td>
+        <td>Rust (single binary) <span class="tag partial">constraint</span></td>
+        <td>Python (flexible, scripty) <span class="tag done">flexible</span></td>
+        <td>TypeScript/Node + Claude SDK</td>
+      </tr>
+      <tr>
+        <td>Tool extensibility</td>
+        <td>Rebuild required for new tools <span class="tag missing">friction</span></td>
+        <td>New tools via Python files <span class="tag done">hot-add</span></td>
+        <td>MCP plugins (no rebuild) <span class="tag done">hot-add</span></td>
+      </tr>
+      <tr>
+        <td>Skill format</td>
+        <td>SKILL.md with YAML frontmatter</td>
+        <td>SKILL.md with YAML frontmatter</td>
+        <td>SKILL.md with YAML frontmatter</td>
+      </tr>
+      <tr>
+        <td>Skill loading</td>
+        <td>3 tiers: managed / workspace-dotdir / workspace-root. Hot-swap.</td>
+        <td>~/.hermes/skills/ + external dirs. Hot-scan.</td>
+        <td>Plugin bundles + local skills. Scanned at session start.</td>
+      </tr>
+      <tr>
+        <td>Model lock-in</td>
+        <td>OpenRouter (200+ models) + Claude Code <span class="tag done">flexible</span></td>
+        <td>OpenRouter / Anthropic / Bedrock / Gemini / NVIDIA / local <span class="tag done">very flexible</span></td>
+        <td>Claude only (Anthropic) <span class="tag missing">locked</span></td>
+      </tr>
+      <tr>
+        <td>Multi-platform</td>
+        <td>TUI + Telegram <span class="tag partial">limited</span></td>
+        <td>CLI + Telegram + Discord + Slack + WhatsApp + Signal <span class="tag done">broad</span></td>
+        <td>Desktop + Browser <span class="tag partial">desktop-focused</span></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════ MEMORY TAB ═══════════════════════════════ -->
+<div class="panel" id="tab-memory">
+  <div class="section-header"><h2>Memory Architecture</h2><div class="line"></div></div>
+
+  <div class="grid-3">
+    <!-- TENGU MEMORY -->
+    <div>
+      <div class="label-row"><span class="dot tengu"></span><strong>Tengu Memory Stack</strong><span class="tag partial">Partially Built</span></div>
+
+      <div class="mem-tier t2">
+        <div class="mem-tier-header">
+          🔮 Permanent Tier <small>(PLANNED — not implemented)</small>
+          <span class="tag missing">Missing</span>
+        </div>
+        <div class="mem-tier-body">
+          Design exists in <code>tengu/ideas/memory-idea/</code>. Would use <code>PermanentDiskStore</code> + <code>remember_permanently</code> tool. Never prunable. Auto-promotion after N recalls.
+        </div>
+      </div>
+
+      <div class="mem-tier t1">
+        <div class="mem-tier-header">
+          🗄 Persistent Tier <small>(vectors.bin / Qdrant)</small>
+          <span class="tag done">Implemented</span>
+        </div>
+        <div class="mem-tier-body">
+          <code>DiskVectorMemoryStore</code> — brute-force cosine similarity, bincode-serialized.<br>
+          <code>QdrantMemoryStore</code> — ANN search, feature-gated. <code>OpenRouterEmbeddingAdapter</code>.<br>
+          <strong>Tool:</strong> <code>remember</code> — stores fact, returns UUID.<br>
+          <strong>Recall:</strong> <code>recall_filtered</code> — semantic search at query time.
+        </div>
+      </div>
+
+      <div class="mem-tier t0">
+        <div class="mem-tier-header">
+          💭 Session Tier
+          <span class="tag done">Implemented</span>
+        </div>
+        <div class="mem-tier-body">
+          In-process <code>RwLock&lt;Vec&gt;</code>. Cleared on prune. Transcript history in <code>ChatRuntimeService</code>. Bootstrap files (AGENTS.md, MEMORY.md) injected at session start.
+        </div>
+      </div>
+
+      <div class="mem-tier permanent">
+        <div class="mem-tier-header">
+          📦 Persistent Store (SQLite cache)
+          <span class="tag partial">Partial</span>
+        </div>
+        <div class="mem-tier-body">
+          <code>SharedCacheTool</code> — workspace-scoped SQLite. Not semantic memory, but a KV store. Used by skills for state persistence across turns.
+        </div>
+      </div>
+    </div>
+
+    <!-- HERMES MEMORY -->
+    <div>
+      <div class="label-row"><span class="dot hermes"></span><strong>Hermes Memory Stack</strong><span class="tag done">Full Loop</span></div>
+
+      <div class="mem-tier" style="border-left:3px solid var(--hermes);">
+        <div class="mem-tier-header" style="background:rgba(2,132,199,.15);">
+          🧬 Honcho User Modeling
+          <span class="tag done">Unique</span>
+        </div>
+        <div class="mem-tier-body">
+          <code>plastic-labs/honcho</code> integration. Dialectic user modeling — agent builds a persistent model of <em>who you are</em> from conversation patterns. Cross-session personality profile.
+        </div>
+      </div>
+
+      <div class="mem-tier t1" style="border-left:3px solid var(--hermes);">
+        <div class="mem-tier-header" style="background:rgba(2,132,199,.2);">
+          💾 Builtin Memory Provider
+          <span class="tag done">Implemented</span>
+        </div>
+        <div class="mem-tier-body">
+          <code>MEMORY.md</code> — curated facts with agent nudges at 75% context usage.<br>
+          <code>USER.md</code> — user preference profile.<br>
+          Pre-turn <strong>prefetch</strong> + post-turn <strong>sync</strong> lifecycle.<br>
+          Memory context wrapped in <code>&lt;memory-context&gt;</code> fence (never mistaken for user input).
+        </div>
+      </div>
+
+      <div class="mem-tier t1" style="border-left:3px solid var(--hermes);">
+        <div class="mem-tier-header" style="background:rgba(2,132,199,.2);">
+          🔍 FTS5 Session Search
+          <span class="tag done">Unique</span>
+        </div>
+        <div class="mem-tier-body">
+          Full-text search across all past sessions. LLM summarizes relevant sessions on recall. Cross-session knowledge continuity without full transcript replay.
+        </div>
+      </div>
+
+      <div class="mem-tier t0" style="border-left:3px solid var(--hermes);">
+        <div class="mem-tier-header" style="background:rgba(2,132,199,.1);">
+          🔌 External Provider Slot
+          <span class="tag done">Extensible</span>
+        </div>
+        <div class="mem-tier-body">
+          <code>MemoryManager</code> allows ONE external memory plugin (vector DB, graph memory, etc). Clean provider interface: <code>prefetch()</code>, <code>sync_turn()</code>, <code>on_turn_start()</code>, <code>on_session_end()</code>, <code>on_pre_compress()</code>.
+        </div>
+      </div>
+    </div>
+
+    <!-- COWORK / PI MEMORY -->
+    <div>
+      <div class="label-row"><span class="dot pi"></span><strong>Cowork/PI Memory</strong><span class="tag partial">File-based</span></div>
+
+      <div class="mem-tier" style="border-left:3px solid var(--pi);">
+        <div class="mem-tier-header" style="background:rgba(5,150,105,.15);">
+          📁 MEMORY.md (File-based)
+          <span class="tag partial">Manual</span>
+        </div>
+        <div class="mem-tier-body">
+          Memory lives in markdown files in the workspace. The <code>consolidate-memory</code> skill merges duplicates and prunes stale facts. Human-readable, git-trackable.
+        </div>
+      </div>
+
+      <div class="mem-tier" style="border-left:3px solid var(--pi);">
+        <div class="mem-tier-header" style="background:rgba(5,150,105,.15);">
+          🧩 Skill-encoded Knowledge
+          <span class="tag done">Implemented</span>
+        </div>
+        <div class="mem-tier-body">
+          SKILL.md files carry procedural knowledge. Skills are the memory of <em>how to do things</em>. New skills are created via the <code>skill-creator</code> skill — LLM guided but manual trigger.
+        </div>
+      </div>
+
+      <div class="mem-tier" style="border-left:3px solid var(--pi);">
+        <div class="mem-tier-header" style="background:rgba(5,150,105,.1);">
+          🗂 Session Context (in-window)
+          <span class="tag done">Implicit</span>
+        </div>
+        <div class="mem-tier-body">
+          Claude's context window is the session memory. No persistent cross-session recall built into the platform — must use file tools + skill invocation to carry knowledge forward.
+        </div>
+      </div>
+
+      <div class="mem-tier" style="border-left:3px solid var(--warn);">
+        <div class="mem-tier-header" style="background:rgba(220,38,38,.1);">
+          ❌ No Vector / Semantic Memory
+          <span class="tag missing">Gap</span>
+        </div>
+        <div class="mem-tier-body">
+          No built-in embedding or semantic recall. No FTS across sessions. Memory recall relies entirely on the skill system and manual file management.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory Flow Diagram -->
+  <div class="section-header mt-24"><h2>Hermes Memory Lifecycle (the gold standard)</h2><div class="line"></div></div>
+  <div class="card" style="overflow-x:auto;">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:16px;min-width:600px;">
+      <div class="flow-box gray">Session Start</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">load MEMORY.md + USER.md<br><small>system prompt block</small></div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box gray">User Message</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">prefetch_all(query)<br><small>semantic + FTS</small></div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">&lt;memory-context&gt; fence<br><small>injected at API call</small></div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">LLM Response</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">sync_all()<br><small>post-turn write</small></div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box hermes">queue_prefetch_all()<br><small>background for next turn</small></div>
+    </div>
+    <div style="padding:0 16px 12px;font-size:12px;color:var(--text-muted);">
+      At 75% context: nudge agent → write key facts to MEMORY.md · At session end: on_session_end() → providers archive
+    </div>
+  </div>
+
+  <!-- What Tengu needs -->
+  <div class="section-header mt-24"><h2>What Tengu's Memory Needs</h2><div class="line"></div></div>
+  <div class="grid-2">
+    <div class="gap-item critical">
+      <div class="gap-icon">🔴</div>
+      <div>
+        <div class="gap-title">Pre-turn Memory Prefetch</div>
+        <div class="gap-desc">Tengu recalls memory only at query time via <code>recall_filtered</code>. There's no proactive pre-turn semantic prefetch or <code>&lt;memory-context&gt;</code> fence injection like Hermes has.</div>
+        <div class="gap-fix">→ Add a <code>prefetch()</code> phase in ChatRuntimeService before each LLM call</div>
+      </div>
+    </div>
+    <div class="gap-item critical">
+      <div class="gap-icon">🔴</div>
+      <div>
+        <div class="gap-title">Permanent Memory Tier</div>
+        <div class="gap-desc">Design exists in ideas folder. <code>PermanentDiskStore</code>, <code>MemoryTier</code> enum, <code>remember_permanently</code> tool — all planned, none implemented.</div>
+        <div class="gap-fix">→ Implement per the ideas/memory-idea design doc (3-4 day Rust task)</div>
+      </div>
+    </div>
+    <div class="gap-item medium">
+      <div class="gap-icon">🟡</div>
+      <div>
+        <div class="gap-title">Session Search / FTS</div>
+        <div class="gap-desc">No cross-session conversation search. Hermes has FTS5 SQLite with LLM summarization for cross-session recall.</div>
+        <div class="gap-fix">→ Add rusqlite FTS5 session indexer + recall tool</div>
+      </div>
+    </div>
+    <div class="gap-item medium">
+      <div class="gap-icon">🟡</div>
+      <div>
+        <div class="gap-title">Memory Context Fencing</div>
+        <div class="gap-desc">When memory is injected, there's no protection against the model treating recalled facts as current user input. Hermes solves this with the <code>&lt;memory-context&gt;</code> pattern.</div>
+        <div class="gap-fix">→ Wrap recalled memory in a fenced system note in ChatRuntimeService</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SKILLS TAB ═══════════════════════════════ -->
+<div class="panel" id="tab-skills">
+  <div class="section-header"><h2>Skills System Architecture</h2><div class="line"></div></div>
+
+  <!-- Shared Foundation -->
+  <div class="card" style="border-color:var(--pi-mid);margin-bottom:24px;">
+    <div class="card-title pi">🤝 Shared SKILL.md Standard (all 3 systems)</div>
+    <div class="grid-2">
+      <div>
+        <p style="font-size:13px;margin-bottom:12px;">All three systems share the same <code>SKILL.md</code> format with YAML frontmatter:</p>
+<pre>---
+name: my-skill
+description: What this skill does
+requires_bins: ["curl"]     # env gate
+requires_env: ["API_KEY"]   # secret gate
+os: ["linux", "macos"]      # platform gate
+metrics:                    # Tengu-specific
+  - kind: llm_judge
+    name: quality
+---
+
+# Skill Body (Markdown)
+Full procedural instructions here...</pre>
+      </div>
+      <div>
+        <p style="font-size:13px;margin-bottom:10px;"><strong>Skill types across systems:</strong></p>
+        <table class="cmp-table" style="font-size:12px;">
+          <thead><tr><th>Type</th><th>Tengu</th><th>Hermes</th><th>Cowork</th></tr></thead>
+          <tbody>
+            <tr><td>Documentation skill</td><td>✓</td><td>✓</td><td>✓</td></tr>
+            <tr><td>Shell skill (tool creation)</td><td>✓ (inline tools)</td><td>—</td><td>—</td></tr>
+            <tr><td>Slash command invocation</td><td>—</td><td>✓ (/skill-name)</td><td>✓ (Skill tool)</td></tr>
+            <tr><td>Config injection</td><td>—</td><td>✓ (config.yaml)</td><td>—</td></tr>
+            <tr><td>Setup detection</td><td>frontmatter gates</td><td>✓ (setup_needed)</td><td>—</td></tr>
+            <tr><td>Supporting files</td><td>—</td><td>✓ (refs/templates)</td><td>✓ (linked files)</td></tr>
+            <tr><td>Metrics / evals</td><td>✓ (4 kinds)</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Self-Adjustment / Evolution Loop -->
+  <div class="section-header"><h2>Skill Self-Adjustment & Evolution Loop</h2><div class="line"></div></div>
+
+  <div class="grid-2" style="margin-bottom:24px;">
+    <!-- Tengu Evolution -->
+    <div>
+      <div class="label-row"><span class="dot tengu"></span><strong>Tengu: Designed Evolution Loop</strong><span class="tag partial">Partially Implemented</span></div>
+      <div class="evo-loop">
+        <div class="evo-nodes">
+          <div class="evo-node active-tengu">
+            <div class="icon">📝</div>
+            <div class="label">skill_distill</div>
+            <div class="desc">LLM creates SKILL.md from conversation transcript. Extracts fixtures. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
+          </div>
+          <div class="evo-node partial-node">
+            <div class="icon">🧪</div>
+            <div class="label">tengu eval</div>
+            <div class="desc">Run fixtures through skill. Score with 4 metric kinds (llm_judge, shell_check, tool_assertion, script). <span style="color:var(--yellow)">◑ PARTIAL</span></div>
+          </div>
+          <div class="evo-node missing-node">
+            <div class="icon">🤖</div>
+            <div class="label">skill-improver</div>
+            <div class="desc">Agent proposes edits to SKILL.candidate.md based on metric delta. <span style="color:var(--warn)">✗ MISSING</span></div>
+          </div>
+          <div class="evo-node missing-node">
+            <div class="icon">✅</div>
+            <div class="label">Approval Gate</div>
+            <div class="desc">User reviews diff + metric delta, approves or rejects. Rollback via /versions/. <span style="color:var(--warn)">✗ MISSING</span></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-muted);">
+          ↻ Loop: evolve → rescore → if better: keep → repeat N times → present best to user<br>
+          <span style="color:var(--tengu-mid);">Key design: LLM proposes, Rust harness decides cycle count/winner. Policy stays in Rust.</span>
+        </div>
+      </div>
+
+      <div class="mt-16">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Metric kinds (implemented in skill_lifecycle/):</div>
+        <div class="plugin-grid">
+          <div class="plugin-box tengu-plugin">
+            <div class="picon">⚖️</div>
+            <div class="pname">llm_judge</div>
+            <div class="pdesc">Rubric-driven LLM scoring. Good for subjective outputs.</div>
+          </div>
+          <div class="plugin-box tengu-plugin">
+            <div class="picon">🔍</div>
+            <div class="pname">shell_check</div>
+            <div class="pdesc">Run command, assert exit code / stdout pattern.</div>
+          </div>
+          <div class="plugin-box tengu-plugin">
+            <div class="picon">🛠</div>
+            <div class="pname">tool_assertion</div>
+            <div class="pdesc">Dispatch workspace tool, assert result structure.</div>
+          </div>
+          <div class="plugin-box tengu-plugin">
+            <div class="picon">📜</div>
+            <div class="pname">script</div>
+            <div class="pdesc">Execute metrics/<n>.sh, parse JSON output.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hermes Evolution -->
+    <div>
+      <div class="label-row"><span class="dot hermes"></span><strong>Hermes: Live Evolution Loop</strong><span class="tag done">Fully Operational</span></div>
+      <div class="evo-loop" style="border-color:var(--hermes);">
+        <div class="evo-nodes">
+          <div class="evo-node active-hermes">
+            <div class="icon">💡</div>
+            <div class="label">Autonomous Creation</div>
+            <div class="desc">After complex tasks, agent automatically creates skills from experience. No explicit distill command needed. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
+          </div>
+          <div class="evo-node active-hermes">
+            <div class="icon">🔄</div>
+            <div class="label">In-use Improvement</div>
+            <div class="desc">Skills self-improve <em>during use</em>. Agent patches its own skills mid-session when it finds a better way. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
+          </div>
+          <div class="evo-node active-hermes">
+            <div class="icon">📊</div>
+            <div class="label">Usage Signal</div>
+            <div class="desc">Feedback nudges from interaction. Agent persists knowledge automatically at context thresholds. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
+          </div>
+          <div class="evo-node active-hermes">
+            <div class="icon">🌐</div>
+            <div class="label">Skills Hub</div>
+            <div class="desc">agentskills.io open standard. Share/discover skills community-wide. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;font-size:12px;color:var(--text-muted);">
+          Key difference: Hermes has <strong>no metric harness</strong> — improvement is purely LLM-driven and reactive.<br>
+          Tengu's designed approach (metric-gated evolution) is actually <em>more rigorous</em> — when built.
+        </div>
+      </div>
+
+      <div class="mt-16">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Hermes skill loading flow:</div>
+        <div class="flow" style="background:var(--surface2);border-radius:8px;padding:12px;">
+          <div class="flow-row">
+            <div class="flow-box gray">scan_skill_commands()</div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-box hermes">SKILL.md rglob</div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-box gray">frontmatter parse</div>
+          </div>
+          <div class="flow-down">↓ platform gate check</div>
+          <div class="flow-row">
+            <div class="flow-box hermes">/skill-name → cmd registry</div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-box gray">skill_view()</div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-box hermes">inject config values</div>
+          </div>
+          <div class="flow-down">↓</div>
+          <div class="flow-row">
+            <div class="flow-box hermes">build activation message</div>
+            <span class="flow-arrow">→</span>
+            <div class="flow-box gray">LLM context</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tengu Skill Loading Detail -->
+  <div class="section-header mt-24"><h2>Tengu Skill Loading (3-Tier System)</h2><div class="line"></div></div>
+  <div class="card tengu-card">
+    <div class="grid-3">
+      <div>
+        <div class="card-title tengu">Tier 1: Managed</div>
+        <code style="font-size:12px;">~/.tengu/skills/</code>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Global skills available to all agents on this machine. The skill-creator installs here by default.</p>
+      </div>
+      <div>
+        <div class="card-title tengu">Tier 2: Workspace Dotdir</div>
+        <code style="font-size:12px;">&lt;workspace&gt;/.tengu/skills/</code>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Private per-workspace skills. Shadow tier 1. Good for workspace-specific overrides.</p>
+      </div>
+      <div>
+        <div class="card-title tengu">Tier 3: Workspace Root</div>
+        <code style="font-size:12px;">&lt;workspace&gt;/skills/</code>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">Public skills committed to the repo. Shadow tiers 1+2. This is where tengu-cluster's skills live.</p>
+      </div>
+    </div>
+    <div style="margin-top:14px;font-size:12px;color:var(--text-muted);">
+      ↑ Later tiers shadow earlier ones. Skills selected per-agent via <code>skill_packages = ["aura-orchestrator"]</code> in config.toml
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ TOOLS TAB ═══════════════════════════════ -->
+<div class="panel" id="tab-tools">
+  <div class="section-header"><h2>Tools Architecture</h2><div class="line"></div></div>
+
+  <div class="grid-3">
+    <!-- TENGU TOOLS -->
+    <div>
+      <div class="label-row"><span class="dot tengu"></span><strong>Tengu Tool System</strong></div>
+      <div class="card tengu-card" style="margin-bottom:14px;">
+        <div class="card-title tengu">Plugin Architecture (Phase A)</div>
+        <pre style="font-size:10px;">Tool (async trait)
+  └─ ToolPlugin groups tools
+       └─ ToolRegistry dispatches
+            └─ PluginToolExecutor
+                 └─ ToolCtx per call
+                      ├─ workspace
+                      ├─ scope (ToolScope)
+                      ├─ shell
+                      ├─ http client
+                      ├─ memory handle
+                      ├─ secret_registry
+                      ├─ activity port
+                      └─ subagents</pre>
+      </div>
+      <div class="plugin-grid">
+        <div class="plugin-box tengu-plugin"><div class="picon">📁</div><div class="pname">workspace</div><div class="pdesc">read, write, list, run_command</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🌐</div><div class="pname">http</div><div class="pdesc">http_request (async, auth)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🔐</div><div class="pname">crypto</div><div class="pdesc">sign_tx, sign_msg, wallet_address, abi_encode</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">💾</div><div class="pname">cache</div><div class="pdesc">shared_cache (SQLite)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🧠</div><div class="pname">memory</div><div class="pdesc">remember, persistent_store</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">⚡</div><div class="pname">skill</div><div class="pdesc">shell skill tools (dynamic)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🤖</div><div class="pname">subagents</div><div class="pdesc">spawn, fan_out, manage</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🔌</div><div class="pname">mcp</div><div class="pdesc">any MCP server (dynamic)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🔬</div><div class="pname">skill_lifecycle</div><div class="pdesc">skill_distill (NEW)</div></div>
+      </div>
+      <div class="mt-16" style="font-size:12px;color:var(--text-muted);">
+        <strong>Access Control (2-layer):</strong><br>
+        1. Allow-list: tool exists for this agent?<br>
+        2. ToolScope: what can this tool touch? (default-deny, filesystem roots, etc.)<br>
+        Enforced by <code>tests/scope_lint.rs</code> — structural guarantee.
+      </div>
+    </div>
+
+    <!-- HERMES TOOLS -->
+    <div>
+      <div class="label-row"><span class="dot hermes"></span><strong>Hermes Tool System</strong></div>
+      <div class="card hermes-card" style="margin-bottom:14px;">
+        <div class="card-title hermes">40+ Tools, 6 Terminal Backends</div>
+        <div style="font-size:12px;color:var(--text-muted);">
+          Tools are Python files. Hot-add without rebuild. <code>hermes tools</code> command to toggle. Toolset presets for common configurations.
+        </div>
+      </div>
+      <div class="plugin-grid">
+        <div class="plugin-box hermes-plugin"><div class="picon">💻</div><div class="pname">terminal</div><div class="pdesc">local/docker/ssh/daytona/modal</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">📁</div><div class="pname">file tools</div><div class="pdesc">read/write/edit/search</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">🌐</div><div class="pname">browser</div><div class="pdesc">web fetch, search, crawl</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">🧠</div><div class="pname">memory</div><div class="pdesc">remember, recall, search</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">⚡</div><div class="pname">skills</div><div class="pdesc">skill_view, skill_install</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">🤖</div><div class="pname">subagents</div><div class="pdesc">delegate, parallel tasks</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">🔌</div><div class="pname">mcp</div><div class="pdesc">MCP server integration</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">🎙</div><div class="pname">voice</div><div class="pdesc">ElevenLabs TTS + transcription</div></div>
+        <div class="plugin-box hermes-plugin"><div class="picon">⏰</div><div class="pname">cron</div><div class="pdesc">scheduled task delivery</div></div>
+      </div>
+      <div class="mt-16" style="font-size:12px;color:var(--text-muted);">
+        <strong>Credential pool:</strong> Rotates API keys automatically.<br>
+        <strong>Rate limit tracker:</strong> Per-provider rate limit awareness.<br>
+        <strong>Context compressor:</strong> Automatic sliding window + summarization.
+      </div>
+    </div>
+
+    <!-- COWORK TOOLS -->
+    <div>
+      <div class="label-row"><span class="dot pi"></span><strong>Cowork/PI Tool System</strong></div>
+      <div class="card pi-card" style="margin-bottom:14px;">
+        <div class="card-title pi">MCP-First, Plugin-Extensible</div>
+        <div style="font-size:12px;color:var(--text-muted);">
+          Core tools built-in to Claude. Everything else arrives as MCP plugins. No rebuild ever needed.
+        </div>
+      </div>
+      <div class="plugin-grid">
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">📖</div><div class="pname">Read/Write/Edit</div><div class="pdesc">File system (sandboxed)</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">⚙️</div><div class="pname">Bash</div><div class="pdesc">Shell in sandbox</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">🌐</div><div class="pname">WebFetch/Search</div><div class="pdesc">Web content retrieval</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">🖥</div><div class="pname">Computer Use</div><div class="pdesc">Desktop control</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">🧩</div><div class="pname">MCP Plugins</div><div class="pdesc">Slack/Gmail/Linear/etc</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">🎨</div><div class="pname">Artifacts</div><div class="pdesc">Live HTML/React views</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">📋</div><div class="pname">TodoList</div><div class="pdesc">Task tracking widget</div></div>
+        <div class="plugin-box pi-card" style="border-left:3px solid var(--pi);"><div class="picon">❓</div><div class="pname">AskUserQuestion</div><div class="pdesc">Structured Q&A widget</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool Access Control Comparison -->
+  <div class="section-header mt-24"><h2>Tool Access Control</h2><div class="line"></div></div>
+  <table class="cmp-table">
+    <thead><tr><th>Feature</th><th>🔮 Tengu</th><th>☤ Hermes</th><th>🌐 Cowork/PI</th></tr></thead>
+    <tbody>
+      <tr><td>Allow-list gating</td><td>✓ Per-agent tool list computed at boot</td><td>✓ hermes tools toggle per session</td><td>✓ Plugin permission model</td></tr>
+      <tr><td>Filesystem scope</td><td>✓ ToolScope (default-deny) with fs_roots</td><td>Workspace-relative by convention</td><td>✓ Sandboxed /sessions/ path</td></tr>
+      <tr><td>Structural enforcement</td><td>✓ scope_lint.rs test (compile-time guarantee)</td><td>—</td><td>Built into platform</td></tr>
+      <tr><td>Secret redaction</td><td>✓ SecretRegistry.redact() on all tool inputs</td><td>✓ redact.py</td><td>Platform-level</td></tr>
+      <tr><td>Network access control</td><td>✓ ToolScope net_hosts allow-list</td><td>—</td><td>Admin-configurable</td></tr>
+      <tr><td>Dynamic tool discovery</td><td>✓ MCP plugin (stdio + http)</td><td>✓ MCP integration</td><td>✓ MCP server ecosystem</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════ GAPS TAB ═══════════════════════════════ -->
+<div class="panel" id="tab-gaps">
+  <div class="section-header"><h2>🚨 Critical Gaps in Tengu-Cluster</h2><div class="line"></div></div>
+  <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">Items Hermes Agent has shipped that Tengu has designed but not built (or not yet started).</p>
+
+  <div class="gap-item critical">
+    <div class="gap-icon">🔴</div>
+    <div>
+      <div class="gap-title">Skill Evolution Loop (tengu skill evolve)</div>
+      <div class="gap-desc">The design is excellent (spec in docs/superpowers/specs/). The <code>skill_distill</code> tool is live. But <code>skill-improver</code> agent, approval gate, scratch-worktree, and the <code>tengu skill evolve</code> CLI command are missing. The full loop exists only on paper.</div>
+      <div class="gap-fix">→ Implement <code>evolve.rs</code> + <code>skill-improver</code> agent profile in sandboxes/. Estimated: 1–2 weeks.</div>
+    </div>
+  </div>
+
+  <div class="gap-item critical">
+    <div class="gap-icon">🔴</div>
+    <div>
+      <div class="gap-title">Permanent Memory Tier</div>
+      <div class="gap-desc">Fully designed in <code>tengu/ideas/memory-idea/</code> with Rust pseudocode. <code>MemoryTier</code> enum, <code>PermanentDiskStore</code>, <code>remember_permanently</code> tool, prune protection — all unimplemented. Agent currently forgets everything on prune.</div>
+      <div class="gap-fix">→ Follow the design doc exactly. Main risk: deciding global vs per-agent permanent scope. Estimated: 3–5 days.</div>
+    </div>
+  </div>
+
+  <div class="gap-item critical">
+    <div class="gap-icon">🔴</div>
+    <div>
+      <div class="gap-title">Cron / Scheduled Tasks</div>
+      <div class="gap-desc">Hermes has a full built-in cron scheduler with delivery to any platform. Tengu has no scheduling subsystem at all — no <code>cron/</code> module, no scheduled task runner, no concept of time-triggered agent runs.</div>
+      <div class="gap-fix">→ Add a <code>scheduler.rs</code> module. Could piggyback on tokio's <code>time::interval</code>. Deliver results to Telegram channel. Estimated: 1 week.</div>
+    </div>
+  </div>
+
+  <div class="gap-item medium">
+    <div class="gap-icon">🟡</div>
+    <div>
+      <div class="gap-title">Pre-turn Memory Prefetch + Context Fencing</div>
+      <div class="gap-desc">Memory recall happens reactively (agent calls <code>remember</code>/<code>recall</code> tools). There's no proactive semantic prefetch injected before each LLM call, and no <code>&lt;memory-context&gt;</code> fence to prevent recalled facts being confused with user input.</div>
+      <div class="gap-fix">→ Add <code>prefetch_memory(query)</code> call in <code>ChatRuntimeService::handle_turn()</code> before building the LLM prompt. Wrap output in system note.</div>
+    </div>
+  </div>
+
+  <div class="gap-item medium">
+    <div class="gap-icon">🟡</div>
+    <div>
+      <div class="gap-title">Context Compression / Sliding Window</div>
+      <div class="gap-desc">Tengu has <code>prompt_budget.rs</code> for token counting but no automatic context compression when the window fills. Hermes has <code>context_compressor.py</code> with LLM summarization + <code>/compress</code> command.</div>
+      <div class="gap-fix">→ When token budget &lt; threshold: call engine with a compression-system-prompt on the current transcript. Truncate old messages, insert summary. Estimated: 3–4 days.</div>
+    </div>
+  </div>
+
+  <div class="gap-item medium">
+    <div class="gap-icon">🟡</div>
+    <div>
+      <div class="gap-title">Cross-session FTS / Session Search</div>
+      <div class="gap-desc">No ability to search past conversations. Hermes has SQLite FTS5 indexing all sessions + LLM summarization of relevant results. This makes recall of old knowledge genuinely useful.</div>
+      <div class="gap-fix">→ Add rusqlite FTS5 table in the existing SQLite infrastructure. Index each completed session. Add <code>session_search</code> tool. 1 week.</div>
+    </div>
+  </div>
+
+  <div class="gap-item low">
+    <div class="gap-icon">🔵</div>
+    <div>
+      <div class="gap-title">Messaging Platform Breadth</div>
+      <div class="gap-desc">Tengu supports Telegram only. Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
+      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust around the existing <code>event_orchestrator.rs</code> pattern.</div>
+    </div>
+  </div>
+
+  <div class="gap-item low">
+    <div class="gap-icon">🔵</div>
+    <div>
+      <div class="gap-title">Skill Catalog / Hub Integration</div>
+      <div class="gap-desc">No skill discovery or sharing mechanism. Hermes integrates with agentskills.io. Skills stay local forever in Tengu unless manually copied.</div>
+      <div class="gap-fix">→ Add <code>tengu skill install &lt;url&gt;</code> CLI command. Git clone to ~/.tengu/skills/. 2–3 days.</div>
+    </div>
+  </div>
+
+  <!-- WHAT TENGU DOES BETTER -->
+  <div class="section-header mt-24"><h2>✅ Where Tengu Is Better Than Hermes</h2><div class="line"></div></div>
+
+  <div class="gap-item" style="border-left:3px solid var(--tengu);">
+    <div class="gap-icon">💜</div>
+    <div>
+      <div class="gap-title">Metric-Gated Skill Evolution (when built)</div>
+      <div class="gap-desc">Hermes improves skills reactively and LLM-only. Tengu's design has a rigorous metric harness (4 metric types, eval fixtures, score delta gate, scratch-worktree isolation). When implemented, this is far more reliable than Hermes's approach.</div>
+    </div>
+  </div>
+
+  <div class="gap-item" style="border-left:3px solid var(--tengu);">
+    <div class="gap-icon">💜</div>
+    <div>
+      <div class="gap-title">Blockchain / Crypto Primitives</div>
+      <div class="gap-desc">Built-in Privy wallet tools: sign transactions, sign messages, get wallet address, ABI encode, hex conversions. Hermes has none. This is a major competitive advantage for DeFi/Web3 agent use cases.</div>
+    </div>
+  </div>
+
+  <div class="gap-item" style="border-left:3px solid var(--tengu);">
+    <div class="gap-icon">💜</div>
+    <div>
+      <div class="gap-title">Architectural Cleanliness (Ports/Adapters)</div>
+      <div class="gap-desc">Tengu's Rust core enforces clean separation — ports for all external dependencies, structural scope enforcement via lint tests, doctrine that prevents Rust encoding policy. Hermes's Python codebase is more pragmatic and less structured.</div>
+    </div>
+  </div>
+
+  <div class="gap-item" style="border-left:3px solid var(--tengu);">
+    <div class="gap-icon">💜</div>
+    <div>
+      <div class="gap-title">Dual Engine (OpenRouter + Claude Code)</div>
+      <div class="gap-desc">Tengu can run agents using Claude Code as the backend, giving access to Claude's native file tools + MCP bridge. This is a unique capability — agents get the full Claude Code experience inside Tengu's orchestration shell.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ MATURITY TAB ═══════════════════════════════ -->
+<div class="panel" id="tab-maturity">
+  <div class="section-header"><h2>📊 Feature Maturity Scorecard</h2><div class="line"></div></div>
+  <p style="font-size:13px;color:var(--text-muted);margin-bottom:24px;">Scores are estimates based on code analysis. 100% = production-ready, feature-complete. The goal is not parity but <em>intentional differentiation</em>.</p>
+
+  <div class="grid-2">
+    <div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:16px;">Core Agent Loop</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu</span><span>78%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:78%"></div></div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes</span><span>95%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:95%"></div></div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork</span><span>88%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:88%"></div></div>
+      </div>
+
+      <div style="font-size:15px;font-weight:700;margin-top:20px;margin-bottom:16px;">Memory System</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu</span><span>42%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:42%"></div></div>
+        <div class="tooltip-hint">Has vector store. Missing: permanent tier, prefetch, FTS, compression nudge</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes</span><span>92%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:92%"></div></div>
+        <div class="tooltip-hint">Full lifecycle. External plugin slot. Honcho. FTS5 session search.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork</span><span>35%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:35%"></div></div>
+        <div class="tooltip-hint">File-based only. No semantic recall. consolidate-memory skill helps.</div>
+      </div>
+
+      <div style="font-size:15px;font-weight:700;margin-top:20px;margin-bottom:16px;">Skills System</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu</span><span>65%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:65%"></div></div>
+        <div class="tooltip-hint">Skill loading great. Distill tool live. Eval/evolve loop incomplete.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes</span><span>88%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:88%"></div></div>
+        <div class="tooltip-hint">Autonomous creation + live improvement. No metric harness.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork</span><span>82%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:82%"></div></div>
+        <div class="tooltip-hint">Rich skill system, skill-creator, no autonomous evolution.</div>
+      </div>
+    </div>
+
+    <div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:16px;">Tools & Integrations</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu</span><span>72%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:72%"></div></div>
+        <div class="tooltip-hint">Strong plugin arch + crypto. Missing voice, browser, more platforms.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes</span><span>95%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:95%"></div></div>
+        <div class="tooltip-hint">40+ tools, 6 backends, voice, cron, subagents, credentials pool.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork</span><span>85%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:85%"></div></div>
+        <div class="tooltip-hint">Computer use, MCP ecosystem, artifacts. Platform-managed security.</div>
+      </div>
+
+      <div style="font-size:15px;font-weight:700;margin-top:20px;margin-bottom:16px;">Multi-platform Reach</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu</span><span>30%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:30%"></div></div>
+        <div class="tooltip-hint">TUI + Telegram only</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes</span><span>95%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:95%"></div></div>
+        <div class="tooltip-hint">6 messaging + 6 terminal + mobile</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork</span><span>55%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:55%"></div></div>
+        <div class="tooltip-hint">Desktop + browser only. No mobile native.</div>
+      </div>
+
+      <div style="font-size:15px;font-weight:700;margin-top:20px;margin-bottom:16px;">Security & Scheduling</div>
+
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu — Security</span><span>88%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:88%"></div></div>
+        <div class="tooltip-hint">AES-256 secrets vault, ToolScope, scope_lint tests, secret redaction</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🔮 Tengu — Scheduling</span><span>5%</span></div>
+        <div class="progress-bar"><div class="progress-fill tengu" style="width:5%"></div></div>
+        <div class="tooltip-hint">Not implemented. No cron.</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>☤ Hermes — Scheduling</span><span>90%</span></div>
+        <div class="progress-bar"><div class="progress-fill hermes" style="width:90%"></div></div>
+        <div class="tooltip-hint">Full cron scheduler with natural language + multi-platform delivery</div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-label"><span>🌐 Cowork — Scheduling</span><span>70%</span></div>
+        <div class="progress-bar"><div class="progress-fill pi" style="width:70%"></div></div>
+        <div class="tooltip-hint">Scheduled task MCP tool, on-demand or interval</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Priority roadmap -->
+  <div class="section-header mt-24"><h2>🗺 Recommended Priority Roadmap for Tengu</h2><div class="line"></div></div>
+  <div class="card" style="border-color:var(--tengu);">
+    <table class="cmp-table">
+      <thead><tr><th>#</th><th>Feature</th><th>Impact</th><th>Effort</th><th>Files to touch</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><strong>Permanent Memory Tier</strong> <span class="tag missing">Critical</span></td>
+          <td>High — users stop forgetting things between restarts</td>
+          <td>3–5 days</td>
+          <td><code>memory_builder.rs</code>, <code>prune.rs</code>, new <code>permanent_store.rs</code></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><strong>Pre-turn Memory Prefetch</strong> <span class="tag missing">Critical</span></td>
+          <td>High — memory becomes proactive instead of reactive</td>
+          <td>1–2 days</td>
+          <td><code>chat_builder.rs</code></td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><strong>Context Compression</strong> <span class="tag partial">Medium</span></td>
+          <td>High — enables long conversations without degradation</td>
+          <td>3–4 days</td>
+          <td><code>prompt_budget.rs</code>, <code>chat_builder.rs</code></td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td><strong>Skill Evolve Loop</strong> <span class="tag planned">Planned</span></td>
+          <td>High — closes the auto-improvement gap vs Hermes</td>
+          <td>1–2 weeks</td>
+          <td><code>skill_lifecycle/evolve.rs</code>, <code>skill-improver</code> sandbox</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td><strong>Cron Scheduler</strong> <span class="tag missing">Missing</span></td>
+          <td>Medium — enables autonomous scheduled agents</td>
+          <td>1 week</td>
+          <td>new <code>scheduler.rs</code>, wire into Telegram adapter</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td><strong>Session FTS Search</strong> <span class="tag missing">Missing</span></td>
+          <td>Medium — cross-session recall without full replay</td>
+          <td>1 week</td>
+          <td>new <code>session_index.rs</code>, SQLite FTS5 table</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- end .content -->
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

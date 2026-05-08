@@ -69,7 +69,9 @@ impl ToolPlugin for CachePlugin {
 
     async fn tools(&self, ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>> {
         match open_cache_db(ctx.workspace) {
-            Ok(conn) => Ok(vec![Arc::new(SharedCacheTool::new(Arc::new(Mutex::new(conn))))]),
+            Ok(conn) => Ok(vec![Arc::new(SharedCacheTool::new(Arc::new(Mutex::new(
+                conn,
+            ))))]),
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to open shared cache, tool disabled");
                 Ok(vec![])

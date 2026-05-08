@@ -2,8 +2,9 @@
 //! Memory plugin — vector-memory-backed tools.
 //!
 //! Provides:
-//! - `remember` — embed + store a fact in the shared memory backend. Always
-//!   registered when `ctx.memory` is `Some`.
+//! - `memory_ingest` — embed + store a document or fact in the shared memory
+//!   backend (renamed from `remember` in harness-orchestration task 2.1).
+//!   Always registered when `ctx.memory` is `Some`.
 //! - `persistent_store` — chunked file storage with semantic search. Opt-in
 //!   via `AgentConfig.workspace_tools` (like `shared_cache`).
 //!
@@ -18,32 +19,92 @@ use std::sync::Arc;
 use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
 use crate::adapters::types::ToolDef;
 
+pub(crate) mod ingest;
 pub(crate) mod persistent_store;
-pub(crate) mod remember;
+pub(crate) mod search;
 
+pub(crate) use ingest::{MemoryIngestTool, MEMORY_INGEST_TOOL_NAME};
 pub(crate) use persistent_store::{PersistentStoreTool, PERSISTENT_STORE_TOOL_NAME};
-pub(crate) use remember::{RememberTool, REMEMBER_TOOL_NAME};
+pub(crate) use search::{MemorySearchTool, MEMORY_SEARCH_TOOL_NAME};
 
-/// ToolDef for `remember` — kept in sync with the schema in
-/// `remember::RememberTool::new`.
-pub(crate) fn remember_def() -> ToolDef {
+/// ToolDef for `memory_ingest` — kept in sync with the schema in
+/// `ingest::MemoryIngestTool::new`.
+pub(crate) fn memory_ingest_def() -> ToolDef {
     ToolDef::new(
-        REMEMBER_TOOL_NAME,
-        "Store a fact in long-term memory.",
+        MEMORY_INGEST_TOOL_NAME,
+        "Ingest a document or fact into long-term vector memory. \
+         Accepts either a single `text`/`content` string or a list of \
+         pre-chunked `chunks`, plus optional free-form `metadata` \
+         (e.g. source, topic, kind). Embeddings are computed by the \
+         memory backend.",
         json!({
             "type": "object",
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The fact, insight, or information to remember"
+                    "description": "The fact, insight, or document body to ingest. \
+                                    Alias of `text`; one of content/text/chunks is required."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Alias of `content` — the text to ingest."
+                },
+                "chunks": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional pre-chunked content. If supplied, each chunk \
+                                    is ingested as a separate memory entry sharing the \
+                                    same metadata."
                 },
                 "metadata": {
                     "type": "object",
-                    "description": "Optional key-value tags for the memory (e.g. {\"kind\": \"fact\", \"topic\": \"auth\"})",
-                    "additionalProperties": { "type": "string" }
+                    "description": "Optional free-form tags attached to every stored entry \
+                                    (e.g. {\"kind\": \"fact\", \"source\": \"url\", \"topic\": \"auth\"}). \
+                                    Non-string values are coerced to strings.",
+                    "additionalProperties": true
+                }
+            }
+        }),
+    )
+}
+
+/// ToolDef for `memory_search` — kept in sync with the schema in
+/// `search::MemorySearchTool::new`.
+pub(crate) fn memory_search_def() -> ToolDef {
+    ToolDef::new(
+        MEMORY_SEARCH_TOOL_NAME,
+        "Targeted vector search of long-term memory. Returns hits with \
+         text, similarity score, and metadata. Use when you need to \
+         look up specific prior content (documents ingested by other \
+         agents, past turn summaries, etc.). Optional `agent`, \
+         `source`, and `kind` filters restrict matches to entries \
+         whose metadata has the exact given value.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language search query embedded by the memory backend."
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Max hits to return (default: 5).",
+                    "default": 5
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `agent` metadata equals this value."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `source` metadata equals this value."
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "Optional metadata filter: only return hits whose `kind` metadata equals this value."
                 }
             },
-            "required": ["content"]
+            "required": ["query"]
         }),
     )
 }
@@ -95,7 +156,7 @@ pub(crate) fn persistent_store_def() -> ToolDef {
 /// inclusion by whether memory is enabled. `persistent_store` is opt-in per
 /// agent via `workspace_tools` and has its own separate `tool_defs()` below.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    vec![remember_def()]
+    vec![memory_ingest_def(), memory_search_def()]
 }
 
 /// Tool definitions for the opt-in `persistent_store` tool.
@@ -106,7 +167,7 @@ pub(crate) fn persistent_store_tool_defs() -> Vec<ToolDef> {
 /// Plugin grouping memory tools.
 ///
 /// Construction is driven by `PluginCtx`:
-/// - `remember` is included whenever `ctx.memory` is `Some`.
+/// - `memory_ingest` is included whenever `ctx.memory` is `Some`.
 /// - `persistent_store` is included when `ctx.memory` is `Some` AND
 ///   `ctx.config.workspace_tools` contains `"persistent_store"`.
 ///   Chunk size / overlap are read from the agent config's `MemoryConfig` if
@@ -132,13 +193,15 @@ impl ToolPlugin for MemoryPlugin {
     }
 
     async fn tools(&self, ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>> {
-        let Some(handle) = ctx.memory.as_ref().cloned() else {
-            // Memory disabled — no tools.
+        // Vector-memory tools go through `MemoryManager` directly.
+        let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+        if let Some(manager) = ctx.memory_manager.as_ref().cloned() {
+            tools.push(Arc::new(MemoryIngestTool::new(Arc::clone(&manager))));
+            tools.push(Arc::new(MemorySearchTool::new(Arc::clone(&manager))));
+        } else {
+            // No vector backend registered — no vector-memory tools.
             return Ok(vec![]);
-        };
-
-        let mut tools: Vec<Arc<dyn Tool>> =
-            vec![Arc::new(RememberTool::new(Arc::clone(&handle)))];
+        }
 
         if ctx
             .config
@@ -146,12 +209,14 @@ impl ToolPlugin for MemoryPlugin {
             .iter()
             .any(|t| t == PERSISTENT_STORE_TOOL_NAME)
         {
-            tools.push(Arc::new(PersistentStoreTool::new(
-                ctx.workspace.to_path_buf(),
-                Arc::clone(&handle),
-                self.chunk_size,
-                self.chunk_overlap,
-            )));
+            if let Some(manager) = ctx.memory_manager.as_ref().cloned() {
+                tools.push(Arc::new(PersistentStoreTool::new(
+                    ctx.workspace.to_path_buf(),
+                    manager,
+                    self.chunk_size,
+                    self.chunk_overlap,
+                )));
+            }
         }
 
         Ok(tools)
@@ -162,55 +227,18 @@ impl ToolPlugin for MemoryPlugin {
 mod tests {
     use super::*;
     use crate::adapters::config::Config;
-    use crate::adapters::memory_builder::MemoryServiceHandle;
-    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort};
-    use crate::adapters::types::{MemoryEntry, MemorySearchResult};
+    use crate::adapters::memory::manager::MemoryManager;
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
     use tempfile::TempDir;
 
-    /// Test-only no-op memory handle used to exercise plugin gating without a
-    /// real embedding backend or vector store.
-    fn dummy_handle() -> Arc<MemoryServiceHandle> {
-        struct NoopEmbed;
-
-        #[async_trait]
-        impl EmbeddingPort for NoopEmbed {
-            async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-                Ok(vec![])
-            }
-        }
-
-        struct NoopStore;
-
-        #[async_trait]
-        impl MemoryStorePort for NoopStore {
-            async fn store(&self, _entry: &MemoryEntry) -> Result<()> {
-                Ok(())
-            }
-            async fn search_by_vector(
-                &self,
-                _embedding: &[f32],
-                _top_k: usize,
-            ) -> Result<Vec<MemorySearchResult>> {
-                Ok(vec![])
-            }
-            async fn delete(&self, _id: &str) -> Result<bool> {
-                Ok(false)
-            }
-            async fn clear_all(&self) -> Result<()> {
-                Ok(())
-            }
-            async fn entry_count(&self) -> usize {
-                0
-            }
-            async fn storage_bytes(&self) -> u64 {
-                0
-            }
-        }
-
-        Arc::new(MemoryServiceHandle {
-            embedding: Arc::new(NoopEmbed),
-            store: Arc::new(NoopStore),
-        })
+    /// Test-only `MemoryManager` with a null `Embedder` + in-memory disk
+    /// vector store — exercises plugin gating without network or disk I/O.
+    async fn dummy_manager() -> Arc<MemoryManager> {
+        let manager = Arc::new(MemoryManager::new());
+        let store: Arc<dyn VectorStore> = Arc::new(DiskVectorStore::in_memory());
+        let embedder = Arc::new(Embedder::null());
+        manager.set_vector_backend(embedder, store).await;
+        manager
     }
 
     #[tokio::test]
@@ -223,9 +251,8 @@ mod tests {
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -233,23 +260,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_plugin_includes_remember_when_memory_enabled() {
+    async fn memory_plugin_includes_memory_ingest_when_memory_enabled() {
         let tmp = TempDir::new().unwrap();
         let config = Config::default();
         let agent_config = config.agents.get("main").unwrap().clone();
+        let manager = dummy_manager().await;
         let ctx = PluginCtx {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: Some(dummy_handle()),
+            memory_manager: Some(manager),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
         let names: Vec<String> = tools.iter().map(|t| t.definition().name.clone()).collect();
-        assert!(names.contains(&"remember".to_string()));
+        assert!(names.contains(&"memory_ingest".to_string()));
+        assert!(names.contains(&"memory_search".to_string()));
         assert!(
             !names.contains(&"persistent_store".to_string()),
             "persistent_store should be opt-in"
@@ -262,19 +290,20 @@ mod tests {
         let config = Config::default();
         let mut agent_config = config.agents.get("main").unwrap().clone();
         agent_config.workspace_tools = vec!["persistent_store".to_string()];
+        let manager = dummy_manager().await;
         let ctx = PluginCtx {
             workspace: tmp.path(),
             config: &agent_config,
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::shell_executor::LocalShellExecutor::new()),
-            memory: Some(dummy_handle()),
+            memory_manager: Some(manager),
             secret_registry: Arc::new(crate::adapters::secret_builder::SecretRegistry::new()),
-            subagents: None,
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
         let names: Vec<String> = tools.iter().map(|t| t.definition().name.clone()).collect();
-        assert!(names.contains(&"remember".to_string()));
+        assert!(names.contains(&"memory_ingest".to_string()));
+        assert!(names.contains(&"memory_search".to_string()));
         assert!(names.contains(&"persistent_store".to_string()));
     }
 }

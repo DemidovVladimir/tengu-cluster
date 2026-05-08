@@ -18,14 +18,13 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::config::Config;
-use crate::adapters::embedding::OpenRouterEmbeddingAdapter;
 use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
-use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
-use crate::adapters::plugins::crypto::CryptoPlugin;
-use crate::adapters::plugins::http::HttpPlugin;
-use crate::adapters::plugins::memory::MemoryPlugin;
-use crate::adapters::plugins::workspace::WorkspacePlugin;
+use crate::adapters::memory::manager::MemoryManager;
+use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+// Phase 7.7 — plugin imports removed; bridge delegates to
+// `channel_runtime::register_core_plugins` which has its own local imports.
+// Keeps the bridge file focused on stdio JSON-RPC + executor wiring rather
+// than re-listing the plugin set.
 use crate::adapters::ports::{ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
@@ -188,7 +187,9 @@ pub async fn run_mcp_bridge() -> Result<()> {
                 handle_tools_call(id, &request.params, &executor, max_result_chars).await
             }
             "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
-            _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method)),
+            _ => {
+                JsonRpcResponse::error(id, -32601, format!("Method not found: {}", request.method))
+            }
         };
 
         write_response(&stdout, &resp);
@@ -234,10 +235,7 @@ async fn handle_tools_call(
     executor: &PluginToolExecutor,
     max_result_chars: usize,
 ) -> JsonRpcResponse {
-    let tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params
         .get("arguments")
         .cloned()
@@ -258,7 +256,7 @@ async fn handle_tools_call(
         "MCP tool call started"
     );
 
-    match executor.execute(&call).await {
+    match executor.execute(&call, &[]).await {
         Ok(result) => {
             let truncated = truncate_mcp_result(&result, max_result_chars);
             info!(
@@ -306,19 +304,15 @@ async fn handle_tools_call(
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
 
 fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
-    if result.len() <= max_chars {
-        return result.to_string();
+    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+        None => result.to_string(),
+        Some((prefix, end)) => format!(
+            "{}\n\n[truncated — showing {} of {} chars]",
+            prefix,
+            end,
+            result.len()
+        ),
     }
-    let mut end = max_chars;
-    while end > 0 && !result.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!(
-        "{}\n\n[truncated — showing {} of {} chars]",
-        &result[..end],
-        end,
-        result.len()
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -327,24 +321,33 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 // channel-specific activity port).
 // ---------------------------------------------------------------------------
 
-async fn build_bridge_executor(
-    workspace: &Path,
-    tools: &[ToolDef],
-) -> Result<PluginToolExecutor> {
-    let allowed_names: HashSet<String> =
-        tools.iter().map(|t| t.name.clone()).collect();
+async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<PluginToolExecutor> {
+    let allowed_names: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
 
     // Bridge-side defaults: use the default main agent config for plugin
     // gating decisions (e.g. `workspace_tools` opt-ins). The bridge runs as a
     // subprocess and has no agent-specific config, so using defaults matches
     // the pre-A9 bridge behaviour.
+    //
+    // Phase 7.6 — synthesize workspace_tools from the incoming `tools`
+    // allow-list. The LLM-advertised tools (passed via TENGU_BRIDGE_TOOLS)
+    // ARE the authoritative allow-list for the bridge process; defaulting
+    // to an empty workspace_tools causes plugins like MemoryPlugin to skip
+    // registering persistent_store even when memory is available, because
+    // the plugin gates on `ctx.config.workspace_tools.contains(...)`.
     let config = Config::default();
-    let agent_config = config
+    let mut agent_config = config
         .agents
         .get("main")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("default config missing 'main' agent"))?;
+    // Phase 7.7 refactor #5 — same allowlist that agent_config_from_spec uses.
+    agent_config.workspace_tools = crate::adapters::channel_runtime::WORKSPACE_TOOLS_ALLOWLIST
+        .iter()
+        .filter(|t| allowed_names.contains(**t))
+        .map(|t| t.to_string())
+        .collect();
 
     let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
         Arc::new(LocalShellExecutor::new());
@@ -356,26 +359,35 @@ async fn build_bridge_executor(
 
     let secret_registry = Arc::new(SecretRegistry::new());
 
-    // Memory handle: only built when memory tools are requested and the API
-    // key is present. Errors fall through to None so other tools still work.
-    let needs_memory = allowed_names.contains("remember")
-        || allowed_names.contains(
-            crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME,
-        );
-    let memory_handle: Option<Arc<MemoryServiceHandle>> = if needs_memory {
+    // Memory manager: only built when memory tools are requested and the
+    // API key is present. Errors fall through to None so other tools still
+    // work. Wraps the shared `Embedder` + `DiskVectorStore` pair so
+    // `memory_ingest` / `memory_search` / `persistent_store` all talk to
+    // the same backing store.
+    let needs_memory = allowed_names.contains("memory_ingest")
+        || allowed_names.contains("memory_search")
+        || allowed_names.contains(crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME);
+    let memory_manager_handle: Option<Arc<MemoryManager>> = if needs_memory {
         match std::env::var("OPENROUTER_API_KEY") {
             Ok(api_key) => {
-                let embedding = Arc::new(OpenRouterEmbeddingAdapter::new(
-                    api_key,
-                    "openai/text-embedding-3-small".to_string(),
-                ));
                 let memory_dir = workspace.join("memory");
-                DiskVectorMemoryStore::new(&memory_dir).ok().map(|store| {
-                    Arc::new(MemoryServiceHandle {
-                        embedding,
-                        store: Arc::new(store),
-                    })
-                })
+                match DiskVectorStore::new(&memory_dir) {
+                    Ok(store) => {
+                        let store: Arc<dyn VectorStore> = Arc::new(store);
+                        let embedder = Arc::new(Embedder::new(
+                            api_key,
+                            "openai/text-embedding-3-small".to_string(),
+                        ));
+
+                        let manager = Arc::new(MemoryManager::new());
+                        manager.set_vector_backend(embedder, store).await;
+                        Some(manager)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "bridge failed to init disk memory store");
+                        None
+                    }
+                }
             }
             Err(_) => {
                 warn!("Memory tools requested but OPENROUTER_API_KEY not set — skipping");
@@ -391,74 +403,40 @@ async fn build_bridge_executor(
         config: &agent_config,
         http: http_client.clone(),
         shell: Arc::clone(&shell),
-        memory: memory_handle.clone(),
+        memory_manager: memory_manager_handle.clone(),
         secret_registry: Arc::clone(&secret_registry),
-        subagents: None,
     };
 
     let mut registry = ToolRegistry::new();
 
     // NOTE: the outbound bridge deliberately does NOT register the inbound
-    // `McpPlugin`. External Claude Code clients are their own host with their
-    // own MCP server access; re-advertising tengu's inbound MCP manifest here
-    // would cause name collisions and confusing double-hop routing.
-    // See `channel_runtime::build_tool_executor` for the inbound-only wiring.
+    // `McpPlugin` or `SkillPlugin`. External Claude Code clients are their
+    // own host with their own MCP server access; re-advertising tengu's
+    // inbound MCP manifest here would cause name collisions and double-hop
+    // routing. SkillPlugin needs a `SkillRegistry` that the bridge's
+    // standalone subprocess context can't sensibly construct.
 
-    // Workspace plugin — read_file, list_directory, write_file, run_command.
-    if let Err(e) = registry
-        .register_plugin(&WorkspacePlugin, &plugin_ctx, &allowed_list)
-        .await
-    {
-        anyhow::bail!("bridge failed to register workspace plugin: {}", e);
-    }
+    // Phase 7.7 — register the seven shared plugins via the consolidated
+    // helper. Adding a new shared plugin only requires editing
+    // `register_core_plugins` in channel_runtime; this bridge picks it up
+    // automatically. Bug B/C wouldn't have happened if this had been
+    // consolidated from day one.
+    crate::adapters::channel_runtime::register_core_plugins(
+        &mut registry,
+        &plugin_ctx,
+        &allowed_names,
+        &allowed_list,
+        crate::adapters::channel_runtime::CoreRegistrationOpts {
+            cancel: None,
+            memory_config: Some(&crate::adapters::config::MemoryConfig::default()),
+        },
+    )
+    .await;
 
-    // Memory plugin — remember, persistent_store (gated by ctx.memory).
-    let memory_plugin = MemoryPlugin::new(1000, 200);
-    if let Err(e) = registry
-        .register_plugin(&memory_plugin, &plugin_ctx, &allowed_list)
-        .await
-    {
-        warn!(error = %e, "bridge failed to register memory plugin");
-    }
-
-    // Cache plugin — shared_cache (opt-in).
-    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        if let Err(e) = registry
-            .register_plugin(&CachePlugin, &plugin_ctx, &allowed_list)
-            .await
-        {
-            warn!(error = %e, "bridge failed to register cache plugin");
-        }
-    }
-
-    // HTTP plugin — http_request.
-    if let Err(e) = registry
-        .register_plugin(&HttpPlugin, &plugin_ctx, &allowed_list)
-        .await
-    {
-        warn!(error = %e, "bridge failed to register http plugin");
-    }
-
-    // Crypto plugin — sign_and_send_transaction, sign_message, get_wallet_address, abi_encode, hex_to_uint256.
-    let crypto_plugin = CryptoPlugin::new(None);
-    if let Err(e) = registry
-        .register_plugin(&crypto_plugin, &plugin_ctx, &allowed_list)
-        .await
-    {
-        warn!(error = %e, "bridge failed to register crypto plugin");
-    }
-
-    // Permissive scope — mirrors `channel_runtime::permissive_scope`. Real
-    // per-agent scoping arrives with Phase B.
-    let scope = ToolScope {
-        fs_roots: vec![workspace.to_path_buf()],
-        net_hosts: vec!["*".to_string()],
-        env_reads: vec!["*".to_string()],
-        shell_bins: vec!["*".to_string()],
-        wallets: vec![
-            crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string(),
-        ],
-    };
+    // Phase 7.7 — shared permissive scope. Was inlined before; now uses the
+    // canonical `channel_runtime::permissive_scope` so a single change to
+    // the scope shape covers both paths.
+    let scope = crate::adapters::channel_runtime::permissive_scope(workspace);
     let mut scopes: HashMap<String, ToolScope> = HashMap::new();
     for name in registry.tool_names() {
         scopes.insert(name, scope.clone());
@@ -469,10 +447,13 @@ async fn build_bridge_executor(
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory: memory_handle,
+        memory_manager: memory_manager_handle,
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,
-        subagents: None,
+        // Stream M — bridge has only the synthesized default-main config;
+        // hand it to ToolCtx so distill (if invoked through the bridge)
+        // sees the engine/model the bridge inherited rather than nothing.
+        agent_config: Some(agent_config),
     })
 }

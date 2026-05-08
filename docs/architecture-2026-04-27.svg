@@ -1,0 +1,410 @@
+<svg viewBox="0 0 1000 1900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — feature workflow + file correlations, 2026-04-27</title>
+  <desc id="desc">Three stacked sections plus a key-mechanics panel: per-turn flow, the five subsystems, the three Qdrant collections, and surprising mechanics readers should know.</desc>
+  <style>
+    .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
+    .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
+    .h3 { font-size: 12px; font-weight: 700; fill: #1e293b; }
+    .body { font-size: 11px; fill: #334155; }
+    .small { font-size: 10px; fill: #64748b; }
+    .mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px; fill: #1e293b; }
+    .file { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 9.5px; fill: #475569; }
+    .lane-user { fill: #fef3c7; stroke: #fde68a; }
+    .lane-orch { fill: #ede9fe; stroke: #c4b5fd; }
+    .lane-plan { fill: #dbeafe; stroke: #93c5fd; }
+    .lane-exec { fill: #cffafe; stroke: #67e8f9; }
+    .lane-sub  { fill: #dcfce7; stroke: #86efac; }
+    .lane-tool { fill: #ffe4e6; stroke: #fda4af; }
+    .lane-mem  { fill: #f1f5f9; stroke: #cbd5e1; }
+    .pill-mem  { fill: #475569; }
+    .pill-rag  { fill: #7c3aed; }
+    .pill-agt  { fill: #0891b2; }
+    .pill-skl  { fill: #16a34a; }
+    .pill-orc  { fill: #c2410c; }
+    .panel { fill: #ffffff; stroke: #e2e8f0; }
+    .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
+    .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
+    .arrow-dash { stroke: #94a3b8; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#475569" />
+    </marker>
+    <marker id="ah-fat" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#1e293b" />
+    </marker>
+    <marker id="ah-dash" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8" />
+    </marker>
+  </defs>
+
+  <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · companion to docs/architecture-2026-04-27.md (the line-by-line read)</text>
+
+  <g transform="translate(20, 56)">
+    <rect width="960" height="28" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
+    <rect x="10" y="6" width="14" height="14" rx="3" class="pill-mem" />
+    <text x="30" y="17" class="small">memory/  (low-level vector store)</text>
+    <rect x="180" y="6" width="14" height="14" rx="3" class="pill-rag" />
+    <text x="200" y="17" class="small">rag/  (v2 facade)</text>
+    <rect x="310" y="6" width="14" height="14" rx="3" class="pill-agt" />
+    <text x="330" y="17" class="small">agents/  (specs)</text>
+    <rect x="430" y="6" width="14" height="14" rx="3" class="pill-skl" />
+    <text x="450" y="17" class="small">skills/  (3-tier scanner)</text>
+    <rect x="580" y="6" width="14" height="14" rx="3" class="pill-orc" />
+    <text x="600" y="17" class="small">orchestrator/  (planner + executor)</text>
+    <text x="800" y="17" class="small" font-style="italic">solid arrows = control flow · dashed = data flow</text>
+  </g>
+
+  <text x="20" y="110" class="h2">section 1 - per-turn flow - the seven steps from prompt to reply</text>
+  <line x1="20" y1="116" x2="980" y2="116" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 132)">
+    <rect width="170" height="64" rx="6" class="lane-user" />
+    <text x="10" y="18" class="h3">1. User input</text>
+    <text x="10" y="34" class="body">TUI / Telegram / CLI</text>
+    <text x="10" y="48" class="file">tui/mod.rs</text>
+    <text x="10" y="60" class="file">telegram_builder.rs</text>
+  </g>
+  <path d="M 195 164 L 235 164" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(240, 132)">
+    <rect width="200" height="64" rx="6" class="lane-orch" />
+    <text x="10" y="18" class="h3">2. Channel runtime</text>
+    <text x="10" y="34" class="body">build_orchestrator + factory</text>
+    <text x="10" y="48" class="file">channel_runtime.rs</text>
+    <text x="10" y="60" class="file">  ChatOrchestratorPortImpl</text>
+  </g>
+  <path d="M 445 164 L 485 164" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(490, 132)">
+    <rect width="220" height="64" rx="6" class="lane-plan" />
+    <text x="10" y="18" class="h3">3. Planner (RagPlanner)</text>
+    <text x="10" y="34" class="body">queries registry, runs planner LLM</text>
+    <text x="10" y="48" class="file">orchestrator/planner.rs</text>
+    <text x="10" y="60" class="file">+ skills/orchestrator/SKILL.md</text>
+  </g>
+  <path d="M 715 164 L 755 164" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(760, 132)">
+    <rect width="220" height="64" rx="6" class="lane-exec" />
+    <text x="10" y="18" class="h3">4. DagExecutor</text>
+    <text x="10" y="34" class="body">retry, parallel steps, cancel</text>
+    <text x="10" y="48" class="file">orchestrator/executor.rs</text>
+    <text x="10" y="60" class="file">  + replan.rs - retry.rs</text>
+  </g>
+
+  <path d="M 870 200 L 870 230" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(560, 234)">
+    <rect width="420" height="74" rx="6" class="lane-sub" />
+    <text x="10" y="18" class="h3">5. SubprocessRunner - spawn tengu run-agent</text>
+    <text x="10" y="34" class="body">child process, IPC over stdin/stdout JSON</text>
+    <text x="10" y="48" class="file">runner.rs (parent) - main.rs::run_agent_subprocess (child)</text>
+    <text x="10" y="62" class="small">passes session_id, step_id, sandbox_config, optional compose override</text>
+  </g>
+  <path d="M 770 312 L 770 342" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(560, 346)">
+    <rect width="420" height="80" rx="6" class="lane-tool" />
+    <text x="10" y="18" class="h3">6. Subagent tool loop (LLM and tools)</text>
+    <text x="10" y="34" class="body">load AgentSpec, build PluginToolExecutor</text>
+    <text x="10" y="48" class="file">channel_runtime::build_subprocess_tool_executor</text>
+    <text x="10" y="62" class="file">plugins/{http,workspace,memory,crypto,mcp,...}</text>
+    <text x="10" y="76" class="small">runs until model calls compress_and_store OR max_turns hit</text>
+  </g>
+  <path d="M 770 430 L 770 460" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(560, 464)">
+    <rect width="420" height="60" rx="6" class="lane-mem" />
+    <text x="10" y="18" class="h3">7. compress_and_store - tengu_outputs</text>
+    <text x="10" y="34" class="body">step summary embedded + written to Qdrant</text>
+    <text x="10" y="48" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
+  </g>
+
+  <path d="M 555 494 L 480 494 L 480 196 L 870 196" class="arrow-dash" marker-end="url(#ah-dash)" />
+  <text x="200" y="490" class="small" font-style="italic">step output flows back to DagExecutor; replan triggered if step exhausted</text>
+
+  <g transform="translate(20, 234)">
+    <rect width="520" height="290" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">Memory writes happen alongside steps 3, 5, 7</text>
+    <line x1="10" y1="26" x2="510" y2="26" stroke="#e2e8f0" />
+    <text x="10" y="46" class="body" font-weight="600">At step 3 (planner.plan):</text>
+    <text x="10" y="62" class="file">RagPlanner::persist_user_message</text>
+    <text x="10" y="76" class="small">writes user message to tengu_messages with session_id</text>
+    <text x="10" y="90" class="small">also pushes to in-memory ring buffer (lite, this process only)</text>
+    <text x="10" y="120" class="body" font-weight="600">At step 3 (planner.plan), BEFORE the write:</text>
+    <text x="10" y="136" class="file">RagPlanner::cross_session_recall_block (Phase 6.4 read-back)</text>
+    <text x="10" y="150" class="small">if memory.cross_session_msg_top_k more than 0, semantic search over</text>
+    <text x="10" y="164" class="small">tengu_messages, inject "Cross-session message recall" block</text>
+    <text x="10" y="194" class="body" font-weight="600">At step 7 (compress_and_store):</text>
+    <text x="10" y="210" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
+    <text x="10" y="224" class="small">embeds the LLM-summarised step output</text>
+    <text x="10" y="238" class="small">writes to tengu_outputs tagged with step_id</text>
+    <text x="10" y="268" class="body" font-weight="600">At step 5 startup (parent to child IPC):</text>
+    <text x="10" y="282" class="file">SubprocessRunner forwards sandbox_config so child loads same scopes</text>
+  </g>
+
+  <text x="20" y="568" class="h2">section 2 - the five subsystems - what lives where</text>
+  <line x1="20" y1="574" x2="980" y2="574" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 586)">
+    <rect width="186" height="318" rx="6" class="panel" />
+    <rect x="0" y="0" width="186" height="22" rx="6" class="pill-mem" />
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">memory/  -  low-level</text>
+    <text x="10" y="40" class="file">vector.rs</text>
+    <text x="10" y="52" class="small">VectorStore trait (write/search/delete</text>
+    <text x="10" y="64" class="small">/clear_all/entry_count/storage_bytes/</text>
+    <text x="10" y="76" class="small">delete_older_than)</text>
+    <text x="10" y="96" class="file">vector/qdrant.rs</text>
+    <text x="10" y="108" class="small">real backend, gRPC to Qdrant</text>
+    <text x="10" y="128" class="file">vector/disk.rs</text>
+    <text x="10" y="140" class="small">bincode fallback (no qdrant feature)</text>
+    <text x="10" y="160" class="file">vector/embedder.rs</text>
+    <text x="10" y="172" class="small">OpenAI text-embedding-3-small client</text>
+    <text x="10" y="192" class="file">manager.rs</text>
+    <text x="10" y="204" class="small">MemoryManager - provider holder</text>
+    <text x="10" y="224" class="file">provider.rs</text>
+    <text x="10" y="236" class="small">MemoryProvider trait</text>
+    <text x="10" y="256" class="file">builtin.rs</text>
+    <text x="10" y="268" class="small">BuiltinMemoryProvider (MEMORY.md)</text>
+    <text x="10" y="288" class="file">injector.rs - writer.rs - fencing.rs</text>
+    <text x="10" y="300" class="small">planner-LLM pre/post turn glue</text>
+    <text x="10" y="312" class="small">(only ChatOrchPortImpl uses these)</text>
+  </g>
+
+  <g transform="translate(216, 586)">
+    <rect width="186" height="318" rx="6" class="panel" />
+    <rect x="0" y="0" width="186" height="22" rx="6" class="pill-rag" />
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">rag/  -  v2 facade</text>
+    <text x="10" y="40" class="file">mod.rs</text>
+    <text x="10" y="52" class="small">RagStore: 3 collections,</text>
+    <text x="10" y="64" class="small">store_memory + search_*</text>
+    <text x="10" y="84" class="file">indexer.rs</text>
+    <text x="10" y="96" class="small">enumerate_builtin_tools</text>
+    <text x="10" y="108" class="small">enumerate_mcp_tools</text>
+    <text x="10" y="120" class="small">index_agents (per-example vectors)</text>
+    <text x="10" y="132" class="small">index_skills, index_tools</text>
+    <text x="10" y="144" class="small">reindex_all_workspace +</text>
+    <text x="10" y="156" class="small">workspace fingerprint dedup</text>
+    <text x="10" y="176" class="file">query.rs</text>
+    <text x="10" y="188" class="small">search_registry (with dedup-by-name)</text>
+    <text x="10" y="200" class="small">search_messages, search_memory</text>
+    <text x="10" y="220" class="file">cleanup.rs</text>
+    <text x="10" y="232" class="small">ttl_cleanup (Phase 6.3 - Qdrant</text>
+    <text x="10" y="244" class="small">filter-based delete)</text>
+    <text x="10" y="270" class="small" font-style="italic">qdrant feature gates this</text>
+    <text x="10" y="284" class="small" font-style="italic">whole module - without it</text>
+    <text x="10" y="298" class="small" font-style="italic">orchestration is disabled</text>
+  </g>
+
+  <g transform="translate(412, 586)">
+    <rect width="186" height="318" rx="6" class="panel" />
+    <rect x="0" y="0" width="186" height="22" rx="6" class="pill-agt" />
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">agents/  -  TOML specs</text>
+    <text x="10" y="40" class="file">src/adapters/agents/mod.rs</text>
+    <text x="10" y="52" class="small">AgentSpec struct + loader</text>
+    <text x="10" y="64" class="small">load_agent_file, load_agents_dir</text>
+    <text x="10" y="84" class="file">agents/aura.toml</text>
+    <text x="10" y="96" class="small">DeSci pipeline agent</text>
+    <text x="10" y="116" class="file">agents/researcher.toml</text>
+    <text x="10" y="128" class="small">generic web/HTTP research</text>
+    <text x="10" y="148" class="file">agents/storage.toml</text>
+    <text x="10" y="160" class="small">file ingest + semantic search</text>
+    <text x="10" y="184" class="h3">Each TOML has:</text>
+    <text x="10" y="200" class="small">name, description (RAG-indexed)</text>
+    <text x="10" y="214" class="small">example_queries (each its own vector)</text>
+    <text x="10" y="228" class="small">model, tools, skills, max_turns</text>
+    <text x="10" y="242" class="small">sandbox (workspace path)</text>
+    <text x="10" y="262" class="small" font-style="italic">edit a .toml + restart chat</text>
+    <text x="10" y="276" class="small" font-style="italic">- auto-reindex picks it up</text>
+    <text x="10" y="290" class="small" font-style="italic">(no rebuild required)</text>
+  </g>
+
+  <g transform="translate(608, 586)">
+    <rect width="186" height="318" rx="6" class="panel" />
+    <rect x="0" y="0" width="186" height="22" rx="6" class="pill-skl" />
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">skills/  -  prompt fragments</text>
+    <text x="10" y="40" class="h3">Three-tier scanner:</text>
+    <text x="10" y="56" class="small">1. ~/.tengu/skills/   (managed)</text>
+    <text x="10" y="70" class="small">2. .tengu/skills/      (workspace dot)</text>
+    <text x="10" y="84" class="small">3. skills/             (workspace root)</text>
+    <text x="10" y="98" class="small">  later tiers shadow earlier</text>
+    <text x="10" y="120" class="file">rag/indexer.rs::scan_skills</text>
+    <text x="10" y="132" class="small">walks all 3 dirs, parses SKILL.md</text>
+    <text x="10" y="144" class="small">frontmatter (YAML), dedupes by name</text>
+    <text x="10" y="166" class="file">skills/orchestrator/SKILL.md</text>
+    <text x="10" y="178" class="small">SPECIAL - used as planner system</text>
+    <text x="10" y="190" class="small">prompt (Phase 4c)</text>
+    <text x="10" y="210" class="file">skills/orchestrator/plan_schema.json</text>
+    <text x="10" y="222" class="small">JSON schema for the plan output</text>
+    <text x="10" y="244" class="file">main.rs::load_skill_body_three_tier</text>
+    <text x="10" y="256" class="small">used by run_agent_subprocess to build</text>
+    <text x="10" y="268" class="small">the subagent's system prompt</text>
+    <text x="10" y="290" class="small" font-style="italic">SKILL.md frontmatter has</text>
+    <text x="10" y="304" class="small" font-style="italic">name + description for RAG</text>
+  </g>
+
+  <g transform="translate(804, 586)">
+    <rect width="176" height="318" rx="6" class="panel" />
+    <rect x="0" y="0" width="176" height="22" rx="6" class="pill-orc" />
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">orchestrator/</text>
+    <text x="10" y="40" class="file">mod.rs</text>
+    <text x="10" y="52" class="small">Orchestrator (top-level handle)</text>
+    <text x="10" y="72" class="file">planner.rs</text>
+    <text x="10" y="84" class="small">RagPlanner (only Planner impl</text>
+    <text x="10" y="96" class="small">since Phase 7.1)</text>
+    <text x="10" y="108" class="small">parse_verdict (free fn)</text>
+    <text x="10" y="120" class="small">cross_session_recall_block</text>
+    <text x="10" y="140" class="file">plan.rs</text>
+    <text x="10" y="152" class="small">Plan, Step, AgentCompose</text>
+    <text x="10" y="172" class="file">executor.rs</text>
+    <text x="10" y="184" class="small">DagExecutor - parallel ready_steps</text>
+    <text x="10" y="204" class="file">retry.rs</text>
+    <text x="10" y="216" class="small">RetryPolicy (3 attempts default)</text>
+    <text x="10" y="236" class="file">replan.rs</text>
+    <text x="10" y="248" class="small">drive() loop - replan on exhausted</text>
+    <text x="10" y="268" class="file">events.rs</text>
+    <text x="10" y="280" class="small">OrchestratorEvent + EventBus</text>
+    <text x="10" y="294" class="small">PlanCreated, StepStarted, ok/fail,</text>
+    <text x="10" y="306" class="small">RagQueried, MetricsRecorded (2026-04-28)</text>
+  </g>
+
+  <text x="20" y="940" class="h2">section 3 - the three Qdrant collections - writers and readers</text>
+  <line x1="20" y1="946" x2="980" y2="946" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 960)">
+    <rect width="313" height="240" rx="6" class="panel" />
+    <rect x="0" y="0" width="313" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" font-size="12" font-weight="700" fill="#fff">tengu_registry  -  what we have</text>
+    <text x="10" y="46" class="body">stores agent specs + skills + tool defs</text>
+    <text x="10" y="60" class="small">embedding model: text-embedding-3-small (1536d)</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">rag/indexer.rs::reindex_all_workspace</text>
+    <text x="10" y="114" class="small">  from `tengu registry reindex-all` (CLI)</text>
+    <text x="10" y="128" class="small">  from RagPlanner::auto_reindex_once (chat)</text>
+    <text x="10" y="148" class="h3">read by:</text>
+    <text x="10" y="164" class="file">rag/query.rs::search_registry</text>
+    <text x="10" y="178" class="small">  called by RagPlanner::plan/replan</text>
+    <text x="10" y="198" class="h3">notable:</text>
+    <text x="10" y="214" class="small">per-example vectors per agent (one + N)</text>
+    <text x="10" y="228" class="small">fingerprint dedup - no re-embed when unchanged</text>
+  </g>
+
+  <g transform="translate(343, 960)">
+    <rect width="313" height="240" rx="6" class="panel" />
+    <rect x="0" y="0" width="313" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" font-size="12" font-weight="700" fill="#fff">tengu_messages  -  who said what</text>
+    <text x="10" y="46" class="body">stores user messages keyed by session_id</text>
+    <text x="10" y="60" class="small">survives restart; durable across sessions</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">RagPlanner::persist_user_message</text>
+    <text x="10" y="114" class="small">  on every plan() call</text>
+    <text x="10" y="134" class="h3">read by:</text>
+    <text x="10" y="150" class="file">RagPlanner::cross_session_recall_block</text>
+    <text x="10" y="164" class="small">  via RagStore::search_messages</text>
+    <text x="10" y="178" class="small">  gated on memory.cross_session_msg_top_k</text>
+    <text x="10" y="192" class="small">  (default 0 = off, opt-in)</text>
+    <text x="10" y="216" class="small">TTL purge sweeps entries older than ttl_days</text>
+    <text x="10" y="228" class="small">via cleanup::ttl_cleanup (default 0 = keep)</text>
+  </g>
+
+  <g transform="translate(666, 960)">
+    <rect width="314" height="240" rx="6" class="panel" />
+    <rect x="0" y="0" width="314" height="26" rx="6" class="pill-rag" />
+    <text x="10" y="18" font-size="12" font-weight="700" fill="#fff">tengu_outputs  -  what we did</text>
+    <text x="10" y="46" class="body">stores compressed step output summaries</text>
+    <text x="10" y="60" class="small">high-signal - used for cross-plan recall on replan</text>
+    <text x="10" y="84" class="h3">written by:</text>
+    <text x="10" y="100" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
+    <text x="10" y="114" class="small">  appended IMPLICITLY to every subagent</text>
+    <text x="10" y="128" class="small">  child writes when LLM calls the tool</text>
+    <text x="10" y="148" class="h3">read by:</text>
+    <text x="10" y="164" class="file">RagPlanner::replan</text>
+    <text x="10" y="178" class="small">  via RagStore::search_memory</text>
+    <text x="10" y="192" class="small">  gated on memory.cross_plan_top_k (default 5)</text>
+    <text x="10" y="216" class="small">TTL purge sweeps entries older than ttl_days</text>
+    <text x="10" y="228" class="small">same hook as tengu_messages above</text>
+  </g>
+
+  <text x="20" y="1232" class="h2">section 4 - key mechanics - six things that surprised me reading this code</text>
+  <line x1="20" y1="1238" x2="980" y2="1238" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 1252)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">A. Doctrine: LLM = heart, RAG = brain, tools = hands</text>
+    <text x="10" y="36" class="small">RagPlanner does ONE thing - pick the right agent. It uses the orchestrator</text>
+    <text x="10" y="50" class="small">SKILL.md as its system prompt; tools/memory/grounding stripped on this call.</text>
+    <text x="10" y="64" class="small">Subagents do the actual work in their own subprocess. The boundary is</text>
+    <text x="10" y="78" class="small">strict: planner reasons over a roster, subagent executes a plan step.</text>
+    <text x="10" y="98" class="file">channel_runtime::run_turn_with_system  (planner-side strip)</text>
+  </g>
+
+  <g transform="translate(510, 1252)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">B. Two senses of "session_id"</text>
+    <text x="10" y="36" class="small">RagPlanner mints one (env override TENGU_SESSION_ID, else fresh UUID).</text>
+    <text x="10" y="50" class="small">SubprocessRunner mints its OWN. Today they don't share - open question</text>
+    <text x="10" y="64" class="small">flagged in the handoff. The parent's id is what gets stamped on persisted</text>
+    <text x="10" y="78" class="small">user messages in tengu_messages.</text>
+    <text x="10" y="98" class="file">orchestrator/planner.rs:RagPlanner.session_id  -  runner.rs:session_id</text>
+  </g>
+
+  <g transform="translate(20, 1377)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">C. Sandbox config crosses the IPC boundary (Phase 7.2)</text>
+    <text x="10" y="36" class="small">Without this, the child loaded ~/.tengu/config.toml and lost the parent's</text>
+    <text x="10" y="50" class="small">sandbox-specific scopes. Symptom: http_request scope-denies in researcher</text>
+    <text x="10" y="64" class="small">while the parent's sandbox allows "*". Fix: AgentIpcInput.sandbox_config</text>
+    <text x="10" y="78" class="small">field, threaded from Config.sandbox_name to SubprocessRunner to IPC.</text>
+    <text x="10" y="98" class="file">Config.sandbox_name (#[serde(skip)])  -  load_sandbox_or sets it</text>
+  </g>
+
+  <g transform="translate(510, 1377)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">D. compress_and_store is implicit, not declared</text>
+    <text x="10" y="36" class="small">Never list compress_and_store in agents/*.toml::tools - the runner</text>
+    <text x="10" y="50" class="small">appends it to every subagent automatically. Used to mark "I am done with</text>
+    <text x="10" y="64" class="small">this step." The middle-ground protocol: only fail when no text emitted</text>
+    <text x="10" y="78" class="small">AND no compress_and_store called. Otherwise OK with a tracing warn.</text>
+    <text x="10" y="98" class="file">main.rs::run_agent_subprocess  -  Phase 5c</text>
+  </g>
+
+  <g transform="translate(20, 1502)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">E. Two layers of recall in the planner prompt</text>
+    <text x="10" y="36" class="small">In-memory ring buffer (Phase 6.4 lite) - recent user msgs THIS process,</text>
+    <text x="10" y="50" class="small">survives within one chat. Cross-session block (Phase 6.4 full) -</text>
+    <text x="10" y="64" class="small">semantic search over tengu_messages, survives restart, opt-in via</text>
+    <text x="10" y="78" class="small">memory.cross_session_msg_top_k. Both inject before the current turn.</text>
+    <text x="10" y="98" class="file">RagPlanner::update_and_format_history  +  cross_session_recall_block</text>
+  </g>
+
+  <g transform="translate(510, 1502)">
+    <rect width="470" height="115" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">F. C to B fallback - composed agents, two turns</text>
+    <text x="10" y="36" class="small">Turn 1 (C): planner emits Direct asking the user to confirm closest match.</text>
+    <text x="10" y="50" class="small">Turn 2 (B): on confirmation, planner emits Plan with Step.compose set.</text>
+    <text x="10" y="64" class="small">Runner loads the base agent, OVERRIDES skills+tools for this run only.</text>
+    <text x="10" y="78" class="small">No persistence - the file on disk is unchanged.</text>
+    <text x="10" y="98" class="file">orchestrator/plan.rs::AgentCompose  -  Phase 6.7</text>
+  </g>
+
+  <g transform="translate(20, 1640)">
+    <rect width="960" height="100" rx="6" class="panel" />
+    <text x="10" y="18" class="h3">G. Context/token metrics observability (2026-04-28) - new metrics.rs subsystem</text>
+    <text x="10" y="36" class="small">Every LLM and embedding call emits one MetricsRecord with kind in {Planner, Subagent, Embedding}, prompt/completion/total tokens,</text>
+    <text x="10" y="50" class="small">latency, prompt chars/bytes, and (for Planner) per-context-layer breakdown (system / roster / cross_session / history /</text>
+    <text x="10" y="64" class="small">recall / failure / user_message). Three surfaces: tracing baseline (RUST_LOG=tengu=info, always on), in-process broadcast bus</text>
+    <text x="10" y="78" class="small">(OrchestratorEvent::MetricsRecorded, re-broadcast from the global sink), TUI bottom bubble (TENGU_TUI_METRICS=1, opt-in).</text>
+    <text x="10" y="92" class="file">src/adapters/metrics.rs  -  emit_planner_metrics  -  AgentIpcOutput.metrics  -  embedder reads usage.total_tokens</text>
+  </g>
+
+  <g transform="translate(20, 1760)">
+    <rect width="960" height="80" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+    <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
+    <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything. Pick `cargo run --release --features qdrant,claude_code -- chat --sandbox aura`,</text>
+    <text x="10" y="54" class="small">type "what is the BTC price?", and follow it: tui/mod.rs - channel_runtime::build_orchestrator - RagPlanner::plan -</text>
+    <text x="10" y="68" class="small">SubprocessRunner::run_step - main.rs::run_agent_subprocess - http plugin - compress_and_store. That is the whole story.</text>
+  </g>
+</svg>

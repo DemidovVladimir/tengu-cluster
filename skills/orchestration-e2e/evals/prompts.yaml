@@ -1,0 +1,128 @@
+# End-to-end orchestration eval prompts.
+#
+# Format: src/adapters/eval_builder.rs::YamlRow — fields are
+# id / prompt / expected / timeout_secs (default 120) / stubs (optional).
+#
+# The judge sees: the "expected" text, the ordered tool-call observations,
+# and the final assistant text. It returns {"verdict": "pass"|"fail", ...}.
+# Phrase "expected" as behavioural criteria the judge can check against the
+# observed tool sequence — not literal output strings.
+
+- id: simple_direct
+  prompt: "What is 2 + 2?"
+  expected: >-
+    Orchestrator planner returns kind=direct (no DAG, no worker dispatch).
+    Final assistant text contains "4". Zero sessions_spawn / fan_out calls —
+    the harness does NOT expose those as tools any more (orchestration is
+    harness-owned), so observed tool calls should be empty or limited to
+    memory_search.
+  timeout_secs: 60
+
+- id: two_step_sequential
+  prompt: >-
+    Look up the HTTP status codes for 200 and 404, then write a short
+    two-sentence summary contrasting them.
+  expected: >-
+    Orchestrator emits a plan with two sequential steps — a researcher step
+    (goal: gather the two status-code descriptions) followed by a writer
+    step that depends_on the researcher and synthesizes the summary. The
+    writer is the single leaf, so its output is the final_response. Final
+    text contains both "200" and "404" and references both codes in prose.
+  timeout_secs: 180
+
+- id: parallel_fan_out
+  prompt: >-
+    Research three HTTP status codes in parallel — 200, 404, and 503 — then
+    write one combined paragraph comparing all three.
+  expected: >-
+    Orchestrator emits a plan with three parallel researcher steps (no
+    depends_on between them, or depends_on empty) plus a final writer /
+    synthesizer step that depends_on all three researchers. Single leaf at
+    the synthesizer. Final text mentions all three codes (200, 404, 503).
+  timeout_secs: 240
+
+- id: failure_recovery
+  prompt: >-
+    Fetch the page at http://example.invalid.nonexistent-tld/ and summarize
+    what it says.
+  expected: >-
+    One of two acceptable behaviours. (a) The worker's http_request fails,
+    the step retries up to max_attempts_per_step then escalates; the
+    orchestrator replans or surfaces a graceful failure explanation. (b) The
+    planner predicts the URL is unresolvable and returns kind=direct
+    explaining the domain is invalid. What must NOT happen: an infinite
+    loop, more than ~3 http_request retries per step, or a hallucinated
+    "successful" fetch. Final text acknowledges the failure.
+  timeout_secs: 180
+  stubs:
+    - tool: http_request
+      responses:
+        - { error: "dns resolution failed: example.invalid.nonexistent-tld" }
+        - { error: "dns resolution failed: example.invalid.nonexistent-tld" }
+        - { error: "dns resolution failed: example.invalid.nonexistent-tld" }
+
+- id: orchestrator_skip_for_trivial
+  prompt: "hi"
+  expected: >-
+    Orchestrator planner returns kind=direct with a short greeting. No DAG
+    is built, no worker is dispatched. Observed tool calls are empty or
+    contain at most a single memory_search. Final text is a short greeting
+    (one or two sentences).
+  timeout_secs: 60
+
+- id: sequential_three_step
+  prompt: >-
+    Research the difference between RDB and AOF persistence in Redis, then
+    draft a one-paragraph recommendation for a write-heavy cache workload,
+    then rewrite that paragraph in formal business tone suitable for an
+    architecture review.
+  expected: >-
+    Orchestrator emits a plan with THREE linear steps: a researcher step
+    covering RDB vs AOF, a writer step (depends_on the researcher) producing
+    a recommendation, and a second writer step (depends_on the first writer)
+    translating to business tone. Single leaf at the final writer. Each step
+    starts only after its predecessor succeeds. Final text references both
+    RDB and AOF, makes a recommendation, and reads as formal prose.
+  timeout_secs: 300
+
+- id: parallel_two_way_with_synthesizer
+  prompt: >-
+    In parallel, summarize the design philosophy of tRPC (one sentence) and
+    the design philosophy of GraphQL (one sentence). Then write a short
+    paragraph contrasting their approaches to API design.
+  expected: >-
+    Orchestrator emits a plan with two parallel researcher steps (no deps
+    between them) and a single writer synthesizer step that depends_on both
+    researchers. Single leaf at the synthesizer. Final paragraph mentions
+    both tRPC and GraphQL. The researcher steps' outputs are embedded as
+    step-inputs in the synthesizer's prompt.
+  timeout_secs: 240
+
+- id: parallel_four_way_stress
+  prompt: >-
+    In parallel, give a one-line definition of each of: unicorn startup,
+    decacorn startup, hectocorn startup, zebra startup. Then list all four
+    with their definitions.
+  expected: >-
+    Orchestrator emits a plan with four parallel researcher steps (no
+    depends_on between them) and a single writer / synthesizer step that
+    depends on all four. Single leaf. Final reply lists all four terms with
+    definitions. The planner must NOT collapse the four researchers into
+    one combined step — the prompt explicitly says "in parallel".
+  timeout_secs: 300
+
+- id: diamond_dag
+  prompt: >-
+    First enumerate two plausible interpretations of the question "what is
+    an agent?". Then, in parallel, research each interpretation — one from
+    the AI/LLM perspective, one from the real-estate broker perspective.
+    Finally, write a short note acknowledging both meanings exist and when
+    each applies.
+  expected: >-
+    Diamond-shaped plan. First step: researcher enumerates interpretations.
+    Two parallel researcher steps depend_on the first (one per interpretation).
+    Final writer step depends_on both of the parallel researchers. Single
+    leaf at the writer. The two parallel steps must not start until the
+    enumeration step succeeds. Final note acknowledges both AI and real-estate
+    meanings.
+  timeout_secs: 360

@@ -16,12 +16,20 @@ enabled = true
 [telegram]
 tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
+allowed_users = ['848344935']  # your sender id from the log
 
-[orchestrator]
-enabled = true
-max_retries = 2
-planner_engine = "claude_code"
-planner_model = "sonnet"
+# At the top level, alongside [hub], [memory], etc.
+[claude_code]
+cli_path = "claude"          # or absolute path if `claude` isn't in PATH
+timeout_secs = 120
+
+# --- Tool scopes (fallback applied when an agent has no per-tool scope) ---
+# The http_request tool refuses any host not on its allow-list. `"*"` is the
+# wildcard used by the A1 permissive-scope migration window — safe for dev,
+# tighten for production.
+[default_scopes.http_request]
+net_hosts = ["*"]
+env_reads = ["*"]
 
 # --- Scaffold ---
 # Root workspace with working directories created at startup.
@@ -43,15 +51,32 @@ content = """# DeSci Project
 - `posts/` — Beach.science post records
 """
 
+ [orchestrator]
+   agent = "aura"
+   engine = "rag"
+   max_attempts_per_step = 3
+   max_replans = 2
+
 [agents.aura]
-engine = "claude_code"
-model = "sonnet"
+# Aura is the orchestrator agent. It runs the planner LLM call which has tools
+# stripped via run_turn_with_system. OpenRouter respects per-turn tool=[]; the
+# Claude Code CLI gets MCP tools from a config file at engine-construction
+# time and ignores per-turn stripping, so it tries to do the work itself
+# instead of emitting plan JSON. Keep aura on OpenRouter for the planner role.
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
 role = "aura"
 default = true
 requires = []
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
+
+# [agents.aura.claude_code] block kept here as documentation — has no effect
+# when engine = "openrouter", but lets you flip the engine field above to
+# "claude_code" without re-adding it. Profile would be editor_shell on flip.
+# [agents.aura.claude_code]
+# builtin_tools_profile = "editor_shell"
 
 [agents.aura.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
@@ -69,4 +94,44 @@ max_mcp_result_chars = 10_000
 
 [agents.aura.identity]
 name = "Aura DeSci Agent"
-instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline."""
+instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
+
+For general user questions that fall outside the DeSci pipeline — looking up prices, fetching facts from the web, quick research, or any simple question where an HTTP call would answer it — use the `http_request` tool freely. You are not locked to the pipeline; you can also be a helpful general-purpose agent when the user asks something off-topic."""
+
+# --- Skill Lifecycle ---
+# Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
+# `tengu skill evolve <skill>`. See
+# `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
+
+[skill_lifecycle]
+improver_agent = "skill-improver"        # Required for `tengu skill evolve`
+fixture_runner_agent = "fixture-runner"  # Required for `tengu eval`
+default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
+default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
+
+[agents.skill-improver]
+engine = "openrouter"
+model = "anthropic/claude-opus-4-7"
+# `read_file` / `list_directory` are normal tools, not workspace_tools.
+# The workspace_tools allowlist is just shared_cache / persistent_store / skill_distill.
+tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
+
+[agents.skill-improver.identity]
+name = "Skill Improver"
+instructions = """
+You are a skill-improver. Given a skill that is under-performing on a specific
+metric, you propose a REVISED skill body that should raise that metric's pass
+rate without regressing other metrics. Emit ONE JSON object and nothing else:
+{"proposal":{"body_markdown":"...","metrics":[...]?,"rationale":"..."}}
+Preserve name + description unchanged. Do not remove metrics. Prefer small
+targeted revisions over wholesale rewrites.
+"""
+
+[agents.fixture-runner]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+tools = ["read_file", "list_directory", "run_command"]
+
+[agents.fixture-runner.identity]
+name = "Fixture Runner"
+instructions = "You execute a single skill fixture and return the final assistant output."

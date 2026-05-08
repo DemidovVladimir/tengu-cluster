@@ -1,6 +1,6 @@
 # Architecture
 
-> Every phase spec (A, B, C, D) references this document. Every PR is reviewed against it.
+> Every implementation plan references this document. Every PR is reviewed against it.
 
 Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `src/main.rs` — flat structure, no sub-crates.
 
@@ -8,34 +8,23 @@ Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `
 
 ## Doctrine
 
-The Rust core exists to serve three principles. Violating any of them is a doctrine violation that blocks the PR.
+Three principles, checked against every PR:
 
-### 1. LLM is the heart
+### 1. The harness owns control flow
 
-It consumes tokens and emits tokens. It has no behaviour of its own — no memory, no goals, no identity, no plans. Anything that looks like "the agent did X because..." is really "the context instructed the LLM, and the LLM produced X." The Rust core never hard-codes behaviour that belongs to the model.
+Orchestration, routing, memory retrieval, memory writes, retries, replans, cancellation, cache discipline, turn lifecycle — all of it is Rust code. No skill teaches these behaviours to an LLM, because no LLM is asked to decide them.
 
-### 2. Context and skills are the brain
+### 2. Agents are narrow LLM workers
 
-Everything the LLM knows on a given turn lives in the context window: system prompt, bootstrap files (AGENTS.md, MEMORY.md, daily logs, identity files), tool definitions, skill catalog entries, transcript history, pending tool results.
+An agent is an `AgentConfig` entry: a name, a system prompt, a model, a tool list, optional memory scope. Agents do not know about other agents. Agents do not decompose user requests. Agents do not spawn subagents. Each agent's conversation is a single stable system prompt + a user message + tool calls — the shape prompt caching demands.
 
-Skills are how policy reaches the brain — any strategy, workflow, playbook, plan, or "how the agent decides what to do" is a skill, and each skill materializes into context via frontmatter catalog entries (compact) and body text (loaded on demand). Orchestration. Decomposition. Delegation. Failure handling. Progress tracking. Even meta-behaviour like "how to write new skills" is a skill (`skill-creator`).
+### 3. The orchestrator is "just an agent with one tool"
 
-The Rust core's job is **brain assembly** — deciding which skills + bootstrap + transcript enter the context, in what order, at what compression, and what to do when the window overflows (Phase D's RAG spill). The core does not decide what the brain does with that context.
-
-Skills evolve through `skill-creator` (create), `skill-eval` (measure), and `skill-improver` (propose edits from align reports — Phase E). The harness gets closer to the user over time because the brain does, not because the core does.
-
-### 3. Tools and MCP are the hands and senses
-
-They are the only way the LLM touches the world. A tool reads a file, writes a file, runs a command, signs a transaction, calls an HTTP API, spawns a subagent. Tools are:
-
-- **Gateable** — the user decides which tools exist for each agent. The per-agent tool list is computed in `channel_runtime::compute_base_tools` + skill tools + (when enabled) `compute_subagent_tools`, and passed to `build_tool_executor` as its allow-list. Tools whose names are not in the list are not registered.
-- **Scopeable** — the user decides what each tool is allowed to touch (`ToolScope`, default-deny). Every registered tool gets a per-agent scope entry; every `Tool::execute` body calls `scope.check_*()` as its first logic line, enforced structurally by `tests/scope_lint.rs`.
-
-MCP servers extend the hands without touching Rust. Adding a tool never requires adding Rust code beyond a new plugin file or a new `[[mcp_servers]]` entry.
+The orchestrator is not a Rust class with baked-in planning logic. It is an `AgentConfig` entry like any other worker, with exactly one tool (`memory_search`) and a system prompt that teaches it to emit structured JSON plans. What makes it the orchestrator is its position in the runtime: it runs first, its output drives the DAG executor, and workers never invoke it back.
 
 ### The no-compromise corollary
 
-If work during any phase is tempted to add Rust code that encodes *policy* — when to delegate, how to retry, what to prioritize, how to format output, when to ask for clarification — that code is a skill, not Rust. The test is: *does a non-engineer user need to change this behaviour by editing a markdown file, or by filing a PR?* If the answer is "markdown file," it's a skill.
+If something in the codebase tries to encode per-user routing preferences, per-workflow templates, or task-specific retry strategies, stop. Those are config or agent system-prompt concerns, not Rust code. The harness owns *mechanism*, not *policy intent*. The test is: *does a non-engineer user need to change this behaviour by editing a config file (`tengu.toml`) or by filing a PR?* If the answer is "config file," it's config. If the answer is "PR," it's Rust code.
 
 This rule is the single sentence every PR reviewer checks against. A violation is not a style issue; it is a doctrine violation and blocks the PR.
 
@@ -108,10 +97,19 @@ Passed to every `engine.run()` call:
 - `bridge_tools` — tool definitions for the [[mcp-bridge]] (Claude Code only)
 
 ### Tool Assembly (`src/adapters/channel_runtime.rs`)
-- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache plugins for the outer loop
+- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache, and skill-lifecycle plugins for the outer loop (`skill_distill`, `shared_cache`, `persistent_store` are opt-in per agent via `workspace_tools`)
 - `compute_subagent_tools()` — subagent-spawn tool defs, added when the orchestrator is enabled
 - `compute_bridge_tools()` — tool defs for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, skill-lifecycle, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+
+### Skill Lifecycle (`src/adapters/skill_lifecycle/`, `src/adapters/plugins/skill_lifecycle/`)
+A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
+
+- `skill_distill` (LLM-callable tool, opt-in via `workspace_tools`) — an agent authors a new skill from the current conversation. Writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. Cache discipline: the new skill does NOT load into the current conversation.
+- `tengu eval <skill>` (integrated into `eval_builder.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
+- `tengu skill evolve <skill>` — bounded rewrite→rescore loop. Baseline, scratch git worktree, N cycles via the `skill-improver` agent, best-cycle selection (no regression > 0.05 on other gated metrics), user approval gate, apply-or-discard.
+
+All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
 
 ### Plugin Architecture (`src/adapters/plugins/`, `src/adapters/tool_plugin.rs`)
 
@@ -160,6 +158,8 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 | `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
 | `plugins/subagents/` | `sessions_spawn`, `sessions_fan_out`, `subagents` — registered when orchestrator is enabled |
 | `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
+| `plugins/skill_lifecycle/` | `skill_distill` — LLM-callable skill authoring from the active conversation (opt-in via `workspace_tools`) |
+| `skill_lifecycle/` | Metric types + 4 kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
 | `tool_builder.rs` | Path validation + tool-activity UI helpers (no executors) |
 | `shell_executor.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
 | `skill_builder.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `plugins/skill/`) |
@@ -197,4 +197,5 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 - [[engine-backends]] — detailed engine comparison
 - [[configuration]] — config reference
 - [[mcp-bridge]] — MCP tool bridge details
-- [[skills]] — skill system architecture
+- [[skills]] — skill system architecture (incl. metrics, distillation, evolve)
+- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec

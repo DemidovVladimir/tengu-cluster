@@ -22,8 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::adapters::memory_builder::{MemoryService, MemoryServiceHandle};
+use crate::adapters::memory::context_block::ChunkMetadata;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) const PERSISTENT_STORE_TOOL_NAME: &str = "persistent_store";
@@ -126,8 +128,8 @@ fn extract_docx_text(raw_bytes: &[u8]) -> Result<String> {
 
 /// Extract text from Excel workbooks via calamine.
 fn extract_excel_text(path: &Path) -> Result<String> {
-    let mut workbook = open_workbook_auto(path)
-        .map_err(|e| anyhow::anyhow!("Cannot open spreadsheet: {e}"))?;
+    let mut workbook =
+        open_workbook_auto(path).map_err(|e| anyhow::anyhow!("Cannot open spreadsheet: {e}"))?;
 
     let mut full_text = String::new();
     let sheet_names: Vec<String> = workbook.sheet_names().to_vec();
@@ -194,7 +196,7 @@ fn current_epoch() -> u64 {
 pub(crate) struct PersistentStoreTool {
     def: ToolDef,
     workspace: PathBuf,
-    memory_handle: Arc<MemoryServiceHandle>,
+    memory_manager: Arc<MemoryManager>,
     chunk_size: usize,
     chunk_overlap: usize,
 }
@@ -202,51 +204,35 @@ pub(crate) struct PersistentStoreTool {
 impl PersistentStoreTool {
     pub(crate) fn new(
         workspace: PathBuf,
-        memory_handle: Arc<MemoryServiceHandle>,
+        memory_manager: Arc<MemoryManager>,
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Self {
         Self {
-            def: ToolDef::new(
-                PERSISTENT_STORE_TOOL_NAME,
-                "Persistent file store with vector search. Store files, search by semantic query, list or delete stored files.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["store", "search", "list", "delete"],
-                            "description": "Operation to perform"
-                        },
-                        "file_path": {
-                            "type": "string",
-                            "description": "Path to the file to store (required for store). Relative to workspace or absolute."
-                        },
-                        "description": {
-                            "type": "string",
-                            "description": "Human description of the file content (optional for store, improves search quality)"
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "Semantic search query (required for search)"
-                        },
-                        "file_id": {
-                            "type": "string",
-                            "description": "File ID to delete (required for delete)"
-                        },
-                        "top_k": {
-                            "type": "integer",
-                            "description": "Max results to return for search (default: 5)"
-                        }
-                    },
-                    "required": ["operation"]
-                }),
-            ),
+            def: super::persistent_store_def(),
             workspace,
-            memory_handle,
+            memory_manager,
             chunk_size,
             chunk_overlap,
         }
+    }
+
+    /// Build a structured `ChunkMetadata` from the legacy `HashMap<String, String>`
+    /// the executor tracks per-chunk. Known keys (`file_id`, `file_name`, etc.)
+    /// are preserved under `extra` as JSON string values so `memory_search`'s
+    /// agent/source/kind filters don't match persistent-store chunks
+    /// accidentally.
+    fn chunk_metadata(kv: &HashMap<String, String>) -> ChunkMetadata {
+        let mut md = ChunkMetadata {
+            agent: Some("persistent_store".to_string()),
+            kind: Some("persistent_store".to_string()),
+            ..Default::default()
+        };
+        for (k, v) in kv {
+            md.extra
+                .insert(k.clone(), serde_json::Value::String(v.clone()));
+        }
+        md
     }
 
     fn storage_root(&self) -> PathBuf {
@@ -314,12 +300,10 @@ impl PersistentStoreTool {
                 meta.insert("file_id".to_string(), file_id.clone());
                 meta.insert("file_name".to_string(), file_name.clone());
                 meta.insert("chunk_index".to_string(), "desc".to_string());
-                let service = MemoryService::new(
-                    self.memory_handle.embedding.as_ref(),
-                    self.memory_handle.store.as_ref(),
-                );
-                let _ = service
-                    .remember_with_metadata(&desc_content, "persistent_store", meta)
+                let md = Self::chunk_metadata(&meta);
+                let _ = self
+                    .memory_manager
+                    .ingest_one(&desc_content, "persistent_store", md)
                     .await;
             }
 
@@ -336,12 +320,11 @@ impl PersistentStoreTool {
 
         // Chunk the text content.
         let chunks = chunk_text(&text_content, self.chunk_size, self.chunk_overlap);
-        let service = MemoryService::new(
-            self.memory_handle.embedding.as_ref(),
-            self.memory_handle.store.as_ref(),
-        );
 
-        let mut chunk_ids = Vec::with_capacity(chunks.len());
+        // Track the chunk ids returned by the vector store so the manifest
+        // can record them — enables deterministic per-chunk delete on file
+        // removal (addresses limitation #2).
+        let mut chunk_ids: Vec<String> = Vec::new();
         for (i, chunk) in chunks.iter().enumerate() {
             let chunk_content = if i == 0 {
                 if let Some(desc) = description {
@@ -365,24 +348,27 @@ impl PersistentStoreTool {
             meta.insert("file_name".to_string(), file_name.clone());
             meta.insert("chunk_index".to_string(), i.to_string());
             meta.insert("chunk_total".to_string(), chunks.len().to_string());
+            let md = Self::chunk_metadata(&meta);
 
-            match service
-                .remember_with_metadata(&chunk_content, "persistent_store", meta)
+            match self
+                .memory_manager
+                .ingest_one(&chunk_content, "persistent_store", md)
                 .await
             {
-                Ok(cid) => chunk_ids.push(cid),
+                Ok(id) => chunk_ids.push(id),
                 Err(e) => {
                     warn!(error = %e, chunk = i, "Failed to embed chunk, skipping");
                 }
             }
         }
 
+        let embedded_count = chunk_ids.len();
         let manifest = FileManifest {
             file_id: file_id.clone(),
             original_name: file_name.clone(),
             stored_at_epoch_s: current_epoch(),
             size_bytes: raw_bytes.len() as u64,
-            chunk_count: chunk_ids.len(),
+            chunk_count: embedded_count,
             chunk_ids: chunk_ids.clone(),
             description: description.map(|s| s.to_string()),
         };
@@ -392,7 +378,7 @@ impl PersistentStoreTool {
         info!(
             file_id = %file_id,
             file_name = %file_name,
-            chunks = chunk_ids.len(),
+            chunks = embedded_count,
             "Stored file with vector chunks"
         );
 
@@ -400,7 +386,7 @@ impl PersistentStoreTool {
             "file_id": file_id,
             "file_name": file_name,
             "size_bytes": raw_bytes.len(),
-            "chunks": chunk_ids.len(),
+            "chunks": embedded_count,
             "status": "stored"
         })
         .to_string())
@@ -409,27 +395,28 @@ impl PersistentStoreTool {
     // -- search --------------------------------------------------------------
 
     async fn execute_search(&self, query: &str, top_k: usize) -> Result<String> {
-        let service = MemoryService::new(
-            self.memory_handle.embedding.as_ref(),
-            self.memory_handle.store.as_ref(),
-        );
+        // Filter by `kind = "persistent_store"` so we don't retrieve
+        // agent-visible turn summaries or `memory_ingest` documents.
+        let filter = ChunkMetadata {
+            kind: Some("persistent_store".to_string()),
+            ..Default::default()
+        };
 
-        let mut required = HashMap::new();
-        required.insert("persistent_store".to_string(), "true".to_string());
-
-        let results = service
-            .recall_filtered(
-                query,
-                top_k * 3, // over-fetch to deduplicate across chunks
-                usize::MAX,
-                &required,
-            )
+        let results = self
+            .memory_manager
+            .search(query, top_k * 3, Some(&filter))
             .await?;
 
         // Deduplicate by file_id, keep highest-scoring chunk per file.
         let mut seen_files: HashMap<String, serde_json::Value> = HashMap::new();
         for r in &results {
-            let file_id = r.entry.metadata.get("file_id").cloned().unwrap_or_default();
+            let file_id = r
+                .metadata
+                .extra
+                .get("file_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             if file_id.is_empty() {
                 continue;
             }
@@ -437,12 +424,18 @@ impl PersistentStoreTool {
                 continue;
             }
             seen_files.entry(file_id.clone()).or_insert_with(|| {
-                let file_name = r.entry.metadata.get("file_name").cloned().unwrap_or_default();
+                let file_name = r
+                    .metadata
+                    .extra
+                    .get("file_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
                 json!({
                     "file_id": file_id,
                     "file_name": file_name,
                     "score": r.score,
-                    "matched_chunk": r.entry.content,
+                    "matched_chunk": r.text,
                 })
             });
         }
@@ -503,23 +496,45 @@ impl PersistentStoreTool {
         let manifest_data = std::fs::read_to_string(&manifest_path)?;
         let manifest: FileManifest = serde_json::from_str(&manifest_data)?;
 
-        // Delete vector entries for all chunks.
-        let store = self.memory_handle.store.as_ref();
-        for chunk_id in &manifest.chunk_ids {
-            if let Err(e) = store.delete(chunk_id).await {
-                warn!(error = %e, chunk_id = %chunk_id, "Failed to delete chunk vector");
+        // Delete vector entries by id (addresses limitation #2). For older
+        // manifests written before ids were tracked, chunk_ids is empty —
+        // log that we can't clean the vectors and move on (the file-level
+        // manifest is still removed so listings stay consistent).
+        let mut vectors_deleted = 0usize;
+        let mut vectors_missing = 0usize;
+        for id in &manifest.chunk_ids {
+            match self.memory_manager.delete_entry(id).await {
+                Ok(true) => vectors_deleted += 1,
+                Ok(false) => vectors_missing += 1,
+                Err(e) => warn!(error = %e, chunk_id = %id, "failed to delete chunk vector"),
             }
+        }
+        if manifest.chunk_ids.is_empty() && manifest.chunk_count > 0 {
+            warn!(
+                file_id = %file_id,
+                chunk_count = manifest.chunk_count,
+                "Legacy manifest without chunk_ids — vectors cannot be deleted individually. \
+                 Run `tengu memory purge` to clear the full vector store if stale entries \
+                 cause problems."
+            );
         }
 
         // Delete the file directory.
         std::fs::remove_dir_all(&file_dir)?;
 
-        info!(file_id = %file_id, file_name = %manifest.original_name, "Deleted stored file");
+        info!(
+            file_id = %file_id,
+            file_name = %manifest.original_name,
+            vectors_deleted,
+            vectors_missing,
+            "Deleted stored file + vector entries"
+        );
 
         Ok(json!({
             "file_id": file_id,
             "file_name": manifest.original_name,
-            "chunks_deleted": manifest.chunk_ids.len(),
+            "chunks_deleted": vectors_deleted,
+            "chunks_orphaned": vectors_missing,
             "status": "deleted"
         })
         .to_string())
@@ -542,39 +557,22 @@ impl Tool for PersistentStoreTool {
         let storage_root = self.storage_root();
         std::fs::create_dir_all(&storage_root)?;
 
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("persistent_store: missing 'operation'"))?;
+        let operation = require_str(args, "persistent_store", "operation")?;
 
         let result = match operation {
             "store" => {
-                let file_path = args
-                    .get("file_path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("persistent_store store: missing 'file_path'")
-                    })?;
+                let file_path = require_str(args, "persistent_store store", "file_path")?;
                 let description = args.get("description").and_then(|v| v.as_str());
                 self.execute_store(file_path, description).await?
             }
             "search" => {
-                let query = args
-                    .get("query")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("persistent_store search: missing 'query'"))?;
-                let top_k = args
-                    .get("top_k")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5) as usize;
+                let query = require_str(args, "persistent_store search", "query")?;
+                let top_k = args.get("top_k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
                 self.execute_search(query, top_k).await?
             }
             "list" => self.execute_list()?,
             "delete" => {
-                let file_id = args
-                    .get("file_id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("persistent_store delete: missing 'file_id'"))?;
+                let file_id = require_str(args, "persistent_store delete", "file_id")?;
                 self.execute_delete(file_id).await?
             }
             other => bail!("persistent_store: unknown operation '{other}'"),
@@ -624,31 +622,18 @@ mod tests {
 
     // -- integration-ish tests using plugin context ------------------------
 
-    use crate::adapters::memory_builder::{DiskVectorMemoryStore, MemoryServiceHandle};
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::{EmbeddingPort, MemoryStorePort, ToolScope};
+    use crate::adapters::ports::ToolScope;
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    /// Stub embedder that returns a deterministic zero vector (size matches
-    /// text-embedding-3-small's 1536). No network I/O — safe for unit tests.
-    struct StubEmbedder;
-
-    #[async_trait]
-    impl EmbeddingPort for StubEmbedder {
-        async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-            let n = texts.len();
-            Ok(vec![vec![0.0f32; 8]; n])
-        }
-    }
-
-    fn make_handle(workspace: &Path) -> Arc<MemoryServiceHandle> {
-        let store_dir = workspace.join("memory");
-        let store = DiskVectorMemoryStore::new(&store_dir).expect("disk store init");
-        Arc::new(MemoryServiceHandle {
-            embedding: Arc::new(StubEmbedder),
-            store: Arc::new(store) as Arc<dyn MemoryStorePort>,
-        })
+    async fn make_manager() -> Arc<MemoryManager> {
+        let manager = Arc::new(MemoryManager::new());
+        let store: Arc<dyn VectorStore> = Arc::new(DiskVectorStore::in_memory());
+        let embedder = Arc::new(Embedder::null());
+        manager.set_vector_backend(embedder, store).await;
+        manager
     }
 
     #[tokio::test]
@@ -661,8 +646,8 @@ mod tests {
             ..Default::default()
         };
         let harness = TestHarness::with_scope(tmp_ws.path(), scope);
-        let handle = make_handle(tmp_ws.path());
-        let tool = PersistentStoreTool::new(tmp_ws.path().to_path_buf(), handle, 1000, 200);
+        let manager = make_manager().await;
+        let tool = PersistentStoreTool::new(tmp_ws.path().to_path_buf(), manager, 1000, 200);
 
         let result = tool
             .execute(&json!({ "operation": "list" }), &harness.ctx())
@@ -674,8 +659,8 @@ mod tests {
     async fn persistent_store_list_empty_returns_zero() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
-        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), handle, 1000, 200);
+        let manager = make_manager().await;
+        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), manager, 1000, 200);
 
         let out = tool
             .execute(&json!({ "operation": "list" }), &harness.ctx())
@@ -690,8 +675,8 @@ mod tests {
     async fn persistent_store_store_then_list_then_delete() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
-        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), handle, 100, 20);
+        let manager = make_manager().await;
+        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), manager, 100, 20);
 
         // Create a text file in the workspace.
         let text_file = tmp.path().join("note.txt");
@@ -745,13 +730,17 @@ mod tests {
     async fn persistent_store_unknown_operation_errors() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
-        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), handle, 1000, 200);
+        let manager = make_manager().await;
+        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), manager, 1000, 200);
 
         let result = tool
             .execute(&json!({ "operation": "reboot" }), &harness.ctx())
             .await;
-        assert!(result.is_err(), "expected error for unknown op, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected error for unknown op, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(msg.contains("unknown operation"), "unexpected: {}", msg);
     }
@@ -760,8 +749,8 @@ mod tests {
     async fn persistent_store_delete_missing_errors() {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
-        let handle = make_handle(tmp.path());
-        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), handle, 1000, 200);
+        let manager = make_manager().await;
+        let tool = PersistentStoreTool::new(tmp.path().to_path_buf(), manager, 1000, 200);
 
         let result = tool
             .execute(

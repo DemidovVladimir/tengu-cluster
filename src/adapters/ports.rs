@@ -3,13 +3,16 @@
 //! Concrete implementations live alongside these traits in `src/adapters/`.
 //!
 //! Sync ports: `ToolActivityPort`, `SkillSourcePort`, `ShellExecutionPort`.
-//! Async ports (`#[async_trait]`): `EmbeddingPort`, `MemoryStorePort`.
+//!
+//! The legacy `EmbeddingPort` / `MemoryStorePort` async traits were removed
+//! in the memory-service-port migration — the harness memory stack now
+//! lives in `crate::adapters::memory::vector::{Embedder, VectorStore}`.
 
 use anyhow::Result;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use crate::adapters::types::{MemoryEntry, MemorySearchResult, ToolCall};
+
+use crate::adapters::types::ToolCall;
 
 /// Output port for publishing tool activity events to the UI/log layer.
 pub(crate) trait ToolActivityPort: Send + Sync {
@@ -25,55 +28,6 @@ pub(crate) trait SkillSourcePort: Send + Sync {
 /// Port for executing shell commands in a workspace directory.
 pub(crate) trait ShellExecutionPort: Send + Sync {
     fn execute_shell(&self, command: &str, workspace: &std::path::Path) -> Result<String>;
-}
-
-/// Port for generating text embeddings via an external model.
-///
-/// Accepts one or more text strings and returns a vector of f32 embeddings,
-/// one per input text. The embedding dimensionality depends on the model
-/// (e.g. 1536 for `text-embedding-3-small`). Both `remember` and `recall`
-/// operations use the same port instance so query and stored vectors always
-/// share the same embedding space.
-#[async_trait]
-pub(crate) trait EmbeddingPort: Send + Sync {
-    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
-}
-
-/// Port for persistent vector memory storage and retrieval.
-///
-/// Two adapters implement this trait:
-/// - `DiskVectorMemoryStore` — in-process brute-force cosine similarity with
-///   bincode persistence (zero-config default).
-/// - `QdrantMemoryStore` — delegates to a Qdrant instance via gRPC for ANN
-///   (approximate nearest-neighbor) search (opt-in via `--features qdrant`).
-///
-/// The `store` method persists a pre-embedded `MemoryEntry` (embedding vector
-/// already attached). The `search_by_vector` method accepts a query embedding
-/// and returns the top-k closest entries scored by cosine similarity.
-#[async_trait]
-pub(crate) trait MemoryStorePort: Send + Sync {
-    /// Persist a memory entry (content + pre-computed embedding vector).
-    async fn store(&self, entry: &MemoryEntry) -> Result<()>;
-
-    /// Find the `top_k` entries closest to `embedding` by cosine similarity.
-    async fn search_by_vector(
-        &self,
-        embedding: &[f32],
-        top_k: usize,
-    ) -> Result<Vec<MemorySearchResult>>;
-
-    /// Delete a memory entry by its UUID. Returns `true` if it existed.
-    #[allow(dead_code)] // used in tests and /purge flow
-    async fn delete(&self, id: &str) -> Result<bool>;
-
-    /// Delete all stored entries, resetting the store to empty.
-    async fn clear_all(&self) -> Result<()>;
-
-    /// Total number of stored entries.
-    async fn entry_count(&self) -> usize;
-
-    /// Approximate storage size in bytes (meaningful for disk, returns 0 for remote stores).
-    async fn storage_bytes(&self) -> u64;
 }
 
 // ---------------------------------------------------------------------------
@@ -465,4 +419,3 @@ mod tests {
         assert!(scope.check_wallet("any").is_err());
     }
 }
-

@@ -125,6 +125,12 @@ pub struct Config {
     #[serde(default)]
     pub orchestrator: Option<OrchestratorConfig>,
 
+    /// RAG startup indexer configuration. Inert until Phase 1 lands a
+    /// consumer. Safe to enable early — the indexer only reads from disk
+    /// and writes to Qdrant; it never changes planner behaviour.
+    #[serde(default)]
+    pub rag: RagConfig,
+
     #[serde(default)]
     pub memory: MemoryConfig,
 
@@ -148,6 +154,25 @@ pub struct Config {
     /// Default is empty: MCP is opt-in per user install.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
+    /// Absent by default — the subsystem is fully opt-in.
+    #[serde(default)]
+    pub skill_lifecycle: Option<crate::adapters::skill_lifecycle::config::SkillLifecycleConfig>,
+
+    /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
+    /// `None` for the default user config. Populated by `load_sandbox_or` in
+    /// `main.rs`. Plumbed through `SubprocessRunner` and the IPC payload so
+    /// `tengu run-agent` children resolve `sandboxes/<name>/config.toml` for
+    /// scopes/secrets/MCP servers — without this the parent + child would
+    /// see different scope rules and tool calls would scope-deny in the
+    /// child even when the sandbox config in the parent allows them.
+    ///
+    /// `#[serde(skip)]` because this is a runtime-resolved field, never
+    /// written to the TOML on disk. Skip on serialise too so dumping the
+    /// config doesn't leak it.
+    #[serde(skip)]
+    pub sandbox_name: Option<String>,
 }
 
 /// A single external MCP server that tengu connects to as a client.
@@ -416,42 +441,58 @@ fn default_max_tokens() -> u64 {
     100_000
 }
 
-/// Orchestrator configuration for fleet management.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Orchestration configuration. Presence activates orchestration;
+/// absence falls back to single-agent-default dispatch.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OrchestratorConfig {
-    #[serde(default = "default_orchestrator_enabled")]
-    pub enabled: bool,
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-    /// Maximum number of subagents that may be running concurrently when
-    /// the orchestrator is enabled. Used by the subagents plugin (A7) to
-    /// bound `sessions_spawn` / `sessions_fan_out`.
-    #[serde(default = "default_max_concurrent")]
-    pub max_concurrent: usize,
-    pub planner_engine: Option<String>,
-    pub planner_model: Option<String>,
+    /// Name of the agent (in `Config.agents`) that acts as the
+    /// orchestrator.
+    pub agent: String,
+
+    /// Tier 1: how many times a single step is retried before
+    /// escalation.
+    #[serde(default = "default_max_attempts_per_step")]
+    pub max_attempts_per_step: u32,
+
+    /// Tier 2: how many times the orchestrator is re-invoked to replan
+    /// after exhaustion before bailing out.
+    #[serde(default = "default_max_replans")]
+    pub max_replans: u32,
+
+    /// When `true`, `@role:`-prefixed messages are also routed through the
+    /// orchestrator (the planner decides whether to honor or override the
+    /// user's explicit target). When `false` (default), `@role:` bypasses
+    /// the orchestrator and dispatches directly to the named agent —
+    /// preserves the "talk to this agent specifically" escape hatch.
+    #[serde(default)]
+    pub route_explicit_agents: bool,
+
+    /// Planner engine: `"static"` (legacy roster.rs/wiring.rs, default) or
+    /// `"rag"` (new RAG + subprocess runner, gated). Flipped to `"rag"` in
+    /// Phase 4 of the redesign; default flipped in Phase 5.
+    #[serde(default = "default_orchestrator_engine")]
+    pub engine: String,
 }
 
-impl Default for OrchestratorConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_orchestrator_enabled(),
-            max_retries: default_max_retries(),
-            max_concurrent: default_max_concurrent(),
-            planner_engine: None,
-            planner_model: None,
-        }
-    }
-}
-
-fn default_orchestrator_enabled() -> bool {
-    false
-}
-fn default_max_retries() -> u32 {
+fn default_max_attempts_per_step() -> u32 {
     3
 }
-fn default_max_concurrent() -> usize {
-    4
+fn default_max_replans() -> u32 {
+    2
+}
+fn default_orchestrator_engine() -> String {
+    "static".to_string()
+}
+
+/// RAG startup indexer configuration. Inert until a consumer calls it.
+/// Safe to enable early — the indexer only reads from disk and writes
+/// to Qdrant.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RagConfig {
+    /// Enable the startup indexer (scans skills/, agents/, MCP tools,
+    /// embeds descriptions, upserts into `tengu_registry`). Off by default.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// Telegram bot adapter configuration.
@@ -571,6 +612,33 @@ pub struct MemoryConfig {
     /// Persistent store: overlap in characters between consecutive chunks.
     #[serde(default = "default_persistent_store_chunk_overlap")]
     pub persistent_store_chunk_overlap: usize,
+
+    /// TTL in days for `tengu_memory` entries. `0` means never purge
+    /// (default, MemPalace-style permanent memory). Set to a positive
+    /// integer to enable startup sweep of older messages/step outputs.
+    #[serde(default = "default_ttl_days")]
+    pub ttl_days: u64,
+    /// Number of most-recent session messages the orchestrator reloads
+    /// each turn (by `session_id`, ordered by timestamp) for multi-turn
+    /// dialogue coherence. Deterministic, not vector-search based.
+    #[serde(default = "default_session_recent_n")]
+    pub session_recent_n: usize,
+    /// Top-K breadth for fuzzy cross-plan recall during replan (vector
+    /// search over `tengu_outputs` only; messages are excluded to keep
+    /// signal/noise apart).
+    #[serde(default = "default_cross_plan_top_k")]
+    pub cross_plan_top_k: usize,
+    /// Top-K breadth for fuzzy cross-session message recall (vector
+    /// search over `tengu_messages`). Defaults to `0` = off — the planner
+    /// prompt stays unchanged for users who haven't opted in. Pair with
+    /// Phase 6.4 (full) durable user-message persistence: setting this
+    /// to e.g. `3` injects a "Cross-session message recall" block of the
+    /// top-3 semantically-similar prior user messages before the current
+    /// turn, surviving across restarts and across `session_id`s. Use
+    /// sparingly — values >5 inflate the planner prompt without much
+    /// signal gain because conversational text tends to cluster.
+    #[serde(default = "default_cross_session_msg_top_k")]
+    pub cross_session_msg_top_k: usize,
 }
 
 impl Default for MemoryConfig {
@@ -589,8 +657,25 @@ impl Default for MemoryConfig {
             vector_size: default_vector_size(),
             persistent_store_chunk_size: default_persistent_store_chunk_size(),
             persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
+            ttl_days: default_ttl_days(),
+            session_recent_n: default_session_recent_n(),
+            cross_plan_top_k: default_cross_plan_top_k(),
+            cross_session_msg_top_k: default_cross_session_msg_top_k(),
         }
     }
+}
+
+fn default_ttl_days() -> u64 {
+    0
+}
+fn default_session_recent_n() -> usize {
+    10
+}
+fn default_cross_plan_top_k() -> usize {
+    5
+}
+fn default_cross_session_msg_top_k() -> usize {
+    0
 }
 
 fn default_embedding_model() -> String {
@@ -945,7 +1030,7 @@ impl Config {
             format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
         );
 
-        let valid_workspace_tools = ["shared_cache", "persistent_store"];
+        let valid_workspace_tools = ["shared_cache", "persistent_store", "skill_distill"];
         for wt in &agent.workspace_tools {
             if !valid_workspace_tools.contains(&wt.as_str()) {
                 errors.push(format!(
@@ -1019,12 +1104,15 @@ impl Default for Config {
             hub: HubConfig::default(),
             agents,
             orchestrator: None,
+            rag: RagConfig::default(),
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
             mcp_servers: Vec::new(),
+            skill_lifecycle: None,
+            sandbox_name: None,
         }
     }
 }
@@ -1047,9 +1135,7 @@ mod tests {
         main.limits.max_output_tokens_per_turn = Some(8_192);
 
         let err = config.validate().expect_err("expected validation error");
-        assert!(err
-            .to_string()
-            .contains("cannot exceed context_window"));
+        assert!(err.to_string().contains("cannot exceed context_window"));
     }
 
     #[test]
@@ -1083,7 +1169,9 @@ mod tests {
         });
 
         let err = config.validate().expect_err("expected validation error");
-        assert!(err.to_string().contains("builtin_tools_profile must be one of"));
+        assert!(err
+            .to_string()
+            .contains("builtin_tools_profile must be one of"));
     }
 
     #[test]

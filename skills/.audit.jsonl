@@ -1,0 +1,5 @@
+{"ts":"2026-04-29T14:40:09.919649+00:00","op":"seed","name":"german-teacher","source":"tier=project;resources_dir=/Users/vladimirdemidov/Desktop/german-materials/"}
+{"ts":"2026-04-29T16:10:19.459407+00:00","op":"seed","name":"spanish-teacher","source":"tier=project;resources_dir=<none>"}
+{"ts":"2026-04-29T17:00:10.327661+00:00","op":"remove","name":"spanish-teacher","source":"tier=project"}
+{"ts":"2026-04-29T17:00:19.733515+00:00","op":"seed","name":"spanish-teacher","source":"tier=project;resources_dir=<none>"}
+{"ts":"2026-04-30T11:49:02.244199+00:00","op":"manage_skill.patch","name":"spanish-teacher","source":"file=SKILL.md;matches=1"}

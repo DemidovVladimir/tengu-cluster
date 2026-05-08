@@ -101,10 +101,11 @@ mod tests {
             scope: &scope,
             shell: shell.as_ref(),
             http: &http,
-            memory: None,
+            memory_manager: None,
             secret_registry: &secrets,
             activity: activity.as_ref(),
-            subagents: None,
+            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            agent_config: None,
         };
 
         let args = json!({"title": "bug"});

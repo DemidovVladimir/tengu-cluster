@@ -10,8 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::memory_builder::MemoryServiceHandle;
-use crate::adapters::plugins::subagents::SubagentRegistry;
+use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::types::{ToolCall, ToolDef};
@@ -54,20 +53,53 @@ pub(crate) trait ToolPlugin: Send + Sync {
 // Contexts
 // ---------------------------------------------------------------------------
 
+/// Read-only view of the current conversation messages, passed to tools
+/// that need to inspect history (e.g. skill_lifecycle::distill).
+pub(crate) struct ConversationView<'a> {
+    messages: &'a [crate::adapters::types::Message],
+}
+
+impl<'a> ConversationView<'a> {
+    pub(crate) fn new(messages: &'a [crate::adapters::types::Message]) -> Self {
+        Self { messages }
+    }
+    pub(crate) fn empty() -> Self {
+        Self { messages: &[] }
+    }
+    pub(crate) fn len(&self) -> usize {
+        self.messages.len()
+    }
+    pub(crate) fn slice(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> anyhow::Result<&'a [crate::adapters::types::Message]> {
+        if from > to || to > self.messages.len() {
+            anyhow::bail!(
+                "conversation slice out of range: {from}..{to} len={}",
+                self.messages.len()
+            );
+        }
+        Ok(&self.messages[from..to])
+    }
+}
+
 /// Per-call context passed to every `Tool::execute`. Borrowed, never stored.
 pub(crate) struct ToolCtx<'a> {
     pub workspace: &'a Path,
     pub scope: &'a ToolScope,
     pub shell: &'a dyn ShellExecutionPort,
     pub http: &'a reqwest::Client,
-    pub memory: Option<&'a MemoryServiceHandle>,
+    pub memory_manager: Option<&'a MemoryManager>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
-    /// Subagent registry handle — present only when the orchestrator is
-    /// enabled (gated by `OrchestratorConfig.enabled`). The subagents plugin
-    /// uses this to spawn / kill / steer LLM-driven subagents; all other
-    /// plugins ignore it.
-    pub subagents: Option<&'a SubagentRegistry>,
+    pub conversation: ConversationView<'a>,
+    /// Calling agent's resolved config. `Some(_)` for tool calls dispatched
+    /// from inside an agent loop (populated by `PluginToolExecutor` from the
+    /// `AgentConfig` it was built with); `None` for harness-level invocations
+    /// (e.g. `tengu eval` runner construction, MetricRunCtx-degraded paths,
+    /// most unit tests).
+    pub agent_config: Option<&'a crate::adapters::config::AgentConfig>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
@@ -76,10 +108,8 @@ pub(crate) struct PluginCtx<'a> {
     pub config: &'a crate::adapters::config::AgentConfig,
     pub http: reqwest::Client,
     pub shell: Arc<dyn ShellExecutionPort>,
-    pub memory: Option<Arc<MemoryServiceHandle>>,
+    pub memory_manager: Option<Arc<MemoryManager>>,
     pub secret_registry: Arc<SecretRegistry>,
-    /// Subagent registry — only set when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +154,10 @@ impl ToolRegistry {
     }
 
     pub(crate) fn definitions(&self) -> Vec<ToolDef> {
-        self.by_name.values().map(|t| t.definition().clone()).collect()
+        self.by_name
+            .values()
+            .map(|t| t.definition().clone())
+            .collect()
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&Arc<dyn Tool>> {
@@ -161,12 +194,17 @@ pub(crate) struct PluginToolExecutor {
     pub workspace: std::path::PathBuf,
     pub shell: Arc<dyn ShellExecutionPort>,
     pub http: reqwest::Client,
-    pub memory: Option<Arc<MemoryServiceHandle>>,
+    pub memory_manager: Option<Arc<MemoryManager>>,
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
-    /// Subagent registry — only populated when the orchestrator is enabled.
-    pub subagents: Option<Arc<SubagentRegistry>>,
+    /// Owned copy of the calling agent's config — borrowed into every
+    /// `ToolCtx` so tools (e.g. `skill_distill`) can read the agent's
+    /// engine + model when seeding generated artefacts. `None` only for
+    /// harness-built executors that have no associated agent (currently
+    /// none in production paths; some tests construct a stub executor
+    /// without one).
+    pub agent_config: Option<crate::adapters::config::AgentConfig>,
 }
 
 impl PluginToolExecutor {
@@ -174,14 +212,12 @@ impl PluginToolExecutor {
     ///
     /// Used to surface dynamically-discovered plugin tools (currently: MCP proxy tools
     /// with `{server}.{tool}` names) to the LLM. The static plugins (workspace, http,
-    /// crypto, cache, memory, skill, subagents) contribute tool defs via their own
+    /// crypto, cache, memory, skill) contribute tool defs via their own
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
     pub(crate) fn additional_tool_defs(&self, already_advertised: &[ToolDef]) -> Vec<ToolDef> {
-        let known: std::collections::HashSet<&str> = already_advertised
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
+        let known: std::collections::HashSet<&str> =
+            already_advertised.iter().map(|t| t.name.as_str()).collect();
         self.registry
             .definitions()
             .into_iter()
@@ -192,7 +228,11 @@ impl PluginToolExecutor {
 
 #[async_trait]
 impl ToolExecutor for PluginToolExecutor {
-    async fn execute(&self, call: &ToolCall) -> Result<String> {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::adapters::types::Message],
+    ) -> Result<String> {
         self.activity.publish_tool_activity(call);
 
         if self.registry.get(&call.name).is_none() {
@@ -205,13 +245,17 @@ impl ToolExecutor for PluginToolExecutor {
             scope: &scope,
             shell: self.shell.as_ref(),
             http: &self.http,
-            memory: self.memory.as_ref().map(|m| m.as_ref()),
+            memory_manager: self.memory_manager.as_ref().map(|m| m.as_ref()),
             secret_registry: &self.secret_registry,
             activity: self.activity.as_ref(),
-            subagents: self.subagents.as_ref().map(|r| r.as_ref()),
+            conversation: ConversationView::new(messages),
+            agent_config: self.agent_config.as_ref(),
         };
 
-        let output = self.registry.invoke(&call.name, &call.arguments, &ctx).await?;
+        let output = self
+            .registry
+            .invoke(&call.name, &call.arguments, &ctx)
+            .await?;
         Ok(output.text)
     }
 }
@@ -256,11 +300,11 @@ mod tests {
             workspace: std::path::PathBuf::from("."),
             shell: Arc::new(LocalShellExecutor::new()),
             http: reqwest::Client::new(),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(SecretRegistry::new()),
             activity: Arc::new(StubActivity),
             scopes: HashMap::new(),
-            subagents: None,
+            agent_config: None,
         }
     }
 

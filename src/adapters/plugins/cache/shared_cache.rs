@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 /// Reserved tool name — skills cannot shadow this.
@@ -92,7 +93,10 @@ impl SharedCacheTool {
             rusqlite::params![namespace, key, value_json],
         )?;
 
-        Ok(format!("ok: {namespace}/{key} ({} bytes)", value_json.len()))
+        Ok(format!(
+            "ok: {namespace}/{key} ({} bytes)",
+            value_json.len()
+        ))
     }
 
     fn execute_delete(&self, namespace: &str, key: &str) -> Result<String> {
@@ -111,9 +115,8 @@ impl SharedCacheTool {
 
     fn execute_list(&self, namespace: &str) -> Result<String> {
         let db = self.db.lock().map_err(|e| anyhow::anyhow!("lock: {e}"))?;
-        let mut stmt = db.prepare(
-            "SELECT key FROM cache_entries WHERE namespace = ?1 ORDER BY key",
-        )?;
+        let mut stmt =
+            db.prepare("SELECT key FROM cache_entries WHERE namespace = ?1 ORDER BY key")?;
         let keys: Vec<String> = stmt
             .query_map(rusqlite::params![namespace], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -138,40 +141,21 @@ impl Tool for SharedCacheTool {
         // workspace write permission since every op touches that file.
         ctx.scope.check_fs_write(ctx.workspace)?;
 
-        let operation = args
-            .get("operation")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("shared_cache: missing 'operation'"))?;
-
-        let namespace = args
-            .get("namespace")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("shared_cache: missing 'namespace'"))?;
+        let operation = require_str(args, "shared_cache", "operation")?;
+        let namespace = require_str(args, "shared_cache", "namespace")?;
 
         let result = match operation {
             "get" => {
-                let key = args
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("shared_cache get: missing 'key'"))?;
+                let key = require_str(args, "shared_cache get", "key")?;
                 self.execute_get(namespace, key)?
             }
             "put" => {
-                let key = args
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("shared_cache put: missing 'key'"))?;
-                let value = args
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("shared_cache put: missing 'value'"))?;
+                let key = require_str(args, "shared_cache put", "key")?;
+                let value = require_str(args, "shared_cache put", "value")?;
                 self.execute_put(namespace, key, value)?
             }
             "delete" => {
-                let key = args
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow::anyhow!("shared_cache delete: missing 'key'"))?;
+                let key = require_str(args, "shared_cache delete", "key")?;
                 self.execute_delete(namespace, key)?
             }
             "list" => self.execute_list(namespace)?,
@@ -213,7 +197,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(put.text.starts_with("ok: ns/k"), "unexpected put: {}", put.text);
+        assert!(
+            put.text.starts_with("ok: ns/k"),
+            "unexpected put: {}",
+            put.text
+        );
 
         let get = tool
             .execute(
@@ -269,7 +257,11 @@ mod tests {
                 &harness.ctx(),
             )
             .await;
-        assert!(result.is_err(), "expected error for unknown op, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "expected error for unknown op, got: {:?}",
+            result
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(
             msg.contains("unknown operation"),

@@ -1,0 +1,232 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cdd6f4"/>
+    </marker>
+    <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a6e3a1"/>
+    </marker>
+    <marker id="arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f9e2af"/>
+    </marker>
+    <marker id="arrP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cba6f7"/>
+    </marker>
+    <style>
+      .bg     { fill: #1e1e2e; }
+      .panel  { fill: #181825; stroke: #45475a; stroke-width: 1.5; rx: 10; }
+      .panelH { fill: #313244; stroke: #585b70; stroke-width: 1; rx: 8; }
+      .accent { fill: #cba6f7; }
+      .ok     { fill: #a6e3a1; }
+      .warn   { fill: #f9e2af; }
+      .err    { fill: #f38ba8; }
+      .blue   { fill: #89b4fa; }
+      .pink   { fill: #f5c2e7; }
+      .teal   { fill: #94e2d5; }
+      .muted  { fill: #6c7086; }
+      text    { fill: #cdd6f4; font-size: 13px; }
+      .title  { font-size: 22px; font-weight: 700; fill: #cdd6f4; }
+      .sub    { font-size: 14px; fill: #a6adc8; }
+      .small  { font-size: 11px; fill: #a6adc8; }
+      .tag    { font-size: 10px; fill: #1e1e2e; font-weight: 700; }
+      .mono   { font-family: ui-monospace, monospace; }
+      .edge   { stroke: #cdd6f4; stroke-width: 1.5; fill: none; }
+      .edgeG  { stroke: #a6e3a1; stroke-width: 1.8; fill: none; }
+      .edgeY  { stroke: #f9e2af; stroke-width: 1.8; fill: none; }
+      .edgeP  { stroke: #cba6f7; stroke-width: 1.8; fill: none; }
+      .dash   { stroke-dasharray: 4 4; }
+      .num    { fill: #1e1e2e; font-weight: 700; font-size: 14px; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1500" height="1700"/>
+
+  <text x="40" y="46" class="title">Context-Cutting in Tengu-Cluster — what shrinks the LLM's input each turn</text>
+  <text x="40" y="68" class="sub">Five distinct mechanisms. None of them is LLM-driven — no auto-summarise pass exists. Old context just falls off or gets first-line-clipped.</text>
+
+  <!-- ===================================================================== -->
+  <!-- PHASE A — TURN ASSEMBLY (chat_builder)                                  -->
+  <!-- ===================================================================== -->
+  <text x="40" y="115" class="title teal">A. Turn assembly  —  before the engine call</text>
+
+  <g transform="translate(40,135)">
+    <rect class="panel" width="1420" height="280"/>
+    <rect class="panelH" x="14" y="14" width="380" height="22"/>
+    <text x="22" y="30" class="tag">chat_builder.rs::ChatTurn::run  (per chat turn, planner-side)</text>
+
+    <!-- system + memory + history flow -->
+    <g transform="translate(40,55)">
+      <rect width="240" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="14" y="22" font-weight="700">system_prompt</text>
+      <text x="14" y="40" class="small">base + skills + grounding</text>
+      <text x="14" y="56" class="small mono muted">estimate_tokens_approx_min1()</text>
+    </g>
+
+    <g transform="translate(310,55)">
+      <rect width="240" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="14" y="22" font-weight="700">memory_block</text>
+      <text x="14" y="40" class="small">RAG recall — fixed cost</text>
+      <text x="14" y="56" class="small mono muted">memory_tokens = estimate(block)</text>
+    </g>
+
+    <g transform="translate(580,55)">
+      <rect width="280" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="14" y="22" font-weight="700">remaining_flow_tokens</text>
+      <text x="14" y="40" class="small">flow-level cap (max_tokens_per_flow)</text>
+      <text x="14" y="56" class="small mono muted">max_tokens_per_flow − flow_token_usage</text>
+    </g>
+
+    <g transform="translate(890,55)">
+      <rect width="280" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="14" y="22" font-weight="700">engine.context_window</text>
+      <text x="14" y="40" class="small">model context (default 1M)</text>
+      <text x="14" y="56" class="small mono muted">engine.max_output_tokens_per_turn()</text>
+    </g>
+
+    <!-- Budget arithmetic -->
+    <g transform="translate(40,140)">
+      <rect width="1100" height="50" rx="8" fill="#181825" stroke="#cba6f7"/>
+      <text x="20" y="22" font-weight="700" class="accent">prompt_budget::compute_base_input_budget</text>
+      <text x="20" y="40" class="small mono">total = min(context_window − reserved_output, remaining_flow_tokens) ;  base_input = total − system_tokens</text>
+    </g>
+
+    <g transform="translate(40,200)">
+      <rect width="1100" height="50" rx="8" fill="#181825" stroke="#cba6f7"/>
+      <text x="20" y="22" font-weight="700" class="accent">history_budget = base_input − memory_tokens</text>
+      <text x="20" y="40" class="small">whatever's left after system + memory occupy their share of the input window</text>
+    </g>
+
+    <!-- Mech #1 callout -->
+    <g transform="translate(1170,140)">
+      <rect width="240" height="110" rx="8" fill="#1e1e2e" stroke="#94e2d5" stroke-width="2"/>
+      <circle cx="22" cy="22" r="13" class="teal"/>
+      <text x="22" y="28" text-anchor="middle" class="num">1</text>
+      <text x="44" y="28" font-weight="700">CUT — sliding window</text>
+      <text x="14" y="52" class="small mono">assemble_recent_history</text>
+      <text x="14" y="68" class="small">newest contiguous suffix</text>
+      <text x="14" y="84" class="small">that fits history_budget,</text>
+      <text x="14" y="100" class="small">capped at 20 msgs.</text>
+    </g>
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- PHASE B — ENGINE LOOP (engine_builder::collect_engine_response)         -->
+  <!-- ===================================================================== -->
+  <text x="40" y="465" class="title pink">B. Tool-calling loop  —  where the in-turn compaction happens</text>
+  <text x="40" y="487" class="sub mono">engine_builder.rs::collect_engine_response   for round in 0..max_tool_rounds (default 70) { ... }</text>
+
+  <g transform="translate(40,505)">
+    <rect class="panel" width="1420" height="780"/>
+
+    <!-- Round timeline -->
+    <text x="40" y="40" font-weight="700">Round 0</text>
+    <g transform="translate(40,55)">
+      <rect width="1340" height="100" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="20" y="26" class="small">① <tspan class="mono">run_single_engine_turn</tspan> → text + tool_calls + token usage</text>
+      <text x="20" y="46" class="small">② push assistant msg with tool_calls; <tspan class="mono">compact_cutoff = messages.len()</tspan></text>
+      <text x="20" y="66" class="small">③ for each tool_call: <tspan class="mono">executor.execute</tspan> → result</text>
+      <text x="20" y="86" class="small">④ push <tspan class="mono">Role::Tool { content: <tspan class="warn">truncate_tool_result</tspan>(result, max_tool_result_chars=300_000) }</tspan></text>
+    </g>
+
+    <!-- Mechs #3, #4, #5 callouts at round 0 -->
+    <g transform="translate(40,165)">
+      <rect width="430" height="120" rx="8" fill="#1e1e2e" stroke="#f9e2af" stroke-width="2"/>
+      <circle cx="22" cy="22" r="13" class="warn"/>
+      <text x="22" y="28" text-anchor="middle" class="num">3</text>
+      <text x="44" y="28" font-weight="700">CUT — per-result truncate</text>
+      <text x="14" y="50" class="small mono">truncate_tool_result(result, max_chars)</text>
+      <text x="14" y="68" class="small">char-cap (default 300_000) with footer:</text>
+      <text x="14" y="84" class="small mono">"[truncated — showing X of Y chars]"</text>
+      <text x="14" y="104" class="small muted">UTF-8 boundary safe (token::truncate_at_boundary)</text>
+    </g>
+
+    <g transform="translate(490,165)">
+      <rect width="430" height="120" rx="8" fill="#1e1e2e" stroke="#f9e2af" stroke-width="2"/>
+      <circle cx="22" cy="22" r="13" class="warn"/>
+      <text x="22" y="28" text-anchor="middle" class="num">4</text>
+      <text x="44" y="28" font-weight="700">CUT — MCP bridge cap</text>
+      <text x="14" y="50" class="small mono">max_mcp_result_chars = 50_000</text>
+      <text x="14" y="68" class="small">env <tspan class="mono">TENGU_BRIDGE_MAX_RESULT_CHARS</tspan></text>
+      <text x="14" y="84" class="small">enforced inside Claude Code engine —</text>
+      <text x="14" y="100" class="small">Claude CLI has no in-loop compaction</text>
+      <text x="14" y="114" class="small muted">claude_code_engine.rs:520</text>
+    </g>
+
+    <g transform="translate(940,165)">
+      <rect width="440" height="120" rx="8" fill="#1e1e2e" stroke="#a6e3a1" stroke-width="2"/>
+      <circle cx="22" cy="22" r="13" class="ok"/>
+      <text x="22" y="28" text-anchor="middle" class="num">5</text>
+      <text x="44" y="28" font-weight="700">AUTO-CONTINUE on output truncation</text>
+      <text x="14" y="50" class="small">if response_text ends with</text>
+      <text x="14" y="66" class="small mono">"[OUTPUT_TRUNCATED]"</text>
+      <text x="14" y="84" class="small">→ inject "Your output was truncated.</text>
+      <text x="14" y="100" class="small">Continue from where you left off."</text>
+      <text x="14" y="116" class="small muted">engine_builder.rs:637 — extends, doesn't cut</text>
+    </g>
+
+    <!-- Round 1 -->
+    <text x="40" y="320" font-weight="700">Round 1</text>
+    <text x="120" y="320" class="small muted">— same sequence, then the magic happens at the end:</text>
+
+    <g transform="translate(40,335)">
+      <rect width="1340" height="80" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="20" y="26" class="small">① model sees: [system, memory, history, prior assistant+tool_calls, prior tool results, NEW round-1 calls + results]</text>
+      <text x="20" y="46" class="small">② new tool calls dispatched, results truncated and pushed</text>
+      <text x="20" y="66" class="small accent">③ if round &gt;= 1: walk messages[..compact_cutoff], rewrite every Role::Tool in place via compact_tool_result(content, 200)</text>
+    </g>
+
+    <!-- Mech #2 — the big one -->
+    <g transform="translate(40,425)">
+      <rect width="1340" height="240" rx="10" fill="#181825" stroke="#cba6f7" stroke-width="2.5"/>
+      <circle cx="36" cy="36" r="18" class="accent"/>
+      <text x="36" y="42" text-anchor="middle" class="num" font-size="18">2</text>
+      <text x="68" y="42" font-weight="700" font-size="16" class="accent">CUT — mid-loop in-place compaction  (the closest thing tengu has to /compact)</text>
+
+      <text x="68" y="76" class="small">Triggered every round once <tspan class="mono">round &gt;= 1</tspan>. Iterates <tspan class="mono">messages[..compact_cutoff]</tspan> — the slice that existed BEFORE this round's calls were pushed.</text>
+      <text x="68" y="94" class="small">For each <tspan class="mono">Role::Tool</tspan> message in that prefix, rewrites <tspan class="mono">msg.content</tspan> in place via:</text>
+
+      <rect x="68" y="110" width="1240" height="60" rx="6" fill="#11111b" stroke="#45475a"/>
+      <text x="84" y="130" class="small mono">fn compact_tool_result(content, limit=200) {</text>
+      <text x="84" y="146" class="small mono">    if content.len() &lt;= limit { return content }</text>
+      <text x="84" y="162" class="small mono">    let first_line = content.lines().next().unwrap_or(content);</text>
+      <text x="700" y="146" class="small mono">    if first_line.len() &lt;= limit { return first_line }</text>
+      <text x="700" y="162" class="small mono">    return format!("{}…", &amp;first_line[..limit])  // utf8-safe</text>
+
+      <text x="68" y="194" class="small">Rationale (the inline comment): tool results "typically put key info on the first line" — tx hashes, IDs, status —</text>
+      <text x="68" y="210" class="small">so keeping the first line preserves the model's working memory of what happened without paying for the body.</text>
+      <text x="68" y="226" class="small muted">Config: <tspan class="mono">limits.compact_result_limit</tspan> (default 200 chars). 0 disables. Rounds 0 keep full bodies; round 1+ shrinks them.</text>
+    </g>
+
+    <!-- Round 2..N -->
+    <text x="40" y="700" font-weight="700">Round 2..N</text>
+    <g transform="translate(40,715)">
+      <rect width="1340" height="50" rx="8" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="20" y="22" class="small">Same pattern — every round re-walks the prefix. Tool results from earlier rounds stay compacted (no re-expansion).</text>
+      <text x="20" y="40" class="small">Loop exits when: model emits no tool_calls, token_budget exceeded, max_tool_rounds (70) hit, or cancel flag set.</text>
+    </g>
+  </g>
+
+  <!-- ===================================================================== -->
+  <!-- PHASE C — Skill / Memory baking                                          -->
+  <!-- ===================================================================== -->
+  <text x="40" y="1330" class="title blue">C. System-prompt baking  —  one-shot truncation when assembling skills + recall</text>
+
+  <g transform="translate(40,1350)">
+    <rect class="panel" width="1420" height="120"/>
+    <text x="20" y="32" class="small mono">skill_builder.rs:1120  — truncate_to_token_budget(instructions, max_file_tokens)</text>
+    <text x="20" y="52" class="small mono">skill_builder.rs:1132  — truncate_to_token_budget(content, max_file_tokens)         (referenced files)</text>
+    <text x="20" y="72" class="small mono">skill_builder.rs:1150  — truncate_to_token_budget(ctx, max_skill_context_tokens)   (skill recall context)</text>
+    <text x="20" y="98" class="small">Char-cap with the shared "~4 chars/token" heuristic. Appends "<tspan class="mono">\n\n[truncated]</tspan>". Runs once at prompt-build time, not per turn.</text>
+  </g>
+
+  <!-- Footer: what we DO NOT have -->
+  <g transform="translate(40,1495)">
+    <rect class="panel" width="1420" height="160" stroke="#f38ba8" stroke-width="2"/>
+    <text x="20" y="32" font-weight="700" class="err">What tengu does NOT have</text>
+    <text x="20" y="58" class="small">— No LLM-driven auto-compact pass. The model never sees a fresh summary of its own history; old turns just drop off via mechanism #1.</text>
+    <text x="20" y="78" class="small">— No "/compact" slash command equivalent in the TUI.</text>
+    <text x="20" y="98" class="small">— No semantic dedupe of repeated tool calls.</text>
+    <text x="20" y="118" class="small">— Subagent step traces are NEVER fed back into the planner's history. The only thing that survives is the <tspan class="mono accent">compress_and_store</tspan> summary in <tspan class="mono">tengu_outputs</tspan>,</text>
+    <text x="20" y="138" class="small">  and only <tspan class="mono">RagPlanner::replan</tspan> reads it (cross-plan recall) — not the per-turn chat history.</text>
+  </g>
+</svg>

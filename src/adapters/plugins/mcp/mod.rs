@@ -79,7 +79,8 @@ impl ToolPlugin for McpPlugin {
 
             for remote in manifest {
                 let qualified = format!("{}.{}", cfg.name, remote.name);
-                let def = ToolDef::new(&qualified, &remote.description, remote.input_schema.clone());
+                let def =
+                    ToolDef::new(&qualified, &remote.description, remote.input_schema.clone());
                 out.push(Arc::new(McpProxyTool {
                     def,
                     remote_name: remote.name,
@@ -112,9 +113,8 @@ mod tests {
             config: agent,
             http: reqwest::Client::new(),
             shell: Arc::new(LocalShellExecutor::new()),
-            memory: None,
+            memory_manager: None,
             secret_registry: Arc::new(SecretRegistry::new()),
-            subagents: None,
         }
     }
 
@@ -187,18 +187,13 @@ mod tests {
         let bad_server = McpServerConfig {
             name: "broken".to_string(),
             transport: "stdio".to_string(),
-            command: vec![
-                "/nonexistent/binary/that/cannot/possibly/exist/abc123xyz".to_string(),
-            ],
+            command: vec!["/nonexistent/binary/that/cannot/possibly/exist/abc123xyz".to_string()],
             url: None,
             env: Default::default(),
             auth: None,
         };
         let plugin = McpPlugin::new(vec![bad_server]);
         let tools = plugin.tools(&ctx).await.unwrap();
-        assert!(
-            tools.is_empty(),
-            "bad server must not contribute any tools"
-        );
+        assert!(tools.is_empty(), "bad server must not contribute any tools");
     }
 }

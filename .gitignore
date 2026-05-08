@@ -9,3 +9,20 @@ secrets.env
 .tengu-attachments
 /hypothesis
 lastrun.md
+.tengu/worktrees/
+.tengu/scratch/
+.tengu/registry-fingerprint
+
+# Eval runner artifacts (per-run transcripts + report.json). The eval
+# runner auto-prunes to `--keep-runs` (default 10), but gitignore keeps
+# them out of status/commits regardless.
+/evals/runs/
+
+# Skill lifecycle per-run artifacts. The rolling metrics.json + history.jsonl
+# are intentional persistent state and remain tracked; only the per-run
+# detail dirs are transient.
+/skills/*/metrics/runs/
+
+# Claude Code per-user settings (settings.local.json holds approved tool
+# allow-lists for the local workstation; not portable across machines).
+/.claude/

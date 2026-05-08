@@ -160,7 +160,9 @@ impl StdioClient {
         });
         let _ = self.rpc_call("initialize", params).await?;
         // Notification — no id, no response expected.
-        let _ = self.rpc_notify("notifications/initialized", json!({})).await;
+        let _ = self
+            .rpc_notify("notifications/initialized", json!({}))
+            .await;
         Ok(())
     }
 
@@ -410,4 +412,3 @@ fn expand_dollar_var(input: &str) -> Result<String> {
     }
     Ok(input.to_string())
 }
-

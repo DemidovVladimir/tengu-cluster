@@ -116,10 +116,7 @@ pub(crate) async fn privy_send_transaction(
         .map(String::from)
 }
 
-pub(crate) async fn privy_personal_sign(
-    client: &reqwest::Client,
-    message: &str,
-) -> Result<String> {
+pub(crate) async fn privy_personal_sign(client: &reqwest::Client, message: &str) -> Result<String> {
     let app_id = std::env::var("PRIVY_APP_ID")
         .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
     let app_secret = std::env::var("PRIVY_APP_SECRET")

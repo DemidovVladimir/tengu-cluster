@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
+use crate::adapters::tool_utils::require_str;
 use crate::adapters::types::ToolDef;
 
 pub(crate) struct HexToUint256Tool {
@@ -42,10 +43,7 @@ impl Tool for HexToUint256Tool {
 
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // scope: pure-compute — deterministic string parsing, no side effects.
-        let hex = args
-            .get("hex")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("hex_to_uint256: missing 'hex'"))?;
+        let hex = require_str(args, "hex_to_uint256", "hex")?;
         let stripped = hex.strip_prefix("0x").unwrap_or(hex);
         let value = U256::from_str_radix(stripped, 16)
             .map_err(|e| anyhow!("hex_to_uint256: invalid hex — {e}"))?;
@@ -88,9 +86,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let harness = TestHarness::new(tmp.path());
         let tool = HexToUint256Tool::new();
-        let result = tool
-            .execute(&json!({"hex": "0xzz"}), &harness.ctx())
-            .await;
+        let result = tool.execute(&json!({"hex": "0xzz"}), &harness.ctx()).await;
         assert!(result.is_err(), "expected invalid hex error");
     }
 }

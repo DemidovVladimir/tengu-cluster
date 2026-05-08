@@ -65,9 +65,7 @@ pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
 
 // ── UI helpers ──────────────────────────────────────────────────────────
 
-pub(crate) fn build_tool_activity_text(
-    call: &ToolCall,
-) -> (String, Option<String>) {
+pub(crate) fn build_tool_activity_text(call: &ToolCall) -> (String, Option<String>) {
     let title = prettify_tool_name(&call.name);
     let detail = summarize_tool_args_for(&call.name, &call.arguments);
     let detail = if detail.is_empty() {
@@ -157,12 +155,5 @@ fn prettify_tool_name(name: &str) -> String {
 
 /// Truncate a display string, appending "…" if it exceeds the limit.
 fn truncate_detail(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
+    crate::adapters::token::truncate_with_suffix(s, max, "…")
 }

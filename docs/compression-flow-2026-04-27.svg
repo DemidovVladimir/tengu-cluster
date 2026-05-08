@@ -1,0 +1,247 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cdd6f4"/>
+    </marker>
+    <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a6e3a1"/>
+    </marker>
+    <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f38ba8"/>
+    </marker>
+    <marker id="arrY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f9e2af"/>
+    </marker>
+    <style>
+      .bg     { fill: #1e1e2e; }
+      .panel  { fill: #181825; stroke: #45475a; stroke-width: 1.5; rx: 10; }
+      .panelH { fill: #313244; stroke: #585b70; stroke-width: 1; rx: 8; }
+      .accent { fill: #cba6f7; }
+      .ok     { fill: #a6e3a1; }
+      .warn   { fill: #f9e2af; }
+      .err    { fill: #f38ba8; }
+      .blue   { fill: #89b4fa; }
+      .pink   { fill: #f5c2e7; }
+      .teal   { fill: #94e2d5; }
+      .muted  { fill: #6c7086; }
+      text    { fill: #cdd6f4; font-size: 13px; }
+      .title  { font-size: 22px; font-weight: 700; fill: #cdd6f4; }
+      .sub    { font-size: 14px; fill: #a6adc8; }
+      .small  { font-size: 11px; fill: #a6adc8; }
+      .tag    { font-size: 10px; fill: #1e1e2e; font-weight: 700; }
+      .mono   { font-family: ui-monospace, monospace; }
+      .edge   { stroke: #cdd6f4; stroke-width: 1.5; fill: none; }
+      .edgeG  { stroke: #a6e3a1; stroke-width: 1.8; fill: none; }
+      .edgeR  { stroke: #f38ba8; stroke-width: 1.8; fill: none; }
+      .edgeY  { stroke: #f9e2af; stroke-width: 1.8; fill: none; }
+      .dash   { stroke-dasharray: 4 4; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1400" height="1700"/>
+
+  <!-- Title -->
+  <text x="40" y="48" class="title">Tengu-Cluster — Compression / Compaction Flow</text>
+  <text x="40" y="72" class="sub">The harness has THREE layered mechanisms. <tspan class="accent">compress_and_store</tspan> is the load-bearing one.</text>
+
+  <!-- Three legend boxes -->
+  <g transform="translate(40,90)">
+    <rect class="panel" width="400" height="56"/>
+    <rect x="10" y="12" width="10" height="32" rx="2" class="accent"/>
+    <text x="30" y="28" font-weight="700">1. compress_and_store</text>
+    <text x="30" y="46" class="small">LLM-driven step summarisation → Qdrant tengu_outputs</text>
+  </g>
+  <g transform="translate(460,90)">
+    <rect class="panel" width="400" height="56"/>
+    <rect x="10" y="12" width="10" height="32" rx="2" class="teal"/>
+    <text x="30" y="28" font-weight="700">2. persistent_store chunking</text>
+    <text x="30" y="46" class="small">Char-window chunks (1000/200 overlap) → vector embeddings</text>
+  </g>
+  <g transform="translate(880,90)">
+    <rect class="panel" width="400" height="56"/>
+    <rect x="10" y="12" width="10" height="32" rx="2" class="warn"/>
+    <text x="30" y="28" font-weight="700">3. Prompt-budget truncation</text>
+    <text x="30" y="46" class="small">History suffix + "~4 chars/token" cap → "[truncated]"</text>
+  </g>
+
+  <!-- Section header for #1 -->
+  <text x="40" y="190" class="title accent">1. compress_and_store — the "step is done" protocol</text>
+  <text x="40" y="210" class="sub">Defined in <tspan class="mono">src/adapters/plugins/skill_lifecycle/compress_and_store.rs</tspan>. ToolDef appended IMPLICITLY to every subagent.</text>
+
+  <!-- Parent panel -->
+  <g transform="translate(40,235)">
+    <rect class="panel" width="1320" height="120"/>
+    <rect class="panelH" x="14" y="14" width="200" height="22"/>
+    <text x="22" y="30" class="tag">PARENT  tengu chat</text>
+    <text x="24" y="60" font-size="13"><tspan class="mono blue">RagPlanner</tspan> emits plan JSON  →  <tspan class="mono blue">DagExecutor</tspan> drives steps  →  <tspan class="mono blue">SubprocessRunner.run(AgentIpcInput)</tspan></text>
+    <text x="24" y="82" class="small mono">channel_runtime.rs::run_turn_with_system  (planner-side: tools=[], memory=None — strict separation)</text>
+    <text x="24" y="100" class="small">Each plan step spawns a fresh child <tspan class="mono">tengu run-agent</tspan> process. IPC over stdin/stdout JSON.</text>
+  </g>
+
+  <!-- Arrow parent → child -->
+  <path class="edge" d="M 700 360 L 700 395" marker-end="url(#arr)"/>
+  <text x="708" y="380" class="small">stdin: AgentIpcInput { goal, agent, model, tools, session_id, step_id, sandbox_config }</text>
+
+  <!-- Child / setup -->
+  <g transform="translate(40,400)">
+    <rect class="panel" width="1320" height="120"/>
+    <rect class="panelH" x="14" y="14" width="270" height="22"/>
+    <text x="22" y="30" class="tag">CHILD  tengu run-agent  (main.rs::run_agent_subprocess)</text>
+    <text x="24" y="60" font-size="13" class="mono">build_subprocess_tool_executor(spec, config, ...)  →  channel_runtime.rs:1194</text>
+    <text x="24" y="82" font-size="13">effective_tools = (compute_base_tools ∩ spec.tools) <tspan font-weight="700" class="accent">∪ {compress_and_store}</tspan>   <tspan class="muted">// always-on, qdrant feature</tspan></text>
+    <text x="24" y="100" class="small">System prompt = base + each skill body + mandatory <tspan class="mono">"...your FINAL action MUST be the compress_and_store tool with a concise summary..."</tspan></text>
+  </g>
+
+  <!-- Arrow into loop -->
+  <path class="edge" d="M 700 525 L 700 555" marker-end="url(#arr)"/>
+
+  <!-- Multi-turn loop block -->
+  <g transform="translate(40,560)">
+    <rect class="panel" width="1320" height="540"/>
+    <rect class="panelH" x="14" y="14" width="280" height="22"/>
+    <text x="22" y="30" class="tag">MULTI-TURN LOOP   (for turn in 0..max_turns)</text>
+
+    <!-- Step 1 -->
+    <g transform="translate(40,55)">
+      <rect class="panelH" width="1240" height="60" rx="8"/>
+      <text x="20" y="25" font-weight="700">① run_single_engine_turn(engine, messages, tools, ctx)</text>
+      <text x="20" y="46" class="small">Sends history + tool defs to model (OpenRouter <tspan class="mono">/chat/completions</tspan> or Claude Code CLI). Returns <tspan class="mono">(text, tool_calls)</tspan>.</text>
+    </g>
+
+    <!-- Diamond decision -->
+    <g transform="translate(540,135)">
+      <polygon points="120,0 240,40 120,80 0,40" fill="#313244" stroke="#585b70"/>
+      <text x="120" y="38" text-anchor="middle" font-weight="700">tool_calls.is_empty()?</text>
+      <text x="120" y="56" text-anchor="middle" class="small">(model produced final answer)</text>
+    </g>
+    <text x="785" y="180" class="small ok">YES → break, final_text = text</text>
+    <path class="edgeG" d="M 780 175 L 850 175 L 850 195" marker-end="url(#arrG)"/>
+
+    <!-- Path NO → for each call -->
+    <text x="540" y="180" text-anchor="end" class="small">NO ↓</text>
+    <path class="edge" d="M 660 215 L 660 240" marker-end="url(#arr)"/>
+
+    <!-- For each call diamond -->
+    <g transform="translate(440,245)">
+      <rect width="440" height="48" rx="8" fill="#313244" stroke="#585b70"/>
+      <text x="220" y="28" text-anchor="middle" font-weight="700">for each call in tool_calls — is name == "compress_and_store"?</text>
+    </g>
+
+    <!-- Two branches -->
+    <path class="edgeY" d="M 540 293 L 540 320 L 250 320 L 250 360" marker-end="url(#arrY)"/>
+    <text x="395" y="312" text-anchor="middle" class="warn small">YES — special-case branch</text>
+
+    <path class="edge" d="M 780 293 L 780 320 L 1080 320 L 1080 360" marker-end="url(#arr)"/>
+    <text x="930" y="312" text-anchor="middle" class="small">NO — normal tool dispatch</text>
+
+    <!-- Left branch: compress_and_store, two dispatch paths -->
+    <g transform="translate(40,360)">
+      <rect class="panel" width="430" height="160" fill="#181825" stroke="#cba6f7"/>
+      <text x="16" y="24" font-weight="700" class="accent">compress_and_store hits one of two paths</text>
+
+      <rect x="14" y="36" width="402" height="56" rx="6" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="24" y="56" font-weight="700" class="blue">Path A — OUT-OF-BAND  (OpenRouter)</text>
+      <text x="24" y="74" class="small">main.rs:821 intercepts BEFORE executor runs:</text>
+      <text x="24" y="88" class="small mono">summary = call.args["summary"]; compress_called = true;</text>
+
+      <rect x="14" y="98" width="402" height="56" rx="6" fill="#1e1e2e" stroke="#45475a"/>
+      <text x="24" y="118" font-weight="700" class="pink">Path B — PLUGIN  (Claude Code via MCP bridge)</text>
+      <text x="24" y="136" class="small mono">CompressAndStoreTool::execute()  → mcp__tengu-tools__compress_and_store</text>
+      <text x="24" y="150" class="small">compress_called stays false (loop never sees it) — graceful path takes over.</text>
+    </g>
+
+    <!-- both paths converge to write_summary -->
+    <path class="edgeY" d="M 255 525 L 255 540" marker-end="url(#arrY)"/>
+
+    <g transform="translate(40,545)">
+      <rect class="panel" width="430" height="80" fill="#181825" stroke="#a6e3a1"/>
+      <text x="16" y="22" font-weight="700" class="ok">write_summary(rag, session_id, step_id, summary)</text>
+      <text x="16" y="40" class="small mono">MemoryEntry { kind: StepOutput, session_id, step_id, content, created_at }</text>
+      <text x="16" y="58" class="small">→ embed (text-embedding-3-small) → upsert into Qdrant collection</text>
+      <text x="16" y="74" class="small mono accent">tengu_outputs</text>
+    </g>
+
+    <!-- Right branch: normal tool dispatch -->
+    <g transform="translate(880,360)">
+      <rect class="panel" width="400" height="160"/>
+      <text x="16" y="22" font-weight="700">Normal dispatch</text>
+      <text x="16" y="44" class="small mono">PluginToolExecutor::execute(call, messages)</text>
+      <text x="16" y="62" class="small">Returns Ok(string) → appended to <tspan class="mono">messages</tspan> as Role::Tool</text>
+      <text x="16" y="86" class="small">e.g. http_request, persistent_store, shared_cache,</text>
+      <text x="16" y="102" class="small">workspace tools, MCP servers …</text>
+      <text x="16" y="130" class="small muted">(loop continues — model may emit more tool calls or final text)</text>
+    </g>
+
+    <path class="edge dash" d="M 1080 525 L 1080 545 L 660 545 L 660 110" marker-end="url(#arr)" opacity="0.6"/>
+    <text x="900" y="540" text-anchor="middle" class="small muted">tool result appended to messages → next turn</text>
+  </g>
+
+  <!-- After-loop: middle-ground protocol (Phase 5c) -->
+  <g transform="translate(540,1115)">
+    <rect class="panel" width="320" height="44"/>
+    <text x="160" y="28" text-anchor="middle" font-weight="700">After loop ends</text>
+  </g>
+  <path class="edge" d="M 700 1100 L 700 1115" marker-end="url(#arr)"/>
+
+  <g transform="translate(40,1180)">
+    <rect class="panel" width="1320" height="160"/>
+    <rect class="panelH" x="14" y="14" width="380" height="22"/>
+    <text x="22" y="30" class="tag">PHASE 5c — MIDDLE-GROUND PROTOCOL  (main.rs:900)</text>
+
+    <g transform="translate(30,55)">
+      <rect width="410" height="80" rx="8" fill="#1e1e2e" stroke="#a6e3a1"/>
+      <text x="20" y="26" font-weight="700" class="ok">PASS — canonical good path</text>
+      <text x="20" y="46" class="small">compress_called == true</text>
+      <text x="20" y="64" class="small mono">AgentIpcOutput::Ok { output, summary }</text>
+    </g>
+
+    <g transform="translate(455,55)">
+      <rect width="410" height="80" rx="8" fill="#1e1e2e" stroke="#f9e2af"/>
+      <text x="20" y="26" font-weight="700" class="warn">PASS — graceful degradation</text>
+      <text x="20" y="46" class="small">no compress_and_store BUT final_text non-empty</text>
+      <text x="20" y="64" class="small mono">summary = final_text;  warn!("model finished without...")</text>
+    </g>
+
+    <g transform="translate(880,55)">
+      <rect width="410" height="80" rx="8" fill="#1e1e2e" stroke="#f38ba8"/>
+      <text x="20" y="26" font-weight="700" class="err">FAIL — empty run</text>
+      <text x="20" y="46" class="small">no compress_and_store AND no text emitted</text>
+      <text x="20" y="64" class="small mono">AgentIpcOutput::Failed { error, output: "" }</text>
+    </g>
+
+    <text x="660" y="150" text-anchor="middle" class="small muted">DagExecutor reads stdout JSON → on Failed: replan / retry. On Ok: feeds summary into next ready step.</text>
+  </g>
+
+  <!-- back to parent / cross-plan recall -->
+  <path class="edge" d="M 700 1340 L 700 1370" marker-end="url(#arr)"/>
+
+  <g transform="translate(40,1380)">
+    <rect class="panel" width="1320" height="100"/>
+    <rect class="panelH" x="14" y="14" width="280" height="22"/>
+    <text x="22" y="30" class="tag">CROSS-PLAN RECALL  (later turn)</text>
+    <text x="24" y="58" class="mono blue">RagPlanner::replan()</text>
+    <text x="200" y="58"> →  <tspan class="mono">search_memory(query, OUTPUTS_COLLECTION)</tspan>  →  surfaces past step summaries to the planner LLM</text>
+    <text x="24" y="80" class="small">This is the entire point of writing to <tspan class="mono accent">tengu_outputs</tspan>: the planner's later turns can recall what subagents already produced.</text>
+  </g>
+
+  <!-- Section #2 + #3 (small footer panels) -->
+  <text x="40" y="1535" class="title teal">2. persistent_store chunking</text>
+  <g transform="translate(40,1550)">
+    <rect class="panel" width="650" height="120"/>
+    <text x="20" y="28" class="small mono">src/adapters/plugins/memory/persistent_store.rs::chunk_text</text>
+    <text x="20" y="50" class="small">Char-window splitter. Defaults: <tspan class="mono">chunk_size=1000, overlap=200</tspan> (config.rs).</text>
+    <text x="20" y="70" class="small">Used by the <tspan class="mono">persistent_store</tspan> tool when an agent saves a file:</text>
+    <text x="20" y="88" class="small">extract text (PDF/DOCX/XLSX/raw) → chunk → embed each chunk → upsert manifest + chunks.</text>
+    <text x="20" y="108" class="small muted">Mechanical chunking — NOT LLM summarisation. Different layer entirely from compress_and_store.</text>
+  </g>
+
+  <text x="720" y="1535" class="title warn">3. Prompt-budget truncation</text>
+  <g transform="translate(720,1550)">
+    <rect class="panel" width="640" height="120"/>
+    <text x="20" y="28" class="small mono">src/adapters/prompt_budget.rs</text>
+    <text x="20" y="50" class="small"><tspan class="mono">assemble_recent_history</tspan> — newest contiguous suffix that fits the input budget (≤ 20 msgs).</text>
+    <text x="20" y="70" class="small"><tspan class="mono">truncate_to_token_budget</tspan> — char-cap with ~4 chars/token; appends <tspan class="mono">"\n\n[truncated]"</tspan>.</text>
+    <text x="20" y="90" class="small"><tspan class="mono">reserved_output_tokens / compute_total_input_budget</tspan> — context-window arithmetic.</text>
+    <text x="20" y="110" class="small muted">Pure budget enforcement — not "compression" in the LLM sense. Drops oldest, doesn't summarise.</text>
+  </g>
+</svg>
