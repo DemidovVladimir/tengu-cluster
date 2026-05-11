@@ -42,6 +42,15 @@ enum Commands {
         #[arg(long)]
         sandbox: Option<String>,
     },
+    /// Run the inbound webhook listener (`[webhooks.endpoints.<name>]` blocks
+    /// in the sandbox config bind URL paths to agents). Returns 202 Accepted
+    /// on every authenticated POST and dispatches a one-shot orchestrator
+    /// turn in the background. Build with `--features webhooks`.
+    Webhooks {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
     /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
     Eval {
         /// One or more skill names. Empty = discover all skills with evals.
@@ -109,6 +118,13 @@ enum Commands {
         #[command(subcommand)]
         action: RegistryAction,
     },
+    /// Inspect the RAG memory collections directly. Diagnostic shipped with
+    /// Fix C/D/E/F (2026-05-09) so operators can confirm whether step
+    /// outputs / messages actually persisted under a given `session_id`.
+    Memory {
+        #[command(subcommand)]
+        action: MemoryAction,
+    },
     /// INTERNAL — subprocess mode invoked by SubprocessRunner. Not intended for
     /// direct user invocation. Refuses to run unless TENGU_AGENT_IPC=1 is set.
     /// Phase 3 of the redesign ships a stub body; Phase 4 wires the real LLM
@@ -149,6 +165,33 @@ enum RegistryAction {
         /// up relative to this path.
         #[arg(long)]
         workspace: Option<PathBuf>,
+    },
+}
+
+/// Diagnostic — inspect the RAG memory collections (`tengu_outputs` /
+/// `tengu_messages`) filtered by `session_id`. Confirms whether durable
+/// writes actually landed for a given chat / telegram session.
+///
+/// Typical use: a planner answered "I have no record of that step" — was
+/// the write skipped (Claude Code never called compress_and_store?), did
+/// the embed fail (long summary?), or is it really not there? This
+/// diagnostic answers that without spinning up the full chat loop again.
+#[derive(Subcommand)]
+enum MemoryAction {
+    /// Show every entry in a collection that matches `--session <id>`.
+    /// Output: one row per entry — index, step_id, content snippet,
+    /// created_at (unix seconds + relative).
+    Inspect {
+        /// `session_id` to filter on (matches `extra.rag_session_id`).
+        #[arg(long)]
+        session: String,
+        /// Which collection: `outputs` (default — step summaries) or
+        /// `messages` (user messages).
+        #[arg(long, default_value = "outputs")]
+        collection: String,
+        /// Max entries to return.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
 }
 
@@ -331,6 +374,10 @@ async fn main() -> Result<()> {
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
+    // Webhook listener uses the same dual-output (file + stderr) pattern as
+    // telegram so operators can `tail -f tengu.log` while also watching the
+    // console for HMAC-fail / dispatch events.
+    let is_webhooks = matches!(cli.command, Some(Commands::Webhooks { .. }));
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
@@ -348,7 +395,7 @@ async fn main() -> Result<()> {
             .with_writer(std::sync::Mutex::new(log_file))
             .with_ansi(false)
             .init();
-    } else if is_telegram {
+    } else if is_telegram || is_webhooks {
         use tracing_subscriber::layer::SubscriberExt;
         let filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=info"));
@@ -424,6 +471,15 @@ async fn main() -> Result<()> {
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
             anyhow::bail!("Telegram support requires: cargo build --features telegram")
+        }
+        #[cfg(feature = "webhooks")]
+        Commands::Webhooks { sandbox } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            adapters::webhook_builder::run_webhooks(config, secret_registry).await
+        }
+        #[cfg(not(feature = "webhooks"))]
+        Commands::Webhooks { .. } => {
+            anyhow::bail!("webhook listener requires: cargo build --features webhooks")
         }
         Commands::Eval {
             skills,
@@ -534,12 +590,37 @@ async fn main() -> Result<()> {
         }
         Commands::Skill { action } => run_skill_command(config, action).await,
         Commands::Registry { action } => run_registry_command(&config, action).await,
+        Commands::Memory { action } => run_memory_command(&config, action).await,
         Commands::RunAgent => {
             // Handled by the early-return in main(); this arm is for
             // exhaustiveness only.
             unreachable!("Commands::RunAgent is dispatched earlier in main()")
         }
     }
+}
+
+/// Shared write path used by both compress_and_store call sites in
+/// `run_agent_subprocess`: the out-of-band intercept (model called the
+/// tool) and the Fix C backstop (model didn't call it but emitted text).
+/// Centralises the "open RagStore + persist summary" idiom so the two
+/// call sites only differ in their logging style — the side-effect shape
+/// is identical and lives here.
+///
+/// Returns `Ok(entry_id)` on success, `Err(_)` if either RagStore init
+/// or the embed-and-write path failed. Both call sites treat errors as
+/// non-fatal — the IPC summary still goes back to the parent regardless.
+#[cfg(feature = "qdrant")]
+async fn try_persist_step_summary(
+    parent_config: &adapters::config::Config,
+    session_id: &str,
+    step_id: &str,
+    summary: &str,
+) -> anyhow::Result<String> {
+    let rag = adapters::rag::RagStore::from_config(parent_config.memory.clone()).await?;
+    adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
+        &rag, session_id, step_id, summary,
+    )
+    .await
 }
 
 /// `tengu run-agent` handler — Phase 5b (real LLM + multi-turn tool loop).
@@ -886,20 +967,13 @@ async fn run_agent_subprocess() -> Result<()> {
                 compress_called = true;
                 #[cfg(feature = "qdrant")]
                 {
-                    if let Ok(rag) = adapters::rag::RagStore::from_config(
-                        parent_config.memory.clone(),
+                    let _ = try_persist_step_summary(
+                        &parent_config,
+                        &input.session_id,
+                        &input.step_id,
+                        &extracted_summary,
                     )
-                    .await
-                    {
-                        let _ =
-                            adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
-                                &rag,
-                                &input.session_id,
-                                &input.step_id,
-                                &extracted_summary,
-                            )
-                            .await;
-                    }
+                    .await;
                 }
                 "stored".to_string()
             } else if let Some(ref exec) = executor {
@@ -940,6 +1014,43 @@ async fn run_agent_subprocess() -> Result<()> {
     // If the model never called compress_and_store, treat the final
     // assistant text as the summary (graceful degradation, same as Phase 5a).
     let summary = summary.unwrap_or_else(|| final_text.clone());
+
+    // Fix C (2026-05-09) — backstop the durable write to `tengu_outputs`
+    // when the subagent finished WITHOUT calling compress_and_store. Pre
+    // Fix-C the IPC summary returned to the parent but nothing was written
+    // to Qdrant, so the planner's within-session recall (Fix A) had no row
+    // to find on the next user turn. This is the path Claude Code subagents
+    // most often take — they "just stop" after their last tool call instead
+    // of issuing the protocol call.
+    //
+    // Fail-soft: any error here is logged and swallowed. The IPC payload
+    // still goes back to the parent unchanged — recall is best-effort,
+    // not a barrier to step completion.
+    #[cfg(feature = "qdrant")]
+    if !compress_called && !summary.trim().is_empty() {
+        match try_persist_step_summary(
+            &parent_config,
+            &input.session_id,
+            &input.step_id,
+            &summary,
+        )
+        .await
+        {
+            Ok(id) => tracing::info!(
+                entry_id = %id,
+                session_id = %input.session_id,
+                step_id = %input.step_id,
+                summary_chars = summary.chars().count(),
+                "compress_and_store: backstop wrote final_text summary to tengu_outputs (Fix C — model skipped the protocol call)"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                session_id = %input.session_id,
+                step_id = %input.step_id,
+                "compress_and_store: backstop write FAILED — within-session recall on the next turn will not find this step (Qdrant down? embedder out of quota?)"
+            ),
+        }
+    }
 
     // Choose the user-visible `output` text. Models that only emit tool
     // calls (no inline assistant text) leave `final_text` empty; in that
@@ -1214,6 +1325,130 @@ async fn run_registry_command(config: &Config, action: RegistryAction) -> Result
 async fn run_registry_command(_config: &Config, _action: RegistryAction) -> Result<()> {
     anyhow::bail!(
         "`tengu registry` requires the 'qdrant' cargo feature. \
+         Rebuild with: cargo build --features qdrant"
+    );
+}
+
+/// Diagnostic — `tengu memory inspect --session <id>`. Lets operators
+/// confirm whether a given chat / telegram session actually persisted
+/// step outputs (or user messages) to Qdrant. Shipped 2026-05-09 alongside
+/// Fix C/D/E/F so symptoms like "the planner says it has no record" can
+/// be triaged in one command instead of needing to re-run a full pipeline.
+#[cfg(feature = "qdrant")]
+async fn run_memory_command(config: &Config, action: MemoryAction) -> Result<()> {
+    use crate::adapters::memory::context_block::ChunkMetadata;
+    use crate::adapters::rag::RagStore;
+
+    let MemoryAction::Inspect {
+        session,
+        collection,
+        limit,
+    } = action;
+
+    let collection_kind = match collection.as_str() {
+        "outputs" | "tengu_outputs" => "outputs",
+        "messages" | "tengu_messages" => "messages",
+        other => anyhow::bail!(
+            "unknown collection '{}' — expected 'outputs' or 'messages'",
+            other
+        ),
+    };
+
+    let rag = RagStore::from_config(config.memory.clone())
+        .await
+        .context("open RagStore (is Qdrant running and OPENROUTER_API_KEY set?)")?;
+
+    let mut filter = ChunkMetadata::default();
+    filter.extra.insert(
+        "rag_session_id".to_string(),
+        serde_json::Value::String(session.clone()),
+    );
+
+    // Query with a placeholder zero-vector. Server-side filter (Fix F)
+    // narrows to matching rows; ordering is incidental but irrelevant —
+    // we just want to see which entries exist for this session_id.
+    let dim = config.memory.vector_size as usize;
+    let zero = vec![0.0f32; dim];
+
+    let store = match collection_kind {
+        "outputs" => rag.outputs(),
+        "messages" => rag.messages(),
+        _ => unreachable!(),
+    };
+
+    let hits = store.search(&zero, limit, Some(&filter)).await?;
+    let kept: Vec<_> = hits
+        .into_iter()
+        .filter(|h| {
+            // Defence-in-depth — disk backend ignores the filter today
+            // (qdrant honours it via Fix F). Drop unrelated rows here too.
+            h.metadata
+                .extra
+                .get("rag_session_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == session)
+        })
+        .collect();
+
+    println!(
+        "# tengu_{} — session_id = {} ({} matching {})",
+        collection_kind,
+        session,
+        kept.len(),
+        if kept.len() == 1 { "entry" } else { "entries" }
+    );
+
+    if kept.is_empty() {
+        println!();
+        println!("(no entries — possible causes:");
+        println!("  · subagent never called compress_and_store AND Fix C wasn't built in");
+        println!("  · embed failed for an oversize summary AND Fix D wasn't built in");
+        println!("  · collection was reset since the session ran");
+        println!("  · session_id mismatch — check the planner startup log for the resolved id)");
+        return Ok(());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    for (i, h) in kept.iter().enumerate() {
+        let step_id = h
+            .metadata
+            .extra
+            .get("rag_step_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(none)");
+        let created_at = h
+            .metadata
+            .extra
+            .get("rag_created_at")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let age_secs = now.saturating_sub(created_at);
+        let chars = h.text.chars().count();
+        let snippet: String = h.text.chars().take(160).collect();
+        println!();
+        println!(
+            "{:>3}. step_id={}  created_at={} ({}s ago)  text_len={}",
+            i + 1,
+            step_id,
+            created_at,
+            age_secs,
+            chars
+        );
+        println!("     {}{}", snippet, if chars > 160 { "…" } else { "" });
+    }
+
+    Ok(())
+}
+
+/// Stub when the `qdrant` feature is off — `tengu memory` is a no-op.
+#[cfg(not(feature = "qdrant"))]
+async fn run_memory_command(_config: &Config, _action: MemoryAction) -> Result<()> {
+    anyhow::bail!(
+        "`tengu memory` requires the 'qdrant' cargo feature. \
          Rebuild with: cargo build --features qdrant"
     );
 }

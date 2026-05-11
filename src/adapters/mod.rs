@@ -26,6 +26,7 @@ pub(crate) mod claude_code_engine;
 pub(crate) mod engine_builder;
 pub(crate) mod eval_builder;
 pub(crate) mod mcp_bridge;
+pub(crate) mod noop;
 pub mod orchestrator;
 pub(crate) mod plugins;
 #[cfg(feature = "qdrant")]
@@ -40,3 +41,5 @@ pub(crate) mod skill_lifecycle;
 pub(crate) mod telegram_builder;
 pub(crate) mod tool_plugin;
 pub(crate) mod tui;
+#[cfg(feature = "webhooks")]
+pub(crate) mod webhook_builder;

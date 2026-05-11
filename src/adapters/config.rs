@@ -137,6 +137,13 @@ pub struct Config {
     #[serde(default)]
     pub telegram: TelegramConfig,
 
+    /// Inbound webhook listener configuration. Absent / `enabled = false`
+    /// means `tengu webhooks` will refuse to start. Each
+    /// `[webhooks.endpoints.<name>]` block binds one URL path to one agent
+    /// with a shared HMAC secret. See `WebhookConfig` for field docs.
+    #[serde(default)]
+    pub webhooks: WebhookConfig,
+
     #[serde(default)]
     pub scaffold: Option<ScaffoldConfig>,
 
@@ -508,6 +515,90 @@ pub struct TelegramConfig {
     pub approve_only: Vec<String>,
 }
 
+// =====================================================================
+// Webhook listener (added 2026-05-09) — `tengu webhooks --sandbox <name>`
+// =====================================================================
+
+/// Inbound HTTP webhook listener.
+///
+/// Bound to the orchestrator: each endpoint is a `(URL path → agent +
+/// secret)` triple. Incoming POSTs are verified with HMAC-SHA256 against
+/// the endpoint's `secret_env` (the value of the named env var), then
+/// dispatched as a one-shot orchestrator turn with a per-request
+/// `session_id` of the form `webhook-<endpoint-name>-<uuid>`.
+///
+/// The listener responds **202 Accepted** with `{"session_id": "..."}`
+/// immediately — agents can take minutes, longer than typical webhook
+/// timeouts. Final agent output goes to `tengu_outputs` (Fix C+D apply
+/// on every step) and the tracing log; recall it later with
+/// `tengu memory inspect --session webhook-<name>-<uuid>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// Whether the listener is enabled. `tengu webhooks --sandbox <name>`
+    /// refuses to start if `enabled = false`. Default: `false` (off).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind address. Default `127.0.0.1` — only loopback by default;
+    /// set to `0.0.0.0` to expose externally (paired with HMAC auth).
+    #[serde(default = "default_webhook_bind")]
+    pub bind: String,
+    /// TCP port. Default `7080`.
+    #[serde(default = "default_webhook_port")]
+    pub port: u16,
+    /// Per-endpoint configuration. Map of `<endpoint-name> →
+    /// WebhookEndpointConfig`. URL surfaces as `/webhooks/<endpoint-name>`.
+    #[serde(default)]
+    pub endpoints: HashMap<String, WebhookEndpointConfig>,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_webhook_bind(),
+            port: default_webhook_port(),
+            endpoints: HashMap::new(),
+        }
+    }
+}
+
+/// One inbound webhook endpoint binding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookEndpointConfig {
+    /// Agent name to dispatch to (must match an `agents/<name>.toml`).
+    pub agent: String,
+    /// Name of the environment variable holding the HMAC shared secret.
+    /// At verify time the listener reads `std::env::var(secret_env)`;
+    /// missing env var → 500 Internal Error (the listener cannot verify
+    /// the signature without the secret). Pair the env var with your
+    /// secrets manager / `.env` file. Mutually exclusive with `secret`.
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    /// Inline shared secret. Less safe than `secret_env` (the secret
+    /// ends up in the TOML on disk). Use only when `secret_env` is
+    /// inconvenient (e.g. local dev). Mutually exclusive with `secret_env`.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Prefix prepended to the synthesized user message that the
+    /// orchestrator receives. The full user message is
+    /// `<goal_template>\n\nPayload (JSON):\n<request body>`. Defaults to
+    /// `"A webhook arrived. Process the payload below."` if omitted.
+    #[serde(default = "default_webhook_goal_template")]
+    pub goal_template: String,
+}
+
+fn default_webhook_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_webhook_port() -> u16 {
+    7080
+}
+
+fn default_webhook_goal_template() -> String {
+    "A webhook arrived. Process the payload below.".to_string()
+}
+
 /// Workspace scaffold — auto-creates directories and seed files on startup.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScaffoldConfig {
@@ -639,6 +730,19 @@ pub struct MemoryConfig {
     /// signal gain because conversational text tends to cluster.
     #[serde(default = "default_cross_session_msg_top_k")]
     pub cross_session_msg_top_k: usize,
+    /// Top-K breadth for fuzzy WITHIN-session output recall on the planner's
+    /// normal `plan()` path (vector search over `tengu_outputs` filtered by
+    /// the planner's `session_id`). Defaults to `0` = off — back-compat.
+    /// Pair with the unified-session_id wiring (Fix B 2026-05-09): the
+    /// planner and `SubprocessRunner` share one `session_id`, so step
+    /// outputs persisted by `compress_and_store` in this session are
+    /// retrievable on the next user turn. Without this, `tengu_outputs`
+    /// is only read on `replan()` (`cross_plan_top_k`) — which is why
+    /// follow-up questions like "was the molecule project created?"
+    /// previously got "I have no record of that step" answers.
+    /// Recommended `3–5` once your sandbox config opts in.
+    #[serde(default = "default_within_session_output_top_k")]
+    pub within_session_output_top_k: usize,
 }
 
 impl Default for MemoryConfig {
@@ -661,6 +765,7 @@ impl Default for MemoryConfig {
             session_recent_n: default_session_recent_n(),
             cross_plan_top_k: default_cross_plan_top_k(),
             cross_session_msg_top_k: default_cross_session_msg_top_k(),
+            within_session_output_top_k: default_within_session_output_top_k(),
         }
     }
 }
@@ -675,6 +780,9 @@ fn default_cross_plan_top_k() -> usize {
     5
 }
 fn default_cross_session_msg_top_k() -> usize {
+    0
+}
+fn default_within_session_output_top_k() -> usize {
     0
 }
 
@@ -1107,6 +1215,7 @@ impl Default for Config {
             rag: RagConfig::default(),
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
+            webhooks: WebhookConfig::default(),
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
@@ -1125,6 +1234,90 @@ mod tests {
     fn validate_accepts_default_config() {
         let config = Config::default();
         assert!(config.validate().is_ok());
+    }
+
+    /// Webhook listener — defaults are `enabled = false`, loopback bind,
+    /// port 7080, no endpoints. The `tengu webhooks` subcommand refuses
+    /// to start under these defaults; users opt in by editing TOML.
+    #[test]
+    fn webhook_config_defaults_off_and_safe() {
+        let cfg = WebhookConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.bind, "127.0.0.1");
+        assert_eq!(cfg.port, 7080);
+        assert!(cfg.endpoints.is_empty());
+    }
+
+    /// Webhook listener — full TOML round-trip through the standard
+    /// `[webhooks]` + `[webhooks.endpoints.<name>]` shape.
+    #[test]
+    fn webhook_config_parses_endpoints() {
+        let toml_str = r#"
+[webhooks]
+enabled = true
+bind = "0.0.0.0"
+port = 9000
+
+[webhooks.endpoints.github]
+agent = "reviewer"
+secret_env = "GITHUB_WEBHOOK_SECRET"
+goal_template = "GitHub PR webhook arrived."
+
+[webhooks.endpoints.local_test]
+agent = "aura"
+secret = "literal-dev-secret"
+"#;
+        let parsed: toml::Value = toml::from_str(toml_str).unwrap();
+        let webhooks: WebhookConfig =
+            parsed.get("webhooks").unwrap().clone().try_into().unwrap();
+        assert!(webhooks.enabled);
+        assert_eq!(webhooks.bind, "0.0.0.0");
+        assert_eq!(webhooks.port, 9000);
+        assert_eq!(webhooks.endpoints.len(), 2);
+
+        let github = webhooks.endpoints.get("github").unwrap();
+        assert_eq!(github.agent, "reviewer");
+        assert_eq!(github.secret_env.as_deref(), Some("GITHUB_WEBHOOK_SECRET"));
+        assert!(github.secret.is_none());
+        assert_eq!(github.goal_template, "GitHub PR webhook arrived.");
+
+        let local = webhooks.endpoints.get("local_test").unwrap();
+        assert_eq!(local.secret.as_deref(), Some("literal-dev-secret"));
+        assert!(local.secret_env.is_none());
+        // Default goal_template applied when omitted.
+        assert!(local.goal_template.contains("webhook arrived"));
+    }
+
+    /// Fix A (2026-05-09) — `within_session_output_top_k` defaults to 0
+    /// (off) so existing users see no behaviour change. Pair with the
+    /// matching default for `cross_session_msg_top_k`.
+    #[test]
+    fn memory_config_within_session_output_top_k_defaults_off() {
+        let cfg = MemoryConfig::default();
+        assert_eq!(cfg.within_session_output_top_k, 0);
+        assert_eq!(cfg.cross_session_msg_top_k, 0);
+        // Replan-side cross-plan recall stays on by default — it's only
+        // wired into the replan() path, never plan().
+        assert_eq!(cfg.cross_plan_top_k, 5);
+    }
+
+    /// Fix A — confirm the field round-trips through TOML and keeps the
+    /// default when absent in the source. This is the back-compat guard:
+    /// pre-Fix-A `[memory]` blocks must still parse.
+    #[test]
+    fn memory_config_within_session_output_top_k_optional_in_toml() {
+        let toml_str = "[memory]\nenabled = true\n";
+        let parsed: toml::Value = toml::from_str(toml_str).unwrap();
+        let mem_section = parsed.get("memory").unwrap().clone();
+        let mem: MemoryConfig = mem_section.try_into().unwrap();
+        assert_eq!(mem.within_session_output_top_k, 0);
+
+        let toml_str_with =
+            "[memory]\nenabled = true\nwithin_session_output_top_k = 4\n";
+        let parsed: toml::Value = toml::from_str(toml_str_with).unwrap();
+        let mem_section = parsed.get("memory").unwrap().clone();
+        let mem: MemoryConfig = mem_section.try_into().unwrap();
+        assert_eq!(mem.within_session_output_top_k, 4);
     }
 
     #[test]

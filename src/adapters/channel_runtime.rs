@@ -1185,10 +1185,25 @@ impl RuntimeChatServiceFactory {
 /// future engine variant could land here without a config break) but the
 /// only currently-supported value is `"rag"`. Anything else logs a warning
 /// and disables orchestration for that channel.
+/// Resolve the planner / runner `session_id` from env-or-fresh.
+///
+/// Reused across surfaces — `tengu chat` and `tengu telegram` resolve
+/// once per process at startup; `tengu webhooks` resolves per request
+/// (so each inbound POST has its own recall key). Empty / whitespace-only
+/// `TENGU_SESSION_ID` falls through to a fresh UUID so callers don't
+/// need to defend against malformed env input.
+pub fn resolve_session_id() -> String {
+    std::env::var("TENGU_SESSION_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
 pub(crate) fn build_orchestrator(
     config: &Config,
     chat_factory: Arc<dyn ChatServiceFactory>,
     memory: Arc<MemoryManager>,
+    session_id: String,
 ) -> Option<Orchestrator> {
     let cfg = config.orchestrator.as_ref()?;
 
@@ -1258,13 +1273,20 @@ pub(crate) fn build_orchestrator(
             });
         }
 
+        // Fix B (2026-05-09) — session_id is resolved by the caller and
+        // passed in. Single value shared between RagPlanner (recall reads)
+        // and SubprocessRunner (compress_and_store writes via IPC).
+        // Logged at info-level so users can stitch tracing output back
+        // to a specific persisted thread.
         tracing::info!(
+            session_id = %session_id,
             sandbox = ?config.sandbox_name,
             "orchestrator: engine=rag, planner=RagPlanner, worker=SubprocessRunner"
         );
         let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
             Arc::new(crate::adapters::runner::SubprocessRunner::new(
                 config.sandbox_name.clone(),
+                session_id.clone(),
             ));
         let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
             cfg.agent.clone(),
@@ -1272,6 +1294,7 @@ pub(crate) fn build_orchestrator(
             config.memory.clone(),
             config.mcp_servers.clone(),
             Some(bus.clone()),
+            session_id,
         ));
 
         let policy = RetryPolicy::new(cfg.max_attempts_per_step);

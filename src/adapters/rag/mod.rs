@@ -234,18 +234,40 @@ impl RagStore {
     /// Write a [`MemoryEntry`] into the appropriate ephemeral collection.
     /// Returns the store-synthesised entry id.
     pub async fn store_memory(&self, entry: MemoryEntry) -> Result<String> {
+        let vec = self.embedder.embed(&entry.content).await?;
+        self.store_memory_with_vec(entry, vec).await
+    }
+
+    /// Fix E (2026-05-09) — vector-input variant. Lets `RagPlanner::plan`
+    /// embed the user message ONCE per turn and reuse the same vector for
+    /// the registry / outputs / messages searches AND the `tengu_messages`
+    /// persist write — collapsing 3 embedder calls per turn into 1.
+    pub async fn store_memory_with_vec(
+        &self,
+        entry: MemoryEntry,
+        vec: Vec<f32>,
+    ) -> Result<String> {
         let store: &Arc<dyn VectorStore> = match entry.kind {
             MemoryKind::Message => &self.messages,
             MemoryKind::StepOutput | MemoryKind::FileChunk => &self.outputs,
         };
         let meta = memory_entry_metadata(&entry);
-        let vec = self.embedder.embed(&entry.content).await?;
         store.write(vec, &entry.content, meta).await
     }
 
     /// Search `tengu_registry` for the top-`k` best matches to `query`.
     pub async fn search_registry(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
         query::search_registry(self, query, top_k).await
+    }
+
+    /// Fix E (2026-05-09) — vector-input variant of [`Self::search_registry`].
+    /// See [`query::search_registry_with_vec`].
+    pub async fn search_registry_with_vec(
+        &self,
+        vec: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<RagResult>> {
+        query::search_registry_with_vec(self, vec, top_k).await
     }
 
     /// Search `tengu_outputs` (the high-signal bucket) for cross-plan recall.
@@ -262,6 +284,40 @@ impl RagStore {
     /// one-liner hook now that durable writes have landed.
     pub async fn search_messages(&self, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
         query::search_messages(self, query, top_k).await
+    }
+
+    /// Fix E (2026-05-09) — vector-input variant of [`Self::search_messages`].
+    pub async fn search_messages_with_vec(
+        &self,
+        vec: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<RagResult>> {
+        query::search_messages_with_vec(self, vec, top_k).await
+    }
+
+    /// Fix A (2026-05-09) — within-session output recall over
+    /// `tengu_outputs` filtered to entries whose `rag_session_id` equals
+    /// `session_id`. See [`query::search_outputs_for_session`] for filter
+    /// semantics. Used by `RagPlanner::plan` when
+    /// `MemoryConfig.within_session_output_top_k > 0`.
+    pub async fn search_outputs_for_session(
+        &self,
+        query: &str,
+        session_id: &str,
+        top_k: usize,
+    ) -> Result<Vec<RagResult>> {
+        query::search_outputs_for_session(self, query, session_id, top_k).await
+    }
+
+    /// Fix E (2026-05-09) — vector-input variant of
+    /// [`Self::search_outputs_for_session`].
+    pub async fn search_outputs_for_session_with_vec(
+        &self,
+        vec: &[f32],
+        session_id: &str,
+        top_k: usize,
+    ) -> Result<Vec<RagResult>> {
+        query::search_outputs_for_session_with_vec(self, vec, session_id, top_k).await
     }
 
     /// Clear every entry from `tengu_registry`. Used before a full reindex.

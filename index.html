@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tengu-Cluster · Operator Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
+    --line: #30363d; --accent: #58a6ff;
+    --c1: #58a6ff; --c2: #f78166; --c3: #56d364; --c4: #d2a8ff; --c5: #ffd60a;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); margin: 0; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #d2a8ff; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* shared nav */
+  nav.top {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(14,17,22,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 24px;
+    display: flex; gap: 16px; align-items: center;
+  }
+  nav.top .brand { font-weight: 600; letter-spacing: -0.01em; }
+  nav.top .brand .dot { color: var(--accent); }
+  nav.top .links { display: flex; gap: 14px; margin-left: auto; font-size: 13px; }
+  nav.top .links a { color: var(--muted); padding: 4px 8px; border-radius: 4px; }
+  nav.top .links a:hover { color: var(--fg); background: var(--panel); text-decoration: none; }
+  nav.top .links a.active { color: var(--fg); background: var(--panel); }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h2 { font-size: 17px; margin: 32px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .subtitle { color: var(--muted); font-size: 15px; margin-bottom: 24px; }
+
+  .tldr { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; margin-top: 14px; }
+  .tldr p { margin: 0; color: var(--fg); }
+  .tldr .doctrine { margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .tldr .doctrine b { color: var(--c4); font-weight: 600; }
+
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    margin-top: 18px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 18px 16px; transition: transform 0.12s ease, border-color 0.12s ease;
+    display: flex; flex-direction: column; gap: 8px;
+    text-decoration: none;
+  }
+  .card:hover { transform: translateY(-2px); border-color: var(--accent); text-decoration: none; }
+  .card .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; align-self: flex-start; }
+  .card.c1 .pill { background: rgba(88,166,255,0.15); color: var(--c1); }
+  .card.c2 .pill { background: rgba(247,129,102,0.15); color: var(--c2); }
+  .card.c3 .pill { background: rgba(86,211,100,0.15); color: var(--c3); }
+  .card.c4 .pill { background: rgba(210,168,255,0.15); color: var(--c4); }
+  .card h3 { margin: 0; font-size: 16px; color: var(--fg); }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .card .arrow { margin-top: auto; color: var(--accent); font-size: 13px; }
+
+  .quick-launch {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-top: 18px; font-size: 13px;
+  }
+  .quick-launch h3 { margin: 0 0 10px; font-size: 14px; color: var(--fg); }
+  .quick-launch pre {
+    background: #0a0d12; border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 12px; margin: 0 0 6px; overflow-x: auto;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--fg);
+  }
+  .quick-launch .label { color: var(--muted); font-size: 12px; margin: 6px 0 4px; }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 12px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="brand">tengu<span class="dot">·</span>cluster</div>
+  <div class="links">
+    <a href="index.html" class="active">Home</a>
+    <a href="features.html">Features</a>
+    <a href="howto.html">How-to</a>
+    <a href="rag.html">RAG</a>
+    <a href="memory.html">Memory</a>
+    <a href="context.html">Context</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Tengu-Cluster · Operator Guide</h1>
+  <p class="subtitle">Multi-agent harness in Rust. RAG-routed planner, subprocess subagents, Qdrant-backed memory.</p>
+
+  <div class="tldr">
+    <p>A user message arrives at a channel (TUI / Telegram). The harness builds an <code>Orchestrator</code>, holding a <code>RagPlanner</code> (the LLM that decides) and a <code>SubprocessRunner</code> (which executes plan steps as child processes). The planner queries <code>tengu_registry</code> — a Qdrant collection of agents, skills and tools — for the top-K matches, then asks an LLM to emit a direct response or a plan referencing one of those matches. Each plan step spawns <code>tengu run-agent</code> as a subprocess, which loads the agent's TOML, builds a tool executor, and runs an LLM-with-tools loop until the model calls <code>compress_and_store</code>. Step output flows back; on failure the executor calls <code>RagPlanner::replan</code> with cross-plan recall from <code>tengu_outputs</code>.</p>
+    <div class="doctrine"><b>Doctrine</b> · LLM = heart, RAG = brain, tools = hands. The planner has exactly one job: emit plan JSON. Subagents do the work.</div>
+  </div>
+
+  <h2>Where to start</h2>
+  <div class="grid">
+    <a class="card c1" href="features.html">
+      <span class="pill">Features</span>
+      <h3>Feature catalog</h3>
+      <p>Every subsystem and what it does — orchestration, RAG, skills lifecycle, tools, observability, IPC, surfaces. Click cards to expand.</p>
+      <span class="arrow">Browse →</span>
+    </a>
+    <a class="card c2" href="howto.html">
+      <span class="pill">How-to</span>
+      <h3>Agents · Skills · Tools · Sandboxes</h3>
+      <p>Add an agent in 1 file. Add a skill in 1 file. Add a tool in 2 files. Configure a sandbox. Each tab: schema, example, verification.</p>
+      <span class="arrow">Walk through →</span>
+    </a>
+    <a class="card c3" href="rag.html">
+      <span class="pill">RAG</span>
+      <h3>How routing actually works</h3>
+      <p>Three Qdrant collections, two query lanes (routing + recall), 6× over-fetch + dedup. Animated walkthrough of how a user message becomes a roster.</p>
+      <span class="arrow">Trace it →</span>
+    </a>
+    <a class="card c3" href="memory.html">
+      <span class="pill">Memory</span>
+      <h3>State, recall, the meta-skill</h3>
+      <p>Three Qdrant collections, ring buffer, durability. The <code>learning-agent</code> + <code>manage_skill</code> meta-skill that creates and updates skills in chat.</p>
+      <span class="arrow">Open →</span>
+    </a>
+    <a class="card c4" href="context.html">
+      <span class="pill">Context</span>
+      <h3>What the LLM actually sees</h3>
+      <p>Seven layers, ~27 mechanisms, no LLM-summary pass. Walk a turn from prompt to subagent reply with token attribution at each step.</p>
+      <span class="arrow">Trace a turn →</span>
+    </a>
+  </div>
+
+  <h2>Quick launch</h2>
+  <div class="quick-launch">
+    <div class="label">One-shot Qdrant + native build (recommended for local dev)</div>
+    <pre>docker compose --profile qdrant up -d qdrant
+cargo build --release --features "qdrant claude_code"
+TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all</pre>
+
+    <div class="label">TUI</div>
+    <pre>RUST_LOG=tengu=info ./target/release/tengu chat --sandbox aura</pre>
+
+    <div class="label">Telegram</div>
+    <pre>RUST_LOG=tengu=info ./target/release/tengu telegram --sandbox aura</pre>
+
+    <div class="label">Verify the registry has data</div>
+    <pre>./target/release/tengu registry list --limit 50
+./target/release/tengu registry search "your query here" --top-k 5</pre>
+  </div>
+
+  <footer>
+    Pages live next to this one in the project root: <a href="features.html">features.html</a> · <a href="howto.html">howto.html</a> · <a href="rag.html">rag.html</a> · <a href="memory.html">memory.html</a> · <a href="context.html">context.html</a>.
+    Authoritative source docs in <code>docs/</code>: <a href="docs/architecture-2026-04-27.md">architecture-2026-04-27.md</a>, <a href="docs/context-management-2026-04-27.md">context-management-2026-04-27.md</a>, <a href="docs/comparison-2026-04-26.md">comparison-2026-04-26.md</a>, <a href="docs/SESSION_HANDOFF.md">SESSION_HANDOFF.md</a>, <a href="CLAUDE.md">CLAUDE.md</a>.
+  </footer>
+</main>
+
+</body>
+</html>

@@ -96,7 +96,13 @@ impl Tool for ApplyImproverProposalTool {
         &self.def
     }
 
-    async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+    async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+        // Coarse fs_write gate at the workspace root. The actual write target
+        // (skills/<name>/SKILL.md) is under the workspace once resolved
+        // through the three-tier scanner; we gate at the workspace boundary
+        // so deny-by-default sandboxes refuse before we do any I/O.
+        ctx.scope.check_fs_write(ctx.workspace)?;
+
         let args: Args = serde_json::from_value(args.clone())
             .map_err(|e| anyhow!("apply_improver_proposal: bad args — {e}"))?;
 

@@ -1003,24 +1003,10 @@ pub struct RowCtx<'a> {
     pub persist_transcript: bool,
 }
 
-// Minimal ToolActivityPort for eval runs — no UI, no logging.
-struct NoopActivity;
-impl ToolActivityPort for NoopActivity {
-    fn publish_tool_activity(&self, _call: &ToolCall) {}
-}
-
-// Fallback executor when the agent has no workspace (which shouldn't happen in evals).
-struct NoopRuntimeToolExecutor;
-#[async_trait]
-impl crate::adapters::engine_builder::ToolExecutor for NoopRuntimeToolExecutor {
-    async fn execute(
-        &self,
-        _call: &ToolCall,
-        _messages: &[crate::adapters::types::Message],
-    ) -> anyhow::Result<String> {
-        anyhow::bail!("no-op executor: tool calls are not enabled in this run")
-    }
-}
+// `NoopActivity` and `NoopRuntimeToolExecutor` live in `adapters::noop`
+// (shared with `webhook_builder`). Local re-exports keep call sites in
+// this file readable without the longer path.
+use crate::adapters::noop::{NoopActivity, NoopRuntimeToolExecutor};
 
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -1341,10 +1327,15 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let engine: Arc<dyn Engine> = Arc::from(engine_box);
 
     // 4. Build tool executor using the orchestrator.rs pattern.
+    // Tilde expansion required — sandbox configs commonly write
+    // `workspace = "~/foo"`. Without expand_tilde the literal `~` is
+    // joined into the cache plugin's `<workspace>/.tengu/cache.db` path
+    // and pollutes the repo with a `~` directory. Matches the
+    // telegram_builder / webhook_builder convention.
     let workspace_path: PathBuf = agent
         .workspace
         .as_ref()
-        .cloned()
+        .map(|p| crate::adapters::tool_builder::expand_tilde(p))
         .unwrap_or_else(|| ws_path.clone());
 
     let secret_registry = Arc::new(SecretRegistry::new());
@@ -1669,10 +1660,11 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
             }
         }
 
+        // Tilde expansion required — see the sibling site above.
         let workspace_path: PathBuf = agent
             .workspace
             .as_ref()
-            .cloned()
+            .map(|p| crate::adapters::tool_builder::expand_tilde(p))
             .unwrap_or_else(|| self.ws_path.clone());
 
         let secret_registry = Arc::new(SecretRegistry::new());
@@ -1836,6 +1828,7 @@ async fn run_row_via_orchestrator(
         &cfg_arc,
         Arc::clone(&factory),
         Arc::clone(&memory_manager),
+        channel_runtime::resolve_session_id(),
     )
     .ok_or_else(|| {
         anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")

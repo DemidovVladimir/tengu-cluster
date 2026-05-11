@@ -746,8 +746,13 @@ impl TelegramSession {
                 channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
             let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
                 Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
-            channel_runtime::build_orchestrator(&config, factory, Arc::clone(&memory_manager))
-                .map(Arc::new)
+            channel_runtime::build_orchestrator(
+                &config,
+                factory,
+                Arc::clone(&memory_manager),
+                channel_runtime::resolve_session_id(),
+            )
+            .map(Arc::new)
         };
         if orchestrator.is_some() {
             info!("Telegram orchestrator constructed with per-message snapshot factory");

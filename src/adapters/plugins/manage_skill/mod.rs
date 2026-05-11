@@ -186,6 +186,13 @@ impl Tool for ManageSkillTool {
     }
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+        // Coarse fs_write gate at the workspace root. Every action below
+        // (create / edit_body / patch / add_resource / remove_resource /
+        // delete) writes under <workspace>/skills/<name>/. Atomic-rename
+        // discipline is inside each `do_*` helper; the scope check is the
+        // sandbox boundary.
+        ctx.scope.check_fs_write(ctx.workspace)?;
+
         let args: Args = serde_json::from_value(args.clone())
             .map_err(|e| anyhow!("manage_skill: bad args — {e}"))?;
         validate_skill_name(&args.name)?;

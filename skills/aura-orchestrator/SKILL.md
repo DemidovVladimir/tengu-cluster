@@ -508,9 +508,54 @@ http_request:
 
 **Mutation name:** `finishCreateOrUpdateFileV2`
 **URL path:** `/x402/labs/finishCreateOrUpdateFileV2`
+
+**Categories and tags** (REQUIRED — pick exactly one category and one or more correlated tags from the lists below; do NOT invent values):
+
+Allowed categories:
+```
+['Science', 'Business', 'Governance', 'Media']
+```
+
+Correlated tags (each tag belongs to exactly one category — only pick tags whose category matches the chosen category):
+```
+Business:
+  'Ecosystem Partnership',
+  'Funding',
+  'University Partnership',
+  'Important Meeting',
+  'Market Opportunity',
+  'Regulatory filing',
+  'Biotech Partnership'
+Governance:
+  'Proposal Failed',
+  'Proposal Approved',
+  'Proposal Open for Feedback'
+Media:
+  'Promotional material',
+  'Blog',
+  'News coverage',
+  'Academic article',
+  'Pitch deck'
+Science:
+  'Discovery',
+  'Clinical Trial',
+  'Provisional Patent Application',
+  'Validation',
+  'Milestone Achieved',
+  'Manufacturing',
+  'Lab Life',
+  'In vivo data',
+  'Patent licensed',
+  'Non-Provisional Patent Application',
+  'Optimization',
+  'Patent granted'
+```
+
+Derive the category and tags from the research document content. For a typical research-PDF upload, default to category `Science` with tag(s) like `Discovery` or `Validation` unless the document clearly fits another category.
+
 **Body:**
 ```json
-{"query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "uploadToken": "<from step A>", "path": "<filename>", "accessLevel": "PUBLIC", "changeBy": "<wallet_address>", "description": "<file description>"}}
+{"query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!]) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "uploadToken": "<from step A>", "path": "<filename>", "accessLevel": "PUBLIC", "changeBy": "<wallet_address>", "description": "<file description>", "categories": ["<one of: Science | Business | Governance | Media>"], "tags": ["<one or more correlated tags from the list above>"]}}
 ```
 
 Run full x402 payment flow (P1–P7). Extract: `datasetId` (format: `did:odf:...`), `contentHash`.

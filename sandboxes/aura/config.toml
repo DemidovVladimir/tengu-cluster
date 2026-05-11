@@ -18,6 +18,26 @@ tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
 allowed_users = ['848344935']  # your sender id from the log
 
+# --- Webhook listener (2026-05-09) ---
+# `tengu webhooks --sandbox aura` boots an axum HTTP server that accepts
+# inbound POSTs and dispatches one-shot orchestrator turns. Each
+# `[webhooks.endpoints.<name>]` block binds /webhooks/<name> to one agent.
+# Auth: HMAC-SHA256 of the request body; expected header is
+# `X-Tengu-Signature: sha256=<hex>`. Secrets resolve from `secret_env`
+# (env var name; preferred) or inline `secret` (TOML literal; dev only).
+# Per-request session_id = `webhook-<name>-<uuid>`; recall later with
+# `tengu memory inspect --session <id>`.
+
+[webhooks]
+enabled = true
+bind = "127.0.0.1"   # change to "0.0.0.0" only after configuring HMAC
+port = 7080
+
+[webhooks.endpoints.test]
+agent = "aura"
+secret_env = "TENGU_TEST_WEBHOOK_SECRET"
+goal_template = "A test webhook arrived. Inspect the payload and summarise it."
+
 # At the top level, alongside [hub], [memory], etc.
 [claude_code]
 cli_path = "claude"          # or absolute path if `claude` isn't in PATH
@@ -62,9 +82,9 @@ content = """# DeSci Project
 # stripped via run_turn_with_system. OpenRouter respects per-turn tool=[]; the
 # Claude Code CLI gets MCP tools from a config file at engine-construction
 # time and ignores per-turn stripping, so it tries to do the work itself
-# instead of emitting plan JSON. Keep aura on OpenRouter for the planner role.
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+# instead of emitting plan JSON. Keep aura on claude_code for the planner role.
+engine = "claude_code"
+model = "claude-sonnet-4-6"
 role = "aura"
 default = true
 requires = []
@@ -110,8 +130,8 @@ default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycle
 default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
 
 [agents.skill-improver]
-engine = "openrouter"
-model = "anthropic/claude-opus-4-7"
+engine = "claude_code"
+model = "claude-opus-4-7"
 # `read_file` / `list_directory` are normal tools, not workspace_tools.
 # The workspace_tools allowlist is just shared_cache / persistent_store / skill_distill.
 tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
@@ -128,8 +148,8 @@ targeted revisions over wholesale rewrites.
 """
 
 [agents.fixture-runner]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"
+model = "claude-sonnet-4-6"
 tools = ["read_file", "list_directory", "run_command"]
 
 [agents.fixture-runner.identity]

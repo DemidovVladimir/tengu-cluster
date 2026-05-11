@@ -107,7 +107,12 @@ impl Tool for ViewSkillTool {
         &self.def
     }
 
-    async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+    async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+        // Coarse fs_read gate at the workspace root. All three-tier scanner
+        // outputs (`<workspace>/skills`, `<workspace>/.tengu/skills`,
+        // `~/.tengu/skills`) are read-only browses below this point.
+        ctx.scope.check_fs_read(ctx.workspace)?;
+
         let action = require_str(args, VIEW_SKILL_TOOL_NAME, "action")?;
 
         match action {

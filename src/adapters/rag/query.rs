@@ -15,6 +15,18 @@ pub async fn search_registry(
     top_k: usize,
 ) -> Result<Vec<RagResult>> {
     let vec = rag.embedder().embed(query).await?;
+    search_registry_with_vec(rag, &vec, top_k).await
+}
+
+/// Fix E (2026-05-09) — vector-input variant. Lets `RagPlanner::plan`
+/// embed the user message ONCE per turn and reuse the vector across all
+/// retrieval lanes (registry + outputs + messages) plus the persist write.
+/// Quota and latency relief.
+pub async fn search_registry_with_vec(
+    rag: &RagStore,
+    vec: &[f32],
+    top_k: usize,
+) -> Result<Vec<RagResult>> {
     // Pull more raw hits than requested so the dedup pass below has room
     // to merge per-agent duplicates (description + per-example vectors)
     // without dropping below the caller's requested top_k.
@@ -30,7 +42,7 @@ pub async fn search_registry(
     // top_k=10 without starving the result. Bump if you push example_queries
     // counts higher.
     let raw_k = top_k.saturating_mul(6).max(top_k + 16);
-    let hits = rag.registry().search(&vec, raw_k, None).await?;
+    let hits = rag.registry().search(vec, raw_k, None).await?;
     let mut results: Vec<RagResult> = hits.into_iter().filter_map(hit_to_result).collect();
 
     // Dedup by (kind, name) — keep the highest-scoring entry per identity.
@@ -54,6 +66,80 @@ pub async fn search_memory(rag: &RagStore, query: &str, top_k: usize) -> Result<
     Ok(hits.into_iter().filter_map(hit_to_result).collect())
 }
 
+/// Within-session output recall (added 2026-05-09 alongside Fix A).
+///
+/// Same retrieval as [`search_memory`] (semantic search over `tengu_outputs`)
+/// but post-filters hits to those tagged with `rag_session_id == session_id`.
+/// Over-fetches `top_k * 5` raw hits to leave room after the in-process
+/// filter — mirrors the over-fetch pattern in [`search_registry`].
+///
+/// Server-side filtering is not yet wired into [`crate::adapters::memory::vector::VectorStore::search`]
+/// (Qdrant backend ignores the `_filter` arg today; see `qdrant.rs:200-210`),
+/// so we fetch wide and trim. When the VectorStore filter pushes down,
+/// switch this helper to use it and drop the over-fetch margin.
+///
+/// Used by `RagPlanner::plan` when `MemoryConfig.within_session_output_top_k > 0`
+/// to surface what subagents already produced THIS session, fixing the
+/// "I have no record of that step" failure on follow-up questions.
+pub async fn search_outputs_for_session(
+    rag: &RagStore,
+    query: &str,
+    session_id: &str,
+    top_k: usize,
+) -> Result<Vec<RagResult>> {
+    if top_k == 0 || session_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let vec = rag.embedder().embed(query).await?;
+    search_outputs_for_session_with_vec(rag, &vec, session_id, top_k).await
+}
+
+/// Fix E (2026-05-09) — vector-input variant. See `search_registry_with_vec`.
+///
+/// Fix F (2026-05-09) — server-side `rag_session_id` filtering via Qdrant
+/// payload match. Pre Fix-F we over-fetched `5×` raw hits and post-filtered
+/// in-process; with the filter pushed down we ask Qdrant for exactly
+/// `top_k` matching rows. The post-filter still runs as a defence-in-depth
+/// (older entries from before Fix-F may lack `rag_session_id` in payload,
+/// and disk-backed test stores ignore the filter argument outright).
+pub async fn search_outputs_for_session_with_vec(
+    rag: &RagStore,
+    vec: &[f32],
+    session_id: &str,
+    top_k: usize,
+) -> Result<Vec<RagResult>> {
+    if top_k == 0 || session_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build the server-side filter targeting `extra.rag_session_id`.
+    let mut filter = crate::adapters::memory::context_block::ChunkMetadata::default();
+    filter.extra.insert(
+        "rag_session_id".to_string(),
+        serde_json::Value::String(session_id.to_string()),
+    );
+
+    // Modest over-fetch (2×, floor +4) as a safety margin in case the
+    // Qdrant filter-push is partial or older payloads predate Fix F's
+    // `rag_session_id` indexing. Way below the pre-Fix-F 5× margin.
+    let raw_k = top_k.saturating_mul(2).max(top_k + 4);
+    let hits = rag.outputs().search(vec, raw_k, Some(&filter)).await?;
+
+    let filtered: Vec<RagResult> = hits
+        .into_iter()
+        .filter(|h| {
+            h.metadata
+                .extra
+                .get("rag_session_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == session_id)
+        })
+        .filter_map(hit_to_result)
+        .take(top_k)
+        .collect();
+    Ok(filtered)
+}
+
 /// Phase 6.4 (full) — semantic search over `tengu_messages`. Forward-compat
 /// hook: today no caller injects these into a planner prompt, but the
 /// persistence side (`RagPlanner::persist_user_message`) writes to this
@@ -67,7 +153,16 @@ pub async fn search_memory(rag: &RagStore, query: &str, top_k: usize) -> Result<
 /// a session_id filter via `ChunkMetadata` once VectorStore exposes it.
 pub async fn search_messages(rag: &RagStore, query: &str, top_k: usize) -> Result<Vec<RagResult>> {
     let vec = rag.embedder().embed(query).await?;
-    let hits = rag.messages().search(&vec, top_k, None).await?;
+    search_messages_with_vec(rag, &vec, top_k).await
+}
+
+/// Fix E (2026-05-09) — vector-input variant. See `search_registry_with_vec`.
+pub async fn search_messages_with_vec(
+    rag: &RagStore,
+    vec: &[f32],
+    top_k: usize,
+) -> Result<Vec<RagResult>> {
+    let hits = rag.messages().search(vec, top_k, None).await?;
     Ok(hits.into_iter().filter_map(hit_to_result).collect())
 }
 

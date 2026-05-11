@@ -192,8 +192,13 @@ pub fn run_tui(
         let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
         let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
             Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
-        channel_runtime::build_orchestrator(&config, factory, Arc::clone(&_memory_manager))
-            .map(Arc::new)
+        channel_runtime::build_orchestrator(
+            &config,
+            factory,
+            Arc::clone(&_memory_manager),
+            channel_runtime::resolve_session_id(),
+        )
+        .map(Arc::new)
     };
     if orchestrator.is_some() {
         tracing::info!("TUI orchestrator constructed with per-turn snapshot factory");

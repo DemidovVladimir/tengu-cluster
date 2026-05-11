@@ -52,17 +52,60 @@ pub fn definition() -> ToolDef {
     }
 }
 
+/// Fix D (2026-05-09) — byte cap before we hand a summary to the embedder.
+///
+/// `text-embedding-3-small` rejects inputs over 8192 tokens; 24 000 bytes
+/// (~6–8K tokens depending on the BPE) leaves a safe margin. Pre Fix-D
+/// long pipeline summaries (POI + IP-NFT mint + Molecule project + upload
+/// + Beach.science announcement → many KB of text) silently failed to
+/// embed: `store_memory` returned `Err`, the fail-soft callers swallowed
+/// it, and `tengu_outputs` got no row. Truncating loses tail content but
+/// a truncated row is still recallable; an embed-failure row is invisible.
+///
+/// Set conservatively. If you raise this, double-check the embedder's
+/// model-specific token cap.
+const MAX_SUMMARY_BYTES: usize = 24_000;
+
+/// Truncate a summary at a UTF-8-safe boundary, appending a marker so the
+/// planner-side recall block can tell the LLM "this was cut". Delegates to
+/// the shared `token::truncate_at_boundary` primitive.
+fn cap_summary_for_embed(summary: &str) -> std::borrow::Cow<'_, str> {
+    use crate::adapters::token::truncate_at_boundary;
+    match truncate_at_boundary(summary, MAX_SUMMARY_BYTES) {
+        None => std::borrow::Cow::Borrowed(summary),
+        Some((prefix, end)) => std::borrow::Cow::Owned(format!(
+            "{prefix}\n\n[truncated for embed — {} of {} bytes retained; embedder caps at ~32K bytes / 8K tokens]",
+            end,
+            summary.len()
+        )),
+    }
+}
+
 /// Write a step's completion summary to `tengu_outputs`.
 ///
 /// Returns the store-synthesised entry id. Callers (the Phase 3 stub today,
 /// the Phase 4 LLM tool dispatcher later) pass through identical arguments
 /// so downstream behaviour is the same.
+///
+/// Fix D — summary is byte-capped to `MAX_SUMMARY_BYTES` before embed.
+/// Caps are logged at info-level so operators see the truncation event.
 pub async fn write_summary(
     rag: &RagStore,
     session_id: &str,
     step_id: &str,
     summary: &str,
 ) -> Result<String> {
+    let original_bytes = summary.len();
+    let capped = cap_summary_for_embed(summary);
+    if matches!(capped, std::borrow::Cow::Owned(_)) {
+        tracing::info!(
+            session_id = %session_id,
+            step_id = %step_id,
+            original_bytes,
+            capped_bytes = MAX_SUMMARY_BYTES,
+            "compress_and_store: summary truncated to fit embedder input cap (Fix D)"
+        );
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -71,10 +114,64 @@ pub async fn write_summary(
         kind: MemoryKind::StepOutput,
         session_id: session_id.to_string(),
         step_id: Some(step_id.to_string()),
-        content: summary.to_string(),
+        content: capped.into_owned(),
         created_at: now,
     };
     rag.store_memory(entry).await
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+
+    /// Fix D — short input passes through untouched (Borrowed variant,
+    /// no allocation, no truncation marker).
+    #[test]
+    fn cap_summary_short_passes_through() {
+        let s = "hello world".repeat(10);
+        let capped = cap_summary_for_embed(&s);
+        assert!(matches!(capped, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(&*capped, &s);
+        assert!(!capped.contains("[truncated"));
+    }
+
+    /// Fix D — input over `MAX_SUMMARY_BYTES` is truncated and a marker
+    /// is appended, returning Cow::Owned. The marker preserves operator-
+    /// visible context: original length, retained length.
+    #[test]
+    fn cap_summary_long_truncates_with_marker() {
+        let s = "a".repeat(MAX_SUMMARY_BYTES + 5_000);
+        let capped = cap_summary_for_embed(&s);
+        assert!(matches!(capped, std::borrow::Cow::Owned(_)));
+        assert!(capped.starts_with(&"a".repeat(100)));
+        assert!(capped.contains("[truncated for embed"));
+        // Total length = retained bytes + marker tail (~120 bytes).
+        let n_bytes = capped.len();
+        assert!(
+            n_bytes > MAX_SUMMARY_BYTES,
+            "expected marker to push above the cap: got {}",
+            n_bytes
+        );
+        assert!(
+            n_bytes < MAX_SUMMARY_BYTES + 300,
+            "expected marker to be small: got {}",
+            n_bytes
+        );
+    }
+
+    /// Fix D — slice boundary is UTF-8-safe even when the cap lands inside
+    /// a multibyte sequence. Pre-fix this would have panicked on a
+    /// non-char-boundary byte index. Delegates to `truncate_at_boundary`,
+    /// which steps back to the nearest valid boundary.
+    #[test]
+    fn cap_summary_handles_multibyte_at_boundary() {
+        let prefix: String = "a".repeat(MAX_SUMMARY_BYTES - 1);
+        let suffix: String = "é".repeat(500); // each "é" is 2 bytes
+        let s = prefix + &suffix;
+        // Should not panic.
+        let capped = cap_summary_for_embed(&s);
+        assert!(matches!(capped, std::borrow::Cow::Owned(_)));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +194,13 @@ impl Tool for CompressAndStoreTool {
     }
 
     async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+        // scope: pure-compute
+        // No agent-visible side effect to gate. `compress_and_store` is
+        // harness-implicit (every subagent gets it appended by the runner;
+        // it cannot be turned off per-agent and it cannot be aimed at
+        // user-controlled targets). The Qdrant write goes to the harness's
+        // own tengu_outputs collection — destination URL is fixed by the
+        // sandbox config, not chosen per call. Treat as infrastructure.
         let summary = args
             .get("summary")
             .and_then(|v| v.as_str())

@@ -129,12 +129,24 @@ impl Default for SubprocessRunner {
 }
 
 impl SubprocessRunner {
-    /// Convenience constructor that propagates the parent's sandbox name into
-    /// the IPC payload of every step. Pass `None` when running with the
-    /// default user config.
-    pub fn new(sandbox_name: Option<String>) -> Self {
+    /// Convenience constructor that propagates the parent's sandbox name AND
+    /// the parent planner's session_id into the IPC payload of every step.
+    ///
+    /// Pre Fix-B (2026-05-09) this minted a fresh UUID per construction,
+    /// which meant the planner's `RagPlanner.session_id` and the runner's
+    /// `SubprocessRunner.session_id` were independent. The child wrote
+    /// `compress_and_store` outputs tagged with the runner's id, which the
+    /// planner could never find via `search_outputs_for_session`. Now
+    /// `build_orchestrator` resolves one id (env-or-fresh) and threads it
+    /// through to both, so within-session output recall (Fix A) works.
+    ///
+    /// Standalone test harnesses can still call `SubprocessRunner::default()`
+    /// to get a runner with an independently-minted UUID — the unified-id
+    /// guarantee is at the `build_orchestrator` boundary, not the runner's.
+    pub fn new(sandbox_name: Option<String>, session_id: String) -> Self {
         Self {
             sandbox_name,
+            session_id,
             ..Self::default()
         }
     }
@@ -303,6 +315,31 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fix B (2026-05-09) — confirm `SubprocessRunner::new` plumbs the
+    /// explicit session_id through instead of minting a fresh UUID.
+    /// Pre-Fix-B the runner ignored the parent's id, breaking
+    /// within-session output recall in `RagPlanner::plan`.
+    #[test]
+    fn new_uses_explicit_session_id() {
+        let runner = SubprocessRunner::new(
+            Some("aura".to_string()),
+            "sess-from-planner".to_string(),
+        );
+        assert_eq!(runner.session_id, "sess-from-planner");
+        assert_eq!(runner.sandbox_name.as_deref(), Some("aura"));
+    }
+
+    /// Default still mints a fresh UUID for standalone use cases (tests,
+    /// one-off CLI invocations). The unified-id guarantee lives at the
+    /// `build_orchestrator` boundary, not the runner's.
+    #[test]
+    fn default_mints_fresh_uuid() {
+        let a = SubprocessRunner::default();
+        let b = SubprocessRunner::default();
+        assert_ne!(a.session_id, b.session_id);
+        assert!(!a.session_id.is_empty());
+    }
 
     #[test]
     fn ipc_input_round_trips() {

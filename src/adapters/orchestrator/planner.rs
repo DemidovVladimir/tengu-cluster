@@ -264,6 +264,13 @@ impl RagPlanner {
         memory_config: crate::adapters::config::MemoryConfig,
         mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
         bus: Option<crate::adapters::orchestrator::events::EventBus>,
+        // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
+        // and shared with `SubprocessRunner`, so the parent's recall query
+        // and the child's `compress_and_store` write key match. Pre-Fix-B
+        // the planner minted independently here and the runner minted
+        // independently of THAT, so within-session output recall (Fix A)
+        // would have filtered to a session_id no one else used.
+        session_id: String,
     ) -> Self {
         let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
             tracing::warn!(
@@ -271,18 +278,6 @@ impl RagPlanner {
             );
             FALLBACK_PLANNER_PROMPT.to_string()
         });
-        // Phase 6.4 (full) — resolve session_id once at construction.
-        // Env override > fresh UUID. Logged at info-level so users can
-        // stitch tracing output back to a specific persisted thread.
-        let session_id = std::env::var("TENGU_SESSION_ID")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        tracing::info!(
-            session_id = %session_id,
-            source = if std::env::var("TENGU_SESSION_ID").is_ok() { "env" } else { "fresh" },
-            "RagPlanner session_id resolved"
-        );
         Self {
             orchestrator_agent,
             chat,
@@ -415,7 +410,16 @@ impl RagPlanner {
     /// `persist_user_message()` so the just-written current message can
     /// never appear in its own recall block. (The semantic embedder will
     /// happily return a self-match at score ~1.0 if we read after writing.)
-    async fn cross_session_recall_block(&self, user_message: &str) -> String {
+    /// Fix E (2026-05-09) — `embed_vec` is the cached user-message vector
+    /// from `plan()`; when `Some`, skip the duplicate embedder call.
+    /// `None` means the caller didn't pre-compute (or the upstream embed
+    /// already failed) — we fall back to embedding internally for backward
+    /// compatibility with replan() and standalone test paths.
+    async fn cross_session_recall_block(
+        &self,
+        user_message: &str,
+        embed_vec: Option<&[f32]>,
+    ) -> String {
         let k = self.memory_config.cross_session_msg_top_k;
         if k == 0 {
             return String::new();
@@ -428,7 +432,12 @@ impl RagPlanner {
             }
         };
         // Over-fetch a couple slots so we have headroom after dedup-filter.
-        let raw_hits = match rag.search_messages(user_message, k.saturating_add(2)).await {
+        let oversample = k.saturating_add(2);
+        let raw_hits_res = match embed_vec {
+            Some(vec) => rag.search_messages_with_vec(vec, oversample).await,
+            None => rag.search_messages(user_message, oversample).await,
+        };
+        let raw_hits = match raw_hits_res {
             Ok(h) => h,
             Err(e) => {
                 tracing::warn!(error = %e, "cross_session_recall: search_messages failed");
@@ -463,6 +472,75 @@ impl RagPlanner {
         s
     }
 
+    /// Fix A (2026-05-09) — within-session output recall.
+    ///
+    /// Returns a formatted prompt block of the top-K semantically-similar
+    /// step outputs from THIS session (filtered by `rag_session_id ==
+    /// self.session_id`), or an empty string when:
+    /// - the config knob `memory.within_session_output_top_k` is 0 (default),
+    /// - the RagStore is unavailable, or
+    /// - no outputs in this session match.
+    ///
+    /// Pairs with Fix B's unified session_id wiring: `compress_and_store`
+    /// writes `rag_session_id = AgentIpcInput.session_id`, which now equals
+    /// the planner's `session_id`. Without Fix B this filter would never
+    /// match (parent and child mint independent UUIDs).
+    async fn session_output_recall_block(
+        &self,
+        user_message: &str,
+        embed_vec: Option<&[f32]>,
+    ) -> String {
+        let k = self.memory_config.within_session_output_top_k;
+        if k == 0 {
+            return String::new();
+        }
+        let rag = match self.rag().await {
+            Ok(r) => r.clone(),
+            Err(e) => {
+                tracing::debug!(error = %e, "skip session_output_recall: RagStore unavailable");
+                return String::new();
+            }
+        };
+        // Fix E — reuse the cached vector when plan() pre-computed it.
+        let hits_res = match embed_vec {
+            Some(vec) => {
+                rag.search_outputs_for_session_with_vec(vec, &self.session_id, k)
+                    .await
+            }
+            None => {
+                rag.search_outputs_for_session(user_message, &self.session_id, k)
+                    .await
+            }
+        };
+        let hits = match hits_res {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "session_output_recall: search failed");
+                return String::new();
+            }
+        };
+        if hits.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from("\n## Recent step outputs (this session)\n\n");
+        s.push_str("_(prior subagent results from `tengu_outputs`, filtered to this `session_id` — the planner can answer follow-up questions about completed work without redoing the steps)_\n\n");
+        for (i, h) in hits.iter().enumerate() {
+            let snippet: String = h.description.chars().take(400).collect();
+            s.push_str(&format!(
+                "{}. score={:.2}  step={}\n   {}\n",
+                i + 1,
+                h.score,
+                h.name,
+                snippet
+            ));
+            if h.description.chars().count() > 400 {
+                s.push_str("   …(truncated)\n");
+            }
+        }
+        s.push('\n');
+        s
+    }
+
     /// Phase 6.4 (full) — durably persist a user message to `tengu_messages`.
     /// Called from `plan()` only (not `replan()`, which receives the same
     /// `user_message` in the same turn cycle — a second write would create
@@ -472,7 +550,7 @@ impl RagPlanner {
     ///
     /// `step_id` is `None` because this is a top-of-turn user message,
     /// not a step output. `created_at` is unix-seconds at write time.
-    async fn persist_user_message(&self, user_message: &str) {
+    async fn persist_user_message(&self, user_message: &str, embed_vec: Option<&[f32]>) {
         let trimmed = user_message.trim();
         if trimmed.is_empty() {
             return;
@@ -495,7 +573,14 @@ impl RagPlanner {
             content: trimmed.to_string(),
             created_at,
         };
-        match rag.store_memory(entry).await {
+        // Fix E — reuse the cached vector when available; the trimmed
+        // content matches the input the embedder would have used (modulo
+        // leading/trailing whitespace, which the embedder ignores anyway).
+        let store_res = match embed_vec {
+            Some(vec) => rag.store_memory_with_vec(entry, vec.to_vec()).await,
+            None => rag.store_memory(entry).await,
+        };
+        match store_res {
             Ok(id) => tracing::debug!(
                 id = %id,
                 session_id = %self.session_id,
@@ -603,15 +688,45 @@ Rules:
 #[async_trait]
 impl Planner for RagPlanner {
     async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
-        let hits = match self.rag().await {
-            Ok(rag) => rag
-                .search_registry(user_message, self.top_k)
+        // Fix E (2026-05-09) — embed the user message ONCE per turn and
+        // reuse the vector across every retrieval lane (registry / messages /
+        // outputs) plus the persist write to `tengu_messages`. Pre Fix-E the
+        // same text was embedded up to 4 times per plan() call: once each
+        // for search_registry, cross_session_recall_block, persist write,
+        // and session_output_recall_block. That's the source of the
+        // "embedding API quota exceeded" the user hit. Fail-soft: if the
+        // single embed call fails, every downstream lane sees `None` and
+        // falls back to its own embed-then-fail-soft path (same as
+        // pre Fix-E behaviour).
+        let embed_vec: Option<Vec<f32>> = match self.rag().await {
+            Ok(rag) => match rag.embedder().embed(user_message).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "plan: embedder failed; RAG lanes will fail-soft this turn"
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
+        let embed_slice = embed_vec.as_deref();
+
+        let hits = match (self.rag().await, embed_slice) {
+            (Ok(rag), Some(vec)) => rag
+                .search_registry_with_vec(vec, self.top_k)
                 .await
                 .unwrap_or_else(|e| {
                     tracing::warn!(error = %e, "rag search_registry failed; falling back to empty roster");
                     Vec::new()
                 }),
-            Err(e) => {
+            (Ok(_), None) => {
+                // Embedder failed above. Don't double-warn here — that path
+                // already logged the error.
+                Vec::new()
+            }
+            (Err(e), _) => {
                 tracing::warn!(error = %e, "RagStore unavailable; falling back to empty roster");
                 Vec::new()
             }
@@ -627,22 +742,34 @@ impl Planner for RagPlanner {
         // one, so the just-written message can never appear in its own
         // recall block by construction. Off when `cross_session_msg_top_k`
         // is 0 (default). Fail-soft.
-        let cross_session_block = self.cross_session_recall_block(user_message).await;
+        let cross_session_block = self
+            .cross_session_recall_block(user_message, embed_slice)
+            .await;
 
         // Phase 6.4 (full, write) — durable persist of user message AFTER
         // the read above. Fail-soft: if embedder or Qdrant is unavailable
         // we still want to plan and respond (in-memory buffer covers this
         // turn for "Recent user messages this session" injection).
-        self.persist_user_message(user_message).await;
+        self.persist_user_message(user_message, embed_slice).await;
 
         // Phase 6.4 (lite) — append current message to per-instance
         // history buffer, then format the last N for prompt injection.
         let history_block = self.update_and_format_history(user_message).await;
 
+        // Fix A (2026-05-09) — within-session output recall on the normal
+        // plan() path. Without this, prior step outputs are only readable
+        // on replan; follow-up questions like "was the molecule project
+        // created?" return "I have no record of that step." Off by default
+        // (`within_session_output_top_k = 0`) so existing users see no
+        // behaviour change.
+        let session_recall_block = self
+            .session_output_recall_block(user_message, embed_slice)
+            .await;
+
         let roster = Self::format_roster(&hits);
         let combined = format!(
-            "{}{}{}\n## User message (current turn)\n\n{}",
-            roster, cross_session_block, history_block, user_message
+            "{}{}{}{}\n## User message (current turn)\n\n{}",
+            roster, cross_session_block, history_block, session_recall_block, user_message
         );
 
         // Per-layer breakdown captured BEFORE the LLM call so the metric
@@ -657,6 +784,10 @@ impl Planner for RagPlanner {
                 &cross_session_block,
             ),
             crate::adapters::metrics::MetricsLayer::from_text("history", &history_block),
+            crate::adapters::metrics::MetricsLayer::from_text(
+                "session_recall",
+                &session_recall_block,
+            ),
             crate::adapters::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
@@ -734,7 +865,10 @@ impl Planner for RagPlanner {
         // Phase 6.4 (full, read-back) — semantic recall over `tengu_messages`.
         // Same shape as the plan() call. Independent of the cross-plan
         // (`tengu_outputs`) recall above; both can appear in the prompt.
-        let cross_session_block = self.cross_session_recall_block(user_message).await;
+        // Replan doesn't pre-cache an embedding for the user message
+        // (it has its own composite-query embed for cross-plan recall),
+        // so `embed_vec = None` falls through to the str-input path.
+        let cross_session_block = self.cross_session_recall_block(user_message, None).await;
 
         let roster = Self::format_roster(&hits);
         let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
@@ -946,9 +1080,29 @@ mod tests {
         assert!(parse_verdict(raw).is_ok());
     }
 
+    /// Phase 7.4 prose-fallback — non-empty malformed input is wrapped as a
+    /// `Direct { response }` verdict rather than returning `Err`. Pre-7.4 this
+    /// test asserted `is_err()` on `"{"`; that contract changed when the
+    /// fallback landed (`parse_verdict` Path 4) so engines like Claude Code
+    /// that emit conversational prose stop hard-erroring the whole turn.
+    /// Truly empty input is the ONLY remaining error case.
     #[test]
-    fn rejects_malformed_json() {
-        assert!(parse_verdict("{").is_err());
+    fn rejects_only_empty_input() {
+        // Empty input still errors — there's nothing to wrap.
+        assert!(parse_verdict("").is_err());
+        assert!(parse_verdict("   ").is_err());
+
+        // Malformed-but-non-empty input gets wrapped as Direct (prose fallback).
+        match parse_verdict("{").unwrap() {
+            PlannerVerdict::Direct { response } => assert_eq!(response, "{"),
+            _ => panic!("expected Direct fallback wrapping the raw text"),
+        }
+        match parse_verdict("Sure, I'll do that.").unwrap() {
+            PlannerVerdict::Direct { response } => {
+                assert_eq!(response, "Sure, I'll do that.")
+            }
+            _ => panic!("expected Direct fallback wrapping the raw text"),
+        }
     }
 
     #[test]

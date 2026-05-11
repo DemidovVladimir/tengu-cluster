@@ -201,22 +201,38 @@ impl VectorStore for QdrantVectorStore {
         &self,
         embedding: &[f32],
         top_k: usize,
-        _filter: Option<&ChunkMetadata>,
+        filter: Option<&ChunkMetadata>,
     ) -> Result<Vec<MemoryHit>> {
-        // NOTE: server-side filtering not yet wired; we do a raw top-k then
-        // client-filter (mirrors the disk store fetch-k * 3 pattern used in
-        // the legacy `MemoryService::recall_filtered`). When `_filter` is
-        // `Some`, callers should fetch extra and post-filter themselves, or
-        // a later task can push the filter down into the Qdrant query.
+        // Fix F (2026-05-09) — server-side filtering on string-valued
+        // payload fields. Pre Fix-F this argument was ignored and callers
+        // had to over-fetch and post-filter (e.g. `search_outputs_for_session`
+        // fetched 5× and dropped non-matches). With server-side push-down,
+        // we ask Qdrant for exactly top_k matching points.
+        //
+        // Translation rules: each `Some(_)` structured field on
+        // `ChunkMetadata` (agent / source / kind) becomes one
+        // `FieldCondition` matching by string keyword. Each string-valued
+        // entry in `extra` becomes one condition keyed `extra_<k>`
+        // (the same prefix used at write time — see top-of-file mapping
+        // table). Non-string and empty filters fall through with no
+        // condition added, so a partially-populated `ChunkMetadata` still
+        // applies the constraints it can.
+        //
+        // If no conditions emerge (no Some-fields, no string-extras), we
+        // skip the Filter entirely — equivalent to the unfiltered query.
         let query_vec = embedding.to_vec();
+        let mut builder = QueryPointsBuilder::new(&self.collection)
+            .query(query_vec)
+            .limit(top_k as u64)
+            .with_payload(true);
+        if let Some(f) = filter {
+            if let Some(qf) = build_search_filter(f) {
+                builder = builder.filter(qf);
+            }
+        }
         let response = self
             .client
-            .query(
-                QueryPointsBuilder::new(&self.collection)
-                    .query(query_vec)
-                    .limit(top_k as u64)
-                    .with_payload(true),
-            )
+            .query(builder)
             .await
             .context("Qdrant search failed")?;
 
@@ -383,9 +399,108 @@ impl VectorStore for QdrantVectorStore {
     }
 }
 
+/// Fix F (2026-05-09) — translate a `ChunkMetadata` filter into a Qdrant
+/// `Filter`. Returns `None` when nothing actionable is present (so the
+/// caller can skip the filter entirely and fall through to an unfiltered
+/// query).
+///
+/// Supported today: structured string fields (`agent`, `source`, `kind`)
+/// and string-valued entries in `extra`. The most important use case is
+/// `extra.rag_session_id` for within-session output recall (`Fix A`).
+/// Non-string filter values are silently dropped — this is a deliberately
+/// limited shape, not a general query DSL.
+fn build_search_filter(filter: &ChunkMetadata) -> Option<qdrant_client::qdrant::Filter> {
+    use qdrant_client::qdrant::r#match::MatchValue;
+    use qdrant_client::qdrant::{
+        condition::ConditionOneOf, Condition, FieldCondition, Filter, Match,
+    };
+
+    let make_keyword_eq = |key: &str, value: &str| Condition {
+        condition_one_of: Some(ConditionOneOf::Field(FieldCondition {
+            key: key.to_string(),
+            r#match: Some(Match {
+                match_value: Some(MatchValue::Keyword(value.to_string())),
+            }),
+            ..Default::default()
+        })),
+    };
+
+    let mut must = Vec::new();
+    let structured = [
+        ("agent", filter.agent.as_deref()),
+        ("source", filter.source.as_deref()),
+        ("kind", filter.kind.as_deref()),
+    ];
+    for (key, value) in structured {
+        if let Some(s) = value.filter(|s| !s.is_empty()) {
+            must.push(make_keyword_eq(key, s));
+        }
+    }
+    for (k, v) in &filter.extra {
+        if let Some(s) = v.as_str().filter(|s| !s.is_empty()) {
+            must.push(make_keyword_eq(&format!("extra_{}", k), s));
+        }
+    }
+
+    if must.is_empty() {
+        None
+    } else {
+        Some(Filter {
+            must,
+            ..Default::default()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fix F — empty `ChunkMetadata` produces no filter.
+    #[test]
+    fn build_filter_empty_returns_none() {
+        let m = ChunkMetadata::default();
+        assert!(build_search_filter(&m).is_none());
+    }
+
+    /// Fix F — `extra.rag_session_id = "smoke-1"` becomes a single
+    /// keyword-match condition on payload key `extra_rag_session_id`.
+    /// This is the most-used path for Fix A's within-session recall.
+    #[test]
+    fn build_filter_session_extra_emits_condition() {
+        use qdrant_client::qdrant::{condition::ConditionOneOf, r#match::MatchValue};
+
+        let mut m = ChunkMetadata::default();
+        m.extra.insert(
+            "rag_session_id".to_string(),
+            serde_json::Value::String("smoke-1".to_string()),
+        );
+        let filter = build_search_filter(&m).expect("filter");
+        assert_eq!(filter.must.len(), 1);
+        let cond = &filter.must[0];
+        let ConditionOneOf::Field(fc) = cond.condition_one_of.as_ref().unwrap() else {
+            panic!("expected FieldCondition");
+        };
+        assert_eq!(fc.key, "extra_rag_session_id");
+        let m_inner = fc.r#match.as_ref().unwrap();
+        match m_inner.match_value.as_ref().unwrap() {
+            MatchValue::Keyword(s) => assert_eq!(s, "smoke-1"),
+            other => panic!("expected Keyword match, got {:?}", other),
+        }
+    }
+
+    /// Fix F — non-string extras are skipped silently.
+    #[test]
+    fn build_filter_skips_non_string_extras() {
+        let mut m = ChunkMetadata::default();
+        m.extra
+            .insert("count".to_string(), serde_json::Value::from(42));
+        m.extra
+            .insert("rag_session_id".to_string(), serde_json::Value::from("x"));
+        let filter = build_search_filter(&m).expect("filter");
+        // Only the string extra survives. The integer is dropped.
+        assert_eq!(filter.must.len(), 1);
+    }
 
     /// Smoke test: exercises Qdrant only if `QDRANT_URL` is configured.
     /// Otherwise skipped silently — matches the plan's `#[ignore]`-or-env

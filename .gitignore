@@ -26,3 +26,18 @@ lastrun.md
 # Claude Code per-user settings (settings.local.json holds approved tool
 # allow-lists for the local workstation; not portable across machines).
 /.claude/
+
+# Runtime caches written by the `shared_cache` / `persistent_store` plugins.
+# These live under `<agent.workspace>/.tengu/cache.db` and can contain
+# arbitrary tool-output snippets, including sensitive payloads from
+# webhook bodies, http_request responses, etc. The repo's normal `.tengu/`
+# entries above cover registry-fingerprint / scratch / worktrees at the
+# repo root; this pattern catches `.tengu/cache.db` no matter where in
+# the worktree it ends up (e.g. under a bogus `~` directory if some code
+# path forgot `expand_tilde` — see 2026-05-11 fix in webhook_builder.rs).
+**/.tengu/cache.db
+# Defensive catch-all for the broken-tilde case ONLY (real workspaces
+# under `~/aura-workspace/...` etc. live OUTSIDE the repo and aren't
+# git-visible — we only need to ignore the literal `~` directory that
+# pre-fix runs created at the repo root).
+/~/

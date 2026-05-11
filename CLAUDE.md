@@ -102,6 +102,7 @@ flow, audit these for staleness **before declaring done**:
 | `CLAUDE.md` (this file) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc |
 | Inline `mod.rs` doc comments in `src/adapters/memory/` and `src/adapters/rag/` | If you changed the layering between memory/ (low-level) and rag/ (v2 facade) |
 | `agents/*.toml` | If you changed the AgentSpec schema, document the new field in `src/adapters/agents/mod.rs` and update each agent file |
+| `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/webhook_builder.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
 | `src/adapters/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
@@ -250,9 +251,27 @@ These are not preferences. They're load-bearing.
   serde's `#[serde(default)]` gives the parent an empty vec. Re-emission
   happens in `SubprocessRunner::run_step` for both the Ok and Failed paths,
   so a partial subagent run still surfaces its consumed tokens.
-- **Two senses of `session_id`** — RagPlanner mints one (env override
-  `TENGU_SESSION_ID` or fresh UUID). SubprocessRunner mints its own. They
-  don't share today — open question in the handoff.
+- **`session_id` is unified between planner and runner (Fix B 2026-05-09)** —
+  `channel_runtime::build_orchestrator` resolves the id ONCE
+  (env override `TENGU_SESSION_ID` > fresh UUID), passes the same string to
+  `RagPlanner::new(...)` AND `SubprocessRunner::new(sandbox_name, session_id)`.
+  The IPC payload's `session_id` matches the planner's, so
+  `compress_and_store` writes `extra.rag_session_id` = planner's id, and
+  `RagPlanner::session_output_recall_block` can filter to it on the next
+  turn. Pre-Fix-B these were minted independently (the long-standing open
+  issue from the original handoff). `SubprocessRunner::default()` still
+  mints a fresh UUID for standalone test / CLI use.
+- **Within-session output recall is opt-in via a config knob (Fix A
+  2026-05-09)** — `[memory] within_session_output_top_k = N` in
+  `sandboxes/<name>/config.toml`. Default 0 = off (back-compat — the
+  planner prompt is unchanged). When > 0, `RagPlanner::plan` injects a
+  `## Recent step outputs (this session)` block from `tengu_outputs`
+  filtered by the planner's `session_id`. Pairs with Fix B — without the
+  unified id the filter would never match. Without this knob,
+  `tengu_outputs` is only read on `replan()` (the `cross_plan_top_k`
+  path), which is why follow-up questions like "was the molecule project
+  created?" used to come back with "I have no record of that step".
+  Recommended `3–5`.
 - **`spec.engine` selects the subagent engine (Phase 7.3)** —
   `agents/<name>.toml::engine` defaults to `"openrouter"` for back-compat;
   set to `"claude_code"` to run that agent through the Claude Code CLI.
@@ -283,13 +302,61 @@ These are not preferences. They're load-bearing.
 - **Adding a workspace-tool opt-in: ONE constant (Phase 7.7)** —
   `channel_runtime::WORKSPACE_TOOLS_ALLOWLIST`. Both `agent_config_from_spec`
   and the bridge filter against it.
-- **`compress_and_store` reliability with Claude Code subagents** — known
-  limitation: Claude Code subagents don't reliably call `compress_and_store`
-  as their final action; they just stop. The harness's middle-ground protocol
-  (Phase 5c) forgives this — the final assistant text becomes the IPC
-  summary. But cross-plan recall on replan won't have those step outputs in
-  `tengu_outputs`. Watch for `model finished without calling compress_and_store`
-  in logs. Workaround: stronger nudge in the agent's `identity.instructions`.
+- **`compress_and_store` reliability with Claude Code subagents (Fix C
+  2026-05-09)** — Claude Code subagents don't reliably call
+  `compress_and_store` as their final action; they just stop. The Phase 5c
+  middle-ground protocol forgives this — the final assistant text becomes
+  the IPC summary. **Fix C** now ALSO writes that final text to
+  `tengu_outputs` via a backstop call to `write_summary` on the same path,
+  so the durable row exists for within-session recall (Fix A) on the next
+  user turn. Watch for `compress_and_store: backstop wrote final_text
+  summary to tengu_outputs (Fix C — model skipped the protocol call)` in
+  logs. The original `model finished without calling compress_and_store`
+  warn is still emitted before the backstop fires. Workaround for the
+  underlying behaviour (still useful for clarity): stronger nudge in the
+  agent's `identity.instructions`.
+- **Long step summaries are char-capped before embedding (Fix D
+  2026-05-09)** — `text-embedding-3-small` rejects inputs over 8192
+  tokens (~32K chars). `compress_and_store::write_summary` now truncates
+  at `MAX_SUMMARY_CHARS = 24_000` (UTF-8-safe) and appends a marker
+  before handing to the embedder. Pre-Fix-D, long pipeline summaries
+  silently failed to embed and the fail-soft swallowed the error → no
+  row in `tengu_outputs`. Watch for the info log: `compress_and_store:
+  summary truncated to fit embedder input cap (Fix D)` with `original_chars`
+  and `capped_chars`. Tail content beyond the cap is lost; chunked
+  multi-row writes are an open follow-up.
+- **User message is embedded ONCE per `plan()` turn (Fix E 2026-05-09)** —
+  pre-Fix-E the same user message was embedded up to 4 times per turn:
+  `search_registry`, `cross_session_recall_block`, `persist_user_message`,
+  `session_output_recall_block`. Fix E adds `*_with_vec` variants
+  (`RagStore::search_registry_with_vec`, `search_outputs_for_session_with_vec`,
+  `search_messages_with_vec`, `store_memory_with_vec`) and threads the
+  cached `Option<&[f32]>` through `RagPlanner::plan` → all helpers. Helpers
+  fall back to embedding internally when `embed_vec = None` (replan path,
+  standalone tests). Direct relief for "embedding API quota exceeded"
+  errors. The string-input methods on `RagStore` are unchanged.
+- **Qdrant search honours `extra.<key>` payload filters (Fix F
+  2026-05-09)** — pre-Fix-F `VectorStore::search`'s `_filter` arg was
+  ignored; callers had to over-fetch and post-filter (e.g.
+  `search_outputs_for_session` did 5× over-fetch). Fix F adds
+  `build_search_filter(&ChunkMetadata) -> Option<Filter>` in
+  `vector/qdrant.rs`, which translates structured fields + string-valued
+  `extra` entries into `FieldCondition` + `MatchValue::Keyword` conditions
+  on the underlying Qdrant call. Most-used target: `extra.rag_session_id`
+  for Fix A. Disk-backed `VectorStore` impls still ignore the filter;
+  callers keep an in-process post-filter as defence-in-depth.
+  `search_outputs_for_session_with_vec` over-fetch dropped from 5× to 2×.
+- **Webhook turns persist their final text via Fix H (2026-05-09)** — `webhook_builder::run_one_shot` calls `compress_and_store::write_summary` AFTER `orchestrator.handle()` returns, with synthetic `step_id = "webhook-handler"`. Without this, webhook turns where the planner emits a `Direct { response }` verdict (no subagent dispatched, so no `compress_and_store` and no Fix-C backstop) leave NOTHING recallable — `tengu memory inspect` returns 0 rows even though the agent answered. Watch for `webhook output persisted to tengu_outputs (Fix H)` per turn. Coexists with subagent rows on the same session_id (different step_ids, both findable).
+- **`tengu webhooks` is the inbound HTTP listener (2026-05-09)** — feature-gated by `webhooks` cargo feature (`cargo build --features webhooks`); off by default. Each `[webhooks.endpoints.<name>]` block in `sandboxes/<name>/config.toml` binds `/webhooks/<name>` to one agent. Auth is HMAC-SHA256 on `X-Tengu-Signature: sha256=<hex>`; secret resolved from `secret_env` (env var name, preferred) or inline `secret` (TOML literal, dev-only). Response is **always async** — 202 Accepted with `{"session_id": "webhook-<name>-<uuid>"}`. Per-request session_id; recall the run later with `tengu memory inspect --session <id>`. Fresh `build_orchestrator` per request — RagStore lazy-inits each time (~100–500ms gRPC handshake), fine for low rates. The `build_orchestrator` signature was extended in this commit to take an explicit `session_id: String` (caller-resolves). Existing surfaces use the new `channel_runtime::resolve_session_id()` helper to preserve env-or-fresh semantics; webhooks build the per-request value `format!("webhook-{name}-{uuid}")`.
+- **`tengu memory inspect` is the diagnostic for "did the write land"
+  (2026-05-09)** — `tengu memory inspect --session <id> [--collection
+  outputs|messages] [--limit N]`. Server-side scroll filtered by
+  `rag_session_id`, prints index, step_id, content snippet, age per row.
+  Empty result prints a checklist of likely causes (no compress_and_store
+  call AND no Fix-C build, oversize summary AND no Fix-D build, collection
+  reset, session_id mismatch). First thing to run when the planner says
+  "I have no record of that step" — eliminates the "is the data even
+  there?" question without re-running the pipeline.
 - **MCP bridge tool names are prefixed `mcp__tengu-tools__<name>`** — when
   Claude Code calls a tengu tool through the bridge, the model sees
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
@@ -300,11 +367,16 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. As of 2026-04-27, every
-item from the original handoff is closed; the only architectural open
-question is **`session_id` sharing** between `RagPlanner` and
-`SubprocessRunner` (parent + child writes to `tengu_messages` and
-`tengu_outputs` respectively, today with different UUIDs).
+See `docs/SESSION_HANDOFF.md` for the running list. As of 2026-05-09 (end
+of day), the recall pipeline is end-to-end working. Fixes A+B (recall block
++ unified session_id) and C+D+E+F (backstop write, char cap, embed cache,
+server-side filter) all landed. Remaining open items are smaller and listed
+in the handoff: chunked multi-row writes for oversize summaries (today's
+Fix D loses tail content past 24K chars), `cross_plan_top_k` (replan-side)
+"this session only" mode reusing Fix F's filter, a real `scroll_filtered`
+primitive on `VectorStore` (today `tengu memory inspect` uses a
+zero-vector-with-filter shape), and `shared_cache` plugin gaining session
+scoping or TTL (currently leaks stale entries across sessions).
 
 ---
 

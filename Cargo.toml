@@ -48,11 +48,18 @@ similar = "2"
 qdrant-client = { version = "1.14", optional = true }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 dptree = { version = "0.3", optional = true }
+# Inbound webhook listener (gated by `webhooks` feature). axum is the
+# only http SERVER dep — `reqwest` already covers outbound. `hmac` is
+# the constant-time MAC primitive used to verify `X-Tengu-Signature`
+# headers; pairs with the existing `sha2` for SHA-256.
+axum = { version = "0.7", optional = true }
+hmac = { version = "0.12", optional = true }
 [features]
 default = ["openrouter", "telegram"]
 telegram = ["teloxide", "dptree"]
 openrouter = []
 qdrant = ["qdrant-client"]
 claude_code = []
+webhooks = ["axum", "hmac"]
 
 [dev-dependencies]

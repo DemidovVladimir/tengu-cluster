@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Features · Tengu-Cluster</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --fg: #e6edf3; --muted: #8b949e;
+    --line: #30363d; --accent: #58a6ff;
+    --c-orch: #58a6ff; --c-rag: #f78166; --c-skill: #56d364;
+    --c-tool: #d2a8ff; --c-obs: #ffd60a; --c-ipc: #ff7b72; --c-surface: #79c0ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); margin: 0; }
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--panel); padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #d2a8ff; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  nav.top { position: sticky; top: 0; z-index: 10; background: rgba(14,17,22,0.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 10px 24px; display: flex; gap: 16px; align-items: center; }
+  nav.top .brand { font-weight: 600; letter-spacing: -0.01em; }
+  nav.top .brand .dot { color: var(--accent); }
+  nav.top .links { display: flex; gap: 14px; margin-left: auto; font-size: 13px; }
+  nav.top .links a { color: var(--muted); padding: 4px 8px; border-radius: 4px; }
+  nav.top .links a:hover { color: var(--fg); background: var(--panel); text-decoration: none; }
+  nav.top .links a.active { color: var(--fg); background: var(--panel); }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 80px; }
+
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 22px; }
+
+  .filters { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+  .filters .label { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .chip {
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+    padding: 5px 11px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .chip:hover { color: var(--fg); border-color: var(--accent); }
+  .chip.active { color: var(--fg); }
+  .chip[data-cat="orch"].active    { background: rgba(88,166,255,0.18);  border-color: var(--c-orch); }
+  .chip[data-cat="rag"].active     { background: rgba(247,129,102,0.18); border-color: var(--c-rag); }
+  .chip[data-cat="skill"].active   { background: rgba(86,211,100,0.18);  border-color: var(--c-skill); }
+  .chip[data-cat="tool"].active    { background: rgba(210,168,255,0.18); border-color: var(--c-tool); }
+  .chip[data-cat="obs"].active     { background: rgba(255,214,10,0.18);  border-color: var(--c-obs); }
+  .chip[data-cat="ipc"].active     { background: rgba(255,123,114,0.18); border-color: var(--c-ipc); }
+  .chip[data-cat="surface"].active { background: rgba(121,192,255,0.18); border-color: var(--c-surface); }
+  .chip.all.active { background: var(--panel); border-color: var(--fg); color: var(--fg); }
+
+  .grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+  .feat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; cursor: pointer; transition: border-color 0.12s ease;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .feat:hover { border-color: var(--accent); }
+  .feat .head { display: flex; align-items: center; gap: 8px; }
+  .feat .badge { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .feat .badge[data-cat="orch"]    { background: var(--c-orch); }
+  .feat .badge[data-cat="rag"]     { background: var(--c-rag); }
+  .feat .badge[data-cat="skill"]   { background: var(--c-skill); }
+  .feat .badge[data-cat="tool"]    { background: var(--c-tool); }
+  .feat .badge[data-cat="obs"]     { background: var(--c-obs); }
+  .feat .badge[data-cat="ipc"]     { background: var(--c-ipc); }
+  .feat .badge[data-cat="surface"] { background: var(--c-surface); }
+  .feat h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; }
+  .feat .toggle { color: var(--muted); font-size: 16px; transition: transform 0.15s ease; line-height: 1; }
+  .feat.open .toggle { transform: rotate(45deg); }
+  .feat .summary { color: var(--muted); font-size: 13px; margin: 0; line-height: 1.45; }
+  .feat .detail {
+    display: none; margin-top: 8px; padding-top: 10px; border-top: 1px dashed var(--line);
+    font-size: 13px; color: var(--fg);
+  }
+  .feat.open .detail { display: block; }
+  .feat .detail .row { margin-bottom: 6px; }
+  .feat .detail .k { display: inline-block; width: 92px; color: var(--muted); font-size: 12px; }
+  .feat .detail .v { color: var(--fg); }
+  .feat.hidden { display: none; }
+
+  .legend { color: var(--muted); font-size: 12px; margin-top: 12px; }
+
+  footer { color: var(--muted); font-size: 12px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 12px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="brand">tengu<span class="dot">·</span>cluster</div>
+  <div class="links">
+    <a href="index.html">Home</a>
+    <a href="features.html" class="active">Features</a>
+    <a href="howto.html">How-to</a>
+    <a href="rag.html">RAG</a>
+    <a href="memory.html">Memory</a>
+    <a href="context.html">Context</a>
+  </div>
+</nav>
+
+<main>
+  <h1>Feature catalog</h1>
+  <p class="subtitle">Click any card to expand. Filter by subsystem with the chips below.</p>
+
+  <div class="filters">
+    <span class="label">Filter:</span>
+    <span class="chip all active" data-cat="all">All</span>
+    <span class="chip" data-cat="orch">Orchestration</span>
+    <span class="chip" data-cat="rag">RAG / Memory</span>
+    <span class="chip" data-cat="skill">Skills</span>
+    <span class="chip" data-cat="tool">Tools</span>
+    <span class="chip" data-cat="obs">Observability</span>
+    <span class="chip" data-cat="ipc">IPC / Subagents</span>
+    <span class="chip" data-cat="surface">Surfaces</span>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <p class="legend">Source — <a href="docs/architecture-2026-04-27.md">architecture-2026-04-27.md</a> §1–§3, <a href="docs/SESSION_HANDOFF.md">SESSION_HANDOFF.md</a>, plus the gotchas in <a href="CLAUDE.md">CLAUDE.md</a>.</p>
+
+  <footer>
+    Pages: <a href="index.html">Home</a> · <a href="howto.html">How-to</a> · <a href="memory.html">Memory</a> · <a href="context.html">Context</a>
+  </footer>
+</main>
+
+<script>
+  const FEATURES = [
+    // ── Orchestration ───────────────────────────────────────────────
+    {
+      cat: "orch", title: "RagPlanner",
+      summary: "The LLM that decides — searches the registry, builds a roster, emits plan JSON or a direct reply.",
+      file: "src/adapters/orchestrator/planner.rs",
+      doc:  "Receives the user message → search_registry(top_k=20) → optional cross-session recall → persist message → in-memory ring push → build prompt (roster + history + cross_session + user) → LLM call with skills/orchestrator/SKILL.md as system prompt, tools=[] → parse verdict.",
+      key:  "Doctrine boundary: tools/memory/grounding STRIPPED on this call (run_turn_with_system). The planner has exactly one job: emit plan JSON."
+    },
+    {
+      cat: "orch", title: "DagExecutor",
+      summary: "Topological-sort then parallel — runs ready steps concurrently, retries on failure.",
+      file: "src/adapters/orchestrator/executor.rs",
+      doc:  "Plan::ready_steps returns every step whose depends_on is satisfied. Each ready step is tokio::spawn'd onto SubprocessRunner. RetryPolicy::new(max_attempts_per_step). On exhaustion → replan.",
+      key:  "Parallelism is automatic — keep depends_on minimal, parallel steps finish faster."
+    },
+    {
+      cat: "orch", title: "Replan loop",
+      summary: "When a step exhausts retries, replan with cross-plan recall from tengu_outputs.",
+      file: "src/adapters/orchestrator/replan.rs",
+      doc:  "drive() calls RagPlanner::replan(prior_plan, failure_reason). Replan also pulls cross_plan_top_k hits from tengu_outputs so the new plan is informed by what already ran.",
+      key:  "Capped by orchestrator.max_replans (default 2)."
+    },
+    {
+      cat: "orch", title: "C → B fallback",
+      summary: "When no listed agent fits — ask user, then compose-on-confirmation.",
+      file: "src/adapters/orchestrator/plan.rs::AgentCompose",
+      doc:  "Turn 1 (C): planner emits Direct asking user. Turn 2 (B, on confirmation): plan with Step.compose set. Runner loads compose.base_agent and OVERRIDES skills/tools wholesale for this run only — file on disk unchanged.",
+      key:  "Wholesale override (not field-merge) — keeps the contract simple."
+    },
+
+    // ── RAG / Memory ────────────────────────────────────────────────
+    {
+      cat: "rag", title: "tengu_registry",
+      summary: "Qdrant collection of agents + skills + tools, indexed for semantic routing.",
+      file: "src/adapters/rag/{indexer,query}.rs",
+      doc:  "Each agent is indexed twice: once on its description, once per example_queries entry. Each skill on its description. Each tool on its name+description. text-embedding-3-small (1536d).",
+      key:  "Auto-reindexed on first chat turn (RagPlanner::auto_reindex_once). Force with TENGU_REGISTRY_FORCE_REINDEX=1 if Qdrant was reset."
+    },
+    {
+      cat: "rag", title: "Per-example vectors",
+      summary: "Each example_queries line gets its own vector — short query ↔ short example wins over long descriptions.",
+      file: "src/adapters/rag/indexer.rs (Apr 26)",
+      doc:  "Embeds bare query text (tight cosine), stores snippet = full description so the planner sees full context after dedup. Lifts realistic match scores from ~0.35 to ~0.5 for short user queries.",
+      key:  "Add example_queries to your agent if short user phrasings are missing it."
+    },
+    {
+      cat: "rag", title: "tengu_messages",
+      summary: "Durable user-message store. Written on every plan() call. Read by cross-session recall.",
+      file: "src/adapters/orchestrator/planner.rs::persist_user_message",
+      doc:  "RagPlanner mints session_id (TENGU_SESSION_ID env override, else fresh UUID). Writes user messages with MemoryKind::Message. Fail-soft on errors.",
+      key:  "Read-back via memory.cross_session_msg_top_k > 0 (default 0 = off)."
+    },
+    {
+      cat: "rag", title: "tengu_outputs",
+      summary: "Compressed step summaries — what the planner uses for cross-plan recall on replan.",
+      file: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs",
+      doc:  "Subagent's 'I'm done' tool. Embeds the LLM-summarised step output and writes to Qdrant tengu_outputs keyed by session_id + step_id. Implicitly appended to every subagent.",
+      key:  "Never list compress_and_store in agents/*.toml::tools — the runner appends it."
+    },
+    {
+      cat: "rag", title: "Fingerprint dedup",
+      summary: "Skip reindex when the workspace hasn't changed.",
+      file: ".tengu/registry-fingerprint",
+      doc:  "Phase 6.2. Hash of every agent spec + skill + tool. Cached file. Auto-reindex compares; matches → skip. Saves ~29 embedding calls per startup.",
+      key:  "Bypass with TENGU_REGISTRY_FORCE_REINDEX=1 — needed if Qdrant was reset since last run."
+    },
+    {
+      cat: "rag", title: "Cross-session recall",
+      summary: "Inject prior user messages from other sessions that semantically match this one.",
+      file: "RagPlanner::cross_session_recall_block",
+      doc:  "Opt-in: memory.cross_session_msg_top_k > 0. Runs BEFORE persisting the current message so it never appears in its own recall block. Block fenced via <memory-context>.",
+      key:  "Default off. Turn on once durable msg writes have accumulated."
+    },
+    {
+      cat: "rag", title: "TTL purge",
+      summary: "Filter-based delete on tengu_messages and tengu_outputs.",
+      file: "src/adapters/rag/cleanup.rs",
+      doc:  "Default ttl_days = 0 (never purge). When > 0, ttl_cleanup is intended to delete entries older than the cutoff via a Qdrant filter.",
+      key:  "Open: filter-based delete still has a TODO."
+    },
+
+    // ── Skills ──────────────────────────────────────────────────────
+    {
+      cat: "skill", title: "Three-tier scanner",
+      summary: "managed → workspace dotdir → workspace root, first-match wins.",
+      file: "src/adapters/rag/indexer.rs::scan_skills",
+      doc:  "Walks ~/.tengu/skills (managed), <workspace>/.tengu/skills (workspace dotdir), <workspace>/skills (workspace root). Highest priority is workspace root. Per-tier counts logged.",
+      key:  "Drop a skill into any tier; restart chat → auto-reindex picks it up."
+    },
+    {
+      cat: "skill", title: "view_skill (read API)",
+      summary: "Always-on read access to every installed skill.",
+      file: "src/adapters/plugins/view_skill/mod.rs",
+      doc:  "Three actions — list (every skill across tiers), read (frontmatter + body + resources), read_resource (file under skills/<name>/resources/, symlink-aware, 1MB cap).",
+      key:  "Always advertised — no workspace_tools opt-in needed."
+    },
+    {
+      cat: "skill", title: "manage_skill (write API)",
+      summary: "Atomic write API — create / edit_body / patch / add_resource / remove_resource / delete.",
+      file: "src/adapters/plugins/manage_skill/mod.rs",
+      doc:  "All writes: validate name, refuse on editable_by_learner: false, atomic temp+rename, append skills/.audit.jsonl. Patch is fuzzy find-and-replace (exact + whitespace-normalised; 6 strategies marked TODO).",
+      key:  "Opt-in via WORKSPACE_TOOLS_ALLOWLIST + tools = [\"manage_skill\"] on the agent's TOML."
+    },
+    {
+      cat: "skill", title: "learning-agent",
+      summary: "The single agent that creates / evaluates / adjusts skills in chat.",
+      file: "agents/learning-agent.toml",
+      doc:  "Replaces 4 old lifecycle agents (skill-author, skill-evaluator, skill-improver-inline, resource-finder). Tools: view_skill, manage_skill, http_request, read_file, list_directory. Skill: skill-creator. Engine: openrouter / opus-4-7.",
+      key:  "Routed by orchestrator on lifecycle verbs: 'create skill', 'adjust yourself', 'fix it', 'improve', 'evaluate'."
+    },
+    {
+      cat: "skill", title: "tengu skill evolve",
+      summary: "Offline metric-driven skill rewriting — rescore until it improves.",
+      file: "src/adapters/skill_lifecycle/evolve.rs",
+      doc:  "Worktree-scoped rewrite cycles. Improver agent proposes, harness scores via fixtures, accepts on improvement. editable_by_learner: false skills are refused with verdict='refused-by-flag'.",
+      key:  "CLI: tengu skill evolve <name> --max-cycles N. Distinct from in-chat lifecycle (which goes through learning-agent)."
+    },
+    {
+      cat: "skill", title: "Skill metrics + variance",
+      summary: "Rolling pass-rate window + stddev + min/max for each metric.",
+      file: "src/adapters/skill_lifecycle/storage.rs",
+      doc:  "MetricRollup { stddev, min, max }. Sample stddev (n-1) when window ≥ 2. CLI prints '0.75 ± 0.08 [0.60–0.90] n=5' summary line.",
+      key:  "tengu skill metrics <skill> --last 5"
+    },
+
+    // ── Tools ───────────────────────────────────────────────────────
+    {
+      cat: "tool", title: "PluginToolExecutor",
+      summary: "The tool dispatcher — name-routed, scoped, namespaced.",
+      file: "src/adapters/tool_plugin.rs",
+      doc:  "Wraps the plugin registry. Each call: validate name in agent's allow-list → resolve plugin → execute with ToolCtx (scopes, agent_config, session_id, workspace).",
+      key:  "Adding a tool: ONE line in channel_runtime::register_core_plugins."
+    },
+    {
+      cat: "tool", title: "MCP bridge",
+      summary: "Tengu acts as an MCP server so Claude Code subagents can call tengu tools.",
+      file: "src/adapters/mcp_bridge.rs",
+      doc:  "SubprocessRunner sets EngineContext.bridge_tools when spec.engine == \"claude_code\". Claude Code spawns 'tengu mcp-bridge' as MCP server; tools surface as mcp__tengu-tools__<name>.",
+      key:  "TENGU_SESSION_ID and OPENROUTER_API_KEY must reach the bridge subprocess (Claude Code replaces inherited env)."
+    },
+    {
+      cat: "tool", title: "Workspace-tools allow-list",
+      summary: "Five privileged tool names — opt-in per agent.",
+      file: "channel_runtime::WORKSPACE_TOOLS_ALLOWLIST",
+      doc:  "shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill. Agents declare with tools = [\"manage_skill\"] in their TOML.",
+      key:  "agents/*.toml has NO workspace_tools field — serde silently ignores it. Use the regular tools array."
+    },
+    {
+      cat: "tool", title: "Tool scopes",
+      summary: "http_request only hits allow-listed hosts; reads only allow-listed env vars.",
+      file: "sandboxes/<name>/config.toml [default_scopes.http_request]",
+      doc:  "net_hosts and env_reads arrays. \"*\" is the wildcard (dev-permissive). Per-agent scopes override default_scopes wholesale (NOT field-merged).",
+      key:  "Scopes cross the IPC boundary now (Phase 7.2) — child sees the same allow-list as the parent."
+    },
+    {
+      cat: "tool", title: "compress_and_store",
+      summary: "Implicit terminal tool every subagent gets.",
+      file: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs",
+      doc:  "Two paths converge: out-of-band intercept for OpenRouter subagents (main.rs:821) + plugin path for Claude Code through the MCP bridge. Both write LLM-summarised text to tengu_outputs.",
+      key:  "Phase 5c middle-ground: missing call but final_text non-empty → Ok with warn. No call AND empty → Failed."
+    },
+    {
+      cat: "tool", title: "Tool catalog (built-in)",
+      summary: "http, crypto, workspace primitives + the 5 workspace-tools.",
+      file: "src/adapters/plugins/",
+      doc:  "Built-ins: http_request, read_file, list_directory, run_command, get_wallet_address, sign_and_send_transaction, sign_message. Workspace-tools: shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill. Plus view_skill (always-on).",
+      key:  "Real MCP tool indexing in the registry is open item 6.6 (currently uses placeholder_tools()=6 hardcoded for query)."
+    },
+
+    // ── Observability ───────────────────────────────────────────────
+    {
+      cat: "obs", title: "MetricsRecord",
+      summary: "Per-LLM-call telemetry — tokens, latency, per-context-layer breakdown.",
+      file: "src/adapters/metrics.rs",
+      doc:  "kind (Planner / Subagent / Embedding), agent, model, prompt_tokens, completion_tokens, latency_ms, prompt_chars, prompt_bytes, response_chars, layer breakdown. Crosses IPC in AgentIpcOutput.metrics.",
+      key:  "Per-context-layer attribution is unique to Tengu — names: system, roster, cross_session, history, recall, failure, user_message."
+    },
+    {
+      cat: "obs", title: "Tracing baseline",
+      summary: "Always-on info-level structured log per LLM/embedding call.",
+      file: "metrics::record() → tracing::info!",
+      doc:  "Run RUST_LOG=tengu=info to see one structured line per call: kind, agent, model, prompt_tokens, completion_tokens, latency_ms, prompt_chars. Per-layer breakdown at debug level.",
+      key:  "Bumped logs: RUST_LOG=tengu=info,tengu::adapters::orchestrator=debug shows the RagQueried event with hit scores."
+    },
+    {
+      cat: "obs", title: "TUI metrics panel",
+      summary: "In-process aggregator with one-line system bubble.",
+      file: "src/adapters/tui/mod.rs",
+      doc:  "Opt-in via TENGU_TUI_METRICS=1. Format: 'metrics: tok in/out 4.5k/812 · last planner (1.2k) · session 5.6k · researcher 4.0k'. Aggregator absorbs records when panel is OFF — flipping it on mid-session shows real numbers.",
+      key:  "TENGU_TUI_RAG_DEBUG=1 is the sibling — renders RagQueried hits as a system bubble."
+    },
+    {
+      cat: "obs", title: "OrchestratorEvent bus",
+      summary: "Single event stream — PlanCreated, StepStarted, RagQueried, MetricsRecorded.",
+      file: "src/adapters/orchestrator/events.rs",
+      doc:  "broadcast::Sender. TUI subscribes and renders progress; eval recorder subscribes for capture; future subscribers come for free.",
+      key:  "Process-global metrics sink republishes onto this bus so subscribers see one unified stream."
+    },
+
+    // ── IPC / Subagents ─────────────────────────────────────────────
+    {
+      cat: "ipc", title: "SubprocessRunner",
+      summary: "Spawns 'tengu run-agent' for each plan step, pipes JSON over stdin/stdout.",
+      file: "src/adapters/runner.rs",
+      doc:  "Builds AgentIpcInput { agent_name, goal, session_id, step_id, sandbox_config, optional compose }. TENGU_AGENT_IPC=1 env guard. Reads result JSON; kill on drop.",
+      key:  "Subagent metrics cross back via AgentIpcOutput.metrics — re-emitted on the parent's global sink."
+    },
+    {
+      cat: "ipc", title: "Sandbox config IPC (Phase 7.2)",
+      summary: "Child re-resolves the parent's sandbox so scopes/secrets/MCP servers match.",
+      file: "Config.sandbox_name → AgentIpcInput.sandbox_config",
+      doc:  "Without this, the child loaded ~/.tengu/config.toml not the parent's sandbox config — http_request scope-denied even when the parent allowed it. Now threaded through IPC.",
+      key:  "If you see scope denials in the child, verify Config.sandbox_name is populated by load_sandbox_or."
+    },
+    {
+      cat: "ipc", title: "Mixed-engine subagents (Phase 7.3)",
+      summary: "Per-agent engine selection — OpenRouter or Claude Code.",
+      file: "AgentSpec.engine",
+      doc:  "Default 'openrouter'. Set to 'claude_code' to run via the CLI. Model slug format depends on engine: openrouter → 'anthropic/claude-sonnet-4-6'; claude_code → 'claude-sonnet-4-6'.",
+      key:  "Don't put a Claude Code agent in the planner role — the CLI's MCP tool access bypasses tool stripping. Verified pattern: OpenRouter planner + Claude Code subagents."
+    },
+    {
+      cat: "ipc", title: "Phase 5c protocol",
+      summary: "Forgive the model that forgets to call compress_and_store.",
+      file: "src/main.rs::run_agent_subprocess",
+      doc:  "✓compress + any text → Ok. ✗compress + non-empty text → Ok with warn (summary = final_text). ✗compress + empty text → Failed. Catches Claude Code's 'just stops' tendency without breaking strict subagents.",
+      key:  "Watch for 'model finished without calling compress_and_store' in logs."
+    },
+    {
+      cat: "ipc", title: "parse_verdict prose-fallback",
+      summary: "When the planner returns prose instead of JSON, wrap it as a Direct verdict.",
+      file: "src/adapters/orchestrator/planner.rs::parse_verdict",
+      doc:  "Phase 7.4 path 4 in the tolerant cascade. Watch for the warn log to know when this is firing — usually means the planner agent should be on OpenRouter not Claude Code.",
+      key:  "No more 'System error: orchestrator initial call failed' — user sees the model's reply."
+    },
+
+    // ── Surfaces ────────────────────────────────────────────────────
+    {
+      cat: "surface", title: "TUI",
+      summary: "Cursive-based terminal UI. Default channel for local dev.",
+      file: "src/adapters/tui/mod.rs",
+      doc:  "tengu chat --sandbox <name>. Rich rendering: System bubbles for orchestrator events, optional RAG-debug panel (TENGU_TUI_RAG_DEBUG=1), metrics panel (TENGU_TUI_METRICS=1).",
+      key:  "Both panels are opt-in; aggregator absorbs events when off."
+    },
+    {
+      cat: "surface", title: "Telegram",
+      summary: "Bot interface via teloxide — multi-user, allow-listed.",
+      file: "src/adapters/telegram_builder.rs",
+      doc:  "tengu telegram --sandbox <name>. allowed_users in [telegram] config gates senders. Optional tool_approvals + approve_only allow-list for approval prompts.",
+      key:  "Config requires TELOXIDE_TOKEN env var. orchestrator construction is identical to TUI."
+    },
+    {
+      cat: "surface", title: "Webhooks (inbound HTTP)",
+      summary: "tengu listens for POSTs and dispatches per-request orchestrator turns. HMAC-SHA256 auth. Full doc: docs/webhooks-2026-05-11.md",
+      file: "src/adapters/webhook_builder.rs",
+      doc:  "Each [webhooks.endpoints.<name>] block in the sandbox config binds /webhooks/<name> to one agent + one HMAC secret. Per-request session_id (webhook-<name>-<uuid>). Async-only response: 202 Accepted with {session_id}; agent runs in background. Fix H persists every turn's final text to tengu_outputs with synthetic step_id 'webhook-handler' — guaranteed recallable.",
+      key:  "Feature-gated: cargo build --features webhooks. Run with: tengu webhooks --sandbox <name>. Verify a run landed: tengu memory inspect --session webhook-<name>-<uuid>. Canonical operator doc: docs/webhooks-2026-05-11.md."
+    },
+    {
+      cat: "surface", title: "Sandboxes",
+      summary: "Per-deployment config — orchestrator agent, scopes, secrets, MCP servers.",
+      file: "sandboxes/<name>/config.toml",
+      doc:  "Top-level sections: [orchestrator] agent + engine, [memory], [telegram], [claude_code], [default_scopes.<tool>], [scaffold], [skill_lifecycle], [agents.<name>] for orchestrator and lifecycle agents.",
+      key:  "engine='rag' is the only valid orchestrator engine post-7.1."
+    }
+  ];
+
+  // ───────── render ─────────
+  const grid = document.getElementById("grid");
+  for (const [i, f] of FEATURES.entries()) {
+    const div = document.createElement("div");
+    div.className = "feat";
+    div.dataset.cat = f.cat;
+    div.dataset.idx = i;
+    div.innerHTML = `
+      <div class="head">
+        <span class="badge" data-cat="${f.cat}"></span>
+        <h3>${f.title}</h3>
+        <span class="toggle">+</span>
+      </div>
+      <p class="summary">${f.summary}</p>
+      <div class="detail">
+        <div class="row"><span class="k">File:</span><span class="v"><code>${f.file}</code></span></div>
+        <div class="row"><span class="k">What:</span><span class="v">${f.doc}</span></div>
+        <div class="row"><span class="k">Key:</span><span class="v">${f.key}</span></div>
+      </div>`;
+    div.addEventListener("click", () => div.classList.toggle("open"));
+    grid.appendChild(div);
+  }
+
+  // ───────── filter ─────────
+  const chips = document.querySelectorAll(".chip");
+  for (const chip of chips) {
+    chip.addEventListener("click", () => {
+      for (const c of chips) c.classList.remove("active");
+      chip.classList.add("active");
+      const cat = chip.dataset.cat;
+      for (const f of document.querySelectorAll(".feat")) {
+        f.classList.toggle("hidden", cat !== "all" && f.dataset.cat !== cat);
+      }
+    });
+  }
+</script>
+
+</body>
+</html>
