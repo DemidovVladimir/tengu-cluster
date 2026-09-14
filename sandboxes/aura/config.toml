@@ -1,8 +1,9 @@
 # Tengu Cluster — DeSci Sandbox
 # Multi-agent team for Decentralized Science workflows:
 # PDF research → IPNFT minting → Molecule project → Beach.science publishing.
-# Run with: tengu orchestrate --sandbox desci
-# Or Telegram: tengu telegram --sandbox desci
+# Run with: tengu chat --sandbox aura
+# Or Telegram: tengu telegram --sandbox aura
+# Agents here use engine = "claude_code" — build with `--features claude_code`.
 
 runtime_profile = "cloud"
 
@@ -25,8 +26,8 @@ allowed_users = ['848344935']  # your sender id from the log
 # Auth: HMAC-SHA256 of the request body; expected header is
 # `X-Tengu-Signature: sha256=<hex>`. Secrets resolve from `secret_env`
 # (env var name; preferred) or inline `secret` (TOML literal; dev only).
-# Per-request session_id = `webhook-<name>-<uuid>`; recall later with
-# `tengu memory inspect --session <id>`.
+# Per-request session_id = `webhook-<name>-<uuid>`; recall later by querying
+# Postgres `agentic_memory` on `TENGU_MEMORY_DATABASE_URL` by session_id.
 
 [webhooks]
 enabled = true
@@ -50,6 +51,9 @@ timeout_secs = 120
 [default_scopes.http_request]
 net_hosts = ["*"]
 env_reads = ["*"]
+# Scopes are enforced at runtime, and http_request multipart uploads read files
+# from disk — the workspace must be an allowed fs root.
+fs_roots = ["~/aura-workspace"]
 
 # --- Scaffold ---
 # Root workspace with working directories created at startup.
@@ -78,23 +82,19 @@ content = """# DeSci Project
    max_replans = 2
 
 [agents.aura]
-# Aura is the orchestrator agent. It runs the planner LLM call which has tools
-# stripped via run_turn_with_system. OpenRouter respects per-turn tool=[]; the
-# Claude Code CLI gets MCP tools from a config file at engine-construction
-# time and ignores per-turn stripping, so it tries to do the work itself
-# instead of emitting plan JSON. Keep aura on claude_code for the planner role.
+# Planner-role trade-off: CLAUDE.md doctrine says the planner belongs on OpenRouter —
+# Claude Code ignores per-turn tool stripping and may act instead of emitting plan JSON
+# (parse_verdict's prose fallback catches it). Kept on claude_code to run on the Claude subscription.
 engine = "claude_code"
 model = "claude-sonnet-4-6"
 role = "aura"
 default = true
-requires = []
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
 
-# [agents.aura.claude_code] block kept here as documentation — has no effect
-# when engine = "openrouter", but lets you flip the engine field above to
-# "claude_code" without re-adding it. Profile would be editor_shell on flip.
+# Optional [agents.aura.claude_code] block (only read when engine = "claude_code").
+# Left commented out on purpose — the planner role does not need editor/shell builtins.
 # [agents.aura.claude_code]
 # builtin_tools_profile = "editor_shell"
 
@@ -125,7 +125,7 @@ For general user questions that fall outside the DeSci pipeline — looking up p
 
 [skill_lifecycle]
 improver_agent = "skill-improver"        # Required for `tengu skill evolve`
-fixture_runner_agent = "fixture-runner"  # Required for `tengu eval`
+fixture_runner_agent = "fixture-runner"  # Optional; `tengu eval` runs rows on the eval config default agent
 default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
 default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
 

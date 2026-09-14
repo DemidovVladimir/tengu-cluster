@@ -1,78 +1,61 @@
 # Configuration
 
-Tengu is configured via a single TOML file. Default location: `~/.tengu/config.toml`. Override with `--config <path>` or sandboxes (`--sandbox <name>` → `sandboxes/<name>/config.toml`).
+One TOML file. Resolution: `--sandbox <name>` loads `sandboxes/<name>/config.toml` and replaces the base config wholesale; without it, `-c/--config <path>` > `TENGU_CONFIG=<path>` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`). The `run-agent` child follows the same chain. Commented reference: `config.example.toml`.
 
-See `config.example.toml` in the repo root for a commented reference.
-
-## Initial Setup
+## Initial setup
 
 ```bash
-# 1. Create encrypted secrets vault
-tengu secret init                              # prompts for master password
-
-# 2. Store API keys
-tengu secret set OPENROUTER_API_KEY sk-or-...  # required for OpenRouter engine
-tengu secret set TELEGRAM_BOT_TOKEN 123:ABC-.. # required for Telegram bot
-
-# 3. Create config
-mkdir -p ~/.tengu
-cp config.example.toml ~/.tengu/config.toml
-
-# 4. Run
-tengu chat                                     # interactive TUI
-tengu telegram                                 # Telegram bot
+tengu secret init                              # vault + master password
+tengu secret set OPENROUTER_API_KEY sk-or-...
+tengu secret set TELEGRAM_BOT_TOKEN 123:ABC-..
+mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
+tengu chat                                     # or: tengu chat --sandbox aura
 ```
 
-To skip the master password prompt, set `TENGU_MASTER_PASSWORD` env var.
+`TENGU_MASTER_PASSWORD` skips the vault prompt.
 
-## Root Sections
+## Root sections
 
 | Section | Purpose |
-|---------|---------|
+|---|---|
 | `runtime_profile` | `"auto"` / `"cloud"` / `"desktop"` / `"minimal"` |
-| `[hub]` | Bind address, port, auth mode, hot-reload |
-| `[agents.<id>]` | Per-agent configuration (see below) |
-| `[orchestrator]` | Fleet orchestration settings |
-| `[memory]` | Persistent vector memory |
+| `[hub]` | Bind, port, auth mode, hot-reload (config-only — nothing listens on `[hub].port`) |
+| `[agents.<id>]` | Per-agent configuration |
+| `[orchestrator]` | Planner + subprocess runner (see below) |
+| `[memory]` | Disk vector store + agentic-memory knobs |
 | `[telegram]` | Telegram bot adapter |
+| `[webhooks]` | Inbound HTTP listener (feature `webhooks`) — `docs/webhooks-2026-05-11.md` |
 | `[scaffold]` | Workspace directory/file scaffolding |
 | `[claude_code]` | Global Claude Code backend settings |
-| `[skill_lifecycle]` | Skill eval / metrics / evolve (required to activate `tengu skill evolve`) |
+| `[skill_lifecycle]` | `tengu eval` / `tengu skill metrics` / `tengu skill evolve` |
 
-## Agent Configuration
+## Agent configuration
 
 ```toml
 [agents.main]
 engine = "openrouter"              # "openrouter" | "claude_code"
-model = "anthropic/claude-sonnet-4.6"
-default = true                     # At most one agent can be default
-workspace = "~/projects/my-app"    # Workspace root
+model = "anthropic/claude-sonnet-4-6"   # claude_code wants the bare slug: "claude-sonnet-4-6"
+default = true                     # at most one default agent
+workspace = "~/projects/my-app"
 default_lens = "eco"               # "eco" | "standard" | "precise"
-role = "backend_engineer"          # Orchestration role (optional)
-skill_packages = ["aura-orchestrator"]  # Skills to load
-workspace_tools = ["shared_cache", "skill_distill"]  # Optional workspace tools (see [[skills#Distillation]])
+role = "backend_engineer"          # optional
+skill_packages = ["aura-orchestrator"]
+workspace_tools = ["shared_cache", "skill_distill"]
 ```
 
-### Engine Selection
+| Field | Notes |
+|---|---|
+| `engine` | `openrouter` needs `OPENROUTER_API_KEY`; `claude_code` needs the `claude` CLI + `--features claude_code`. See [[engine-backends]]. |
+| `workspace_tools` | Allow-list: `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill` (`config.rs::valid_workspace_tools`). |
+| Subagent specs | `agents/<name>.toml` (`AgentSpec`) has NO `workspace_tools` field — put opt-ins in `tools = [...]`. |
 
-The `engine` field selects the execution backend. See [[engine-backends]] for details.
-
-| Value | Backend | Requires |
-|-------|---------|----------|
-| `openrouter` | OpenRouter API | `OPENROUTER_API_KEY` env var |
-| `claude_code` | Claude Code CLI | `claude` CLI installed, `--features claude_code` |
-
-### Identity
+### Identity / Flow / Limits
 
 ```toml
 [agents.main.identity]
 name = "My Agent"
 instructions = "You are a helpful assistant."
-```
 
-### Flow
-
-```toml
 [agents.main.flow]
 scope = "per-sender"                # "main" | "per-group" | "per-pipe-sender" | "per-sender"
 reset_mode = "idle"                 # "idle" | "manual" | "time"
@@ -81,180 +64,156 @@ max_history_turns = 20              # optional
 compaction_threshold_ratio = 0.82   # optional (0.0, 1.0]
 compaction_keep_turns = 24          # optional
 compaction_summary_max_tokens = 320 # optional
-```
 
-### Limits
-
-```toml
 [agents.main.limits]
-max_tokens_per_flow = 100_000      # Hard limit (warning at 80%)
+max_tokens_per_flow = 100_000      # hard limit (warning at 80%)
 context_window = 1_000_000
-max_tool_rounds = 70               # Max tool-loop iterations
-max_tool_result_chars = 300_000    # Truncation threshold per result
+max_tool_rounds = 70
+max_tool_result_chars = 300_000
 stream_event_timeout_secs = 120
-compact_result_limit = 200         # Old-round tool result compaction
-max_output_tokens_per_turn = 4096  # optional (must be <= context_window)
+compact_result_limit = 200
+max_output_tokens_per_turn = 4096  # optional (<= context_window)
 max_cost_per_flow = 5.0            # optional (USD)
-warn_at_cost = 4.0                 # optional (must be <= max_cost_per_flow)
+warn_at_cost = 4.0                 # optional (<= max_cost_per_flow)
 ```
 
-## Claude Code Configuration
-
-### Global
+### Claude Code
 
 ```toml
 [claude_code]
-cli_path = "claude"   # Path to Claude Code CLI binary (default: "claude")
-```
+cli_path = "claude"
 
-### Per-Agent
-
-```toml
 [agents.main.claude_code]
 builtin_tools_profile = "editor_shell"  # "none" | "read_only" | "editor" | "editor_shell"
 ```
 
-The profile controls which Claude-native tools are allowed. See [[engine-backends#Builtin Tools Profiles]].
-
-This section is only used when `engine = "claude_code"`.
+Don't put a `claude_code` agent in the planner role unless you accept that the CLI keeps MCP tool access (planner-side tool stripping only works for OpenRouter) — see `CLAUDE.md` gotchas.
 
 ## Orchestrator
 
+Schema: `src/adapters/config.rs::OrchestratorConfig`.
+
 ```toml
 [orchestrator]
-enabled = true
-max_retries = 2
-planner_engine = "openrouter"       # or "claude_code"
-planner_model = "anthropic/claude-sonnet-4.6"
+agent = "aura"                 # agent (in [agents.*]) that runs the planner LLM call
+engine = "rag"                 # REQUIRED — only supported value (historical name; file-registry planner)
+max_attempts_per_step = 3      # Tier 1: retries per step before escalation
+max_replans = 2                # Tier 2: replans before bailing out
+route_explicit_agents = false  # true = `@role:` messages also go through the planner
 ```
+
+| Fact | Where |
+|---|---|
+| `engine` defaults to `"static"`, which logs a warn and disables orchestration | `channel_runtime.rs` (`cfg.engine != "rag"`) |
+| Subagents are `agents/<name>.toml`; registry regenerated into `TENGU_PLANNER_REGISTRY.md` each planner turn | `orchestrator/shared_files.rs` |
+| Accepted plan written to `TENGU_PLAN.md` for subagents | `orchestrator/replan.rs` |
 
 ## Memory
 
 ```toml
 [memory]
 enabled = true
-embedding_model = "text-embedding-3-small"
+embedding_model = "text-embedding-3-small"   # must stay 1536-dim (Postgres schema hardcodes vector(1536))
 max_recall_entries = 5
 max_recall_tokens = 600
 store_path = "~/.tengu/memory/"
-backend = "disk"              # "disk" | "qdrant" (requires --features qdrant)
+backend = "disk"                              # only built-in backend (bincode on disk)
+session_recent_n = 10
+cross_plan_top_k = 5
+within_session_output_top_k = 3               # 0 = off; needs postgres_memory
+persistent_store_chunk_size = 1000
+persistent_store_chunk_overlap = 200
 ```
 
-Memory embeddings require `OPENROUTER_API_KEY` regardless of engine backend.
+Durable cross-session memory is the Postgres `agentic_memory` plugin: build with `--features postgres_memory`, set `TENGU_MEMORY_DATABASE_URL`. Spec: `docs/agentic-memory-*-2026-05-13.md`. Embeddings need `OPENROUTER_API_KEY` regardless of engine.
 
 ## Telegram
 
 ```toml
 [telegram]
 enabled = true
-allowed_users = ["123456789"]    # Telegram user IDs (get from @userinfobot)
+allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS
 ```
 
-Set `TELEGRAM_BOT_TOKEN` in the secrets vault or as an env var. Get a token from @BotFather on Telegram.
-
-## Secrets
-
-Store API keys encrypted in `~/.tengu/secrets.vault`:
-
-```bash
-tengu secret init                  # create vault + set master password
-tengu secret set KEY VALUE         # store a secret
-tengu secret list                  # list stored keys
-tengu secret remove KEY            # remove a secret
-```
-
-Skip the interactive password prompt with:
-```bash
-export TENGU_MASTER_PASSWORD="your-password"
-```
-
-## Sandboxes
-
-Domain-specific configurations in `sandboxes/<name>/config.toml`:
-
-```bash
-tengu telegram --sandbox aura           # OpenRouter-backed DeSci
-tengu telegram --sandbox aura-claude    # Claude Code-backed DeSci
-```
-
-## Feature Flags
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `openrouter` | on | OpenRouter API backend |
-| `telegram` | on | Telegram bot channel |
-| `claude_code` | off | Claude Code CLI backend |
-| `qdrant` | off | Qdrant vector store for memory |
-
-```bash
-cargo build                              # default: openrouter + telegram
-cargo build --features claude_code       # + Claude Code backend
-cargo build --all-features               # everything
-```
-
-## Reset / Fresh Start
-
-```bash
-rm -rf ~/.tengu              # remove all config, secrets, logs, and state
-tengu chat                   # starts with built-in defaults
-```
-
-Selective cleanup:
-
-```bash
-rm -rf ~/.tengu/state        # session state only
-rm -rf ~/.tengu/logs         # logs only
-tengu prune                  # remove cached/ephemeral state (keeps config & secrets)
-```
-
-## Validation
-
-Config is validated at load time. Invalid values produce clear error messages:
-- Engine must be `openrouter` or `claude_code`
-- Profile must be `none`, `read_only`, `editor`, or `editor_shell`
-- Limits must be positive, cost thresholds consistent
-- `workspace_tools` entries must be in `["shared_cache", "persistent_store", "skill_distill"]`
-
-## Skill Lifecycle
-
-Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and `tengu skill evolve <skill>`. See [[skills#Metrics & Evolution]] for the frontmatter contract. This block is optional — absence disables the evolve CLI but does not affect chat/eval of skills that don't declare metrics.
+## Skill lifecycle
 
 ```toml
 [skill_lifecycle]
-improver_agent       = "skill-improver"     # Name of the agent (in [agents.*]) that proposes rewrites
-fixture_runner_agent = "fixture-runner"     # Name of the agent that executes eval fixtures
-default_max_evolve_cycles = 3               # Tier-2 cap on rewrite→rescore cycles per evolve run
-default_rolling_window    = 10              # Window over which metrics.json pass_rate is computed
+improver_agent       = "skill-improver"   # required for `tengu skill evolve`
+fixture_runner_agent = "fixture-runner"   # serde-required but unused — `tengu eval` runs rows on the eval config default agent
+default_max_evolve_cycles = 3
+default_rolling_window    = 10
 
 [agents.skill-improver]
 engine = "openrouter"
 model  = "anthropic/claude-opus-4-7"
-workspace_tools = []                         # Read-only; harness applies diffs, not the agent
-
-[agents.skill-improver.identity]
-name = "Skill Improver"
-instructions = """
-You are a skill-improver. Given a skill that is under-performing on a specific
-metric, propose a REVISED skill body that raises the metric's pass rate without
-regressing others. Emit ONE JSON object and nothing else:
-{"proposal":{"body_markdown":"...","metrics":[...]?,"rationale":"..."}}
-"""
-
-[agents.fixture-runner]
-engine = "openrouter"
-model  = "anthropic/claude-sonnet-4-6"
-workspace_tools = []
+tools  = ["read_file", "list_directory"]
 ```
 
-Agents that should be able to author skills mid-conversation add `"skill_distill"` to their own `workspace_tools`:
+See [[skills#Metrics & Evolution]] for the frontmatter contract.
 
-```toml
-[agents.main]
-workspace_tools = ["skill_distill"]
+## Sandboxes
+
+`sandboxes/<name>/config.toml` — `aura` (DeSci pipeline), `storage-test`, `unlimited` (OpenRouter DeepSeek model bench, see `sandboxes/unlimited/BENCH.md`).
+
+```bash
+tengu chat --sandbox aura
+tengu telegram --sandbox aura
+cargo run --features claude_code -- chat --sandbox aura   # aura's agents use engine = "claude_code"
+```
+
+## Environment variables
+
+| Var | Read by | Default | Purpose |
+|---|---|---|---|
+| `OPENROUTER_API_KEY` | `engine_builder.rs`, `orchestrator/planner.rs`, `mcp_bridge.rs`, `main.rs` | — (required) | OpenRouter chat + embeddings |
+| `OPENROUTER_BASE_URL` | `engine_builder.rs`, `plugins/agentic_memory/mod.rs` | `https://openrouter.ai/api` | Override API base |
+| `OPENROUTER_REFERER` | `engine_builder.rs` | unset | `HTTP-Referer` header |
+| `OPENROUTER_TITLE` | `engine_builder.rs` | unset | `X-Title` header |
+| `TELEGRAM_BOT_TOKEN` | `telegram_builder.rs` | — (required for `telegram`) | Bot token |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `telegram_builder.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users` |
+| `TENGU_HOME` | `main.rs::resolve_tengu_home` | `~/.tengu` | State root (config, vault, logs, memory) |
+| `TENGU_CONFIG` | `main.rs` (config resolution) | `~/.tengu/config.toml` | Path to config.toml (`-c/--config` wins) |
+| `TENGU_MASTER_PASSWORD` | `main.rs`, `secret_builder.rs` | unset (prompt) | Vault password |
+| `TENGU_SESSION_ID` | `channel_runtime.rs::build_orchestrator`, `claude_code_engine.rs`, `plugins/agentic_memory/mod.rs`, `memory/vector/embedder.rs` | fresh UUID | Pin the session id shared by planner + runner |
+| `TENGU_MEMORY_DATABASE_URL` | `plugins/agentic_memory/mod.rs` | — (required for `postgres_memory`) | Postgres + pgvector DSN |
+| `TENGU_WIKI_COMPILER_MODEL` | `plugins/agentic_memory/mod.rs::wiki_compiler_model` | `anthropic/claude-sonnet-4-6` | `compile_wiki` model |
+| `TENGU_TUI_METRICS` | `tui/mod.rs` | off | Token/latency status line in the TUI |
+| `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | Planner recall hits as a System bubble |
+| `TENGU_GPU_HINT` | `config.rs::detect_gpu` | auto-detect | `none|cpu|off|false` or `gpu|cuda|metal|mps|on|true` for `runtime_profile = "auto"` |
+| `TENGU_PERSISTENT_STORE_CHUNK_SIZE` | `claude_code_engine.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_size` | Chunk size for `persistent_store` |
+| `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | `claude_code_engine.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_overlap` | Chunk overlap for `persistent_store` |
+| `CHAIN_ID` | `plugins/crypto/helpers.rs::resolve_default_chain_id` | `DEFAULT_CHAIN_ID` | Chain id when a tool call omits it |
+| `PRIVY_APP_ID` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
+| `PRIVY_APP_SECRET` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
+| `PRIVY_WALLET_ID` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
+| `EVM_RPC_URL` | `plugins/crypto/helpers.rs` | `https://ethereum-rpc.publicnode.com` | JSON-RPC endpoint |
+| `RUST_LOG` | `main.rs` (`tracing_subscriber::EnvFilter`) | `info` | Log filter; `tengu=info` prints one `metrics` line per LLM call |
+
+## Feature flags
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `openrouter` | on | OpenRouter API backend |
+| `telegram` | on | Telegram bot channel |
+| `claude_code` | off | Claude Code CLI backend |
+| `postgres_memory` | off | Postgres + pgvector agentic memory, `tengu agentic-memory-server` |
+| `webhooks` | off | `tengu webhooks` inbound HTTP listener |
+
+## Validation
+
+- Engine must be `openrouter` or `claude_code`; `builtin_tools_profile` must be `none|read_only|editor|editor_shell`.
+- Limits positive; `warn_at_cost <= max_cost_per_flow`; `max_output_tokens_per_turn <= context_window`.
+- `workspace_tools` entries must be in the allow-list above.
+
+## Reset
+
+```bash
+rm -rf ~/.tengu              # everything
+rm -rf ~/.tengu/state        # sessions only
+tengu prune                  # cached/ephemeral state (keeps config + secrets)
 ```
 
 ## Related
-- [[architecture]] — system overview
-- [[engine-backends]] — engine comparison
-- [[skills]] — skill_packages configuration + `[skill_lifecycle]` details
-- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — design spec
+- [[architecture]] · `docs/architecture-2026-04-27.md` (canonical)
+- [[engine-backends]] · [[skills]] · `docs/webhooks-2026-05-11.md`

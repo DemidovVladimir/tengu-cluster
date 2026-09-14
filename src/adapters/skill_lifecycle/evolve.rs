@@ -917,10 +917,16 @@ mod tests {
         assert_eq!(written.len(), 2);
         let f1 = skill_dir.join("resources").join("genitive.md");
         let f2 = skill_dir.join("resources").join("verbs").join("strong.md");
-        assert_eq!(std::fs::read_to_string(&f1).unwrap(), "# Genitive\nlinks...\n");
+        assert_eq!(
+            std::fs::read_to_string(&f1).unwrap(),
+            "# Genitive\nlinks...\n"
+        );
         assert_eq!(std::fs::read_to_string(&f2).unwrap(), "strong verbs");
         // No leftover .resource.tmp-* siblings.
-        for sub in [skill_dir.join("resources"), skill_dir.join("resources").join("verbs")] {
+        for sub in [
+            skill_dir.join("resources"),
+            skill_dir.join("resources").join("verbs"),
+        ] {
             for entry in std::fs::read_dir(&sub).unwrap() {
                 let name = entry.unwrap().file_name();
                 let s = name.to_string_lossy();

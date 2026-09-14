@@ -154,7 +154,7 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 | `plugins/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
 | `plugins/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
 | `plugins/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
-| `plugins/memory/` | `remember` + `persistent_store` (chunked RAG, opt-in via `workspace_tools`) |
+| `plugins/memory/` | `remember` + `persistent_store` (chunked Open Brain / Karpathy LLM Wiki, opt-in via `workspace_tools`) |
 | `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
 | `plugins/subagents/` | `sessions_spawn`, `sessions_fan_out`, `subagents` — registered when orchestrator is enabled |
 | `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
@@ -170,7 +170,7 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 |--------|---------|
 | `memory_builder.rs` | Memory types, service, disk store, tool defs |
 | `embedding.rs` | Embedding generation (OpenRouter API) |
-| `qdrant_memory_store.rs` | Qdrant vector store backend (feature-gated) |
+| `qdrant_memory_store.rs` | legacy vector DB vector store backend (feature-gated) |
 
 ### Channel Adapters
 | Module | Purpose |

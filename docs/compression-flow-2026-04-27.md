@@ -43,10 +43,10 @@ persists across plan/replan cycles.
 | **A — Out-of-band** | OpenRouter subagents | `main.rs::run_agent_subprocess` intercepts the tool call BEFORE the executor. Sets `compress_called = true`, calls `write_summary` directly, breaks loop. |
 | **B — Plugin** | Claude Code subagents (Phase 7.6 fix) | MCP bridge routes through `PluginToolExecutor`. `CompressAndStoreTool::execute` calls the same `write_summary` internally. |
 
-Both converge on `write_summary(rag, session_id, step_id, summary)` which
-constructs a `MemoryEntry { kind: StepOutput, ... }`, embeds it via
-`text-embedding-3-small`, and upserts into the Qdrant `tengu_outputs`
-collection.
+With `postgres_memory`, `main.rs::run_agent_subprocess` writes the final
+summary into Open Brain-style Postgres `agentic_memory`, with embeddings when
+available and text-only fallback otherwise. Legacy vector builds keep the old
+`write_summary(rag, session_id, step_id, summary)` compatibility path.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 
@@ -63,9 +63,9 @@ pragmatic because many models (Claude Code subagents in particular) don't
 reliably call protocol tools but do produce useful text.
 
 ### Read path
-`RagPlanner::replan` does `search_memory(query, OUTPUTS_COLLECTION)` on
-later turns to recall what subagents already produced — this is the only
-reason `tengu_outputs` exists as a separate collection.
+`RagPlanner::replan` (legacy planner type name) reads prior step outputs from
+Postgres `agentic_memory` via pgvector first and FTS fallback when
+`postgres_memory` is enabled. Planner routing no longer depends on a vector DB.
 
 ---
 
@@ -116,8 +116,10 @@ no summarisation pass — oldest turns simply drop off the end.
   and the Phase 5c degradation path.
 - `docs/architecture-2026-04-27.md` § 1 step 7 — narrative of the full
   per-turn flow.
-- `src/adapters/rag/mod.rs` — where the three Qdrant collections
-  (`tengu_registry`, `tengu_messages`, `tengu_outputs`) are defined.
+- `TENGU_PLANNER_REGISTRY.md` — root file-backed planner roster generated from
+  agents, skills, and tools.
+- `src/adapters/rag/mod.rs` — legacy vector compatibility facade; not the
+  current brain architecture.
 - `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol.
 
 ---

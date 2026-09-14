@@ -144,8 +144,8 @@ Current flow parses, mutates metrics, serializes, then re-parses. Consolidate in
 ### S5 — `flow_builder.rs:136–152` three separate scope-default match functions
 Collapse `default_compaction_threshold_ratio_for_scope`, `default_compaction_keep_turns_for_scope`, `default_compaction_summary_max_tokens` into one struct-returning function. **Est. delta: −~20 LOC.** Risk: **L**.
 
-### S6 — `MemoryConfig` (config.rs:544–575) Qdrant fields gated by `backend`
-The four Qdrant-specific fields (`qdrant_url`, `qdrant_api_key`, `qdrant_collection`, `vector_size`) are live but only read when `backend = "qdrant"`. Consider making them an `Option<QdrantConfig>` sub-struct so they're not implied as always-applicable. **Est. delta: −~10 LOC, config surface clearer.** Risk: **M** — config schema change, user configs would need migration.
+### S6 — `MemoryConfig` (config.rs:544–575) legacy vector DB fields gated by `backend`
+The four legacy vector DB-specific fields (`qdrant_url`, `qdrant_api_key`, `qdrant_collection`, `vector_size`) are live but only read when `backend = "qdrant"`. Consider making them an `Option<QdrantConfig>` sub-struct so they're not implied as always-applicable. **Est. delta: −~10 LOC, config surface clearer.** Risk: **M** — config schema change, user configs would need migration.
 
 Items *NOT* in this list (intentionally):
 

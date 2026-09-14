@@ -12,6 +12,10 @@ lastrun.md
 .tengu/worktrees/
 .tengu/scratch/
 .tengu/registry-fingerprint
+# Editor/vault noise + `tengu skill evolve` scratch output — never repo state.
+**/.obsidian/
+*.tmp
+.tengu/evolve-out/
 
 # Eval runner artifacts (per-run transcripts + report.json). The eval
 # runner auto-prunes to `--keep-runs` (default 10), but gitignore keeps
@@ -26,6 +30,21 @@ lastrun.md
 # Claude Code per-user settings (settings.local.json holds approved tool
 # allow-lists for the local workstation; not portable across machines).
 /.claude/
+
+# Codex CLI per-user settings (mirror of the /.claude/ rule above).
+/.codex/
+
+# Agentic memory — planner-context files regenerated on every planner turn
+# (TENGU_PLANNER_REGISTRY.md from agents/skills/tools, TENGU_PLAN.md from the
+# current accepted plan). Pure runtime artifacts; never hand-edited.
+/TENGU_PLANNER_REGISTRY.md
+/TENGU_PLAN.md
+
+# Agentic memory — raw ingested sources. May contain arbitrary payloads
+# (files, URLs, transcripts) including sensitive content — same reasoning as
+# the cache.db rule below. The compiled wiki under .tengu/agentic-memory/wiki/
+# is intentionally NOT ignored: it is human-reviewable via git diff (PRD).
+**/.tengu/agentic-memory/raw/
 
 # Runtime caches written by the `shared_cache` / `persistent_store` plugins.
 # These live under `<agent.workspace>/.tengu/cache.db` and can contain

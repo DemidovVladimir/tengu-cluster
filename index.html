@@ -89,7 +89,6 @@
     <a href="index.html" class="active">Home</a>
     <a href="features.html">Features</a>
     <a href="howto.html">How-to</a>
-    <a href="rag.html">RAG</a>
     <a href="memory.html">Memory</a>
     <a href="context.html">Context</a>
   </div>
@@ -97,10 +96,10 @@
 
 <main>
   <h1>Tengu-Cluster · Operator Guide</h1>
-  <p class="subtitle">Multi-agent harness in Rust. RAG-routed planner, subprocess subagents, Qdrant-backed memory.</p>
+  <p class="subtitle">Multi-agent harness in Rust. File-registry planner, subprocess subagents, Postgres <code>agentic_memory</code> (pgvector) memory.</p>
 
   <div class="tldr">
-    <p>A user message arrives at a channel (TUI / Telegram). The harness builds an <code>Orchestrator</code>, holding a <code>RagPlanner</code> (the LLM that decides) and a <code>SubprocessRunner</code> (which executes plan steps as child processes). The planner queries <code>tengu_registry</code> — a Qdrant collection of agents, skills and tools — for the top-K matches, then asks an LLM to emit a direct response or a plan referencing one of those matches. Each plan step spawns <code>tengu run-agent</code> as a subprocess, which loads the agent's TOML, builds a tool executor, and runs an LLM-with-tools loop until the model calls <code>compress_and_store</code>. Step output flows back; on failure the executor calls <code>RagPlanner::replan</code> with cross-plan recall from <code>tengu_outputs</code>.</p>
+    <p>A user message arrives at a channel (TUI / Telegram). The harness builds an <code>Orchestrator</code>, holding a <code>RagPlanner</code> (the LLM that decides) and a <code>SubprocessRunner</code> (which executes plan steps as child processes). The planner reads <code>TENGU_PLANNER_REGISTRY.md</code> — regenerated from agents, skills and tools each turn — then asks an LLM to emit a direct response or a plan referencing one of those entries. Each plan step spawns <code>tengu run-agent</code> as a subprocess, which loads the agent's TOML, builds a tool executor, and runs an LLM-with-tools loop until the model calls <code>compress_and_store</code>. Step output flows back; on failure the executor calls <code>RagPlanner::replan</code> with cross-plan recall from Postgres <code>agentic_memory</code>.</p>
     <div class="doctrine"><b>Doctrine</b> · LLM = heart, RAG = brain, tools = hands. The planner has exactly one job: emit plan JSON. Subagents do the work.</div>
   </div>
 
@@ -118,16 +117,10 @@
       <p>Add an agent in 1 file. Add a skill in 1 file. Add a tool in 2 files. Configure a sandbox. Each tab: schema, example, verification.</p>
       <span class="arrow">Walk through →</span>
     </a>
-    <a class="card c3" href="rag.html">
-      <span class="pill">RAG</span>
-      <h3>How routing actually works</h3>
-      <p>Three Qdrant collections, two query lanes (routing + recall), 6× over-fetch + dedup. Animated walkthrough of how a user message becomes a roster.</p>
-      <span class="arrow">Trace it →</span>
-    </a>
     <a class="card c3" href="memory.html">
       <span class="pill">Memory</span>
       <h3>State, recall, the meta-skill</h3>
-      <p>Three Qdrant collections, ring buffer, durability. The <code>learning-agent</code> + <code>manage_skill</code> meta-skill that creates and updates skills in chat.</p>
+      <p>Postgres <code>agentic_memory</code> (pgvector), ring buffer, durability. The <code>learning-agent</code> + <code>manage_skill</code> meta-skill that creates and updates skills in chat.</p>
       <span class="arrow">Open →</span>
     </a>
     <a class="card c4" href="context.html">
@@ -140,10 +133,10 @@
 
   <h2>Quick launch</h2>
   <div class="quick-launch">
-    <div class="label">One-shot Qdrant + native build (recommended for local dev)</div>
-    <pre>docker compose --profile qdrant up -d qdrant
-cargo build --release --features "qdrant claude_code"
-TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all</pre>
+    <div class="label">Postgres agentic memory + native build (recommended for local dev)</div>
+    <pre>docker compose --profile postgres-memory up -d postgres-memory
+export TENGU_MEMORY_DATABASE_URL=postgres://tengu:tengu@localhost:5432/tengu_memory
+cargo build --release --features "postgres_memory claude_code"</pre>
 
     <div class="label">TUI</div>
     <pre>RUST_LOG=tengu=info ./target/release/tengu chat --sandbox aura</pre>
@@ -151,13 +144,14 @@ TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all</pre>
     <div class="label">Telegram</div>
     <pre>RUST_LOG=tengu=info ./target/release/tengu telegram --sandbox aura</pre>
 
-    <div class="label">Verify the registry has data</div>
-    <pre>./target/release/tengu registry list --limit 50
-./target/release/tengu registry search "your query here" --top-k 5</pre>
+    <div class="label">Verify memory writes landed</div>
+    <pre># the planner registry is a file: cat TENGU_PLANNER_REGISTRY.md
+# durable memory: query Postgres agentic_memory via TENGU_MEMORY_DATABASE_URL
+psql "$TENGU_MEMORY_DATABASE_URL" -c "select id, kind, left(content, 80) from agentic_memory order by created_at desc limit 20"</pre>
   </div>
 
   <footer>
-    Pages live next to this one in the project root: <a href="features.html">features.html</a> · <a href="howto.html">howto.html</a> · <a href="rag.html">rag.html</a> · <a href="memory.html">memory.html</a> · <a href="context.html">context.html</a>.
+    Pages live next to this one in the project root: <a href="features.html">features.html</a> · <a href="howto.html">howto.html</a> · <a href="memory.html">memory.html</a> · <a href="context.html">context.html</a>.
     Authoritative source docs in <code>docs/</code>: <a href="docs/architecture-2026-04-27.md">architecture-2026-04-27.md</a>, <a href="docs/context-management-2026-04-27.md">context-management-2026-04-27.md</a>, <a href="docs/comparison-2026-04-26.md">comparison-2026-04-26.md</a>, <a href="docs/SESSION_HANDOFF.md">SESSION_HANDOFF.md</a>, <a href="CLAUDE.md">CLAUDE.md</a>.
   </footer>
 </main>

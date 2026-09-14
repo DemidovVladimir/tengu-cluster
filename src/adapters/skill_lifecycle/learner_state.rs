@@ -111,8 +111,7 @@ pub(crate) fn save(skill_dir: &Path, state: &LearnerState) -> Result<()> {
     let tmp_path = state_dir.join(format!(".{}.tmp-{}", state.learner_id, nanos));
 
     let bytes = serde_json::to_vec_pretty(state).context("serialize learner_state")?;
-    std::fs::write(&tmp_path, &bytes)
-        .with_context(|| format!("write tmp {:?}", tmp_path))?;
+    std::fs::write(&tmp_path, &bytes).with_context(|| format!("write tmp {:?}", tmp_path))?;
     std::fs::rename(&tmp_path, &final_path)
         .with_context(|| format!("rename {:?} -> {:?}", tmp_path, final_path))?;
     Ok(())
@@ -295,7 +294,9 @@ mod tests {
         );
         // Mastery scores must be consistent with the same marker — i.e. no
         // tearing across the two writers' payloads.
-        assert!(loaded.mastery_scores.contains_key(&format!("topic.{marker}")));
+        assert!(loaded
+            .mastery_scores
+            .contains_key(&format!("topic.{marker}")));
         assert_eq!(loaded.mastery_scores.len(), 1);
     }
 }

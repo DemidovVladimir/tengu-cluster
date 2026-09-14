@@ -6,7 +6,7 @@
 
 **Architecture:** Two new subsystems under `src/adapters/` — `orchestrator/` (planner, DAG executor, retry, replan, events) and `memory/` (MemoryProvider trait, BuiltinMemoryProvider, injector, writer). Existing `plugins/memory/` is refactored to hold LLM-callable memory tools (`memory_ingest`, `memory_search`, `persistent_store`). Existing `plugins/subagents/` and legacy orchestration Rust files are deleted.
 
-**Tech Stack:** Rust, Tokio, serde/TOML, broadcast channels (`tokio::sync::broadcast`), OpenRouter SDK. Qdrant optional for vector memory.
+**Tech Stack:** Rust, Tokio, serde/TOML, broadcast channels (`tokio::sync::broadcast`), OpenRouter SDK. legacy vector DB optional for vector memory.
 
 **Spec:** [2026-04-20-harness-orchestration-memory-design.md](../specs/2026-04-20-harness-orchestration-memory-design.md)
 
@@ -150,7 +150,7 @@ For `src/adapters/memory/mod.rs`:
 //! - `injector` — pre-turn fenced context injection
 //! - `writer` — post-turn spawned non-blocking writes
 //! - `fencing` — `<memory-context>` block helpers
-//! - `vector` — embeddings + Qdrant/bincode backend
+//! - `vector` — embeddings + legacy vector DB/bincode backend
 //! - `context_block` — shared types
 
 pub mod builtin;
@@ -479,7 +479,7 @@ git commit -m "feat(memory): shared types for retrieval results"
 
 **Files:**
 - Read: `src/adapters/memory_builder.rs` (current disk + embedding impl)
-- Read: `src/adapters/qdrant_memory_store.rs` (current Qdrant impl)
+- Read: `src/adapters/qdrant_memory_store.rs` (current legacy vector DB impl)
 - Read: `src/adapters/embedding.rs` (current embedding client)
 - Modify: `src/adapters/memory/vector.rs`
 
@@ -491,7 +491,7 @@ wc -l src/adapters/memory_builder.rs src/adapters/qdrant_memory_store.rs src/ada
 
 Use `Read` tool to inspect them. Identify:
 - The store trait (likely `MemoryStorePort` from `ports.rs`)
-- The two store impls (disk/bincode + Qdrant)
+- The two store impls (disk/bincode + legacy vector DB)
 - The embedding API (OpenRouter `text-embedding-3-small`)
 
 - [ ] **Step 2: Move the store impls into `vector.rs`**
@@ -503,7 +503,7 @@ Create `src/adapters/memory/vector.rs` containing:
 //!
 //! Two swappable stores, selected by `MemoryConfig.backend`:
 //! - `disk`   — bincode file at `<workspace>/.tengu/memory.bin`
-//! - `qdrant` — REST client against a Qdrant instance
+//! - `qdrant` — REST client against a legacy vector DB instance
 //!
 //! Both expose the `VectorStore` trait below.
 
@@ -535,7 +535,7 @@ Create `src/adapters/memory/vector/disk.rs`. Port the bincode/disk implementatio
 
 - [ ] **Step 4: Create `qdrant.rs` submodule**
 
-Create `src/adapters/memory/vector/qdrant.rs`. Port Qdrant-specific code from `src/adapters/qdrant_memory_store.rs`. Implement `VectorStore` the same way.
+Create `src/adapters/memory/vector/qdrant.rs`. Port legacy vector DB-specific code from `src/adapters/qdrant_memory_store.rs`. Implement `VectorStore` the same way.
 
 - [ ] **Step 5: Create `embedder.rs` submodule**
 

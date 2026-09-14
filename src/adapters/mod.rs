@@ -29,11 +29,10 @@ pub(crate) mod mcp_bridge;
 pub(crate) mod noop;
 pub mod orchestrator;
 pub(crate) mod plugins;
-#[cfg(feature = "qdrant")]
-pub mod rag;
+// `rag` (legacy Qdrant facade) was removed in Phase 6 — Open Brain (Postgres `agentic_memory`) is the memory backend.
 pub mod agents;
-pub mod runner;
 pub(crate) mod prune;
+pub mod runner;
 pub(crate) mod scaffold;
 pub(crate) mod shell_executor;
 pub(crate) mod skill_lifecycle;

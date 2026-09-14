@@ -65,7 +65,7 @@
     <g transform="translate(310,55)">
       <rect width="240" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
       <text x="14" y="22" font-weight="700">memory_block</text>
-      <text x="14" y="40" class="small">RAG recall — fixed cost</text>
+      <text x="14" y="40" class="small">Open Brain recall — fixed cost</text>
       <text x="14" y="56" class="small mono muted">memory_tokens = estimate(block)</text>
     </g>
 
@@ -226,7 +226,7 @@
     <text x="20" y="58" class="small">— No LLM-driven auto-compact pass. The model never sees a fresh summary of its own history; old turns just drop off via mechanism #1.</text>
     <text x="20" y="78" class="small">— No "/compact" slash command equivalent in the TUI.</text>
     <text x="20" y="98" class="small">— No semantic dedupe of repeated tool calls.</text>
-    <text x="20" y="118" class="small">— Subagent step traces are NEVER fed back into the planner's history. The only thing that survives is the <tspan class="mono accent">compress_and_store</tspan> summary in <tspan class="mono">tengu_outputs</tspan>,</text>
+    <text x="20" y="118" class="small">— Subagent step traces are NEVER fed back into the planner's history. The only thing that survives is the <tspan class="mono accent">compress_and_store</tspan> summary in Open Brain memory,</text>
     <text x="20" y="138" class="small">  and only <tspan class="mono">RagPlanner::replan</tspan> reads it (cross-plan recall) — not the per-turn chat history.</text>
   </g>
 </svg>

@@ -2,6 +2,7 @@
 name = "tengu-cluster"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.78"
 license = "MIT"
 
 [[bin]]
@@ -25,7 +26,6 @@ sysinfo = "0.33"
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-regex-lite = "0.1"
 dirs-next = "2.0"
 bincode = "1"
 dotenvy = "0.15"
@@ -45,7 +45,7 @@ tokio-stream = "0.1"
 tempfile = "3"
 glob = "0.3"
 similar = "2"
-qdrant-client = { version = "1.14", optional = true }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-uuid-1"], optional = true }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
 dptree = { version = "0.3", optional = true }
 # Inbound webhook listener (gated by `webhooks` feature). axum is the
@@ -58,8 +58,6 @@ hmac = { version = "0.12", optional = true }
 default = ["openrouter", "telegram"]
 telegram = ["teloxide", "dptree"]
 openrouter = []
-qdrant = ["qdrant-client"]
+postgres_memory = ["tokio-postgres"]
 claude_code = []
 webhooks = ["axum", "hmac"]
-
-[dev-dependencies]

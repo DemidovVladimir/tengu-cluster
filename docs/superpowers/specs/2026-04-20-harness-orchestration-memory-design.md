@@ -115,7 +115,7 @@ src/adapters/
 │   ├── injector.rs       # for_turn(agent, query) → PinnedMemoryBlock
 │   ├── writer.rs         # sync_turn(agent, user, asst) — spawned, non-blocking
 │   ├── fencing.rs        # <memory-context> block building + sanitization
-│   ├── vector.rs         # embedding + Qdrant/bincode write/search
+│   ├── vector.rs         # embedding + legacy vector DB/bincode write/search
 │   └── context_block.rs  # shared types: PinnedMemoryBlock, metadata shapes
 │
 ├── plugins/
@@ -412,7 +412,7 @@ Channels call `Orchestrator::cancel(session_id)` which sets an `AtomicBool` on t
 
 ### 6.4 Concurrency — memory writes
 
-- `memory_ingest`: serialized at the Qdrant/bincode write layer (atomic append). No extra locking.
+- `memory_ingest`: serialized at the legacy vector DB/bincode write layer (atomic append). No extra locking.
 - `sync_turn`: detached tasks, order across concurrent workers undefined, safe (each write is self-contained).
 - `persistent_store`: SQLite `INSERT OR REPLACE` handles last-writer-wins per key.
 
@@ -491,7 +491,7 @@ Property-based fuzzing on plan shapes, cross-process tests, load testing. Revisi
 
 ### 9.2 Deleted specs / plans (already marked `D` in current `git status`)
 
-Commit the deletions on the new work branch: Phase B orchestration-collapse spec, Phase C engine/channel/store spec, Phase D context-spill-to-RAG spec, Phase E self-alignment spec + plan. All subsumed or deliberately out of scope here.
+Commit the deletions on the new work branch: Phase B orchestration-collapse spec, Phase C engine/channel/store spec, Phase D context-spill-to-Open Brain / Karpathy LLM Wiki spec, Phase E self-alignment spec + plan. All subsumed or deliberately out of scope here.
 
 ### 9.3 Phase 0 doctrine docs — scrub, not archive
 

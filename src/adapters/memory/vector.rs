@@ -1,10 +1,16 @@
-//! Vector backend for memory retrieval and ingestion.
+//! Vector backend for the in-process memory tools (`remember`,
+//! `persistent_store`, `memory_ingest` / `memory_search`).
 //!
-//! Two swappable stores, selected by config:
-//! - `disk`   — bincode file at `<workspace>/.tengu/memory.bin`
-//! - `qdrant` — REST client against a Qdrant instance
+//! | Piece | Status |
+//! |---|---|
+//! | `VectorStore` trait (below) | port; one impl |
+//! | `disk::DiskVectorStore` | the only impl — bincode file at `<workspace>/.tengu/memory.bin` |
+//! | `embedder::Embedder` | OpenRouter embeddings client; model = `embedder::DEFAULT_EMBEDDING_MODEL` |
+//! | Qdrant impl | removed Phase 6 (2026-05-14); `memory_config.backend` is no longer branched on |
 //!
-//! Both expose the `VectorStore` trait below.
+//! Durable runtime memory (planner recall, step summaries, wiki) is NOT here —
+//! it is the Postgres `agentic_memory` plugin (`plugins/agentic_memory/`,
+//! feature `postgres_memory`).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -47,33 +53,10 @@ pub trait VectorStore: Send + Sync {
     /// Approximate on-disk (or over-the-wire) size in bytes. Implementations
     /// that can't cheaply compute this may return `0`.
     async fn storage_bytes(&self) -> Result<u64>;
-
-    /// Phase 6.3 — delete every entry whose payload's `field` (a numeric
-    /// extras key like `"extra_rag_created_at"`) is strictly less than
-    /// `cutoff`. Returns the number of entries deleted (0 when nothing
-    /// matched). Implementations that can't push the filter down to the
-    /// store should return `Ok(0)` and log a debug line — callers must
-    /// not treat `0` as failure.
-    ///
-    /// The default impl is the "can't" path so each backend opts in
-    /// explicitly. Today Qdrant overrides; the disk store leaves the
-    /// default in place (filter-based delete on a flat bincode file
-    /// would mean a full rewrite — a separate cleanup story).
-    async fn delete_older_than(&self, _field: &str, _cutoff: f64) -> Result<u64> {
-        tracing::debug!(
-            "VectorStore::delete_older_than: backend has no filter-based delete; \
-             returning 0 (callers fall through to no-op)"
-        );
-        Ok(0)
-    }
 }
 
 pub mod disk;
 pub mod embedder;
-#[cfg(feature = "qdrant")]
-pub mod qdrant;
 
 pub use disk::DiskVectorStore;
 pub use embedder::Embedder;
-#[cfg(feature = "qdrant")]
-pub use qdrant::QdrantVectorStore;

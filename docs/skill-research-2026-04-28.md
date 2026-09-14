@@ -273,7 +273,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 | Turn | User | System |
 |---|---|---|
 | Setup | Teacher: `tengu skill seed german-teacher ./materials/` | Skill `german-teacher` written with `resources/` populated |
-| Day 1 | Learner: opens `tengu chat --sandbox learner`, picks German agent, drills | Conversation accumulates in `tengu_messages` with `session_id` |
+| Day 1 | Learner: opens `tengu chat --sandbox learner`, picks German agent, drills | Conversation accumulates in `agentic_memory user events` with `session_id` |
 | Day 1 end | Learner: `adjust yourself` | Plan: `skill-evaluator` → `skill-improver-inline`. Eval finds: "weak on dative". Proposal: SKILL.md adds dative focus, `state/<learner>.json` records weak topic. Approval gate. User accepts. |
 | Day 2 | Learner: opens chat, agent (using updated skill) starts on dative drills | Skill body reflects Day 1's learnings |
 | Week 1 | Learner: `adjust yourself` | Eval reads `state/<learner>.json`, finds dative now passing, proposes moving to genitive + fetches 2 new YouTube links into `resources/genitive.md` |
@@ -362,8 +362,8 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | Approval gate | `src/adapters/skill_lifecycle/approval_gate.rs` |
 | Scratch worktree | `src/adapters/skill_lifecycle/scratch_worktree.rs` |
 | CLI dispatch | `src/main.rs` (`Commands::Eval`, `SkillEvolve`, `SkillMetrics`, `SkillAcceptProposal`) |
-| Skill scanner (RAG) | `src/adapters/rag/indexer.rs::scan_skills` |
-| Legacy Hermes-style registry | `src/adapters/skill_builder.rs` (shell skills only; ignored by RAG) |
+| Skill scanner (Open Brain / Karpathy LLM Wiki) | `src/adapters/rag/indexer.rs::scan_skills` |
+| Legacy Hermes-style registry | `src/adapters/skill_builder.rs` (shell skills only; ignored by Open Brain / Karpathy LLM Wiki) |
 | Cowork reference | `/var/folders/.../skills/skill-creator/{SKILL.md,scripts/,agents/,eval-viewer/}` |
 | Hermes reference | `/Users/vladimirdemidov/development/hermes-agent/{hermes_cli,tools}/skills_hub.py` + `tools/skills_guard.py` |
 | Design spec | `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` |

@@ -125,12 +125,6 @@ pub struct Config {
     #[serde(default)]
     pub orchestrator: Option<OrchestratorConfig>,
 
-    /// RAG startup indexer configuration. Inert until Phase 1 lands a
-    /// consumer. Safe to enable early — the indexer only reads from disk
-    /// and writes to Qdrant; it never changes planner behaviour.
-    #[serde(default)]
-    pub rag: RagConfig,
-
     #[serde(default)]
     pub memory: MemoryConfig,
 
@@ -307,9 +301,6 @@ pub struct AgentConfig {
     pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
-    /// Roles this agent depends on — tasks for this agent must follow tasks from these roles.
-    #[serde(default)]
-    pub requires: Vec<String>,
     /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
     #[serde(default)]
     pub workspace_tools: Vec<String>,
@@ -474,9 +465,11 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     pub route_explicit_agents: bool,
 
-    /// Planner engine: `"static"` (legacy roster.rs/wiring.rs, default) or
-    /// `"rag"` (new RAG + subprocess runner, gated). Flipped to `"rag"` in
-    /// Phase 4 of the redesign; default flipped in Phase 5.
+    /// Planner engine. `"rag"` (default) is the only supported value — the
+    /// name is historical (Phase 4 of the redesign); the current planner is
+    /// `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`) + the
+    /// `SubprocessRunner` worker. The legacy `"static"` roster engine was
+    /// removed in Phase 7.1; any other value fails config validation.
     #[serde(default = "default_orchestrator_engine")]
     pub engine: String,
 }
@@ -488,18 +481,7 @@ fn default_max_replans() -> u32 {
     2
 }
 fn default_orchestrator_engine() -> String {
-    "static".to_string()
-}
-
-/// RAG startup indexer configuration. Inert until a consumer calls it.
-/// Safe to enable early — the indexer only reads from disk and writes
-/// to Qdrant.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RagConfig {
-    /// Enable the startup indexer (scans skills/, agents/, MCP tools,
-    /// embeds descriptions, upserts into `tengu_registry`). Off by default.
-    #[serde(default)]
-    pub enabled: bool,
+    "rag".to_string()
 }
 
 /// Telegram bot adapter configuration.
@@ -685,18 +667,6 @@ pub struct MemoryConfig {
     pub max_recall_tokens: usize,
     #[serde(default = "default_store_path")]
     pub store_path: String,
-    #[serde(default = "default_embedding_provider")]
-    pub embedding_provider: String,
-    #[serde(default = "default_memory_backend")]
-    pub backend: String,
-    #[serde(default = "default_qdrant_url")]
-    pub qdrant_url: String,
-    #[serde(default)]
-    pub qdrant_api_key: Option<String>,
-    #[serde(default = "default_qdrant_collection")]
-    pub qdrant_collection: String,
-    #[serde(default = "default_vector_size")]
-    pub vector_size: u64,
     /// Persistent store: chunk size in characters for file vectorization.
     #[serde(default = "default_persistent_store_chunk_size")]
     pub persistent_store_chunk_size: usize,
@@ -704,11 +674,6 @@ pub struct MemoryConfig {
     #[serde(default = "default_persistent_store_chunk_overlap")]
     pub persistent_store_chunk_overlap: usize,
 
-    /// TTL in days for `tengu_memory` entries. `0` means never purge
-    /// (default, MemPalace-style permanent memory). Set to a positive
-    /// integer to enable startup sweep of older messages/step outputs.
-    #[serde(default = "default_ttl_days")]
-    pub ttl_days: u64,
     /// Number of most-recent session messages the orchestrator reloads
     /// each turn (by `session_id`, ordered by timestamp) for multi-turn
     /// dialogue coherence. Deterministic, not vector-search based.
@@ -753,15 +718,8 @@ impl Default for MemoryConfig {
             max_recall_entries: default_max_recall_entries(),
             max_recall_tokens: default_max_recall_tokens(),
             store_path: default_store_path(),
-            embedding_provider: default_embedding_provider(),
-            backend: default_memory_backend(),
-            qdrant_url: default_qdrant_url(),
-            qdrant_api_key: None,
-            qdrant_collection: default_qdrant_collection(),
-            vector_size: default_vector_size(),
             persistent_store_chunk_size: default_persistent_store_chunk_size(),
             persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
-            ttl_days: default_ttl_days(),
             session_recent_n: default_session_recent_n(),
             cross_plan_top_k: default_cross_plan_top_k(),
             cross_session_msg_top_k: default_cross_session_msg_top_k(),
@@ -770,9 +728,6 @@ impl Default for MemoryConfig {
     }
 }
 
-fn default_ttl_days() -> u64 {
-    0
-}
 fn default_session_recent_n() -> usize {
     10
 }
@@ -787,7 +742,7 @@ fn default_within_session_output_top_k() -> usize {
 }
 
 fn default_embedding_model() -> String {
-    "text-embedding-3-small".to_string()
+    crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL.to_string()
 }
 fn default_max_recall_entries() -> usize {
     5
@@ -797,25 +752,6 @@ fn default_max_recall_tokens() -> usize {
 }
 fn default_store_path() -> String {
     "~/.tengu/memory/".to_string()
-}
-fn default_embedding_provider() -> String {
-    "openrouter".to_string()
-}
-
-fn default_memory_backend() -> String {
-    "disk".to_string()
-}
-
-fn default_qdrant_url() -> String {
-    "http://localhost:6334".to_string()
-}
-
-fn default_qdrant_collection() -> String {
-    "tengu-memory".to_string()
-}
-
-fn default_vector_size() -> u64 {
-    1536
 }
 
 fn default_persistent_store_chunk_size() -> usize {
@@ -945,9 +881,36 @@ impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
         let content = Self::substitute_env_vars(&content)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
         config.validate()?;
+        config.fold_default_scopes();
         Ok(config)
+    }
+
+    /// Post-load normalisation: fold `[default_scopes]` into every agent's
+    /// `scopes` map (per-agent entries win wholesale, never field-merged) and
+    /// expand `~` in `fs_roots`. `build_tool_executor` only holds an
+    /// `AgentConfig`, so the fallback has to be materialised here — mirrors
+    /// what `agent_config_from_spec` does for subprocess children.
+    pub fn fold_default_scopes(&mut self) {
+        for agent in self.agents.values_mut() {
+            for (tool, scope) in &self.default_scopes {
+                agent
+                    .scopes
+                    .entry(tool.clone())
+                    .or_insert_with(|| scope.clone());
+            }
+            for scope in agent.scopes.values_mut() {
+                for root in scope.fs_roots.iter_mut() {
+                    *root = crate::adapters::tool_builder::expand_tilde(root);
+                }
+            }
+        }
+        for scope in self.default_scopes.values_mut() {
+            for root in scope.fs_roots.iter_mut() {
+                *root = crate::adapters::tool_builder::expand_tilde(root);
+            }
+        }
     }
 
     /// Validate cross-field configuration invariants.
@@ -995,6 +958,10 @@ impl Config {
         let default_count = self.agents.values().filter(|agent| agent.default).count();
         if default_count > 1 {
             errors.push("only one agent can have default=true");
+        }
+
+        if let Some(orch) = &self.orchestrator {
+            errors.require_one_of("orchestrator.engine", &orch.engine, &["rag"]);
         }
 
         self.agents.iter().for_each(|(agent_id, agent)| {
@@ -1138,7 +1105,14 @@ impl Config {
             format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
         );
 
-        let valid_workspace_tools = ["shared_cache", "persistent_store", "skill_distill"];
+        let valid_workspace_tools = [
+            "agentic_memory",
+            "shared_cache",
+            "persistent_store",
+            "skill_distill",
+            "apply_improver_proposal",
+            "manage_skill",
+        ];
         for wt in &agent.workspace_tools {
             if !valid_workspace_tools.contains(&wt.as_str()) {
                 errors.push(format!(
@@ -1152,7 +1126,7 @@ impl Config {
 
     fn substitute_env_vars(content: &str) -> anyhow::Result<String> {
         let mut result = content.to_string();
-        let re = regex_lite::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+        let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
 
         for cap in re.captures_iter(content) {
             let full_match = cap.get(0).unwrap().as_str();
@@ -1200,7 +1174,6 @@ impl Default for Config {
                 role: None,
                 skill_packages: vec![],
                 prompt_budget: PromptBudgetConfig::default(),
-                requires: vec![],
                 workspace_tools: vec![],
                 scopes: HashMap::new(),
                 claude_code: None,
@@ -1212,7 +1185,6 @@ impl Default for Config {
             hub: HubConfig::default(),
             agents,
             orchestrator: None,
-            rag: RagConfig::default(),
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             webhooks: WebhookConfig::default(),
@@ -1268,8 +1240,7 @@ agent = "aura"
 secret = "literal-dev-secret"
 "#;
         let parsed: toml::Value = toml::from_str(toml_str).unwrap();
-        let webhooks: WebhookConfig =
-            parsed.get("webhooks").unwrap().clone().try_into().unwrap();
+        let webhooks: WebhookConfig = parsed.get("webhooks").unwrap().clone().try_into().unwrap();
         assert!(webhooks.enabled);
         assert_eq!(webhooks.bind, "0.0.0.0");
         assert_eq!(webhooks.port, 9000);
@@ -1312,8 +1283,7 @@ secret = "literal-dev-secret"
         let mem: MemoryConfig = mem_section.try_into().unwrap();
         assert_eq!(mem.within_session_output_top_k, 0);
 
-        let toml_str_with =
-            "[memory]\nenabled = true\nwithin_session_output_top_k = 4\n";
+        let toml_str_with = "[memory]\nenabled = true\nwithin_session_output_top_k = 4\n";
         let parsed: toml::Value = toml::from_str(toml_str_with).unwrap();
         let mem_section = parsed.get("memory").unwrap().clone();
         let mem: MemoryConfig = mem_section.try_into().unwrap();
@@ -1339,6 +1309,57 @@ secret = "literal-dev-secret"
 
         let err = config.validate().expect_err("expected validation error");
         assert!(err.to_string().contains("engine must be one of"));
+    }
+
+    #[test]
+    fn orchestrator_engine_defaults_to_rag() {
+        let toml_str = r#"
+[orchestrator]
+agent = "main"
+"#;
+        let parsed: toml::Value = toml::from_str(toml_str).unwrap();
+        let orch: OrchestratorConfig = parsed
+            .get("orchestrator")
+            .unwrap()
+            .clone()
+            .try_into()
+            .unwrap();
+        assert_eq!(orch.engine, "rag");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_orchestrator_engine() {
+        let mut config = Config::default();
+        config.orchestrator = Some(OrchestratorConfig {
+            agent: "main".to_string(),
+            max_attempts_per_step: default_max_attempts_per_step(),
+            max_replans: default_max_replans(),
+            route_explicit_agents: false,
+            engine: "static".to_string(),
+        });
+        let err = config.validate().expect_err("expected validation error");
+        assert!(err
+            .to_string()
+            .contains("orchestrator.engine must be one of"));
+
+        config.orchestrator.as_mut().unwrap().engine = "rag".to_string();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn memory_config_ignores_removed_qdrant_keys() {
+        // Sandbox configs written before Phase 6 may still carry the old
+        // Qdrant-era keys; `MemoryConfig` has no `deny_unknown_fields`, so
+        // they must parse cleanly (and be ignored).
+        let toml_str = r#"
+enabled = true
+backend = "disk"
+qdrant_url = "http://localhost:6334"
+vector_size = 1536
+ttl_days = 7
+"#;
+        let cfg: MemoryConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.enabled);
     }
 
     #[test]
@@ -1471,6 +1492,40 @@ secret = "literal-dev-secret"
         let config: Config = toml::from_str(toml_str).expect("should parse");
         let scope = config.resolve_scope("main", "read_file").unwrap();
         assert_eq!(scope.fs_roots.len(), 1);
+    }
+
+    #[test]
+    fn fold_default_scopes_materialises_fallback_per_agent() {
+        let toml_str = r#"
+            runtime_profile = "auto"
+
+            [default_scopes.read_file]
+            fs_roots = ["~/ws"]
+
+            [default_scopes.write_file]
+            fs_roots = ["./global"]
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4-6"
+
+            [agents.main.scopes.write_file]
+            fs_roots = ["./agent-specific"]
+        "#;
+        let mut config: Config = toml::from_str(toml_str).expect("should parse");
+        config.fold_default_scopes();
+        let scopes = &config.agents["main"].scopes;
+        // Unconfigured tool inherits the default entry.
+        assert_eq!(scopes["read_file"].fs_roots.len(), 1);
+        // `~` is expanded so `ToolScope::check_fs` matches canonical paths.
+        assert!(!scopes["read_file"].fs_roots[0].starts_with("~"));
+        // Per-agent entry wins wholesale over the default.
+        assert_eq!(scopes["write_file"].fs_roots.len(), 1);
+        assert_eq!(
+            scopes["write_file"].fs_roots[0].to_str().unwrap(),
+            "./agent-specific"
+        );
     }
 
     #[test]

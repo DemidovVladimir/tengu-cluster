@@ -80,10 +80,9 @@ impl ToolScope {
 
     pub(crate) fn check_net_host(&self, host: &str) -> anyhow::Result<()> {
         for pattern in &self.net_hosts {
-            // `"*"` is an allow-any wildcard — used by the A1 migration-window
-            // `permissive_scope` to preserve pre-Phase-A behaviour where http
-            // access was ungated. Mirrors the `check_shell_bin` wildcard.
-            // TODO(Phase B): drop once per-agent net_hosts land.
+            // `"*"` is an allow-any wildcard — used by `permissive_scope`
+            // (the fallback for tools with no configured scope) to keep http
+            // access ungated. Mirrors the `check_shell_bin` wildcard.
             if pattern == "*" {
                 return Ok(());
             }
@@ -105,8 +104,13 @@ impl ToolScope {
         )
     }
 
+    /// Check whether `var` is allowed by this scope's `env_reads` list.
+    ///
+    /// `"*"` is an allow-any wildcard — used by `permissive_scope` (the
+    /// fallback for tools with no configured scope) to keep env reads
+    /// ungated. Mirrors the `check_net_host` / `check_shell_bin` wildcard.
     pub(crate) fn check_env_read(&self, var: &str) -> anyhow::Result<()> {
-        if self.env_reads.iter().any(|v| v == var) {
+        if self.env_reads.iter().any(|v| v == "*" || v == var) {
             return Ok(());
         }
         anyhow::bail!(
@@ -118,9 +122,9 @@ impl ToolScope {
 
     /// Check whether `bin` is allowed by this scope's `shell_bins` list.
     ///
-    /// `"*"` is an allow-any wildcard — used by the A1 migration-window
-    /// `permissive_scope` to preserve pre-Phase-A behaviour where shell access
-    /// was ungated. Real per-agent shell allow-lists arrive with Phase B.
+    /// `"*"` is an allow-any wildcard — used by `permissive_scope` (the
+    /// fallback for tools with no configured scope) to keep shell access
+    /// ungated. Per-agent `[agents.*.scopes.<tool>].shell_bins` narrows it.
     ///
     /// Callers must guard against empty-string `bin` values themselves
     /// (`run_command` rejects empty commands before reaching this check).
@@ -352,6 +356,16 @@ mod tests {
             ..Default::default()
         };
         assert!(scope.check_env_read("SECRET_TOKEN").is_err());
+    }
+
+    #[test]
+    fn env_wildcard_allows_any_var() {
+        let scope = ToolScope {
+            env_reads: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(scope.check_env_read("API_KEY").is_ok());
+        assert!(scope.check_env_read("ANY_OTHER_VAR").is_ok());
     }
 
     #[test]

@@ -4,12 +4,11 @@ Run this at the end of every implementation phase. Both the TUI and Telegram cha
 
 ## Pre-flight
 
-- [ ] `bash scripts/phase-0-checks.sh` exits 0
 - [ ] `cargo build --release` completes with no errors or warnings
 - [ ] `cargo test` passes with no failures
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] `tests/scope_lint.rs` passes (required structural test for the repo)
-- [ ] Qdrant reachable: `curl http://localhost:6334/collections` returns HTTP 200
+- [ ] (with `--features postgres_memory`) Postgres reachable: `psql "$TENGU_MEMORY_DATABASE_URL" -c 'select count(*) from agentic_memory'` succeeds
 - [ ] `git status --short` shows only the changes expected for the current phase
 
 ## TUI smoke (default agent)
@@ -17,7 +16,7 @@ Run this at the end of every implementation phase. Both the TUI and Telegram cha
 Launch with `cargo run -- chat`. The TUI must come up without a panic and present a prompt.
 
 - [ ] `> hello` produces a direct conversational response in under 5 seconds
-- [ ] `> what agents do you have?` lists agents from the roster (static mode) or returns RAG hits (rag mode), matching the mode configured for this phase
+- [ ] `> what agents do you have?` lists agents from the roster (static mode) or returns Open Brain / Karpathy LLM Wiki hits (legacy planner mode), matching the mode configured for this phase
 - [ ] `> research what LLMs were released in April 2026 and summarise the top 3` produces a visible plan, step events fire as the plan executes, and a final synthesised response is delivered
 - [ ] `> /quit` exits the TUI cleanly with no panic and no dangling processes
 
@@ -46,11 +45,11 @@ Launch with `cargo run -- telegram --sandbox aura`. The sandbox flag must take e
 - [ ] A short message from the phone gets a coherent reply grounded in the aura sandbox context
 - [ ] Ctrl-C shuts down cleanly
 
-## Debug probes (become available in later phases)
+## Debug probes
 
-- [ ] `tengu registry list` (Phase 1+): lists compiled-in tools + MCP tools + agents + skills
-- [ ] `tengu registry search "<query>"` (Phase 1+): returns top-10 ranked entries
-- [ ] Qdrant dashboard at http://localhost:6334/dashboard shows `tengu_registry`, `tengu_messages`, `tengu_outputs` (Phase 1–2)
+- [ ] `TENGU_PLANNER_REGISTRY.md` at the repo root is regenerated on a planner turn and lists agents + skills + core tools
+- [ ] `TENGU_PLAN.md` at the repo root holds the last accepted plan
+- [ ] (with `--features postgres_memory`) step summaries landed: `psql "$TENGU_MEMORY_DATABASE_URL" -c "select session_id, agent, left(content, 80) from agentic_memory order by created_at desc limit 5"`
 
 ## Regression baselines
 

@@ -1,17 +1,23 @@
 # Tengu-Cluster: Redesign Briefing for Implementation
 
+> **Superseded note (2026-05-14):** this is the old retrieval-first design
+> brief. Current doctrine is **LLM = heart, Open Brain + Karpathy LLM Wiki =
+> brain, tools = hands**. Planner routing is file-backed via
+> `TENGU_PLANNER_REGISTRY.md`; live memory is Postgres `agentic_memory`;
+> stable knowledge compiles to Markdown wiki pages.
+>
 > **Status (2026-04-25): functionally complete and end-to-end verified.**
 >
 > Phases 0, 1, 2, 3, 4, 4b, 4c, 5a, 5b, 5c, 6.1 (lite), 6.4 (lite), and
 > 6.5 are merged and proven working: a real BTC USD price was fetched via
-> the rag-mode pipeline (RagPlanner → SubprocessRunner → real LLM →
+> the legacy planner mode pipeline (RagPlanner → SubprocessRunner → real LLM →
 > `http_request` → CoinGecko → `compress_and_store`). Multi-turn context
-> works in rag mode via an in-memory ring buffer of recent user messages
+> works in legacy planner mode via an in-memory ring buffer of recent user messages
 > in `RagPlanner` (6.4 lite). The static path is preserved.
 >
 > Remaining items are polish, not capability: 6.1 (full event-bus
 > RagQueried), 6.2 (content-hash dedup), 6.3 (filter-based TTL purge),
-> 6.4 (full — durable persistence to `tengu_messages` keyed by
+> 6.4 (full — durable persistence to `agentic_memory user events` keyed by
 > `session_id`), 6.6 (MCP tool indexing), 6.7 (C→B fallback B half),
 > 7.1 (delete legacy), 7.2 (v1 dead-code cleanup).
 >
@@ -33,7 +39,7 @@ via a DAG planner.
 The codebase is "vibecoded" — architecturally coherent principles but the implementation
 accumulated dead weight: hardcoded agent rosters, per-sandbox config directories, static
 system prompts, and no semantic discovery. The redesign strips this away and replaces it
-with a single central authority: **Qdrant RAG**.
+with a single central authority: **Open Brain / Karpathy LLM Wiki**.
 
 ### What exists today (v1) — the problems
 
@@ -57,14 +63,14 @@ Three principles. Every PR is reviewed against them. Violating any one blocks th
 It consumes tokens and emits tokens. It has no behaviour of its own. The Rust core never
 hard-codes behaviour that belongs to the model.
 
-### Principle 2 — RAG is the brain
+### Principle 2 — Open Brain / Karpathy LLM Wiki is the brain
 
-Everything the system knows lives in the RAG store: skill descriptions, agent specs, tool
+Everything the system knows lives in the Open Brain / Karpathy LLM Wiki store: skill descriptions, agent specs, tool
 descriptions, user messages, step outputs. The orchestrator never loads everything into
-context — it queries Qdrant for what is relevant to the current task and loads only that.
+context — it queries legacy vector DB for what is relevant to the current task and loads only that.
 Context stays small by design.
 
-Corollary: if something needs to influence agent behaviour, it must be in the RAG store or
+Corollary: if something needs to influence agent behaviour, it must be in the Open Brain / Karpathy LLM Wiki store or
 in a skill body. There is no other path.
 
 ### Principle 3 — Tools and MCP are the hands
@@ -87,33 +93,33 @@ do not file a PR. **If behaviour requires a PR to change, that is a doctrine vio
 Startup
   ├── scan skills/, agents/
   ├── connect to each MCP server → tools/list
-  ├── embed descriptions → Qdrant (tengu_registry, permanent)
-  ├── TTL cleanup: delete from tengu_messages/tengu_outputs older than ttl_days
+  ├── embed descriptions → legacy vector DB (TENGU_PLANNER_REGISTRY.md, permanent)
+  ├── TTL cleanup: delete from agentic_memory user events/agentic_memory step outputs older than ttl_days
   │   (skipped entirely if ttl_days == 0 — the default)
-  └── if tengu_registry empty → cold-start fallback (see §16)
+  └── if TENGU_PLANNER_REGISTRY.md empty → cold-start fallback (see §16)
 
 User message arrives (TUI / Telegram)
   │
-  ├── embed message → store in tengu_messages (ttl_days if > 0, else permanent)
+  ├── embed message → store in agentic_memory user events (ttl_days if > 0, else permanent)
   │
   ├── Orchestrator loads:
   │     skills/orchestrator/SKILL.md       ← system prompt (user-editable)
   │     skills/orchestrator/plan_schema.json ← plan output contract (harness-validated)
   │
-  ├── Orchestrator calls RAG:
+  ├── Orchestrator calls Open Brain / Karpathy LLM Wiki:
   │     query = embed(user_message)
-  │     results = qdrant.search(tengu_registry, query, top_k=20)
+  │     results = qdrant.search(TENGU_PLANNER_REGISTRY.md, query, top_k=20)
   │     → ranked list of agents + skills + tools by cosine similarity
   │
   ├── Orchestrator loads recent dialogue (deterministic, not vector):
-  │     qdrant.scroll(tengu_messages,
+  │     qdrant.scroll(agentic_memory user events,
   │                   filter: session_id == this_session,
   │                   order: created_at DESC,
   │                   limit: session_recent_n)
   │
   ├── If no agent above similarity threshold:
   │     C → ask user: "Closest match is X (confidence Y%). Use it or describe what you need?"
-  │     user confirms → B → compose generic agent from closest-matching spec + top RAG hits
+  │     user confirms → B → compose generic agent from closest-matching spec + top Open Brain / Karpathy LLM Wiki hits
   │     (composed config used for this run only — not persisted unless user asks)
   │
   ├── Orchestrator LLM call:
@@ -143,7 +149,7 @@ User message arrives (TUI / Telegram)
                   workspace = spec.sandbox path OR temp dir (default)
                   runs until: compress_and_store called OR max_turns OR error
                 on compress_and_store(summary):
-                  write to tengu_outputs (Qdrant)
+                  write to agentic_memory step outputs
                   type: "step_output", session_id, step_id, created_at
                 exit → stdout JSON:
                   ok:     { status:"ok", output:"<full text>", summary:"<compressed>" }
@@ -152,10 +158,10 @@ User message arrives (TUI / Telegram)
         DagExecutor tracks:
           completed_outputs: HashMap<StepId, String>
           ← EXACT, in-memory. Used for within-plan step dependency injection.
-          ← NOT RAG. NOT fuzzy. Always reliable for direct dependencies.
+          ← NOT Open Brain / Karpathy LLM Wiki. NOT fuzzy. Always reliable for direct dependencies.
 
         On step failure:
-          NeedsReplan → orchestrator queries tengu_outputs for context
+          NeedsReplan → orchestrator queries agentic_memory step outputs for context
                       → replan(user_message, prior_plan, failed_step, error)
                       → repeat until max_replans reached
 
@@ -196,12 +202,12 @@ The orchestrator has NO agent spec file. It is the entry point — hardcoded to 
 
 ---
 
-## 5. Qdrant Collections
+## 5. legacy vector DB Collections
 
 Three collections — registry for permanent stuff, messages and outputs split so signal
 and noise stay apart.
 
-### tengu_registry (permanent — skills, agents, tools)
+### TENGU_PLANNER_REGISTRY.md (permanent — skills, agents, tools)
 
 ```
 payload:
@@ -212,9 +218,9 @@ payload:
   description:  string      ← the text that was embedded
 ```
 
-### tengu_messages (raw user turns, noisy)
+### agentic_memory user events (raw user turns, noisy)
 
-### tengu_outputs (step summaries + file chunks, high signal)
+### agentic_memory step outputs (step summaries + file chunks, high signal)
 
 ```
 payload (both):
@@ -231,8 +237,8 @@ purge runs at startup before indexing:
 ```rust
 if cfg.memory.ttl_days > 0 {
     let cutoff = Utc::now() - Duration::days(cfg.memory.ttl_days as i64);
-    qdrant.delete(collection: "tengu_messages", filter: created_at < cutoff);
-    qdrant.delete(collection: "tengu_outputs",  filter: created_at < cutoff);
+    qdrant.delete(collection: "agentic_memory user events", filter: created_at < cutoff);
+    qdrant.delete(collection: "agentic_memory step outputs",  filter: created_at < cutoff);
 }
 ```
 
@@ -272,7 +278,7 @@ timeout_secs = 180
 # sandbox = "workspaces/researcher"
 ```
 
-The `description` field IS what gets embedded in `tengu_registry`. Write it for semantic
+The `description` field IS what gets embedded in `TENGU_PLANNER_REGISTRY.md`. Write it for semantic
 search: what tasks the agent handles, what it is NOT good for. More specific = better recall.
 
 ---
@@ -317,7 +323,7 @@ Success:
 {
   "status":  "ok",
   "output":  "<full agent text output — may be long>",
-  "summary": "<compressed summary already written to Qdrant by compress_and_store>"
+  "summary": "<compressed summary already written to legacy vector DB by compress_and_store>"
 }
 ```
 
@@ -404,7 +410,7 @@ Compiled-in. Always registered for every subagent. Not optional. Not user-config
 ```
 
 On call:
-1. Writes `{summary}` to `tengu_outputs` (Qdrant), payload: `type:"step_output"`, `session_id`, `step_id`, `created_at:now`
+1. Writes `{summary}` to `agentic_memory step outputs` (legacy vector DB), payload: `type:"step_output"`, `session_id`, `step_id`, `created_at:now`
 2. Sets an internal flag in the runner
 3. Runner checks this flag when mini-loop ends — if set, step completed cleanly
 
@@ -469,8 +475,8 @@ message — retrying with the same prompt produces the same failure.
 
 ## 10. Orchestrator Skill (User Action Required)
 
-`skills/orchestrator/SKILL.md` must be rewritten by the user to match the new RAG-based
-roster input. The harness no longer passes a static roster — it passes the top-K RAG
+`skills/orchestrator/SKILL.md` must be rewritten by the user to match the new Open Brain / Karpathy LLM Wiki-based
+roster input. The harness no longer passes a static roster — it passes the top-K Open Brain / Karpathy LLM Wiki
 results in this format:
 
 ```
@@ -510,7 +516,7 @@ not code. The harness loads whatever is there at runtime.
 ```markdown
 ---
 name: orchestrator
-description: "Plans and dispatches multi-agent work from a ranked RAG roster."
+description: "Plans and dispatches multi-agent work from a ranked Open Brain / Karpathy LLM Wiki roster."
 ---
 
 You are the orchestrator for the tengu-cluster harness. For every user message
@@ -546,7 +552,7 @@ file-based so no PR is needed.
 
 ## 11. Unknown Agent Fallback (C → B)
 
-When RAG returns no agent above the similarity threshold (configurable, default 0.6):
+When Open Brain / Karpathy LLM Wiki returns no agent above the similarity threshold (configurable, default 0.6):
 
 **Step C** — Orchestrator LLM outputs a question to the user:
 > "I don't have an agent for this task. The closest I have is `researcher`
@@ -556,7 +562,7 @@ When RAG returns no agent above the similarity threshold (configurable, default 
 **Step B** — After user responds and confirms:
 - Orchestrator composes a generic agent config on the fly
 - Base: closest-matching `.toml` spec
-- Augmented with highest-scoring skills and tools from the RAG results
+- Augmented with highest-scoring skills and tools from the Open Brain / Karpathy LLM Wiki results
 - Config used for this run only — NOT persisted as a new agent spec
 - Unless user explicitly says "save this as a new agent" — then the runner writes
   `agents/<user-provided-name>.toml` and triggers re-indexing
@@ -569,8 +575,8 @@ Remove these. Their functionality is replaced or deferred.
 
 | Delete | Reason |
 |--------|--------|
-| `src/adapters/orchestrator/roster.rs` | Replaced by RAG |
-| `src/adapters/orchestrator/wiring.rs` | Replaced by RAG + runner.rs |
+| `src/adapters/orchestrator/roster.rs` | Replaced by Open Brain / Karpathy LLM Wiki |
+| `src/adapters/orchestrator/wiring.rs` | Replaced by Open Brain / Karpathy LLM Wiki + runner.rs |
 | `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 |
 | `src/adapters/eval_builder.rs` | Deferred → move to `tengu/ideas/` |
 | `src/adapters/skill_lifecycle/evolve.rs` | Deferred → move to `tengu/ideas/` (path verified — evolve.rs lives under `skill_lifecycle/`, NOT under `plugins/skill_lifecycle/`) |
@@ -599,7 +605,7 @@ violation.
 | `src/adapters/plugins/` (all) | Compiled-in tools unchanged |
 | `src/adapters/plugins/skill_lifecycle/distill.rs` | skill_distill tool — keep, working |
 | `src/adapters/plugins/skill_lifecycle/metrics.rs` | Keep for skill evals |
-| `src/adapters/memory/` | Elevated to central RAG authority |
+| `src/adapters/memory/` | Elevated to central Open Brain / Karpathy LLM Wiki authority |
 | `src/adapters/tui/` | Unchanged |
 | `src/adapters/telegram_builder.rs` | Unchanged |
 | `src/adapters/mcp/` | Unchanged |
@@ -618,7 +624,7 @@ pub trait WorkerHandle: Send + Sync {
 }
 
 // completed_outputs: HashMap<StepId, String>
-// This is EXACT in-memory lookup. NOT replaced by RAG.
+// This is EXACT in-memory lookup. NOT replaced by Open Brain / Karpathy LLM Wiki.
 // Used for injecting prior step outputs into dependent steps.
 // FuturesUnordered for parallel dispatch. Keep all of this.
 ```
@@ -640,7 +646,7 @@ pub enum OrchestratorEvent {
     ReplanTriggered { reason: String },
     PlanCompleted   { final_response: String, cancelled: bool },
 
-    // NEW — emitted before every planner LLM call, captures RAG input.
+    // NEW — emitted before every planner LLM call, captures Open Brain / Karpathy LLM Wiki input.
     // Lets the user see which agents/skills/tools the planner had in hand.
     RagQueried      {
         query:   String,
@@ -655,16 +661,16 @@ pub type EventBus = broadcast::Sender<OrchestratorEvent>;
 ## 14. New Modules to Build
 
 > **Framing note, 2026-04-24:** `src/adapters/memory/` already contains a working
-> `QdrantVectorStore` plus a full memory manager/provider. The "RAG layer" below is
+> `QdrantVectorStore` plus a full memory manager/provider. The "Open Brain / Karpathy LLM Wiki layer" below is
 > best built as a thin facade on top of that, not as a parallel stack. Think
-> "promote memory to central RAG" rather than "write RAG from scratch."
+> "promote memory to central Open Brain / Karpathy LLM Wiki" rather than "write Open Brain / Karpathy LLM Wiki from scratch."
 
 ### `src/adapters/rag/mod.rs`
 
-RAG facade. Public API:
+legacy vector facade. Public API:
 
 ```rust
-pub struct RagStore { /* Qdrant client + config */ }
+pub struct RagStore { /* legacy vector DB client + config */ }
 
 impl RagStore {
     pub async fn startup_index(&self, skills: &[Skill], agents: &[AgentSpec], tools: &[ToolDef]) -> Result<()>;
@@ -698,7 +704,7 @@ content_hash (sha256 of description). Only embeds changed or new entries.
 
 ### `src/adapters/rag/query.rs`
 
-Thin wrapper over Qdrant search. Deserializes payload into `RagResult`.
+Thin wrapper over legacy vector DB search. Deserializes payload into `RagResult`.
 
 ### `src/adapters/rag/cleanup.rs`
 
@@ -762,7 +768,7 @@ Add `run-agent` subcommand that:
 4. Assembles system prompt (base + skills + mandatory suffix)
 5. Resolves tools: `(spec.tools ∩ ipc.tools) ∪ {compress_and_store}`
 6. Runs LLM mini-loop
-7. On `compress_and_store` call: stores to Qdrant, sets flag
+7. On `compress_and_store` call: stores to legacy vector DB, sets flag
 8. Writes stdout JSON (`AgentIpcOutput`) and exits
 
 ---
@@ -783,13 +789,13 @@ Two-layer enforcement stays exactly as-is:
 
 ## 16. Cold Start Fallback
 
-On startup, if `tengu_registry` returns zero results for any query:
+On startup, if `TENGU_PLANNER_REGISTRY.md` returns zero results for any query:
 
-1. Log warning: `[tengu] RAG registry empty — falling back to sandbox config`
+1. Log warning: `[tengu] Open Brain / Karpathy LLM Wiki registry empty — falling back to sandbox config`
 2. Load agent configs from `sandboxes/*/config.toml` (still present: `aura`,
    `storage-test`) — parse their `[agents.*]` blocks and use them as the static
    roster for this session only.
-3. Background-index from `skills/` and `agents/` anyway; next session uses RAG.
+3. Background-index from `skills/` and `agents/` anyway; next session uses Open Brain / Karpathy LLM Wiki.
 
 This is a temporary compatibility shim, unchanged from v1 behaviour. Sandbox
 directories are not deleted automatically — the user migrates at their own pace
@@ -807,24 +813,24 @@ Migration steps (happens in Phase 2 of IMPLEMENTATION_PLAN.md):
 ## 17. Memory Lifecycle Summary
 
 ```
-tengu_registry (permanent — never expires)
+TENGU_PLANNER_REGISTRY.md (permanent — never expires)
   Written: startup indexer
   Read: orchestrator planning, unknown agent fallback
   Deleted: only when source file is deleted (detected by missing source_path on next startup)
 
 tengu_memory (TTL configurable — default 0 = never purge; set ttl_days > 0 to opt in)
   Two sub-collections to keep signal/noise apart:
-    tengu_messages   ← raw user messages (high noise, conversational)
-    tengu_outputs    ← compress_and_store summaries + file chunks (high signal)
+    agentic_memory user events   ← raw user messages (high noise, conversational)
+    agentic_memory step outputs    ← compress_and_store summaries + file chunks (high signal)
   Written by:
-    - User message handler       → tengu_messages (each user turn)
-    - compress_and_store tool    → tengu_outputs  (step completion)
-    - File input handler         → tengu_outputs  (user uploads, chunked)
+    - User message handler       → agentic_memory user events (each user turn)
+    - compress_and_store tool    → agentic_memory step outputs  (step completion)
+    - File input handler         → agentic_memory step outputs  (user uploads, chunked)
   Read by:
-    - Orchestrator on user message → tengu_messages, last N for same session_id
+    - Orchestrator on user message → agentic_memory user events, last N for same session_id
                                      (N default = 10, configurable), injected into
                                      system prompt as "recent dialogue" block
-    - Orchestrator on replan       → tengu_outputs, fuzzy RAG top_k for planner context
+    - Orchestrator on replan       → agentic_memory step outputs, fuzzy Open Brain / Karpathy LLM Wiki top_k for planner context
   Purged: at startup, all entries older than the configured TTL (no-op if ttl_days == 0)
 ```
 
@@ -832,10 +838,10 @@ tengu_memory (TTL configurable — default 0 = never purge; set ttl_days > 0 to 
 N messages for the current `session_id` by `created_at` ORDER BY desc, not by vector
 similarity. Conversational coherence does not depend on embedding quality.
 
-**Cross-plan recall** is fuzzy (vector search on `tengu_outputs` only — never on
-`tengu_messages`, to avoid noise pollution). It is supplemental to the planner LLM —
+**Cross-plan recall** is fuzzy (vector search on `agentic_memory step outputs` only — never on
+`agentic_memory user events`, to avoid noise pollution). It is supplemental to the planner LLM —
 hints, not hard data. The exact data (step output text) is always in
-`completed_outputs: HashMap<StepId, String>` in DagExecutor — never go to Qdrant for that.
+`completed_outputs: HashMap<StepId, String>` in DagExecutor — never go to legacy vector DB for that.
 
 ### Config
 
@@ -859,7 +865,7 @@ embedding_model     = "openai/text-embedding-3-small"
 Execute in order. Each phase is independently shippable (tests pass, binary builds).
 
 - **Phase 0** — baseline & safety net. Record current TUI + Telegram behaviour; add inert config scaffolding.
-- **Phase 1** — RAG facade + Qdrant collections (read-only).
+- **Phase 1** — legacy vector facade (read-only).
 - **Phase 2** — agents + skills on disk (indexed, unused).
 - **Phase 3** — runner subprocess + `compress_and_store` (standalone, unused).
 - **Phase 4** — dual-mode orchestrator (flag-gated cutover).
@@ -885,7 +891,7 @@ scope manageable:
   → MCP bridge already exists; user configures `config.toml` directly
 - **MemPalace integration** — considered and parked (see IMPLEMENTATION_PLAN.md
   "Deferred decisions"). Revisit after Phase 5; plugs in as an MCP server without
-  rewriting the Qdrant code.
+  rewriting the legacy vector DB code.
 
 ---
 
@@ -899,7 +905,7 @@ it in a comment but implement what is specified here.
 | Orchestrator context growth | Clean context before each new orchestrator prompt | Prevents unbounded context growth; orchestrator is stateless per turn |
 | Who compresses subagent output | Subagent itself (no extra LLM call) | Zero added latency; LLM already knows what it did; model writes summary as final tool call |
 | Cold start | Fallback to sandbox configs temporarily | Backwards compatibility; user migrates at their own pace |
-| When to index new files | At startup + when user provides files via channel | RAG is the central authority; all user-provided content goes into memory immediately |
+| When to index new files | At startup + when user provides files via channel | Open Brain / Karpathy LLM Wiki is the central authority; all user-provided content goes into memory immediately |
 | Plan schema location | File beside SKILL.md (`plan_schema.json`) | User can read it; version-controlled; harness loads from disk |
 | Agent spec format | `.toml` files in `agents/` | Simple, readable, file-based — no Rust changes to add an agent |
 | Unknown agent handling | C → B | Ask user first (C), then compose generic agent (B); never silently use wrong agent |
@@ -908,9 +914,9 @@ it in a comment but implement what is specified here.
 | Skill/tool storage duration | Skills, agents, tools = permanent; conversations/outputs/files = configurable TTL (default 0 = never) | Registry is configuration; memory defaults to permanent, opt-in expiry |
 | Event bus | Keep — `tokio::sync::broadcast` | TUI and Telegram both subscribe; subprocess model doesn't eliminate the need for streaming |
 | MCP tools | User configures `config.toml` | MCP bridge already exists; no new infrastructure needed |
-| Within-plan step dependencies | Exact `HashMap<StepId, String>` — NOT RAG | Correctness-critical; fuzzy search is wrong for "step A's exact output → step B's input" |
+| Within-plan step dependencies | Exact `HashMap<StepId, String>` — NOT Open Brain / Karpathy LLM Wiki | Correctness-critical; fuzzy search is wrong for "step A's exact output → step B's input" |
 | compress_and_store enforcement | Harness appends mandatory suffix (Option C) | Skill-independent; harness-enforced; LLM cannot avoid it regardless of skill content |
-| Memory collections | Split `tengu_messages` (noise) from `tengu_outputs` (signal) | Fuzzy cross-plan recall queries only the high-signal collection |
+| Memory collections | Split `agentic_memory user events` (noise) from `agentic_memory step outputs` (signal) | Fuzzy cross-plan recall queries only the high-signal collection |
 | Multi-turn dialogue | Deterministic last-N by session_id + timestamp | Conversational coherence does not depend on embedding quality |
 | compress_and_store on IPC | Implicit, not in stdin tools list | Trust boundary: runner intersects stdin with spec + always adds compress_and_store |
 | stderr handling | Piped, forwarded as `StepProgress` — NEVER inherited | Inheriting stderr from a subagent would clobber the TUI |
@@ -921,7 +927,7 @@ it in a comment but implement what is specified here.
 
 Before beginning implementation, confirm:
 
-1. Is Qdrant already running and reachable? Check `config.toml` for the connection URL.
+1. Is legacy vector DB already running and reachable? Check `config.toml` for the connection URL.
 2. Is the default embedding model (`openai/text-embedding-3-small` — see `[memory]`
    block in §17) the right choice, or should it be a local Ollama model?
 3. Are the two example agent specs for Phase 2 (`agents/*.toml`) derived from the
@@ -929,7 +935,7 @@ Before beginning implementation, confirm:
 4. Is the minimum-viable `skills/orchestrator/SKILL.md` template in §10 acceptable as
    the initial landing, or do you want to author one yourself before Phase 4 lands?
 
-If no answer, proceed with the §17 defaults: Qdrant at `localhost:6334`,
+If no answer, proceed with the §17 defaults: legacy vector DB at `localhost:6334`,
 `openai/text-embedding-3-small`, and land the §10 template verbatim in Phase 4.
 
 ---
@@ -942,7 +948,7 @@ cat src/adapters/orchestrator/executor.rs    # DagExecutor — keep as-is
 cat src/adapters/orchestrator/events.rs      # OrchestratorEvent — extend (RagQueried)
 cat src/adapters/orchestrator/planner.rs     # Planner trait — change implementation
 cat src/adapters/orchestrator/replan.rs      # drive() — keep as-is
-cat src/adapters/memory/mod.rs               # Existing memory layer — extend for RAG
+cat src/adapters/memory/mod.rs               # Existing memory layer — extend for Open Brain / Karpathy LLM Wiki
 cat src/adapters/plugins/skill_lifecycle/distill.rs  # compress_and_store predecessor — keep
 cat src/adapters/config.rs                   # Config struct — understand MemoryConfig extensions
 cat src/main.rs                              # Entry point — add run-agent subcommand here

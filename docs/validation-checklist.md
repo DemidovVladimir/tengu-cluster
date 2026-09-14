@@ -336,7 +336,7 @@ If anything fails:
 Known gaps (documented in `docs/harness-architecture.md` §9):
 
 - **Concurrent multi-user sessions** — only one orchestrator session per test.
-- **Qdrant backend** — all tests use disk. Qdrant port exists but not validated against a live server.
+- **legacy vector DB backend** — all tests use disk. legacy vector DB port exists but not validated against a live server.
 - **5+ step plans** — `prompts.yaml` tops out at 4 steps (diamond).
 - **Mid-step LLM streaming cancellation** — `/stop` between steps is tested; mid-LLM-call cancel is not.
 

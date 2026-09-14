@@ -432,9 +432,7 @@ fn emit_shell_metric_advisories(
             file: skill_md.to_path_buf(),
             line: 1,
             matched,
-            description: format!(
-                "skill declares {display_kind} metric — runs shell at eval time"
-            ),
+            description: format!("skill declares {display_kind} metric — runs shell at eval time"),
         });
     }
 }
@@ -442,11 +440,7 @@ fn emit_shell_metric_advisories(
 /// Run shell-target patterns over each `cmd` string declared in a
 /// `shell_check` metric. Catches inline `rm -rf $HOME` etc. without needing
 /// an actual `*.sh` file on disk.
-fn scan_shell_check_cmds(
-    fm: &serde_yaml::Value,
-    skill_md: &Path,
-    findings: &mut Vec<Finding>,
-) {
+fn scan_shell_check_cmds(fm: &serde_yaml::Value, skill_md: &Path, findings: &mut Vec<Finding>) {
     let metrics = match fm.get("metrics").and_then(|m| m.as_sequence()) {
         Some(s) => s,
         None => return,

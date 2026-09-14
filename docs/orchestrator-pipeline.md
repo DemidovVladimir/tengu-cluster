@@ -629,7 +629,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **Builtin provider** | `src/adapters/memory/builtin.rs` | `BuiltinMemoryProvider` |
 | **Vector store trait** | `src/adapters/memory/vector.rs` | `VectorStore` trait: `write`, `search`, `delete`, `clear_all`, `entry_count`, `storage_bytes` |
 | **Disk store** | `src/adapters/memory/vector/disk.rs` | `DiskVectorStore`, bincode-backed |
-| **Qdrant store** | `src/adapters/memory/vector/qdrant.rs` | `QdrantVectorStore`, optional feature |
+| **legacy vector DB store** | `src/adapters/memory/vector/qdrant.rs` | `QdrantVectorStore`, optional feature |
 | **Embedder** | `src/adapters/memory/vector/embedder.rs` | `Embedder::embed`, `::embed_batch` (single HTTP call for N inputs) |
 | **Channel runtime helpers** | `src/adapters/channel_runtime.rs` | `build_orchestrator`, `build_memory_manager`, `RuntimeChatServiceFactory`, `OrchestratorSnapshots`, `snapshots_inputs_fn` |
 | **Config schema** | `src/adapters/config.rs` | `OrchestratorConfig` (agent, max_attempts_per_step, max_replans, route_explicit_agents) |

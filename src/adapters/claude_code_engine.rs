@@ -69,6 +69,11 @@ pub(crate) struct ClaudeCodeEngine {
     profile: BuiltinToolsProfile,
     model: Option<String>,
     timeout_secs: u64,
+    /// Calling agent's per-tool scope map (`AgentConfig.scopes`, with
+    /// `[default_scopes]` already folded in). Exported to the bridge
+    /// subprocess as `TENGU_BRIDGE_SCOPES` so MCP-routed tool calls are
+    /// gated the same way in-process calls are. Empty = every tool permissive.
+    scopes: std::collections::HashMap<String, crate::adapters::ports::ToolScope>,
 }
 
 impl ClaudeCodeEngine {
@@ -83,7 +88,18 @@ impl ClaudeCodeEngine {
             profile,
             model,
             timeout_secs,
+            scopes: std::collections::HashMap::new(),
         }
+    }
+
+    /// Attach the agent's per-tool scope map (see `scopes` field). Call from
+    /// `engine_builder::build_engine` with `agent_config.scopes.clone()`.
+    pub fn with_scopes(
+        mut self,
+        scopes: std::collections::HashMap<String, crate::adapters::ports::ToolScope>,
+    ) -> Self {
+        self.scopes = scopes;
+        self
     }
 
     /// Format conversation history into a prompt string for one-shot queries.
@@ -114,17 +130,24 @@ impl ClaudeCodeEngine {
 
     /// Build MCP config JSON for the tengu-tools bridge server.
     fn build_mcp_config_json(
+        &self,
         tengu_bin: &str,
         workspace: &std::path::Path,
         bridge_tools: &[ToolDef],
         max_mcp_result_chars: u32,
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
+        // Per-tool scopes cross the process boundary as JSON; the bridge's
+        // `build_bridge_executor` reads them back and falls back to
+        // `permissive_scope` for any tool without an entry.
+        let scopes_json = serde_json::to_string(&self.scopes).unwrap_or_else(|_| "{}".into());
         let mut env = serde_json::json!({
             "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
             "TENGU_BRIDGE_TOOLS": tools_json,
             "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
         });
+        env[crate::adapters::mcp_bridge::TENGU_BRIDGE_SCOPES_ENV] =
+            serde_json::Value::String(scopes_json);
         // Forward persistent store chunk config if set in the parent process.
         if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_SIZE") {
             env["TENGU_PERSISTENT_STORE_CHUNK_SIZE"] = serde_json::Value::String(v);
@@ -518,7 +541,7 @@ impl Engine for ClaudeCodeEngine {
                     .to_string_lossy()
                     .to_string();
                 let mcp_limit = context.max_mcp_result_chars.unwrap_or(50_000);
-                let config = Self::build_mcp_config_json(&tengu_bin, ws, bridge_tools, mcp_limit);
+                let config = self.build_mcp_config_json(&tengu_bin, ws, bridge_tools, mcp_limit);
                 let mut tmp = tempfile::NamedTempFile::new()?;
                 serde_json::to_writer(&mut tmp, &config)?;
                 cmd.arg("--mcp-config").arg(tmp.path());

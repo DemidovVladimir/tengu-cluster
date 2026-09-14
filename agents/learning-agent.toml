@@ -52,9 +52,9 @@ example_queries = [
 engine = "openrouter"
 model = "anthropic/claude-opus-4-7"
 
-# `view_skill` and `manage_skill` are workspace-tool-allowlist names — the
-# harness auto-promotes them via `agent_config_from_spec`. They live in the
-# regular `tools` array (no `workspace_tools` field on agents/*.toml — see
+# `manage_skill` is a workspace-tool-allowlist name — the harness auto-promotes
+# it via `agent_config_from_spec`. `view_skill` is a regular core tool. Both live
+# in the `tools` array (no `workspace_tools` field on agents/*.toml — see
 # CLAUDE.md gotcha).
 tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]
 skills = ["skill-creator"]

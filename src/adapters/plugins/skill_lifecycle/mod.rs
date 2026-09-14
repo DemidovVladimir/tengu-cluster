@@ -10,9 +10,8 @@ use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
 use crate::adapters::types::ToolDef;
 
 pub(crate) mod apply_improver_proposal;
-pub(crate) mod distill;
-#[cfg(feature = "qdrant")]
 pub mod compress_and_store;
+pub(crate) mod distill;
 
 #[allow(unused_imports)]
 pub(crate) use apply_improver_proposal::APPLY_IMPROVER_PROPOSAL_TOOL_NAME;

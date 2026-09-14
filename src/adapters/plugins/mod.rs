@@ -1,6 +1,8 @@
 // src/adapters/plugins/mod.rs
 //! Tool plugins — each subdirectory groups related tools.
 
+#[cfg(feature = "postgres_memory")]
+pub(crate) mod agentic_memory;
 pub(crate) mod cache;
 pub(crate) mod crypto;
 pub(crate) mod http;

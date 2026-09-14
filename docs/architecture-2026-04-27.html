@@ -284,7 +284,7 @@
 
 <!-- ============ COLLECTIONS ============ -->
 <div class="panel" id="panel-collections">
-  <h2>Three Qdrant collections — what's in each, who writes, who reads</h2>
+  <h2>Open Brain, LLM Wiki, and planner files — who writes, who reads</h2>
   <table class="coll-table">
     <thead>
       <tr>
@@ -297,21 +297,21 @@
     </thead>
     <tbody>
       <tr>
-        <td>tengu_registry</td>
-        <td>Agent specs, skills, tool defs (built-in + MCP)</td>
-        <td><code>indexer::reindex_all_workspace</code> (CLI + auto on first chat turn)</td>
-        <td><code>RagPlanner::plan/replan</code> via <code>search_registry</code></td>
-        <td>NO — deterministic</td>
+        <td>TENGU_PLANNER_REGISTRY.md</td>
+        <td>Agent specs, skills, tool defs</td>
+        <td><code>orchestrator/shared_files.rs</code> before planner calls</td>
+        <td><code>RagPlanner::plan/replan</code> prompt context</td>
+        <td>NO</td>
       </tr>
       <tr>
-        <td>tengu_messages</td>
+        <td>Open Brain user memory</td>
         <td>User messages keyed by session_id</td>
         <td><code>RagPlanner::persist_user_message</code> on every plan()</td>
         <td><code>RagPlanner::cross_session_recall_block</code> (opt-in via <code>memory.cross_session_msg_top_k</code>)</td>
         <td>YES — <code>cleanup::ttl_cleanup</code></td>
       </tr>
       <tr>
-        <td>tengu_outputs</td>
+        <td>Open Brain step outputs</td>
         <td>Compressed step output summaries</td>
         <td><code>compress_and_store</code> tool (implicit on every subagent)</td>
         <td><code>RagPlanner::replan</code> for cross-plan recall</td>
@@ -320,9 +320,9 @@
     </tbody>
   </table>
   <p style="margin-top: 18px;">
-    All three live in Qdrant (gRPC). Embedding model: <code>text-embedding-3-small</code> (1536d). When the
-    <code>qdrant</code> cargo feature is off, this entire layer is unavailable and the orchestrator
-    cannot run — channels fall back to direct default-agent dispatch.
+    Current state lives in Open Brain Postgres plus LLM Wiki Markdown. The legacy Qdrant collections and the
+    <code>rag/</code> facade were removed (Phase 6, files deleted 2026-09-12); without <code>postgres_memory</code>
+    the planner still routes from <code>TENGU_PLANNER_REGISTRY.md</code>, it just has no durable memory.
   </p>
 </div>
 
@@ -333,15 +333,15 @@
   <div class="mech-grid">
     <div class="mech-card">
       <div class="label">Doctrine</div>
-      <h3>A. LLM = heart, RAG = brain, tools = hands</h3>
-      <p>RagPlanner does ONE thing — pick the right agent. Its LLM call strips tools, tool_executor, memory_manager, and grounding so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
+      <h3>A. LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands</h3>
+      <p>RagPlanner (legacy name) does ONE thing — pick the right agent. Its LLM call strips tools, tool_executor, memory_manager, and grounding so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
       <div class="ref">channel_runtime::run_turn_with_system</div>
     </div>
     <div class="mech-card">
-      <div class="label">Open question</div>
-      <h3>B. Two senses of "session_id"</h3>
-      <p>RagPlanner mints one (TENGU_SESSION_ID env override or fresh UUID). SubprocessRunner mints its own. They don't share — open question in the handoff. Parent's id stamps user messages in tengu_messages; child's id stamps step outputs in tengu_outputs.</p>
-      <div class="ref">orchestrator/planner.rs:RagPlanner.session_id · runner.rs:session_id</div>
+      <div class="label">Fix B</div>
+      <h3>B. Shared session_id</h3>
+      <p>channel_runtime::build_orchestrator resolves the id once (TENGU_SESSION_ID env override or fresh UUID) and passes it to both RagPlanner and SubprocessRunner, so planner messages and subagent summaries share the same session key.</p>
+      <div class="ref">channel_runtime.rs::build_orchestrator</div>
     </div>
     <div class="mech-card">
       <div class="label">Phase 7.2 fix</div>
@@ -358,7 +358,7 @@
     <div class="mech-card">
       <div class="label">Two layers</div>
       <h3>E. Two layers of recall in the planner prompt</h3>
-      <p>In-memory ring buffer (Phase 6.4 lite) — recent user msgs THIS process, lost on restart. Cross-session block (Phase 6.4 full) — semantic search over tengu_messages, opt-in via memory.cross_session_msg_top_k. Both inject before the current turn.</p>
+      <p>In-memory ring buffer (Phase 6.4 lite) — recent user msgs THIS process, lost on restart. Cross-session block (Phase 6.4 full) — Open Brain agentic_memory recall, opt-in via memory.cross_session_msg_top_k. Both inject before the current turn.</p>
       <div class="ref">RagPlanner::update_and_format_history + cross_session_recall_block</div>
     </div>
     <div class="mech-card">
@@ -399,7 +399,7 @@
     <div class="mech-card">
       <div class="label">Phase 7.7</div>
       <h3>K. WORKSPACE_TOOLS_ALLOWLIST — single constant</h3>
-      <p>The three opt-in workspace tools (<code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>) used to live in two constants in two files. Now there's one <code>pub(crate) const WORKSPACE_TOOLS_ALLOWLIST</code> in <code>channel_runtime.rs</code>. Adding a fourth opt-in is a one-line edit. <code>agent_config_from_spec</code> filters <code>spec.tools</code> against it; the bridge filters <code>allowed_names</code> against it.</p>
+      <p>Opt-in workspace tools such as <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, and <code>manage_skill</code> use one <code>pub(crate) const WORKSPACE_TOOLS_ALLOWLIST</code> in <code>channel_runtime.rs</code>. Adding another opt-in is a one-line allowlist edit plus plugin registration. <code>agent_config_from_spec</code> filters <code>spec.tools</code> against it; the bridge filters <code>allowed_names</code> against it.</p>
       <div class="ref">channel_runtime::WORKSPACE_TOOLS_ALLOWLIST</div>
     </div>
   </div>
@@ -434,7 +434,7 @@ const STEPS = [
   },
   {
     num: 2, title: "Channel runtime — build_orchestrator", lane: "orch",
-    what: "channel_runtime constructs the Orchestrator wrapping the planner + worker. Returns None when [orchestrator] is missing or qdrant feature is off — channels then fall back to direct default-agent dispatch.",
+    what: "channel_runtime constructs the Orchestrator wrapping the planner + worker. Returns None when [orchestrator] is missing — channels then fall back to direct default-agent dispatch.",
     files: [
       { path: "src/adapters/channel_runtime.rs::build_orchestrator", desc: "the wiring" },
       { path: "src/adapters/channel_runtime.rs::ChatOrchestratorPortImpl", desc: "the planner-side LLM-call abstraction" },
@@ -443,15 +443,15 @@ const STEPS = [
     deep: "Phase 7.1 made engine = \"rag\" the only path. There used to be a static-mode fallback (OrchestratorAgentPlanner + ChatWorker); both deleted. If you load a sandbox config with engine ≠ \"rag\" today, you get a warn log and the channel runs without orchestration."
   },
   {
-    num: 3, title: "Planner — RagPlanner::plan", lane: "plan",
-    what: "Search registry → emit RagQueried event → optional cross-session recall → persist user message → push to in-memory buffer → build prompt → LLM call → parse verdict.",
+    num: 3, title: "Planner — RagPlanner::plan (legacy name)", lane: "plan",
+    what: "Regenerate/load TENGU_PLANNER_REGISTRY.md → emit RagQueried event → optional cross-session recall → persist user message → optional session-output recall → push to in-memory buffer → build prompt → LLM call → parse verdict.",
     files: [
       { path: "src/adapters/orchestrator/planner.rs::RagPlanner::plan", desc: "the orchestration of all the steps below" },
-      { path: "src/adapters/rag/query.rs::search_registry", desc: "top-K agents/skills/tools by cosine sim" },
+      { path: "TENGU_PLANNER_REGISTRY.md", desc: "root file-backed roster loaded into the planner prompt" },
       { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
       { path: "skills/orchestrator/plan_schema.json", desc: "validates the plan JSON output" },
     ],
-    deep: "The planner LLM call uses run_turn_with_system_metered (post 2026-04-28) — same as run_turn_with_system but additionally returns TurnTelemetry with prompt/completion tokens, model slug, latency. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after parsing. Output is one of two shapes: PlannerVerdict::Direct { response } or PlannerVerdict::Plan { steps }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+    deep: "The planner LLM call uses run_turn_with_system_metered (post 2026-04-28) — same as run_turn_with_system but additionally returns TurnTelemetry with prompt/completion tokens, model slug, latency. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after parsing. Output is one of two shapes: PlannerVerdict::Direct { response } or PlannerVerdict::Plan { steps }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block. Planner roster comes from root TENGU_PLANNER_REGISTRY.md; postgres_memory builds use Open Brain-style Postgres agentic_memory for runtime memory."
   },
   {
     num: 4, title: "DagExecutor", lane: "exec",
@@ -462,17 +462,17 @@ const STEPS = [
       { path: "src/adapters/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts with backoff" },
       { path: "src/adapters/orchestrator/plan.rs::Plan::ready_steps", desc: "topology check" },
     ],
-    deep: "Replan uses memory.cross_plan_top_k (default 5) hits from tengu_outputs as context for the new plan. The plan validator rejects unknown agent names — important guardrail post Phase 6.7 since composed agents now use Step.compose to declare a transient roster, NOT a renamed agent name."
+    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. The plan validator rejects unknown agent names — important guardrail post Phase 6.7 since composed agents now use Step.compose to declare a transient roster, NOT a renamed agent name."
   },
   {
     num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
     what: "Builds AgentIpcInput JSON, spawns child with TENGU_AGENT_IPC=1, pipes JSON over stdin, reads result over stdout. Kill on drop.",
     files: [
       { path: "src/adapters/runner.rs::SubprocessRunner::run_step", desc: "parent side" },
-      { path: "src/adapters/runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, optional compose" },
+      { path: "src/adapters/runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, plan_state, optional compose" },
       { path: "src/main.rs::run_agent_subprocess", desc: "child entry point" },
     ],
-    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny."
+    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. 2026-09-12 added plan_state (the rendered plan for this session) so concurrent sessions never read each other's TENGU_PLAN.md; scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots)."
   },
   {
     num: 6, title: "Subagent tool loop", lane: "tool",
@@ -486,24 +486,22 @@ const STEPS = [
     deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Most agents are well-behaved; the warn path catches the rest. Each run_single_engine_turn emits a MetricsRecord with kind=Subagent (post 2026-04-28); records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
   },
   {
-    num: 7, title: "compress_and_store → tengu_outputs", lane: "mem",
-    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it, embeds the LLM-summarised output, writes to Qdrant tengu_outputs tagged with step_id, and exits cleanly with the summary in the IPC output JSON.",
+    num: 7, title: "compress_and_store → durable summary", lane: "mem",
+    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it, writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory with embeddings when available; legacy vector builds keep the old compatibility path.",
     files: [
       { path: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs", desc: "the tool def + write_summary helper" },
-      { path: "src/adapters/rag/mod.rs::RagStore::store_memory", desc: "the actual Qdrant write" },
     ],
-    deep: "Output flows back to the parent via the IPC stdout, then to the DagExecutor (step 4). On step success the next ready step starts. The child's session_id and step_id are stamped on the Qdrant payload so cross-plan recall on replan can pull the right entries."
+    deep: "Output flows back to the parent via the IPC stdout, then to the DagExecutor (step 4). On step success the next ready step starts. The child's session_id and step_id are stamped on durable memory payloads so later planner recall can pull the right entries."
   },
 ];
 
 const SUBSYSTEMS = [
   {
     key: "memory", title: "memory/ — low-level vector store",
-    subtitle: "the foundation. Used by both the v2 RAG facade AND the legacy planner-side LLM turn.",
+    subtitle: "the foundation. Used by both the legacy vector facade AND the legacy planner-side LLM turn.",
     files: [
-      ["vector.rs", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes/delete_older_than"],
-      ["vector/qdrant.rs", "real backend, gRPC, scrolls + filters + range conditions"],
-      ["vector/disk.rs", "bincode fallback for non-qdrant builds"],
+      ["vector.rs", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes"],
+      ["vector/disk.rs", "DiskVectorStore — the only VectorStore impl (bincode)"],
       ["vector/embedder.rs", "OpenAI text-embedding-3-small client"],
       ["manager.rs", "MemoryManager — provider holder"],
       ["provider.rs", "MemoryProvider trait"],
@@ -513,29 +511,18 @@ const SUBSYSTEMS = [
       ["fencing.rs", "<memory-context> block helpers"],
       ["context_block.rs", "shared types — MemoryHit, ChunkMetadata"],
     ],
-    deep: "If you're touching vector reads/writes against Qdrant or disk, you're in memory/. If you're touching the v2 registry/messages/outputs flow that the planner uses, you're in rag/. The naming makes them look like duplicates but they're stacked — rag/ is a thin facade over memory/vector/.",
-  },
-  {
-    key: "rag", title: "rag/ — v2 facade (qdrant feature)",
-    subtitle: "owns three Qdrant collections, knows the v2 idioms.",
-    files: [
-      ["mod.rs", "RagStore facade, MemoryEntry/MemoryKind/RagKind types"],
-      ["indexer.rs", "enumerate_builtin_tools, enumerate_mcp_tools, index_*, reindex_all_workspace, scan_skills, fingerprint dedup"],
-      ["query.rs", "search_registry (with dedup-by-(kind,name)), search_messages, search_memory"],
-      ["cleanup.rs", "ttl_cleanup over tengu_messages + tengu_outputs"],
-    ],
-    deep: "The whole module is gated behind the qdrant cargo feature. Without it, build_orchestrator returns None and channels fall back to direct dispatch. The rag/ facade is opinionated (knows there are EXACTLY three collections, what each holds, the auto-reindex/fingerprint/TTL/per-example-vector idioms); memory/vector is generic.",
+    deep: "memory/ is the in-process disk vector store used by memory_ingest/memory_search and the BuiltinMemoryProvider. Durable, cross-session memory is plugins/agentic_memory/ (Postgres + pgvector, postgres_memory feature). The old rag/ facade is gone.",
   },
   {
     key: "agents", title: "agents/ — TOML specs",
-    subtitle: "edit a .toml and restart chat — auto-reindex picks it up.",
+    subtitle: "edit a .toml and restart chat — planner registry file is regenerated.",
     files: [
       ["src/adapters/agents/mod.rs", "AgentSpec struct + load_agent_file + load_agents_dir"],
       ["agents/aura.toml", "DeSci pipeline agent (heaviest)"],
       ["agents/researcher.toml", "generic web/HTTP research"],
       ["agents/storage.toml", "file ingest + semantic search"],
     ],
-    deep: "Each spec carries: name, description (RAG-indexed), example_queries (each indexed as its OWN vector since 2026-04-26), model, tools, skills, max_turns, sandbox (workspace path). The runner intersects spec.tools with ipc.tools and always appends compress_and_store. Never list compress_and_store in tools — it's implicit.",
+    deep: "Each spec carries: name, description (registry-file rendered), example_queries (each indexed as its OWN vector since 2026-04-26), model, tools, skills, max_turns, sandbox (workspace path). The runner intersects spec.tools with ipc.tools and always appends compress_and_store. Never list compress_and_store in tools — it's implicit.",
   },
   {
     key: "skills", title: "skills/ — prompt fragments",
@@ -546,7 +533,7 @@ const SUBSYSTEMS = [
       ["skills/", "TIER 3 — workspace root (highest priority)"],
       ["skills/orchestrator/SKILL.md", "SPECIAL — used as planner system prompt"],
       ["skills/orchestrator/plan_schema.json", "validates planner JSON output"],
-      ["src/adapters/rag/indexer.rs::scan_skills", "the scanner"],
+      ["src/adapters/orchestrator/shared_files.rs::scan_skill_summaries", "the scanner"],
       ["src/main.rs::load_skill_body_three_tier", "called by run_agent_subprocess"],
     ],
     deep: "Each SKILL.md has YAML frontmatter (name, description). The scanner walks all three tiers, dedupes by name, later tiers shadow earlier. The body of each SKILL.md becomes part of the subagent's system prompt (assembled in run_agent_subprocess after the base template).",
@@ -592,7 +579,7 @@ const FILE_MAP = [
   ["src/adapters/engine_builder.rs", "engine", "build_engine, build_openrouter_engine, run_single_engine_turn, ToolExecutor"],
   ["src/adapters/runner.rs", "orchestrator", "SubprocessRunner, AgentIpcInput, AgentIpcOutput — the IPC plumbing"],
   ["src/adapters/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle"],
-  ["src/adapters/orchestrator/planner.rs", "orchestrator", "RagPlanner, parse_verdict (free fn), persist_user_message, cross_session_recall_block, auto_reindex_once"],
+  ["src/adapters/orchestrator/planner.rs", "orchestrator", "RagPlanner, parse_verdict (free fn), persist_user_message, cross_session_recall_block, shared_files registry generation"],
   ["src/adapters/orchestrator/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7)"],
   ["src/adapters/orchestrator/executor.rs", "orchestrator", "DagExecutor, WorkerHandle trait"],
   ["src/adapters/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
@@ -600,11 +587,8 @@ const FILE_MAP = [
   ["src/adapters/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
   ["src/adapters/orchestrator/wiring.rs", "orchestrator", "ChatServiceFactory trait + run_turn_with_system_metered, TurnTelemetry, ChatOrchestratorPortImpl"],
   ["src/adapters/metrics.rs", "metrics", "MetricsRecord, MetricsKind, MetricsLayer, install_global_sink/record/subscribe, AggregatorState (per-agent + per-kind rollups). Observes every LLM and embedding call; tracing info baseline + bus broadcast + TUI bubble (TENGU_TUI_METRICS=1)."],
-  ["src/adapters/rag/mod.rs", "rag", "RagStore facade, MemoryEntry, MemoryKind, RagKind, three collection name constants"],
-  ["src/adapters/rag/indexer.rs", "rag", "enumerate_builtin_tools, enumerate_mcp_tools, index_*, reindex_all_workspace (with fingerprint dedup), scan_skills"],
-  ["src/adapters/rag/query.rs", "rag", "search_registry (dedup-by-(kind,name)), search_messages, search_memory"],
-  ["src/adapters/rag/cleanup.rs", "rag", "ttl_cleanup over tengu_messages + tengu_outputs"],
-  ["src/adapters/memory/mod.rs", "memory", "module preamble explaining memory ↔ rag layering"],
+  ["src/adapters/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation (agents + skills + core & MCP tools), per-session active plan (set_active_plan / plan_state), TENGU_PLAN.md debug artifact"],
+  ["src/adapters/memory/mod.rs", "memory", "module preamble explaining memory/ (disk vector store) vs plugins/agentic_memory (Postgres)"],
   ["src/adapters/memory/manager.rs", "memory", "MemoryManager — provider holder, prefetch_all, sync_all"],
   ["src/adapters/memory/provider.rs", "memory", "MemoryProvider trait"],
   ["src/adapters/memory/builtin.rs", "memory", "BuiltinMemoryProvider — MEMORY.md, identity, daily logs"],
@@ -613,7 +597,6 @@ const FILE_MAP = [
   ["src/adapters/memory/fencing.rs", "memory", "<memory-context> block helpers"],
   ["src/adapters/memory/context_block.rs", "memory", "PinnedMemoryBlock, MemoryHit, ChunkMetadata"],
   ["src/adapters/memory/vector.rs", "memory", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes/delete_older_than"],
-  ["src/adapters/memory/vector/qdrant.rs", "memory", "QdrantVectorStore — real backend, gRPC, filter-based delete"],
   ["src/adapters/memory/vector/disk.rs", "memory", "DiskVectorStore — bincode fallback"],
   ["src/adapters/memory/vector/embedder.rs", "memory", "Embedder — OpenAI text-embedding-3-small client"],
   ["src/adapters/agents/mod.rs", "agents", "AgentSpec struct, load_agent_file, load_agents_dir"],

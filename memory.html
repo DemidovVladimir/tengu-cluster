@@ -90,7 +90,6 @@
     <a href="index.html">Home</a>
     <a href="features.html">Features</a>
     <a href="howto.html">How-to</a>
-    <a href="rag.html">RAG</a>
     <a href="memory.html" class="active">Memory</a>
     <a href="context.html">Context</a>
   </div>
@@ -98,7 +97,7 @@
 
 <main>
   <h1>Memory · what persists, what's recalled, the meta-skill</h1>
-  <p class="subtitle">Three Qdrant collections + one in-process ring buffer. Plus the <code>learning-agent</code> + <code>manage_skill</code> meta-skill that creates and updates skills in chat.</p>
+  <p class="subtitle">Postgres <code>agentic_memory</code> (pgvector) + one in-process ring buffer. Plus the <code>learning-agent</code> + <code>manage_skill</code> meta-skill that creates and updates skills in chat.</p>
 
   <h2>The four memory stores</h2>
   <p>Click any card to inspect its lifecycle.</p>
@@ -106,17 +105,17 @@
   <div class="stores" id="stores">
     <div class="store" data-id="reg">
       <h4><span class="dot"></span>tengu_registry</h4>
-      <span class="tag">Qdrant · deterministic · no TTL</span>
+      <span class="tag">file-backed · deterministic · no TTL</span>
       <p>Agents + skills + tools indexed for semantic routing.</p>
     </div>
     <div class="store" data-id="msg">
       <h4><span class="dot"></span>tengu_messages</h4>
-      <span class="tag">Qdrant · session-keyed · TTL</span>
+      <span class="tag">Postgres agentic_memory · session-keyed · TTL</span>
       <p>Every user message, durably persisted on every <code>plan()</code> call.</p>
     </div>
     <div class="store" data-id="out">
       <h4><span class="dot"></span>tengu_outputs</h4>
-      <span class="tag">Qdrant · step-keyed · TTL</span>
+      <span class="tag">Postgres agentic_memory · step-keyed · TTL</span>
       <p>Compressed step summaries written by <code>compress_and_store</code>.</p>
     </div>
     <div class="store" data-id="buf">
@@ -177,33 +176,21 @@
 [memory]
 enabled = true
 within_session_output_top_k = 5    # 0 = off (default)</code></pre>
-  <p>When &gt; 0, <code>RagPlanner::plan</code> injects a <code>## Recent step outputs (this session)</code> block from <code>tengu_outputs</code> filtered to the planner's <code>session_id</code>. Pairs with Fix B — the filter only matches because parent and child agree on the id.</p>
+  <p>When &gt; 0, <code>RagPlanner::plan</code> injects a <code>## Recent step outputs (this session)</code> block from Postgres <code>agentic_memory</code> filtered to the planner's <code>session_id</code>. Pairs with Fix B — the filter only matches because parent and child agree on the id.</p>
 
   <h2>Operating the registry</h2>
-<pre><code># What's there?
-./target/release/tengu registry list --limit 50
+<pre><code># The planner registry is a file, regenerated on every planner turn
+cat TENGU_PLANNER_REGISTRY.md
 
-# Run the same search the planner runs
-./target/release/tengu registry search "your query" --top-k 10
-
-# If Qdrant was reset, the workspace fingerprint will mask an empty store —
-# bypass the dedup:
-TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all
-
-# Wipe + rebuild from scratch
-./target/release/tengu registry clear
-./target/release/tengu registry reindex-all</code></pre>
+# Edit agents/*.toml or skills/*/SKILL.md and restart `tengu chat --sandbox &lt;name&gt;` — no reindex step</code></pre>
 
   <h2>Inspecting durable writes (diagnostic · 2026-05-09)</h2>
   <p>When the planner says <em>"I have no record of that step"</em>, run:</p>
-<pre><code># What did this session actually persist?
-./target/release/tengu memory inspect --session smoke-2026-05-09 --limit 50
+<pre><code># What did this session actually persist? Query Postgres agentic_memory via TENGU_MEMORY_DATABASE_URL:
+psql "$TENGU_MEMORY_DATABASE_URL" -c "select id, kind, session_id, left(content, 80), created_at from agentic_memory where session_id = 'smoke-2026-05-09' order by created_at desc limit 50"</code></pre>
+  <p>One row per durable entry. An empty result means the write never landed (subagent stopped without <code>compress_and_store</code> and the run-agent backstop did not fire, or a session_id mismatch). Check BEFORE rerunning a long pipeline.</p>
 
-# Same, but for user messages instead of step outputs
-./target/release/tengu memory inspect --session smoke-2026-05-09 --collection messages</code></pre>
-  <p>Output is one row per matching entry — index, <code>step_id</code>, snippet, <code>created_at</code> + age. An empty result prints a checklist (Fix-C not built, Fix-D not built, collection reset, session_id mismatch). Use this BEFORE rerunning a long pipeline — it answers the "is the data even there?" question directly.</p>
-
-  <div class="gotcha"><b>Gotcha</b> — <code>.tengu/registry-fingerprint</code> stores a hash of the workspace state. If you reset Qdrant (different container, dropped collection) WITHOUT changing any agent/skill/tool TOML, the auto-reindex will think nothing changed and skip. Force a rebuild with <code>TENGU_REGISTRY_FORCE_REINDEX=1</code>.</div>
+  <div class="gotcha"><b>Gotcha</b> — there is no <code>tengu memory inspect</code> CLI any more (removed with the Qdrant path). Query Postgres <code>agentic_memory</code> via <code>TENGU_MEMORY_DATABASE_URL</code> or run the ignored <code>postgres_*_smoke</code> tests.</div>
 
   <h2>Cross-session recall</h2>
   <p>Off by default. To turn on, set <code>memory.cross_session_msg_top_k</code> in your sandbox config:</p>
@@ -291,12 +278,12 @@ tengu skill metrics spanish-teacher --last 5</code></pre>
       title: "tengu_registry",
       sub:   "The router's index. Agents + skills + tools, embedded for semantic search.",
       rows: [
-        ["Written by", "indexer::reindex_all_workspace — auto on first chat turn (lazy OnceCell), CLI via tengu registry reindex-all"],
+        ["Written by", "orchestrator::shared_files — TENGU_PLANNER_REGISTRY.md regenerated before every planner call"],
         ["Read by",   "RagPlanner::plan and RagPlanner::replan via search_registry(top_k=20)"],
         ["Embedding", "OpenAI text-embedding-3-small (1536d). Each agent indexed twice: once on description, once per example_queries entry"],
         ["Score floor", "~0.15 — practical noise floor; ~0.4 is a strong match; 0.6+ is rare. Don't gate on absolute score, the SKILL.md asks the planner to read the description"],
         ["TTL",       "None — registry is deterministic, never time-decays"],
-        ["Force rebuild", "TENGU_REGISTRY_FORCE_REINDEX=1 tengu registry reindex-all"]
+        ["Force rebuild", "none needed — file is regenerated each planner turn"]
       ]
     },
     msg: {
@@ -307,7 +294,7 @@ tengu skill metrics spanish-teacher --last 5</code></pre>
         ["Read by",   "RagPlanner::cross_session_recall_block — opt-in via memory.cross_session_msg_top_k (default 0 = off)"],
         ["Keyed by",  "session_id (TENGU_SESSION_ID env override, else fresh UUID per RagPlanner construction)"],
         ["Block fence", "<memory-context>...</memory-context> — system note instructs the model not to treat content as user input"],
-        ["TTL",       "cleanup::ttl_cleanup — default ttl_days = 0 (never purge); when set > 0, intended to delete via Qdrant filter (TODO: filter-based delete)"],
+        ["TTL",       "cleanup::ttl_cleanup — default ttl_days = 0 (never purge); when set > 0, intended to delete via a Postgres agentic_memory filter (TODO)"],
         ["Open",      "Cross-session read-back hydration is wired forward-compat but defaults off — flip cross_session_msg_top_k once you have data"]
       ]
     },

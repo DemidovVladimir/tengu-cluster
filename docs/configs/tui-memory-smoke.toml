@@ -36,16 +36,13 @@
 runtime_profile = "cloud"
 
 # ---------------------------------------------------------------------------
-# Memory subsystem — ON.
-#
-# Using disk backend by default. If you have Qdrant running locally, set
-# backend = "qdrant" and provide qdrant_url / qdrant_api_key.
+# Memory subsystem — ON. Disk-backed bincode vector store (the only built-in
+# backend). Durable cross-session memory is the Postgres `agentic_memory`
+# plugin (`--features postgres_memory` + TENGU_MEMORY_DATABASE_URL).
 # ---------------------------------------------------------------------------
 [memory]
 enabled = true
-backend = "disk"
 embedding_model = "text-embedding-3-small"
-vector_size = 1536
 max_recall_entries = 5
 max_recall_tokens = 4000
 persistent_store_chunk_size = 1000
@@ -58,21 +55,22 @@ persistent_store_chunk_overlap = 200
 # ---------------------------------------------------------------------------
 [orchestrator]
 agent = "orchestrator"
+engine = "rag"                      # required — the only supported value
 max_attempts_per_step = 3
 max_replans = 2
 route_explicit_agents = true
 
 # ---------------------------------------------------------------------------
-# Orchestrator agent — planner only. Gets memory_search; no other tools.
-# Empty workspace_tools in the eval path; here it has memory_search so
-# the planner can look up prior context before planning (useful for S-18).
+# Orchestrator agent — planner only. memory_search / memory_ingest are core
+# memory tools (available when [memory] enabled = true), not workspace_tools
+# opt-ins, so workspace_tools stays empty.
 # ---------------------------------------------------------------------------
 [agents.orchestrator]
 default = false
 engine = "openrouter"
 model = "anthropic/claude-haiku-4-5"
 workspace = "$WORKSPACE"
-workspace_tools = ["memory_search"]
+workspace_tools = []
 
 [agents.orchestrator.identity]
 instructions = """
@@ -135,7 +133,7 @@ default = true
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 workspace = "$WORKSPACE"
-workspace_tools = ["http_request", "memory_search", "memory_ingest"]
+workspace_tools = []
 
 [agents.researcher.identity]
 instructions = """
@@ -162,7 +160,7 @@ stream_event_timeout_secs = 60
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 workspace = "$WORKSPACE"
-workspace_tools = ["memory_search"]
+workspace_tools = []
 
 [agents.writer.identity]
 instructions = """

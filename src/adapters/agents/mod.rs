@@ -1,36 +1,44 @@
 //! Agent spec loader — Phase 2 of the redesign.
 //!
 //! Each `agents/<name>.toml` file is parsed into an [`AgentSpec`]. The spec
-//! carries the metadata the RAG registry indexes (`name` + `description`)
-//! plus the runtime configuration the (future) subprocess runner consumes
-//! (`model`, `tools`, `skills`, `max_turns`, `timeout_secs`, `sandbox`).
+//! carries the metadata rendered into `TENGU_PLANNER_REGISTRY.md` for the
+//! planner LLM (`name`, `description`, `example_queries`) plus the runtime
+//! configuration `tengu run-agent` consumes (`engine`, `model`, `tools`,
+//! `skills`, `max_turns`, `timeout_secs`, `sandbox`).
 //!
-//! Phase 2 only uses the loader. Phase 3 wires `SubprocessRunner` to look
-//! up a spec by name.
+//! Unknown keys are rejected (`deny_unknown_fields`) so a typo such as
+//! `workspace_tools = [...]` — which is NOT an `AgentSpec` field; workspace
+//! tool opt-ins go in `tools` — fails loudly instead of being silently
+//! ignored.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Engines a subagent spec may declare. Mirrors the per-sandbox
+/// `[agents.*].engine` allow-list in `config.rs::validate_agent`.
+pub const VALID_AGENT_ENGINES: &[&str] = &["openrouter", "claude_code"];
+
 /// v2-style agent specification. File-based replacement for the per-sandbox
 /// `[agents.*]` blocks that lived in `sandboxes/*/config.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSpec {
     /// Agent name. Must match the filename stem (e.g. `researcher.toml`
     /// => `name = "researcher"`). Orchestrator plans reference this.
     pub name: String,
 
-    /// Human-readable description. This field IS what the RAG registry
-    /// embeds — write it for semantic search: what the agent handles,
+    /// Human-readable description. Rendered verbatim under the agent's
+    /// heading in `TENGU_PLANNER_REGISTRY.md`; the planner LLM reads it to
+    /// decide routing, so write it for a reader: what the agent handles,
     /// what it is NOT good for.
     pub description: String,
 
     /// Optional list of example user questions this agent handles well.
-    /// Indexed as a SECOND vector per agent (alongside `description`)
-    /// so a query like "what is the BTC price?" can match a near-identical
-    /// example line directly, instead of fighting the asymmetry between
-    /// short casual queries and long formal descriptions. Empty by default —
-    /// when absent, the agent is matched on description only.
+    /// Rendered as an "Example queries" bullet list under the agent's
+    /// registry entry so the planner can match a short casual message
+    /// ("what is the BTC price?") against a near-identical example line
+    /// instead of only the longer formal description. Empty by default.
     #[serde(default)]
     pub example_queries: Vec<String>,
 
@@ -101,6 +109,14 @@ impl AgentSpec {
         if self.model.trim().is_empty() {
             bail!("agent spec `{}` missing `model`", self.name);
         }
+        if !VALID_AGENT_ENGINES.contains(&self.engine.as_str()) {
+            bail!(
+                "agent spec `{}` has unsupported engine `{}` (expected one of: {})",
+                self.name,
+                self.engine,
+                VALID_AGENT_ENGINES.join(", ")
+            );
+        }
         Ok(())
     }
 }
@@ -140,9 +156,7 @@ pub fn load_agents_dir(dir: &Path) -> Result<Vec<AgentSpec>> {
         return Ok(Vec::new());
     }
     let mut specs = Vec::new();
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("read_dir {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
@@ -186,6 +200,48 @@ mod tests {
         "#;
         let spec: AgentSpec = toml::from_str(toml_src).unwrap();
         assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_engine() {
+        let toml_src = r#"
+            name = "x"
+            description = "d"
+            model = "m"
+            engine = "ollama"
+        "#;
+        let spec: AgentSpec = toml::from_str(toml_src).unwrap();
+        let err = spec.validate().unwrap_err();
+        assert!(err.to_string().contains("unsupported engine `ollama`"));
+    }
+
+    #[test]
+    fn validate_accepts_both_engines() {
+        for engine in VALID_AGENT_ENGINES {
+            let toml_src = format!(
+                "name = \"x\"\ndescription = \"d\"\nmodel = \"m\"\nengine = \"{}\"\n",
+                engine
+            );
+            let spec: AgentSpec = toml::from_str(&toml_src).unwrap();
+            assert!(spec.validate().is_ok(), "engine {engine} should validate");
+        }
+    }
+
+    /// `workspace_tools` is an `AgentConfig` (sandbox config) field, not an
+    /// `AgentSpec` field — pre-`deny_unknown_fields` it was silently dropped.
+    #[test]
+    fn parse_rejects_unknown_key() {
+        let toml_src = r#"
+            name = "x"
+            description = "d"
+            model = "m"
+            workspace_tools = []
+        "#;
+        let err = toml::from_str::<AgentSpec>(toml_src).unwrap_err();
+        assert!(
+            err.to_string().contains("workspace_tools"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -30,6 +30,15 @@ pub trait Planner: Send + Sync {
         failed_step_id: &str,
         error: &str,
     ) -> anyhow::Result<PlannerVerdict>;
+
+    /// Orchestrator session id this planner stamps on memory writes, when it
+    /// has one. `replan::drive` keys the per-session active plan
+    /// (`shared_files::set_active_plan`) on it so `SubprocessRunner` — which
+    /// shares the same id — can hand each child its own session's plan over
+    /// IPC. `None` (default) skips the per-session registration.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
 }
 
 use std::sync::Arc;
@@ -70,10 +79,7 @@ pub trait OrchestratorChatPort: Send + Sync {
         agent: &str,
         system_prompt: &str,
         user_message: &str,
-    ) -> anyhow::Result<(
-        String,
-        crate::adapters::orchestrator::wiring::TurnTelemetry,
-    )> {
+    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
         let reply = self
             .run_orchestrator_turn_with_system(agent, system_prompt, user_message)
             .await?;
@@ -136,7 +142,11 @@ pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
     // bounded.
     if !trimmed.is_empty() {
         let preview: String = trimmed.chars().take(300).collect();
-        let suffix = if trimmed.chars().count() > 300 { "…" } else { "" };
+        let suffix = if trimmed.chars().count() > 300 {
+            "…"
+        } else {
+            ""
+        };
         tracing::warn!(
             preview = %preview,
             suffix = %suffix,
@@ -209,20 +219,23 @@ fn extract_balanced_json_object(s: &str) -> Option<String> {
 // =====================================================================
 // RagPlanner — the only Planner implementation as of Phase 7.1.
 //
-// Queries `tengu_registry` per turn and prepends a top-K ranked list to
-// the user message; uses `parse_verdict` (free fn above) for tolerant
+// Loads `TENGU_PLANNER_REGISTRY.md` per turn and prepends the full roster
+// to the user message; uses `parse_verdict` (free fn above) for tolerant
 // JSON parsing of the LLM's plan output.
 // =====================================================================
 
-#[cfg(feature = "qdrant")]
+#[derive(Debug, Clone)]
+struct RegistryHit {
+    kind: String,
+    name: String,
+    score: f32,
+}
+
 pub struct RagPlanner {
     orchestrator_agent: String,
     chat: Arc<dyn OrchestratorChatPort>,
     memory_config: crate::adapters::config::MemoryConfig,
-    /// Lazy-initialised on first `plan()` call so the (sync) `build_orchestrator`
-    /// constructor does not need to be made async or carry a tokio runtime.
-    rag: tokio::sync::OnceCell<Arc<crate::adapters::rag::RagStore>>,
-    top_k: usize,
+    workspace: std::path::PathBuf,
     /// Phase 4c — body of `skills/orchestrator/SKILL.md` (frontmatter
     /// stripped) used as the planner system prompt. Falls back to a
     /// hardcoded minimal instruction if the file is missing.
@@ -231,32 +244,28 @@ pub struct RagPlanner {
     /// for THIS RagPlanner instance. Survives within one channel session,
     /// lost on restart; mixes turns from concurrent Telegram chats sharing
     /// one RagPlanner. Used as the source of the "## Recent user messages
-    /// this session" prompt block. Phase 6.4 (full) writes to `tengu_messages`
-    /// in addition for cross-restart durability.
+    /// this session" prompt block. With `postgres_memory`, the current user
+    /// message is also written to Postgres `agentic_memory`.
     session_history: tokio::sync::Mutex<Vec<String>>,
-    /// Phase 6.4 (full) — id stamped on every user message we persist to
-    /// `tengu_messages`. Resolution order at construction:
-    /// 1. `TENGU_SESSION_ID` env var if set (lets tests pin a known id;
-    ///    advanced ops users can stitch sessions across restarts manually).
-    /// 2. fresh `Uuid::new_v4()` — matches `SubprocessRunner` per-instance
-    ///    behaviour. NOTE: a fresh UUID per process means restart-pickup
-    ///    does NOT magically work via `WHERE session_id = ?` — the value
-    ///    of writing it now is forward-compat: the writes are durable, and
-    ///    a future commit can wire `search_messages` into the planner
-    ///    prompt for cross-session semantic recall regardless of session_id.
+    /// id stamped on every durable memory write. Resolved once by
+    /// `channel_runtime::build_orchestrator` and shared with
+    /// `SubprocessRunner` so planner and subagent writes line up.
     session_id: String,
-    /// Phase 6.6 — passed through to `auto_reindex_once` so the registry
-    /// reindex on first chat turn enumerates real MCP tools alongside the
-    /// built-ins. Cloned from `Config.mcp_servers` at planner construction.
-    mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
     /// Phase 6.1 (full) — optional event bus for emitting
     /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
     /// `None` means structured events are silently dropped (the
     /// `tracing::info!` line still fires regardless).
     bus: Option<crate::adapters::orchestrator::events::EventBus>,
+    /// `Config.mcp_servers` — enumerated (live `tools/list`, fail-soft per
+    /// server) once per planner instance so the registry's TOOLS section
+    /// lists `<server>.<tool>` entries alongside the core tools.
+    mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
+    /// Lazily-filled cache of the MCP enumeration above. Filled on the
+    /// first `plan()`/`replan()`; restart `tengu chat` to pick up server
+    /// changes (same rule as `agents/*.toml`).
+    mcp_tools: tokio::sync::OnceCell<Vec<crate::adapters::types::ToolDef>>,
 }
 
-#[cfg(feature = "qdrant")]
 impl RagPlanner {
     pub fn new(
         orchestrator_agent: String,
@@ -282,92 +291,82 @@ impl RagPlanner {
             orchestrator_agent,
             chat,
             memory_config,
-            rag: tokio::sync::OnceCell::new(),
-            top_k: 20,
+            workspace: std::env::current_dir().unwrap_or_default(),
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
             session_id,
-            mcp_servers,
             bus,
+            mcp_servers,
+            mcp_tools: tokio::sync::OnceCell::new(),
         }
     }
 
-    /// Resolve (and cache) the underlying `RagStore`. Constructing it requires
-    /// `OPENROUTER_API_KEY` and a reachable Qdrant on `memory.qdrant_url`; if
-    /// either is missing the planner returns `Err` from this helper and the
-    /// caller falls through to graceful degradation in `plan()`/`replan()`.
-    ///
-    /// Auto-reindex on first init: when the RagStore is built for the first
-    /// time in a process, we run the same `clear + index_tools + index_agents
-    /// + index_skills` sequence that `tengu registry reindex-all` does, so
-    /// freshly-edited `agents/*.toml` entries take effect without a manual
-    /// reindex step. Fail-soft — a reindex error (Qdrant write fault, OpenAI
-    /// rate-limit, missing agents/ directory) is logged and the planner keeps
-    /// going with whatever is already indexed.
-    async fn rag(&self) -> anyhow::Result<&Arc<crate::adapters::rag::RagStore>> {
-        self.rag
-            .get_or_try_init(|| async {
-                let store: Arc<crate::adapters::rag::RagStore> =
-                    crate::adapters::rag::RagStore::from_config(self.memory_config.clone())
-                        .await
-                        .map(Arc::new)?;
-                self.auto_reindex_once(&store).await;
-                Ok::<_, anyhow::Error>(store)
-            })
-            .await
+    #[cfg(feature = "postgres_memory")]
+    fn embedder(&self) -> Option<crate::adapters::memory::vector::Embedder> {
+        std::env::var("OPENROUTER_API_KEY").ok().map(|api_key| {
+            crate::adapters::memory::vector::Embedder::new(
+                api_key,
+                self.memory_config.embedding_model.clone(),
+            )
+        })
     }
 
-    /// Run a one-shot registry reindex from the current working directory.
-    /// Called from `rag()` on first init. Errors are logged, never propagated —
-    /// the caller's planner pipeline must keep functioning even when the
-    /// registry is stale.
-    ///
-    /// Phase 6.6 — passes `self.mcp_servers` through so the reindex
-    /// includes real MCP tools alongside the built-ins. Connecting to
-    /// dead/misconfigured MCP servers is tolerated downstream
-    /// (`enumerate_mcp_tools` is fail-soft per server).
-    async fn auto_reindex_once(&self, store: &crate::adapters::rag::RagStore) {
-        let root = match std::env::current_dir() {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(error = %e, "auto-reindex skipped: could not resolve current_dir");
-                return;
-            }
+    #[cfg(feature = "postgres_memory")]
+    async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
+        let Some(embedder) = self.embedder() else {
+            return None;
         };
-        match crate::adapters::rag::indexer::reindex_all_workspace(
-            store,
-            &root,
-            &self.mcp_servers,
-        )
-        .await
-        {
-            Ok(r) if r.unchanged => tracing::info!(
-                root = %root.display(),
-                "auto-reindex skipped: workspace fingerprint unchanged (Phase 6.2 cache hit)"
-            ),
-            Ok(r) => tracing::info!(
-                tools = r.tools_indexed,
-                agents = r.agents_indexed,
-                skills = r.skills_indexed,
-                mcp_servers = self.mcp_servers.len(),
-                root = %root.display(),
-                "auto-reindexed tengu_registry on first rag-mode use"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                "auto-reindex failed; continuing with existing registry contents"
-            ),
+        match embedder.embed(text).await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "planner embed failed; semantic memory lanes will fall back where possible"
+                );
+                None
+            }
         }
+    }
 
-        // Phase 6.3 — TTL purge on the same cold-start hook. Internally
-        // a no-op when `memory.ttl_days == 0` (default), so this is
-        // free for users who haven't opted in. When >0, sweeps entries
-        // older than the cutoff from tengu_messages + tengu_outputs.
-        // Fail-soft: a Qdrant error logs warn and continues.
-        match store.ttl_cleanup().await {
-            Ok(0) => {} // either ttl_days=0 or nothing to purge — silent
-            Ok(n) => tracing::info!(purged = n, "rag ttl_cleanup purged old entries"),
-            Err(e) => tracing::warn!(error = %e, "rag ttl_cleanup failed; continuing"),
+    async fn load_registry_block(&self) -> (String, Vec<RegistryHit>) {
+        let mcp_tools = self
+            .mcp_tools
+            .get_or_init(|| async {
+                let tools = crate::adapters::orchestrator::shared_files::enumerate_mcp_tools(
+                    &self.mcp_servers,
+                )
+                .await;
+                tracing::info!(
+                    servers = self.mcp_servers.len(),
+                    tools = tools.len(),
+                    "planner registry: MCP tools enumerated"
+                );
+                tools
+            })
+            .await;
+        match crate::adapters::orchestrator::shared_files::ensure_planner_registry(
+            &self.workspace,
+            mcp_tools,
+        ) {
+            Ok(snapshot) => {
+                let hits = snapshot
+                    .entries
+                    .into_iter()
+                    .map(|entry| RegistryHit {
+                        kind: entry.kind,
+                        name: entry.name,
+                        score: 1.0,
+                    })
+                    .collect();
+                (snapshot.prompt_block, hits)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "planner registry file unavailable");
+                (
+                    "\n## Planner registry\n\n_(registry file unavailable)_\n\n".to_string(),
+                    Vec::new(),
+                )
+            }
         }
     }
 
@@ -396,12 +395,12 @@ impl RagPlanner {
         format_history(&hist, limit)
     }
 
-    /// Phase 6.4 (full, read-back) — semantic recall over `tengu_messages`.
+    /// Phase 6.4 (full, read-back) — semantic recall over durable user messages.
     /// Returns a formatted prompt block of the top-K semantically-similar
     /// prior user messages, or an empty string when:
     /// - the config knob `memory.cross_session_msg_top_k` is 0 (default,
     ///   so existing users see no behaviour change),
-    /// - the RagStore is unavailable (Qdrant down, OPENROUTER_API_KEY missing),
+    /// - the memory backend is unavailable,
     /// - the search returns nothing (collection empty / cold start), or
     /// - every hit is a near-duplicate of the current message (filtered out
     ///   so the LLM doesn't see "the user already asked this").
@@ -424,52 +423,51 @@ impl RagPlanner {
         if k == 0 {
             return String::new();
         }
-        let rag = match self.rag().await {
-            Ok(r) => r.clone(),
-            Err(e) => {
-                tracing::debug!(error = %e, "skip cross_session_recall: RagStore unavailable");
+        #[cfg(feature = "postgres_memory")]
+        {
+            let hits =
+                match crate::adapters::plugins::agentic_memory::recall_user_messages_with_vec(
+                    user_message,
+                    embed_vec,
+                    k,
+                    user_message,
+                )
+                .await
+                {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "skip cross_session_recall: agentic_memory unavailable");
+                        Vec::new()
+                    }
+                };
+            if hits.is_empty() {
                 return String::new();
             }
-        };
-        // Over-fetch a couple slots so we have headroom after dedup-filter.
-        let oversample = k.saturating_add(2);
-        let raw_hits_res = match embed_vec {
-            Some(vec) => rag.search_messages_with_vec(vec, oversample).await,
-            None => rag.search_messages(user_message, oversample).await,
-        };
-        let raw_hits = match raw_hits_res {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!(error = %e, "cross_session_recall: search_messages failed");
-                return String::new();
+            let mut s = String::from("\n## Cross-session message recall\n\n");
+            s.push_str(
+                "_(prior user messages from Postgres `agentic_memory`, excluding the current turn)_\n\n",
+            );
+            for (i, h) in hits.iter().enumerate() {
+                let snippet: String = h.content.chars().take(400).collect();
+                s.push_str(&format!(
+                    "{}. score={:.2}  kind={}  {}\n",
+                    i + 1,
+                    h.score,
+                    h.kind,
+                    snippet
+                ));
+                if h.content.chars().count() > 400 {
+                    s.push_str("   …(truncated)\n");
+                }
             }
-        };
-        // Filter out exact-content duplicates — the planner has no use for
-        // "the user previously asked X" where X is exactly the current
-        // message. (Edge case: a Qdrant write that already propagated by
-        // the time we read; or genuine repeat queries from the user.)
-        let trimmed_current = user_message.trim();
-        let filtered: Vec<_> = raw_hits
-            .into_iter()
-            .filter(|h| h.description.trim() != trimmed_current)
-            .take(k)
-            .collect();
-        if filtered.is_empty() {
-            return String::new();
+            s.push('\n');
+            return s;
         }
-        let mut s = String::from("\n## Cross-session message recall\n\n");
-        s.push_str("_(semantically-similar prior user messages from `tengu_messages`)_\n\n");
-        for (i, h) in filtered.iter().enumerate() {
-            // Truncate so the planner prompt stays bounded — same 400-char
-            // budget as the lite per-session history block.
-            let snippet: String = h.description.chars().take(400).collect();
-            s.push_str(&format!("{}. score={:.2}  {}\n", i + 1, h.score, snippet));
-            if h.description.chars().count() > 400 {
-                s.push_str("   …(truncated)\n");
-            }
+        #[cfg(not(feature = "postgres_memory"))]
+        {
+            let _ = (user_message, embed_vec);
+            String::new()
         }
-        s.push('\n');
-        s
     }
 
     /// Fix A (2026-05-09) — within-session output recall.
@@ -494,58 +492,58 @@ impl RagPlanner {
         if k == 0 {
             return String::new();
         }
-        let rag = match self.rag().await {
-            Ok(r) => r.clone(),
-            Err(e) => {
-                tracing::debug!(error = %e, "skip session_output_recall: RagStore unavailable");
+        #[cfg(feature = "postgres_memory")]
+        {
+            let hits =
+                match crate::adapters::plugins::agentic_memory::recall_step_outputs_for_session_with_vec(
+                    &self.session_id,
+                    user_message,
+                    embed_vec,
+                    k,
+                )
+                .await
+                {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "skip session_output_recall: agentic_memory unavailable");
+                        Vec::new()
+                    }
+                };
+            if hits.is_empty() {
                 return String::new();
             }
-        };
-        // Fix E — reuse the cached vector when plan() pre-computed it.
-        let hits_res = match embed_vec {
-            Some(vec) => {
-                rag.search_outputs_for_session_with_vec(vec, &self.session_id, k)
-                    .await
+            let mut s = String::from("\n## Recent step outputs (this session)\n\n");
+            s.push_str("_(prior subagent results from Postgres `agentic_memory`, filtered to this `session_id`)_\n\n");
+            for (i, h) in hits.iter().enumerate() {
+                let snippet: String = h.content.chars().take(400).collect();
+                let step = h.step_id.as_deref().unwrap_or(&h.id);
+                s.push_str(&format!(
+                    "{}. score={:.2}  kind={}  step={}\n   {}\n",
+                    i + 1,
+                    h.score,
+                    h.kind,
+                    step,
+                    snippet
+                ));
+                if h.content.chars().count() > 400 {
+                    s.push_str("   …(truncated)\n");
+                }
             }
-            None => {
-                rag.search_outputs_for_session(user_message, &self.session_id, k)
-                    .await
-            }
-        };
-        let hits = match hits_res {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!(error = %e, "session_output_recall: search failed");
-                return String::new();
-            }
-        };
-        if hits.is_empty() {
-            return String::new();
+            s.push('\n');
+            return s;
         }
-        let mut s = String::from("\n## Recent step outputs (this session)\n\n");
-        s.push_str("_(prior subagent results from `tengu_outputs`, filtered to this `session_id` — the planner can answer follow-up questions about completed work without redoing the steps)_\n\n");
-        for (i, h) in hits.iter().enumerate() {
-            let snippet: String = h.description.chars().take(400).collect();
-            s.push_str(&format!(
-                "{}. score={:.2}  step={}\n   {}\n",
-                i + 1,
-                h.score,
-                h.name,
-                snippet
-            ));
-            if h.description.chars().count() > 400 {
-                s.push_str("   …(truncated)\n");
-            }
+        #[cfg(not(feature = "postgres_memory"))]
+        {
+            let _ = (user_message, embed_vec);
+            String::new()
         }
-        s.push('\n');
-        s
     }
 
-    /// Phase 6.4 (full) — durably persist a user message to `tengu_messages`.
+    /// Phase 6.4 (full) — durably persist a user message to the configured
+    /// runtime memory backend.
     /// Called from `plan()` only (not `replan()`, which receives the same
     /// `user_message` in the same turn cycle — a second write would create
-    /// a duplicate row). Fail-soft: any error path (RagStore unavailable,
-    /// embedder rate-limit, Qdrant unreachable) is logged and swallowed
+    /// a duplicate row). Fail-soft: any memory/backend error is logged and swallowed
     /// because the planner must still be able to plan + respond.
     ///
     /// `step_id` is `None` because this is a top-of-turn user message,
@@ -555,96 +553,38 @@ impl RagPlanner {
         if trimmed.is_empty() {
             return;
         }
-        let rag = match self.rag().await {
-            Ok(r) => r.clone(),
-            Err(e) => {
-                tracing::debug!(error = %e, "skip persist_user_message: RagStore unavailable");
-                return;
+        #[cfg(feature = "postgres_memory")]
+        {
+            match crate::adapters::plugins::agentic_memory::write_user_message_with_embedding(
+                &self.session_id,
+                trimmed,
+                embed_vec,
+            )
+            .await
+            {
+                Ok(id) => tracing::debug!(
+                    id = %id,
+                    session_id = %self.session_id,
+                    "persisted user message to agentic_memory"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    session_id = %self.session_id,
+                    "persist_user_message to agentic_memory failed; continuing without durable write"
+                ),
             }
-        };
-        let created_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let entry = crate::adapters::rag::MemoryEntry {
-            kind: crate::adapters::rag::MemoryKind::Message,
-            session_id: self.session_id.clone(),
-            step_id: None,
-            content: trimmed.to_string(),
-            created_at,
-        };
-        // Fix E — reuse the cached vector when available; the trimmed
-        // content matches the input the embedder would have used (modulo
-        // leading/trailing whitespace, which the embedder ignores anyway).
-        let store_res = match embed_vec {
-            Some(vec) => rag.store_memory_with_vec(entry, vec.to_vec()).await,
-            None => rag.store_memory(entry).await,
-        };
-        match store_res {
-            Ok(id) => tracing::debug!(
-                id = %id,
-                session_id = %self.session_id,
-                "persisted user message to tengu_messages"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                session_id = %self.session_id,
-                "persist_user_message failed; continuing without durable write"
-            ),
+            return;
         }
-    }
-
-    /// Build the ranked-roster markdown block injected before the user message.
-    /// Groups hits by kind so the LLM can see agents/skills/tools separately.
-    fn format_roster(results: &[crate::adapters::rag::RagResult]) -> String {
-        use crate::adapters::rag::RagKind;
-
-        let mut agents = Vec::new();
-        let mut skills = Vec::new();
-        let mut tools = Vec::new();
-        for r in results {
-            let line = format!(
-                "{}. {} (score: {:.2})\n   {}",
-                // numbered later per-section
-                "#",
-                r.name,
-                r.score,
-                r.description.lines().next().unwrap_or(&r.description)
-            );
-            match r.kind {
-                RagKind::Agent => agents.push(line),
-                RagKind::Skill => skills.push(line),
-                RagKind::Tool => tools.push(line),
-            }
+        #[cfg(not(feature = "postgres_memory"))]
+        {
+            let _ = embed_vec;
         }
-
-        let mut out = String::new();
-        let render = |label: &str, items: &[String], out: &mut String| {
-            if items.is_empty() {
-                return;
-            }
-            out.push_str(&format!("## Available {} (ranked by relevance)\n\n", label));
-            for (i, item) in items.iter().enumerate() {
-                // Replace the placeholder "#" prefix with the index.
-                let numbered = item.replacen('#', &(i + 1).to_string(), 1);
-                out.push_str(&numbered);
-                out.push_str("\n\n");
-            }
-        };
-        render("agents", &agents, &mut out);
-        render("skills", &skills, &mut out);
-        render("tools", &tools, &mut out);
-        if out.is_empty() {
-            out.push_str("## Roster\n\n_(no results — RAG registry empty?)_\n\n");
-        }
-        out
     }
 }
 
 /// Read `skills/orchestrator/SKILL.md` from cwd and return the body
 /// (everything after the YAML frontmatter, if present). Returns `None` if
 /// the file is missing or unreadable. Phase 4c.
-#[cfg(feature = "qdrant")]
 fn load_orchestrator_skill_body() -> Option<String> {
     let path = std::path::Path::new("skills/orchestrator/SKILL.md");
     let content = std::fs::read_to_string(path).ok()?;
@@ -667,10 +607,9 @@ fn load_orchestrator_skill_body() -> Option<String> {
 
 /// Last-resort planner prompt used when `skills/orchestrator/SKILL.md` is
 /// missing on disk. Phase 4c.
-#[cfg(feature = "qdrant")]
 const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
 
-For every user message you receive a ranked roster of available agents, skills, and tools (with similarity scores), and the user's message.
+For every user message you receive the available agents, skills, tools, and the user's message.
 
 Output ONLY raw JSON. No prose, no markdown fences. Pick exactly one of:
 
@@ -679,66 +618,36 @@ Output ONLY raw JSON. No prose, no markdown fences. Pick exactly one of:
   {\"kind\":\"plan\",\"steps\":[{\"id\":\"s1\",\"agent\":\"<exact name from roster>\",\"goal\":\"<one-sentence instruction>\",\"depends_on\":[]}]}
 
 Rules:
-- NEVER invent an agent name. If no agent above score 0.6, return a Direct asking the user to clarify.
+- NEVER invent an agent name. If no listed agent fits, return a Direct asking the user to clarify.
 - Keep plans minimal — one step is enough most of the time.
 - The harness rejects anything that is not valid JSON matching one of the two shapes above.
 ";
 
-#[cfg(feature = "qdrant")]
 #[async_trait]
 impl Planner for RagPlanner {
+    fn session_id(&self) -> Option<String> {
+        Some(self.session_id.clone())
+    }
+
     async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
-        // Fix E (2026-05-09) — embed the user message ONCE per turn and
-        // reuse the vector across every retrieval lane (registry / messages /
-        // outputs) plus the persist write to `tengu_messages`. Pre Fix-E the
-        // same text was embedded up to 4 times per plan() call: once each
-        // for search_registry, cross_session_recall_block, persist write,
-        // and session_output_recall_block. That's the source of the
-        // "embedding API quota exceeded" the user hit. Fail-soft: if the
-        // single embed call fails, every downstream lane sees `None` and
-        // falls back to its own embed-then-fail-soft path (same as
-        // pre Fix-E behaviour).
-        let embed_vec: Option<Vec<f32>> = match self.rag().await {
-            Ok(rag) => match rag.embedder().embed(user_message).await {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "plan: embedder failed; RAG lanes will fail-soft this turn"
-                    );
-                    None
-                }
-            },
-            Err(_) => None,
-        };
+        // Embed the user message once per turn and reuse the vector across
+        // Postgres memory recall/write lanes when `postgres_memory` is on.
+        // Planner registry routing itself is file-backed and does not embed.
+        #[cfg(feature = "postgres_memory")]
+        let embed_vec: Option<Vec<f32>> = self.embed_text(user_message).await;
+        #[cfg(not(feature = "postgres_memory"))]
+        let embed_vec: Option<Vec<f32>> = None;
         let embed_slice = embed_vec.as_deref();
 
-        let hits = match (self.rag().await, embed_slice) {
-            (Ok(rag), Some(vec)) => rag
-                .search_registry_with_vec(vec, self.top_k)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "rag search_registry failed; falling back to empty roster");
-                    Vec::new()
-                }),
-            (Ok(_), None) => {
-                // Embedder failed above. Don't double-warn here — that path
-                // already logged the error.
-                Vec::new()
-            }
-            (Err(e), _) => {
-                tracing::warn!(error = %e, "RagStore unavailable; falling back to empty roster");
-                Vec::new()
-            }
-        };
+        let (registry_block, hits) = self.load_registry_block().await;
 
         // Phase 6.1 (lite + full) — surface the planner's input roster on
         // both the tracing channel (always) and the OrchestratorEvent bus
         // (when one is wired into this planner).
         emit_rag_query("plan", user_message, &hits, self.bus.as_ref());
 
-        // Phase 6.4 (full, read-back) — semantic recall of prior user
-        // messages from `tengu_messages` BEFORE we persist the current
+        // Semantic recall of prior user messages from runtime memory BEFORE
+        // we persist the current
         // one, so the just-written message can never appear in its own
         // recall block by construction. Off when `cross_session_msg_top_k`
         // is 0 (default). Fail-soft.
@@ -766,10 +675,9 @@ impl Planner for RagPlanner {
             .session_output_recall_block(user_message, embed_slice)
             .await;
 
-        let roster = Self::format_roster(&hits);
         let combined = format!(
             "{}{}{}{}\n## User message (current turn)\n\n{}",
-            roster, cross_session_block, history_block, session_recall_block, user_message
+            registry_block, cross_session_block, history_block, session_recall_block, user_message
         );
 
         // Per-layer breakdown captured BEFORE the LLM call so the metric
@@ -778,7 +686,7 @@ impl Planner for RagPlanner {
         // part of `combined` but still part of what the LLM sees.
         let layers = vec![
             crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
-            crate::adapters::metrics::MetricsLayer::from_text("roster", &roster),
+            crate::adapters::metrics::MetricsLayer::from_text("roster", &registry_block),
             crate::adapters::metrics::MetricsLayer::from_text(
                 "cross_session",
                 &cross_session_block,
@@ -819,42 +727,64 @@ impl Planner for RagPlanner {
         failed_step_id: &str,
         error: &str,
     ) -> anyhow::Result<PlannerVerdict> {
-        let hits = match self.rag().await {
-            Ok(rag) => rag
-                .search_registry(user_message, self.top_k)
-                .await
-                .unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+        let (registry_block, hits) = self.load_registry_block().await;
         emit_rag_query("replan", user_message, &hits, self.bus.as_ref());
 
         // Phase 6.5 — cross-plan recall. Pull the top-K most similar
-        // step outputs / file chunks from `tengu_outputs` so the planner
-        // sees relevant prior work before deciding the new plan. Failure
-        // is non-fatal — we still replan with whatever roster we have.
+        // step outputs so the planner sees relevant prior work before
+        // deciding the new plan. Failure is non-fatal — we still replan
+        // with whatever roster we have.
         let recall_k = self.memory_config.cross_plan_top_k;
-        let recall_hits: Vec<crate::adapters::rag::RagResult> = match self.rag().await {
-            Ok(rag) if recall_k > 0 => {
-                let q = format!("{} {} {}", user_message, failed_step_id, error);
-                rag.search_memory(&q, recall_k).await.unwrap_or_default()
-            }
-            _ => Vec::new(),
-        };
-        let recall_block = if recall_hits.is_empty() {
+        let recall_query = format!("{} {} {}", user_message, failed_step_id, error);
+        let recall_block = if recall_k == 0 {
             String::new()
         } else {
-            let mut s = String::from("\n## Relevant prior step outputs (cross-plan recall)\n\n");
-            for (i, h) in recall_hits.iter().enumerate() {
-                let snippet: String = h.description.chars().take(400).collect();
-                s.push_str(&format!(
-                    "{}. score={:.2}  {}\n   {}\n\n",
-                    i + 1,
-                    h.score,
-                    h.name,
-                    snippet
-                ));
+            #[cfg(feature = "postgres_memory")]
+            {
+                let embed_vec = self.embed_text(&recall_query).await;
+                let hits =
+                    match crate::adapters::plugins::agentic_memory::recall_step_outputs_with_vec(
+                        &recall_query,
+                        embed_vec.as_deref(),
+                        recall_k,
+                    )
+                    .await
+                    {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::debug!(
+                                error = %e,
+                                "skip cross-plan recall: agentic_memory unavailable"
+                            );
+                            Vec::new()
+                        }
+                    };
+                if hits.is_empty() {
+                    String::new()
+                } else {
+                    let mut s =
+                        String::from("\n## Relevant prior step outputs (cross-plan recall)\n\n");
+                    s.push_str("_(prior subagent results from Postgres `agentic_memory`)_\n\n");
+                    for (i, h) in hits.iter().enumerate() {
+                        let snippet: String = h.content.chars().take(400).collect();
+                        let step = h.step_id.as_deref().unwrap_or(&h.id);
+                        s.push_str(&format!(
+                            "{}. score={:.2}  kind={}  step={}\n   {}\n\n",
+                            i + 1,
+                            h.score,
+                            h.kind,
+                            step,
+                            snippet
+                        ));
+                    }
+                    s
+                }
             }
-            s
+            #[cfg(not(feature = "postgres_memory"))]
+            {
+                let _ = &recall_query;
+                String::new()
+            }
         };
 
         // Phase 6.4 (lite) — recent dialogue context for replan too.
@@ -862,7 +792,7 @@ impl Planner for RagPlanner {
         // earlier in this turn cycle); just read the last N for injection.
         let history_block = self.format_history_only().await;
 
-        // Phase 6.4 (full, read-back) — semantic recall over `tengu_messages`.
+        // Semantic recall over runtime memory.
         // Same shape as the plan() call. Independent of the cross-plan
         // (`tengu_outputs`) recall above; both can appear in the prompt.
         // Replan doesn't pre-cache an embedding for the user message
@@ -870,7 +800,6 @@ impl Planner for RagPlanner {
         // so `embed_vec = None` falls through to the str-input path.
         let cross_session_block = self.cross_session_recall_block(user_message, None).await;
 
-        let roster = Self::format_roster(&hits);
         let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
         let failure_block = format!(
             "\n## A previous plan failed\n\n\
@@ -881,7 +810,7 @@ impl Planner for RagPlanner {
         );
         let context = format!(
             "{}{}{}{}{}## Original user message\n\n{}",
-            roster,
+            registry_block,
             cross_session_block,
             history_block,
             recall_block,
@@ -891,7 +820,7 @@ impl Planner for RagPlanner {
 
         let layers = vec![
             crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
-            crate::adapters::metrics::MetricsLayer::from_text("roster", &roster),
+            crate::adapters::metrics::MetricsLayer::from_text("roster", &registry_block),
             crate::adapters::metrics::MetricsLayer::from_text(
                 "cross_session",
                 &cross_session_block,
@@ -928,7 +857,6 @@ impl Planner for RagPlanner {
 /// engine telemetry and emit it via the global metrics sink. Pure side-effect
 /// — never returns an error and never blocks. Phase metrics — landed
 /// alongside the metrics module.
-#[cfg(feature = "qdrant")]
 #[allow(clippy::too_many_arguments)]
 fn emit_planner_metrics(
     phase: &'static str,
@@ -961,7 +889,9 @@ fn emit_planner_metrics(
         total_tokens,
         prompt_chars,
         prompt_bytes,
-        response_chars: telemetry.response_chars.max(raw_response.chars().count() as u32),
+        response_chars: telemetry
+            .response_chars
+            .max(raw_response.chars().count() as u32),
         latency_ms: telemetry.latency_ms,
         layers,
         step_id: None,
@@ -972,7 +902,6 @@ fn emit_planner_metrics(
 /// markdown "recent dialogue" block. Shows the last `limit` user messages.
 /// Returns an empty string when there's only one entry (just the current
 /// turn — no prior context worth showing).
-#[cfg(feature = "qdrant")]
 fn format_history(hist: &[String], limit: usize) -> String {
     if hist.len() <= 1 {
         return String::new();
@@ -1006,11 +935,10 @@ fn format_history(hist: &[String], limit: usize) -> String {
 /// `Err` only when there are no live receivers, which is the steady
 /// state on cold-start before the channel adapter subscribes; we silently
 /// ignore that case rather than spamming warnings.
-#[cfg(feature = "qdrant")]
 fn emit_rag_query(
     phase: &'static str,
     query: &str,
-    hits: &[crate::adapters::rag::RagResult],
+    hits: &[RegistryHit],
     bus: Option<&crate::adapters::orchestrator::events::EventBus>,
 ) {
     // Tracing — same shape as the lite version, kept for `RUST_LOG=tengu=info`.
@@ -1020,7 +948,7 @@ fn emit_rag_query(
         let summary: Vec<String> = hits
             .iter()
             .take(10)
-            .map(|h| format!("{}:{}={:.2}", h.kind.as_str(), h.name, h.score))
+            .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
             .collect();
         tracing::info!(
             phase,
@@ -1043,11 +971,13 @@ fn emit_rag_query(
                 score: h.score,
             })
             .collect();
-        let _ = bus.send(crate::adapters::orchestrator::events::OrchestratorEvent::RagQueried {
-            phase,
-            query: query.to_string(),
-            hits: payload_hits,
-        });
+        let _ = bus.send(
+            crate::adapters::orchestrator::events::OrchestratorEvent::RagQueried {
+                phase,
+                query: query.to_string(),
+                hits: payload_hits,
+            },
+        );
     }
 }
 

@@ -39,7 +39,7 @@ prior-round tool results to first-line-only mid-loop).
 │ Layer 3  Inner tool loop         engine_builder.rs               │
 │ Layer 4  MCP bridge              claude_code_engine.rs           │
 │ Layer 5  Subagent IPC            runner.rs, main.rs::run_agent   │
-│ Layer 6  RAG storage hygiene     rag/cleanup.rs, rag/indexer.rs  │
+│ Layer 6  Open Brain / Wiki state orchestrator/shared_files.rs     │
 │ Layer 7  File chunking           plugins/memory/persistent_store │
 │ Layer 8  Observability           metrics.rs (added 2026-04-28)   │
 └─────────────────────────────────────────────────────────────────┘
@@ -47,7 +47,9 @@ prior-round tool results to first-line-only mid-loop).
 
 A user message hits Layers 1→2→3 (potentially →4) on the planner-side
 turn, then Layers 5→3 (→4) on each subagent step. Layers 0, 6, 7 are
-infrastructure consumed by the others. **Layer 8 is orthogonal** — it
+infrastructure consumed by the others. Layer 6 is now Open Brain live memory
+plus Karpathy LLM Wiki compiled state; legacy vector cleanup is compatibility
+only. **Layer 8 is orthogonal** — it
 observes the output of layers 2/3/5 (LLM calls) and the embedder, then
 emits records onto a process-global broadcast bus + tracing. It never
 mutates a prompt.
@@ -150,7 +152,7 @@ Newest contiguous suffix of `state.messages` whose token estimate fits
 `history_budget`. Hard ceiling of **20 messages** even if budget allows
 more (`MAX_HISTORY_MESSAGES = 20`).
 
-### 6. Memory recall block (Qdrant)
+### 6. Memory recall block
 
 Driven by `MemoryConfig`. Default knobs:
 
@@ -160,7 +162,14 @@ Driven by `MemoryConfig`. Default knobs:
 | `max_recall_tokens` | 600 | total budget for the recall block |
 | `session_recent_n` | 10 | recent messages from same session, deterministic (no vector search) |
 | `cross_session_msg_top_k` | 0 | semantic match across sessions; 0 = disabled |
-| `cross_plan_top_k` | 5 | recall over `tengu_outputs` (planner replan path) |
+| `cross_plan_top_k` | 5 | planner replan recall over prior step outputs |
+
+Planner registry context now comes from root `TENGU_PLANNER_REGISTRY.md`,
+regenerated from agents/skills/tools before planner calls. Builds with
+`postgres_memory` use Postgres `agentic_memory` for planner user-message
+persistence, cross-session message recall, within-session step-output
+recall, and replan cross-plan recall. Without `postgres_memory`, these
+durable planner-memory lanes are empty.
 
 The block is fenced via `fencing.rs::build_memory_context_block` — wrapped
 in `<memory-context>...</memory-context>` with a system note instructing
@@ -283,10 +292,10 @@ steps.
 ### 16. `compress_and_store` durable summary
 
 The harness-enforced "step is done" signal. Implicitly appended to every
-subagent's tool list. The model calls it with a `summary` string; that
-string is embedded and persisted to Qdrant `tengu_outputs` keyed by
-`session_id` + `step_id`. Two dispatch paths converge on the same
-`write_summary`:
+subagent's tool list. The model calls it with a `summary` string. With
+`postgres_memory`, the summary is written to Postgres `agentic_memory`
+with embeddings when available and text-only fallback otherwise. Legacy vector
+builds keep the old compatibility path. Dispatch:
 
 | Path | Trigger |
 |---|---|
@@ -308,34 +317,31 @@ the `compress_and_store` warn path on exhaust.
 
 ### 19. Cross-plan recall (planner replan side)
 
-`RagPlanner::replan` calls `search_memory(query, OUTPUTS_COLLECTION)`
-to surface past step summaries to the planner LLM. This is the entire
-point of writing to `tengu_outputs` — the planner's later turns can
-recall what subagents already produced. Capped by `cross_plan_top_k`
-(default 5).
+`RagPlanner::replan` (legacy planner type name) surfaces past step summaries to the planner LLM.
+With `postgres_memory`, it queries Postgres `agentic_memory` step outputs
+via pgvector first and FTS fallback. Without that feature, planner memory
+lanes are empty. Capped by `cross_plan_top_k` (default 5).
 
 ---
 
-## Layer 6 — RAG storage hygiene
+## Layer 6 — Open Brain / Wiki State
 
-`rag/cleanup.rs`, `rag/indexer.rs`.
+`orchestrator/shared_files.rs`, `plugins/agentic_memory/`, and legacy
+`rag/cleanup.rs`.
 
-### 20. `ttl_cleanup` (Phase 6.3)
+### 20. Open Brain live memory
 
-Qdrant filter-based delete over `tengu_messages` and `tengu_outputs`
-where `rag_created_at < (now - ttl_days * 86_400)`. Trigger:
-`MemoryConfig.ttl_days > 0`. Default `0` (permanent retention). Runs at
-chat cold-start.
+With `postgres_memory`, user messages, step summaries, files, and transcript
+chunks land in Postgres `agentic_memory` tables. Recall uses pgvector first
+and FTS fallback. Legacy vector cleanup remains only for compatibility builds.
 
-### 21. Workspace fingerprint dedup (Phase 6.2)
+### 21. Karpathy LLM Wiki + planner files
 
-`<workspace_root>/.tengu/registry-fingerprint`. SHA-256 over agent TOMLs
-+ skill MDs + tool defs. `reindex_all_workspace` skips the full embed
-when fingerprint matches. Bypass: `TENGU_REGISTRY_FORCE_REINDEX=1`.
-
-This is "context management" only in the sense that it controls what
-the *planner* sees in `tengu_registry` — but a stale registry is
-effectively a context-shape bug, so it earns the layer.
+Root `TENGU_PLANNER_REGISTRY.md` is regenerated from agent TOMLs, skill
+frontmatter, and core tool definitions before planner calls. It is loaded
+directly into the planner prompt, so planner routing no longer depends on
+old registry search or registry fingerprints. Stable promoted knowledge
+is compiled into `.tengu/agentic-memory/wiki/*.md`.
 
 ---
 
@@ -460,8 +466,8 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 21 | 5 | `compress_and_store` | skill_lifecycle/...rs | implicit append |
 | 22 | 5 | Phase 5c protocol | main.rs:900 | three rows |
 | 23 | 5 | subprocess `max_turns` | runner.rs:39 | 20 |
-| 24 | 6 | `ttl_cleanup` | rag/cleanup.rs:24 | `ttl_days=0` |
-| 25 | 6 | fingerprint dedup | rag/indexer.rs:64 | sha256 |
+| 24 | 6 | Open Brain memory | plugins/agentic_memory | Postgres |
+| 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
 | 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
 | 27 | 8 | `MetricsRecord` (Planner/Subagent/Embedding) | metrics.rs | always-on |
 | 28 | 8 | Per-context-layer attribution | orchestrator/planner.rs::emit_planner_metrics | approximate |
@@ -483,13 +489,12 @@ Comparison points for future sessions:
 - **No `/compact` slash command** in the TUI.
 - **No semantic dedupe** of repeated tool calls. Two identical
   `http_request` calls keep both full responses.
-- **No retrieval over prior turns of the current session for the chat
-  loop.** `tengu_messages` exists, but only `cross_session_recall_block`
-  (planner-side, opt-in) reads it. The chat-side recall path queries
-  the legacy memory provider.
+- **No automatic chat-loop recall from Open Brain yet.** Planner-side opt-in
+  recall reads Postgres `agentic_memory`; chat-side recall still uses the
+  legacy memory provider.
 - **Subagent step traces are NEVER fed back into the planner's history.**
-  Only the `compress_and_store` summary survives, and only
-  `RagPlanner::replan` reads it for cross-plan recall.
+  Only the `compress_and_store` summary survives. With `postgres_memory`,
+  planner replan can read those summaries for cross-plan recall.
 - **Claude Code engine has zero in-loop compaction.** Layer 4's
   `max_mcp_result_chars` is the only governor on that path. If a Claude
   Code subagent fans out a lot of tool calls, Claude's own context
@@ -512,8 +517,8 @@ Comparison points for future sessions:
 | `[truncated — showing X of Y chars]` in tool output | Layer 3 #14 (`max_tool_result_chars`) — bump or paginate |
 | Claude Code subagent stops citing old tool results | Layer 4 #19 (MCP bridge cap) — bump `TENGU_BRIDGE_MAX_RESULT_CHARS` |
 | "model finished without calling compress_and_store" warn | Layer 5 #22 (Phase 5c) — graceful path; final text became the summary |
-| Planner picks the same agent on replan despite obvious progress | Layer 5 #19 (`cross_plan_top_k`) — recall not surfacing the prior summary |
-| Stale agents/skills in the planner roster | Layer 6 #25 (fingerprint dedup) — `TENGU_REGISTRY_FORCE_REINDEX=1` |
+| Planner picks the same agent on replan despite obvious progress | Layer 5 #19 (`cross_plan_top_k`) — Postgres recall not surfacing the prior summary |
+| Stale agents/skills in the planner roster | Layer 6 #25 — inspect root `TENGU_PLANNER_REGISTRY.md`; it regenerates before planner calls |
 | "Why is this turn so big?" — diagnose context bloat | Layer 8 #28 — set `RUST_LOG=tengu=debug` and read the `metrics.layer` lines for the planner call (chars per layer) |
 | Need rolling totals for cost analysis in the TUI | Layer 8 #29/#31 — set `TENGU_TUI_METRICS=1`; aggregator absorbs records even when panel is off |
 | Subagent token counts missing in parent logs | Layer 8 #30 — child binary may be old (no `metrics` field). Rebuild both parent and child. |
@@ -525,7 +530,7 @@ Comparison points for future sessions:
 - **[`context-management-2026-04-27.svg`](./context-management-2026-04-27.svg)** — the full layered diagram (this doc's picture).
 - **[`context-management-2026-04-27.html`](./context-management-2026-04-27.html)** — interactive explorer (search the mechanisms, walk a turn, drag config knobs).
 - **[`context-cutting-flow-2026-04-27.{svg,html}`](./context-cutting-flow-2026-04-27.svg)** — focused view: Layer 3 (the inner tool loop). Most useful when debugging something inside `collect_engine_response`.
-- **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or `tengu_outputs`.
+- **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
 *Last updated 2026-04-27. If you change any of the mechanisms above,
 update this doc in the same commit.*

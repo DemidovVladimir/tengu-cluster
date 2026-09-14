@@ -96,7 +96,6 @@
     <a href="index.html">Home</a>
     <a href="features.html" class="active">Features</a>
     <a href="howto.html">How-to</a>
-    <a href="rag.html">RAG</a>
     <a href="memory.html">Memory</a>
     <a href="context.html">Context</a>
   </div>
@@ -162,10 +161,10 @@
     // ── RAG / Memory ────────────────────────────────────────────────
     {
       cat: "rag", title: "tengu_registry",
-      summary: "Qdrant collection of agents + skills + tools, indexed for semantic routing.",
+      summary: "File-backed registry (TENGU_PLANNER_REGISTRY.md) of agents + skills + tools the planner reads each turn.",
       file: "src/adapters/rag/{indexer,query}.rs",
       doc:  "Each agent is indexed twice: once on its description, once per example_queries entry. Each skill on its description. Each tool on its name+description. text-embedding-3-small (1536d).",
-      key:  "Auto-reindexed on first chat turn (RagPlanner::auto_reindex_once). Force with TENGU_REGISTRY_FORCE_REINDEX=1 if Qdrant was reset."
+      key:  "Regenerated from agents/, skills and tool defs before every planner call (orchestrator/shared_files.rs). Edit TOML/SKILL.md and restart — no reindex."
     },
     {
       cat: "rag", title: "Per-example vectors",
@@ -185,7 +184,7 @@
       cat: "rag", title: "tengu_outputs",
       summary: "Compressed step summaries — what the planner uses for cross-plan recall on replan.",
       file: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs",
-      doc:  "Subagent's 'I'm done' tool. Embeds the LLM-summarised step output and writes to Qdrant tengu_outputs keyed by session_id + step_id. Implicitly appended to every subagent.",
+      doc:  "Subagent's 'I'm done' tool. Embeds the LLM-summarised step output and writes to Postgres agentic_memory keyed by session_id + step_id. Implicitly appended to every subagent.",
       key:  "Never list compress_and_store in agents/*.toml::tools — the runner appends it."
     },
     {
@@ -193,7 +192,7 @@
       summary: "Skip reindex when the workspace hasn't changed.",
       file: ".tengu/registry-fingerprint",
       doc:  "Phase 6.2. Hash of every agent spec + skill + tool. Cached file. Auto-reindex compares; matches → skip. Saves ~29 embedding calls per startup.",
-      key:  "Bypass with TENGU_REGISTRY_FORCE_REINDEX=1 — needed if Qdrant was reset since last run."
+      key:  "No fingerprint gate any more — the registry file is rewritten every planner turn."
     },
     {
       cat: "rag", title: "Cross-session recall",
@@ -206,7 +205,7 @@
       cat: "rag", title: "TTL purge",
       summary: "Filter-based delete on tengu_messages and tengu_outputs.",
       file: "src/adapters/rag/cleanup.rs",
-      doc:  "Default ttl_days = 0 (never purge). When > 0, ttl_cleanup is intended to delete entries older than the cutoff via a Qdrant filter.",
+      doc:  "Default ttl_days = 0 (never purge). When > 0, ttl_cleanup is intended to delete entries older than the cutoff via a Postgres agentic_memory filter.",
       key:  "Open: filter-based delete still has a TODO."
     },
 
@@ -384,8 +383,8 @@
       cat: "surface", title: "Webhooks (inbound HTTP)",
       summary: "tengu listens for POSTs and dispatches per-request orchestrator turns. HMAC-SHA256 auth. Full doc: docs/webhooks-2026-05-11.md",
       file: "src/adapters/webhook_builder.rs",
-      doc:  "Each [webhooks.endpoints.<name>] block in the sandbox config binds /webhooks/<name> to one agent + one HMAC secret. Per-request session_id (webhook-<name>-<uuid>). Async-only response: 202 Accepted with {session_id}; agent runs in background. Fix H persists every turn's final text to tengu_outputs with synthetic step_id 'webhook-handler' — guaranteed recallable.",
-      key:  "Feature-gated: cargo build --features webhooks. Run with: tengu webhooks --sandbox <name>. Verify a run landed: tengu memory inspect --session webhook-<name>-<uuid>. Canonical operator doc: docs/webhooks-2026-05-11.md."
+      doc:  "Each [webhooks.endpoints.<name>] block in the sandbox config binds /webhooks/<name> to one agent + one HMAC secret. Per-request session_id (webhook-<name>-<uuid>). Async-only response: 202 Accepted with {session_id}; agent runs in background. Fix H persists every turn's final text to Postgres agentic_memory with synthetic step_id 'webhook-handler' — guaranteed recallable.",
+      key:  "Feature-gated: cargo build --features webhooks. Run with: tengu webhooks --sandbox <name>. Verify a run landed: query Postgres agentic_memory via TENGU_MEMORY_DATABASE_URL, filtering session_id = webhook-<name>-<uuid>. Canonical operator doc: docs/webhooks-2026-05-11.md."
     },
     {
       cat: "surface", title: "Sandboxes",

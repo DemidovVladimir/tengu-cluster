@@ -31,11 +31,7 @@ pub(crate) struct NoopRuntimeToolExecutor;
 
 #[async_trait]
 impl ToolExecutor for NoopRuntimeToolExecutor {
-    async fn execute(
-        &self,
-        _call: &ToolCall,
-        _messages: &[Message],
-    ) -> Result<String> {
+    async fn execute(&self, _call: &ToolCall, _messages: &[Message]) -> Result<String> {
         bail!("no-op executor: tool calls are not enabled in this run")
     }
 }

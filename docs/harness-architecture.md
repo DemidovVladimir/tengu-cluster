@@ -312,7 +312,7 @@ All six limitations originally noted at the time of the four-PR merge have been 
 
 2. **Per-id delete.** ✅ Fixed. `VectorStore::delete(id)` + `VectorStore::write` now returns the synthetic entry id. `persistent_store` tracks `chunk_ids` in its `FileManifest` and calls `MemoryManager::delete_entry(id)` per chunk on file delete. Legacy manifests without ids log a warning.
 
-3. **`/purge` clears memory.** ✅ Fixed. Telegram `/purge` and TUI `/purge` both call `MemoryManager::clear_all()` which delegates to `VectorStore::clear_all()`. Disk impl truncates + flushes; Qdrant impl deletes the collection and recreates it with the same vector config.
+3. **`/purge` clears memory.** ✅ Fixed. Telegram `/purge` and TUI `/purge` both call `MemoryManager::clear_all()` which delegates to `VectorStore::clear_all()`. Disk impl truncates + flushes; legacy vector DB impl deletes the collection and recreates it with the same vector config.
 
 4. **TUI status line shows memory stats.** ✅ Fixed. `VectorStore::entry_count()` + `storage_bytes()` added. `MemoryManager::stats() -> Option<(usize, u64)>` surfaces them. TUI updates the status bar after each turn: `mem: N entries / M KB`.
 
@@ -502,7 +502,7 @@ Memory is automatic IF `build_memory_manager` returned `Some` at startup. Precon
 
 Logs:
 - `"DiskVectorStore loaded"` — disk backend ready.
-- `"QdrantVectorStore connected"` — Qdrant backend ready.
+- `"QdrantVectorStore connected"` — legacy vector DB backend ready.
 - `"OPENROUTER_API_KEY not set, memory disabled"` — backend didn't initialize.
 
 Status:
@@ -535,7 +535,7 @@ For future work, the harness is explicitly designed to accept extensions at thes
 | Extension | Interface | Typical use |
 |---|---|---|
 | New channel (Slack, Discord, HTTP API) | Implement `ChatInputsFn` closure + call `build_orchestrator` | Wiring a new IM/API endpoint into the same orchestration flow |
-| New memory backend | `impl VectorStore` (and register via `MemoryManager::set_vector_backend`) | Swap Qdrant for Pinecone, or add an in-memory mock for tests |
+| New memory backend | `impl VectorStore` (and register via `MemoryManager::set_vector_backend`) | Swap legacy vector DB for Pinecone, or add an in-memory mock for tests |
 | External memory provider (LangMem, Letta, Mem0) | `impl MemoryProvider` + `MemoryManager::add_provider` | Layer semantic-memory products over the builtin store |
 | Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `OrchestratorAgentPlanner` | Skip LLM planner calls for recognized patterns |
 | Custom worker handle (delegate to remote cluster, Modal, etc.) | `impl WorkerHandle` | Fan work out to hosted inference instead of local engine |

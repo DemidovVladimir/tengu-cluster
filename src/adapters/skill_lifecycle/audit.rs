@@ -162,6 +162,9 @@ mod tests {
     fn now_ts_is_rfc3339() {
         let ts = now_ts();
         let parsed = DateTime::parse_from_rfc3339(&ts);
-        assert!(parsed.is_ok(), "now_ts() should parse as RFC3339, got: {ts}");
+        assert!(
+            parsed.is_ok(),
+            "now_ts() should parse as RFC3339, got: {ts}"
+        );
     }
 }

@@ -120,9 +120,8 @@ impl Tool for ViewSkillTool {
             "read" => {
                 let skill = require_str(args, VIEW_SKILL_TOOL_NAME, "skill")?;
                 validate_skill_name(skill)?;
-                let (skill_dir, tier) = locate_skill_dir(skill, &cwd()).ok_or_else(|| {
-                    anyhow!("no skill '{}' found in any tier", skill)
-                })?;
+                let (skill_dir, tier) = locate_skill_dir(skill, &cwd())
+                    .ok_or_else(|| anyhow!("no skill '{}' found in any tier", skill))?;
                 read_skill(skill, &skill_dir, tier)
             }
             "read_resource" => {
@@ -130,9 +129,8 @@ impl Tool for ViewSkillTool {
                 let path = require_str(args, VIEW_SKILL_TOOL_NAME, "path")?;
                 validate_skill_name(skill)?;
                 validate_path_under_resources(path)?;
-                let (skill_dir, _tier) = locate_skill_dir(skill, &cwd()).ok_or_else(|| {
-                    anyhow!("no skill '{}' found in any tier", skill)
-                })?;
+                let (skill_dir, _tier) = locate_skill_dir(skill, &cwd())
+                    .ok_or_else(|| anyhow!("no skill '{}' found in any tier", skill))?;
                 let resources_dir = skill_dir.join("resources");
                 read_resource(skill, &resources_dir, path)
             }
@@ -182,11 +180,7 @@ fn validate_path_under_resources(rel: &str) -> Result<()> {
         bail!("path is empty");
     }
     if rel.len() > MAX_PATH_LEN {
-        bail!(
-            "path is {} bytes — over {} limit",
-            rel.len(),
-            MAX_PATH_LEN
-        );
+        bail!("path is {} bytes — over {} limit", rel.len(), MAX_PATH_LEN);
     }
     if rel.starts_with('/') {
         bail!("path '{}' is absolute; must be relative to resources/", rel);
@@ -441,8 +435,8 @@ fn read_skill(skill: &str, skill_dir: &Path, tier: Tier) -> Result<ToolOutput> {
             .to_string(),
         ));
     }
-    let content = std::fs::read_to_string(&skill_md_path)
-        .map_err(|e| anyhow!("read SKILL.md: {e}"))?;
+    let content =
+        std::fs::read_to_string(&skill_md_path).map_err(|e| anyhow!("read SKILL.md: {e}"))?;
 
     let (fm_value, body) = match split_frontmatter(&content) {
         Some(parts) => parts,
@@ -478,8 +472,7 @@ fn read_skill(skill: &str, skill_dir: &Path, tier: Tier) -> Result<ToolOutput> {
     let (metrics_summary, metrics_warning) = build_metrics_summary(&frontmatter);
 
     // Convert serde_yaml::Value -> serde_json::Value for output.
-    let frontmatter_json: Value =
-        serde_json::to_value(&frontmatter).unwrap_or(Value::Null);
+    let frontmatter_json: Value = serde_json::to_value(&frontmatter).unwrap_or(Value::Null);
 
     let mut out = json!({
         "name": skill,
@@ -558,10 +551,7 @@ fn build_metrics_summary(fm: &serde_yaml::Value) -> (Vec<Value>, Option<String>)
 
 fn read_resource(skill: &str, resources_dir: &Path, rel: &str) -> Result<ToolOutput> {
     if !resources_dir.is_dir() {
-        bail!(
-            "view_skill: skill '{}' has no resources/ directory",
-            skill
-        );
+        bail!("view_skill: skill '{}' has no resources/ directory", skill);
     }
     let abs = resources_dir.join(rel);
     let canon_resources = std::fs::canonicalize(resources_dir)

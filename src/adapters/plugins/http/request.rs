@@ -316,9 +316,9 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String)>> 
 ///
 /// Each env read is gated by `ctx.scope.check_env_read(name)`; scopes whose
 /// `env_reads` list is empty will reject the expansion (default-deny).
-/// The A1 migration-window `permissive_scope` leaves `env_reads` empty, so
-/// tools that expand `$VAR` must opt in explicitly via agent config.
-// TODO(Phase B): revisit once per-agent env_reads are wired into permissive_scope.
+/// `permissive_scope` (the fallback for tools with no configured scope) sets
+/// `env_reads = ["*"]`, which the check honours as allow-any; a configured
+/// `[agents.*.scopes.http_request].env_reads` list narrows it.
 fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<String> {
     let mut out = String::new();
     let bytes = input.as_bytes();
@@ -349,14 +349,10 @@ fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<String> {
     Ok(out)
 }
 
-/// Read an env var, gated by scope. Scope-less callers (permissive_scope)
-/// bypass the gate only when `env_reads` contains a `"*"` wildcard — mirroring
-/// the shell_bins / net_hosts wildcard convention. Default-deny otherwise.
+/// Read an env var, gated by scope (`"*"` wildcard handled inside
+/// `ToolScope::check_env_read`). Default-deny otherwise.
 fn read_env(name: &str, ctx: &ToolCtx<'_>) -> Result<String> {
-    let allowed_any = ctx.scope.env_reads.iter().any(|v| v == "*");
-    if !allowed_any {
-        ctx.scope.check_env_read(name)?;
-    }
+    ctx.scope.check_env_read(name)?;
     std::env::var(name).map_err(|_| anyhow!("Missing environment variable {}", name))
 }
 

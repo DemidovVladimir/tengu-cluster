@@ -67,6 +67,53 @@ McpServerConfig::Stdio(McpStdioServerConfig {
 })
 ```
 
+## Standalone `agentic-memory` MCP server
+
+`tengu agentic-memory-server` runs the same stdio JSON-RPC loop but exposes
+**only** the `agentic_memory` tool — so non-Tengu agents (ChatGPT, Codex,
+Claude) can read+write the same Open Brain memory without a full Tengu sandbox.
+Build with `--features postgres_memory`.
+
+| | `tengu mcp-bridge` | `tengu agentic-memory-server` |
+|---|---|---|
+| Tool set | `TENGU_BRIDGE_TOOLS` (caller-supplied) | fixed: `agentic_memory` only |
+| Spawned by | the Claude Code engine | any MCP client config |
+| `serverInfo.name` | `tengu-tools` | `tengu-agentic-memory` |
+| Needs | — | `TENGU_MEMORY_DATABASE_URL` (per call) |
+
+Workspace (where `.tengu/agentic-memory/{raw,wiki}/` live) defaults to the cwd,
+overridable via `TENGU_BRIDGE_WORKSPACE`. Wire it into an external MCP client:
+
+```jsonc
+{
+  "mcpServers": {
+    "tengu-agentic-memory": {
+      "command": "tengu",
+      "args": ["agentic-memory-server"],
+      "env": {
+        "TENGU_MEMORY_DATABASE_URL": "postgres://tengu:tengu@localhost:5432/tengu_memory",
+        "OPENROUTER_API_KEY": "sk-or-...",
+        "TENGU_WIKI_COMPILER_MODEL": "anthropic/claude-sonnet-4-6"
+      }
+    }
+  }
+}
+```
+
+**Env forwarding matters.** MCP clients typically launch the server with a
+*replaced* environment (only the keys in the `env` block), not the inherited
+shell env — same trap `claude_code_engine.rs` documents for the bridge. So:
+
+- `TENGU_MEMORY_DATABASE_URL` — required; without it every tool call errors.
+- `OPENROUTER_API_KEY` — without it `recall` falls back to FTS-only,
+  `ingest_source` stores chunks text-only, and `compile_wiki` writes the
+  deterministic fallback page instead of an LLM-synthesised one. All fail-soft,
+  but silently degraded.
+- `TENGU_WIKI_COMPILER_MODEL` — optional; defaults to `anthropic/claude-sonnet-4-6`.
+
+Both entry points share `serve_mcp_stdio` in `src/adapters/mcp_bridge.rs`. The
+server starts even without these — tool calls just error or degrade.
+
 ## Testing
 
 Manual test with stdin:

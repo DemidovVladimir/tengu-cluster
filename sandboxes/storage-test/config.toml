@@ -1,7 +1,7 @@
 # Tengu Cluster — Storage Test Sandbox
 # Test persistent_store tool: file storage + vector indexing.
 # Run with: tengu telegram --sandbox storage-test
-# Or TUI:   tengu tui --sandbox storage-test
+# Or TUI:   tengu chat --sandbox storage-test
 
 runtime_profile = "auto"
 
@@ -14,8 +14,6 @@ enabled = true
 # Chunking parameters for persistent_store
 persistent_store_chunk_size = 5000
 persistent_store_chunk_overlap = 200
-backend = "qdrant"
-qdrant_url = "http://localhost:6334"
 
 [telegram]
 tool_approvals = false

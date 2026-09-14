@@ -2,12 +2,14 @@
 # Tengu Cluster — One-liner installer
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/user/tengu-cluster/main/deploy/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/tengu-cluster/main/deploy/install.sh | bash
 #
 # Options (env vars):
 #   TENGU_DIR        Install directory       (default: ./tengu-cluster)
 #   TENGU_PROFILE    Compose profile         (default: none — OpenRouter + Telegram only)
-#                    Options: qdrant
+#                    Options: postgres-memory (Postgres + pgvector agentic memory;
+#                    sets TENGU_FEATURES=openrouter,telegram,postgres_memory so the
+#                    image is built with the feature)
 #   TENGU_BRANCH     Git branch to clone     (default: main)
 #   SKIP_DOCKER      Skip Docker install     (default: false)
 #   SKIP_START       Skip starting services  (default: false)
@@ -95,7 +97,7 @@ setup_repo() {
     else
         info "Cloning tengu-cluster..."
         git clone --branch "$TENGU_BRANCH" --depth 1 \
-            https://github.com/user/tengu-cluster.git "$TENGU_DIR" 2>/dev/null || {
+            https://github.com/DemidovVladimir/tengu-cluster.git "$TENGU_DIR" 2>/dev/null || {
             warn "Could not clone repo — using local copy"
             if [ ! -d "$TENGU_DIR" ]; then
                 err "Directory $TENGU_DIR does not exist and clone failed"
@@ -134,6 +136,9 @@ start_services() {
     fi
 
     info "Building tengu image..."
+    if [ "$TENGU_PROFILE" = "postgres-memory" ]; then
+        export TENGU_FEATURES="${TENGU_FEATURES:-openrouter,telegram,postgres_memory}"
+    fi
     if [ -n "$TENGU_PROFILE" ]; then
         docker compose --profile "$TENGU_PROFILE" build
         docker compose --profile "$TENGU_PROFILE" up -d
@@ -158,7 +163,7 @@ summary() {
     echo ""
     echo "  Commands:"
     echo "    make up           Start tengu"
-    echo "    make up-qdrant    Start tengu + Qdrant vector memory"
+    echo "    make up-memory    Start tengu + Postgres/pgvector agentic memory"
     echo "    make logs         View logs"
     echo "    make doctor       Run diagnostics"
     echo "    make down         Stop all"

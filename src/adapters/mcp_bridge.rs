@@ -20,6 +20,7 @@ use tracing::{info, warn};
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::ToolExecutor;
 use crate::adapters::memory::manager::MemoryManager;
+use crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL;
 use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
 // Phase 7.7 — plugin imports removed; bridge delegates to
 // `channel_runtime::register_core_plugins` which has its own local imports.
@@ -136,13 +137,50 @@ pub async fn run_mcp_bridge() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_MCP_RESULT_CHARS);
 
-    let executor = build_bridge_executor(&workspace, &tools).await?;
+    serve_mcp_stdio(&workspace, tools, max_result_chars, "tengu-tools").await
+}
+
+/// Standalone MCP stdio server exposing ONLY the `agentic_memory` tool, so
+/// non-Tengu agents (ChatGPT / Codex / Claude) can read+write the same Open
+/// Brain memory. Entry point for `tengu agentic-memory-server`.
+///
+/// Needs `TENGU_MEMORY_DATABASE_URL` for any tool call to succeed; the server
+/// itself starts fine without it (calls just return an error). The workspace —
+/// where `.tengu/agentic-memory/{raw,wiki}/` live — defaults to the cwd and is
+/// overridable via `TENGU_BRIDGE_WORKSPACE`.
+#[cfg(feature = "postgres_memory")]
+pub async fn run_agentic_memory_mcp_server() -> Result<()> {
+    let workspace = std::env::var("TENGU_BRIDGE_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+
+    let max_result_chars: usize = std::env::var("TENGU_BRIDGE_MAX_RESULT_CHARS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MAX_MCP_RESULT_CHARS);
+
+    let tools = crate::adapters::plugins::agentic_memory::tool_defs();
+    serve_mcp_stdio(&workspace, tools, max_result_chars, "tengu-agentic-memory").await
+}
+
+/// Shared stdio JSON-RPC serve loop. Builds a `PluginToolExecutor` over `tools`
+/// and dispatches `initialize` / `tools/list` / `tools/call` / `ping` until
+/// stdin closes. Used by both `run_mcp_bridge` and
+/// `run_agentic_memory_mcp_server`.
+async fn serve_mcp_stdio(
+    workspace: &Path,
+    tools: Vec<ToolDef>,
+    max_result_chars: usize,
+    server_name: &'static str,
+) -> Result<()> {
+    let executor = build_bridge_executor(workspace, &tools).await?;
     let mcp_tools: Vec<McpToolDef> = tools.iter().map(McpToolDef::from).collect();
 
     info!(
         workspace = %workspace.display(),
         tool_count = tools.len(),
-        "MCP bridge started"
+        server = server_name,
+        "MCP stdio server started"
     );
 
     let mut reader = BufReader::new(tokio::io::stdin()).lines();
@@ -156,7 +194,7 @@ pub async fn run_mcp_bridge() -> Result<()> {
         let request: JsonRpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                warn!(error = %e, "MCP bridge received invalid JSON");
+                warn!(error = %e, "MCP server received invalid JSON");
                 let resp = JsonRpcResponse::error(
                     serde_json::Value::Null,
                     -32700,
@@ -180,7 +218,7 @@ pub async fn run_mcp_bridge() -> Result<()> {
         let id = request.id.unwrap_or(serde_json::Value::Null);
 
         let resp = match request.method.as_str() {
-            "initialize" => handle_initialize(id),
+            "initialize" => handle_initialize(id, server_name),
             "notifications/initialized" => continue, // notification, no response
             "tools/list" => handle_tools_list(id, &mcp_tools),
             "tools/call" => {
@@ -209,7 +247,7 @@ fn write_response(stdout: &io::Stdout, resp: &JsonRpcResponse) {
 // MCP method handlers
 // ---------------------------------------------------------------------------
 
-fn handle_initialize(id: serde_json::Value) -> JsonRpcResponse {
+fn handle_initialize(id: serde_json::Value, server_name: &str) -> JsonRpcResponse {
     JsonRpcResponse::success(
         id,
         serde_json::json!({
@@ -218,7 +256,7 @@ fn handle_initialize(id: serde_json::Value) -> JsonRpcResponse {
                 "tools": {}
             },
             "serverInfo": {
-                "name": "tengu-tools",
+                "name": server_name,
                 "version": env!("CARGO_PKG_VERSION")
             }
         }),
@@ -321,6 +359,27 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 // channel-specific activity port).
 // ---------------------------------------------------------------------------
 
+/// Env var carrying the calling agent's per-tool scope map into the bridge
+/// subprocess. Written by `ClaudeCodeEngine::build_mcp_config_json`.
+pub(crate) const TENGU_BRIDGE_SCOPES_ENV: &str = "TENGU_BRIDGE_SCOPES";
+
+/// Parse `TENGU_BRIDGE_SCOPES`. Unset → empty map (every tool permissive).
+/// Unparsable → warn + empty map, so a malformed export never bricks the
+/// bridge (fail-soft on config plumbing; the per-call `check_*` gates are
+/// what actually enforce).
+fn bridge_scopes_from_env() -> HashMap<String, ToolScope> {
+    match std::env::var(TENGU_BRIDGE_SCOPES_ENV) {
+        Ok(json) => match serde_json::from_str::<HashMap<String, ToolScope>>(&json) {
+            Ok(map) => map,
+            Err(e) => {
+                warn!(error = %e, "bridge: failed to parse {TENGU_BRIDGE_SCOPES_ENV}; all tools permissive");
+                HashMap::new()
+            }
+        },
+        Err(_) => HashMap::new(),
+    }
+}
+
 async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<PluginToolExecutor> {
     let allowed_names: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
@@ -374,10 +433,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
                 match DiskVectorStore::new(&memory_dir) {
                     Ok(store) => {
                         let store: Arc<dyn VectorStore> = Arc::new(store);
-                        let embedder = Arc::new(Embedder::new(
-                            api_key,
-                            "openai/text-embedding-3-small".to_string(),
-                        ));
+                        let embedder =
+                            Arc::new(Embedder::new(api_key, DEFAULT_EMBEDDING_MODEL.to_string()));
 
                         let manager = Arc::new(MemoryManager::new());
                         manager.set_vector_backend(embedder, store).await;
@@ -433,14 +490,17 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     )
     .await;
 
-    // Phase 7.7 — shared permissive scope. Was inlined before; now uses the
-    // canonical `channel_runtime::permissive_scope` so a single change to
-    // the scope shape covers both paths.
-    let scope = crate::adapters::channel_runtime::permissive_scope(workspace);
-    let mut scopes: HashMap<String, ToolScope> = HashMap::new();
-    for name in registry.tool_names() {
-        scopes.insert(name, scope.clone());
-    }
+    // Per-tool scopes — ENFORCED. The parent's `ClaudeCodeEngine` exports the
+    // agent's scope map as `TENGU_BRIDGE_SCOPES` (serde_json of
+    // `HashMap<String, ToolScope>`); tools without an entry fall back to
+    // `permissive_scope`, exactly like `channel_runtime::build_tool_executor`.
+    // A missing or unparsable env var degrades to all-permissive with a warn.
+    let configured = bridge_scopes_from_env();
+    let scopes = crate::adapters::channel_runtime::resolve_tool_scopes(
+        workspace,
+        &configured,
+        registry.tool_names(),
+    );
 
     Ok(PluginToolExecutor {
         registry,

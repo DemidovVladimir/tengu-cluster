@@ -190,14 +190,11 @@ pub(crate) fn build_tool_executor(
         );
     }
 
-    // Per-tool scope map: permissive by default during A1 — pre-migration
-    // behaviour did not gate tools via ToolScope. Per-agent scope wiring arrives
-    // alongside the remaining plugin migrations.
-    let default_scope = permissive_scope(workspace);
-    let mut scopes: HashMap<String, ToolScope> = HashMap::new();
-    for name in registry.tool_names() {
-        scopes.insert(name, default_scope.clone());
-    }
+    // Per-tool scope map — ENFORCED. `agent_config.scopes` already has the
+    // parent's `[default_scopes]` folded in (`Config::fold_default_scopes`
+    // for the parent path, `agent_config_from_spec` for subprocess children).
+    // A tool with no configured entry falls back to `permissive_scope`.
+    let scopes = resolve_tool_scopes(workspace, &agent_config.scopes, registry.tool_names());
 
     Some(PluginToolExecutor {
         registry,
@@ -225,6 +222,7 @@ pub(crate) fn build_tool_executor(
 /// Adding a new opt-in workspace tool: append the name here, then add
 /// the matching plugin registration in `register_core_plugins`.
 pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
+    "agentic_memory",
     "shared_cache",
     "persistent_store",
     "skill_distill",
@@ -232,15 +230,50 @@ pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
     "manage_skill",
 ];
 
-/// Build a permissive `ToolScope` that preserves pre-migration behaviour:
+/// Resolve the per-tool scope map for an executor: a configured entry in
+/// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
+/// already folded in) wins; any tool without one gets `permissive_scope`.
+/// Shared by `build_tool_executor` and `mcp_bridge::build_bridge_executor`.
+pub(crate) fn resolve_tool_scopes(
+    workspace: &Path,
+    configured: &HashMap<String, ToolScope>,
+    tool_names: impl IntoIterator<Item = String>,
+) -> HashMap<String, ToolScope> {
+    let fallback = permissive_scope(workspace);
+    tool_names
+        .into_iter()
+        .map(|name| {
+            let scope = configured
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| fallback.clone());
+            (name, scope)
+        })
+        .collect()
+}
+
+/// Inherited `[default_scopes]` were authored for the parent's workspace. A
+/// subprocess child runs in its own workspace (`spec.sandbox`, or a temp /
+/// cwd when unset), so grant that root on every inherited scope — otherwise
+/// `read_file` / multipart `http_request` under the child's own workspace is
+/// scope-denied. Tools without a configured scope already get the workspace
+/// via `permissive_scope`, so this only equalises the configured ones.
+pub(crate) fn grant_workspace_root(scopes: &mut HashMap<String, ToolScope>, workspace: &Path) {
+    for scope in scopes.values_mut() {
+        if !scope.fs_roots.iter().any(|r| r == workspace) {
+            scope.fs_roots.push(workspace.to_path_buf());
+        }
+    }
+}
+
+/// Build the fallback `ToolScope` for tools with no configured entry:
 /// the workspace root is writable, any host is reachable, any binary is
 /// runnable, any env var is readable, and the canonical wallet label is
-/// granted so the crypto plugin's `check_wallet` guard succeeds. Phase A
-/// tasks tighten this once each plugin ships.
+/// granted so the crypto plugin's `check_wallet` guard succeeds. Narrow it
+/// per tool via `[default_scopes.<tool>]` / `[agents.*.scopes.<tool>]`.
 ///
 /// Phase 7.7 — `pub(crate)` so the MCP bridge calls this instead of
 /// inlining its own copy. Both paths share the same scope shape.
-// TODO(Phase B): replace with per-agent scope once config-scopes land
 pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
@@ -262,9 +295,11 @@ pub(crate) struct CoreRegistrationOpts<'a> {
     pub memory_config: Option<&'a crate::adapters::config::MemoryConfig>,
 }
 
-/// Phase 7.7 — register the SEVEN plugins shared by every executor:
-/// workspace, memory, cache (opt-in), skill-lifecycle (opt-in),
-/// compress_and_store (opt-in, qdrant), http, crypto.
+/// Phase 7.7 — register the core plugins shared by every executor:
+/// workspace, memory, cache (opt-in), skill-lifecycle (opt-in), http, crypto,
+/// plus optional feature-gated plugins (e.g. `agentic_memory`). Note:
+/// `compress_and_store` has no plugin handler — only its tool *definition* is
+/// advertised (the runner intercepts the call out-of-band).
 ///
 /// Before this consolidation, `channel_runtime::build_tool_executor` and
 /// `mcp_bridge::build_bridge_executor` each had their own copy of this
@@ -287,8 +322,25 @@ pub(crate) async fn register_core_plugins(
     use crate::adapters::plugins::memory::MemoryPlugin;
     use crate::adapters::plugins::workspace::WorkspacePlugin;
 
+    #[cfg(feature = "postgres_memory")]
+    if allowed_names.contains(crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME) {
+        if let Err(e) = registry
+            .register_plugin(
+                &crate::adapters::plugins::agentic_memory::AgenticMemoryPlugin,
+                ctx,
+                allowed_list,
+            )
+            .await
+        {
+            tracing::warn!(error = %e, "register_core_plugins: agentic_memory plugin failed");
+        }
+    }
+
     // Workspace — read_file, list_directory, write_file, run_command.
-    if let Err(e) = registry.register_plugin(&WorkspacePlugin, ctx, allowed_list).await {
+    if let Err(e) = registry
+        .register_plugin(&WorkspacePlugin, ctx, allowed_list)
+        .await
+    {
         tracing::warn!(error = %e, "register_core_plugins: workspace plugin failed");
     }
 
@@ -303,13 +355,19 @@ pub(crate) async fn register_core_plugins(
         .map(|mc| mc.persistent_store_chunk_overlap)
         .unwrap_or(200);
     let memory_plugin = MemoryPlugin::new(chunk_size, chunk_overlap);
-    if let Err(e) = registry.register_plugin(&memory_plugin, ctx, allowed_list).await {
+    if let Err(e) = registry
+        .register_plugin(&memory_plugin, ctx, allowed_list)
+        .await
+    {
         tracing::warn!(error = %e, "register_core_plugins: memory plugin failed");
     }
 
     // Cache — shared_cache (opt-in via workspace_tools).
     if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        if let Err(e) = registry.register_plugin(&CachePlugin, ctx, allowed_list).await {
+        if let Err(e) = registry
+            .register_plugin(&CachePlugin, ctx, allowed_list)
+            .await
+        {
             tracing::warn!(error = %e, "register_core_plugins: cache plugin failed");
         }
     }
@@ -319,11 +377,10 @@ pub(crate) async fn register_core_plugins(
     // allowlist filter inside `register_plugin` keeps only the names listed
     // in `allowed_list`. We just need to register the plugin once when
     // either name is opted in.
-    let want_distill = allowed_names
-        .contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME);
-    let want_apply_improver = allowed_names.contains(
-        crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME,
-    );
+    let want_distill =
+        allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME);
+    let want_apply_improver = allowed_names
+        .contains(crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME);
     if want_distill || want_apply_improver {
         if let Err(e) = registry
             .register_plugin(
@@ -337,30 +394,27 @@ pub(crate) async fn register_core_plugins(
         }
     }
 
-    // Compress-and-store — qdrant-only, gated on allow-list. Subagents have
-    // it appended implicitly by the runner, so this branch fires for them.
-    #[cfg(feature = "qdrant")]
-    if allowed_names.contains("compress_and_store") {
-        if let Some(mc) = opts.memory_config {
-            let plugin =
-                crate::adapters::plugins::skill_lifecycle::compress_and_store::CompressAndStorePlugin {
-                    memory_config: mc.clone(),
-                };
-            if let Err(e) = registry.register_plugin(&plugin, ctx, allowed_list).await {
-                tracing::warn!(error = %e, "register_core_plugins: compress_and_store plugin failed");
-            }
-        }
-    }
+    // `compress_and_store` has no plugin handler — the runner intercepts the
+    // call out-of-band (OpenRouter path) and the `postgres_memory` backstop in
+    // `run-agent` covers the Claude Code path. Only the tool *definition* is
+    // advertised (appended by `build_subprocess_tool_executor`). The legacy
+    // Qdrant `CompressAndStorePlugin` was removed in Phase 6.
 
     // HTTP — http_request.
-    if let Err(e) = registry.register_plugin(&HttpPlugin, ctx, allowed_list).await {
+    if let Err(e) = registry
+        .register_plugin(&HttpPlugin, ctx, allowed_list)
+        .await
+    {
         tracing::warn!(error = %e, "register_core_plugins: http plugin failed");
     }
 
     // Crypto — sign_and_send_transaction, sign_message, get_wallet_address,
     // abi_encode, hex_to_uint256.
     let crypto_plugin = CryptoPlugin::new(opts.cancel);
-    if let Err(e) = registry.register_plugin(&crypto_plugin, ctx, allowed_list).await {
+    if let Err(e) = registry
+        .register_plugin(&crypto_plugin, ctx, allowed_list)
+        .await
+    {
         tracing::warn!(error = %e, "register_core_plugins: crypto plugin failed");
     }
 
@@ -398,9 +452,7 @@ pub(crate) async fn register_core_plugins(
     // delete. Atomic + audit-logged + editable_by_learner gated. Supersedes
     // `apply_improver_proposal` (kept for back-compat) and is the canonical
     // in-chat skill mutation path. See `plugins/manage_skill/mod.rs`.
-    if allowed_names
-        .contains(crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
-    {
+    if allowed_names.contains(crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME) {
         if let Err(e) = registry
             .register_plugin(
                 &crate::adapters::plugins::manage_skill::ManageSkillPlugin,
@@ -439,6 +491,13 @@ pub(crate) fn compute_base_tools(
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
+    #[cfg(feature = "postgres_memory")]
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::agentic_memory::tool_defs());
+    }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
     }
@@ -448,9 +507,10 @@ pub(crate) fn compute_base_tools(
     {
         tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
     }
-    if workspace_tools.iter().any(|t| {
-        t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME
-    }) {
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME)
+    {
         tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
     }
     if workspace_tools
@@ -479,6 +539,13 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
     if workspace_tools.iter().any(|t| t == "shared_cache") {
         tools.extend(crate::adapters::plugins::cache::tool_defs());
     }
+    #[cfg(feature = "postgres_memory")]
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME)
+    {
+        tools.extend(crate::adapters::plugins::agentic_memory::tool_defs());
+    }
     if workspace_tools.iter().any(|t| t == "persistent_store") {
         tools.extend(persistent_store_tool_defs());
     }
@@ -488,9 +555,10 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
     {
         tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
     }
-    if workspace_tools.iter().any(|t| {
-        t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME
-    }) {
+    if workspace_tools
+        .iter()
+        .any(|t| t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME)
+    {
         tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
     }
     if workspace_tools
@@ -528,42 +596,8 @@ pub(crate) fn resolve_memory_store_path(
     }
 }
 
-/// Resolve the Qdrant collection name: workspace-scoped if a workspace is
-/// provided, otherwise fall back to the config value.
-pub(crate) fn resolve_qdrant_collection(
-    memory_config: &crate::adapters::config::MemoryConfig,
-    workspace: Option<&Path>,
-) -> String {
-    match workspace {
-        Some(ws) => {
-            let name = ws
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "default".to_string());
-            format!("tengu-memory-{}", name)
-        }
-        None => memory_config.qdrant_collection.clone(),
-    }
-}
-
-/// Build the new `Embedder` + `VectorStore` pair from config.
-///
-/// Returns `None` if memory is disabled, the API key is missing, or the
-/// backend fails to initialize. Consumed by `build_memory_manager`
-/// (which registers the pair into a `BuiltinMemoryProvider` + the
-/// manager's shared vector backend).
-/// Phase 7.7 refactor #4 — sync wrapper around `build_vector_stack_async`.
-/// Pre-7.7 this was a 60-line copy of the async version with `rt.block_on`
-/// inlined at the Qdrant call. Now it just block_on's the async function.
-/// The duplication of API-key check + path resolution + backend matching
-/// is gone; one source of truth.
-fn build_vector_stack(
-    memory_config: &crate::adapters::config::MemoryConfig,
-    rt: &tokio::runtime::Runtime,
-    workspace: Option<&Path>,
-) -> Option<(Arc<Embedder>, Arc<dyn VectorStore>)> {
-    rt.block_on(build_vector_stack_async(memory_config, workspace))
-}
+// `resolve_qdrant_collection` was removed in Phase 6 along with the Qdrant
+// backend — the disk-backed `VectorStore` does not use collection names.
 
 /// Build a `MemoryManager` populated with a `BuiltinMemoryProvider` that
 /// uses the new `Embedder` + `VectorStore` pair.
@@ -577,8 +611,8 @@ fn build_vector_stack(
 /// Phase 7.6 — async sibling of `build_memory_manager` for callers that
 /// already live inside a tokio context (notably `run_agent_subprocess`,
 /// which can't take a `&Runtime` arg without re-entrant block-on hazards).
-/// Returns the same fully-wired `MemoryManager` — backed by Qdrant or
-/// bincode-disk per `memory_config.backend`.
+/// Returns the same fully-wired `MemoryManager` — backed by the bincode
+/// `DiskVectorStore` (the only `VectorStore` impl since Phase 6).
 pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::adapters::config::MemoryConfig,
     workspace: Option<&Path>,
@@ -606,7 +640,9 @@ pub(crate) async fn build_memory_manager_async(
     manager
 }
 
-/// Phase 7.6 — async sibling of `build_vector_stack`.
+/// Build the `Embedder` + `DiskVectorStore` pair from config. Returns `None`
+/// if memory is disabled, `OPENROUTER_API_KEY` is missing, or the store fails
+/// to open. Consumed by `build_memory_manager_async` only.
 async fn build_vector_stack_async(
     memory_config: &crate::adapters::config::MemoryConfig,
     workspace: Option<&Path>,
@@ -622,38 +658,18 @@ async fn build_vector_stack_async(
         }
     };
     let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
-    #[allow(unused_variables)]
-    let resolved_collection = resolve_qdrant_collection(memory_config, workspace);
 
-    let store: Option<Arc<dyn VectorStore>> = match memory_config.backend.as_str() {
-        #[cfg(feature = "qdrant")]
-        "qdrant" => {
-            use crate::adapters::memory::vector::QdrantVectorStore;
-            match QdrantVectorStore::new(
-                &memory_config.qdrant_url,
-                memory_config.qdrant_api_key.as_deref(),
-                &resolved_collection,
-                memory_config.vector_size,
-            )
-            .await
-            {
-                Ok(s) => Some(Arc::new(s)),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to init Qdrant vector store, memory disabled");
-                    None
-                }
-            }
-        }
-        #[cfg(not(feature = "qdrant"))]
-        "qdrant" => DiskVectorStore::new(&resolved_store_path)
-            .ok()
-            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
-        _ => DiskVectorStore::new(&resolved_store_path)
-            .ok()
-            .map(|s| Arc::new(s) as Arc<dyn VectorStore>),
-    };
+    // The legacy `qdrant` backend was removed in Phase 6. The disk-backed
+    // bincode store is the only `VectorStore` impl now — `memory_config.backend`
+    // is no longer branched on.
+    let store: Option<Arc<dyn VectorStore>> = DiskVectorStore::new(&resolved_store_path)
+        .ok()
+        .map(|s| Arc::new(s) as Arc<dyn VectorStore>);
     let store = store?;
-    let embedder = Arc::new(Embedder::new(api_key, memory_config.embedding_model.clone()));
+    let embedder = Arc::new(Embedder::new(
+        api_key,
+        memory_config.embedding_model.clone(),
+    ));
     Some((embedder, store))
 }
 
@@ -931,15 +947,11 @@ use crate::adapters::chat_builder::ChatRuntimeService;
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
 use crate::adapters::memory::manager::MemoryManager;
-#[cfg(feature = "qdrant")]
-use crate::adapters::orchestrator::planner::RagPlanner;
-use crate::adapters::orchestrator::planner::Planner;
+use crate::adapters::orchestrator::planner::{Planner, RagPlanner};
 use crate::adapters::orchestrator::retry::RetryPolicy;
 // Phase 7.1 (full) — `OrchestratorAgentPlanner`, `ChatWorker`, and the
 // `render_roster` helper were deleted along with the static-mode path.
-// `build_orchestrator` now constructs only `RagPlanner` + `SubprocessRunner`
-// when the qdrant feature is on; without qdrant, orchestration is unavailable
-// (build_orchestrator returns None and channels fall back to direct dispatch).
+// `build_orchestrator` now constructs only `RagPlanner` + `SubprocessRunner`.
 use crate::adapters::orchestrator::wiring::{ChatOrchestratorPortImpl, ChatServiceFactory};
 use crate::adapters::orchestrator::Orchestrator;
 use crate::adapters::types::FlowCompactionPolicy;
@@ -1079,10 +1091,7 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
         agent: &str,
         system_prompt: Option<&str>,
         text: &str,
-    ) -> anyhow::Result<(
-        String,
-        crate::adapters::orchestrator::wiring::TurnTelemetry,
-    )> {
+    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
         self.run_turn_inner(agent, system_prompt, text).await
     }
 }
@@ -1097,10 +1106,7 @@ impl RuntimeChatServiceFactory {
         agent: &str,
         system_override: Option<&str>,
         text: &str,
-    ) -> anyhow::Result<(
-        String,
-        crate::adapters::orchestrator::wiring::TurnTelemetry,
-    )> {
+    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
         let inputs = (self.inputs_fn)(agent)?;
         let model_slug = inputs.agent_config.model.clone();
         let started = std::time::Instant::now();
@@ -1174,12 +1180,10 @@ impl RuntimeChatServiceFactory {
 
 /// Build the harness-owned `Orchestrator` from config + factory + memory.
 ///
-/// Phase 7.1 (full) — only one path remains: `RagPlanner` + `SubprocessRunner`,
-/// gated on the `qdrant` cargo feature. Returns `None` when:
+/// Phase 7.1 (full) — only one path remains: `RagPlanner` + `SubprocessRunner`.
+/// Returns `None` when:
 ///   - `config.orchestrator` is absent (orchestration disabled — channels
-///     fall back to direct default-agent dispatch), OR
-///   - the `qdrant` feature is off (orchestration requires the registry +
-///     Qdrant for the planner's RAG roster).
+///     fall back to direct default-agent dispatch).
 ///
 /// `cfg.engine` is left in the config schema for forward-compatibility (a
 /// future engine variant could land here without a config break) but the
@@ -1216,97 +1220,82 @@ pub(crate) fn build_orchestrator(
         return None;
     }
 
-    #[cfg(not(feature = "qdrant"))]
+    let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
+        Arc::clone(&chat_factory),
+        Arc::clone(&memory),
+    ));
+
+    // Phase 6.1 (full) — mint the orchestrator event bus *before* the
+    // planner so we can hand the same bus to both. RagPlanner emits
+    // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
+    // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
+    // (TUI, Telegram adapter) see one unified event stream.
+    let bus = crate::adapters::orchestrator::events::new_bus();
+
+    // Metrics — install the process-global metrics sink and bridge it
+    // onto the orchestrator event bus so a single subscriber can render
+    // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
+    // subsequent `build_orchestrator` calls reuse the already-installed
+    // sink. Bridge task lives as long as the metrics sink exists.
+    let metrics_tx = crate::adapters::metrics::install_global_sink();
     {
-        // chat_factory + memory are unused on this path but Rust does not
-        // warn on unused fn parameters — they're dropped when the function
-        // returns. No suppression needed.
-        tracing::warn!(
-            "[orchestrator] engine = \"rag\" requires the 'qdrant' cargo feature; \
-             rebuild with --features qdrant. Orchestration disabled for this channel."
-        );
-        return None;
-    }
-
-    #[cfg(feature = "qdrant")]
-    {
-        let chat_port = Arc::new(ChatOrchestratorPortImpl::new(
-            Arc::clone(&chat_factory),
-            Arc::clone(&memory),
-        ));
-
-        // Phase 6.1 (full) — mint the orchestrator event bus *before* the
-        // planner so we can hand the same bus to both. RagPlanner emits
-        // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
-        // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
-        // (TUI, Telegram adapter) see one unified event stream.
-        let bus = crate::adapters::orchestrator::events::new_bus();
-
-        // Metrics — install the process-global metrics sink and bridge it
-        // onto the orchestrator event bus so a single subscriber can render
-        // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
-        // subsequent `build_orchestrator` calls reuse the already-installed
-        // sink. Bridge task lives as long as the metrics sink exists.
-        let metrics_tx = crate::adapters::metrics::install_global_sink();
-        {
-            let mut metrics_rx = metrics_tx.subscribe();
-            let bus_tx = bus.clone();
-            tokio::spawn(async move {
-                use tokio::sync::broadcast::error::RecvError;
-                loop {
-                    match metrics_rx.recv().await {
-                        Ok(record) => {
-                            // `bus.send` returns Err only when zero
-                            // subscribers — fine, drop and keep listening.
-                            let _ = bus_tx.send(
-                                crate::adapters::orchestrator::events::OrchestratorEvent::MetricsRecorded {
-                                    record,
-                                },
-                            );
-                        }
-                        Err(RecvError::Lagged(n)) => {
-                            tracing::warn!(dropped = n, "metrics sink subscriber lagged");
-                        }
-                        Err(RecvError::Closed) => break,
+        let mut metrics_rx = metrics_tx.subscribe();
+        let bus_tx = bus.clone();
+        tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                match metrics_rx.recv().await {
+                    Ok(record) => {
+                        // `bus.send` returns Err only when zero
+                        // subscribers — fine, drop and keep listening.
+                        let _ = bus_tx.send(
+                            crate::adapters::orchestrator::events::OrchestratorEvent::MetricsRecorded {
+                                record,
+                            },
+                        );
                     }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(dropped = n, "metrics sink subscriber lagged");
+                    }
+                    Err(RecvError::Closed) => break,
                 }
-            });
-        }
-
-        // Fix B (2026-05-09) — session_id is resolved by the caller and
-        // passed in. Single value shared between RagPlanner (recall reads)
-        // and SubprocessRunner (compress_and_store writes via IPC).
-        // Logged at info-level so users can stitch tracing output back
-        // to a specific persisted thread.
-        tracing::info!(
-            session_id = %session_id,
-            sandbox = ?config.sandbox_name,
-            "orchestrator: engine=rag, planner=RagPlanner, worker=SubprocessRunner"
-        );
-        let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
-            Arc::new(crate::adapters::runner::SubprocessRunner::new(
-                config.sandbox_name.clone(),
-                session_id.clone(),
-            ));
-        let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
-            cfg.agent.clone(),
-            chat_port,
-            config.memory.clone(),
-            config.mcp_servers.clone(),
-            Some(bus.clone()),
-            session_id,
-        ));
-
-        let policy = RetryPolicy::new(cfg.max_attempts_per_step);
-        Some(Orchestrator::new(
-            planner,
-            worker,
-            policy,
-            cfg.max_replans,
-            memory,
-            bus,
-        ))
+            }
+        });
     }
+
+    // Fix B (2026-05-09) — session_id is resolved by the caller and
+    // passed in. Single value shared between RagPlanner (recall reads)
+    // and SubprocessRunner (compress_and_store writes via IPC).
+    // Logged at info-level so users can stitch tracing output back
+    // to a specific persisted thread.
+    tracing::info!(
+        session_id = %session_id,
+        sandbox = ?config.sandbox_name,
+        "orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner"
+    );
+    let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
+        Arc::new(crate::adapters::runner::SubprocessRunner::new(
+            config.sandbox_name.clone(),
+            session_id.clone(),
+        ));
+    let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
+        cfg.agent.clone(),
+        chat_port,
+        config.memory.clone(),
+        config.mcp_servers.clone(),
+        Some(bus.clone()),
+        session_id,
+    ));
+
+    let policy = RetryPolicy::new(cfg.max_attempts_per_step);
+    Some(Orchestrator::new(
+        planner,
+        worker,
+        policy,
+        cfg.max_replans,
+        memory,
+        bus,
+    ))
 }
 
 /// Phase 5b — synthesize an `AgentConfig` from an `AgentSpec` so the existing
@@ -1344,7 +1333,6 @@ pub(crate) fn agent_config_from_spec(
         role: None,
         skill_packages: Vec::new(),
         prompt_budget: Default::default(),
-        requires: Vec::new(),
         workspace_tools,
         // Inherit the parent's default_scopes so http_request etc. honour the
         // permissive scope when the parent config has one.
@@ -1382,12 +1370,13 @@ pub(crate) fn build_subprocess_tool_executor(
     // tools in its allow-list.
     memory_manager: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
-    let agent_cfg = agent_config_from_spec(spec, &config.default_scopes);
+    let mut agent_cfg = agent_config_from_spec(spec, &config.default_scopes);
+    grant_workspace_root(&mut agent_cfg.scopes, workspace);
 
     // Full base tool list (workspace + http + crypto + memory if enabled).
     let base_tools = compute_base_tools(
-        true,                                                // uses_tools
-        config.memory.enabled,                               // has_memory
+        true,                  // uses_tools
+        config.memory.enabled, // has_memory
         &agent_cfg.workspace_tools,
     );
 
@@ -1416,12 +1405,7 @@ pub(crate) fn build_subprocess_tool_executor(
 
     // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
     // only need its description here for the LLM to see + call.
-    #[cfg(feature = "qdrant")]
-    {
-        effective.push(
-            crate::adapters::plugins::skill_lifecycle::compress_and_store::definition(),
-        );
-    }
+    effective.push(crate::adapters::plugins::skill_lifecycle::compress_and_store::definition());
 
     // Skill registry is empty for the subprocess (skill bodies are loaded
     // separately and merged into the system prompt; no shell-skills exposed
@@ -1432,11 +1416,11 @@ pub(crate) fn build_subprocess_tool_executor(
         workspace,
         &effective,
         &skill_registry,
-        &memory_manager,                // Phase 7.6 — passed in by caller
+        &memory_manager, // Phase 7.6 — passed in by caller
         secret_registry,
         activity,
-        None,                           // cancel
-        None,                           // shared_http_client
+        None, // cancel
+        None, // shared_http_client
         Some(&config.memory),
         &agent_cfg,
         &config.mcp_servers,
@@ -1522,6 +1506,84 @@ mod golden_tests {
     struct StubActivity;
     impl ToolActivityPort for StubActivity {
         fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    /// A configured `[agents.*.scopes.<tool>]` entry is used verbatim; an
+    /// unconfigured tool falls back to `permissive_scope`.
+    #[test]
+    fn configured_scope_is_used_and_unconfigured_falls_back_to_permissive() {
+        let tmp = TempDir::new().unwrap();
+        let mut configured: HashMap<String, ToolScope> = HashMap::new();
+        configured.insert(
+            "http_request".to_string(),
+            ToolScope {
+                net_hosts: vec!["api.example.com".to_string()],
+                env_reads: vec!["EXAMPLE_API_KEY".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let scopes = resolve_tool_scopes(
+            tmp.path(),
+            &configured,
+            vec!["http_request".to_string(), "read_file".to_string()],
+        );
+
+        // Configured scope: exact allow-list, no wildcard.
+        let http = &scopes["http_request"];
+        assert!(http.check_net_host("api.example.com").is_ok());
+        assert!(http.check_net_host("evil.example.org").is_err());
+        assert!(http.check_env_read("EXAMPLE_API_KEY").is_ok());
+        assert!(http.check_env_read("OTHER").is_err());
+        assert!(http.check_fs_read(tmp.path()).is_err());
+
+        // Unconfigured tool: permissive fallback.
+        let read = &scopes["read_file"];
+        assert!(read.check_net_host("anything.example").is_ok());
+        assert!(read.check_env_read("ANY").is_ok());
+        assert!(read.check_shell_bin("rm").is_ok());
+        assert!(read.check_fs_read(tmp.path()).is_ok());
+    }
+
+    /// End-to-end through `build_tool_executor`: the executor's scope map
+    /// carries the agent's configured entry, not the permissive default.
+    #[test]
+    fn build_tool_executor_honours_agent_scopes() {
+        let tmp = TempDir::new().unwrap();
+        let tools = crate::adapters::plugins::http::tool_defs();
+
+        let mut config = Config::default();
+        let agent_config = config.agents.get_mut("main").unwrap();
+        agent_config.scopes.insert(
+            "http_request".to_string(),
+            ToolScope {
+                net_hosts: vec!["api.example.com".to_string()],
+                ..Default::default()
+            },
+        );
+        let agent_config = config.agents.get("main").unwrap();
+        let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+        let activity: Arc<dyn ToolActivityPort> = Arc::new(StubActivity);
+        let secret_registry = Arc::new(SecretRegistry::new());
+
+        let executor = build_tool_executor(
+            tmp.path(),
+            &tools,
+            &skill_registry,
+            &None,
+            &secret_registry,
+            activity,
+            None,
+            None,
+            None,
+            agent_config,
+            &[],
+        )
+        .expect("executor");
+
+        let scope = &executor.scopes["http_request"];
+        assert_eq!(scope.net_hosts, vec!["api.example.com".to_string()]);
+        assert!(scope.check_net_host("openrouter.ai").is_err());
     }
 
     /// Assert that the set of registered tool names equals the pre-migration set

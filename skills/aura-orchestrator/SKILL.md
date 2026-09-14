@@ -1,10 +1,11 @@
 ---
 name: aura-orchestrator
-description: End-to-end DeSci molecule — POI registration, IP-NFT minting, Molecule authentication, project creation, file upload, and announcement. Single-agent sequential execution.
+description: End-to-end DeSci molecule — POI registration, IP-NFT minting, Molecule authentication, project creation, file upload (public or private/encrypted), and announcement. Single-agent sequential execution.
 env_vars:
   - MOLECULE_CLIENT_URL
   - MOLECULE_LABS_URL
   - IPNFT_CONTRACT_ADDRESS
+  - ACCESS_RESOLVER_ADDRESS
   - X402_GATEWAY_URL
   - EVM_WALLET_ADDRESS
   - CHAIN_ID
@@ -30,6 +31,9 @@ Do NOT stop, report progress, or output text between steps — execute ALL steps
 - NEVER use python, pip, pdftotext, or any external tool for PDF reading. Use `read_file` — it supports PDF extraction natively.
 - NEVER guess or fabricate URLs, contract addresses, or function signatures. Follow the aura-orchestrator skill EXACTLY.
 - Use x402 payment flow for all Molecule mutations, including project creation, file uploads, announcements, and ownership management. Follow the x402 Payment Flow section below (steps P1–P7).
+- For **private / confidential** files, use the Private / Encrypted Upload variant in Phase 4 (Steps E0–E5) **instead of** the public Steps A–C: generate a one-shot DEK, AES-256-GCM encrypt the file locally, upload the ciphertext, and finish with `encryptionMetadata` + a non-PUBLIC `accessLevel`. NEVER upload a confidential file as plaintext or with `accessLevel: PUBLIC`.
+- The plaintext DEK is single-use and secret: pass it only through the `DEK` env prefix to the Node encryption command — NEVER write it to `shared_cache`, a file, or logs. Only the wrapped `encryptedDek` and the ciphertext are persisted.
+- `node` may be used via `run_command` ONLY for the AES-256-GCM encrypt/decrypt step in Phase 4 (it replicates the Labs Web Crypto `encryptFileWithKms`). PDF reading still uses `read_file` — never python/pip/pdftotext.
 - Phases executed sequentially without stopping or reporting intermediate progress.
 
 ## Required Environment Variables if not available terminate with an error and instructions on how to set them. These are needed for wallet management, authentication, and NFT transfer.
@@ -41,7 +45,7 @@ Do NOT stop, report progress, or output text between steps — execute ALL steps
 | `PRIVY_WALLET_ID` | Privy wallet ID (auto-detected or set after wallet creation) |
 | `EVM_WALLET_ADDRESS` | Owner's personal wallet address for NFT transfer (optional — skip transfer if not set) |
 
-**Note:** Skill examples reference environment variables by name. URLs and public constants (client URL, GraphQL endpoint, IPNFT contract address) are rendered into the prompt at skill-load time from `.env`. API keys and secrets stay as literal `$VAR` placeholders and are expanded by `http_request` at call time. Switching between staging and production is a `.env` edit only — never modify the skill body for environment changes.
+**Note:** Skill examples reference environment variables by name. URLs and public constants (client URL, GraphQL endpoint, IPNFT contract address, AccessResolver address) are rendered into the prompt at skill-load time from `.env`. API keys and secrets stay as literal `$VAR` placeholders and are expanded by `http_request` at call time. Switching between staging and production is a `.env` edit only — never modify the skill body for environment changes.
 
 ## Input
 
@@ -470,6 +474,8 @@ shared_cache: { "operation": "put", "namespace": "molecule", "key": "project_url
 
 ## Phase 4: Upload File to Data Room
 
+By default a file is uploaded **PUBLIC** via Steps A–C. If the file must be **private / confidential** (encrypted at rest, access-controlled), use the **Private / Encrypted Upload** variant (Steps E0–E5) at the end of this phase *instead of* Steps A–C — it replicates the Labs Onchain-Verified Envelope Encryption (`encryptFileWithKms`) client-side. Choose ONE path per file; do not run both.
+
 **Wait 90 seconds** after project creation — data room provisioning is async:
 ```
 run_command:
@@ -564,6 +570,104 @@ Cache:
 ```
 shared_cache: { "operation": "put", "namespace": "molecule", "key": "dataset_id", "value": "<datasetId>" }
 ```
+
+---
+
+## Phase 4 (Private variant): Encrypted Upload to Data Room (Steps E0–E5)
+
+Use this **instead of** Steps A–C when the file must be confidential. It is a faithful client-side replication of Labs **Onchain-Verified Envelope Encryption** — the same algorithm, IV size, tag handling, and `contentHash` rule as `desci-ecosystem/packages/storage/src/lib/encryption/kms-envelope.ts` (`encryptFileWithKms`). The backend never sees plaintext or the unwrapped key; it only stores the ciphertext, the KMS-wrapped DEK, and the on-chain access conditions.
+
+**Preconditions & invariants:**
+- `generateDataEncryptionKey` must be reachable through the x402 gateway (BE: Linear IP-2372). If it is not yet whitelisted, the P1 request returns a non-402 error — stop and report that the encryption surface is not enabled on this gateway.
+- `accessLevel` MUST be `ADMIN` (or `HOLDERS`) — valid values are `PUBLIC | HOLDERS | ADMIN`. Never `PUBLIC` for a confidential file.
+- **Production guard (`assertOclEncryptionAvailable`):** on `production`, the backend refuses to finalize an encrypted file unless `AccessResolver` V3 is live on the canonical chain. If V3 is not deployed, Step E5 fails with `OCL_ACCESS_RESOLVER_NOT_DEPLOYED` ("AccessResolver V3 not deployed on mainnet — refusing to encrypt OCL files until V3 is live"). Surface that message verbatim and stop.
+- The plaintext DEK is **one-shot and secret**: pass it only via the `DEK=` env prefix to Node; never cache, log, or write it to a file. Only `encryptedDek` (wrapped) and the ciphertext are persisted.
+- Crypto must match the Labs client exactly: **AES-256-GCM**, **random 12-byte IV**, **128-bit (16-byte) auth tag appended to the ciphertext**, `contentHash` = **hex SHA-256 of the _plaintext_** (not the ciphertext), DEK imported from base64 raw bytes (32 bytes ⇒ AES-256), `iv` reported base64.
+
+### Step E0 — Generate the data encryption key (x402 paid)
+
+**Mutation name:** `generateDataEncryptionKey` &nbsp; **URL path:** `/x402/labs/generateDataEncryptionKey`
+**Body:**
+```json
+{"query": "mutation GenerateDataEncryptionKey { generateDataEncryptionKey { isSuccess plaintextDEK encryptedDek encryptionSystem error { message code retryable } } }", "variables": {}}
+```
+Run the full x402 payment flow (P1–P7). Extract `plaintextDEK` (base64), `encryptedDek` (base64), `encryptionSystem` (e.g. `"kms"` — echo it verbatim, never hardcode). **Do NOT cache `plaintextDEK`.**
+
+### Step E1 — Encrypt the file locally (replicates `encryptFileWithKms`)
+
+```
+run_command:
+  command: DEK='<plaintextDEK from E0>' node -e 'const c=require("crypto"),fs=require("fs");const dek=Buffer.from(process.env.DEK,"base64");const pt=fs.readFileSync(process.argv[1]);const iv=c.randomBytes(12);const e=c.createCipheriv("aes-256-gcm",dek,iv);const ct=Buffer.concat([e.update(pt),e.final()]);const tag=e.getAuthTag();const out=Buffer.concat([ct,tag]);fs.writeFileSync(process.argv[2],out);console.log(JSON.stringify({iv:iv.toString("base64"),contentHash:c.createHash("sha256").update(pt).digest("hex"),cipherBytes:out.length}));' <path-to-pdf> mint/encrypted/<filename>.enc
+```
+
+The DEK travels only in the `DEK=` prefix (kept out of `argv`). From the stdout JSON, save `iv` (base64), `contentHash` (hex), and `cipherBytes`. The output file `mint/encrypted/<filename>.enc` is `ciphertext‖tag` — this exact byte layout is what the Labs reader (`decryptFileWithKms`, Web Crypto) expects, so it is what you upload.
+
+### Step E2 — Initiate upload with the **ciphertext** size (x402 paid)
+
+Identical to public Step A, except `contentLength` MUST be the ciphertext size (`cipherBytes` from E1, or `wc -c < mint/encrypted/<filename>.enc`):
+```json
+{"query": "mutation InitiateCreateOrUpdateFileV2($ipnftUid: String!, $contentType: String!, $contentLength: Int!) { initiateCreateOrUpdateFileV2(ipnftUid: $ipnftUid, contentType: $contentType, contentLength: $contentLength) { uploadToken uploadUrl uploadUrlExpiry method headers { key value } useMultipart isSuccess error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "contentType": "application/pdf", "contentLength": <cipherBytes>}}
+```
+Run x402 (P1–P7). Extract `uploadToken`, `uploadUrl`, `method`, `headers`.
+
+### Step E3 — PUT the ciphertext to S3 (direct, NO x402)
+
+Upload the **encrypted** file, not the original:
+```
+http_request:
+  url: <uploadUrl from E2>
+  method: <method from E2, usually PUT>
+  headers: {<all key:value pairs from E2 headers>, "Content-Type": "application/pdf"}
+  file_path: mint/encrypted/<filename>.enc
+```
+
+### Step E4 — Build `accessControlConditions` (authorized IP-NFT signer)
+
+Replicates `createAuthorizedIpnftSignerCondition` — gates decryption on `AccessResolver.isAuthorizedSignerForIpnft(:userAddress, <reservationId>)` so the IP-NFT owner and any recursive (Safe / Ownable / ERC-6551 TBA) signer can decrypt. Map `$CHAIN_ID` to the evaluator `chain` string: `1` → `"ethereum"`, `11155111` → `"sepolia"`, `8453` → `"base"`, `84532` → `"baseSepolia"`.
+
+This is a single-element JSON array (it gets JSON-**stringified** into `encryptionMetadata.accessControlConditions` in E5):
+```json
+[{"chain": "<chain for $CHAIN_ID>", "conditionType": "evmContract", "contractAddress": "$ACCESS_RESOLVER_ADDRESS", "functionName": "isAuthorizedSignerForIpnft", "functionParams": [":userAddress", "<reservationId>"], "functionAbi": {"name": "isAuthorizedSignerForIpnft", "inputs": [{"internalType": "address", "name": "signer", "type": "address"}, {"internalType": "uint256", "name": "ipnftId", "type": "uint256"}], "outputs": [{"internalType": "bool", "name": "", "type": "bool"}], "stateMutability": "view", "type": "function"}, "returnValueTest": {"comparator": "=", "key": "", "value": "true"}}]
+```
+`:userAddress` is a literal placeholder the backend evaluator substitutes with the authenticated caller — do NOT replace it.
+
+### Step E5 — Finalize the encrypted upload (x402 paid)
+
+**Mutation name:** `finishCreateOrUpdateFileV2` &nbsp; **URL path:** `/x402/labs/finishCreateOrUpdateFileV2`
+
+Same category/tag rules as the public Step C (pick exactly one category + correlated tag(s) — default `Science` / `Discovery`). The new piece is `encryptionMetadata` (`EncryptionMetadataInput`) and the non-PUBLIC `accessLevel`. `encryptionMetadata.accessControlConditions` is a **string** (the E4 array, JSON-stringified). `encryptedAt` is ISO-8601 UTC — generate via `run_command: date -u +%Y-%m-%dT%H:%M:%SZ`.
+
+| Field | Value |
+|-------|-------|
+| `encryptionSystem` | echo from E0 (e.g. `kms`) — never hardcode |
+| `accessControlConditions` | the E4 array, JSON-stringified (a string) |
+| `encryptedBy` | `<wallet_address>` |
+| `encryptedAt` | ISO-8601 UTC timestamp |
+| `encryptedDek` | `encryptedDek` from E0 (base64, wrapped) |
+| `iv` | `iv` from E1 (base64) |
+| `contentHash` | `contentHash` from E1 (hex SHA-256 of plaintext) |
+
+**Body** (`accessLevel` = `ADMIN`; the `encryptionMetadata.accessControlConditions` value below is the E4 array as an escaped JSON string):
+```json
+{"query": "mutation FinishCreateOrUpdateFileV2($ipnftUid: String!, $uploadToken: String!, $path: String, $accessLevel: String!, $changeBy: String!, $description: String, $tags: [String!], $categories: [String!], $encryptionMetadata: EncryptionMetadataInput) { finishCreateOrUpdateFileV2(ipnftUid: $ipnftUid, uploadToken: $uploadToken, path: $path, accessLevel: $accessLevel, changeBy: $changeBy, description: $description, tags: $tags, categories: $categories, encryptionMetadata: $encryptionMetadata) { datasetId contentHash version newHead isSuccess message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "uploadToken": "<from E2>", "path": "<filename>", "accessLevel": "ADMIN", "changeBy": "<wallet_address>", "description": "<file description>", "categories": ["<one of: Science | Business | Governance | Media>"], "tags": ["<one or more correlated tags>"], "encryptionMetadata": {"encryptionSystem": "<from E0>", "accessControlConditions": "<E4 array JSON-stringified>", "encryptedBy": "<wallet_address>", "encryptedAt": "<ISO-8601 UTC>", "encryptedDek": "<from E0>", "iv": "<from E1>", "contentHash": "<from E1>"}}}
+```
+Run x402 (P1–P7). Extract `datasetId` (`did:odf:...`) and `contentHash`, then cache:
+```
+shared_cache: { "operation": "put", "namespace": "molecule", "key": "dataset_id", "value": "<datasetId>" }
+```
+
+### Step E6 (optional) — Verify decryption (replicates `decryptFileWithKms`)
+
+To confirm an authorized caller can recover the file: call `decryptDataKey` (returns `plaintextDEK` + `iv` after the backend evaluates the access conditions), then AES-256-GCM decrypt — the **last 16 bytes are the auth tag**:
+```
+run_command:
+  command: DEK='<plaintextDEK from decryptDataKey>' node -e 'const c=require("crypto"),fs=require("fs");const dek=Buffer.from(process.env.DEK,"base64");const iv=Buffer.from(process.argv[2],"base64");const buf=fs.readFileSync(process.argv[1]);const tag=buf.subarray(buf.length-16);const ct=buf.subarray(0,buf.length-16);const d=c.createDecipheriv("aes-256-gcm",dek,iv);d.setAuthTag(tag);fs.writeFileSync(process.argv[3],Buffer.concat([d.update(ct),d.final()]));' mint/encrypted/<filename>.enc <iv-base64> mint/decrypted-check.bin
+```
+`decryptDataKey` body:
+```json
+{"query": "mutation DecryptDataKey($ipnftUid: String!, $filePath: String) { decryptDataKey(ipnftUid: $ipnftUid, filePath: $filePath) { isSuccess plaintextDEK iv message error { message code retryable } } }", "variables": {"ipnftUid": "<ipnft_uid>", "filePath": "<filename>"}}
+```
+A `LEGACY_ENCRYPTION` error means the file predates the envelope flow; `ACCESS_DENIED` means the caller's wallet does not satisfy the access conditions.
 
 ## Phase 5: Create Announcement (via x402)
 

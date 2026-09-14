@@ -125,7 +125,7 @@
       <rect class="panel2" width="460" height="135"/>
       <circle cx="28" cy="28" r="14" fill="#2DD4BF"/>
       <text x="28" y="33" text-anchor="middle" class="badge">8</text>
-      <text x="52" y="32" class="mech">Memory recall block (Qdrant)</text>
+      <text x="52" y="32" class="mech">Open Brain recall block</text>
       <text x="20" y="56" class="small mono">chat_builder.rs:326 · MemoryConfig</text>
       <text x="20" y="76" class="small">top-K results, total token budget:</text>
       <text x="20" y="92" class="small mono">max_recall_entries=5 · max_recall_tokens=600</text>
@@ -315,7 +315,7 @@
       <text x="20" y="92" class="small">Two paths converge on write_summary:</text>
       <text x="20" y="108" class="small">A — out-of-band  (OpenRouter, main.rs:821)</text>
       <text x="20" y="124" class="small">B — plugin       (Claude Code via MCP bridge)</text>
-      <text x="20" y="148" class="tiny">writes MemoryEntry → Qdrant tengu_outputs</text>
+      <text x="20" y="148" class="tiny">writes Open Brain Postgres with postgres_memory</text>
     </g>
 
     <g transform="translate(915,20)">
@@ -339,16 +339,16 @@
       <text x="20" y="56" class="small mono">runner.rs:39</text>
       <text x="20" y="76" class="small">Default 20 mini-loop turns.</text>
       <text x="20" y="100" class="small mech">+ #19 cross_plan_top_k</text>
-      <text x="20" y="116" class="small">RagPlanner::replan reads</text>
-      <text x="20" y="132" class="small">tengu_outputs to surface</text>
+      <text x="20" y="116" class="small">Planner replan reads</text>
+      <text x="20" y="132" class="small">step outputs to surface</text>
       <text x="20" y="148" class="small">past step summaries.</text>
     </g>
   </g>
 
-  <!-- ============== LAYER 6 — RAG STORAGE HYGIENE ============== -->
+  <!-- ============== LAYER 6 — Open Brain / Wiki state ============== -->
   <text x="40" y="1660" class="layer-n" fill="#60A5FA">6</text>
-  <text x="100" y="1650" class="layer-t">RAG storage hygiene</text>
-  <text x="100" y="1670" class="layer-s mono">rag/cleanup.rs · rag/indexer.rs   ·   what stays in Qdrant</text>
+  <text x="100" y="1650" class="layer-t">Open Brain / Wiki state</text>
+  <text x="100" y="1670" class="layer-s mono">agentic_memory · wiki · planner files</text>
 
   <g transform="translate(40,1690)">
     <rect class="layer L6" width="1520" height="150"/>
@@ -358,17 +358,17 @@
       <text x="28" y="33" text-anchor="middle" class="badge">24</text>
       <text x="52" y="32" class="mech">ttl_cleanup (Phase 6.3)</text>
       <text x="20" y="56" class="small mono">rag/cleanup.rs:24</text>
-      <text x="20" y="76" class="small">Qdrant filter-based delete over tengu_messages + tengu_outputs.</text>
+      <text x="20" y="76" class="small">Open Brain Postgres + LLM Wiki Markdown; legacy cleanup optional.</text>
       <text x="20" y="92" class="small">Trigger: <tspan class="mono">MemoryConfig.ttl_days &gt; 0</tspan> · default 0 (permanent).</text>
     </g>
     <g transform="translate(785,20)">
       <rect class="panel2" width="715" height="110"/>
       <circle cx="28" cy="28" r="14" fill="#60A5FA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">25</text>
-      <text x="52" y="32" class="mech">Workspace fingerprint dedup (Phase 6.2)</text>
-      <text x="20" y="56" class="small mono">rag/indexer.rs:64 · &lt;workspace&gt;/.tengu/registry-fingerprint</text>
-      <text x="20" y="76" class="small">SHA-256 of agents/skills/tools. Skips reindex when nothing changed.</text>
-      <text x="20" y="92" class="small">Bypass: <tspan class="mono">TENGU_REGISTRY_FORCE_REINDEX=1</tspan></text>
+      <text x="52" y="32" class="mech">Planner registry file</text>
+      <text x="20" y="56" class="small mono">TENGU_PLANNER_REGISTRY.md</text>
+      <text x="20" y="76" class="small">Generated from agents/skills/tools before planner calls.</text>
+      <text x="20" y="92" class="small">Loaded directly into the planner prompt.</text>
     </g>
   </g>
 

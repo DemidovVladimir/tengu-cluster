@@ -27,8 +27,7 @@ use serde_json::{json, Value};
 
 use crate::adapters::skill_lifecycle::audit;
 use crate::adapters::skill_lifecycle::evolve::{
-    apply_proposal_to_skill_md, is_editable_by_learner, nanos, validate_resource_path,
-    ProposalBody,
+    apply_proposal_to_skill_md, is_editable_by_learner, nanos, validate_resource_path, ProposalBody,
 };
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
 use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
@@ -250,8 +249,12 @@ fn do_create(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     }
 
     let skill_dir = tier_root.join(&args.name);
-    std::fs::create_dir_all(&tier_root)
-        .map_err(|e| anyhow!("manage_skill.create: create_dir_all {}: {e}", tier_root.display()))?;
+    std::fs::create_dir_all(&tier_root).map_err(|e| {
+        anyhow!(
+            "manage_skill.create: create_dir_all {}: {e}",
+            tier_root.display()
+        )
+    })?;
 
     let learner_facing = args.learner_facing.unwrap_or(true);
     let editable = args.editable_by_learner.unwrap_or(true);
@@ -304,11 +307,21 @@ fn do_create(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     )?;
 
     // Atomic rename — last step.
-    std::fs::rename(&tmp, &skill_dir)
-        .map_err(|e| anyhow!("manage_skill.create: rename {} -> {}: {e}", tmp.display(), skill_dir.display()))?;
+    std::fs::rename(&tmp, &skill_dir).map_err(|e| {
+        anyhow!(
+            "manage_skill.create: rename {} -> {}: {e}",
+            tmp.display(),
+            skill_dir.display()
+        )
+    })?;
     guard.path = None;
 
-    audit_log(workspace, "manage_skill.create", &args.name, Some(format!("tier={}", tier)));
+    audit_log(
+        workspace,
+        "manage_skill.create",
+        &args.name,
+        Some(format!("tier={}", tier)),
+    );
 
     let rel_path = skill_dir
         .strip_prefix(workspace)
@@ -337,11 +350,18 @@ fn do_edit_body(args: &Args, workspace: &Path) -> Result<ToolOutput> {
         .as_deref()
         .ok_or_else(|| anyhow!("manage_skill.edit_body: 'body' is required"))?;
 
-    let skill_dir = locate_skill_dir(&args.name, workspace)
-        .ok_or_else(|| anyhow!("manage_skill.edit_body: no skill '{}' found in any tier", args.name))?;
+    let skill_dir = locate_skill_dir(&args.name, workspace).ok_or_else(|| {
+        anyhow!(
+            "manage_skill.edit_body: no skill '{}' found in any tier",
+            args.name
+        )
+    })?;
     let skill_md = skill_dir.join("SKILL.md");
     if !skill_md.is_file() {
-        bail!("manage_skill.edit_body: SKILL.md missing at {}", skill_md.display());
+        bail!(
+            "manage_skill.edit_body: SKILL.md missing at {}",
+            skill_md.display()
+        );
     }
     if !is_editable_by_learner(&skill_md)? {
         bail!(
@@ -397,11 +417,18 @@ fn do_patch(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     let replace_all = args.replace_all.unwrap_or(false);
     let file_path = args.file_path.as_deref().unwrap_or("SKILL.md");
 
-    let skill_dir = locate_skill_dir(&args.name, workspace)
-        .ok_or_else(|| anyhow!("manage_skill.patch: no skill '{}' found in any tier", args.name))?;
+    let skill_dir = locate_skill_dir(&args.name, workspace).ok_or_else(|| {
+        anyhow!(
+            "manage_skill.patch: no skill '{}' found in any tier",
+            args.name
+        )
+    })?;
     let skill_md = skill_dir.join("SKILL.md");
     if !skill_md.is_file() {
-        bail!("manage_skill.patch: SKILL.md missing at {}", skill_md.display());
+        bail!(
+            "manage_skill.patch: SKILL.md missing at {}",
+            skill_md.display()
+        );
     }
     if !is_editable_by_learner(&skill_md)? {
         bail!(
@@ -429,9 +456,7 @@ fn do_patch(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     let target_is_skill_md = target == skill_md;
     if target_is_skill_md {
         validate_post_patch_frontmatter(&patched).map_err(|e| {
-            anyhow!(
-                "manage_skill.patch: post-patch frontmatter invalid — refused: {e}"
-            )
+            anyhow!("manage_skill.patch: post-patch frontmatter invalid — refused: {e}")
         })?;
     }
 
@@ -467,7 +492,10 @@ fn resolve_patch_target(skill_dir: &Path, file_path: &str) -> Result<PathBuf> {
     for c in p.components() {
         match c {
             Component::ParentDir => {
-                bail!("manage_skill.patch: file_path '{}' contains '..' — refused", file_path)
+                bail!(
+                    "manage_skill.patch: file_path '{}' contains '..' — refused",
+                    file_path
+                )
             }
             Component::RootDir | Component::Prefix(_) => bail!(
                 "manage_skill.patch: file_path '{}' is absolute — refused",
@@ -650,7 +678,11 @@ fn normalize_ws_with_index(s: &str) -> (String, Vec<usize>) {
         out.pop();
         idx.pop();
     }
-    debug_assert_eq!(out.len(), idx.len(), "idx must have one entry per output byte");
+    debug_assert_eq!(
+        out.len(),
+        idx.len(),
+        "idx must have one entry per output byte"
+    );
     (out, idx)
 }
 
@@ -782,8 +814,12 @@ fn do_remove_resource(args: &Args, workspace: &Path) -> Result<ToolOutput> {
             dest.display()
         );
     }
-    std::fs::remove_file(&dest)
-        .map_err(|e| anyhow!("manage_skill.remove_resource: remove {}: {e}", dest.display()))?;
+    std::fs::remove_file(&dest).map_err(|e| {
+        anyhow!(
+            "manage_skill.remove_resource: remove {}: {e}",
+            dest.display()
+        )
+    })?;
 
     audit_log(
         workspace,
@@ -860,8 +896,12 @@ fn do_delete(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     }
 
     let removed_path = skill_dir.display().to_string();
-    std::fs::remove_dir_all(&skill_dir)
-        .map_err(|e| anyhow!("manage_skill.delete: remove_dir_all {}: {e}", skill_dir.display()))?;
+    std::fs::remove_dir_all(&skill_dir).map_err(|e| {
+        anyhow!(
+            "manage_skill.delete: remove_dir_all {}: {e}",
+            skill_dir.display()
+        )
+    })?;
 
     audit_log(workspace, "manage_skill.delete", &args.name, None);
 
@@ -949,8 +989,13 @@ fn atomic_write(target: &Path, content: &str) -> Result<()> {
     let tmp = parent.join(format!(".{}.tmp-{}", filename_of(target), nanos()));
     std::fs::write(&tmp, content)
         .map_err(|e| anyhow!("atomic_write: write tmp {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, target)
-        .map_err(|e| anyhow!("atomic_write: rename {} -> {}: {e}", tmp.display(), target.display()))?;
+    std::fs::rename(&tmp, target).map_err(|e| {
+        anyhow!(
+            "atomic_write: rename {} -> {}: {e}",
+            tmp.display(),
+            target.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -1087,7 +1132,10 @@ mod tests {
         do_edit_body(&a, ws.path()).unwrap();
 
         let md = std::fs::read_to_string(ws.path().join("skills/demo/SKILL.md")).unwrap();
-        assert!(md.contains("name: demo"), "frontmatter name preserved: {md}");
+        assert!(
+            md.contains("name: demo"),
+            "frontmatter name preserved: {md}"
+        );
         assert!(md.contains("# NEW BODY"));
         assert!(!md.contains("# OLD BODY"));
     }
@@ -1238,11 +1286,7 @@ mod tests {
     fn add_resource_refuses_overwrite_without_flag() {
         let ws = TempDir::new().unwrap();
         write_skill(ws.path(), "demo", Some(true), "# body");
-        std::fs::write(
-            ws.path().join("skills/demo/resources/x.md"),
-            "ORIG",
-        )
-        .unwrap();
+        std::fs::write(ws.path().join("skills/demo/resources/x.md"), "ORIG").unwrap();
 
         let mut a = make_args("add_resource", "demo");
         a.path = Some("x.md".into());
@@ -1278,11 +1322,7 @@ mod tests {
     fn remove_resource_deletes_file() {
         let ws = TempDir::new().unwrap();
         write_skill(ws.path(), "demo", Some(true), "# body");
-        std::fs::write(
-            ws.path().join("skills/demo/resources/gone.md"),
-            "data",
-        )
-        .unwrap();
+        std::fs::write(ws.path().join("skills/demo/resources/gone.md"), "data").unwrap();
 
         let mut a = make_args("remove_resource", "demo");
         a.path = Some("gone.md".into());
@@ -1301,10 +1341,7 @@ mod tests {
 
         let a = make_args("delete", "demo");
         let err = do_delete(&a, ws.path()).unwrap_err();
-        assert!(
-            format!("{err}").contains("active evolve worktree"),
-            "{err}"
-        );
+        assert!(format!("{err}").contains("active evolve worktree"), "{err}");
         // Skill must still exist.
         assert!(ws.path().join("skills/demo").is_dir());
     }
@@ -1321,13 +1358,8 @@ mod tests {
     #[test]
     fn fuzzy_whitespace_normalized_collapses_runs() {
         // Original has single spaces; needle has tabs and double spaces.
-        let (out, n) = fuzzy_find_and_replace(
-            "alpha beta gamma",
-            "alpha\t\tbeta",
-            "X",
-            false,
-        )
-        .unwrap();
+        let (out, n) =
+            fuzzy_find_and_replace("alpha beta gamma", "alpha\t\tbeta", "X", false).unwrap();
         assert_eq!(n, 1);
         assert!(out.contains("X gamma"), "got: {out}");
     }

@@ -107,23 +107,15 @@ enum Commands {
     },
     /// Run MCP bridge server (stdio). Used as a subprocess by Claude Code engine.
     McpBridge,
+    /// Run a standalone MCP stdio server exposing the `agentic_memory` tool so
+    /// external agents (ChatGPT / Codex / Claude) can share the Open Brain
+    /// memory. Needs `TENGU_MEMORY_DATABASE_URL`; build with
+    /// `--features postgres_memory`.
+    AgenticMemoryServer,
     /// Skill lifecycle commands — evolve / metrics / list / install / etc.
     Skill {
         #[command(subcommand)]
         action: SkillAction,
-    },
-    /// Inspect and manage the RAG registry (tengu_registry + tengu_messages + tengu_outputs).
-    /// Phase 1 of the redesign — see docs/IMPLEMENTATION_PLAN.md.
-    Registry {
-        #[command(subcommand)]
-        action: RegistryAction,
-    },
-    /// Inspect the RAG memory collections directly. Diagnostic shipped with
-    /// Fix C/D/E/F (2026-05-09) so operators can confirm whether step
-    /// outputs / messages actually persisted under a given `session_id`.
-    Memory {
-        #[command(subcommand)]
-        action: MemoryAction,
     },
     /// INTERNAL — subprocess mode invoked by SubprocessRunner. Not intended for
     /// direct user invocation. Refuses to run unless TENGU_AGENT_IPC=1 is set.
@@ -131,68 +123,6 @@ enum Commands {
     /// mini-loop.
     #[command(hide = true)]
     RunAgent,
-}
-
-#[derive(Subcommand)]
-enum RegistryAction {
-    /// List entries in tengu_registry (type | name | score=N/A).
-    List {
-        /// Filter by entry type: "skill", "agent", or "tool".
-        #[arg(long)]
-        r#type: Option<String>,
-        /// Max entries to list (by a broad search over the collection).
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
-    /// Semantic search across tengu_registry. Prints top-K ranked hits.
-    Search {
-        /// Free-text query.
-        query: String,
-        /// How many hits to return.
-        #[arg(long, default_value_t = 10)]
-        top_k: usize,
-    },
-    /// Phase 1 bootstrap: re-index a small hardcoded set of placeholder tool
-    /// descriptions so the registry has something to search. Phase 2 replaces
-    /// this with real enumeration of compiled-in + MCP tool descriptions.
-    ReindexTools,
-    /// Phase 2: wipe tengu_registry, then re-index:
-    ///   - `agents/*.toml`                    → kind = agent
-    ///   - `skills/**/SKILL.md` (3-tier merge) → kind = skill
-    ///   - Phase-1 placeholder tools           → kind = tool
-    ReindexAll {
-        /// Workspace root (defaults to cwd). agents/ and skills/ are looked
-        /// up relative to this path.
-        #[arg(long)]
-        workspace: Option<PathBuf>,
-    },
-}
-
-/// Diagnostic — inspect the RAG memory collections (`tengu_outputs` /
-/// `tengu_messages`) filtered by `session_id`. Confirms whether durable
-/// writes actually landed for a given chat / telegram session.
-///
-/// Typical use: a planner answered "I have no record of that step" — was
-/// the write skipped (Claude Code never called compress_and_store?), did
-/// the embed fail (long summary?), or is it really not there? This
-/// diagnostic answers that without spinning up the full chat loop again.
-#[derive(Subcommand)]
-enum MemoryAction {
-    /// Show every entry in a collection that matches `--session <id>`.
-    /// Output: one row per entry — index, step_id, content snippet,
-    /// created_at (unix seconds + relative).
-    Inspect {
-        /// `session_id` to filter on (matches `extra.rag_session_id`).
-        #[arg(long)]
-        session: String,
-        /// Which collection: `outputs` (default — step summaries) or
-        /// `messages` (user messages).
-        #[arg(long, default_value = "outputs")]
-        collection: String,
-        /// Max entries to return.
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
 }
 
 #[derive(Subcommand)]
@@ -318,6 +248,20 @@ async fn main() -> Result<()> {
         return adapters::mcp_bridge::run_mcp_bridge().await;
     }
 
+    #[cfg(feature = "postgres_memory")]
+    if matches!(cli.command, Some(Commands::AgenticMemoryServer)) {
+        // Stdout carries the JSON-RPC protocol — route tracing to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return adapters::mcp_bridge::run_agentic_memory_mcp_server().await;
+    }
+
     if matches!(cli.command, Some(Commands::RunAgent)) {
         // Subprocess mode — stdout is JSON only, everything else goes to stderr.
         tracing_subscriber::fmt()
@@ -429,9 +373,7 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let config_path = cli
-        .config
-        .unwrap_or_else(|| resolve_tengu_home().join("config.toml"));
+    let config_path = cli.config.unwrap_or_else(default_config_path);
 
     let config = if config_path.exists() {
         Config::load(&config_path)
@@ -459,10 +401,7 @@ async fn main() -> Result<()> {
             print_status(&config, profile);
             Ok(())
         }
-        Commands::Doctor => {
-            run_doctor(&config);
-            Ok(())
-        }
+        Commands::Doctor => run_doctor(&config),
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
@@ -565,6 +504,18 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::McpBridge => adapters::mcp_bridge::run_mcp_bridge().await,
+        #[cfg(feature = "postgres_memory")]
+        Commands::AgenticMemoryServer => {
+            // Handled by the early-return in main() (stdout must stay
+            // JSON-RPC-clean); this arm is for exhaustiveness only.
+            unreachable!("Commands::AgenticMemoryServer is dispatched earlier in main()")
+        }
+        #[cfg(not(feature = "postgres_memory"))]
+        Commands::AgenticMemoryServer => {
+            anyhow::bail!(
+                "agentic-memory MCP server requires: cargo build --features postgres_memory"
+            )
+        }
         Commands::Secret { action } => {
             let path = secret_builder::secrets_file_path(&resolve_tengu_home());
             match action {
@@ -589,8 +540,6 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Skill { action } => run_skill_command(config, action).await,
-        Commands::Registry { action } => run_registry_command(&config, action).await,
-        Commands::Memory { action } => run_memory_command(&config, action).await,
         Commands::RunAgent => {
             // Handled by the early-return in main(); this arm is for
             // exhaustiveness only.
@@ -599,26 +548,37 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Shared write path used by both compress_and_store call sites in
-/// `run_agent_subprocess`: the out-of-band intercept (model called the
-/// tool) and the Fix C backstop (model didn't call it but emitted text).
-/// Centralises the "open RagStore + persist summary" idiom so the two
-/// call sites only differ in their logging style — the side-effect shape
-/// is identical and lives here.
-///
-/// Returns `Ok(entry_id)` on success, `Err(_)` if either RagStore init
-/// or the embed-and-write path failed. Both call sites treat errors as
-/// non-fatal — the IPC summary still goes back to the parent regardless.
-#[cfg(feature = "qdrant")]
-async fn try_persist_step_summary(
+#[cfg(feature = "postgres_memory")]
+async fn try_persist_agentic_step_summary(
     parent_config: &adapters::config::Config,
     session_id: &str,
     step_id: &str,
     summary: &str,
 ) -> anyhow::Result<String> {
-    let rag = adapters::rag::RagStore::from_config(parent_config.memory.clone()).await?;
-    adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
-        &rag, session_id, step_id, summary,
+    let embedding = match std::env::var("OPENROUTER_API_KEY") {
+        Ok(api_key) => {
+            let embedder = adapters::memory::vector::Embedder::new(
+                api_key,
+                parent_config.memory.embedding_model.clone(),
+            );
+            match embedder.embed(summary).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "agentic_memory: step summary embedding failed; writing text-only memory"
+                    );
+                    None
+                }
+            }
+        }
+        Err(_) => None,
+    };
+    adapters::plugins::agentic_memory::write_step_summary_with_embedding(
+        session_id,
+        step_id,
+        summary,
+        embedding.as_deref(),
     )
     .await
 }
@@ -646,7 +606,7 @@ async fn run_agent_subprocess() -> Result<()> {
     if std::env::var("TENGU_AGENT_IPC").ok().as_deref() != Some("1") {
         anyhow::bail!(
             "`tengu run-agent` is a subprocess mode not meant for direct invocation. \
-             Set TENGU_AGENT_IPC=1 if you really want to run it (e.g. via scripts/test-runner.sh)."
+             Set TENGU_AGENT_IPC=1 if you really want to run it (e.g. via tests/run_agent_ipc.rs)."
         );
     }
 
@@ -694,15 +654,16 @@ async fn run_agent_subprocess() -> Result<()> {
         }
         None => (input.agent_name.clone(), None),
     };
-    let spec_path = std::path::PathBuf::from("agents")
-        .join(format!("{}.toml", spec_load_name));
-    let mut spec = adapters::agents::load_agent_file(&spec_path).with_context(|| {
-        format!("load agent spec from {}", spec_path.display())
-    })?;
+    let spec_path = std::path::PathBuf::from("agents").join(format!("{}.toml", spec_load_name));
+    let mut spec = adapters::agents::load_agent_file(&spec_path)
+        .with_context(|| format!("load agent spec from {}", spec_path.display()))?;
     if let Some(c) = compose_override {
         spec.skills = c.skills;
         spec.tools = c.tools;
     }
+    // Resolved spec name (the base spec for composed agents) — exposed like
+    // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.
+    std::env::set_var("TENGU_AGENT_NAME", &spec.name);
 
     // IPC `model` overrides spec when non-empty (the orchestrator can swap
     // models per-step in the future). Falls back to the spec's model.
@@ -724,6 +685,21 @@ async fn run_agent_subprocess() -> Result<()> {
                 tracing::warn!(skill = %skill_name, "skill body not found in any tier");
             }
         }
+    }
+    // Plan block: the parent's per-session `plan_state` IPC field is the
+    // source of truth; the global `TENGU_PLAN.md` is only a fallback for old
+    // parents that don't send it (it is overwritten by every session).
+    let plan_state = match input.plan_state.as_deref() {
+        Some(rendered) => {
+            adapters::orchestrator::shared_files::plan_state_block(rendered, "IPC `plan_state`")
+        }
+        None => {
+            adapters::orchestrator::shared_files::read_plan_state_block(&std::env::current_dir()?)
+        }
+    };
+    if !plan_state.is_empty() {
+        system_prompt.push_str("\n\n---\n\n");
+        system_prompt.push_str(&plan_state);
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
@@ -768,10 +744,15 @@ async fn run_agent_subprocess() -> Result<()> {
     // when dispatched as a subagent step. Now we synthesize an `AgentConfig`
     // from the spec (propagating spec.engine) and let `build_engine` route
     // to the right backend.
-    let agent_cfg_for_engine = adapters::channel_runtime::agent_config_from_spec(
-        &spec,
-        &parent_config.default_scopes,
-    );
+    let workspace = spec
+        .sandbox
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let mut agent_cfg_for_engine =
+        adapters::channel_runtime::agent_config_from_spec(&spec, &parent_config.default_scopes);
+    // The Claude Code engine ships these scopes to the MCP bridge; the child
+    // workspace must be an allowed fs root there too.
+    adapters::channel_runtime::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
     let engine = adapters::engine_builder::build_engine(
         &input.agent_name,
         &agent_cfg_for_engine,
@@ -795,11 +776,6 @@ async fn run_agent_subprocess() -> Result<()> {
     let secret_registry = std::sync::Arc::new(adapters::secret_builder::SecretRegistry::new());
     let activity: std::sync::Arc<dyn crate::adapters::ports::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
-    let workspace = spec
-        .sandbox
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
     // the MemoryPlugin can register persistent_store / memory_ingest as
     // callable handlers (not just advertised tool defs). Without this,
@@ -956,7 +932,8 @@ async fn run_agent_subprocess() -> Result<()> {
         // Dispatch each tool call.
         for call in &tool_calls {
             let result = if call.name == "compress_and_store" {
-                // Out-of-band handling: write to tengu_outputs ourselves.
+                // Out-of-band handling: capture the summary here; with
+                // `postgres_memory` it is persisted to Postgres `agentic_memory`.
                 let extracted_summary = call
                     .arguments
                     .get("summary")
@@ -965,9 +942,9 @@ async fn run_agent_subprocess() -> Result<()> {
                     .to_string();
                 summary = Some(extracted_summary.clone());
                 compress_called = true;
-                #[cfg(feature = "qdrant")]
+                #[cfg(feature = "postgres_memory")]
                 {
-                    let _ = try_persist_step_summary(
+                    let _ = try_persist_agentic_step_summary(
                         &parent_config,
                         &input.session_id,
                         &input.step_id,
@@ -1015,20 +992,14 @@ async fn run_agent_subprocess() -> Result<()> {
     // assistant text as the summary (graceful degradation, same as Phase 5a).
     let summary = summary.unwrap_or_else(|| final_text.clone());
 
-    // Fix C (2026-05-09) — backstop the durable write to `tengu_outputs`
-    // when the subagent finished WITHOUT calling compress_and_store. Pre
-    // Fix-C the IPC summary returned to the parent but nothing was written
-    // to Qdrant, so the planner's within-session recall (Fix A) had no row
-    // to find on the next user turn. This is the path Claude Code subagents
-    // most often take — they "just stop" after their last tool call instead
-    // of issuing the protocol call.
-    //
-    // Fail-soft: any error here is logged and swallowed. The IPC payload
-    // still goes back to the parent unchanged — recall is best-effort,
-    // not a barrier to step completion.
-    #[cfg(feature = "qdrant")]
+    // Backstop the durable write when the subagent finished WITHOUT calling
+    // compress_and_store — the path Claude Code subagents most often take
+    // (they "just stop" after their last tool call). Fail-soft: errors are
+    // logged and swallowed; the IPC payload still goes back to the parent
+    // unchanged — recall is best-effort, not a barrier to step completion.
+    #[cfg(feature = "postgres_memory")]
     if !compress_called && !summary.trim().is_empty() {
-        match try_persist_step_summary(
+        match try_persist_agentic_step_summary(
             &parent_config,
             &input.session_id,
             &input.step_id,
@@ -1041,13 +1012,13 @@ async fn run_agent_subprocess() -> Result<()> {
                 session_id = %input.session_id,
                 step_id = %input.step_id,
                 summary_chars = summary.chars().count(),
-                "compress_and_store: backstop wrote final_text summary to tengu_outputs (Fix C — model skipped the protocol call)"
+                "agentic_memory: backstop wrote final_text summary to Postgres"
             ),
             Err(e) => tracing::warn!(
                 error = %e,
                 session_id = %input.session_id,
                 step_id = %input.step_id,
-                "compress_and_store: backstop write FAILED — within-session recall on the next turn will not find this step (Qdrant down? embedder out of quota?)"
+                "agentic_memory: backstop write FAILED"
             ),
         }
     }
@@ -1108,16 +1079,21 @@ impl crate::adapters::ports::ToolActivityPort for SubprocessActivity {
     fn publish_tool_activity(&self, _call: &crate::adapters::types::ToolCall) {}
 }
 
-/// Same as `load_config_or_default` but available even without the qdrant
-/// feature (Phase 5b needs it for parent_config.default_scopes regardless
-/// of whether RagStore is compiled in).
+/// Config loader used by the `run-agent` subprocess path — needs
+/// `parent_config.default_scopes` regardless of which memory features are
+/// compiled in.
 fn load_config_or_default_unconditional() -> Config {
-    let path = resolve_tengu_home().join("config.toml");
+    let path = default_config_path();
     if !path.is_file() {
         return Config::default();
     }
     match std::fs::read_to_string(&path) {
-        Ok(s) => toml::from_str(&s).unwrap_or_else(|_| Config::default()),
+        Ok(s) => toml::from_str(&s)
+            .map(|mut c: Config| {
+                c.fold_default_scopes();
+                c
+            })
+            .unwrap_or_else(|_| Config::default()),
         Err(_) => Config::default(),
     }
 }
@@ -1130,8 +1106,8 @@ Do not ask follow-up questions — make reasonable assumptions and answer the us
 
 /// Mandatory suffix appended to every subagent system prompt — Phase 5b
 /// version. Tells the model to call `compress_and_store(summary)` as its
-/// final action; the harness writes the summary to `tengu_outputs` and
-/// exits the loop on that call.
+/// final action; the harness captures the summary (persisted to Postgres
+/// `agentic_memory` with `postgres_memory`) and exits the loop on that call.
 const MANDATORY_SUFFIX: &str = "\n\n---\n\n\
 When you have completed your task, your FINAL action MUST be to call the \
 `compress_and_store` tool with a concise `summary` of what you accomplished. \
@@ -1187,271 +1163,10 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
     None
 }
 
-/// Dispatcher for `tengu registry ...` subcommands.
-///
-/// Phase 1 of the redesign: thin wrapper over `adapters::rag::RagStore`. Only
-/// compiled when the `qdrant` feature is enabled — without it we bail with a
-/// clear error so users know what's missing.
-#[cfg(feature = "qdrant")]
-async fn run_registry_command(config: &Config, action: RegistryAction) -> Result<()> {
-    use crate::adapters::rag::{RagStore, REGISTRY_COLLECTION};
-
-    let rag = RagStore::from_config(config.memory.clone())
-        .await
-        .context("failed to open RagStore — is Qdrant running and OPENROUTER_API_KEY set?")?;
-
-    match action {
-        RegistryAction::List { r#type, limit } => {
-            // Phase 1 approximation: we don't have a native list-by-filter yet,
-            // so we do a broad search with a neutral query. Phase 2 will add a
-            // proper scroll. The type filter is applied client-side.
-            let hits = rag.search_registry("list all", limit.max(1)).await?;
-            let filtered: Vec<_> = hits
-                .into_iter()
-                .filter(|h| match &r#type {
-                    Some(t) => h.kind.as_str() == t,
-                    None => true,
-                })
-                .collect();
-            println!("# tengu_registry ({} entries shown)", filtered.len());
-            for h in filtered {
-                println!(
-                    "  [{:<5}] {:<32}  score={:.3}  {}",
-                    h.kind.as_str(),
-                    h.name,
-                    h.score,
-                    h.source_path.as_deref().unwrap_or("")
-                );
-            }
-            Ok(())
-        }
-        RegistryAction::Search { query, top_k } => {
-            let hits = rag.search_registry(&query, top_k).await?;
-            println!(
-                "# search '{}' in {} — top {}",
-                query, REGISTRY_COLLECTION, top_k
-            );
-            for (i, h) in hits.iter().enumerate() {
-                println!(
-                    "{:>2}. [{:<5}] {:<32}  score={:.3}",
-                    i + 1,
-                    h.kind.as_str(),
-                    h.name,
-                    h.score
-                );
-                let snippet: String = h.description.chars().take(120).collect();
-                println!("    {}", snippet);
-            }
-            Ok(())
-        }
-        RegistryAction::ReindexTools => {
-            // Phase 6.6 — clear + write the FULL real tool roster: built-in
-            // (compute_bridge_tools) + MCP servers from config.
-            use crate::adapters::rag::indexer::{enumerate_builtin_tools, enumerate_mcp_tools};
-            let mut tools = enumerate_builtin_tools();
-            let mcp = enumerate_mcp_tools(&config.mcp_servers).await;
-            let mcp_count = mcp.len();
-            tools.extend(mcp);
-            rag.clear_registry().await?;
-            let n = rag.index_tools(tools).await?;
-            println!(
-                "reindexed {} tool descriptions into tengu_registry (built-in + {} MCP)",
-                n, mcp_count
-            );
-            println!("(Phase 6.6 — `reindex-all` additionally indexes agents/ and skills/)");
-            Ok(())
-        }
-        RegistryAction::ReindexAll { workspace } => {
-            let root = workspace
-                .clone()
-                .or_else(|| std::env::current_dir().ok())
-                .context("could not resolve workspace root (pass --workspace)")?;
-            let agents_dir = root.join("agents");
-            let result = crate::adapters::rag::indexer::reindex_all_workspace(
-                &rag,
-                &root,
-                &config.mcp_servers,
-            )
-            .await?;
-
-            if result.unchanged {
-                println!(
-                    "tengu_registry unchanged at {} — workspace fingerprint matches \
-                     (set TENGU_REGISTRY_FORCE_REINDEX=1 to override)",
-                    root.display()
-                );
-                println!(
-                    "  agents loaded: {} from {}",
-                    result.agent_specs.len(),
-                    agents_dir.display()
-                );
-                println!("  skills loaded: {} (3-tier scan)", result.skill_entries.len());
-                return Ok(());
-            }
-
-            println!("reindexed tengu_registry from {}", root.display());
-            println!(
-                "  tools  : {} (built-in + {} MCP server(s))",
-                result.tools_indexed,
-                config.mcp_servers.len()
-            );
-            println!(
-                "  agents : {} (from {})",
-                result.agents_indexed,
-                agents_dir.display()
-            );
-            for a in &result.agent_specs {
-                println!(
-                    "           - {:<20} {}",
-                    a.name,
-                    a.source_path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default()
-                );
-            }
-            println!("  skills : {} (3-tier scan)", result.skills_indexed);
-            for s in &result.skill_entries {
-                println!("           - {:<20} {}", s.name, s.source_path.display());
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Stub when the `qdrant` feature is off — `tengu registry` is a no-op and
-/// tells the user how to rebuild with support.
-#[cfg(not(feature = "qdrant"))]
-async fn run_registry_command(_config: &Config, _action: RegistryAction) -> Result<()> {
-    anyhow::bail!(
-        "`tengu registry` requires the 'qdrant' cargo feature. \
-         Rebuild with: cargo build --features qdrant"
-    );
-}
-
-/// Diagnostic — `tengu memory inspect --session <id>`. Lets operators
-/// confirm whether a given chat / telegram session actually persisted
-/// step outputs (or user messages) to Qdrant. Shipped 2026-05-09 alongside
-/// Fix C/D/E/F so symptoms like "the planner says it has no record" can
-/// be triaged in one command instead of needing to re-run a full pipeline.
-#[cfg(feature = "qdrant")]
-async fn run_memory_command(config: &Config, action: MemoryAction) -> Result<()> {
-    use crate::adapters::memory::context_block::ChunkMetadata;
-    use crate::adapters::rag::RagStore;
-
-    let MemoryAction::Inspect {
-        session,
-        collection,
-        limit,
-    } = action;
-
-    let collection_kind = match collection.as_str() {
-        "outputs" | "tengu_outputs" => "outputs",
-        "messages" | "tengu_messages" => "messages",
-        other => anyhow::bail!(
-            "unknown collection '{}' — expected 'outputs' or 'messages'",
-            other
-        ),
-    };
-
-    let rag = RagStore::from_config(config.memory.clone())
-        .await
-        .context("open RagStore (is Qdrant running and OPENROUTER_API_KEY set?)")?;
-
-    let mut filter = ChunkMetadata::default();
-    filter.extra.insert(
-        "rag_session_id".to_string(),
-        serde_json::Value::String(session.clone()),
-    );
-
-    // Query with a placeholder zero-vector. Server-side filter (Fix F)
-    // narrows to matching rows; ordering is incidental but irrelevant —
-    // we just want to see which entries exist for this session_id.
-    let dim = config.memory.vector_size as usize;
-    let zero = vec![0.0f32; dim];
-
-    let store = match collection_kind {
-        "outputs" => rag.outputs(),
-        "messages" => rag.messages(),
-        _ => unreachable!(),
-    };
-
-    let hits = store.search(&zero, limit, Some(&filter)).await?;
-    let kept: Vec<_> = hits
-        .into_iter()
-        .filter(|h| {
-            // Defence-in-depth — disk backend ignores the filter today
-            // (qdrant honours it via Fix F). Drop unrelated rows here too.
-            h.metadata
-                .extra
-                .get("rag_session_id")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s == session)
-        })
-        .collect();
-
-    println!(
-        "# tengu_{} — session_id = {} ({} matching {})",
-        collection_kind,
-        session,
-        kept.len(),
-        if kept.len() == 1 { "entry" } else { "entries" }
-    );
-
-    if kept.is_empty() {
-        println!();
-        println!("(no entries — possible causes:");
-        println!("  · subagent never called compress_and_store AND Fix C wasn't built in");
-        println!("  · embed failed for an oversize summary AND Fix D wasn't built in");
-        println!("  · collection was reset since the session ran");
-        println!("  · session_id mismatch — check the planner startup log for the resolved id)");
-        return Ok(());
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    for (i, h) in kept.iter().enumerate() {
-        let step_id = h
-            .metadata
-            .extra
-            .get("rag_step_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(none)");
-        let created_at = h
-            .metadata
-            .extra
-            .get("rag_created_at")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        let age_secs = now.saturating_sub(created_at);
-        let chars = h.text.chars().count();
-        let snippet: String = h.text.chars().take(160).collect();
-        println!();
-        println!(
-            "{:>3}. step_id={}  created_at={} ({}s ago)  text_len={}",
-            i + 1,
-            step_id,
-            created_at,
-            age_secs,
-            chars
-        );
-        println!("     {}{}", snippet, if chars > 160 { "…" } else { "" });
-    }
-
-    Ok(())
-}
-
-/// Stub when the `qdrant` feature is off — `tengu memory` is a no-op.
-#[cfg(not(feature = "qdrant"))]
-async fn run_memory_command(_config: &Config, _action: MemoryAction) -> Result<()> {
-    anyhow::bail!(
-        "`tengu memory` requires the 'qdrant' cargo feature. \
-         Rebuild with: cargo build --features qdrant"
-    );
-}
+// Memory inspection: Open Brain (Postgres `agentic_memory`) is the only durable
+// memory backend. Inspect it with SQL against `TENGU_MEMORY_DATABASE_URL` or
+// the ignored `postgres_*_smoke` tests. A Postgres-native inspect CLI is a
+// tracked follow-up in docs/SESSION_HANDOFF.md.
 
 // ---------------------------------------------------------------------------
 // `tengu skill ...` dispatcher and handlers (Batch 2 of skill-research-2026-04-28)
@@ -1596,9 +1311,8 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&v)?);
 
             // Friendly per-metric summary with variance band when available.
-            if let Ok(mj) = serde_json::from_slice::<
-                adapters::skill_lifecycle::storage::MetricsJson,
-            >(&raw)
+            if let Ok(mj) =
+                serde_json::from_slice::<adapters::skill_lifecycle::storage::MetricsJson>(&raw)
             {
                 println!("\n-- summary --");
                 for (name, r) in &mj.metrics {
@@ -1609,10 +1323,7 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
                         _ => String::new(),
                     };
                     let gated = if r.gated { " [GATED]" } else { "" };
-                    println!(
-                        "{}: {:.2}{}  n={}{}",
-                        name, r.pass_rate, band, r.n, gated
-                    );
+                    println!("{}: {:.2}{}  n={}{}", name, r.pass_rate, band, r.n, gated);
                 }
             }
 
@@ -1653,7 +1364,17 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
             description,
             learner_facing,
             yes,
-        } => skill_seed(&name, resources_dir.as_deref(), &tier, description.as_deref(), learner_facing, yes).await,
+        } => {
+            skill_seed(
+                &name,
+                resources_dir.as_deref(),
+                &tier,
+                description.as_deref(),
+                learner_facing,
+                yes,
+            )
+            .await
+        }
     }
 }
 
@@ -1694,7 +1415,11 @@ async fn skill_remove(name: &str, tier: &str, yes: bool) -> Result<()> {
     let evals_dir = skill_dir.join("evals");
     let fixture_count = if evals_dir.is_dir() {
         std::fs::read_dir(&evals_dir)
-            .map(|rd| rd.flatten().filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("yaml")).count())
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("yaml"))
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         0
@@ -1703,7 +1428,9 @@ async fn skill_remove(name: &str, tier: &str, yes: bool) -> Result<()> {
     let runs_count = {
         let runs = skill_dir.join("metrics").join("runs");
         if runs.is_dir() {
-            std::fs::read_dir(&runs).map(|rd| rd.flatten().count()).unwrap_or(0)
+            std::fs::read_dir(&runs)
+                .map(|rd| rd.flatten().count())
+                .unwrap_or(0)
         } else {
             0
         }
@@ -1758,10 +1485,12 @@ async fn skill_list(tier_filter: Option<&str>) -> Result<()> {
         }
         let skill_md = dir.join("SKILL.md");
         let fm = read_frontmatter_lite(&skill_md).unwrap_or_default();
-        let name = fm
-            .name
-            .clone()
-            .unwrap_or_else(|| dir.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string());
+        let name = fm.name.clone().unwrap_or_else(|| {
+            dir.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string()
+        });
 
         let fixture_count = {
             let evals = dir.join("evals");
@@ -1769,7 +1498,9 @@ async fn skill_list(tier_filter: Option<&str>) -> Result<()> {
                 std::fs::read_dir(&evals)
                     .map(|rd| {
                         rd.flatten()
-                            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("yaml"))
+                            .filter(|e| {
+                                e.path().extension().and_then(|s| s.to_str()) == Some("yaml")
+                            })
                             .count()
                     })
                     .unwrap_or(0)
@@ -1786,9 +1517,9 @@ async fn skill_list(tier_filter: Option<&str>) -> Result<()> {
                 .ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                 .and_then(|v| {
-                    v.get("metrics").and_then(|m| m.as_object()).map(|o| {
-                        o.keys().cloned().collect::<Vec<_>>().join(",")
-                    })
+                    v.get("metrics")
+                        .and_then(|m| m.as_object())
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>().join(","))
                 })
                 .unwrap_or_default()
         } else {
@@ -1808,7 +1539,14 @@ async fn skill_list(tier_filter: Option<&str>) -> Result<()> {
             .unwrap_or_else(|| "-".to_string());
 
         let shell_marked = declares_shell_kind(&fm, &["script", "shell_check"]);
-        rows.push((name, tier_label, fixture_count, gated, last_run, shell_marked));
+        rows.push((
+            name,
+            tier_label,
+            fixture_count,
+            gated,
+            last_run,
+            shell_marked,
+        ));
     }
 
     rows.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1839,7 +1577,10 @@ async fn skill_doctor(no_fail: bool) -> Result<()> {
             read_frontmatter_lite(&d.join("SKILL.md"))
                 .and_then(|fm| fm.name)
                 .unwrap_or_else(|| {
-                    d.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string()
+                    d.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string()
                 })
         })
         .collect();
@@ -1870,10 +1611,7 @@ async fn skill_doctor(no_fail: bool) -> Result<()> {
             }
             if let Ok(a) = toml::from_str::<AgentLite>(&body) {
                 for s in a.skills {
-                    referenced
-                        .entry(s)
-                        .or_default()
-                        .push(agent_name.clone());
+                    referenced.entry(s).or_default().push(agent_name.clone());
                 }
             }
         }
@@ -1897,12 +1635,18 @@ async fn skill_doctor(no_fail: bool) -> Result<()> {
 
     println!("# tengu skill doctor");
     println!();
-    println!("phantoms ({}): agent refs with no skill on disk", phantoms.len());
+    println!(
+        "phantoms ({}): agent refs with no skill on disk",
+        phantoms.len()
+    );
     for (s, agents) in &phantoms {
         println!("  {} <- {}", s, agents.join(","));
     }
     println!();
-    println!("orphans ({}): installed skills with no agent ref", orphans.len());
+    println!(
+        "orphans ({}): installed skills with no agent ref",
+        orphans.len()
+    );
     for s in &orphans {
         println!("  {}", s);
     }
@@ -2125,8 +1869,8 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
 
     // Step 3: symlink-aware extraction check. Walk every entry, canonicalize,
     // assert it stays inside quarantine_root.
-    let q_canon = std::fs::canonicalize(&quarantine_root)
-        .context("canonicalize quarantine root")?;
+    let q_canon =
+        std::fs::canonicalize(&quarantine_root).context("canonicalize quarantine root")?;
     if let Err(e) = assert_no_escape(&quarantine_root, &q_canon) {
         let _ = std::fs::remove_dir_all(&quarantine_root);
         eprintln!("install rejected: {}", e);
@@ -2135,9 +1879,8 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
 
     // Step 4: locate SKILL.md (top-level OR under exactly one subdir like a
     // git checkout). Validate frontmatter parses with non-empty name + desc.
-    let skill_root = locate_skill_root(&quarantine_root).ok_or_else(|| {
-        anyhow::anyhow!("no SKILL.md found in source")
-    })?;
+    let skill_root = locate_skill_root(&quarantine_root)
+        .ok_or_else(|| anyhow::anyhow!("no SKILL.md found in source"))?;
     let fm = read_frontmatter_lite(&skill_root.join("SKILL.md"))
         .ok_or_else(|| anyhow::anyhow!("SKILL.md missing or malformed frontmatter"))?;
     let skill_name = fm
@@ -2326,8 +2069,7 @@ async fn skill_seed(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp = tier_root.join(format!(".{}.tmp-{}", name, nanos));
-    std::fs::create_dir_all(&tmp)
-        .with_context(|| format!("create tmp {}", tmp.display()))?;
+    std::fs::create_dir_all(&tmp).with_context(|| format!("create tmp {}", tmp.display()))?;
 
     // Cleanup-on-drop for the tmp dir if anything below errors before rename.
     let mut cleanup = TmpDirGuard {
@@ -2527,8 +2269,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 fn assert_no_escape(root: &Path, q_canon: &Path) -> Result<()> {
     for e in std::fs::read_dir(root)?.flatten() {
         let p = e.path();
-        let canon = std::fs::canonicalize(&p)
-            .with_context(|| format!("canonicalize {}", p.display()))?;
+        let canon =
+            std::fs::canonicalize(&p).with_context(|| format!("canonicalize {}", p.display()))?;
         if !canon.starts_with(q_canon) {
             anyhow::bail!(
                 "path {} escapes quarantine ({} -> {})",
@@ -2605,12 +2347,16 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
 }
 
-fn run_doctor(config: &Config) {
+/// `tengu doctor` — build every configured agent's engine and print its
+/// diagnostics. Returns `Err` (→ non-zero exit) when any engine fails to
+/// build; the Docker `HEALTHCHECK` relies on that exit code.
+fn run_doctor(config: &Config) -> Result<()> {
     println!();
     println!("  TENGU CLUSTER — Doctor");
     println!("  ─────────────────────────────────────");
 
     println!("  Backend diagnostics:");
+    let mut failures: Vec<String> = Vec::new();
     for (id, ac) in &config.agents {
         match build_engine(id, ac, config.claude_code.as_ref()) {
             Ok(engine) => {
@@ -2624,12 +2370,27 @@ fn run_doctor(config: &Config) {
             }
             Err(err) => {
                 println!("    {}: backend init error: {}", id, err);
+                failures.push(format!("{id}: {err}"));
             }
         }
     }
 
     println!("  ─────────────────────────────────────");
     println!();
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "doctor: {} agent engine(s) failed to build:\n{}",
+            failures.len(),
+            failures
+                .iter()
+                .map(|f| format!("  - {f}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
 }
 
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
@@ -2654,6 +2415,15 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
             Ok(cfg)
         }
     }
+}
+
+/// Config file used when `--config` is absent: `$TENGU_CONFIG` if set,
+/// else `<tengu home>/config.toml`. Shared by the parent CLI and the
+/// `run-agent` child so both resolve the same file.
+pub(crate) fn default_config_path() -> PathBuf {
+    std::env::var_os("TENGU_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| resolve_tengu_home().join("config.toml"))
 }
 
 pub(crate) fn resolve_tengu_home() -> PathBuf {

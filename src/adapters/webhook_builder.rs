@@ -76,10 +76,7 @@ const SIG_HEADER: &str = "x-tengu-signature";
 
 /// Long-running entry point. Boots the axum server and never returns
 /// (until ctrl-c).
-pub async fn run_webhooks(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-) -> Result<()> {
+pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
     if !config.webhooks.enabled {
         return Err(anyhow!(
             "[webhooks] not enabled in this sandbox config — set `[webhooks] enabled = true` to start the listener"
@@ -245,11 +242,7 @@ async fn dispatch_webhook(
 /// Final agent text is written to the tracing log; durable side-effects
 /// (compress_and_store rows, metrics records) flow through the standard
 /// pipeline. Errors are logged and discarded — the listener stays up.
-async fn run_one_shot(
-    state: Arc<WebhookAppState>,
-    session_id: &str,
-    user_message: String,
-) {
+async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_message: String) {
     // Per-request orchestrator construction. Uses `WebhookChatServiceFactory`
     // — a per-turn rebuild-from-config pattern modelled on `EvalChatServiceFactory`
     // in `eval_builder.rs`. Avoids the `OrchestratorSnapshots` map that
@@ -269,7 +262,7 @@ async fn run_one_shot(
     ) else {
         warn!(
             session_id = %session_id,
-            "build_orchestrator returned None — webhook turn aborted (engine != \"rag\" or qdrant feature off). This is a sandbox-config issue, not a runtime crisis."
+            "build_orchestrator returned None — webhook turn aborted (engine != \"rag\"). This is a sandbox-config issue, not a runtime crisis."
         );
         return;
     };
@@ -293,44 +286,46 @@ async fn run_one_shot(
         "webhook orchestrator turn completed"
     );
 
-    // Fix H (2026-05-09) — persist the orchestrator's final output to
-    // `tengu_outputs` with a synthetic step_id `"webhook-handler"`. Without
-    // this, webhook turns where the planner emitted `Direct { response }`
-    // (no subagent dispatched, no `compress_and_store` invocation, no
-    // Fix-C backstop firing either) leave nothing recallable —
-    // `tengu memory inspect --session webhook-<…>` would show 0 rows even
-    // though the agent answered. Coexists with subagent `compress_and_store`
-    // rows on the same session_id; different step_ids keep them distinct.
-    //
-    // Fix D's char cap inside `write_summary` applies, so oversize replies
-    // are truncated rather than silently dropped at the embedder.
+    // Persist the orchestrator's final output to Open Brain (`agentic_memory`,
+    // Postgres) with a synthetic step_id `"webhook-handler"`. Without this,
+    // webhook turns where the planner emitted `Direct { response }` (no
+    // subagent dispatched, so no `compress_and_store` and no backstop) leave
+    // nothing recallable. Coexists with subagent step summaries on the same
+    // session_id; different step_ids keep them distinct.
     persist_webhook_output(&state, session_id, &final_text).await;
 }
 
-/// Fire-and-forget persist of the webhook turn's final text. Logs success
-/// at info, errors at warn — never propagates.
-async fn persist_webhook_output(
-    state: &Arc<WebhookAppState>,
-    session_id: &str,
-    final_text: &str,
-) {
-    let rag = match crate::adapters::rag::RagStore::from_config(state.config.memory.clone()).await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            warn!(
-                session_id = %session_id,
-                error = %e,
-                "webhook persist skipped — RagStore unavailable (Qdrant down or no API key); webhook output is in tracing only"
+/// Fire-and-forget persist of the webhook turn's final text into Open Brain
+/// (`agentic_memory`, Postgres). Logs success at info, errors at warn — never
+/// propagates. Embedding is best-effort: no `OPENROUTER_API_KEY` (or an embed
+/// error) stores a text-only memory.
+#[cfg(feature = "postgres_memory")]
+async fn persist_webhook_output(state: &Arc<WebhookAppState>, session_id: &str, final_text: &str) {
+    let embedding = match std::env::var("OPENROUTER_API_KEY") {
+        Ok(api_key) => {
+            let embedder = crate::adapters::memory::vector::Embedder::new(
+                api_key,
+                state.config.memory.embedding_model.clone(),
             );
-            return;
+            match embedder.embed(final_text).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "webhook persist: embedding failed; writing text-only memory"
+                    );
+                    None
+                }
+            }
         }
+        Err(_) => None,
     };
-    match crate::adapters::plugins::skill_lifecycle::compress_and_store::write_summary(
-        &rag,
+    match crate::adapters::plugins::agentic_memory::write_step_summary_with_embedding(
         session_id,
         "webhook-handler",
         final_text,
+        embedding.as_deref(),
     )
     .await
     {
@@ -338,14 +333,29 @@ async fn persist_webhook_output(
             entry_id = %id,
             session_id = %session_id,
             step_id = "webhook-handler",
-            "webhook output persisted to tengu_outputs (Fix H)"
+            "webhook output persisted to agentic_memory"
         ),
         Err(e) => warn!(
             session_id = %session_id,
             error = %e,
-            "webhook output persist FAILED — `tengu memory inspect` won't find this run"
+            "webhook output persist FAILED — agentic_memory unavailable (is TENGU_MEMORY_DATABASE_URL set?)"
         ),
     }
+}
+
+/// Without `postgres_memory` there is no durable memory backend — the webhook
+/// turn still completes and its output is in the tracing log, just not
+/// recallable.
+#[cfg(not(feature = "postgres_memory"))]
+async fn persist_webhook_output(
+    _state: &Arc<WebhookAppState>,
+    session_id: &str,
+    _final_text: &str,
+) {
+    warn!(
+        session_id = %session_id,
+        "webhook output not persisted — built without the `postgres_memory` feature"
+    );
 }
 
 /// Resolve the shared secret from `secret_env` (preferred) or `secret`
@@ -400,10 +410,7 @@ fn validate_endpoints(endpoints: &HashMap<String, WebhookEndpointConfig>) -> Res
             _ => {}
         }
         if ep.agent.is_empty() {
-            return Err(anyhow!(
-                "[webhooks.endpoints.{}] `agent` is required",
-                name
-            ));
+            return Err(anyhow!("[webhooks.endpoints.{}] `agent` is required", name));
         }
     }
     Ok(())
@@ -429,10 +436,11 @@ fn verify_hmac(header_value: &str, body: &[u8], secret: &[u8]) -> Result<()> {
         .strip_prefix("sha256=")
         .ok_or_else(|| anyhow!("`X-Tengu-Signature` must start with `sha256=`"))?
         .trim();
-    let expected_bytes = hex_decode(hex_sig)
-        .map_err(|e| anyhow!("`X-Tengu-Signature` hex decode failed: {}", e))?;
-    let mut mac = HmacSha256::new_from_slice(secret)
-        .map_err(|_| anyhow!("HMAC key length invalid (this is a bug — Hmac<Sha256> accepts any length)"))?;
+    let expected_bytes =
+        hex_decode(hex_sig).map_err(|e| anyhow!("`X-Tengu-Signature` hex decode failed: {}", e))?;
+    let mut mac = HmacSha256::new_from_slice(secret).map_err(|_| {
+        anyhow!("HMAC key length invalid (this is a bug — Hmac<Sha256> accepts any length)")
+    })?;
     mac.update(body);
     mac.verify_slice(&expected_bytes)
         .map_err(|_| anyhow!("HMAC mismatch"))?;
@@ -487,8 +495,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
             .get(agent_name)
             .ok_or_else(|| anyhow!("unknown agent in webhook turn: {}", agent_name))?;
 
-        let engine_box =
-            build_engine(agent_name, agent, self.cfg.claude_code.as_ref())?;
+        let engine_box = build_engine(agent_name, agent, self.cfg.claude_code.as_ref())?;
         let engine: Arc<dyn Engine> = Arc::from(engine_box);
 
         // Workspace fallback: when the agent has none of its own (rare in

@@ -302,8 +302,9 @@ mod tests {
             min_pass_rate: None,
         }];
 
-        let judge: Arc<dyn JudgeClient> =
-            Arc::new(StubJudge(r#"{"verdict":"pass","score":0.9,"notes":"clean"}"#));
+        let judge: Arc<dyn JudgeClient> = Arc::new(StubJudge(
+            r#"{"verdict":"pass","score":0.9,"notes":"clean"}"#,
+        ));
         let ctx = ctx(
             dir.path(),
             &ws,

@@ -1,11 +1,11 @@
 # Tengu Cluster — Makefile
 #
-# Quick start:  make setup && make up
-# With Qdrant:  make up-qdrant
-# Native build: make native
+# Quick start:    make setup && make up
+# With memory:    make up-memory      (Postgres + pgvector agentic memory, image built with postgres_memory)
+# Native build:   make native / make native-memory
 
-.PHONY: help setup build up down up-qdrant logs status \
-        doctor clean pull native native-release
+.PHONY: help setup build up down up-memory logs status \
+        doctor clean pull native native-release native-memory
 
 COMPOSE := docker compose
 CARGO   := cargo
@@ -31,11 +31,11 @@ pull: ## Pull latest base images
 up: ## Start tengu (OpenRouter + Telegram)
 	$(COMPOSE) up -d
 
-up-qdrant: ## Start tengu + Qdrant vector memory
-	TENGU_FEATURES=openrouter,telegram,qdrant $(COMPOSE) --profile qdrant up -d
+up-memory: ## Start tengu + Postgres/pgvector agentic memory (rebuilds image with postgres_memory)
+	TENGU_FEATURES=openrouter,telegram,postgres_memory $(COMPOSE) --profile postgres-memory up -d --build
 
 down: ## Stop all services
-	$(COMPOSE) --profile qdrant down
+	$(COMPOSE) --profile postgres-memory down
 
 logs: ## Tail tengu logs
 	$(COMPOSE) logs -f tengu
@@ -49,7 +49,7 @@ doctor: ## Run tengu diagnostics
 clean: ## Stop all and remove volumes (destructive)
 	@echo "This will delete all data volumes. Press Ctrl+C to cancel."
 	@sleep 3
-	$(COMPOSE) --profile qdrant down -v
+	$(COMPOSE) --profile postgres-memory down -v
 
 # ── Native Build ────────────────────────────────────────────────
 native: ## Build locally with cargo (debug, default features)
@@ -58,5 +58,5 @@ native: ## Build locally with cargo (debug, default features)
 native-release: ## Build locally with cargo (release, all features)
 	$(CARGO) build --release --all-features
 
-native-qdrant: ## Build locally with qdrant feature
-	$(CARGO) build --release --features qdrant
+native-memory: ## Build locally with the postgres_memory feature
+	$(CARGO) build --release --features postgres_memory

@@ -29,11 +29,11 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
-# workspace_tools = ["shared_cache", "skill_distill"]  # skill_distill lets the agent author new skills from conversation
+# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
-# model = "nvidia/nemotron-3-super-120b-a12b:free"        # Claude Sonnet 4 (premium)
+# model = "anthropic/claude-sonnet-4-6"      # Claude Sonnet 4.6 (premium)
 # model = "openai/gpt-4o"                    # GPT-4o
 # model = "google/gemini-2.5-pro"            # Gemini 2.5 Pro
 # model = "meta-llama/llama-4-maverick"      # Llama 4 Maverick
@@ -68,25 +68,21 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [memory]
 # enabled = true
-# embedding_model = "text-embedding-3-small"
+# embedding_model = "text-embedding-3-small"  # must be 1536-dim (Postgres schema hardcodes vector(1536))
 # max_recall_entries = 5
 # max_recall_tokens = 600
 # store_path = "~/.tengu/memory/"
-#
-# --- Qdrant vector store backend (optional) ---
-# Requires: cargo build --features qdrant
-# Start Qdrant: docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-#
-# backend = "qdrant"                          # "disk" (default) or "qdrant"
-# qdrant_url = "http://localhost:6334"        # gRPC endpoint
-# qdrant_collection = "tengu-memory"          # collection name
-# vector_size = 1536                          # must match embedding model output dim
-# qdrant_api_key = "${QDRANT_API_KEY}"        # for Qdrant Cloud (optional)
-#
-# --- Redesign additions (Phase 0 scaffold, inert until later phases wire them) ---
-# ttl_days = 0                                # 0 = never purge; set >0 to enable startup sweep of tengu_memory
 # session_recent_n = 10                       # last-N messages reloaded each orchestrator turn for dialogue coherence
-# cross_plan_top_k = 5                        # fuzzy recall breadth during replan (vector search over tengu_outputs)
+# cross_plan_top_k = 5                        # fuzzy recall breadth during replan (recall over agentic_memory step outputs)
+#
+# --- Agentic memory (Open Brain — Postgres + pgvector) ---
+# Requires: cargo build --features postgres_memory
+# Start the DB:  docker compose --profile postgres-memory up -d postgres-memory
+# Set the URL:   export TENGU_MEMORY_DATABASE_URL=postgres://tengu:tengu@localhost:5432/tengu_memory
+# The legacy Qdrant backend was removed in Phase 6 — the only built-in vector
+# store now is the disk-backed bincode store; durable cross-session memory is
+# the Postgres `agentic_memory` plugin.
+# within_session_output_top_k = 3             # planner injects recent step outputs from agentic_memory (0 = off)
 
 # --- Telegram Bot ---
 # Run with: tengu telegram
@@ -98,17 +94,32 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # enabled = true
 # allowed_users = ["123456789"]
 
-# --- Fleet Orchestration ---
-# Run a multi-agent fleet, all through OpenRouter — one bill, multiple models.
-# Run with: tengu orchestrate
-# Use sandboxes for domain-specific teams: tengu orchestrate --sandbox webstudio
-# See tengu/Sandboxes.md for details.
+# --- Webhooks (inbound HTTP) ---
+# Run with: tengu webhooks --sandbox <name>   (build with --features webhooks)
+# Listens on [webhooks].port (default 7080). See docs/webhooks-2026-05-11.md.
+
+# [webhooks]
+# enabled = true
+# bind = "127.0.0.1"
+# port = 7080
+#
+# [webhooks.endpoints.test]
+# agent = "main"
+# secret_env = "TENGU_TEST_WEBHOOK_SECRET"
+# goal_template = "Webhook arrived. Summarise the payload."
+
+# --- Orchestration ---
+# The planner agent emits plan JSON; each step runs `agents/<name>.toml` as a
+# `tengu run-agent` subprocess. Run with: tengu chat --sandbox <name>
+# (or tengu telegram --sandbox <name>). Domain teams live in sandboxes/<name>/config.toml
+# — see README "Sandboxes".
 
 # [orchestrator]
-# agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that acts as the orchestrator
+# agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that runs the planner LLM call
+# engine = "rag"                        # REQUIRED — the only supported value (historical name; file-registry planner). Anything else disables orchestration.
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
-# max_replans = 2                       # Tier 2: how many times the orchestrator is re-invoked to replan before bailing out
-# engine = "static"                     # "static" (default, legacy roster) or "rag" (new RAG + runner; Phase 4+)
+# max_replans = 2                       # Tier 2: how many times the planner is re-invoked to replan before bailing out
+# route_explicit_agents = false         # true = `@role:` messages also go through the planner
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
@@ -160,7 +171,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [agents.editor]
 # engine = "claude_code"
-# model = "claude-sonnet-4-20250514"
+# model = "claude-sonnet-4-6"              # bare slug (no `anthropic/` prefix) for claude_code
 # workspace = "~/projects/my-app"
 # skill_packages = ["my-skill"]
 # workspace_tools = ["shared_cache"]
@@ -183,15 +194,16 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [skill_lifecycle]
 # improver_agent = "skill-improver"        # Required for `tengu skill evolve`
-# fixture_runner_agent = "fixture-runner"  # Required for `tengu eval`
+# fixture_runner_agent = "fixture-runner"  # Unused — `tengu eval` runs rows on the eval config default agent (field is serde-required, value is ignored; no [agents.fixture-runner] block needed)
 # default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
 # default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
 
 # [agents.skill-improver]
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
-# # `workspace_tools` is a 3-item allowlist (shared_cache / persistent_store /
-# # skill_distill). Regular tools like read_file / list_directory go in `tools`.
+# # `workspace_tools` allow-list: agentic_memory / shared_cache / persistent_store /
+# # skill_distill / apply_improver_proposal / manage_skill. Regular tools like
+# # read_file / list_directory go in `tools`.
 # tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #
 # [agents.skill-improver.identity]
@@ -205,19 +217,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # targeted revisions over wholesale rewrites.
 # """
 
-# [agents.fixture-runner]
-# engine = "openrouter"
-# model = "anthropic/claude-sonnet-4-6"
-# tools = ["read_file", "list_directory", "run_command"]
-#
-# [agents.fixture-runner.identity]
-# name = "Fixture Runner"
-# instructions = "You execute a single skill fixture and return the final assistant output."
-
-# --- RAG (redesign Phase 1+) ---
-# Turns on the startup indexer which embeds skill/agent/tool descriptions into
-# Qdrant (`tengu_registry`). Inert until Phase 4 wires the RAG planner path.
-# Safe to enable early: indexer is read-from-disk + write-to-Qdrant only.
-#
-# [rag]
-# enabled = false
+# --- Planner registry ---
+# The planner routes from root `TENGU_PLANNER_REGISTRY.md`, regenerated from
+# `agents/`, skills, and core tool definitions on every planner turn. There is
+# no config block — it is file-backed. (The legacy `[rag]` Qdrant indexer block
+# was removed in Phase 6.)

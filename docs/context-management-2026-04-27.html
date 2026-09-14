@@ -454,11 +454,11 @@
       <li><strong>No LLM-driven auto-summarise pass.</strong> Every "summary" in the harness is either truncated concatenation (<code>maybe_compact_flow</code>, <code>compact_tool_result</code>) or written by the model itself as a tool call (<code>compress_and_store</code>). There is no in-harness LLM call whose only job is to compress prior context.</li>
       <li><strong>No <code>/compact</code> slash command in the TUI.</strong></li>
       <li><strong>No semantic dedupe of repeated tool calls.</strong> Two identical <code>http_request</code> calls keep both full responses.</li>
-      <li><strong>No retrieval over prior turns of the current session for the chat loop.</strong> <code>tengu_messages</code> exists, but only <code>cross_session_recall_block</code> (planner-side, opt-in) reads it.</li>
-      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RagPlanner::replan</code> reads it for cross-plan recall.</li>
+      <li><strong>No retrieval over prior turns of the current session for the chat loop.</strong> With <code>postgres_memory</code>, planner-side opt-in recall reads Postgres <code>agentic_memory</code>; otherwise planner memory lanes are empty.</li>
+      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the final summary survives. <code>postgres_memory</code> writes Postgres <code>agentic_memory</code>; legacy vector builds keep old compatibility.</li>
       <li><strong>Claude Code engine has zero in-loop compaction.</strong> Layer 4's <code>max_mcp_result_chars</code> is the only governor on that path. If a Claude Code subagent fans out a lot of tool calls, Claude's own context fills up — the harness can only cap individual results, not compact prior ones.</li>
       <li><strong>No per-skill dedup.</strong> If two skills duplicate content (e.g. shared boilerplate), both go in the system prompt at full size up to <code>max_skill_context_tokens</code>.</li>
-      <li><strong>No sliding window over <code>tengu_outputs</code>.</strong> <code>cross_plan_top_k</code> is a top-K, not a recency-weighted window — old summaries stick around as long as TTL allows.</li>
+      <li><strong>No sliding window over planner memory.</strong> <code>cross_plan_top_k</code> is a top-K, not a recency-weighted window.</li>
     </ul>
   </div>
 </div>
@@ -488,9 +488,9 @@ const LAYERS = [
   { n: 5, key: "l5", color: "#4ADE80", title: "Subagent IPC",
     where: "src/adapters/runner.rs · main.rs::run_agent_subprocess",
     desc: "compress_and_store durable per-step summary. Subprocess gets fresh context. Phase 5c middle-ground protocol decides Ok/Failed." },
-  { n: 6, key: "l6", color: "#60A5FA", title: "RAG storage hygiene",
+  { n: 6, key: "l6", color: "#60A5FA", title: "Open Brain / Wiki state",
     where: "src/adapters/rag/cleanup.rs · rag/indexer.rs",
-    desc: "What stays in Qdrant. TTL pruning of messages/outputs + workspace fingerprint dedup to avoid re-embedding unchanged registries." },
+    desc: "Open Brain live memory, Karpathy LLM Wiki Markdown, and planner registry files." },
   { n: 7, key: "l7", color: "#FB923C", title: "File chunking",
     where: "src/adapters/plugins/memory/persistent_store.rs",
     desc: "Char-window file splitter for vector-storage. Orthogonal to LLM context — surfaces only via memory_recall." },
@@ -527,12 +527,12 @@ const MECHS = [
   { n: 7, layer: 2, title: "assemble_recent_history", where: "prompt_budget.rs:8",
     body: "Newest contiguous suffix of <code>state.messages</code> that fits <code>history_budget</code>. Hard ceiling of 20 messages.",
     pills: ["MAX_HISTORY_MESSAGES = 20"], tags: ["history", "window", "sliding", "suffix"] },
-  { n: 8, layer: 2, title: "Memory recall block (Qdrant)", where: "chat_builder.rs:326",
-    body: "Top-K semantic search over the memory backend. Bounded by total token budget.",
+  { n: 8, layer: 2, title: "Memory recall block", where: "chat_builder.rs:326 / planner.rs",
+    body: "Planner roster comes from root <code>TENGU_PLANNER_REGISTRY.md</code>. Runtime planner recall uses Postgres <code>agentic_memory</code> with <code>postgres_memory</code>; otherwise planner memory lanes stay empty.",
     pills: ["top-K = 5", "max_recall_tokens = 600", "session_recent_n = 10", "cross_plan_top_k = 5"],
     tags: ["recall", "memory", "rag", "qdrant", "top-k"] },
   { n: 9, layer: 2, title: "cross_session_msg_top_k", where: "MemoryConfig",
-    body: "When > 0, planner-side surfaces semantically similar messages from prior sessions. Off by default.",
+    body: "When > 0, planner-side surfaces similar messages from prior sessions. Off by default. Reads Postgres <code>agentic_memory</code> when <code>postgres_memory</code> is enabled.",
     pills: ["default 0 (off)"], tags: ["recall", "cross-session", "planner", "messages"] },
   { n: 10, layer: 2, title: "&lt;memory-context&gt; fencing", where: "fencing.rs",
     body: "Wraps recall in <code>&lt;memory-context&gt;...&lt;/memory-context&gt;</code> + system note. Prevents the model from treating recalled text as new user input.",
@@ -587,8 +587,8 @@ const MECHS = [
     pills: ["IPC over JSON stdin/stdout"], tags: ["subprocess", "ipc", "fresh", "isolation"] },
   { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "plugins/skill_lifecycle/compress_and_store.rs",
     star: true,
-    body: "Implicitly appended to every subagent's tools. Two paths converge on <code>write_summary</code>: out-of-band (OpenRouter) + plugin (Claude Code via MCP bridge). Writes to Qdrant <code>tengu_outputs</code> keyed by session_id + step_id.",
-    pills: ["implicit append", "two dispatch paths", "Qdrant tengu_outputs"], tags: ["compress", "summary", "subagent", "qdrant", "step"] },
+    body: "Implicitly appended to every subagent's tools. Out-of-band OpenRouter handling can complete without the plugin executor. <code>postgres_memory</code> writes final summaries to Postgres <code>agentic_memory</code> with embeddings when available; legacy vector builds keep old compatibility.",
+    pills: ["implicit append", "Open Brain memory", "legacy vector"], tags: ["compress", "summary", "subagent", "qdrant", "postgres", "step"] },
   { n: 22, layer: 5, title: "Phase 5c middle-ground protocol", where: "main.rs:900",
     body: "Three-row verdict table: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed. Graceful degradation lets non-protocol-respecting models still succeed if they produce text.",
     pills: ["3 rows", "graceful degradation"], tags: ["protocol", "verdict", "ipc", "phase-5c"] },
@@ -598,11 +598,11 @@ const MECHS = [
 
   // Layer 6
   { n: 24, layer: 6, title: "ttl_cleanup (Phase 6.3)", where: "rag/cleanup.rs:24",
-    body: "Qdrant filter-based delete over <code>tengu_messages</code> + <code>tengu_outputs</code> where <code>rag_created_at &lt; (now - ttl_days * 86_400)</code>. Trigger: <code>ttl_days &gt; 0</code>. Default 0 (permanent retention). Runs at chat cold-start.",
+    body: "Open Brain writes live memory to Postgres agentic_memory; Karpathy LLM Wiki compiles promoted knowledge into Markdown. Legacy vector cleanup remains compatibility-only.",
     pills: ["ttl_days = 0 default", "filter-based delete", "cold-start trigger"], tags: ["ttl", "cleanup", "qdrant", "filter"] },
-  { n: 25, layer: 6, title: "Workspace fingerprint dedup (Phase 6.2)", where: "rag/indexer.rs:64",
-    body: "<code>&lt;workspace&gt;/.tengu/registry-fingerprint</code>. SHA-256 over agents + skills + tools. <code>reindex_all_workspace</code> skips full embed when fingerprint matches.",
-    pills: ["sha256", "TENGU_REGISTRY_FORCE_REINDEX=1 bypass"], tags: ["fingerprint", "dedup", "registry", "indexer"] },
+  { n: 25, layer: 6, title: "Planner registry file", where: "TENGU_PLANNER_REGISTRY.md",
+    body: "Generated from agents/skills/tools before planner calls and loaded directly into the planner prompt.",
+    pills: ["root file", "no vector DB routing; wiki for stable knowledge"], tags: ["registry", "planner", "file"] },
 
   // Layer 7
   { n: 26, layer: 7, title: "persistent_store::chunk_text", where: "plugins/memory/persistent_store.rs:54",
@@ -647,7 +647,7 @@ const STEPS = [
     what: "<code>compute_total_input_budget</code> calculates remaining input budget after reserved output, system prompt, and memory block. <code>history_budget</code> is what's left for the sliding window.",
     hits: ["#6 compute_total_input_budget", "#13 truncate_to_token_budget (skill bodies in system prompt)"] },
   { title: "Layer 2 — memory recall", layer: 2,
-    what: "If memory manager is configured AND grounding nudge wasn't triggered, query Qdrant for top-K relevant entries. Bounded by <code>max_recall_tokens</code>. Wrap in <code>&lt;memory-context&gt;</code> fence.",
+    what: "If memory manager is configured AND grounding nudge wasn't triggered, query the configured memory backend for top-K relevant entries. Bounded by <code>max_recall_tokens</code>. Wrap in <code>&lt;memory-context&gt;</code> fence.",
     hits: ["#8 memory recall block", "#10 fencing", "#9 cross_session_msg_top_k"] },
   { title: "Layer 2 — sliding history + grounding", layer: 2,
     what: "<code>assemble_recent_history</code> picks newest 1-20 messages that fit <code>history_budget</code>. If user said \"latest/recent/...\", inject grounding nudge AND skip memory recall.",
@@ -670,9 +670,9 @@ const STEPS = [
   { title: "Layer 5 — step verdict", layer: 5,
     what: "When the subagent finishes (or <code>compress_and_store</code> fires), Phase 5c protocol decides: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed (DagExecutor retries).",
     hits: ["#22 Phase 5c protocol"] },
-  { title: "Layer 6 — RAG hygiene", layer: 6,
-    what: "On chat cold-start: <code>ttl_cleanup</code> purges expired entries from <code>tengu_messages</code> and <code>tengu_outputs</code> if <code>ttl_days &gt; 0</code>. <code>reindex_all_workspace</code> checks fingerprint and skips re-embedding if nothing changed.",
-    hits: ["#24 ttl_cleanup", "#25 fingerprint dedup"] },
+  { title: "Layer 6 — Open Brain / Wiki state", layer: 6,
+    what: "On planner turns: <code>TENGU_PLANNER_REGISTRY.md</code> is regenerated from agents/skills/tools and loaded directly. Legacy vector cleanup can still purge expired compatibility entries when that feature is enabled.",
+    hits: ["#24 ttl_cleanup", "#25 planner registry file"] },
   { title: "Layer 8 — emit metrics (orthogonal — fires across the turn)", layer: 8,
     what: "Each LLM and embedding call emits one <code>MetricsRecord</code>. Planner records carry per-context-layer breakdown captured BEFORE the call. Subagent records cross IPC and are re-emitted on the parent's sink. Embedding records read <code>usage.total_tokens</code> from the OpenRouter response. Always-on tracing line + opt-in bus subscribers + opt-in TUI bubble.",
     hits: ["#27 MetricsRecord ★", "#28 per-layer attribution (planner)", "#29 three surfaces", "#30 IPC plumbing"] },
@@ -702,9 +702,9 @@ const SYMPTOMS = [
   { layer: 5, sym: "\"model finished without calling compress_and_store\" warn",
     cause: "Layer 5 #22 (Phase 5c) — graceful path; final assistant text became the summary. Common with Claude Code subagents." },
   { layer: 5, sym: "Planner picks the same agent on replan despite obvious progress",
-    cause: "Layer 5 #21 — subagent didn't call <code>compress_and_store</code>, so no entry in <code>tengu_outputs</code>. Recall returns nothing. OR <code>cross_plan_top_k</code> = 0." },
+    cause: "Layer 5 #21 — no durable step summary was written to Postgres agentic_memory, or <code>cross_plan_top_k</code> = 0." },
   { layer: 6, sym: "Stale agents/skills in planner roster",
-    cause: "Layer 6 #25 — fingerprint dedup is suppressing reindex. Run <code>TENGU_REGISTRY_FORCE_REINDEX=1 tengu chat</code>." },
+    cause: "Layer 6 #25 — inspect root <code>TENGU_PLANNER_REGISTRY.md</code>; it is regenerated from agents/skills/tools before planner calls." },
   { layer: 6, sym: "Old session messages keep resurfacing in cross-session recall",
     cause: "Layer 6 #24 — <code>ttl_days</code> = 0 default means permanent retention. Set to e.g. 30 to auto-purge." },
   { layer: 8, sym: "\"Why is this turn so big?\" — diagnose context bloat",
@@ -730,7 +730,7 @@ const CONFIG = [
   { layer: 2, knob: "memory.max_recall_tokens", def: "600", where: "config.rs:594", what: "Total token budget for recall block." },
   { layer: 2, knob: "memory.session_recent_n", def: "10", where: "config.rs:625", what: "Recent same-session messages reloaded each turn." },
   { layer: 2, knob: "memory.cross_session_msg_top_k", def: "0 (off)", where: "config.rs:641", what: "Cross-session message recall — opt-in." },
-  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config.rs:630", what: "Top-K for cross-plan recall over tengu_outputs." },
+  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config.rs:630", what: "Top-K for replan recall over prior step outputs." },
   { layer: 2, knob: "prompt_budget.max_skill_context_tokens", def: "16_000", where: "config.rs:727", what: "Total skill-body cap in system prompt." },
   { layer: 2, knob: "prompt_budget.max_file_tokens", def: "2_000", where: "config.rs:725", what: "Per-file cap inside a skill." },
   { layer: 3, knob: "limits.max_tool_rounds", def: "70", where: "config.rs:424", what: "Hard cap on inner-loop rounds." },
@@ -738,8 +738,8 @@ const CONFIG = [
   { layer: 3, knob: "limits.compact_result_limit", def: "200", where: "config.rs:433", what: "First-line clip threshold for in-place compaction (#15)." },
   { layer: 4, knob: "limits.max_mcp_result_chars", def: "50_000", where: "config.rs:436", what: "MCP bridge cap for Claude Code engine." },
   { layer: 5, knob: "AgentIpcInput.max_turns", def: "20", where: "runner.rs:39", what: "Subagent mini-loop turn cap." },
-  { layer: 6, knob: "memory.ttl_days", def: "0 (permanent)", where: "config.rs", what: "Days before tengu_messages/outputs entries are purged." },
-  { layer: 6, knob: "TENGU_REGISTRY_FORCE_REINDEX", def: "(unset)", where: "rag/indexer.rs", what: "Bypass fingerprint dedup — set to 1 to force reindex." },
+  { layer: 6, knob: "memory.ttl_days", def: "0 (permanent)", where: "config.rs", what: "Legacy compatibility TTL; Open Brain retention is owned by agentic_memory." },
+  { layer: 6, knob: "TENGU_PLANNER_REGISTRY.md", def: "root file", where: "orchestrator/shared_files.rs", what: "Generated planner roster loaded into the planner prompt." },
   { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config.rs:610", what: "File chunk window in chars." },
   { layer: 7, knob: "memory.persistent_store_chunk_overlap", def: "200", where: "config.rs:613", what: "Overlap between adjacent chunks." },
   { layer: 8, knob: "RUST_LOG=tengu=info", def: "(unset)", where: "metrics.rs::record", what: "Always-on tracing baseline. One info line per LLM/embedding call. Bump to debug to also see per-layer breakdown." },

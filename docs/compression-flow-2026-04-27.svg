@@ -49,7 +49,7 @@
     <rect class="panel" width="400" height="56"/>
     <rect x="10" y="12" width="10" height="32" rx="2" class="accent"/>
     <text x="30" y="28" font-weight="700">1. compress_and_store</text>
-    <text x="30" y="46" class="small">LLM-driven step summarisation → Qdrant tengu_outputs</text>
+    <text x="30" y="46" class="small">LLM-driven step summarisation → Open Brain memory</text>
   </g>
   <g transform="translate(460,90)">
     <rect class="panel" width="400" height="56"/>
@@ -157,8 +157,8 @@
       <rect class="panel" width="430" height="80" fill="#181825" stroke="#a6e3a1"/>
       <text x="16" y="22" font-weight="700" class="ok">write_summary(rag, session_id, step_id, summary)</text>
       <text x="16" y="40" class="small mono">MemoryEntry { kind: StepOutput, session_id, step_id, content, created_at }</text>
-      <text x="16" y="58" class="small">→ embed (text-embedding-3-small) → upsert into Qdrant collection</text>
-      <text x="16" y="74" class="small mono accent">tengu_outputs</text>
+      <text x="16" y="58" class="small">→ embed when available → write to Postgres agentic_memory</text>
+      <text x="16" y="74" class="small mono accent">agentic_memory</text>
     </g>
 
     <!-- Right branch: normal tool dispatch -->
@@ -219,9 +219,9 @@
     <rect class="panel" width="1320" height="100"/>
     <rect class="panelH" x="14" y="14" width="280" height="22"/>
     <text x="22" y="30" class="tag">CROSS-PLAN RECALL  (later turn)</text>
-    <text x="24" y="58" class="mono blue">RagPlanner::replan()</text>
+    <text x="24" y="58" class="mono blue">Planner replan</text>
     <text x="200" y="58"> →  <tspan class="mono">search_memory(query, OUTPUTS_COLLECTION)</tspan>  →  surfaces past step summaries to the planner LLM</text>
-    <text x="24" y="80" class="small">This is the entire point of writing to <tspan class="mono accent">tengu_outputs</tspan>: the planner's later turns can recall what subagents already produced.</text>
+    <text x="24" y="80" class="small">This is the entire point of writing to <tspan class="mono accent">agentic_memory</tspan>: the planner's later turns can recall what subagents already produced.</text>
   </g>
 
   <!-- Section #2 + #3 (small footer panels) -->

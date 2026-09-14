@@ -80,13 +80,17 @@ pub(crate) fn build_engine(
                     Some(agent_config.model.clone())
                 };
                 let timeout = agent_config.limits.stream_event_timeout_secs;
+                // Per-tool scopes ride into the MCP bridge subprocess as
+                // TENGU_BRIDGE_SCOPES so Claude Code subagents are gated the
+                // same way in-process OpenRouter agents are.
                 Ok(Box::new(
                     crate::adapters::claude_code_engine::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
                         crate::adapters::claude_code_engine::BuiltinToolsProfile::from_str(profile),
                         model_opt,
                         timeout,
-                    ),
+                    )
+                    .with_scopes(agent_config.scopes.clone()),
                 ))
             }
             #[cfg(not(feature = "claude_code"))]

@@ -237,21 +237,13 @@ pub(crate) fn validate_metrics(specs: &[MetricSpec], skill_dir: &Path) -> Result
             } => {
                 let p = skill_dir.join(queries_file);
                 if !p.exists() {
-                    bail!(
-                        "metric '{}' queries_file missing: {}",
-                        name,
-                        p.display()
-                    );
+                    bail!("metric '{}' queries_file missing: {}", name, p.display());
                 }
                 if *runs_per_query == 0 {
                     bail!("metric '{}' runs_per_query must be >= 1", name);
                 }
                 if !(0.0..=1.0).contains(holdout) {
-                    bail!(
-                        "metric '{}' holdout {} outside [0,1]",
-                        name,
-                        holdout
-                    );
+                    bail!("metric '{}' holdout {} outside [0,1]", name, holdout);
                 }
             }
         }

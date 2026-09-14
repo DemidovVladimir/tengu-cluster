@@ -95,6 +95,9 @@ pub enum MetricsKind {
     Subagent,
     /// OpenRouter embeddings API call (used by reindex + per-turn searches).
     Embedding,
+    /// OpenRouter chat call from the `agentic_memory` LLM Wiki compiler
+    /// (`compile_wiki`). Occasional + explicit, not per-turn.
+    WikiCompiler,
 }
 
 impl MetricsKind {
@@ -103,6 +106,7 @@ impl MetricsKind {
             MetricsKind::Planner => "planner",
             MetricsKind::Subagent => "subagent",
             MetricsKind::Embedding => "embedding",
+            MetricsKind::WikiCompiler => "wiki_compiler",
         }
     }
 }
@@ -153,7 +157,10 @@ pub fn install_global_sink() -> broadcast::Sender<MetricsRecord> {
         Ok(()) => new_tx,
         // Already installed — return a clone of the existing sender so the
         // caller can subscribe.
-        Err(_) => GLOBAL_SINK.get().expect("set failed but get returned None").clone(),
+        Err(_) => GLOBAL_SINK
+            .get()
+            .expect("set failed but get returned None")
+            .clone(),
     }
 }
 

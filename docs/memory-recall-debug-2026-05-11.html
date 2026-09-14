@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tengu — Session Memory Recall Debug Map (2026-05-11)</title>
+<style>
+  :root {
+    --bg:        #0f1115;
+    --panel:     #161a22;
+    --panel-2:   #1c2230;
+    --line:      #2a3142;
+    --text:      #d8dee9;
+    --muted:     #7a869a;
+    --accent:    #7fd1ff;
+    --good:      #6ddc8b;
+    --warn:      #f5b461;
+    --bad:       #ff7a8a;
+    --ghost:     #8b8b9a;
+    --hl:        #ffd866;
+    --link:      #82c4ff;
+    --grad-a:    linear-gradient(180deg, #1a212d 0%, #181d28 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { padding: 32px 24px 80px; max-width: 1280px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 8px; letter-spacing: -0.3px; }
+  h2 { font-size: 18px; margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); letter-spacing: -0.2px; }
+  h3 { font-size: 14px; margin: 16px 0 8px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.6px; }
+  p { margin: 6px 0; }
+  code, pre, kbd { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+  pre  { background: var(--panel-2); padding: 10px 12px; border-radius: 6px; overflow-x: auto; border: 1px solid var(--line); }
+  a { color: var(--link); }
+  .hero {
+    background: var(--grad-a);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .hero .verdict { color: var(--bad); font-weight: 600; }
+  .hero .verdict.good { color: var(--good); }
+  .small { font-size: 12px; color: var(--muted); }
+  .grid { display: grid; gap: 16px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 900px) { .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    margin: 6px 0 10px;
+  }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  tr:hover td { background: rgba(127, 209, 255, 0.04); }
+  .badge {
+    display: inline-block;
+    font-size: 10.5px;
+    line-height: 1.1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .badge.off { color: var(--bad); border-color: rgba(255, 122, 138, 0.4); }
+  .badge.on  { color: var(--good); border-color: rgba(109, 220, 139, 0.4); }
+  .badge.warn{ color: var(--warn); border-color: rgba(245, 180, 97, 0.4); }
+  .badge.ghost { color: var(--ghost); border-style: dashed; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px;
+    background: rgba(127, 209, 255, 0.1); color: var(--accent); border: 1px solid rgba(127, 209, 255, 0.3);
+  }
+  /* --- Toggles & simulator --- */
+  .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
+  @media (max-width: 700px) { .toggles { grid-template-columns: 1fr; } }
+  .toggle-row {
+    display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center;
+    background: var(--panel-2); border: 1px solid var(--line); padding: 8px 10px; border-radius: 6px;
+    cursor: pointer; user-select: none;
+  }
+  .toggle-row:hover { border-color: var(--accent); }
+  .toggle-row .knob {
+    width: 38px; height: 20px; border-radius: 99px; background: #2a3142; position: relative; transition: 0.15s;
+    border: 1px solid var(--line);
+  }
+  .toggle-row .knob::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%; background: #5a6271; transition: 0.15s;
+  }
+  .toggle-row.on .knob { background: rgba(109, 220, 139, 0.25); border-color: var(--good); }
+  .toggle-row.on .knob::after { left: 20px; background: var(--good); }
+  .toggle-row .label { font-size: 12.5px; line-height: 1.3; }
+  .toggle-row .label .name { font-weight: 600; }
+  .toggle-row .label .desc { color: var(--muted); font-size: 11.5px; }
+  .toggle-row .impact { font-size: 11px; color: var(--muted); text-align: right; }
+  .toggle-row .impact .tk { color: var(--warn); }
+  .sim-panel {
+    background: #0a0d12;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    margin-top: 8px;
+  }
+  .sim-prompt {
+    background: var(--panel-2);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-left: 3px solid var(--accent);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .sim-prompt .block-header { color: var(--accent); font-weight: 600; }
+  .sim-prompt .block-empty  { color: var(--ghost); font-style: italic; }
+  .sim-prompt .block-mute   { color: var(--muted); }
+  .meters { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .meter {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .meter .label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .meter .value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .meter .value.good { color: var(--good); }
+  .meter .value.warn { color: var(--warn); }
+  .meter .value.bad  { color: var(--bad); }
+  /* --- Lifecycle trace --- */
+  .trace { display: flex; flex-direction: column; gap: 6px; }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line);
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 12.5px;
+  }
+  .step.amnesia { border-left-color: var(--bad); background: rgba(255, 122, 138, 0.05); }
+  .step.write   { border-left-color: var(--good); }
+  .step.read    { border-left-color: var(--accent); }
+  .step.note    { border-left-color: var(--warn); background: rgba(245, 180, 97, 0.04); }
+  .step .role { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }
+  .step .arrow { color: var(--muted); }
+  .step .note-tag { color: var(--bad); font-weight: 600; font-size: 11px; }
+  .step .info { color: var(--muted); font-size: 11px; }
+  /* --- Citation --- */
+  .cite { color: var(--muted); font-size: 11px; }
+  .cite code { font-size: 11px; }
+  .tab { display: inline-block; padding: 6px 12px; cursor: pointer; border: 1px solid var(--line); border-bottom: none; background: var(--panel-2); border-radius: 6px 6px 0 0; margin-right: 4px; font-size: 12.5px; }
+  .tab.active { background: var(--panel); color: var(--accent); }
+  .tab-body { background: var(--panel); border: 1px solid var(--line); border-radius: 0 6px 6px 6px; padding: 14px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 12.5px; padding: 4px 0; }
+  details[open] summary { margin-bottom: 6px; }
+  .priority-1 { color: var(--good); font-weight: 600; }
+  .priority-2 { color: var(--accent); font-weight: 600; }
+  .priority-3 { color: var(--warn); font-weight: 600; }
+  .footer { color: var(--muted); font-size: 11.5px; margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+
+<h1>Tengu session memory — recall failure debug map</h1>
+<div class="small">2026-05-11 · investigates "why can't the planner remember what I just said?" · interactive — toggle knobs to simulate alternative configs</div>
+
+<div class="hero" style="margin-top:14px">
+  <p class="verdict">Verdict: the data isn't broken — by default, almost nothing is asked for, and what is asked for is asked for the wrong way.</p>
+  <p>Three orthogonal failures stack:</p>
+  <ol>
+    <li><strong>Defaults are OFF.</strong> <code>memory.enabled=false</code>, <code>within_session_output_top_k=0</code>, <code>cross_session_msg_top_k=0</code>. Out of the box the planner gets <em>only</em> the in-process user-message ring buffer (10 msgs, user side only, lost on restart).</li>
+    <li><strong>The planner is amnesic about its own replies.</strong> When the verdict is <code>Direct</code> (no subagent dispatched), the response is never written to <code>agentic_memory step outputs</code> on the TUI/chat path — only the webhook path persists Direct verdicts (Fix H). Ring buffer pushes <em>user</em> messages only. So turn N+1 sees [M1, M2] but never sees R1.</li>
+    <li><strong>Open Brain / Karpathy LLM Wiki is the wrong primitive for dialog continuity.</strong> Cosine similarity ≠ recency; short utterances ("yes", "do it") embed near-randomly; "the molecule project" is coreference, not similarity; current message self-matches its own paraphrase from 3 turns ago. Vector recall is fine for cross-session search-my-history; it is a poor substitute for a verbatim last-N window.</li>
+  </ol>
+  <p class="small">Five-line repro of the bug: enable nothing, type "remember pi is 3.14", on the next turn type "what's pi?" — the planner has no record of the first turn (no subagent, no <code>compress_and_store</code>, no Fix C backstop, no Fix H), no within-session output knob to read it back, and ring-buffer history shows only your user messages. <code>tengu memory inspect --session $TENGU_SESSION_ID</code> confirms zero rows.</p>
+</div>
+
+<!-- ============================================================== -->
+<h2 id="surfaces">1 · Memory surfaces — what's on, what's off, what each costs</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Surface</th>
+      <th>Stores</th>
+      <th>Knob</th>
+      <th>Default</th>
+      <th>Read by</th>
+      <th>Failure mode</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>session_history</code> ring buffer</td>
+      <td>USER msgs only, in-RAM, this-process</td>
+      <td><code>session_recent_n</code></td>
+      <td><span class="badge on">10</span></td>
+      <td>Planner (every <code>plan()</code>)</td>
+      <td>Lost on restart; mixes concurrent chats; <em>no assistant side</em></td>
+    </tr>
+    <tr>
+      <td><code>agentic_memory user events</code></td>
+      <td>USER msgs only, durable</td>
+      <td><code>cross_session_msg_top_k</code></td>
+      <td><span class="badge off">0 (OFF)</span></td>
+      <td>Planner cross-session block</td>
+      <td>Writes happen even when reads are off — orphaned data</td>
+    </tr>
+    <tr>
+      <td><code>agentic_memory step outputs</code> (within-session)</td>
+      <td>Subagent step summaries, filtered to this <code>session_id</code></td>
+      <td><code>within_session_output_top_k</code></td>
+      <td><span class="badge off">0 (OFF)</span></td>
+      <td>Planner Fix A block (since 2026-05-09)</td>
+      <td>Off by default; needs Fix B unified session_id (✓ landed); needs subagent OR Fix C/H to have written</td>
+    </tr>
+    <tr>
+      <td><code>agentic_memory step outputs</code> (cross-plan)</td>
+      <td>Same as above, no session filter</td>
+      <td><code>cross_plan_top_k</code></td>
+      <td><span class="badge warn">5 (replan only)</span></td>
+      <td>Planner <code>replan()</code> only</td>
+      <td>Never fires on first <code>plan()</code> — useless for follow-up Qs</td>
+    </tr>
+    <tr>
+      <td><code>TENGU_PLANNER_REGISTRY.md</code></td>
+      <td>Agents / skills / tools (for routing)</td>
+      <td>—</td>
+      <td><span class="badge on">always</span></td>
+      <td>Planner roster block</td>
+      <td>Not a conversation memory — never holds dialog</td>
+    </tr>
+    <tr>
+      <td>Chat-side <code>state.messages</code> + <code>assemble_recent_history</code></td>
+      <td>UI/engine sliding window, in-RAM</td>
+      <td><code>MAX_HISTORY_MESSAGES=20</code></td>
+      <td><span class="badge ghost">BYPASSED on planner turn</span></td>
+      <td>Only regular chat path</td>
+      <td><code>run_turn_with_system</code> nils <code>memory_manager</code> when planner system override is set — chat-side recall never fires for planner</td>
+    </tr>
+    <tr>
+      <td>Subagent context (IPC)</td>
+      <td>Empty <code>messages</code>; only <code>goal</code> + ids cross the boundary</td>
+      <td>—</td>
+      <td><span class="badge off">empty by design</span></td>
+      <td>Child process</td>
+      <td>All in-session context is lost on dispatch unless the planner encodes it in the one-sentence <code>goal</code></td>
+    </tr>
+    <tr>
+      <td>Persistent_store chunks</td>
+      <td>Files saved by tools (not dialog)</td>
+      <td><code>chunk_size=1000</code>, <code>chunk_overlap=200</code> (chars)</td>
+      <td><span class="badge on">on, file-tool only</span></td>
+      <td>Generic <code>search_memory</code></td>
+      <td>Orthogonal to dialog — never reads back into a turn directly</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="cite">Sources: <code>src/adapters/config.rs:677–807</code> (MemoryConfig + defaults), <code>src/adapters/orchestrator/planner.rs:236–595</code> (ring buffer, persist_user_message, recall blocks), <code>src/adapters/channel_runtime.rs::run_turn_with_system</code> ≈ line 1038–1143 (memory_manager strip on planner turn), <code>src/adapters/plugins/skill_lifecycle/compress_and_store.rs:54–121</code> (Fix D 24K cap + write), <code>src/adapters/runner.rs:24–69</code> (AgentIpcInput shape), <code>docs/context-management-2026-04-27.md §What we deliberately do NOT have</code> (no retrieval over prior turns of current session for chat loop).</p>
+
+<!-- ============================================================== -->
+<h2 id="simulator">2 · Simulator — flip knobs, see what the planner gets</h2>
+
+<div class="grid cols-2">
+
+  <div class="card">
+    <h3>Toggles (current config)</h3>
+    <div class="toggles" id="toggles">
+      <div class="toggle-row" data-knob="ring_buffer">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Ring buffer (<code>session_recent_n</code>)</div>
+          <div class="desc">Last 10 USER msgs, in-RAM, this process</div>
+        </div>
+        <div class="impact"><span class="tk">+~300</span> chars · default ON</div>
+      </div>
+      <div class="toggle-row" data-knob="within_session_output_top_k">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Within-session output recall (Fix A)</div>
+          <div class="desc">top-K step summaries this session_id</div>
+        </div>
+        <div class="impact"><span class="tk">+~2k</span> chars · <strong>default OFF</strong></div>
+      </div>
+      <div class="toggle-row" data-knob="cross_session_msg_top_k">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Cross-session message recall</div>
+          <div class="desc">top-K semantically-similar prior user msgs</div>
+        </div>
+        <div class="impact"><span class="tk">+~1.5k</span> chars · <strong>default OFF</strong></div>
+      </div>
+      <div class="toggle-row" data-knob="persist_direct">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Persist Direct verdicts to <code>agentic_memory step outputs</code> (proposed)</div>
+          <div class="desc">TUI-side parity with webhook Fix H</div>
+        </div>
+        <div class="impact"><span class="tk">+1</span> row/turn · <strong>not in code</strong></div>
+      </div>
+      <div class="toggle-row" data-knob="verbatim_window">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Verbatim last-N turn pairs (proposed)</div>
+          <div class="desc">user+assistant, always injected, deterministic</div>
+        </div>
+        <div class="impact"><span class="tk">+~3k</span> chars · <strong>not in code</strong></div>
+      </div>
+      <div class="toggle-row" data-knob="history_tail_to_subagent">
+        <div class="knob"></div>
+        <div class="label">
+          <div class="name">Pass history tail to subagents (proposed)</div>
+          <div class="desc">opt-in per agent via <code>receives_history</code></div>
+        </div>
+        <div class="impact"><span class="tk">+~1.5k</span> chars · <strong>not in code</strong></div>
+      </div>
+    </div>
+    <div class="meters">
+      <div class="meter">
+        <div class="label">Extra prompt chars</div>
+        <div class="value" id="m-chars">0</div>
+      </div>
+      <div class="meter">
+        <div class="label">Continuity score</div>
+        <div class="value" id="m-cont">0/100</div>
+      </div>
+      <div class="meter">
+        <div class="label">Amnesia points</div>
+        <div class="value" id="m-amn">7</div>
+      </div>
+    </div>
+    <p class="small" style="margin-top:8px">"Continuity" is a heuristic: ring buffer + persist_direct give partial credit; verbatim window + within-session recall + history-tail give the rest. It's a vibes-metric, not a benchmark.</p>
+  </div>
+
+  <div class="card">
+    <h3>What the planner LLM would see (turn N+1)</h3>
+    <div class="sim-prompt" id="sim-prompt"></div>
+    <h3 style="margin-top:14px">What the subagent would see</h3>
+    <div class="sim-prompt" id="sim-subagent" style="border-left-color: var(--warn)"></div>
+  </div>
+
+</div>
+
+<!-- ============================================================== -->
+<h2 id="lifecycle">3 · Two-turn lifecycle — where dialog drops on the floor</h2>
+
+<p class="small">Scenario: user types <code>M1</code> on turn N; planner emits <code>Direct{response:R1}</code>; user types <code>M2</code> on turn N+1 referring to R1. Trace shows what's persisted, read, and dropped at each step.</p>
+
+<div class="trace">
+  <div class="step write"><span class="role">Turn N · write</span> User msg <code>M1</code> → <code>RagPlanner.session_history.push(M1)</code> <span class="info">(in-RAM ring buffer, USER side only)</span> <span class="cite"><code>planner.rs:377</code></span></div>
+  <div class="step write"><span class="role">Turn N · write</span> <code>persist_user_message(M1)</code> → <code>agentic_memory user events</code> row, <code>session_id=$sid</code>, <code>step_id=None</code> <span class="cite"><code>planner.rs:553</code></span></div>
+  <div class="step read"><span class="role">Turn N · read</span> <code>search_registry_with_vec</code> on <code>TENGU_PLANNER_REGISTRY.md</code> for roster; top 20 agents/skills/tools <span class="info">(score floor ~0.15, no threshold filter)</span></div>
+  <div class="step note"><span class="role">Turn N · build</span> Planner combines: <code>system + roster + cross_session_block (empty, OFF) + history_block (just M1) + session_recall (empty, OFF) + user_message</code></div>
+  <div class="step note"><span class="role">Turn N · build</span> <code>run_turn_with_system</code> nils <code>memory_manager</code> for this call — chat-side recall NEVER fires <span class="cite"><code>channel_runtime.rs ≈ 1140–1143</code></span></div>
+  <div class="step read"><span class="role">Turn N · LLM</span> Planner emits <code>{"kind":"direct","response":"R1"}</code></div>
+  <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #1</span> R1 is NEVER pushed into <code>session_history</code> (ring buffer ignores assistant side) <span class="cite"><code>planner.rs:378–389</code></span></div>
+  <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #2</span> R1 is NEVER persisted to <code>agentic_memory step outputs</code> on TUI path — Fix H persists Direct only on webhook path <span class="cite"><code>webhook_builder.rs::run_one_shot</code></span></div>
+  <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #3</span> R1 is NEVER persisted to <code>agentic_memory user events</code> either (that's user-msgs-only)</div>
+  <div class="step note"><span class="role">Turn N · UI</span> R1 lands in chat <code>state.messages</code> as Assistant. <span class="info">Useful only on the chat-engine path — bypassed when planner is entry point.</span></div>
+
+  <div class="step write"><span class="role">Turn N+1 · write</span> User msg <code>M2</code> → ring buffer push, <code>agentic_memory user events</code> write (same as before)</div>
+  <div class="step read"><span class="role">Turn N+1 · read</span> <code>cross_session_recall_block</code>: <span class="badge off">empty (knob=0)</span></div>
+  <div class="step read"><span class="role">Turn N+1 · read</span> <code>session_output_recall_block</code> (Fix A): <span class="badge off">empty (knob=0; <em>also nothing written in turn N</em>)</span></div>
+  <div class="step read"><span class="role">Turn N+1 · read</span> <code>history_block</code> = "<code>1. M1</code>" <span class="info">(NO R1, NO M2 — M2 is shown separately as current turn)</span></div>
+  <div class="step amnesia"><span class="role">Turn N+1 · build</span> <span class="note-tag">AMNESIA #4</span> Planner sees only its own roster + your <em>previous user message</em>. It cannot see its own R1. <span class="info">If M2 = "what did you just tell me?" the planner has to guess.</span></div>
+  <div class="step note"><span class="role">Turn N+1 · LLM</span> If planner dispatches a subagent, see next…</div>
+
+  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #5</span> Child receives only <code>goal</code> + ids in <code>AgentIpcInput</code>. No messages, no prior turns, no R1, no M1. <span class="cite"><code>runner.rs:24–69</code></span></div>
+  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #6</span> Subagent's own working context: empty <code>messages</code> array. Its only handle on dialog is the one-sentence <code>goal</code> the planner wrote. <span class="cite"><code>main.rs::run_agent_subprocess ≈ 845</code></span></div>
+  <div class="step amnesia"><span class="role">Subagent · end</span> <span class="note-tag">AMNESIA #7</span> If subagent doesn't call <code>compress_and_store</code>, Phase 5c + Fix C save the final text — <em>but only for subagent-dispatched turns</em>. Direct verdicts don't reach this code path.</div>
+</div>
+
+<!-- ============================================================== -->
+<h2 id="rag-mechanics">4 · Open Brain / Karpathy LLM Wiki mechanics — why retrieval is mediocre even when enabled</h2>
+
+<table>
+  <thead><tr><th>Mechanism</th><th>Behaviour</th><th>Consequence for dialog recall</th><th>Cite</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Embedder = <code>text-embedding-3-small</code></td>
+      <td>Cosine, 1536-dim. CLAUDE.md acknowledges score floor ~0.15. Registry-tier scores cap at 0.30–0.40 for clearly-relevant matches.</td>
+      <td>Score is a noise floor, not a real threshold. Marginal hits (0.18) are returned.</td>
+      <td>CLAUDE.md "Registry score floor"; <code>config.rs:789</code></td>
+    </tr>
+    <tr>
+      <td>No score-threshold filter in search code</td>
+      <td><code>search_outputs_for_session_with_vec</code> applies session filter, but never <code>score >= X</code>. Top-K is taken regardless.</td>
+      <td>Irrelevant rows in the recall block. Worse: planner LLM may trust them and answer wrong.</td>
+      <td><code>rag/query.rs</code></td>
+    </tr>
+    <tr>
+      <td>2× over-fetch post-Fix-F</td>
+      <td>Fix F pushed session filter to legacy vector DB; over-fetch dropped from 5× to 2×.</td>
+      <td>Thin margin: if session-filtered subset is sparse, you get &lt;K rows. No re-fetch loop.</td>
+      <td>CLAUDE.md "Fix F"; <code>rag/query.rs</code></td>
+    </tr>
+    <tr>
+      <td><code>compress_and_store</code> writes ONE row per summary</td>
+      <td>No chunking. Fix D char-caps at <strong>24 000 chars</strong>; everything past is discarded with a marker.</td>
+      <td>Tail content past 24K is permanently invisible to retrieval. Long pipeline summaries are lossy on the back end.</td>
+      <td><code>compress_and_store.rs:54–82</code></td>
+    </tr>
+    <tr>
+      <td>Self-similarity of current message</td>
+      <td>The current user message is embedded; recall returns past user messages similar to it. Often the most similar match is the user's own prior phrasing.</td>
+      <td>Recall surfaces the user's own words back at the planner. Adds noise, not signal.</td>
+      <td><code>planner.rs:451–459</code> (exact-match filter — only catches literal duplicates, not paraphrases)</td>
+    </tr>
+    <tr>
+      <td>Short-utterance embeddings</td>
+      <td>"yes", "do it", "no, the second one" → low-magnitude embedding vectors with high noise.</td>
+      <td>On confirmation turns the recall block returns essentially random hits.</td>
+      <td>Inherent to embedding models, not tengu-specific</td>
+    </tr>
+    <tr>
+      <td>Coreference</td>
+      <td>"the molecule project" has no shared tokens with the prior step's actual content.</td>
+      <td>Vector search misses pronoun/alias-style references entirely. This is the most common dialog-continuity failure mode.</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td>No <code>vector_size</code> validation</td>
+      <td>Config <code>vector_size</code> is used verbatim at collection creation. Mismatch with embedder dim ⇒ silent write failure on upsert.</td>
+      <td>Misconfig disappears data with no runtime error.</td>
+      <td><code>rag/vector/qdrant.rs:66</code></td>
+    </tr>
+    <tr>
+      <td>Embed-call fail-soft</td>
+      <td>Fix E caches the user-message embedding once per turn. If that one call fails, every downstream lane gets <code>None</code> and degrades. Logged at warn.</td>
+      <td>One blip in OpenRouter embed quota ⇒ silent recall miss for that turn.</td>
+      <td><code>planner.rs:701–714</code></td>
+    </tr>
+    <tr>
+      <td>Write durability</td>
+      <td><code>UpsertPointsBuilder.wait(true)</code> ⇒ legacy vector DB returns when point is indexed. Immediate next-turn read sees the write.</td>
+      <td>OK. No async-gap. (This is one of the few things <em>not</em> broken.)</td>
+      <td><code>rag/vector/qdrant.rs:194</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================== -->
+<h2 id="architecture">5 · Is Open Brain / Karpathy LLM Wiki even the right primitive for session memory?</h2>
+
+<div class="grid cols-2">
+
+<div class="card">
+<h3>Failure modes — Open Brain / Karpathy LLM Wiki for dialog</h3>
+<table>
+  <thead><tr><th>Mode</th><th>Why it breaks</th></tr></thead>
+  <tbody>
+    <tr><td>Recency ≠ similarity</td><td>cosine has no time axis; top-K can return a turn from 30 min ago over the last turn</td></tr>
+    <tr><td>Window-not-snippet</td><td>continuity needs the whole last N pairs verbatim; top-K gives 1–2 chunks and loses the thread</td></tr>
+    <tr><td>Short-utterance noise</td><td>"yes" / "do it" embed near-random</td></tr>
+    <tr><td>Self-similarity</td><td>current message ≈ paraphrase of recent ones; model gets its own words echoed back as "context"</td></tr>
+    <tr><td>Coreference miss</td><td>"the molecule project" can't be resolved by token overlap</td></tr>
+    <tr><td>Threshold theater</td><td>0.15 floor is "not random," not "relevant"</td></tr>
+    <tr><td>Embedding cost / quota</td><td>every turn re-embeds; one blip kills recall</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="card">
+<h3>What actually works — survey</h3>
+<table>
+  <thead><tr><th>Approach</th><th>Shape</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Sliding window (N pairs verbatim)</td><td>deterministic; both sides</td><td>canonical baseline (LangChain <code>ConversationBufferWindowMemory</code>)</td></tr>
+    <tr><td>Window + rolling LLM summary</td><td>verbatim recent + summary of older</td><td><code>ConversationSummaryBufferMemory</code></td></tr>
+    <tr><td>Episodic event log</td><td>structured rows {when, who, action, refs}</td><td>A-MEM, Generative Agents</td></tr>
+    <tr><td>Entity / coreference index</td><td>extract facts, dedupe, link</td><td><a href="https://github.com/mem0ai/mem0">mem0</a></td></tr>
+    <tr><td>Working / archival split</td><td>OS-paging metaphor, agent moves data via tools</td><td><a href="https://arxiv.org/abs/2310.08560">MemGPT</a> / <a href="https://www.letta.com/">Letta</a></td></tr>
+    <tr><td>Temporal knowledge graph</td><td>time-aware graph</td><td><a href="https://www.getzep.com/">Zep / Graphiti</a></td></tr>
+    <tr><td>OpenSearch agentic memory</td><td>working + long-term + history layers; SEMANTIC / USER_PREFERENCE / SUMMARY strategies</td><td><a href="https://docs.opensearch.org/latest/ml-commons-plugin/agentic-memory/">docs</a> — the <em>shape</em> matches; you don't need OpenSearch the vendor</td></tr>
+    <tr><td>Always-injected curated context</td><td>human-edited markdown, always present</td><td>what <code>CLAUDE.md</code> already does for doctrine</td></tr>
+  </tbody>
+</table>
+</div>
+
+</div>
+
+<div class="card" style="margin-top:14px">
+<h3>Recommended doctrine update</h3>
+<p>Today: <em>"LLM = heart, Open Brain / Karpathy LLM Wiki = brain, tools = hands."</em> Single memory primitive carries cross-session search <strong>and</strong> dialog continuity.</p>
+<p>Proposed: <em>"LLM = heart, <span style="color:var(--good)">working memory = scratchpad</span>, Open Brain / Karpathy LLM Wiki = long-term brain, tools = hands."</em></p>
+<p class="small">Same composition principle the rest of the harness already uses for agents/skills/tools. Open Brain / Karpathy LLM Wiki keeps the cross-session "search my history" job; a deterministic last-N window + a per-session working-memory record handles continuity. This matches MemGPT's paging metaphor, OpenSearch's working/long-term split, and the A-MEM episodic/semantic distinction.</p>
+<p class="small">You do <strong>not</strong> need to migrate to OpenSearch. legacy vector DB + a flat per-session JSON (under <code>.tengu/sessions/&lt;id&gt;.json</code>) + a verbatim ring buffer get the same shape with less infra churn. Revisit only if hybrid keyword+vector or built-in fact-extraction become real needs.</p>
+</div>
+
+<!-- ============================================================== -->
+<h2 id="fixes">6 · Recommended fixes (ROI ranked)</h2>
+
+<table>
+  <thead><tr><th>#</th><th>Change</th><th>Where</th><th>Why</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="priority-1">1</span></td>
+      <td><strong>Verbatim last-N turn-pair window</strong> (both user + assistant), always injected ahead of any Open Brain / Karpathy LLM Wiki block. No embedding, no threshold.</td>
+      <td><code>RagPlanner</code> prompt assembly · new <code>VerbatimWindow</code> in planner state</td>
+      <td>Fixes recency / coref / short-utterance in one move. Today's dominant failure mode.</td>
+      <td>Small. ~50 LoC + a new ring buffer alongside <code>session_history</code>.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-1">2</span></td>
+      <td><strong>Persist Direct verdicts to <code>agentic_memory step outputs</code></strong> on the TUI/chat path (parity with webhook Fix H).</td>
+      <td><code>chat_builder.rs</code> / wherever Direct dispatches · use <code>step_id="direct-handler"</code></td>
+      <td>Without this, planner replies vanish from durable storage. Window in (1) becomes the ONLY record of the assistant side.</td>
+      <td>Small. Copy the Fix H pattern. ~30 LoC.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-1">3</span></td>
+      <td><strong>Also push assistant responses into the ring buffer</strong> with a role marker — and consider <code>session_recent_n</code> as "turn pairs" not "user messages".</td>
+      <td><code>planner.rs:236</code> + <code>update_and_format_history</code></td>
+      <td>Trivial but high-impact. Today's bug is that <code>session_history</code> is a single string list with no role.</td>
+      <td>Tiny. ~10 LoC + format change in <code>format_history</code>.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-2">4</span></td>
+      <td>Keep <code>within_session_output_top_k = 0</code> default. Once (1) lands, semantic recall of in-session outputs is redundant for short sessions.</td>
+      <td><code>sandboxes/*/config.toml</code> docs</td>
+      <td>Stops the self-similarity loop. Re-enable later for very long sessions only.</td>
+      <td>None.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-2">5</span></td>
+      <td><strong>Opt-in <code>receives_history</code> per agent</strong> in <code>AgentSpec</code>; planner passes a compressed history-tail in <code>AgentIpcInput</code> when flag is set.</td>
+      <td><code>agents/*.toml</code> · <code>AgentSpec</code> · <code>SubprocessRunner::run_step</code></td>
+      <td>Subagents start empty by design. Some follow-up agents legitimately need context.</td>
+      <td>Medium. New IPC field + per-spec gate. ~80 LoC.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-2">6</span></td>
+      <td><strong>Structured per-session working-memory record</strong>: <code>.tengu/sessions/&lt;id&gt;.json</code> with fields {entities, decisions, open_questions, last_action}. Updated by extraction inside <code>compress_and_store</code>.</td>
+      <td>new module · hook in <code>compress_and_store.rs</code></td>
+      <td>Replaces ad-hoc coref ("the molecule project") with a deterministic lookup. The OpenSearch-style long-term + SUMMARY shape, but per-session.</td>
+      <td>Medium. Extraction is one extra LLM call per step.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-3">7</span></td>
+      <td>Score-threshold filter on <code>search_outputs_for_session_with_vec</code> (e.g. <code>score &gt;= 0.20</code>).</td>
+      <td><code>rag/query.rs</code></td>
+      <td>Stops marginal-hit noise. Cheap defence-in-depth.</td>
+      <td>Tiny.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-3">8</span></td>
+      <td>Chunked multi-row writes for <code>compress_and_store</code> summaries &gt;24K chars (already on the open-items list).</td>
+      <td><code>compress_and_store.rs</code></td>
+      <td>Recovers tail content lost to Fix D. Long-pipeline summaries become searchable end-to-end.</td>
+      <td>Medium.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-3">9</span></td>
+      <td>Validate <code>vector_size</code> against embedder dim at startup.</td>
+      <td><code>rag/mod.rs</code> init</td>
+      <td>Catches silent mismatched-dim writes that disappear data.</td>
+      <td>Tiny.</td>
+    </tr>
+    <tr>
+      <td><span class="priority-3">10</span></td>
+      <td>Doctrine update in <code>CLAUDE.md</code> + <code>context-management-2026-04-27.{md,svg,html}</code>: declare Open Brain / Karpathy LLM Wiki out-of-scope for within-session continuity.</td>
+      <td>docs</td>
+      <td>Stops future Claudes (and humans) from misusing the primitive.</td>
+      <td>Doc-only.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================== -->
+<h2 id="diagnose">7 · Diagnose your current session — exact commands</h2>
+
+<p>Before changing code, prove which surface is empty. The CLAUDE.md mentions <code>tengu memory inspect</code> as the canonical diagnostic.</p>
+
+<pre>
+# 1) Pin a session_id so you can recall later
+export TENGU_SESSION_ID=$(uuidgen)
+echo "session: $TENGU_SESSION_ID"
+
+# 2) Start a chat with verbose logging
+RUST_LOG=tengu=info cargo run --release --features qdrant -- chat --sandbox &lt;name&gt;
+# Type one message — say something memorable — then exit.
+
+# 3) Inspect what was written
+cargo run --release --features qdrant -- memory inspect --session $TENGU_SESSION_ID
+# Expect: user message row in agentic_memory user events. If a Direct verdict was issued
+# and no subagent ran, there should be ZERO rows in agentic_memory step outputs. This is
+# the bug. If a subagent ran, expect ONE row per compress_and_store call.
+
+# 4) Inspect by collection
+cargo run --release --features qdrant -- memory inspect --session $TENGU_SESSION_ID --collection outputs
+cargo run --release --features qdrant -- memory inspect --session $TENGU_SESSION_ID --collection messages
+
+# 5) Verify the unified session_id (Fix B) is intact across IPC
+grep "session_id=$TENGU_SESSION_ID" &lt;your-log-file&gt; | head -20
+</pre>
+
+<p class="small">If <code>memory inspect</code> returns zero rows for <code>outputs</code>, check this checklist in order:</p>
+<ol class="small">
+  <li><code>memory.enabled = true</code> in <code>sandboxes/&lt;name&gt;/config.toml</code>?</li>
+  <li>Built with <code>--features qdrant</code>?</li>
+  <li>Did the turn actually dispatch a subagent, or did the planner emit <code>Direct</code>? (Direct verdicts on TUI path write nothing.)</li>
+  <li>If a subagent ran: did <code>compress_and_store</code> fire? Look for the Fix C backstop log line <code>compress_and_store: backstop wrote final_text summary to agentic_memory step outputs</code>.</li>
+  <li>Was the summary &gt; 24K chars? Look for the Fix D log <code>compress_and_store: summary truncated to fit embedder input cap</code>.</li>
+  <li>Did the embedder succeed? <code>RUST_LOG=tengu=debug</code> for embedder errors.</li>
+</ol>
+
+<!-- ============================================================== -->
+<h2 id="map">8 · Source-of-truth file map</h2>
+
+<details open>
+<summary>Memory write path</summary>
+<ul>
+  <li><code>src/adapters/orchestrator/planner.rs:553–595</code> — <code>persist_user_message</code> (writes user msg to <code>agentic_memory user events</code>; fail-soft)</li>
+  <li><code>src/adapters/plugins/skill_lifecycle/compress_and_store.rs:54–121</code> — <code>write_summary</code> (Fix D 24K cap; only path to <code>agentic_memory step outputs</code> from subagents)</li>
+  <li><code>src/adapters/main.rs::run_agent_subprocess ≈ 900</code> — Fix C backstop (writes <code>final_text</code> when subagent skips <code>compress_and_store</code>)</li>
+  <li><code>src/adapters/webhook_builder.rs::run_one_shot</code> — Fix H backstop (webhook path Direct-verdict persistence)</li>
+  <li><code>src/adapters/rag/mod.rs</code>, <code>src/adapters/rag/query.rs</code> — <code>RagStore</code> + <code>store_memory_with_vec</code></li>
+</ul>
+</details>
+
+<details open>
+<summary>Memory read path</summary>
+<ul>
+  <li><code>src/adapters/orchestrator/planner.rs:377</code> — <code>update_and_format_history</code> (in-RAM ring buffer; USER side only)</li>
+  <li><code>src/adapters/orchestrator/planner.rs:418</code> — <code>cross_session_recall_block</code> (gated by <code>cross_session_msg_top_k</code>; default 0)</li>
+  <li><code>src/adapters/orchestrator/planner.rs:488</code> — <code>session_output_recall_block</code> (Fix A; gated by <code>within_session_output_top_k</code>; default 0)</li>
+  <li><code>src/adapters/orchestrator/planner.rs:815–924</code> — <code>replan</code> (cross_plan_top_k recall; only fires on replan)</li>
+  <li><code>src/adapters/channel_runtime.rs ≈ 1140–1143</code> — <code>memory_manager = None</code> when planner system override is set (chat-side legacy recall BYPASSED)</li>
+</ul>
+</details>
+
+<details open>
+<summary>IPC boundary</summary>
+<ul>
+  <li><code>src/adapters/runner.rs:24–69</code> — <code>AgentIpcInput</code> shape (no history field)</li>
+  <li><code>src/adapters/main.rs::run_agent_subprocess ≈ 845</code> — child starts with empty <code>messages</code></li>
+  <li><code>src/adapters/channel_runtime.rs::build_orchestrator</code> + <code>resolve_session_id</code> — Fix B unified <code>session_id</code></li>
+</ul>
+</details>
+
+<details>
+<summary>Config knobs</summary>
+<ul>
+  <li><code>src/adapters/config.rs:677–807</code> — <code>MemoryConfig</code> struct + all default fns</li>
+  <li>Defaults: <code>enabled=false</code>, <code>session_recent_n=10</code>, <code>cross_plan_top_k=5</code>, <code>cross_session_msg_top_k=0</code>, <code>within_session_output_top_k=0</code>, <code>max_recall_entries=5</code>, <code>max_recall_tokens=600</code>, <code>persistent_store_chunk_size=1000</code>, <code>persistent_store_chunk_overlap=200</code>, <code>ttl_days=0</code></li>
+</ul>
+</details>
+
+<details>
+<summary>Docs to keep in sync if you change anything</summary>
+<ul>
+  <li><code>docs/context-management-2026-04-27.{md,svg,html}</code> — canonical context-shaping doc (Layer 2 #6, #9; Layer 5 #19)</li>
+  <li><code>docs/compression-flow-2026-04-27.{md,svg}</code> — <code>compress_and_store</code> step protocol</li>
+  <li><code>docs/architecture-2026-04-27.{md,svg,html}</code> — per-turn flow walkthrough</li>
+  <li><code>skills/orchestrator/SKILL.md</code> + <code>plan_schema.json</code> — planner prompt + plan shape</li>
+  <li><code>CLAUDE.md</code> — doctrine block + required-reading list</li>
+</ul>
+</details>
+
+<div class="footer">
+  Author: investigation fan-out (5 subagents) — 2026-05-11 ·
+  Cross-refs: <code>CLAUDE.md</code>, <code>docs/context-management-2026-04-27.md</code>, <code>docs/architecture-2026-04-27.md</code> ·
+  This doc lives at <code>docs/memory-recall-debug-2026-05-11.html</code>. If the per-turn flow or any memory knob changes, audit this for staleness in the same commit.
+</div>
+
+<script>
+(function () {
+  // ---------- Toggle state ----------
+  // Approximate impact in chars on planner prompt, plus a "continuity contribution"
+  // (out of 100) and an "amnesia point" the toggle resolves.
+  const knobs = {
+    ring_buffer: {
+      defaultOn: true,
+      chars: 300,
+      continuity: 10,
+      amnesiaResolved: [],
+      block: {
+        header: "## Recent user messages this session",
+        body: "1. (M1 — your previous user message)\n",
+        empty: false,
+      },
+    },
+    within_session_output_top_k: {
+      defaultOn: false,
+      chars: 2000,
+      continuity: 20,
+      amnesiaResolved: ["A1-output-recall-off"],
+      block: {
+        header: "## Recent step outputs (this session)",
+        body: "1. score=0.31  step=s1\n   (last subagent's compress_and_store summary, scoped to your session_id)\n",
+        empty: true,
+      },
+    },
+    cross_session_msg_top_k: {
+      defaultOn: false,
+      chars: 1500,
+      continuity: 5,
+      amnesiaResolved: [],
+      block: {
+        header: "## Cross-session message recall",
+        body: "1. score=0.27  (a semantically similar prior user msg from another session)\n",
+        empty: true,
+      },
+    },
+    persist_direct: {
+      defaultOn: false,
+      chars: 0,
+      continuity: 20,
+      amnesiaResolved: ["A2-direct-not-persisted", "A3-direct-not-in-agentic_memory user events"],
+      block: null,
+    },
+    verbatim_window: {
+      defaultOn: false,
+      chars: 3000,
+      continuity: 35,
+      amnesiaResolved: ["A1-ring-user-only", "A4-planner-cant-see-own-replies"],
+      block: {
+        header: "## Recent turns (verbatim, deterministic)",
+        body: "[user] M1 — what you said last turn\n[assistant] R1 — what I told you in return\n[user] M2 — what you're asking now (also shown below)\n",
+        empty: false,
+      },
+    },
+    history_tail_to_subagent: {
+      defaultOn: false,
+      chars: 1500,
+      continuity: 10,
+      amnesiaResolved: ["A5-subagent-IPC-empty", "A6-subagent-only-goal"],
+      block: null, // affects subagent panel only
+    },
+  };
+
+  const state = Object.fromEntries(
+    Object.entries(knobs).map(([k, v]) => [k, v.defaultOn])
+  );
+
+  // ---------- Wire toggles ----------
+  const togglesEl = document.getElementById("toggles");
+  togglesEl.querySelectorAll(".toggle-row").forEach((row) => {
+    const k = row.dataset.knob;
+    if (state[k]) row.classList.add("on");
+    row.addEventListener("click", () => {
+      state[k] = !state[k];
+      row.classList.toggle("on", state[k]);
+      render();
+    });
+  });
+
+  // ---------- Renderers ----------
+  const promptEl = document.getElementById("sim-prompt");
+  const subEl = document.getElementById("sim-subagent");
+  const mChars = document.getElementById("m-chars");
+  const mCont  = document.getElementById("m-cont");
+  const mAmn   = document.getElementById("m-amn");
+
+  function block(header, body, opts = {}) {
+    const headerLine = `<span class="block-header">${header}</span>\n`;
+    if (opts.empty) {
+      return headerLine + `<span class="block-empty">_(empty — knob OFF or no data)_</span>\n\n`;
+    }
+    return headerLine + body + "\n";
+  }
+
+  function render() {
+    // -- Planner prompt --
+    let p = "";
+
+    p += block("[ system prompt ]", `<span class="block-mute">skills/orchestrator/SKILL.md body (~2 000 chars) — planner instructions</span>\n`);
+    p += block("## Available agents / skills / tools (ranked by relevance)", `<span class="block-mute">1. researcher (score: 0.32)\n2. molecule-x402 (score: 0.28)\n...</span>\n`);
+
+    if (state.verbatim_window) {
+      p += `<span class="block-header">${knobs.verbatim_window.block.header}</span>\n${knobs.verbatim_window.block.body}\n`;
+    }
+
+    if (state.cross_session_msg_top_k) {
+      p += `<span class="block-header">${knobs.cross_session_msg_top_k.block.header}</span>\n${knobs.cross_session_msg_top_k.block.body}\n`;
+    } else {
+      p += `<span class="block-header">## Cross-session message recall</span>\n<span class="block-empty">_(empty — cross_session_msg_top_k=0)_</span>\n\n`;
+    }
+
+    if (state.ring_buffer) {
+      p += `<span class="block-header">${knobs.ring_buffer.block.header}</span>\n${knobs.ring_buffer.block.body}\n`;
+    } else {
+      p += `<span class="block-header">## Recent user messages this session</span>\n<span class="block-empty">_(empty — knob OFF; this would be hard to achieve, ring buffer is always-on today)_</span>\n\n`;
+    }
+
+    if (state.within_session_output_top_k) {
+      p += `<span class="block-header">${knobs.within_session_output_top_k.block.header}</span>\n${knobs.within_session_output_top_k.block.body}\n`;
+      if (!state.persist_direct) {
+        p += `<span class="block-mute">⚠ note: if turn N was a Direct verdict, nothing was written here either; this block will be empty regardless of the knob.</span>\n\n`;
+      }
+    } else {
+      p += `<span class="block-header">## Recent step outputs (this session)</span>\n<span class="block-empty">_(empty — within_session_output_top_k=0 [Fix A])_</span>\n\n`;
+    }
+
+    p += `<span class="block-header">## User message (current turn)</span>\nM2 — "${escapeHtml('what was pi again? you told me last turn')}"\n`;
+
+    promptEl.innerHTML = p;
+
+    // -- Subagent prompt --
+    let s = "";
+    s += `<span class="block-header">[ AgentIpcInput ]</span>\n`;
+    s += `goal: "<one-sentence step instruction from the planner>"\nagent_name: "researcher"\nmodel: "openai/gpt-4o-mini"\nsession_id: "$TENGU_SESSION_ID"\nstep_id: "s1"\n\n`;
+    if (state.history_tail_to_subagent) {
+      s += `<span class="block-header">[ history_tail (opt-in via receives_history) ]</span>\n[user] M1\n[assistant] R1\n[user] M2\n\n`;
+    } else {
+      s += `<span class="block-empty">_(no history field on AgentIpcInput — child starts with empty messages array; only the one-sentence goal carries context)_</span>\n`;
+    }
+    s += `<span class="block-mute">[ engine starts the loop with messages = [System(spec.identity), User(goal)] ]</span>\n`;
+    subEl.innerHTML = s;
+
+    // -- Meters --
+    let chars = 0;
+    let cont = 0;
+    Object.keys(knobs).forEach((k) => {
+      if (state[k]) {
+        chars += knobs[k].chars;
+        cont += knobs[k].continuity;
+      }
+    });
+    mChars.textContent = chars.toLocaleString();
+    const tCont = Math.min(100, cont);
+    mCont.textContent = tCont + "/100";
+    mCont.className = "value " + (tCont >= 60 ? "good" : tCont >= 30 ? "warn" : "bad");
+
+    // amnesia: total 7, deduct one per resolved
+    const allResolved = new Set();
+    Object.keys(state).forEach((k) => {
+      if (state[k]) knobs[k].amnesiaResolved.forEach((a) => allResolved.add(a));
+    });
+    const remaining = Math.max(0, 7 - allResolved.size);
+    mAmn.textContent = remaining;
+    mAmn.className = "value " + (remaining <= 1 ? "good" : remaining <= 3 ? "warn" : "bad");
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  render();
+})();
+</script>
+
+</body>
+</html>

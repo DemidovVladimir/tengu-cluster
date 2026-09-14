@@ -521,7 +521,7 @@ Strict incremental, one plugin per PR. Each step compiles, passes tests, and lea
 | A2 | Convert `http` — HttpRequestTool + secret resolution helpers. Delete `http_tool_executor.rs`. | http_tool_executor.rs, new plugin | −200 | low |
 | A3 | Convert `crypto` — 4 tools + Privy client holder. Delete `crypto_tool_executor.rs`. | crypto_tool_executor.rs, new plugin | −350 | med (EVM test coverage) |
 | A4 | Convert `cache` — SharedCacheTool. Delete `cache_tool_executor.rs`. | cache_tool_executor.rs, new plugin | −100 | low |
-| A5 | Convert `memory` — remember/search/write/get. Delete `persistent_store_executor.rs`. `MemoryService` stays. | persistent_store_executor.rs, new plugin | −500 | med (Qdrant feature flag moves) |
+| A5 | Convert `memory` — remember/search/write/get. Delete `persistent_store_executor.rs`. `MemoryService` stays. | persistent_store_executor.rs, new plugin | −500 | med (legacy vector DB feature flag moves) |
 | A6 | Convert `shell` — trivially empty (absorbed by workspace.run_command). Delete `shell_executor.rs`. | shell_executor.rs | −80 | none |
 | A7 | Convert `subagents` — Spawn/FanOut/Sessions tools. Delete subagent tool-dispatch code from `subagent_builder.rs` (the `AgentRuntime` + `SubagentRegistry` stay). Drop the `block_in_place + block_on` hack. | subagent_builder.rs | −200 | low |
 | A8 | `SkillPlugin` + `SkillCatalog` + `SkillShellTool`. `skill_builder.rs` retains parser + catalog only. | skill_builder.rs | −900 | med (biggest single shrink) |

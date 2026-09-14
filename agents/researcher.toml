@@ -1,16 +1,16 @@
 # Generic research agent.
 #
-# Description is the field the RAG registry embeds. Write it for semantic
-# similarity to user queries — what the agent is good at AND what it is
-# NOT good at. More specificity = better recall.
+# `description` and `example_queries` are rendered into TENGU_PLANNER_REGISTRY.md,
+# which the planner LLM reads to pick an agent. Say what the agent is good at
+# AND what it is NOT good at. Edits take effect on the next planner turn after
+# restarting `tengu chat` — no reindex step.
 
 name = "researcher"
 
-# The description is the field the RAG registry embeds. Write it so the
-# embedding lands close to typical user queries — include domain words
-# (prices, crypto, weather, news), example sources (CoinGecko, OpenWeather,
-# Wikipedia), and the kinds of HTTP fetches the agent does. Generic phrasing
-# ("fact-finding") doesn't embed near concrete queries like "BTC price USD".
+# Write the description for the planner LLM, not for a similarity score —
+# include domain words (prices, crypto, weather, news), example sources
+# (CoinGecko, OpenWeather, Wikipedia), and the kinds of HTTP fetches the agent
+# does. Generic phrasing ("fact-finding") gives the planner nothing to match.
 description = """
 Generic research and live-data agent. Fetches information from the public web \
 via HTTP. \
@@ -20,15 +20,15 @@ news; summarising web pages; due diligence on companies, projects, or tokens; \
 fact-finding on unfamiliar subjects; gathering context from public REST APIs \
 or HTML pages. \
 Tools: http_request for any web API or page; read_file and list_directory for \
-local docs already on disk; remember to persist findings. \
+local docs already on disk; memory_ingest to persist findings. \
 NOT for: writing code, system administration, shell commands, sending money, \
 or anything requiring authenticated/paid APIs.
 """
 
-# Indexed as a SECOND vector alongside the description above. Each line is a
+# Rendered under the description in TENGU_PLANNER_REGISTRY.md. Each line is a
 # template the planner LLM compares the user's actual question against — the
-# better the templates match real usage, the higher the routing score.
-# Add or refine these freely; they take effect after `tengu registry reindex-all`.
+# better they match real usage, the more reliably the planner routes here.
+# Add or refine freely; picked up on the next planner turn after a `tengu chat` restart.
 example_queries = [
     "what is the current BTC price in USD?",
     "how much is ETH right now?",
@@ -45,7 +45,7 @@ example_queries = [
 engine = "claude_code"
 model = "claude-sonnet-4-6"
 
-tools = ["http_request", "read_file", "list_directory", "remember"]
+tools = ["http_request", "read_file", "list_directory", "memory_ingest"]
 skills = []
 
 max_turns = 20

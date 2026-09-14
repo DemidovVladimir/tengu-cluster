@@ -192,7 +192,10 @@ impl MetricKind for DescriptionTriggerKind {
                         continue;
                     }
                 };
-                let select = parsed.get("select").and_then(|v| v.as_bool()).unwrap_or(false);
+                let select = parsed
+                    .get("select")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if select {
                     votes_true += 1;
                 }
@@ -310,9 +313,16 @@ fn stratified_test_split(queries: &[TriggerQuery], holdout: f32) -> Vec<TriggerQ
         return queries.to_vec();
     }
 
-    let mut pos: Vec<TriggerQuery> = queries.iter().filter(|q| q.should_trigger).cloned().collect();
-    let mut neg: Vec<TriggerQuery> =
-        queries.iter().filter(|q| !q.should_trigger).cloned().collect();
+    let mut pos: Vec<TriggerQuery> = queries
+        .iter()
+        .filter(|q| q.should_trigger)
+        .cloned()
+        .collect();
+    let mut neg: Vec<TriggerQuery> = queries
+        .iter()
+        .filter(|q| !q.should_trigger)
+        .cloned()
+        .collect();
     stable_shuffle(&mut pos, 42);
     stable_shuffle(&mut neg, 43);
 
@@ -408,17 +418,8 @@ mod tests {
     }
     #[async_trait]
     impl JudgeClient for OracleJudge {
-        async fn judge(
-            &self,
-            _: &str,
-            user: &str,
-            _: &str,
-            _: Option<&str>,
-        ) -> Result<String> {
-            let select = self
-                .should_true_substrings
-                .iter()
-                .any(|s| user.contains(s));
+        async fn judge(&self, _: &str, user: &str, _: &str, _: Option<&str>) -> Result<String> {
+            let select = self.should_true_substrings.iter().any(|s| user.contains(s));
             Ok(format!(r#"{{"select":{},"rationale":"x"}}"#, select))
         }
     }
@@ -533,7 +534,10 @@ mod tests {
             .unwrap();
         assert!(out.pass, "expected pass; outcome: {out:?}");
         assert!((out.score - 1.0).abs() < 1e-4);
-        assert_eq!(out.notes.as_deref(), Some("4/4 test queries triggered as expected"));
+        assert_eq!(
+            out.notes.as_deref(),
+            Some("4/4 test queries triggered as expected")
+        );
     }
 
     #[tokio::test]
@@ -554,8 +558,7 @@ mod tests {
         );
         let ws = std::env::temp_dir();
         let shell = NoShell;
-        let judge: Arc<dyn JudgeClient> =
-            Arc::new(StubJudge(r#"{"select":true,"rationale":"x"}"#));
+        let judge: Arc<dyn JudgeClient> = Arc::new(StubJudge(r#"{"select":true,"rationale":"x"}"#));
         let ctx = ctx_with_judge(dir.path(), &ws, &shell, judge);
         let out = DescriptionTriggerKind
             .run(&spec("q.yaml", 1, 1.0), &dummy_fixture(), &ctx)
@@ -599,8 +602,7 @@ mod tests {
         write_skill_md(dir.path());
         let ws = std::env::temp_dir();
         let shell = NoShell;
-        let judge: Arc<dyn JudgeClient> =
-            Arc::new(StubJudge(r#"{"select":true}"#));
+        let judge: Arc<dyn JudgeClient> = Arc::new(StubJudge(r#"{"select":true}"#));
         let ctx = ctx_with_judge(dir.path(), &ws, &shell, judge);
         let out = DescriptionTriggerKind
             .run(&spec("nope.yaml", 1, 1.0), &dummy_fixture(), &ctx)
@@ -609,7 +611,10 @@ mod tests {
         assert!(!out.pass);
         assert_eq!(out.score, 0.0);
         let notes = out.notes.unwrap();
-        assert!(notes.contains("unreadable") || notes.contains("queries file"), "got: {notes}");
+        assert!(
+            notes.contains("unreadable") || notes.contains("queries file"),
+            "got: {notes}"
+        );
     }
 
     #[tokio::test]
@@ -619,8 +624,7 @@ mod tests {
         write_queries(dir.path(), "q.yaml", "queries: []\n");
         let ws = std::env::temp_dir();
         let shell = NoShell;
-        let judge: Arc<dyn JudgeClient> =
-            Arc::new(StubJudge(r#"{"select":true}"#));
+        let judge: Arc<dyn JudgeClient> = Arc::new(StubJudge(r#"{"select":true}"#));
         let ctx = ctx_with_judge(dir.path(), &ws, &shell, judge);
         let out = DescriptionTriggerKind
             .run(&spec("q.yaml", 1, 1.0), &dummy_fixture(), &ctx)

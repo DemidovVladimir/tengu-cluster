@@ -127,7 +127,6 @@
     <a href="index.html">Home</a>
     <a href="features.html">Features</a>
     <a href="howto.html">How-to</a>
-    <a href="rag.html">RAG</a>
     <a href="memory.html">Memory</a>
     <a href="context.html" class="active">Context</a>
   </div>
@@ -218,7 +217,7 @@ User: &lt;step.goal — one-sentence instruction from the planner&gt;
     <tbody>
       <tr>
         <td>Planner refuses to route, says "registry appears empty"</td>
-        <td>Qdrant down, or fingerprint dedup masking an empty Qdrant after a reset</td>
+        <td>Postgres <code>agentic_memory</code> unreachable (<code>TENGU_MEMORY_DATABASE_URL</code>) or binary built without <code>postgres_memory</code></td>
         <td>Layer 6 — RAG storage hygiene</td>
       </tr>
       <tr>
@@ -243,12 +242,12 @@ User: &lt;step.goal — one-sentence instruction from the planner&gt;
       </tr>
       <tr>
         <td>Planner says "I have no record of that step" after a successful prior turn</td>
-        <td>Within-session output recall is off — set <code>memory.within_session_output_top_k = 5</code> in the sandbox config (Fix A · 2026-05-09). Then run <code>tengu memory inspect --session &lt;id&gt;</code> to confirm the row is actually there.</td>
+        <td>Within-session output recall is off — set <code>memory.within_session_output_top_k = 5</code> in the sandbox config (Fix A · 2026-05-09). Then query Postgres <code>agentic_memory</code> via <code>TENGU_MEMORY_DATABASE_URL</code> (filter on <code>session_id</code>) to confirm the row is actually there.</td>
         <td>Layer 2 — Per-turn assembly</td>
       </tr>
       <tr>
-        <td>Empty result from <code>tengu memory inspect</code> after a Claude Code subagent run</td>
-        <td>Pre Fix-C the model "just stopped" without calling <code>compress_and_store</code> → no durable write. Fix C now backstops by calling <code>write_summary</code> with the final text. Look for the new info log <code>backstop wrote final_text summary to tengu_outputs</code>.</td>
+        <td>Empty <code>agentic_memory</code> query result (via <code>TENGU_MEMORY_DATABASE_URL</code>) after a Claude Code subagent run</td>
+        <td>Pre Fix-C the model "just stopped" without calling <code>compress_and_store</code> → no durable write. Fix C now backstops by calling <code>write_summary</code> with the final text. Look for the new info log <code>backstop wrote final_text summary to agentic_memory</code>.</td>
         <td>Layer 5 — Subagent IPC</td>
       </tr>
       <tr>
@@ -347,7 +346,7 @@ User: &lt;step.goal — one-sentence instruction from the planner&gt;
       lede: "The subprocess gets fresh context. The compress_and_store protocol commits durable summaries.",
       mech: [
         ["Subprocess gets fresh context", "Child starts with EMPTY messages. IPC payload (AgentIpcInput) carries only goal, agent_name, model, tools, skills, session_id, step_id, sandbox_config. By design — keeps subagents focused, prevents accidental context leakage between steps."],
-        ["compress_and_store durable summary", "Harness-enforced 'I'm done' signal. Implicitly appended to every subagent's tool list. Two paths: (A) Out-of-band intercept for OpenRouter (main.rs:821), (B) Plugin call for Claude Code via MCP bridge. Both write to Qdrant tengu_outputs."],
+        ["compress_and_store durable summary", "Harness-enforced 'I'm done' signal. Implicitly appended to every subagent's tool list. Two paths: (A) Out-of-band intercept for OpenRouter (main.rs:821), (B) Plugin call for Claude Code via MCP bridge. Both write to Postgres agentic_memory."],
         ["Phase 5c middle-ground", "✓compress + any text → Ok. ✗compress + non-empty text → Ok with warn (summary = final_text). ✗compress + empty text → Failed. Catches Claude Code's 'just stops' tendency."],
         ["Subprocess max_turns", "AgentIpcInput.max_turns. Hard cap on subagent's mini-loop. Default 20."],
         ["Cross-plan recall (replan path)", "RagPlanner::replan → search_memory(query, OUTPUTS_COLLECTION). Capped by cross_plan_top_k (default 5). The point of writing to tengu_outputs."]
@@ -399,7 +398,7 @@ User: &lt;step.goal — one-sentence instruction from the planner&gt;
     { n: 6, t: "Subagent loop",       sub: "main.rs::run_agent_subprocess",       layers: [3, 4, 5],
       detail: "1. Read stdin → AgentIpcInput. 2. Resolve TOML (compose.base_agent if composed, else input.agent_name). 3. Phase 7.2 sandbox resolution — load sandboxes/<name>/config.toml so scopes/secrets/MCP servers match parent. 4. System prompt = base + each skill body + mandatory suffix. 5. build_subprocess_tool_executor: PluginToolExecutor over (spec.tools ∩ ipc.tools) ∪ {compress_and_store}. 6. Multi-turn run_single_engine_turn loop until model calls compress_and_store OR max_turns. Layer 3 truncate_tool_result + compact_tool_result run here on OpenRouter; Layer 4 max_mcp_result_chars on Claude Code." },
     { n: 7, t: "Commit + return",     sub: "compress_and_store → tengu_outputs",  layers: [5, 6],
-      detail: "compress_and_store embeds the LLM-summarised step output and writes to Qdrant tengu_outputs keyed by session_id + step_id. Child exits with the summary in IPC output JSON. Output flows back to executor (step 4); on success the next ready step starts." }
+      detail: "compress_and_store embeds the LLM-summarised step output and writes to Postgres agentic_memory keyed by session_id + step_id. Child exits with the summary in IPC output JSON. Output flows back to executor (step 4); on success the next ready step starts." }
   ];
 
   // ─────────────── RENDER LAYERS ───────────────

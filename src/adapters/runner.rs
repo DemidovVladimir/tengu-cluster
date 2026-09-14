@@ -1,17 +1,17 @@
 //! Subprocess runner — Phase 3 of the redesign.
 //!
 //! Spawns `tengu run-agent` as a child process, pipes the IPC JSON in and
-//! the result JSON out, and returns the `AgentIpcOutput`. Phase 3 ships the
-//! IPC plumbing only; the run-agent child itself is a stub that does not yet
-//! call the LLM. Phase 4 replaces the child's mini-loop body and this module
-//! becomes an implementation of `WorkerHandle` so the DagExecutor can drive
-//! it.
+//! the result JSON out, and returns the `AgentIpcOutput`. `SubprocessRunner`
+//! implements `WorkerHandle` so the DagExecutor drives it; the child runs the
+//! real LLM mini-loop (`main.rs::run_agent_subprocess`). The accepted plan
+//! reaches the child as `AgentIpcInput.plan_state` (per session), not via
+//! the global `TENGU_PLAN.md`.
 //!
 //! The child subprocess is the same `tengu` binary re-invoked with a dedicated
 //! `run-agent` subcommand and the `TENGU_AGENT_IPC=1` environment guard. The
 //! guard prevents accidental fork-bomb-style re-entry.
 
-#![allow(dead_code)]  // SubprocessRunner is wired by the DagExecutor in Phase 4.
+#![allow(dead_code)] // SubprocessRunner is wired by the DagExecutor in Phase 4.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,13 @@ pub struct AgentIpcInput {
     /// compatibility).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_config: Option<String>,
+    /// Rendered markdown of the accepted plan for THIS session
+    /// (`shared_files::render_plan_state`). Source of truth for the plan
+    /// block in the child's system prompt — replaces reading the global
+    /// `TENGU_PLAN.md`, which concurrent webhook/telegram sessions overwrite.
+    /// `None` (old parents) → the child falls back to the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_state: Option<String>,
 }
 
 fn default_max_turns() -> u32 {
@@ -81,8 +88,8 @@ fn default_max_turns() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum AgentIpcOutput {
-    /// Step completed cleanly. `summary` was already written to `tengu_outputs`
-    /// by the child (via compress_and_store).
+    /// Step completed cleanly. `summary` is the `compress_and_store` text the
+    /// child captured (persisted to Postgres `agentic_memory` with `postgres_memory`).
     Ok {
         output: String,
         summary: String,
@@ -183,10 +190,7 @@ impl SubprocessRunner {
                 .write_all(&stdin_payload)
                 .await
                 .context("write IPC input to child stdin")?;
-            stdin
-                .shutdown()
-                .await
-                .context("close child stdin")?;
+            stdin.shutdown().await.context("close child stdin")?;
         }
 
         // Wait with timeout.
@@ -280,6 +284,9 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
             // the subagent sees the same scopes/secrets/MCP servers as the
             // parent process did.
             sandbox_config: self.sandbox_name.clone(),
+            // Per-session plan registered by `replan::drive` under the same
+            // session_id this runner carries (see `build_orchestrator`).
+            plan_state: crate::adapters::orchestrator::shared_files::active_plan(&self.session_id),
         };
 
         match self.run(input).await? {
@@ -302,11 +309,7 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
                 for rec in metrics {
                     crate::adapters::metrics::record(rec);
                 }
-                anyhow::bail!(
-                    "subagent failed: {}\npartial output:\n{}",
-                    error,
-                    output
-                )
+                anyhow::bail!("subagent failed: {}\npartial output:\n{}", error, output)
             }
         }
     }
@@ -322,10 +325,8 @@ mod tests {
     /// within-session output recall in `RagPlanner::plan`.
     #[test]
     fn new_uses_explicit_session_id() {
-        let runner = SubprocessRunner::new(
-            Some("aura".to_string()),
-            "sess-from-planner".to_string(),
-        );
+        let runner =
+            SubprocessRunner::new(Some("aura".to_string()), "sess-from-planner".to_string());
         assert_eq!(runner.session_id, "sess-from-planner");
         assert_eq!(runner.sandbox_name.as_deref(), Some("aura"));
     }
@@ -355,11 +356,45 @@ mod tests {
             step_id: "step-1".to_string(),
             compose: None,
             sandbox_config: None,
+            plan_state: None,
         };
         let json = serde_json::to_string(&input).unwrap();
+        // `None` is skipped on the wire so old children keep parsing.
+        assert!(!json.contains("\"plan_state\""));
         let back: AgentIpcInput = serde_json::from_str(&json).unwrap();
         assert_eq!(back.goal, input.goal);
         assert_eq!(back.session_id, input.session_id);
+        assert_eq!(back.plan_state, None);
+    }
+
+    #[test]
+    fn ipc_input_plan_state_round_trips() {
+        let input = AgentIpcInput {
+            goal: "g".to_string(),
+            agent_name: "researcher".to_string(),
+            model: String::new(),
+            tools: Vec::new(),
+            skills: Vec::new(),
+            max_turns: 1,
+            sandbox: None,
+            session_id: "s1".to_string(),
+            step_id: "step-1".to_string(),
+            compose: None,
+            sandbox_config: None,
+            plan_state: Some("# Tengu Current Plan\n".to_string()),
+        };
+        let json = serde_json::to_string(&input).unwrap();
+        assert!(json.contains("\"plan_state\""));
+        let back: AgentIpcInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.plan_state.as_deref(), Some("# Tengu Current Plan\n"));
+    }
+
+    /// Old parents send payloads without `plan_state`; the field defaults.
+    #[test]
+    fn ipc_input_parses_without_plan_state() {
+        let json = r#"{"goal":"g","agent_name":"a","model":"m","session_id":"s","step_id":"x"}"#;
+        let back: AgentIpcInput = serde_json::from_str(json).unwrap();
+        assert!(back.plan_state.is_none());
     }
 
     #[test]

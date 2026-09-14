@@ -84,7 +84,6 @@
     <a href="index.html">Home</a>
     <a href="features.html">Features</a>
     <a href="howto.html" class="active">How-to</a>
-    <a href="rag.html">RAG</a>
     <a href="memory.html">Memory</a>
     <a href="context.html">Context</a>
   </div>
@@ -149,14 +148,11 @@ timeout_secs = 60
 </code></pre>
 
     <h3><span class="step">3</span>Verify it landed</h3>
-<pre><code># force reindex (filesystem fingerprint may have skipped)
-TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all
+<pre><code># the planner registry is regenerated on the next planner turn — restart the TUI, then:
+rg -n btc-watcher TENGU_PLANNER_REGISTRY.md
 
-# look it up
-./target/release/tengu registry list --limit 50 | grep btc-watcher
-
-# semantic search — confirm it surfaces for the queries you wrote
-./target/release/tengu registry search "BTC price" --top-k 5</code></pre>
+# durable memory writes: query Postgres agentic_memory via TENGU_MEMORY_DATABASE_URL
+psql "$TENGU_MEMORY_DATABASE_URL" -c "select kind, left(content, 80) from agentic_memory order by created_at desc limit 10"</code></pre>
 
     <div class="gotcha"><b>Gotcha</b> — the orchestrator agent (e.g. <code>aura</code>) is BOTH planner and a routable subagent. The planner role strips tools/memory; when dispatched as a subagent, the subprocess gets the full tools/skills list back. Same TOML, two roles.</div>
     <div class="gotcha"><b>Gotcha</b> — <code>workspace_tools = [...]</code> in <code>agents/*.toml</code> is silently ignored. Put privileged tool names (<code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, <code>manage_skill</code>) in the regular <code>tools</code> array. The harness derives the synthesized workspace_tools by filtering against <code>WORKSPACE_TOOLS_ALLOWLIST</code>.</div>
@@ -230,9 +226,8 @@ You teach beginner Spanish. Default to Castilian unless the user specifies LatAm
 <pre><code>./target/release/tengu skill list                    # all installed skills, by tier
 ./target/release/tengu skill doctor                  # informational scan over installed skills
 
-# semantic match
-TENGU_REGISTRY_FORCE_REINDEX=1 ./target/release/tengu registry reindex-all
-./target/release/tengu registry search "practice Spanish" --top-k 5</code></pre>
+# confirm the planner sees it (file regenerated on the next planner turn)
+rg -n "practice Spanish" TENGU_PLANNER_REGISTRY.md</code></pre>
 
     <div class="gotcha"><b>Gotcha</b> — when only a SKILL matches your query (no agent matches), the planner CAN'T put a skill name in a plan step. Skills are reference material loaded by an agent. The orchestrator SKILL.md tells the planner: route to the closest agent and let it consult the skill via its skill loader.</div>
     <div class="gotcha"><b>Gotcha</b> — <code>skills/orchestrator/SKILL.md</code> is special: it's the planner system prompt. Don't load it on a non-planner agent. <code>editable_by_learner: false</code> on this skill — harness-critical, locked.</div>
@@ -351,14 +346,14 @@ root = "~/hello-workspace"
 directories = ["research"]</code></pre>
 
     <h3><span class="step">4</span>Verify</h3>
-<pre><code># Lints config + checks Qdrant + checks API keys
+<pre><code># Lints config + checks API keys
 ./target/release/tengu doctor
 
 # Pretty-print resolved config
-./target/release/tengu --sandbox hello status</code></pre>
+./target/release/tengu status</code></pre>
 
     <div class="gotcha"><b>Gotcha (Phase 7.2)</b> — <code>Config.sandbox_name</code> is <code>#[serde(skip)]</code>, populated by <code>load_sandbox_or</code>, threaded through <code>SubprocessRunner</code> → <code>AgentIpcInput.sandbox_config</code>. Without this, child subprocesses load <code>~/.tengu/config.toml</code> not the parent's sandbox config — http_request scope-denies in the child even when the parent's sandbox allows it.</div>
-    <div class="gotcha"><b>Gotcha</b> — <code>engine = "rag"</code> is the only valid orchestrator engine post-7.1. Anything else logs warn and disables orchestration for that channel. The qdrant cargo feature is required.</div>
+    <div class="gotcha"><b>Gotcha</b> — <code>engine = "rag"</code> is the only valid orchestrator engine post-7.1. Anything else logs warn and disables orchestration for that channel. Run with <code>tengu chat --sandbox &lt;name&gt;</code>.</div>
   </div>
 
   <!-- ───────────── WEBHOOKS ───────────── -->
@@ -367,7 +362,7 @@ directories = ["research"]</code></pre>
     <div class="lede yellow">External systems POST to <code>/webhooks/&lt;name&gt;</code>; tengu HMAC-verifies the request and dispatches a one-shot orchestrator turn. Each endpoint is a TOML block — adding a new webhook is a config edit, no recompile.</div>
 
     <h3><span class="step">1</span>Build with the feature on</h3>
-<pre><code>cargo build --release --features "qdrant claude_code webhooks"</code></pre>
+<pre><code>cargo build --release --features "postgres_memory claude_code webhooks"</code></pre>
 
     <h3><span class="step">2</span>Add an endpoint to the sandbox config</h3>
 <pre><code># sandboxes/aura/config.toml
@@ -404,8 +399,8 @@ curl -X POST http://127.0.0.1:7080/webhooks/github_pr \
 # {"status":"accepted","session_id":"webhook-github_pr-...","endpoint":"github_pr","agent":"reviewer"}</code></pre>
 
     <h3><span class="step">5</span>Verify the agent ran</h3>
-<pre><code># Replace with the session_id from the curl response
-./target/release/tengu memory inspect --session webhook-github_pr-&lt;uuid&gt;
+<pre><code># Replace with the session_id from the curl response — query Postgres agentic_memory via TENGU_MEMORY_DATABASE_URL
+psql "$TENGU_MEMORY_DATABASE_URL" -c "select kind, step_id, left(content, 80) from agentic_memory where session_id = 'webhook-github_pr-&lt;uuid&gt;'"
 # Each compress_and_store row from the agent's run shows up here.</code></pre>
 
     <h3>HMAC signature shape</h3>
@@ -431,9 +426,9 @@ curl -X POST http://127.0.0.1:7080/webhooks/github_pr \
       </tbody>
     </table>
 
-    <div class="gotcha"><b>Async-only in v1</b> — the listener returns 202 immediately and the agent runs in the background. There's no way to wait for the agent's reply over HTTP. Use the returned <code>session_id</code> with <code>tengu memory inspect</code> to retrieve the result asynchronously.</div>
-    <div class="gotcha"><b>Persistence (Fix H · 2026-05-09)</b> — every webhook turn's final text is written to <code>tengu_outputs</code> with synthetic <code>step_id = "webhook-handler"</code>. This guarantees <code>tengu memory inspect</code> returns at least one row even when the planner answered directly without dispatching a subagent. Subagent <code>compress_and_store</code> rows (when they fire) coexist with separate step_ids.</div>
-    <div class="gotcha"><b>Per-request orchestrator</b> — each webhook request constructs a fresh orchestrator. <code>RagStore</code> lazy-inits on first <code>plan()</code>, so the first hit takes ~100–500ms longer for the Qdrant gRPC handshake. Tolerable for low rates; if your webhook traffic climbs, share <code>RagStore</code> across requests (open follow-up).</div>
+    <div class="gotcha"><b>Async-only in v1</b> — the listener returns 202 immediately and the agent runs in the background. There's no way to wait for the agent's reply over HTTP. Use the returned <code>session_id</code> to retrieve the result asynchronously — query Postgres <code>agentic_memory</code> via <code>TENGU_MEMORY_DATABASE_URL</code>.</div>
+    <div class="gotcha"><b>Persistence (Fix H · 2026-05-09)</b> — every webhook turn's final text is written to Postgres <code>agentic_memory</code> with synthetic <code>step_id = "webhook-handler"</code>. This guarantees a query of <code>agentic_memory</code> via <code>TENGU_MEMORY_DATABASE_URL</code> returns at least one row even when the planner answered directly without dispatching a subagent. Subagent <code>compress_and_store</code> rows (when they fire) coexist with separate step_ids.</div>
+    <div class="gotcha"><b>Per-request orchestrator</b> — each webhook request constructs a fresh orchestrator. The Postgres pool lazy-inits on first <code>plan()</code>, so the first hit takes longer for the connection handshake. Tolerable for low rates; if your webhook traffic climbs, share the pool across requests (open follow-up).</div>
     <div class="gotcha"><b>Default-deny exposure</b> — defaults bind to <code>127.0.0.1</code>. Change to <code>0.0.0.0</code> only after configuring HMAC. Don't leave inline <code>secret = "..."</code> in a TOML committed to a public repo — use <code>secret_env</code> with a secrets-manager-loaded env var.</div>
     <div class="gotcha"><b>Compile-time gate</b> — webhooks are off by default. Without <code>--features webhooks</code>, the <code>tengu webhooks</code> command prints "webhook listener requires: cargo build --features webhooks" and exits.</div>
 

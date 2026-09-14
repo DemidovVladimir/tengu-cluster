@@ -2,7 +2,13 @@
 #
 # Usage:
 #   docker compose up -d                              # Default (OpenRouter + Telegram)
-#   docker compose --profile qdrant up -d             # + Qdrant vector memory
+#   docker compose --profile postgres-memory up -d postgres-memory   # DB only (native binary)
+#
+# Agentic memory needs the image built WITH the feature, not just the profile:
+#   TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build
+#
+# Ports: 7080 is the webhook listener (`tengu webhooks`, feature `webhooks`).
+# Nothing listens on [hub].port.
 #
 # Config:
 #   1. cp .env.example .env && edit .env (set API keys)
@@ -22,14 +28,15 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - TENGU_CONFIG=/opt/tengu/config.toml
+      - TENGU_CONFIG=/opt/tengu/config.toml   # honoured by the binary; agents/ + sandboxes/ are baked into the image
       - TENGU_HOME=/opt/tengu/data
+      - TENGU_MEMORY_DATABASE_URL=${TENGU_MEMORY_DATABASE_URL:-postgres://tengu:tengu@postgres-memory:5432/tengu_memory}
       - RUST_LOG=${RUST_LOG:-info}
     volumes:
       - ./config.toml:/opt/tengu/config.toml:ro
       - tengu-data:/opt/tengu/data
     ports:
-      - "${TENGU_PORT:-7070}:7070"
+      - "${TENGU_WEBHOOK_PORT:-7080}:7080"
     healthcheck:
       test: ["CMD", "tengu", "doctor"]
       interval: 60s
@@ -37,23 +44,36 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      qdrant:
-        condition: service_started
+      postgres-memory:
+        condition: service_healthy
         required: false
 
-  # ── Qdrant Vector DB ─────────────────────────────────────────
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: tengu-qdrant
+  # ── Agentic Memory Postgres + pgvector ──────────────────────
+  postgres-memory:
+    image: pgvector/pgvector:pg16
+    container_name: tengu-postgres-memory
     restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${TENGU_MEMORY_POSTGRES_DB:-tengu_memory}
+      POSTGRES_USER: ${TENGU_MEMORY_POSTGRES_USER:-tengu}
+      POSTGRES_PASSWORD: ${TENGU_MEMORY_POSTGRES_PASSWORD:-tengu}
     ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - "${TENGU_MEMORY_POSTGRES_PORT:-5432}:5432"
     volumes:
-      - qdrant-data:/qdrant/storage
+      - postgres-memory-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     profiles:
-      - qdrant
+      - postgres-memory
 
 volumes:
   tengu-data:
-  qdrant-data:
+  postgres-memory-data:

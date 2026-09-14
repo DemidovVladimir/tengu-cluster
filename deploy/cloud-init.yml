@@ -36,13 +36,17 @@ runcmd:
   - systemctl enable --now docker
 
   # Clone tengu-cluster
-  - git clone --depth 1 https://github.com/user/tengu-cluster.git /opt/tengu-cluster
+  - git clone --depth 1 https://github.com/DemidovVladimir/tengu-cluster.git /opt/tengu-cluster
 
   # Configure
   - cd /opt/tengu-cluster && cp .env.example .env && cp config.example.toml config.toml
 
-  # Set hub to bind 0.0.0.0 for external access
-  - sed -i 's/bind = "127.0.0.1"/bind = "0.0.0.0"/' /opt/tengu-cluster/config.toml
+  # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu webhooks`,
+  # feature `webhooks`) to 0.0.0.0 for external access. Only the [webhooks]
+  # section is rewritten; nothing listens on [hub].port. Only takes effect
+  # when the [webhooks] block is uncommented and the image is built with
+  # TENGU_FEATURES=openrouter,telegram,webhooks.
+  - sed -i '/^\[webhooks\]/,/^\[/ s/^bind = "127.0.0.1"/bind = "0.0.0.0"/' /opt/tengu-cluster/config.toml
 
   # Build image (so it's ready when user SSH's in)
   - cd /opt/tengu-cluster && docker compose build
@@ -69,9 +73,9 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable tengu.service
 
-  # Firewall: allow SSH + Tengu hub port
+  # Firewall: allow SSH + webhook listener port (7080, `tengu webhooks`)
   - ufw allow 22/tcp
-  - ufw allow 7070/tcp
+  - ufw allow 7080/tcp
   - ufw --force enable
 
 write_files:

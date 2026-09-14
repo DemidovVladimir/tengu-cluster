@@ -1,0 +1,134 @@
+# Tengu Cluster — "unlimited" sandbox
+# Model-comparison bench on OpenRouter DeepSeek. Direct-agent dispatch (no
+# [orchestrator]) so every answer comes from the DeepSeek agent you address,
+# not from the Claude Code subagents in agents/*.toml.
+#
+# Run:
+#   cargo run -- chat --sandbox unlimited                 # TUI → default agent (v4-flash)
+#   cargo run -- telegram --sandbox unlimited             # @pro: / @r1: / @flash: pick a model per message
+#   TENGU_CONFIG=sandboxes/unlimited/config.toml cargo run -- status   # validate
+#
+# Compare models:
+#   Telegram — prefix the message with the role: `@pro: explain MEV in two lines`.
+#   TUI      — only the `default = true` agent answers; move the flag to another
+#              block (or change `model`) and restart. `/engine` shows the live slug.
+# Needs OPENROUTER_API_KEY (vault or .env). Slugs verified against
+# https://openrouter.ai/api/v1/models on 2026-09-13.
+
+runtime_profile = "auto"
+
+[memory]
+enabled = true          # disk vector store; add --features postgres_memory for Open Brain
+
+[telegram]
+tool_approvals = false
+
+[scaffold]
+root = "~/unlimited-workspace"
+directories = ["notes", "downloads"]
+
+# --- Shared identity text ---------------------------------------------------
+# Keep instructions identical across agents so differences in answers come
+# from the model, not the prompt.
+
+[agents.unlimited]
+default = true
+engine = "openrouter"
+model = "deepseek/deepseek-v4-flash"        # 1M ctx, tools, cheapest
+role = "flash"
+workspace = "~/unlimited-workspace"
+default_lens = "standard"
+
+[agents.unlimited.identity]
+name = "Unlimited (DeepSeek v4 Flash)"
+instructions = """You are a general-purpose assistant running on DeepSeek via OpenRouter.
+Answer directly and concisely. When a question needs live data (prices, weather,
+news, docs), call http_request against a public API or page, then cite the source URL.
+State the model you are running on if the user asks."""
+
+[agents.unlimited.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
+
+[agents.unlimited.limits]
+max_tokens_per_flow = 2_000_000
+max_tool_rounds = 40
+max_tool_result_chars = 20_000
+
+[agents.pro]
+engine = "openrouter"
+model = "deepseek/deepseek-v4-pro"          # stronger reasoning, ~6x flash price
+role = "pro"
+workspace = "~/unlimited-workspace"
+default_lens = "standard"
+
+[agents.pro.identity]
+name = "Unlimited (DeepSeek v4 Pro)"
+instructions = """You are a general-purpose assistant running on DeepSeek via OpenRouter.
+Answer directly and concisely. When a question needs live data (prices, weather,
+news, docs), call http_request against a public API or page, then cite the source URL.
+State the model you are running on if the user asks."""
+
+[agents.pro.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
+
+[agents.pro.limits]
+max_tokens_per_flow = 2_000_000
+max_tool_rounds = 40
+max_tool_result_chars = 20_000
+
+[agents.r1]
+engine = "openrouter"
+model = "deepseek/deepseek-r1-0528"         # reasoning model, 164k ctx
+role = "r1"
+workspace = "~/unlimited-workspace"
+default_lens = "standard"
+
+[agents.r1.identity]
+name = "Unlimited (DeepSeek R1)"
+instructions = """You are a general-purpose assistant running on DeepSeek via OpenRouter.
+Answer directly and concisely. When a question needs live data (prices, weather,
+news, docs), call http_request against a public API or page, then cite the source URL.
+State the model you are running on if the user asks."""
+
+[agents.r1.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
+
+[agents.r1.limits]
+max_tokens_per_flow = 2_000_000
+max_tool_rounds = 40
+max_tool_result_chars = 20_000
+
+# --- Cross-vendor comparison agent: Google Gemma (also via OpenRouter) ---
+[agents.gemma]
+engine = "openrouter"
+model = "google/gemma-3-27b-it"             # Google open weights, 131k ctx, tools
+role = "gemma"
+workspace = "~/unlimited-workspace"
+default_lens = "standard"
+
+[agents.gemma.identity]
+name = "Unlimited (Google Gemma 3 27B)"
+instructions = """You are a general-purpose assistant running on Google Gemma via OpenRouter.
+Answer directly and concisely. When a question needs live data (prices, weather,
+news, docs), call http_request against a public API or page, then cite the source URL.
+State the model you are running on if the user asks."""
+
+[agents.gemma.flow]
+scope = "per-sender"
+reset_mode = "idle"
+idle_timeout_minutes = 60
+
+[agents.gemma.limits]
+max_tokens_per_flow = 2_000_000
+max_tool_rounds = 40
+max_tool_result_chars = 20_000
+
+# Other slugs served by OpenRouter (2026-09-13):
+#   DeepSeek: deepseek/deepseek-v4.1-flash  deepseek/deepseek-v3.2  deepseek/deepseek-chat-v3.1
+#   Gemma:    google/gemma-4-31b-it  google/gemma-4-26b-a4b-it:free  google/gemma-3-12b-it

@@ -46,9 +46,18 @@ pub async fn drive(
         }
     };
 
+    // Per-session active plan: registered in-process so `SubprocessRunner`
+    // (same session_id) forwards it to each child as `AgentIpcInput.plan_state`.
+    // Cleared on every exit path via the guard's `Drop`. `TENGU_PLAN.md` is
+    // still written as a human-readable debug artifact.
+    let mut active_plan = ActivePlanGuard {
+        session_id: planner.session_id(),
+        rendered: None,
+    };
     let mut replans_left = max_replans;
     loop {
         let plan = plan_opt.as_ref().unwrap().clone();
+        active_plan.register(&plan);
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
         match DagExecutor::run(
@@ -111,6 +120,45 @@ pub async fn drive(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Owns the per-session active-plan registration for one `drive` call.
+struct ActivePlanGuard {
+    session_id: Option<String>,
+    rendered: Option<String>,
+}
+
+impl ActivePlanGuard {
+    /// Render `plan`, register it for this session (when the planner has
+    /// one), and mirror it into `TENGU_PLAN.md` for humans.
+    fn register(&mut self, plan: &Plan) {
+        use crate::adapters::orchestrator::shared_files;
+        let rendered = match &self.session_id {
+            Some(sid) => shared_files::set_active_plan(sid, "active", plan),
+            None => shared_files::render_plan_state("active", plan),
+        };
+        let rendered = match rendered {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to render plan state");
+                return;
+            }
+        };
+        if let Ok(root) = std::env::current_dir() {
+            if let Err(e) = shared_files::write_plan_state(&root, &rendered) {
+                tracing::warn!(error = %e, "failed to write shared plan state debug file");
+            }
+        }
+        self.rendered = Some(rendered);
+    }
+}
+
+impl Drop for ActivePlanGuard {
+    fn drop(&mut self) {
+        if let (Some(sid), Some(rendered)) = (&self.session_id, &self.rendered) {
+            crate::adapters::orchestrator::shared_files::clear_active_plan(sid, rendered);
         }
     }
 }

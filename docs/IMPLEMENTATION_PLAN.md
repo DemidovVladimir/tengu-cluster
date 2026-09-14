@@ -1,15 +1,19 @@
 # Tengu-cluster — Implementation Plan
 
+> **Superseded note (2026-05-14):** old retrieval-first phases are kept for
+> history. Current target is Open Brain live memory + Karpathy LLM Wiki
+> compiled Markdown; planner routing is file-backed.
+>
 > **Status (2026-04-25): Phases 0–6.5 done and verified end-to-end.**
-> Real BTC USD price fetched through the full RAG-mode pipeline. See
+> Real BTC USD price fetched through the legacy planner pipeline. See
 > `docs/SESSION_HANDOFF.md` for the next-session cold-start brief.
 >
 > Per-phase status:
 >
 > | Phase | Status | Notes |
 > |---|---|---|
-> | 0 — baseline | ✅ done | Config blocks, manual checklist, phase-0-checks.sh |
-> | 1 — RAG facade | ✅ done | `src/adapters/rag/`, registry CLI |
+> | 0 — baseline | ✅ done | Config blocks, manual checklist. `phase-0-checks.sh` retired 2026-09 (hard-failed on Qdrant, which is gone) |
+> | 1 — legacy vector facade | ✅ done | `src/adapters/rag/`, registry CLI |
 > | 2 — agents + orchestrator skill | ✅ done | `agents/*.toml`, `skills/orchestrator/` |
 > | 3 — runner subprocess | ✅ done | `runner.rs`, run-agent subcommand, IPC |
 > | 4 — dual-mode planner | ✅ done | `RagPlanner`, build_orchestrator branch |
@@ -19,12 +23,12 @@
 > | 5b — multi-turn tool loop | ✅ done | Real tool dispatch, compress_and_store |
 > | 5c — protocol enforcement | ✅ done | Failed iff no compress AND no text |
 > | 6.1 (lite) — planner tracing | ✅ done | tracing::info per plan/replan |
-> | 6.5 — cross-plan recall | ✅ done | replan queries tengu_outputs |
+> | 6.5 — cross-plan recall | ✅ done | replan queries prior step outputs; `postgres_memory` uses Postgres |
 > | 6.4 (lite) — session history buffer | ✅ done | In-memory ring buffer of last-N user messages in RagPlanner; injected as "Recent user messages" block in plan/replan |
 > | 6.1 (full) — RagQueried event | ⏸ deferred | Needs event bus plumbed into RagPlanner |
 > | 6.2 — content-hash dedup | ⏸ deferred | Indexer always re-embeds today |
 > | 6.3 — filter-based TTL purge | ⏸ deferred | No-op when ttl_days == 0 (default) |
-> | 6.4 (full) — tengu_messages persistence | ⏸ deferred | Survives restart, keyed by session_id, supports cross-session recall |
+> | 6.4 (full) — Open Brain user-event persistence | ⏸ deferred | Survives restart, keyed by session_id, supports cross-session recall |
 > | 6.6 — MCP tool indexing | ⏸ deferred | Replaces `placeholder_tools()` |
 > | 6.7 — C→B fallback (B half) | ⏸ deferred | Compose generic agent on confirmation |
 > | 7.1 — delete legacy | ⏸ deferred | Drop roster.rs / wiring.rs static path |
@@ -40,10 +44,10 @@
 ## Deferred decisions
 
 - **MemPalace integration (2026-04-24):** Considered adopting
-  `/Users/vladimirdemidov/development/mempalace` as the memory/RAG layer.
-  Deferred — Qdrant stays for now. The door is left open: MemPalace exposes a
+  `/Users/vladimirdemidov/development/mempalace` as the memory/Open Brain / Karpathy LLM Wiki layer.
+  Deferred — legacy vector DB stays for now. The door is left open: MemPalace exposes a
   29-tool stdio-MCP server, so if it is adopted later it plugs in as an
-  additional MCP server in `config.toml`, no rewrite of the Qdrant code
+  additional MCP server in `config.toml`, no rewrite of the legacy vector DB code
   required. Revisit after Phase 5.
 
 ## Guiding rules (apply to every phase)
@@ -82,19 +86,19 @@ ttl_days            = 0
 session_recent_n    = 10
 cross_plan_top_k    = 5
 # Existing default qdrant_url is http://localhost:6334 (NOT 6333).
-# The storage-test sandbox already runs Qdrant on 6334; keep that.
+# The storage-test sandbox already runs legacy vector DB on 6334; keep that.
 
 # Extend EXISTING [orchestrator] block (OrchestratorConfig — already has agent,
 # max_attempts_per_step, max_replans, route_explicit_agents):
 [orchestrator]
 # "static" uses legacy roster.rs/wiring.rs (default until Phase 5)
-# "rag"    uses the new RAG planner + subprocess runner
+# "rag"    uses the new Open Brain / Karpathy LLM Wiki planner + subprocess runner
 engine              = "static"
 
 # NEW top-level block:
 [rag]
 # Enables the startup indexer regardless of engine choice.
-# Safe to turn on early — indexer is read-from-disk / write-to-Qdrant only.
+# Safe to turn on early — indexer is read-from-disk / write-to-legacy vector DB only.
 enabled             = false
 ```
 
@@ -112,7 +116,7 @@ Establish a reproducible manual smoke test for both channels so every subsequent
 2. Create `docs/manual-test-checklist.md` — a copy-pasteable script for the TUI and Telegram smoke tests.
 3. Extend `[memory]` and `[orchestrator]` structs in `src/adapters/config.rs` with the new fields (inert). Add new `RagConfig` struct + `Config.rag` field. Mirror in `config.example.toml` as commented examples.
 4. Run the manual smoke test on `main` and record the expected output so later phases can diff against it.
-5. Confirm Qdrant is reachable (the codebase default is port **6334**, not 6333):
+5. Confirm legacy vector DB is reachable (the codebase default is port **6334**, not 6333):
    ```bash
    curl http://localhost:6334/collections
    ```
@@ -123,7 +127,7 @@ Establish a reproducible manual smoke test for both channels so every subsequent
 - `config.example.toml`
 - `src/adapters/config.rs`
 - `docs/manual-test-checklist.md` (new)
-- `scripts/phase-0-checks.sh` (new — non-interactive pre-flight probes)
+- `scripts/phase-0-checks.sh` (retired 2026-09 — probed Qdrant, which was removed in Phase 6)
 
 ### Manual test (the baseline — run once, save the output)
 ```
@@ -144,17 +148,17 @@ Both should behave exactly as today. Paste each session into the "Regression bas
 ### Acceptance
 - Both channels produce the recorded baseline output.
 - Build clean, tests green.
-- `bash scripts/phase-0-checks.sh` exits 0.
+- ~~`bash scripts/phase-0-checks.sh` exits 0.~~ (script retired)
 
 ### Rollback
 None needed — no behaviour change.
 
 ---
 
-## Phase 1 — RAG facade + Qdrant collections (read-only)  (1–1½ days)
+## Phase 1 — legacy vector facade (read-only)  (1–1½ days)
 
 ### Goal
-`tengu_registry`, `tengu_messages`, and `tengu_outputs` exist in Qdrant, the indexer populates `tengu_registry` with compiled-in tools and MCP tools on startup, but NOTHING in the orchestrator uses it yet. Zero behaviour change.
+`TENGU_PLANNER_REGISTRY.md`, `agentic_memory user events`, and `agentic_memory step outputs` exist in legacy vector DB, the indexer populates `TENGU_PLANNER_REGISTRY.md` with compiled-in tools and MCP tools on startup, but NOTHING in the orchestrator uses it yet. Zero behaviour change.
 
 ### Tasks
 1. Create `src/adapters/rag/` module with:
@@ -199,30 +203,30 @@ cargo run -- telegram
 The baseline behaviour MUST match Phase 0 exactly. Only difference the user should notice: startup takes slightly longer (indexing).
 
 ### Acceptance
-- Collections exist in Qdrant (visible in the Qdrant dashboard).
+- Collections exist in legacy vector DB (visible in the legacy vector DB dashboard).
 - `registry list` returns compiled-in + MCP tool entries.
 - Phase 0 smoke tests still pass byte-for-byte on both channels.
 
 ### Rollback
-`rag.enabled = false`. Indexer is skipped, nothing reads from Qdrant.
+`rag.enabled = false`. Indexer is skipped, nothing reads from legacy vector DB.
 
 ### Risks
 - Embedding API cost on first boot: ~50 embeddings, cents. Log total count.
-- Qdrant down → startup panics. Wrap indexer in `anyhow::Result` and log a warning rather than crashing; the old path doesn't need Qdrant.
+- legacy vector DB down → startup panics. Wrap indexer in `anyhow::Result` and log a warning rather than crashing; the old path doesn't need legacy vector DB.
 
 ---
 
 ## Phase 2 — Agent specs + skills on disk (indexed, unused)  (1 day)
 
 ### Goal
-`agents/*.toml` and `skills/` directories exist, the indexer picks them up, and the RAG can answer "find me an agent for X." Planner still uses the static roster.
+`agents/*.toml` and `skills/` directories exist, the indexer picks them up, and the Open Brain / Karpathy LLM Wiki can answer "find me an agent for X." Planner still uses the static roster.
 
 ### Tasks
 1. Create `src/adapters/agents/mod.rs` — loader + validator for `AgentSpec` (fields per REDESIGN §6).
 2. Migrate the two existing `sandboxes/*/config.toml` files into `agents/*.toml` files that mirror their roles. Write the `description` field specifically for semantic search (what this agent is good at + what it is NOT good at).
 3. Author a minimal `skills/orchestrator/SKILL.md` using the template in REDESIGN §10. Author `skills/orchestrator/plan_schema.json` from §9.
 4. Extend `rag/indexer.rs` to scan:
-   - `agents/*.toml` → `description` field → upsert into `tengu_registry`.
+   - `agents/*.toml` → `description` field → upsert into `TENGU_PLANNER_REGISTRY.md`.
    - `skills/**/SKILL.md` → frontmatter `description` → upsert.
    - Three-tier skill search (managed / dotdir / root) — lowest to highest precedence; duplicate names shadow.
 5. `tengu registry list --type agent` / `--type skill` filters added.
@@ -278,7 +282,7 @@ A runner subprocess exists, has a JSON IPC contract, and can be driven manually 
    - Reads stdin JSON, writes stdout JSON per REDESIGN §7.
    - `stderr` forwarded via a framed `StepProgress`-style protocol line prefix (e.g. `@@progress: ...`). The parent runner parses these lines; anything unprefixed is logged verbatim.
 2. Implement `compress_and_store` compiled-in tool (`src/adapters/plugins/skill_lifecycle/compress_and_store.rs`):
-   - Writes `{summary, session_id, step_id, created_at}` to `tengu_outputs`.
+   - Writes `{summary, session_id, step_id, created_at}` to `agentic_memory step outputs`.
    - Sets an internal flag in the runner context.
 3. Implement three-tier skill loader in a shared helper so the `run-agent` mode uses it. Hard-fail on missing skill.
 4. Implement `src/adapters/runner.rs`:
@@ -289,20 +293,20 @@ A runner subprocess exists, has a JSON IPC contract, and can be driven manually 
    - Times out via `spec.timeout_secs`.
 5. Integration test:
    - Spawn `SubprocessRunner::run_step` with a goal like "say hello and store a summary".
-   - Verify it exits with `status: "ok"`, a summary is in `tengu_outputs`, and an `OrchestratorEvent::StepProgress` was emitted.
-6. Manual black-box test script: a `scripts/test-runner.sh` that pipes hand-written JSON into `TENGU_AGENT_IPC=1 cargo run -- run-agent` and prints the response. Commit this script.
+   - Verify it exits with `status: "ok"`, a summary is in `agentic_memory step outputs`, and an `OrchestratorEvent::StepProgress` was emitted.
+6. Black-box test of the IPC boundary: `tests/run_agent_ipc.rs` drives the built binary (`tengu run-agent`) with `TENGU_AGENT_IPC=1` and asserts the pre-loop failure contract (retired `scripts/test-runner.sh` on 2026-09-12).
 
 ### Files touched
 - `src/main.rs` (new subcommand + env guard)
 - NEW: `src/adapters/runner.rs`
 - NEW: `src/adapters/plugins/skill_lifecycle/compress_and_store.rs`
-- NEW: `scripts/test-runner.sh`
+- NEW: `tests/run_agent_ipc.rs` (was `scripts/test-runner.sh`)
 - `src/adapters/rag/` (write path for outputs)
 
 ### Manual test
 ```
 # Black-box runner test — no orchestrator involved yet
-./scripts/test-runner.sh
+cargo test --test run_agent_ipc
 # Expect: stdout JSON with status: "ok", summary field populated.
 
 cargo run -- registry search "hello world"
@@ -314,8 +318,8 @@ cargo run -- telegram
 ```
 
 ### Acceptance
-- `scripts/test-runner.sh` returns a clean `ok` response.
-- Summary lands in `tengu_outputs`.
+- `cargo test --test run_agent_ipc` passes (missing `TENGU_AGENT_IPC`, bad stdin JSON, unknown agent → non-zero exit, anyhow chain on stderr, empty stdout).
+- Summary lands in `agentic_memory step outputs`.
 - TUI + Telegram baseline still matches.
 
 ### Rollback
@@ -344,17 +348,17 @@ Flip `[orchestrator] engine = "rag"` and the full flow works end-to-end via the 
      - Retry on parse failure with previous-output + validator-error appended (max 3 retries, log each attempt).
 2. In `rag` mode, the `DagExecutor` is constructed with `SubprocessRunner` as the `WorkerHandle`. In `static` mode it still uses the existing worker.
 3. Emit `OrchestratorEvent::RagQueried` before every planner call.
-4. Wire `tengu_messages` writes on user message receipt (both TUI and Telegram paths — one shared handler).
-5. On replan (existing `replan.rs`), query `tengu_outputs` for top-K (from `cross_plan_top_k`) and inject as a context block. Query `tengu_messages` for last-N (from `session_recent_n`) of the same `session_id` by `created_at DESC` (NOT vector search) and prepend as a "recent dialogue" block.
+4. Wire `agentic_memory user events` writes on user message receipt (both TUI and Telegram paths — one shared handler).
+5. On replan (existing `replan.rs`), query prior step outputs for top-K (from `cross_plan_top_k`) and inject as a context block. Default builds use legacy vector DB `agentic_memory step outputs`; `postgres_memory` builds use Postgres `agentic_memory`. Query recent dialogue separately.
 6. Add `--engine rag` CLI override on `tengu chat` / `tengu telegram` so you can test without editing config.toml.
-7. Add an E2E smoke test: `tests/e2e_rag_flow.rs` (use `cargo test --ignored`) that boots the harness with a stub embedding model + stub Qdrant (or a Qdrant test container), sends a message, and asserts the final response arrives via the event bus.
+7. Add an E2E smoke test: `tests/e2e_rag_flow.rs` (use `cargo test --ignored`) that boots the harness with a stub embedding model + stub legacy vector DB (or a legacy vector DB test container), sends a message, and asserts the final response arrives via the event bus.
 
 ### Files touched
 - `src/adapters/orchestrator/planner.rs`
 - `src/adapters/orchestrator/replan.rs`
 - `src/adapters/orchestrator/events.rs` (add `RagQueried`)
 - `src/adapters/orchestrator/wiring.rs` — keep, now only used in static mode
-- `src/adapters/tui/` and `src/adapters/telegram_builder.rs` — user-message write-through to `tengu_messages`
+- `src/adapters/tui/` and `src/adapters/telegram_builder.rs` — user-message write-through to `agentic_memory user events`
 - `src/main.rs` (the `--engine` flag)
 - NEW: `tests/e2e_rag_flow.rs`
 
@@ -403,7 +407,7 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
 
 ### Risks
 - **Biggest risk**: planner produces invalid JSON → 3 retries → user sees an error. Mitigation: the retry-with-validator-error loop; if that isn't enough, fall back to `{"kind":"direct","response":"..."}` with a user-visible apology.
-- Subprocess spawn + Qdrant write latency → visible lag. Measure; if >2s per step, investigate embedding caching.
+- Subprocess spawn + legacy vector DB write latency → visible lag. Measure; if >2s per step, investigate embedding caching.
 - Replan loops (failed step → replan → failed step). Keep `max_replans` at 3.
 
 ---
@@ -422,7 +426,7 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
    - `src/adapters/eval_builder.rs` (move body to `tengu/ideas/eval/`)
    - `src/adapters/skill_lifecycle/evolve.rs` (move body to `tengu/ideas/auto-skill-research/`)
    - `sandboxes/aura/`, `sandboxes/storage-test/` (after Phase 2 migration completes)
-4. Remove the `engine` flag — RAG is the only path. Remove the `static` branch from `planner.rs` and `main.rs`.
+4. Remove the `engine` flag — Open Brain / Karpathy LLM Wiki is the only path. Remove the `static` branch from `planner.rs` and `main.rs`.
 5. Update `README.md` with the new architecture summary + link to REDESIGN.md.
 6. Compile, test, clippy.
 
@@ -456,7 +460,7 @@ The remaining items from REDESIGN.md that aren't required for a working v2.
 2. Surface `RagQueried` in the TUI (a collapsed panel showing top-K per turn). Helps debugging.
 3. `tengu registry search <query>` — already in Phase 1; polish the output format.
 4. Optional: background re-index on SIGHUP (not a file watcher — user-triggered re-index without restart).
-5. Optional: hybrid BM25 + vector search for the registry. Qdrant supports it; may improve precision on short-description agents.
+5. Optional: hybrid BM25 + vector search for the registry. legacy vector DB supports it; may improve precision on short-description agents.
 6. Optional: revisit MemPalace integration (see Deferred decisions above).
 
 ### Acceptance
@@ -469,7 +473,7 @@ Features work as described; no regressions against Phase 5 checklist.
 | Phase | Effort |
 |-------|--------|
 | 0 — baseline | ½ day |
-| 1 — RAG facade | 1½ days |
+| 1 — legacy vector facade | 1½ days |
 | 2 — agents + skills on disk | 1 day |
 | 3 — runner subprocess | 2 days |
 | 4 — dual-mode cutover | 2 days |
@@ -483,7 +487,7 @@ The cutover risk lives entirely in Phase 4. Phases 0–3 are additive and safe. 
 
 ## What to do before starting Phase 0
 
-1. Confirm Qdrant is running locally or that the team has a remote Qdrant reachable from your dev machine.
+1. Confirm legacy vector DB is running locally or that the team has a remote legacy vector DB reachable from your dev machine.
 2. Confirm embedding API keys (OpenAI / Voyage / Ollama) are configured.
 3. Decide who reviews each phase's PR — the plan's value comes from each increment being reviewed before the next starts.
 4. Decide which two sandboxes (`aura`, `storage-test`) to migrate first as example `agents/*.toml` in Phase 2.

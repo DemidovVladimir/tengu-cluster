@@ -96,7 +96,7 @@
 
     <rect x="0" y="174" width="305" height="44" rx="4" class="col-tengu" />
     <text x="10" y="190" class="h3">State / persistence</text>
-    <text x="10" y="204" class="body">Qdrant: tengu_registry/messages/outputs</text>
+    <text x="10" y="204" class="body">legacy vector DB: TENGU_PLANNER_REGISTRY.md/messages/outputs</text>
     <text x="10" y="216" class="small">embeds via OpenAI text-embedding-3-small</text>
     <rect x="317" y="174" width="305" height="44" rx="4" class="col-hermes" />
     <text x="327" y="190" class="h3">State / persistence</text>
@@ -128,7 +128,7 @@
     <text x="10" y="34" class="small">how state persists</text>
     <text x="10" y="50" class="small">across turns/sessions</text>
     <rect x="162" y="0" width="265" height="68" rx="4" class="row" />
-    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3 Qdrant collections</text>
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3 legacy vector DB collections</text>
     <circle cx="172" cy="32" r="4" class="warn" /><text x="182" y="36" class="body">in-mem ring buffer (lite)</text>
     <circle cx="172" cy="50" r="4" class="new" /><text x="182" y="54" class="body">durable msg writes (today)</text>
     <text x="172" y="65" class="small">no cross-restart read-back yet</text>
@@ -191,7 +191,7 @@
     <text x="10" y="34" class="small">how the agent</text>
     <text x="10" y="50" class="small">decides what to do</text>
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
-    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">RAG over registry · cosine ≥ ~0.15</text>
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">Open Brain / Karpathy LLM Wiki over registry · cosine ≥ ~0.15</text>
     <circle cx="172" cy="32" r="4" class="new" /><text x="182" y="36" class="body">per-example vectors (today)</text>
     <text x="172" y="52" class="small">LLM judges roster (no hard gate)</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
@@ -226,7 +226,7 @@
     <circle cx="488" cy="14" r="4" class="new" />
     <text x="498" y="18" class="h3">Durable msg persistence</text>
     <text x="484" y="36" class="body">RagPlanner mints session_id;</text>
-    <text x="484" y="48" class="body">plan() writes to tengu_messages</text>
+    <text x="484" y="48" class="body">plan() writes to agentic_memory user events</text>
     <text x="484" y="64" class="small">forward-compat search_messages;</text>
     <text x="484" y="76" class="small">no read-back hydration yet</text>
     <rect x="711" y="0" width="229" height="86" rx="4" class="col-tengu" />
@@ -241,7 +241,7 @@
   <g transform="translate(20, 838)">
     <rect x="0" y="0" width="940" height="32" rx="4" class="row-alt" />
     <text x="10" y="20" class="small">
-      <tspan font-weight="700" fill="#7c3aed">Tengu</tspan> is doctrinally sharp (LLM=heart · RAG=brain · tools=hands) but light on agent-layer features —
+      <tspan font-weight="700" fill="#7c3aed">Tengu</tspan> is doctrinally sharp (LLM=heart · Open Brain / Karpathy LLM Wiki=brain · tools=hands) but light on agent-layer features —
       <tspan font-weight="700" fill="#0284c7">Hermes</tspan> wins on breadth (platforms, scheduler, self-improving skills, multi-tenant);
       <tspan font-weight="700" fill="#059669">PI/Cowork</tspan> wins on UX (artifacts, computer-use, MCP marketplace).
     </text>
