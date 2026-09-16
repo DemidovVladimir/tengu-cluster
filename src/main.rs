@@ -104,6 +104,12 @@ enum Commands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+        /// Hard reset: also remove each workspace's `.tengu/` dir (cache, daily
+        /// logs, workspace skills), the top-level scaffold directories, and root
+        /// runtime artifacts (TENGU_PLAN.md / TENGU_PLANNER_REGISTRY.md). The
+        /// sandbox config is never touched. Requires --sandbox.
+        #[arg(long)]
+        hard: bool,
     },
     /// Run MCP bridge server (stdio). Used as a subprocess by Claude Code engine.
     McpBridge,
@@ -454,8 +460,8 @@ async fn main() -> Result<()> {
             let exit_code = adapters::eval_builder::run(args).await?;
             std::process::exit(exit_code);
         }
-        Commands::Prune { sandbox, yes } => {
-            let (workspaces, scaffold_dirs): (Vec<PathBuf>, Vec<String>) =
+        Commands::Prune { sandbox, yes, hard } => {
+            let (workspaces, project_dirs): (Vec<PathBuf>, Vec<String>) =
                 if let Some(ref name) = sandbox {
                     let config = load_sandbox_or(Some(name.clone()), config)?;
                     let ws = config
@@ -469,17 +475,28 @@ async fn main() -> Result<()> {
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
                         .collect();
-                    let dirs = config
+                    let project_dirs = config
                         .scaffold
                         .as_ref()
                         .and_then(|s| s.project.as_ref())
                         .map(|p| p.directories.clone())
                         .unwrap_or_default();
-                    (ws, dirs)
+                    (ws, project_dirs)
                 } else {
                     (Vec::new(), Vec::new())
                 };
-            let targets = adapters::prune::plan_prune(&tengu_home, &workspaces, &scaffold_dirs);
+            if hard && sandbox.is_none() {
+                eprintln!(
+                    "--hard has no effect without --sandbox (no workspace to reset); \
+                     pruning global state only."
+                );
+            }
+            let targets = adapters::prune::plan_prune(&adapters::prune::PruneOptions {
+                tengu_home: &tengu_home,
+                workspaces: &workspaces,
+                project_dirs: &project_dirs,
+                hard,
+            });
             if targets.iter().all(|t| !t.exists) {
                 println!("Nothing to prune.");
                 return Ok(());
