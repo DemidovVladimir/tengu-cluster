@@ -58,7 +58,8 @@ idle_timeout_minutes = 30
 [agents.main.limits]
 max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
 # context_window_override = 200000
-# max_output_tokens_per_turn = 4096
+# max_output_tokens_per_turn = 4096  # optional; unset omits max_tokens (model/provider default)
+# request_timeout_secs = 600         # total budget for one non-streaming HTTP call (default 600)
 # max_cost_per_flow = 5.0           # USD cost limit (optional)
 # warn_at_cost = 4.0                # USD cost warning threshold (must be <= max_cost_per_flow)
 

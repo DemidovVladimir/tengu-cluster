@@ -101,12 +101,33 @@ pub(crate) fn build_engine(
         }
         _ => {
             let context_window = agent_config.limits.context_window.max(1) as usize;
-            build_openrouter_engine(&agent_config.model, context_window)
+            build_openrouter_engine_with_limits(
+                &agent_config.model,
+                context_window,
+                agent_config.limits.request_timeout_secs,
+                agent_config.limits.max_output_tokens_per_turn,
+            )
         }
     }
 }
 
 pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box<dyn Engine>> {
+    build_openrouter_engine_with_limits(
+        model,
+        context_window,
+        crate::adapters::config::default_request_timeout_secs(),
+        None,
+    )
+}
+
+/// Same as [`build_openrouter_engine`] but threads the per-agent request
+/// timeout and optional output-token cap from `[limits]`.
+pub fn build_openrouter_engine_with_limits(
+    model: &str,
+    context_window: usize,
+    request_timeout_secs: u64,
+    max_output_tokens_override: Option<u32>,
+) -> Result<Box<dyn Engine>> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow::anyhow!("OPENROUTER_API_KEY is required"))?;
     let base_url = std::env::var("OPENROUTER_BASE_URL")
@@ -116,6 +137,8 @@ pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box
         model,
         &api_key,
         context_window,
+        request_timeout_secs,
+        max_output_tokens_override,
     )))
 }
 
@@ -128,6 +151,10 @@ pub struct OpenRouterEngine {
     model: String,
     api_key: String,
     context_window_tokens: usize,
+    /// Per-agent output cap from `[limits] max_output_tokens_per_turn`. `None`
+    /// omits `max_tokens` from the request entirely, letting the model/provider
+    /// use its own default (no synthetic ceiling).
+    max_output_tokens_override: Option<u32>,
     referer: Option<String>,
     title: Option<String>,
     client: reqwest::Client,
@@ -138,7 +165,8 @@ struct OpenRouterChatRequest {
     model: String,
     messages: Vec<serde_json::Value>,
     stream: bool,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<OpenRouterToolDef>,
 }
@@ -203,13 +231,21 @@ struct OpenRouterUsage {
 }
 
 impl OpenRouterEngine {
-    pub fn new(base_url: &str, model: &str, api_key: &str, context_window: usize) -> Self {
+    pub fn new(
+        base_url: &str,
+        model: &str,
+        api_key: &str,
+        context_window: usize,
+        request_timeout_secs: u64,
+        max_output_tokens_override: Option<u32>,
+    ) -> Self {
         let context_window_tokens = context_window;
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             api_key: api_key.to_string(),
             context_window_tokens,
+            max_output_tokens_override,
             referer: std::env::var("OPENROUTER_REFERER").ok(),
             title: std::env::var("OPENROUTER_TITLE").ok(),
             client: reqwest::Client::builder()
@@ -217,7 +253,8 @@ impl OpenRouterEngine {
                 // Total timeout covers the body read. With `stream: false`
                 // OpenRouter sends 200 immediately and holds the body until
                 // generation ends, so long reasoning turns need headroom.
-                .timeout(std::time::Duration::from_secs(600))
+                // Sourced from `[limits] request_timeout_secs`.
+                .timeout(std::time::Duration::from_secs(request_timeout_secs))
                 .build()
                 .unwrap_or_default(),
         }
@@ -326,6 +363,17 @@ impl Engine for OpenRouterEngine {
         self.context_window_tokens
     }
 
+    /// Budget-reservation value only (prompt budget, TUI display). When a cap
+    /// is configured we reserve exactly that; when unset we fall back to the
+    /// trait's context-scaled estimate. The request itself omits `max_tokens`
+    /// unless configured (see `run`), so this is not a synthetic send-ceiling.
+    fn max_output_tokens_per_turn(&self) -> u32 {
+        match self.max_output_tokens_override {
+            Some(cap) => cap.clamp(1, self.context_window_tokens.max(1) as u32),
+            None => ((self.context_window() / 8).clamp(256, 16_384)) as u32,
+        }
+    }
+
     fn supports_tool_use(&self) -> bool {
         true
     }
@@ -369,7 +417,8 @@ impl Engine for OpenRouterEngine {
             model: self.model.clone(),
             messages: Self::convert_messages(messages, context.system_prompt.as_deref()),
             stream: false,
-            max_tokens: self.max_output_tokens_per_turn(),
+            // Sent only when configured; unset -> the model/provider default.
+            max_tokens: self.max_output_tokens_override,
             tools: Self::convert_tools(tools),
         };
 
@@ -936,7 +985,7 @@ mod tests {
                 .await;
         });
 
-        let engine = OpenRouterEngine::new(&format!("http://{addr}"), "m", "k", 8_000);
+        let engine = OpenRouterEngine::new(&format!("http://{addr}"), "m", "k", 8_000, 600, None);
         let messages = vec![Message {
             role: Role::User,
             content: "hi".to_string(),
@@ -966,5 +1015,38 @@ mod tests {
             ),
             "source chain missing: {message}"
         );
+    }
+
+    #[test]
+    fn max_tokens_omitted_when_unset_sent_when_configured() {
+        let mk = |req: &OpenRouterChatRequest| serde_json::to_value(req).unwrap();
+
+        let unset = OpenRouterChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            stream: false,
+            max_tokens: None,
+            tools: vec![],
+        };
+        assert!(
+            mk(&unset).get("max_tokens").is_none(),
+            "max_tokens must be omitted when no cap is configured"
+        );
+
+        let set = OpenRouterChatRequest {
+            max_tokens: Some(8192),
+            ..unset
+        };
+        assert_eq!(mk(&set)["max_tokens"], serde_json::json!(8192));
+    }
+
+    #[test]
+    fn budget_reservation_reflects_configured_cap() {
+        let capped = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, Some(8192));
+        assert_eq!(capped.max_output_tokens_per_turn(), 8192);
+
+        // Unset falls back to the context-scaled reservation estimate.
+        let unset = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, None);
+        assert_eq!(unset.max_output_tokens_per_turn(), 16_384);
     }
 }

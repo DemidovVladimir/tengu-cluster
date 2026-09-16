@@ -70,9 +70,10 @@ max_tokens_per_flow = 100_000      # hard limit (warning at 80%)
 context_window = 1_000_000
 max_tool_rounds = 70
 max_tool_result_chars = 300_000
-stream_event_timeout_secs = 120
+stream_event_timeout_secs = 120    # idle gap between stream events
+request_timeout_secs = 600         # total budget for one non-streaming HTTP call (body read included)
 compact_result_limit = 200
-max_output_tokens_per_turn = 4096  # optional (<= context_window)
+max_output_tokens_per_turn = 4096  # optional (<= context_window); unset = omit max_tokens, model default applies
 max_cost_per_flow = 5.0            # optional (USD)
 warn_at_cost = 4.0                 # optional (<= max_cost_per_flow)
 ```
@@ -209,10 +210,24 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 ## Reset
 
 ```bash
-rm -rf ~/.tengu              # everything
-rm -rf ~/.tengu/state        # sessions only
-tengu prune                  # cached/ephemeral state (keeps config + secrets)
+rm -rf ~/.tengu                          # everything
+rm -rf ~/.tengu/state                    # sessions only
+tengu prune                              # global cached/ephemeral state (keeps config + secrets)
+tengu prune --sandbox <name>             # + that sandbox's workspace memory/tasks/attachments/storage + pipeline dirs
+tengu prune --sandbox <name> --hard      # empties the workspace root entirely
+                                         #   (every child: .tengu/, memory/, and any
+                                         #   agent-created dirs), keeping the root itself
 ```
+
+`prune` never touches `sandboxes/<name>/config.toml`, secrets, or managed skills.
+Soft prune removes a known allow-list under `~/.tengu` and each agent `workspace`
+(memory, tasks, attachments, storage, `scaffold.project.directories`). `--hard`
+bypasses the allow-list and removes **every** entry inside the workspace root —
+this catches arbitrary agent-created folders, which the allow-list can't know
+about — while leaving the root dir itself so the sandbox is reusable. Safe because
+the workspace root holds only generated files (config lives in the repo). `--hard`
+requires `--sandbox`; it does **not** clear the Postgres `agentic_memory` store —
+use `make clean` for that (global, destructive).
 
 ## Related
 - [[architecture]] · `docs/architecture-2026-04-27.md` (canonical)

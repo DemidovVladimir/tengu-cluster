@@ -389,6 +389,13 @@ pub struct LimitsConfig {
     pub max_tool_result_chars: u32,
     #[serde(default = "default_stream_event_timeout_secs")]
     pub stream_event_timeout_secs: u64,
+    /// Total wall-clock budget for a single non-streaming engine HTTP request,
+    /// body read included. OpenRouter answers `stream: false` with HTTP 200 up
+    /// front and holds the body open until generation ends, so slow reasoning
+    /// models need headroom here or the read aborts with "error decoding
+    /// response body". Defaults to 600s.
+    #[serde(default = "default_request_timeout_secs")]
+    pub request_timeout_secs: u64,
     /// Max chars for compacted (old-round) tool results. Defaults to 200.
     #[serde(default = "default_compact_result_limit")]
     pub compact_result_limit: u32,
@@ -410,6 +417,7 @@ impl Default for LimitsConfig {
             max_tool_rounds: default_max_tool_rounds(),
             max_tool_result_chars: default_max_tool_result_chars(),
             stream_event_timeout_secs: default_stream_event_timeout_secs(),
+            request_timeout_secs: default_request_timeout_secs(),
             compact_result_limit: default_compact_result_limit(),
             max_mcp_result_chars: default_max_mcp_result_chars(),
         }
@@ -427,6 +435,9 @@ fn default_max_tool_result_chars() -> u32 {
 }
 fn default_stream_event_timeout_secs() -> u64 {
     120
+}
+pub(crate) fn default_request_timeout_secs() -> u64 {
+    600
 }
 fn default_compact_result_limit() -> u32 {
     200
