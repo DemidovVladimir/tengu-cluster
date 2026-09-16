@@ -214,7 +214,10 @@ impl OpenRouterEngine {
             title: std::env::var("OPENROUTER_TITLE").ok(),
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(30))
-                .timeout(std::time::Duration::from_secs(120))
+                // Total timeout covers the body read. With `stream: false`
+                // OpenRouter sends 200 immediately and holds the body until
+                // generation ends, so long reasoning turns need headroom.
+                .timeout(std::time::Duration::from_secs(600))
                 .build()
                 .unwrap_or_default(),
         }
@@ -408,6 +411,10 @@ impl Engine for OpenRouterEngine {
         let raw_body = match response.text().await {
             Ok(body) => body,
             Err(e) => {
+                // reqwest's Display is always "error decoding response body";
+                // the real cause (timeout, reset) lives in the source chain,
+                // which anyhow's `{:#}` prints.
+                let e = format!("{:#}", anyhow::Error::from(e));
                 error!(model = %self.model, error = %e, "Failed to read OpenRouter response body");
                 return Ok(Box::pin(stream::iter(vec![StreamEvent::Error {
                     message: format!("OpenRouter response body read failed: {}", e),
@@ -906,5 +913,58 @@ fn flush_pending_tool_call(
             arguments,
         });
         pending_args.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Server sends 200 + headers, then drops mid-body. The surfaced error
+    /// must carry reqwest's source chain, not just "error decoding response body".
+    #[tokio::test]
+    async fn body_read_failure_surfaces_source_chain() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{")
+                .await;
+        });
+
+        let engine = OpenRouterEngine::new(&format!("http://{addr}"), "m", "k", 8_000);
+        let messages = vec![Message {
+            role: Role::User,
+            content: "hi".to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let context = EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: None,
+            max_mcp_result_chars: None,
+        };
+        let events: Vec<StreamEvent> = engine
+            .run(&messages, &[], &context)
+            .await
+            .unwrap()
+            .collect()
+            .await;
+
+        let Some(StreamEvent::Error { message }) = events.first() else {
+            panic!("expected an Error event");
+        };
+        assert!(
+            message.starts_with(
+                "OpenRouter response body read failed: error decoding response body: "
+            ),
+            "source chain missing: {message}"
+        );
     }
 }
