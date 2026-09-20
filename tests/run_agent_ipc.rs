@@ -2,14 +2,14 @@
 //!
 //! Replaces `scripts/test-runner.sh`. Drives the built binary the same way
 //! `SubprocessRunner` does — `TENGU_AGENT_IPC=1`, one `AgentIpcInput` JSON on
-//! stdin, cwd = repo root so `agents/<name>.toml` resolves — but only through
+//! stdin, cwd = repo root — but only through
 //! the pre-LLM failure paths so no network / API key is needed.
 //!
 //! | Case | Trigger | Expected (from `src/main.rs::run_agent_subprocess`) |
 //! |---|---|---|
 //! | guard | no `TENGU_AGENT_IPC` | exit != 0, stderr: "subprocess mode not meant for direct invocation" |
 //! | bad json | `TENGU_AGENT_IPC=1`, stdin = `not json` | exit != 0, stderr: "parse IPC input JSON", stdout empty |
-//! | no agent | valid input, `agent_name = "__no_such_agent__"` | exit != 0, stderr: "load agent spec from agents/__no_such_agent__.toml", stdout empty |
+//! | no agent | valid input, `agent_name = "__no_such_agent__"` | exit != 0, stderr: "no agent `__no_such_agent__` in the active config", stdout empty |
 //!
 //! None of these paths emit an `AgentIpcOutput` — every failure before the
 //! tool loop propagates as `anyhow::Error` out of `main`, and the parent
@@ -189,8 +189,8 @@ fn run_agent_fails_fast_on_unknown_agent() {
     );
     assert!(
         run.stderr
-            .contains("load agent spec from agents/__no_such_agent__.toml"),
-        "stderr should name the missing agent spec path, got:\n{}",
+            .contains("no agent `__no_such_agent__` in the active config"),
+        "stderr should name the unknown agent, got:\n{}",
         run.stderr
     );
     // The bail happens before engine construction, so no API key is consulted.

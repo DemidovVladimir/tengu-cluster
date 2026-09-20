@@ -10,7 +10,7 @@ use std::path::Path;
 
 // Several lifecycle methods on this trait (`is_available`, `initialize`,
 // `system_prompt_block`, `shutdown`) are unused on the v2 RagPlanner /
-// SubprocessRunner path — the v2 worker hits Qdrant directly via `RagStore`
+// SubprocessRunner path — subagents persist step summaries to Postgres `agentic_memory` themselves (`main.rs::try_persist_agentic_step_summary`)
 // rather than going through `MemoryProvider`. The trait is kept intact so
 // the static-mode path keeps compiling; Phase 7.1 will collapse this whole
 // hierarchy once the static path is deleted.

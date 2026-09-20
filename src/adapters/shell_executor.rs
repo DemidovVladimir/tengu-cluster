@@ -3,7 +3,7 @@
 use crate::adapters::ports::ShellExecutionPort;
 use anyhow::Result;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,9 +27,10 @@ impl LocalShellExecutor {
 
 impl ShellExecutionPort for LocalShellExecutor {
     fn execute_shell(&self, command: &str, workspace: &Path) -> Result<String> {
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg(command)
+        // `[egress]` decides the wrapper (plain `sh`, or `sandbox-exec` under
+        // `shell_network = "isolated"`) and exports the proxy env vars.
+        let mut child = crate::adapters::egress::policy()
+            .shell_command(command)
             .current_dir(workspace)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

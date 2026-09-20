@@ -1,0 +1,7 @@
+# Merged on top of compose.yml by docker-compose.tor.yml (include path list):
+# inside the tengu compose project the `tor` service is reached by name on
+# tor-front, so the 127.0.0.1:9050 host port is dropped — a standalone
+# `make tor` proxy may already hold it.
+services:
+  tor:
+    ports: !reset []

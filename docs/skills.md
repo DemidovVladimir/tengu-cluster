@@ -15,12 +15,12 @@ API skills are documentation-only — they describe API endpoints for the agent 
 
 ## Loading
 
-Skills are loaded from three tiers (later tiers shadow earlier):
-1. **Managed:** `~/.tengu/skills/`
+Skills are loaded from three tiers — first match wins (`skill_builder.rs::skill_directories`):
+1. **Managed:** `~/.tengu/skills/` (`tengu skill install --tier managed`)
 2. **Workspace (dotdir):** `<workspace>/.tengu/skills/`
-3. **Workspace (root):** `<workspace>/skills/`
+3. **Project:** `<workspace>/skills/`
 
-Agents select skills via `skill_packages` in [[configuration]]:
+Agents select skills via `skill_packages` on any `[agents.<name>]` block of the sandbox config ([[configuration]]); `skills = [...]` is an accepted alias:
 ```toml
 [agents.main]
 skill_packages = ["aura-orchestrator", "beach-science"]
@@ -53,6 +53,8 @@ homepage: https://example.com
 requires_bins: ["curl"]     # optional: required CLI tools
 requires_env: ["API_KEY"]   # optional: required env vars
 os: ["linux", "macos"]      # optional: OS filter
+editable_by_learner: true   # optional (default false): in-chat `adjust yourself` / `fix it` may mutate this skill
+learner_facing: true        # optional (default false): per-learner state at skills/<name>/state/<learner_id>.json
 metrics:                    # optional: accuracy metrics (see below)
   - name: output_quality
     kind: llm_judge
@@ -65,7 +67,7 @@ Gating metadata (`requires_bins`, `requires_env`, `os`) is evaluated at load tim
 
 ## Metrics & Evolution
 
-A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Four built-in kinds:
+A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Six built-in kinds (`src/adapters/skill_lifecycle/metric_kinds/`):
 
 | Kind | What it does |
 |------|--------------|
@@ -73,6 +75,8 @@ A skill's `metrics:` block declares accuracy characteristics the harness can mea
 | `llm_judge` | Loads a `rubric_file`, lets a judge LLM score the fixture transcript against narrative criteria. For qualitative quality. |
 | `tool_assertion` | Dispatches a workspace tool (e.g. `persistent_store`) and asserts on its output via `value_matches` / `value_equals` / `value_in`. |
 | `script` | Invokes `sh <path>` with fixture data in env vars; parses stdout JSON `{pass, score, notes?}`. Escape hatch for custom checks. |
+| `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
+| `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 
 Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric.
 
@@ -80,7 +84,9 @@ See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1 
 
 ## Distillation
 
-An agent with `workspace_tools = ["skill_distill"]` can author a new skill mid-conversation via the `skill_distill` tool. Given in-context understanding plus a starting message index, the tool writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. The new skill does **not** load into the current conversation — cache discipline requires a stable tool/skill inventory per conversation. It becomes available on next session start.
+An agent with `workspace_tools = ["skill_distill"]` (or `skill_distill` in a subagent block's `tools`) can author a new skill mid-conversation via the `skill_distill` tool. Given in-context understanding plus a starting message index, the tool writes `skills/<name>/{SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/<scaffolds>}` atomically (`evals/config.toml` mirrors the calling agent's engine + model). The new skill does **not** load into the current conversation — cache discipline requires a stable tool/skill inventory per conversation. It becomes available on next session start.
+
+`manage_skill` (`create | edit_body | patch | add_resource | remove_resource | delete`; opt-in like `skill_distill`) + `view_skill` (`list | read | read_resource`; always on) are the unified in-chat read/write API — `docs/skill-redesign-2026-04-29.md`. `skill_resource` and `apply_improver_proposal` are kept as back-compat aliases. Audit log: `skills/.audit.jsonl`.
 
 ## CLI commands
 
@@ -90,8 +96,14 @@ An agent with `workspace_tools = ["skill_distill"]` can author a new skill mid-c
 | `tengu skill metrics <skill>` | Show rolling `metrics.json` + recent history entries (read-only, no API calls). |
 | `tengu skill evolve <skill>` | Bounded rewrite→rescore loop. Baseline-evals, picks the lowest-gated metric as target, spawns `skill-improver` in a scratch git worktree for N cycles, picks the best cycle (no regression > 0.05 on other gated metrics), shows a diff + metric delta, prompts y/n/d/o. |
 | `tengu skill accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1). |
+| `tengu skill list [--tier T]` | Walk the three tiers; print name, tier, metrics health. |
+| `tengu skill remove <name> [--tier T] [--yes]` | Delete a skill dir (default tier `project`). |
+| `tengu skill doctor [--no-fail]` | Cross-check `[agents.*].skill_packages` of the active config vs disk: phantoms (exit non-zero unless `--no-fail`), orphans, missing rubric files, scanner findings. |
+| `tengu skill export <name> [--out <path>]` | Tar.gz bundle of the skill. |
+| `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution/dangerous verdicts). |
+| `tengu skill seed <name> [<resources_dir>] [--tier T]` | Teacher onboarding: SKILL.md template + `resources/` folder. |
 
-Activating evolve requires `[skill_lifecycle]` + `[agents.skill-improver]` + `[agents.fixture-runner]` in `tengu.toml` — see [[configuration]].
+Activating evolve requires `[skill_lifecycle]` + `[agents.skill-improver]` in the active config (`sandboxes/<name>/config.toml` via `--sandbox`, else `~/.tengu/config.toml`); `fixture_runner_agent` is accepted but unused. `sandboxes/aura/config.toml` ships a working block — see [[configuration]].
 
 ## Example: Documentation Skill
 

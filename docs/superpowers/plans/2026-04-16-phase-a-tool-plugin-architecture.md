@@ -1,5 +1,7 @@
 # Phase A — Tool Plugin Architecture Implementation Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the executor-per-domain model with a per-tool trait + plugin-module pattern, making tools independently testable, async-native, and scope-enforced.

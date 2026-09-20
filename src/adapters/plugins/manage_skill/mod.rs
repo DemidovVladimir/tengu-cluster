@@ -970,7 +970,7 @@ fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
 }
 
 /// Three-tier walk: managed → workspace → project, first match wins. Mirrors
-/// `apply_improver_proposal::locate_skill_dir` and `rag/indexer.rs::scan_skills`.
+/// `apply_improver_proposal::locate_skill_dir` and `skill_builder.rs::skill_directories`.
 fn locate_skill_dir(name: &str, workspace: &Path) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
     if let Some(home) = dirs_next::home_dir() {

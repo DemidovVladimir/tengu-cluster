@@ -34,7 +34,7 @@ This is a config-only backend switch. The same agent definition can run on eithe
 
 ### Bridge transport
 - The bridge is an external stdio MCP server launched as a Tengu subcommand: `tengu mcp-bridge`.
-- Parent and child communicate bridge configuration through environment variables (`TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS`).
+- Parent and child communicate bridge configuration through environment variables (`TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS`; today also `TENGU_BRIDGE_SCOPES`, `TENGU_BRIDGE_MAX_RESULT_CHARS`, `TENGU_EGRESS` — see [[mcp-bridge]]).
 - The child bridge process owns executor construction. The parent does not pass a live executor across the boundary.
 
 ## Implementation Mapping
@@ -47,8 +47,8 @@ This is a config-only backend switch. The same agent definition can run on eithe
 | Claude engine | `src/adapters/claude_code_engine.rs` — `ClaudeCodeEngine` |
 | MCP bridge | `src/adapters/mcp_bridge.rs` + `tengu mcp-bridge` subcommand |
 | Engine dispatch | `src/adapters/engine_builder.rs` — `build_engine()`, `build_planner_engine()` |
-| Safety policy | `src/adapters/claude_code_engine.rs` — `build_safety_policy()` |
-| Sandbox | `sandboxes/aura-claude/config.toml` |
+| Safety policy | `src/adapters/claude_code_engine.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/mcp_bridge.rs` — `TENGU_BRIDGE_SCOPES`; `src/adapters/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
+| Sandbox | `sandboxes/aura/config.toml` (`[agents.aura]`, `researcher`, `skill-improver`, `fixture-runner` on `engine = "claude_code"`; `sandboxes/aura-claude/` no longer exists) |
 
 ## Safety Policy
 - Explicit `can_use_tool` callback for every Claude-backed request

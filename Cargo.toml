@@ -17,7 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 toml = "0.8"
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "socks"] }
 anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
@@ -47,6 +47,9 @@ glob = "0.3"
 similar = "2"
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1", "with-uuid-1"], optional = true }
 teloxide = { version = "0.13", features = ["macros"], optional = true }
+# teloxide takes a reqwest 0.11 Client; this alias (unified with its copy, no
+# new crate) lets telegram_builder build one with Tor-sized timeouts.
+reqwest011 = { package = "reqwest", version = "0.11", default-features = false, optional = true }
 dptree = { version = "0.3", optional = true }
 # Inbound webhook listener (gated by `webhooks` feature). axum is the
 # only http SERVER dep — `reqwest` already covers outbound. `hmac` is
@@ -56,7 +59,7 @@ axum = { version = "0.7", optional = true }
 hmac = { version = "0.12", optional = true }
 [features]
 default = ["openrouter", "telegram"]
-telegram = ["teloxide", "dptree"]
+telegram = ["teloxide", "dptree", "reqwest011"]
 openrouter = []
 postgres_memory = ["tokio-postgres"]
 claude_code = []

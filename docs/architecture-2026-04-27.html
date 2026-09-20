@@ -277,7 +277,7 @@
 
 <!-- ============ SUBSYSTEMS ============ -->
 <div class="panel" id="panel-systems">
-  <h2>The five subsystems</h2>
+  <h2>The six subsystems</h2>
   <p>Click any card to expand its file-by-file breakdown.</p>
   <div class="grid-5" id="systems-grid"></div>
 </div>
@@ -298,8 +298,8 @@
     <tbody>
       <tr>
         <td>TENGU_PLANNER_REGISTRY.md</td>
-        <td>Agent specs, skills, tool defs</td>
-        <td><code>orchestrator/shared_files.rs</code> before planner calls</td>
+        <td><code>[agents.*]</code> blocks with a <code>description</code>, skills, core + MCP tool defs</td>
+        <td><code>shared_files::ensure_planner_registry</code> before planner calls</td>
         <td><code>RagPlanner::plan/replan</code> prompt context</td>
         <td>NO</td>
       </tr>
@@ -308,20 +308,19 @@
         <td>User messages keyed by session_id</td>
         <td><code>RagPlanner::persist_user_message</code> on every plan()</td>
         <td><code>RagPlanner::cross_session_recall_block</code> (opt-in via <code>memory.cross_session_msg_top_k</code>)</td>
-        <td>YES — <code>cleanup::ttl_cleanup</code></td>
+        <td>none yet (tracked in SESSION_HANDOFF)</td>
       </tr>
       <tr>
         <td>Open Brain step outputs</td>
         <td>Compressed step output summaries</td>
-        <td><code>compress_and_store</code> tool (implicit on every subagent)</td>
-        <td><code>RagPlanner::replan</code> for cross-plan recall</td>
-        <td>YES — <code>cleanup::ttl_cleanup</code></td>
+        <td><code>main.rs::try_persist_agentic_step_summary</code> when the child's implicit <code>compress_and_store</code> fires (or at exit)</td>
+        <td><code>RagPlanner::replan</code> (cross-plan) + <code>session_output_recall_block</code> (within-session, opt-in)</td>
+        <td>none yet (tracked in SESSION_HANDOFF)</td>
       </tr>
     </tbody>
   </table>
   <p style="margin-top: 18px;">
-    Current state lives in Open Brain Postgres plus LLM Wiki Markdown. The legacy Qdrant collections and the
-    <code>rag/</code> facade were removed (Phase 6, files deleted 2026-09-12); without <code>postgres_memory</code>
+    Current state lives in Open Brain Postgres plus LLM Wiki Markdown (<code>postgres_memory</code> feature); without it
     the planner still routes from <code>TENGU_PLANNER_REGISTRY.md</code>, it just has no durable memory.
   </p>
 </div>
@@ -352,7 +351,7 @@
     <div class="mech-card">
       <div class="label">Implicit contract</div>
       <h3>D. compress_and_store is implicit, not declared</h3>
-      <p>Never list compress_and_store in agents/*.toml::tools — the runner appends it to every subagent automatically. Used to mark "I'm done." Middle-ground protocol: only Failed when no text emitted AND no compress_and_store called. Otherwise OK with a tracing warn.</p>
+      <p>Never list compress_and_store in [agents.*].tools — the runner appends it to every subagent automatically. Used to mark "I'm done." Middle-ground protocol: only Failed when no text emitted AND no compress_and_store called. Otherwise OK with a tracing warn.</p>
       <div class="ref">main.rs::run_agent_subprocess (Phase 5c)</div>
     </div>
     <div class="mech-card">
@@ -364,21 +363,21 @@
     <div class="mech-card">
       <div class="label">Multi-turn UX</div>
       <h3>F. C → B fallback — composed agents, two turns</h3>
-      <p>Turn 1 (C): planner emits Direct asking the user to confirm closest match. Turn 2 (B): on confirmation, planner emits Plan with Step.compose set. Runner loads the base agent, OVERRIDES skills+tools for this run only. No persistence — file on disk unchanged.</p>
+      <p>Turn 1 (C): planner emits Direct asking the user to confirm closest match. Turn 2 (B): on confirmation, planner emits Plan with Step.compose set. Child loads the base agent's [agents.*] block, OVERRIDES skill_packages+tools for this run only. No persistence — config on disk unchanged.</p>
       <div class="ref">orchestrator/plan.rs::AgentCompose (Phase 6.7)</div>
     </div>
 
     <div class="mech-card">
       <div class="label">Phase 7.3</div>
-      <h3>G. AgentSpec.engine — subagents pick their backend</h3>
-      <p>Each agent's TOML can declare <code>engine = "openrouter"</code> (default) or <code>engine = "claude_code"</code>. Subprocess honours it via <code>build_engine</code>. Model slug format depends on engine: OpenRouter wants <code>anthropic/claude-sonnet-4-6</code>; Claude Code wants bare <code>claude-sonnet-4-6</code>. Mixed-mode (planner = OpenRouter, subagents = Claude Code) is the verified pattern — Claude Code as planner bypasses orchestration because its MCP tool access is set at engine-construction time.</p>
-      <div class="ref">agents/&lt;name&gt;.toml::engine — agent_config_from_spec — build_engine</div>
+      <h3>G. [agents.*].engine — subagents pick their backend</h3>
+      <p>Each <code>[agents.&lt;name&gt;]</code> block declares <code>engine = "openrouter"</code> or <code>engine = "claude_code"</code> (same field as in-process agents). Subprocess honours it via <code>build_engine</code>. Model slug format depends on engine: OpenRouter wants <code>anthropic/claude-sonnet-4-6</code>; Claude Code wants bare <code>claude-sonnet-4-6</code>. Mixed-mode (planner = OpenRouter, subagents = Claude Code) is the verified pattern — Claude Code as planner bypasses orchestration because its MCP tool access is set at engine-construction time.</p>
+      <div class="ref">[agents.&lt;name&gt;].engine — channel_runtime::subagent_config — build_engine</div>
     </div>
 
     <div class="mech-card">
       <div class="label">Phase 7.4</div>
       <h3>H. Claude Code subagents see tengu's tools via MCP</h3>
-      <p>SubprocessRunner sets <code>EngineContext.bridge_tools = Some(tools)</code> when <code>spec.engine == "claude_code"</code>. Claude Code spawns <code>tengu mcp-bridge</code> as an MCP server, which advertises tengu's tools as <code>mcp__tengu-tools__&lt;name&gt;</code>. Claude Code calls those, the bridge dispatches to its own ToolRegistry, response flows back. Two key env vars forwarded to the bridge: <code>TENGU_SESSION_ID</code> and <code>OPENROUTER_API_KEY</code> (without them the bridge silently fails to register memory tools).</p>
+      <p>main.rs::run_agent_subprocess sets <code>EngineContext.bridge_tools = Some(tools)</code> when the agent's <code>engine == "claude_code"</code>. Claude Code spawns <code>tengu mcp-bridge</code> as an MCP server, which advertises tengu's tools as <code>mcp__tengu-tools__&lt;name&gt;</code>. Claude Code calls those, the bridge dispatches to its own ToolRegistry, response flows back. Two key env vars forwarded to the bridge: <code>TENGU_SESSION_ID</code> and <code>OPENROUTER_API_KEY</code> (without them the bridge silently fails to register memory tools).</p>
       <div class="ref">EngineContext.bridge_tools — claude_code_engine.rs::build_mcp_config_json — mcp_bridge.rs::build_bridge_executor</div>
     </div>
 
@@ -399,8 +398,15 @@
     <div class="mech-card">
       <div class="label">Phase 7.7</div>
       <h3>K. WORKSPACE_TOOLS_ALLOWLIST — single constant</h3>
-      <p>Opt-in workspace tools such as <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, and <code>manage_skill</code> use one <code>pub(crate) const WORKSPACE_TOOLS_ALLOWLIST</code> in <code>channel_runtime.rs</code>. Adding another opt-in is a one-line allowlist edit plus plugin registration. <code>agent_config_from_spec</code> filters <code>spec.tools</code> against it; the bridge filters <code>allowed_names</code> against it.</p>
+      <p>Opt-in workspace tools such as <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, and <code>manage_skill</code> use one <code>pub(crate) const WORKSPACE_TOOLS_ALLOWLIST</code> in <code>channel_runtime.rs</code>. Adding another opt-in is a one-line allowlist edit plus plugin registration. <code>channel_runtime::subagent_config</code> merges the names in <code>tools</code> that match it into <code>workspace_tools</code>; the bridge filters <code>allowed_names</code> against it.</p>
       <div class="ref">channel_runtime::WORKSPACE_TOOLS_ALLOWLIST</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-09-16</div>
+      <h3>L. Every LLM network path goes through egress.rs</h3>
+      <p><code>[egress] network = "tor"</code> is the default: proxy <code>socks5h://127.0.0.1:9050</code> (<code>TENGU_TOR_PROXY</code> overrides — the <code>deploy/tor/</code> Arti + lyrebird-rs container), <code>route_llm_api</code> on; <code>network = "open"</code> is plain internet. <code>EgressConfig::resolved()</code> fills those defaults, the policy is installed process-wide, and the <em>resolved</em> config is handed to <code>run-agent</code> / <code>mcp-bridge</code> children as <code>TENGU_EGRESS</code>. <code>http_request</code>, crypto and MCP-http use the proxied tool client; the Claude Code CLI gets <code>HTTPS_PROXY</code> (HTTP CONNECT on the SOCKS port, <code>claude_cli_env</code>); Telegram gets a proxied reqwest 0.11 client (<code>TelegramPipe::build_bot</code>); <code>http_request</code> follows redirects itself and re-checks <code>allow_hosts</code>/<code>deny_hosts</code>/<code>https_only</code> + <code>net_hosts</code> on every hop. <code>run_command</code> runs under <code>sandbox-exec</code> when <code>shell_network = "isolated"</code>. Every hop / network-looking shell command lands in the JSONL audit log. <code>build_tool_executor</code> no longer accepts an HTTP client, so nothing can inject an unproxied one.</p>
+      <div class="ref">egress::install · resolved · tool_client · llm_api_client · check_url · shell_command · guard_shell · claude_cli_env · docs/egress-2026-09-16.md</div>
     </div>
   </div>
 </div>
@@ -462,24 +468,25 @@ const STEPS = [
       { path: "src/adapters/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts with backoff" },
       { path: "src/adapters/orchestrator/plan.rs::Plan::ready_steps", desc: "topology check" },
     ],
-    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. The plan validator rejects unknown agent names — important guardrail post Phase 6.7 since composed agents now use Step.compose to declare a transient roster, NOT a renamed agent name."
+    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn) on an agent name with no [agents.*] block — important guardrail post Phase 6.7 since composed agents use Step.compose to declare a transient roster, NOT a renamed agent name."
   },
   {
     num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
-    what: "Builds AgentIpcInput JSON, spawns child with TENGU_AGENT_IPC=1, pipes JSON over stdin, reads result over stdout. Kill on drop.",
+    what: "Fails fast when step.agent has no [agents.*] block; builds AgentIpcInput JSON (max_turns = the agent's limits.max_tool_rounds; model/tools/skills travel empty), spawns child with TENGU_AGENT_IPC=1 + TENGU_EGRESS (parent's resolved [egress]), pipes JSON over stdin, reads result over stdout under limits.step_timeout_secs (run_with_timeout). Kill on drop.",
     files: [
       { path: "src/adapters/runner.rs::SubprocessRunner::run_step", desc: "parent side" },
       { path: "src/adapters/runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, plan_state, optional compose" },
       { path: "src/main.rs::run_agent_subprocess", desc: "child entry point" },
     ],
-    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. 2026-09-12 added plan_state (the rendered plan for this session) so concurrent sessions never read each other's TENGU_PLAN.md; scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots)."
+    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/&lt;name&gt;/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. 2026-09-12 added plan_state (the rendered plan for this session) so concurrent sessions never read each other's TENGU_PLAN.md; scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots)."
   },
   {
     num: 6, title: "Subagent tool loop", lane: "tool",
-    what: "Inside the child: load AgentSpec + override with compose (if any) → assemble system prompt (base + skills + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns.",
+    what: "Inside the child: load the parent's config FIRST (sandbox_config → sandboxes/&lt;name&gt;/config.toml, else the default chain) → egress::install (TENGU_EGRESS wins) → take [agents.*] for the step's agent from it (compose.base_agent when composed; skill_packages/tools overridden in memory only) → assemble system prompt (base + skills + plan_state + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns (= limits.max_tool_rounds).",
     files: [
       { path: "src/main.rs::run_agent_subprocess", desc: "the orchestrating function" },
-      { path: "src/adapters/channel_runtime::build_subprocess_tool_executor", desc: "intersects spec.tools with ipc.tools, appends compress_and_store" },
+      { path: "src/adapters/channel_runtime::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store}; subagent_config merges workspace-tool opt-ins from tools" },
+      { path: "src/adapters/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
       { path: "src/adapters/plugins/{http,workspace,memory,crypto,mcp,...}", desc: "the actual tools" },
       { path: "src/adapters/engine_builder::run_single_engine_turn", desc: "one LLM turn" },
     ],
@@ -487,9 +494,10 @@ const STEPS = [
   },
   {
     num: 7, title: "compress_and_store → durable summary", lane: "mem",
-    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it, writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory with embeddings when available; legacy vector builds keep the old compatibility path.",
+    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it, writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory (main.rs::try_persist_agentic_step_summary) with embeddings when available; without the feature the summary only travels back over IPC.",
     files: [
-      { path: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs", desc: "the tool def + write_summary helper" },
+      { path: "src/adapters/plugins/skill_lifecycle/compress_and_store.rs", desc: "the tool definition only (implicit on every subagent)" },
+      { path: "src/main.rs::try_persist_agentic_step_summary", desc: "the durable write (postgres_memory)" },
     ],
     deep: "Output flows back to the parent via the IPC stdout, then to the DagExecutor (step 4). On step success the next ready step starts. The child's session_id and step_id are stamped on durable memory payloads so later planner recall can pull the right entries."
   },
@@ -498,7 +506,7 @@ const STEPS = [
 const SUBSYSTEMS = [
   {
     key: "memory", title: "memory/ — low-level vector store",
-    subtitle: "the foundation. Used by both the legacy vector facade AND the legacy planner-side LLM turn.",
+    subtitle: "the in-process disk vector store behind memory_ingest / memory_search / persistent_store, plus planner-side memory glue.",
     files: [
       ["vector.rs", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes"],
       ["vector/disk.rs", "DiskVectorStore — the only VectorStore impl (bincode)"],
@@ -511,18 +519,33 @@ const SUBSYSTEMS = [
       ["fencing.rs", "<memory-context> block helpers"],
       ["context_block.rs", "shared types — MemoryHit, ChunkMetadata"],
     ],
-    deep: "memory/ is the in-process disk vector store used by memory_ingest/memory_search and the BuiltinMemoryProvider. Durable, cross-session memory is plugins/agentic_memory/ (Postgres + pgvector, postgres_memory feature). The old rag/ facade is gone.",
+    deep: "memory/ is the in-process disk vector store used by memory_ingest/memory_search and the BuiltinMemoryProvider. Durable, cross-session memory is plugins/agentic_memory/ (Postgres + pgvector, postgres_memory feature).",
   },
   {
-    key: "agents", title: "agents/ — TOML specs",
-    subtitle: "edit a .toml and restart chat — planner registry file is regenerated.",
+    key: "agents", title: "[agents.*] — subagents in the sandbox config",
+    subtitle: "no agents/ directory, no separate spec — the same AgentConfig, routable when description is set. Edit a block, restart chat, registry regenerated.",
     files: [
-      ["src/adapters/agents/mod.rs", "AgentSpec struct + load_agent_file + load_agents_dir"],
-      ["agents/aura.toml", "DeSci pipeline agent (heaviest)"],
-      ["agents/researcher.toml", "generic web/HTTP research"],
-      ["agents/storage.toml", "file ingest + semantic search"],
+      ["src/adapters/config.rs::AgentConfig", "one struct for in-process agents and subagents — description, example_queries, tools, skill_packages (skills alias), limits.max_tool_rounds / step_timeout_secs"],
+      ["sandboxes/&lt;name&gt;/config.toml", "[agents.&lt;name&gt;] blocks — aura sandbox: aura (DeSci pipeline), researcher (web/HTTP), learning-agent (skill lifecycle)"],
+      ["src/adapters/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
+      ["src/adapters/channel_runtime.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
+      ["src/main.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
     ],
-    deep: "Each spec carries: name, description (registry-file rendered), example_queries (each indexed as its OWN vector since 2026-04-26), model, tools, skills, max_turns, sandbox (workspace path). The runner intersects spec.tools with ipc.tools and always appends compress_and_store. Never list compress_and_store in tools — it's implicit.",
+    deep: "The child re-loads the parent's config (sandbox_config over IPC) and takes [agents.*] for the step's agent from it; model/tools/skills travel empty in the IPC payload. SubprocessRunner fails fast when the planner names an agent with no block, and reads limits.max_tool_rounds / limits.step_timeout_secs per step. Never list compress_and_store in tools — it's implicit.",
+  },
+  {
+    key: "egress", title: "egress.rs — network policy (2026-09-16)",
+    subtitle: "Tor by default; [egress] network = \"open\" for plain internet. Every LLM-initiated network path goes through it.",
+    files: [
+      ["EgressConfig", "network tor|open (default tor), proxy (socks5h only), route_llm_api, allow_hosts / deny_hosts, https_only, shell_network proxy_env|isolated, audit / audit_log"],
+      ["resolved()", "fills proxy (TENGU_TOR_PROXY or socks5h://127.0.0.1:9050 — the deploy/tor/ Arti + lyrebird-rs container) and route_llm_api from network; children get this resolved config as TENGU_EGRESS"],
+      ["install / policy", "process-wide, once — main, load_sandbox_or, run-agent, mcp-bridge"],
+      ["tool_client / llm_api_client / mcp_client", "the only HTTP clients on LLM paths; tool client has redirects off so http_request re-checks every hop"],
+      ["check_url / guard_shell / shell_command", "host ceiling per hop; URL audit for shells; sandbox-exec under isolated"],
+      ["claude_cli_env / http_connect_proxy / claude_code_profile", "HTTPS_PROXY (HTTP CONNECT on the SOCKS port) for the Claude Code CLI; builtin Bash dropped while proxied"],
+      ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
+    ],
+    deep: "Every http_request hop and network-looking shell command lands in &lt;TENGU_HOME&gt;/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "skills", title: "skills/ — prompt fragments",
@@ -567,19 +590,20 @@ const SUBSYSTEMS = [
       ["tui/mod.rs", "TENGU_TUI_METRICS=1 — absorbs records into AggregatorState, renders compact one-liner as System bubble"],
       ["eval_builder.rs", "records one Observation per MetricsRecorded event for cross-run cost comparison"],
     ],
-    deep: "Three surfaces, one record. Tracing baseline (RUST_LOG=tengu=info — every record() call emits a structured info line) is always-on. Bus broadcast is best-effort — record() is fail-soft. AggregatorState absorbs even when the TUI panel is OFF so flipping it on mid-session shows real numbers. Subagent records cross the IPC boundary in AgentIpcOutput.metrics (default + skip_serializing_if = Vec::is_empty keeps the payload byte-compatible with older child binaries). Per-context-layer attribution is approximate — engine-side framing (Anthropic <thinking> blocks, function-calling wrappers) isn't counted; treat layers as relative attribution, not byte-perfect accounting against prompt_tokens.",
+    deep: "Three surfaces, one record. Tracing baseline (RUST_LOG=tengu=info — every record() call emits a structured info line) is always-on. Bus broadcast is best-effort — record() is fail-soft. AggregatorState absorbs even when the TUI panel is OFF so flipping it on mid-session shows real numbers. Subagent records cross the IPC boundary in AgentIpcOutput.metrics (default + skip_serializing_if = Vec::is_empty keeps the payload byte-compatible with older child binaries). Per-context-layer attribution is approximate — engine-side framing (Anthropic &lt;thinking&gt; blocks, function-calling wrappers) isn't counted; treat layers as relative attribution, not byte-perfect accounting against prompt_tokens.",
   },
 ];
 
 const FILE_MAP = [
-  ["src/main.rs", "main", "CLI entrypoint, RegistryAction subcommand, run_agent_subprocess (the child process), load_sandbox_or"],
-  ["src/adapters/channel_runtime.rs", "channel_runtime", "build_orchestrator, build_subprocess_tool_executor, ChatOrchestratorPortImpl, agent_config_from_spec, RuntimeChatServiceFactory, register_core_plugins (Phase 7.7), WORKSPACE_TOOLS_ALLOWLIST (Phase 7.7), build_memory_manager_async, permissive_scope"],
+  ["src/main.rs", "main", "CLI entrypoint (chat / telegram / webhooks / doctor / eval / prune / secret / skill / mcp-bridge / agentic-memory-server / run-agent), run_agent_subprocess (child: parent config → egress::install → [agents.*] lookup), try_persist_agentic_step_summary, load_sandbox_or (+ egress::install, warn_if_proxy_unreachable), skill_doctor"],
+  ["src/adapters/channel_runtime.rs", "channel_runtime", "build_orchestrator (passes config.agents to RagPlanner + SubprocessRunner), resolve_session_id, build_subprocess_tool_executor(&AgentConfig, ..), subagent_config, RuntimeChatServiceFactory, register_core_plugins (Phase 7.7), WORKSPACE_TOOLS_ALLOWLIST (Phase 7.7), build_memory_manager_async, grant_workspace_root, permissive_scope"],
   ["src/adapters/chat_builder.rs", "channel_runtime", "ChatRuntimeService, handle_chat_command, slash-command routing"],
-  ["src/adapters/config.rs", "config", "Config struct, MemoryConfig, OrchestratorConfig, RagConfig, AgentConfig, McpServerConfig, sandbox_name (Phase 7.2)"],
+  ["src/adapters/config.rs", "config", "Config, AgentConfig (in-process + subagent: description, example_queries, tools, skill_packages / skills alias), LimitsConfig (max_tool_rounds, step_timeout_secs), MemoryConfig, OrchestratorConfig, McpServerConfig, fold_default_scopes, sandbox_name (Phase 7.2)"],
   ["src/adapters/engine_builder.rs", "engine", "build_engine, build_openrouter_engine, run_single_engine_turn, ToolExecutor"],
-  ["src/adapters/runner.rs", "orchestrator", "SubprocessRunner, AgentIpcInput, AgentIpcOutput — the IPC plumbing"],
+  ["src/adapters/egress.rs", "egress", "[egress] policy (2026-09-16): network tor|open (default tor), EgressConfig::resolved (proxy ← TENGU_TOR_PROXY or socks5h://127.0.0.1:9050, route_llm_api), install/policy (process-wide, resolved config → children as TENGU_EGRESS), tool_client / llm_api_client / mcp_client, check_url host ceiling, shell_command (sandbox-exec under isolated), guard_shell, claude_cli_env / http_connect_proxy (HTTPS_PROXY for the Claude Code CLI), claude_code_profile, warn_if_proxy_unreachable, JSONL audit"],
+  ["src/adapters/runner.rs", "orchestrator", "SubprocessRunner::new(sandbox, session_id, agents) — fail-fast on unknown [agents.*], per-step max_tool_rounds / step_timeout_secs, run_with_timeout, TENGU_EGRESS to the child; AgentIpcInput, AgentIpcOutput — the IPC plumbing"],
   ["src/adapters/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle"],
-  ["src/adapters/orchestrator/planner.rs", "orchestrator", "RagPlanner, parse_verdict (free fn), persist_user_message, cross_session_recall_block, shared_files registry generation"],
+  ["src/adapters/orchestrator/planner.rs", "orchestrator", "RagPlanner::new(.., agents, mcp_servers, ..), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
   ["src/adapters/orchestrator/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7)"],
   ["src/adapters/orchestrator/executor.rs", "orchestrator", "DagExecutor, WorkerHandle trait"],
   ["src/adapters/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
@@ -587,7 +611,7 @@ const FILE_MAP = [
   ["src/adapters/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
   ["src/adapters/orchestrator/wiring.rs", "orchestrator", "ChatServiceFactory trait + run_turn_with_system_metered, TurnTelemetry, ChatOrchestratorPortImpl"],
   ["src/adapters/metrics.rs", "metrics", "MetricsRecord, MetricsKind, MetricsLayer, install_global_sink/record/subscribe, AggregatorState (per-agent + per-kind rollups). Observes every LLM and embedding call; tracing info baseline + bus broadcast + TUI bubble (TENGU_TUI_METRICS=1)."],
-  ["src/adapters/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation (agents + skills + core & MCP tools), per-session active plan (set_active_plan / plan_state), TENGU_PLAN.md debug artifact"],
+  ["src/adapters/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents ([agents.*] with a description) + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_summaries, enumerate_mcp_tools); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
   ["src/adapters/memory/mod.rs", "memory", "module preamble explaining memory/ (disk vector store) vs plugins/agentic_memory (Postgres)"],
   ["src/adapters/memory/manager.rs", "memory", "MemoryManager — provider holder, prefetch_all, sync_all"],
   ["src/adapters/memory/provider.rs", "memory", "MemoryProvider trait"],
@@ -597,24 +621,22 @@ const FILE_MAP = [
   ["src/adapters/memory/fencing.rs", "memory", "<memory-context> block helpers"],
   ["src/adapters/memory/context_block.rs", "memory", "PinnedMemoryBlock, MemoryHit, ChunkMetadata"],
   ["src/adapters/memory/vector.rs", "memory", "VectorStore trait — write/search/delete/clear_all/entry_count/storage_bytes/delete_older_than"],
-  ["src/adapters/memory/vector/disk.rs", "memory", "DiskVectorStore — bincode fallback"],
+  ["src/adapters/memory/vector/disk.rs", "memory", "DiskVectorStore — the only VectorStore impl (bincode)"],
   ["src/adapters/memory/vector/embedder.rs", "memory", "Embedder — OpenAI text-embedding-3-small client"],
-  ["src/adapters/agents/mod.rs", "agents", "AgentSpec struct, load_agent_file, load_agents_dir"],
+  ["sandboxes/&lt;name&gt;/config.toml", "agents", "one config per sandbox: [egress] (network tor|open), [orchestrator], [agents.*] — a block with a description is a planner-routable subagent (aura: aura, researcher, learning-agent), [default_scopes], MCP servers"],
   ["src/adapters/tui/mod.rs", "tui", "cursive TUI loop, event subscription, input dispatch"],
-  ["src/adapters/telegram_builder.rs", "telegram", "Telegram polling + per-chat dispatch"],
-  ["src/adapters/plugins/http/mod.rs", "plugins", "http_request tool"],
-  ["src/adapters/plugins/workspace/mod.rs", "plugins", "read_file, list_directory, run_command"],
-  ["src/adapters/plugins/memory/mod.rs", "plugins", "remember tool"],
+  ["src/adapters/telegram_builder.rs", "telegram", "Telegram polling + per-chat dispatch; build_bot() builds a proxied reqwest 0.11 client from the egress policy (30s/60s timeouts)"],
+  ["src/adapters/plugins/http/request.rs", "plugins", "http_request — hop-0 egress + scope gate inside execute, follows redirects itself and re-checks every hop through egress::check_url"],
+  ["src/adapters/plugins/workspace/mod.rs", "plugins", "read_file, list_directory, write_file, run_command (runs under the [egress] shell mode)"],
+  ["src/adapters/plugins/memory/mod.rs", "plugins", "MemoryPlugin — memory_ingest, memory_search, persistent_store (opt-in) over the disk vector store"],
   ["src/adapters/plugins/cache/mod.rs", "plugins", "shared_cache tool"],
   ["src/adapters/plugins/crypto/mod.rs", "plugins", "Privy crypto tools — sign_and_send_transaction, etc."],
   ["src/adapters/plugins/mcp/mod.rs", "plugins", "MCP plugin — connects to external MCP servers as a client"],
   ["src/adapters/plugins/mcp/client.rs", "plugins", "McpClient + McpCaller trait, stdio + http transports"],
-  ["src/adapters/plugins/skill_lifecycle/mod.rs", "plugins", "skill_lifecycle plugin — distill + compress_and_store"],
+  ["src/adapters/plugins/skill_lifecycle/mod.rs", "plugins", "skill_lifecycle plugin — skill_distill, apply_improver_proposal, compress_and_store (definition)"],
   ["src/adapters/plugins/skill_lifecycle/compress_and_store.rs", "plugins", "the implicit-on-every-subagent compress_and_store tool"],
   ["src/adapters/mcp_bridge.rs", "mcp", "OUTBOUND MCP server — exposes tengu's tools to Claude Code clients"],
-  ["agents/aura.toml", "agents", "DeSci pipeline agent — Sonnet, full DeSci skill packages"],
-  ["agents/researcher.toml", "agents", "generic web/HTTP research — gpt-4o-mini, http_request + summariser"],
-  ["agents/storage.toml", "agents", "file ingest + semantic search — Sonnet, persistent_store"],
+  ["src/adapters/claude_code_engine.rs", "engine", "ClaudeCodeEngine — Claude Code CLI backend; with_scopes exports TENGU_BRIDGE_SCOPES, build_mcp_config_json spawns tengu mcp-bridge, HTTPS_PROXY from egress::claude_cli_env"],
   ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],
   ["skills/orchestrator/plan_schema.json", "skills", "JSON schema validating planner output"],
 ];

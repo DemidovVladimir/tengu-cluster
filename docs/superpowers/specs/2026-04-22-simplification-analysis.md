@@ -1,5 +1,7 @@
 # Simplification Analysis — Dependency Graph, Duplication, and Refactor Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 **Date:** 2026-04-22
 **Scope:** `src/` at `main` (commit `6864a48`)
 **Deliverable mode:** Analysis + ranked refactor plan. **No code changes in this pass.**

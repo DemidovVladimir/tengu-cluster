@@ -48,7 +48,7 @@
     <rect x="180" y="6" width="14" height="14" rx="3" class="pill-rag" />
     <text x="200" y="17" class="small">agentic_memory/ (Postgres)</text>
     <rect x="310" y="6" width="14" height="14" rx="3" class="pill-agt" />
-    <text x="330" y="17" class="small">agents/  (specs)</text>
+    <text x="330" y="17" class="small">[agents.*]  (subagents)</text>
     <rect x="430" y="6" width="14" height="14" rx="3" class="pill-skl" />
     <text x="450" y="17" class="small">skills/  (3-tier scanner)</text>
     <rect x="580" y="6" width="14" height="14" rx="3" class="pill-orc" />
@@ -101,28 +101,29 @@
     <text x="10" y="18" class="h3">5. SubprocessRunner - spawn tengu run-agent</text>
     <text x="10" y="34" class="body">child process, IPC over stdin/stdout JSON</text>
     <text x="10" y="48" class="file">runner.rs (parent) - main.rs::run_agent_subprocess (child)</text>
-    <text x="10" y="62" class="small">passes session_id, step_id, sandbox_config, optional compose override</text>
+    <text x="10" y="62" class="small">session_id · step_id · sandbox_config · plan_state · compose · TENGU_EGRESS env</text>
   </g>
   <path d="M 770 312 L 770 342" class="arrow" marker-end="url(#ah)" />
 
   <g transform="translate(560, 346)">
-    <rect width="420" height="80" rx="6" class="lane-tool" />
+    <rect width="420" height="94" rx="6" class="lane-tool" />
     <text x="10" y="18" class="h3">6. Subagent tool loop (LLM and tools)</text>
-    <text x="10" y="34" class="body">load AgentSpec, build PluginToolExecutor</text>
+    <text x="10" y="34" class="body">load [agents.&lt;name&gt;] from sandbox config, build PluginToolExecutor</text>
     <text x="10" y="48" class="file">channel_runtime::build_subprocess_tool_executor</text>
     <text x="10" y="62" class="file">plugins/{http,workspace,memory,crypto,mcp,...}</text>
     <text x="10" y="76" class="small">runs until model calls compress_and_store OR max_turns hit</text>
+    <text x="10" y="90" class="file">egress.rs - Tor proxy, host allowlist, shell sandbox, audit</text>
   </g>
-  <path d="M 770 430 L 770 460" class="arrow" marker-end="url(#ah)" />
+  <path d="M 770 444 L 770 474" class="arrow" marker-end="url(#ah)" />
 
-  <g transform="translate(560, 464)">
+  <g transform="translate(560, 478)">
     <rect width="420" height="60" rx="6" class="lane-mem" />
     <text x="10" y="18" class="h3">7. compress_and_store - durable summary</text>
     <text x="10" y="34" class="body">Open Brain Postgres with postgres_memory</text>
-    <text x="10" y="48" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
+    <text x="10" y="48" class="file">main.rs::try_persist_agentic_step_summary (def: compress_and_store.rs)</text>
   </g>
 
-  <path d="M 555 494 L 480 494 L 480 196 L 870 196" class="arrow-dash" marker-end="url(#ah-dash)" />
+  <path d="M 555 508 L 480 508 L 480 196 L 870 196" class="arrow-dash" marker-end="url(#ah-dash)" />
   <text x="200" y="490" class="small" font-style="italic">step output flows back to DagExecutor; replan triggered if step exhausted</text>
 
   <g transform="translate(20, 234)">
@@ -138,11 +139,11 @@
     <text x="10" y="150" class="small">if memory.cross_session_msg_top_k more than 0, semantic search over</text>
     <text x="10" y="164" class="small">Open Brain memory, inject "Cross-session message recall" block</text>
     <text x="10" y="194" class="body" font-weight="600">At step 7 (compress_and_store):</text>
-    <text x="10" y="210" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
+    <text x="10" y="210" class="file">main.rs::try_persist_agentic_step_summary</text>
     <text x="10" y="224" class="small">captures the LLM-summarised step output</text>
     <text x="10" y="238" class="small">writes step summary to Open Brain Postgres tagged with step_id</text>
     <text x="10" y="268" class="body" font-weight="600">At step 5 startup (parent to child IPC):</text>
-    <text x="10" y="282" class="file">SubprocessRunner forwards sandbox_config so child loads same scopes</text>
+    <text x="10" y="282" class="file">SubprocessRunner forwards sandbox_config: child loads same config, scopes, [agents.*]</text>
   </g>
 
   <text x="20" y="568" class="h2">section 2 - the five subsystems - what lives where</text>
@@ -193,28 +194,28 @@
     <text x="10" y="240" class="small">wiki: .tengu/agentic-memory/wiki/*.md</text>
     <text x="10" y="270" class="small" font-style="italic">Open Brain = live memory;</text>
     <text x="10" y="284" class="small" font-style="italic">compile_wiki = Karpathy LLM Wiki</text>
-    <text x="10" y="298" class="small" font-style="italic">(rag/ facade deleted 2026-09-12)</text>
+    <text x="10" y="298" class="small" font-style="italic">(pgvector + FTS fallback, fail-soft)</text>
   </g>
 
   <g transform="translate(412, 586)">
     <rect width="186" height="318" rx="6" class="panel" />
     <rect x="0" y="0" width="186" height="22" rx="6" class="pill-agt" />
-    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">agents/  -  TOML specs</text>
-    <text x="10" y="40" class="file">src/adapters/agents/mod.rs</text>
-    <text x="10" y="52" class="small">AgentSpec struct + loader</text>
-    <text x="10" y="64" class="small">load_agent_file, load_agents_dir</text>
-    <text x="10" y="84" class="file">agents/aura.toml</text>
-    <text x="10" y="96" class="small">DeSci pipeline agent</text>
-    <text x="10" y="116" class="file">agents/researcher.toml</text>
-    <text x="10" y="128" class="small">generic web/HTTP research</text>
-    <text x="10" y="148" class="file">agents/storage.toml</text>
-    <text x="10" y="160" class="small">file ingest + semantic search</text>
-    <text x="10" y="184" class="h3">Each TOML has:</text>
-    <text x="10" y="200" class="small">name, description (registry-file rendered)</text>
-    <text x="10" y="214" class="small">example_queries (each its own vector)</text>
-    <text x="10" y="228" class="small">model, tools, skills, max_turns</text>
-    <text x="10" y="242" class="small">sandbox (workspace path)</text>
-    <text x="10" y="262" class="small" font-style="italic">edit a .toml + restart chat</text>
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">[agents.*]  -  subagents</text>
+    <text x="10" y="40" class="file">config.rs::AgentConfig</text>
+    <text x="10" y="52" class="small">one struct for in-process agents</text>
+    <text x="10" y="64" class="small">and subagents (no agents/ dir)</text>
+    <text x="10" y="84" class="file">sandboxes/&lt;name&gt;/config.toml</text>
+    <text x="10" y="96" class="small">[agents.&lt;name&gt;] + description</text>
+    <text x="10" y="116" class="file">shared_files::routable_agents</text>
+    <text x="10" y="128" class="small">description set = planner-routable</text>
+    <text x="10" y="148" class="file">main.rs::run_agent_subprocess</text>
+    <text x="10" y="160" class="small">loads config, then agents.get(name)</text>
+    <text x="10" y="184" class="h3">Each block has:</text>
+    <text x="10" y="200" class="small">engine, model, description</text>
+    <text x="10" y="214" class="small">example_queries, tools, skills</text>
+    <text x="10" y="228" class="small">limits.max_tool_rounds / step_timeout</text>
+    <text x="10" y="242" class="small">workspace, scopes, claude_code</text>
+    <text x="10" y="262" class="small" font-style="italic">edit a block + restart chat</text>
     <text x="10" y="276" class="small" font-style="italic">- registry file regenerated</text>
     <text x="10" y="290" class="small" font-style="italic">(no rebuild required)</text>
   </g>
@@ -280,7 +281,7 @@
     <text x="10" y="84" class="h3">written by:</text>
     <text x="10" y="100" class="file">orchestrator/shared_files.rs</text>
     <text x="10" y="114" class="small">  regenerated before planner calls</text>
-    <text x="10" y="128" class="small">  from agents/, skills, core tools</text>
+    <text x="10" y="128" class="small">  from [agents.*] with description, skills, tools</text>
     <text x="10" y="148" class="h3">read by:</text>
     <text x="10" y="164" class="file">RagPlanner::plan/replan</text>
     <text x="10" y="178" class="small">  injected as system prompt context</text>
@@ -300,11 +301,11 @@
     <text x="10" y="114" class="small">  on every plan() call</text>
     <text x="10" y="134" class="h3">read by:</text>
     <text x="10" y="150" class="file">RagPlanner::cross_session_recall_block</text>
-    <text x="10" y="164" class="small">  via RagStore::search_messages</text>
+    <text x="10" y="164" class="small">  via agentic_memory::recall_user_messages_with_vec</text>
     <text x="10" y="178" class="small">  gated on memory.cross_session_msg_top_k</text>
     <text x="10" y="192" class="small">  (default 0 = off, opt-in)</text>
-    <text x="10" y="216" class="small">TTL purge sweeps entries older than ttl_days</text>
-    <text x="10" y="228" class="small">via cleanup::ttl_cleanup (default 0 = keep)</text>
+    <text x="10" y="216" class="small">no TTL sweep yet (tracked in SESSION_HANDOFF)</text>
+    <text x="10" y="228" class="small">rows stamped with session_id + agent</text>
   </g>
 
   <g transform="translate(666, 960)">
@@ -314,15 +315,15 @@
     <text x="10" y="46" class="body">stores compressed step output summaries</text>
     <text x="10" y="60" class="small">default store for cross-plan recall on replan</text>
     <text x="10" y="84" class="h3">written by:</text>
-    <text x="10" y="100" class="file">plugins/skill_lifecycle/compress_and_store.rs</text>
-    <text x="10" y="114" class="small">  appended IMPLICITLY to every subagent</text>
-    <text x="10" y="128" class="small">  child writes when LLM calls the tool</text>
+    <text x="10" y="100" class="file">main.rs::try_persist_agentic_step_summary</text>
+    <text x="10" y="114" class="small">  compress_and_store is IMPLICIT on every subagent</text>
+    <text x="10" y="128" class="small">  child writes when the LLM calls it (or at exit)</text>
     <text x="10" y="148" class="h3">read by:</text>
     <text x="10" y="164" class="file">RagPlanner::replan</text>
     <text x="10" y="178" class="small">  Postgres with postgres_memory</text>
     <text x="10" y="192" class="small">  gated on memory.cross_plan_top_k (default 5)</text>
-    <text x="10" y="216" class="small">TTL purge sweeps entries older than ttl_days</text>
-    <text x="10" y="228" class="small">same Open Brain memory hook</text>
+    <text x="10" y="216" class="small">also within-session recall on the next turn</text>
+    <text x="10" y="228" class="small">(within_session_output_top_k, default 0 = off)</text>
   </g>
 
   <text x="20" y="1232" class="h2">section 4 - key mechanics - six things that surprised me reading this code</text>
@@ -340,12 +341,12 @@
 
   <g transform="translate(510, 1252)">
     <rect width="470" height="115" rx="6" class="panel" />
-    <text x="10" y="18" class="h3">B. Two senses of "session_id"</text>
-    <text x="10" y="36" class="small">channel_runtime resolves one shared session_id.</text>
-    <text x="10" y="50" class="small">SubprocessRunner mints its OWN. Today they don't share - open question</text>
-    <text x="10" y="64" class="small">flagged in the handoff. The parent's id is what gets stamped on persisted</text>
-    <text x="10" y="78" class="small">user messages in Open Brain memory.</text>
-    <text x="10" y="98" class="file">orchestrator/planner.rs:RagPlanner.session_id  -  runner.rs:session_id</text>
+    <text x="10" y="18" class="h3">B. One shared session_id (Fix B, 2026-05-09)</text>
+    <text x="10" y="36" class="small">channel_runtime::build_orchestrator resolves the id once (TENGU_SESSION_ID</text>
+    <text x="10" y="50" class="small">env override or fresh UUID) and hands the same string to RagPlanner AND</text>
+    <text x="10" y="64" class="small">SubprocessRunner, so planner messages and subagent step summaries share</text>
+    <text x="10" y="78" class="small">one key; run-agent exports it as TENGU_SESSION_ID for memory writes.</text>
+    <text x="10" y="98" class="file">resolve_session_id  -  RagPlanner.session_id  -  SubprocessRunner.session_id</text>
   </g>
 
   <g transform="translate(20, 1377)">
@@ -361,7 +362,7 @@
   <g transform="translate(510, 1377)">
     <rect width="470" height="115" rx="6" class="panel" />
     <text x="10" y="18" class="h3">D. compress_and_store is implicit, not declared</text>
-    <text x="10" y="36" class="small">Never list compress_and_store in agents/*.toml::tools - the runner</text>
+    <text x="10" y="36" class="small">Never list compress_and_store in [agents.*].tools - the runner</text>
     <text x="10" y="50" class="small">appends it to every subagent automatically. Used to mark "I am done with</text>
     <text x="10" y="64" class="small">this step." The middle-ground protocol: only fail when no text emitted</text>
     <text x="10" y="78" class="small">AND no compress_and_store called. Otherwise OK with a tracing warn.</text>
@@ -384,7 +385,7 @@
     <text x="10" y="36" class="small">Turn 1 (C): planner emits Direct asking the user to confirm closest match.</text>
     <text x="10" y="50" class="small">Turn 2 (B): on confirmation, planner emits Plan with Step.compose set.</text>
     <text x="10" y="64" class="small">Runner loads the base agent, OVERRIDES skills+tools for this run only.</text>
-    <text x="10" y="78" class="small">No persistence - the file on disk is unchanged.</text>
+    <text x="10" y="78" class="small">No persistence - the config on disk is unchanged.</text>
     <text x="10" y="98" class="file">orchestrator/plan.rs::AgentCompose  -  Phase 6.7</text>
   </g>
 

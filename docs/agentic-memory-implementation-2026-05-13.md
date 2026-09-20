@@ -87,7 +87,7 @@ Planned graph tables: `memory_claims`, `memory_links`.
 | `promote` | Mark stable/high-value memory for wiki compilation |
 | `compile_wiki` | Update Markdown wiki from promoted items |
 | `lint` | Find duplicates, contradictions, stale pages, missing citations |
-| `propose_behavior` | Produce reviewable skill/TOML patch from evidence |
+| `propose_behavior` | Produce reviewable skill/config patch from evidence (planned; not in the Tengu `agentic_memory` op enum yet) |
 
 ## Tengu Spike Touchpoints
 
@@ -97,12 +97,14 @@ Planned graph tables: `memory_claims`, `memory_links`.
 | `src/adapters/plugins/mod.rs` | Export plugin |
 | `channel_runtime::register_core_plugins` | Register once |
 | `WORKSPACE_TOOLS_ALLOWLIST` | Add `agentic_memory` |
-| `src/adapters/config.rs` | Add `[agentic_memory]` config |
+| `src/adapters/config.rs` | `[agentic_memory]` section (not landed — the DB comes from `TENGU_MEMORY_DATABASE_URL` only) |
+| `src/adapters/egress.rs` | Embedder + `compile_wiki` LLM calls use `egress::policy().llm_api_client` — Tor by default (`[egress] network = "tor"`); Postgres at `TENGU_MEMORY_DATABASE_URL` is loopback / compose-internal (`postgres-memory` on `tor-front`), never proxied |
+| `run-agent` env | `TENGU_SESSION_ID` + `TENGU_AGENT_NAME` (= the `[agents.<name>]` key) stamped onto `capture` rows when the LLM omits them |
 | `planner.rs` recall/write paths | Spike only |
 | `compress_and_store` path | Spike only |
 | External hosts | Use MCP server first; add native plugin packaging only when host needs richer lifecycle hooks |
 
-## Config Sketch
+## Config Sketch (not implemented — `TENGU_MEMORY_DATABASE_URL` is the only knob today)
 
 ```toml
 [agentic_memory]

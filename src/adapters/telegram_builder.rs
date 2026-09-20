@@ -17,7 +17,7 @@
 //! - **Multi-agent routing** — `@role: message` targeting, automatic classification,
 //!   `/team` orchestration via event-bus.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -82,19 +82,45 @@ fn build_tool_summary_fallback(tool_outcomes: &[(String, String)]) -> String {
 
 /// Telegram bot pipe backed by teloxide.
 struct TelegramPipe {
-    token: String,
+    /// Built once in `new` (see `build_bot`); `Bot` is `Arc`-backed, clones
+    /// are cheap.
+    bot: teloxide::Bot,
     shutdown: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
     turn_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl TelegramPipe {
+    /// Bot client honouring `[egress]`. teloxide takes a reqwest 0.11 client
+    /// (`reqwest011` alias). Under a proxy it goes through the proxy's HTTP
+    /// CONNECT form (Arti serves CONNECT on the SOCKS port) with Tor-sized
+    /// timeouts: teloxide's defaults (5s connect / 17s total, and 0.10 does
+    /// not extend the total for long polls) time out over Tor, where `GetMe`
+    /// takes 10–15s and each `getUpdates` is the 10s long poll plus that.
+    fn build_bot(token: &str) -> Result<teloxide::Bot> {
+        let mut builder = teloxide::net::default_reqwest_settings();
+        if let Some(proxy) = crate::adapters::egress::policy().http_connect_proxy() {
+            builder = builder
+                .proxy(reqwest011::Proxy::all(proxy).context("telegram proxy url")?)
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60));
+        }
+        let client = builder.build().context("building telegram http client")?;
+        Ok(teloxide::Bot::with_client(token, client))
+    }
+
+    fn bot(&self) -> anyhow::Result<teloxide::Bot> {
+        Ok(self.bot.clone())
+    }
+}
+
+impl TelegramPipe {
     /// Create a new pipe with the given bot token and cancellation flag.
-    fn new(token: String, cancel: Arc<AtomicBool>) -> Self {
-        Self {
-            token,
+    fn new(token: String, cancel: Arc<AtomicBool>) -> Result<Self> {
+        Ok(Self {
+            bot: Self::build_bot(&token)?,
             shutdown: Arc::new(Mutex::new(None)),
             turn_cancel: Some(cancel),
-        }
+        })
     }
 
     /// Start the teloxide dispatcher and forward incoming messages to `inbound_tx`.
@@ -102,7 +128,7 @@ impl TelegramPipe {
         use teloxide::prelude::*;
         use teloxide::requests::Requester;
 
-        let bot = Bot::new(&self.token);
+        let bot = self.bot()?;
         let me = bot
             .get_me()
             .await
@@ -309,7 +335,7 @@ impl TelegramPipe {
         use teloxide::prelude::*;
         use teloxide::types::{ChatAction, ChatId};
 
-        let bot = Bot::new(&self.token);
+        let bot = self.bot()?;
         let chat_id: i64 = target
             .thread_id
             .as_deref()
@@ -333,7 +359,7 @@ impl TelegramPipe {
         use teloxide::prelude::*;
         use teloxide::types::ChatId;
 
-        let bot = Bot::new(&self.token);
+        let bot = self.bot()?;
         let chat_id: i64 = target
             .thread_id
             .as_deref()
@@ -705,7 +731,7 @@ impl TelegramSession {
 
         let turn_cancel = Arc::new(AtomicBool::new(false));
 
-        let pipe = Arc::new(TelegramPipe::new(bot_token, Arc::clone(&turn_cancel)));
+        let pipe = Arc::new(TelegramPipe::new(bot_token, Arc::clone(&turn_cancel))?);
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
         rt.block_on(pipe.connect(inbound_tx))?;
 
@@ -1184,7 +1210,6 @@ impl TelegramSession {
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
-                None,
                 Some(&self.memory_config),
                 &agent.agent_config,
                 &self.config.mcp_servers,
@@ -1449,7 +1474,6 @@ impl TelegramSession {
                         &self.secret_registry,
                         activity_adapter,
                         Some(Arc::clone(&self.turn_cancel)),
-                        None,
                         Some(&self.memory_config),
                         &agent.agent_config,
                         &self.config.mcp_servers,
@@ -1873,7 +1897,6 @@ impl TelegramSession {
                 &self.secret_registry,
                 activity_adapter,
                 Some(Arc::clone(&self.turn_cancel)),
-                None,
                 Some(&self.memory_config),
                 &agent.agent_config,
                 &self.config.mcp_servers,

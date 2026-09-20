@@ -107,8 +107,10 @@ impl Tool for RunCommandTool {
             anyhow::bail!("run_command: empty command");
         }
         ctx.scope.check_shell_bin(bin)?;
+        let audit = crate::adapters::egress::policy().guard_shell("run_command", command)?;
 
-        let output = ctx.shell.execute_shell(command, ctx.workspace)?;
-        Ok(ToolOutput::from(output))
+        let output = ctx.shell.execute_shell(command, ctx.workspace);
+        audit.finish(&output);
+        Ok(ToolOutput::from(output?))
     }
 }

@@ -1,14 +1,16 @@
-# Tengu Cluster — Docker Compose
+# Tengu Cluster — Docker Compose (base file: tengu + optional Postgres)
 #
-# Usage:
-#   docker compose up -d                              # Default (OpenRouter + Telegram)
+# Usage (prefer the Makefile — it picks the right file set):
+#   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress-2026-09-16.md)
+#   make up SANDBOX=unlimited   # sandboxes/unlimited/config.toml instead (TENGU_CONFIG_FILE below)
+#   make up-memory              # + Postgres/pgvector (image built with postgres_memory)
 #   docker compose --profile postgres-memory up -d postgres-memory   # DB only (native binary)
 #
 # Agentic memory needs the image built WITH the feature, not just the profile:
 #   TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build
 #
 # Ports: 7080 is the webhook listener (`tengu webhooks`, feature `webhooks`).
-# Nothing listens on [hub].port.
+# Nothing listens on [hub].port. Not published under NETWORK=tor.
 #
 # Config:
 #   1. cp .env.example .env && edit .env (set API keys)
@@ -28,12 +30,13 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - TENGU_CONFIG=/opt/tengu/config.toml   # honoured by the binary; agents/ + sandboxes/ are baked into the image
+      - TENGU_CONFIG=/opt/tengu/config.toml   # honoured by the binary; skills/ + sandboxes/ are baked into the image
       - TENGU_HOME=/opt/tengu/data
       - TENGU_MEMORY_DATABASE_URL=${TENGU_MEMORY_DATABASE_URL:-postgres://tengu:tengu@postgres-memory:5432/tengu_memory}
       - RUST_LOG=${RUST_LOG:-info}
     volumes:
-      - ./config.toml:/opt/tengu/config.toml:ro
+      # TENGU_CONFIG_FILE = config.toml or sandboxes/<name>/config.toml (Makefile SANDBOX=)
+      - ./${TENGU_CONFIG_FILE:-config.toml}:/opt/tengu/config.toml:ro
       - tengu-data:/opt/tengu/data
     ports:
       - "${TENGU_WEBHOOK_PORT:-7080}:7080"

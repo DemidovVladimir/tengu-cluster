@@ -40,9 +40,11 @@ impl Tool for SkillShellTool {
             anyhow::bail!("skill_shell: empty command");
         }
         ctx.scope.check_shell_bin(bin)?;
+        let audit = crate::adapters::egress::policy().guard_shell(&self.def.name, &command)?;
 
         tracing::info!(skill = %self.def.name, command = %command, "Executing skill tool");
         let result = ctx.shell.execute_shell(&command, ctx.workspace);
+        audit.finish(&result);
         match &result {
             Ok(output) => tracing::info!(
                 skill = %self.def.name,

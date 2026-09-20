@@ -42,11 +42,12 @@ Confirm: `./target/debug/tengu doctor` — should list your configured agents wi
 
 ### 0.3 Config with `[skill_lifecycle]`
 
-Your `~/.tengu/config.toml` must include three things:
+The active config (`sandboxes/<name>/config.toml` via `--sandbox`, else `~/.tengu/config.toml`) must include two things:
 
 1. A default agent with `skill_distill` in `workspace_tools` (lets that agent author skills mid-conversation).
-2. The `[skill_lifecycle]` block naming the improver + fixture-runner agents.
-3. `[agents.skill-improver]` and `[agents.fixture-runner]` entries.
+2. The `[skill_lifecycle]` block naming the improver agent + an `[agents.skill-improver]` entry. `fixture_runner_agent` is accepted but unused — `tengu eval` runs rows on the eval config's default agent.
+
+`sandboxes/aura/config.toml` already has all of this — pass `--sandbox aura` to `eval` / `skill evolve`.
 
 Minimum example:
 
@@ -67,7 +68,7 @@ max_tokens_per_flow = 100_000
 
 [skill_lifecycle]
 improver_agent       = "skill-improver"
-fixture_runner_agent = "fixture-runner"
+# fixture_runner_agent = "fixture-runner"   # optional, unused
 default_max_evolve_cycles = 3
 default_rolling_window    = 10
 max_per_run_reports       = 10     # per-skill metrics/runs/<ts>/ retention (0 disables)
@@ -76,7 +77,7 @@ worktree_stale_hours      = 24     # sweep leaked scratch worktrees older than t
 [agents.skill-improver]
 engine = "openrouter"
 model  = "anthropic/claude-opus-4-7"
-workspace_tools = []
+tools  = ["read_file", "list_directory"]   # read-only; harness applies diffs
 
 [agents.skill-improver.identity]
 name = "Skill Improver"
@@ -90,23 +91,11 @@ Preserve name + description unchanged. Do not remove metrics.
 
 [agents.skill-improver.limits]
 max_tokens_per_flow = 50_000
-
-[agents.fixture-runner]
-engine = "openrouter"
-model  = "anthropic/claude-sonnet-4-6"
-workspace_tools = []
-
-[agents.fixture-runner.identity]
-name = "Fixture Runner"
-instructions = "You execute a single skill fixture and return the final assistant output."
-
-[agents.fixture-runner.limits]
-max_tokens_per_flow = 50_000
 ```
 
 See `config.example.toml` in the repo root for the full commented reference.
 
-Confirm: `./target/debug/tengu doctor` lists three agents (`main`, `skill-improver`, `fixture-runner`).
+Confirm: `./target/debug/tengu doctor` lists both agents (`main`, `skill-improver`).
 
 ---
 
@@ -121,12 +110,12 @@ cargo test --bin tengu plugins::         -- --nocapture 2>&1 | tail -5
 Expected:
 
 ```
-test result: ok. 48 passed; 0 failed ...      (skill_lifecycle)
-test result: ok. 29 passed; 0 failed ...      (eval_builder)
-test result: ok. 51 passed; 0 failed ...      (plugins)
+test result: ok. N passed; 0 failed ...      (skill_lifecycle — ≈88 as of 2026-09-18)
+test result: ok. N passed; 0 failed ...      (eval_builder   — 29)
+test result: ok. N passed; 0 failed ...      (plugins        — ≈97 default features; `postgres_memory` adds more)
 ```
 
-Total: 128 tests. If any fail, investigate before running live smokes.
+Counts drift; the invariant is `0 failed`. If any fail, investigate before running live smokes.
 
 Specific test groups worth knowing:
 
@@ -138,12 +127,16 @@ Specific test groups worth knowing:
 | `skill_lifecycle::metric_kinds::llm_judge::tests` | judge JSON parse + prose-wrapped output |
 | `skill_lifecycle::metric_kinds::tool_assertion::tests` | `value_matches`, `value_equals`, `value_in` |
 | `skill_lifecycle::metric_kinds::script::tests` | shell-script metric JSON parse |
+| `skill_lifecycle::metric_kinds::dialog_replay::tests` | current-dialog slice → delegate metric |
+| `skill_lifecycle::metric_kinds::description_trigger::tests` | should/shouldn't-trigger judge, holdout split |
+| `skill_lifecycle::scanner::tests` · `audit::tests` · `learner_state::tests` | threat patterns, `skills/.audit.jsonl`, `state/<learner>.json` |
 | `skill_lifecycle::storage::tests` | `metrics.json` round-trip, rolling window, retention pruning |
 | `skill_lifecycle::fixtures::tests` | YAML round-trip + transcript→fixture extraction |
 | `skill_lifecycle::scratch_worktree::tests` | git worktree + non-git fallback |
 | `skill_lifecycle::evolve::tests` | `pick_target_metric`, `pick_best`, `apply_proposal_to_skill_md` |
 | `skill_lifecycle::approval_gate::tests` | terminal diff + keystroke parsing |
-| `plugins::skill_lifecycle::distill::tests` | `skill_distill` tool — atomic write, collision, invalid name |
+| `plugins::skill_lifecycle::distill::tests` | `skill_distill` tool — atomic write, collision, invalid name, seeded `evals/config.toml` |
+| `plugins::manage_skill::tests` · `plugins::view_skill::tests` | in-chat write / read API, `editable_by_learner` refusal, fuzzy patch |
 
 ---
 
@@ -153,7 +146,7 @@ Specific test groups worth knowing:
 ./target/debug/tengu --help
 ```
 
-Expected: `eval`, `skill` (with subcommands: `evolve`, `metrics`, `accept-proposal`, `remove`, `list`, `doctor`, `export`, `install`) all listed.
+Expected: `eval`, `skill` (with subcommands: `evolve`, `metrics`, `accept-proposal`, `remove`, `list`, `doctor`, `export`, `install`, `seed`) all listed.
 
 ```bash
 ./target/debug/tengu eval --help
@@ -184,14 +177,14 @@ All should return without error.
 ## 3. `tengu doctor` (no API key needed, no cost)
 
 ```bash
-./target/debug/tengu doctor
+./target/debug/tengu doctor            # or: tengu doctor --sandbox aura
 ```
 
 Expected output includes:
-- Auto-detected runtime profile.
-- Backend diagnostics for **each configured agent** — look for `main`, `skill-improver`, `fixture-runner`.
+- Auto-detected runtime profile + `[egress]` network mode.
+- Backend diagnostics for **each configured agent** — look for `main` (or the sandbox planner) and `skill-improver`.
 
-If `skill-improver` or `fixture-runner` is missing → your `~/.tengu/config.toml` is incomplete. Re-check section 0.3.
+If `skill-improver` is missing → the active config is incomplete. Re-check section 0.3.
 
 ---
 
@@ -321,9 +314,9 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "`[skill_lifecycle]` config missing" | No `[skill_lifecycle]` block in config | Add per section 0.3 |
-| "agent 'X' is not a valid workspace_tool" | Validator allowlist doesn't accept `skill_distill` | Update `src/adapters/config.rs` — should include `"skill_distill"` in the valid list (commit `4b0abcd` or later) |
+| "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) | Fix the name; the list lives in `src/adapters/config.rs::validate_agent` + `channel_runtime::WORKSPACE_TOOLS_ALLOWLIST` |
 | "yaml prompts parse failed" | Fixtures file is wrong schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}`, not `{schema_version, fixtures: [...]}` |
-| Every row fails with "agent only described skill_distill in text" | `SkillLifecyclePlugin` not registered → tool not advertised to LLM | Verify commit `f16d2ef` or later is in the tree — check `src/adapters/channel_runtime.rs` for `SkillLifecyclePlugin` registration block |
+| Every row fails with "agent only described skill_distill in text" | `SkillLifecyclePlugin` not registered → tool not advertised to LLM | Check `src/adapters/channel_runtime.rs::register_core_plugins` for the `SkillLifecyclePlugin` block (`want_distill \|\| want_apply_improver`) |
 | llm_judge fails with "model does not support assistant prefill" | Old prefill-based judge prompt | Verify commit `6d88028` or later — `LlmJudgeKind::run` should build the prompt with `""` prefill |
 
 ---
@@ -469,8 +462,8 @@ Manually plant a stale worktree dir to exercise the sweep:
 mkdir -p .tengu/worktrees/evolve-fake-old
 touch -d '30 hours ago' .tengu/worktrees/evolve-fake-old
 
-./target/debug/tengu skill evolve skill-creator --max-cycles 1 --dry-run 2>&1 | head
-# (then Ctrl-C after startup to avoid a real eval run, OR pipe 'n')
+./target/debug/tengu skill evolve skill-creator --max-cycles 1 2>&1 | head
+# (there is no --dry-run flag — Ctrl-C after startup to avoid a real eval run, OR pipe 'n')
 
 # The stale dir should be gone:
 ls .tengu/worktrees/ 2>&1
@@ -489,7 +482,7 @@ worktree_stale_hours = 0
 
 ## 9. Distillation — from a live conversation
 
-The `skill_distill` tool is advertised to any agent that lists it in `workspace_tools`. Exercising it requires a conversation, not the eval runner.
+The `skill_distill` tool is advertised to any agent that lists it in `workspace_tools` (or, for a subagent block, in `tools`). Exercising it requires a conversation, not the eval runner. In-chat lifecycle verbs ("create skill from our dialog", "evaluate", "adjust yourself") route to `[agents.learning-agent]` + `manage_skill` instead — `skills/orchestrator/SKILL.md`.
 
 ### 9.1 Interactive TUI
 
@@ -507,7 +500,7 @@ In the chat:
    ls skills/fetch-user-count/
    ```
 
-   Expected: `SKILL.md`, `evals/prompts.yaml`, `metrics/` (with any rubric scaffolds).
+   Expected: `SKILL.md`, `evals/prompts.yaml`, `evals/config.toml` (auto-seeded), `metrics/` (with any rubric scaffolds).
 
    **Invariant:** the new skill does NOT load into the current conversation — it becomes available on the next session. Cache discipline requires a stable tool inventory per conversation.
 
@@ -516,12 +509,14 @@ In the chat:
 ```bash
 cat skills/fetch-user-count/SKILL.md
 cat skills/fetch-user-count/evals/prompts.yaml
+cat skills/fetch-user-count/evals/config.toml
 ```
 
 Expected:
 - Frontmatter with `name`, `description`, `metrics:` block.
 - Body with Overview / When to Use / Procedure / Common Mistakes.
 - `prompts.yaml` seeded with the conversation slice (args schema-redacted — long strings replaced with `"<elided>"`).
+- `config.toml` with `[agents.<name>-agent]` mirroring the calling agent's `engine` + `model`; `workspace_tools` = tool names seen in the fixtures. `tengu eval` refuses `engine = "claude_code"` here — pass `--sandbox <openrouter-config>` or edit the file.
 
 ### 9.3 Known limitation
 

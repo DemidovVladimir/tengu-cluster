@@ -1,5 +1,7 @@
 # Phase A — Tool Plugin Architecture
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 **Status:** Design, pending approval
 **Date:** 2026-04-15
 **Depends on:** Nothing (foundation)

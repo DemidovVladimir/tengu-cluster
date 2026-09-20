@@ -1,5 +1,7 @@
 # Simplification Cleanup PR Implementation Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the first cleanup PR from the simplification analysis (§6 of `docs/superpowers/specs/2026-04-22-simplification-analysis.md`): remove dead code, collapse duplicated helpers, unify the two-variant redaction executor. No public API changes, no behavioral changes, −230 to −325 LOC.

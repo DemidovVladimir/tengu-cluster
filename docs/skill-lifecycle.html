@@ -537,7 +537,7 @@
           <div class="stage-icon purple">📊</div>
           <div class="stage-title">Metrics scored</div>
           <div class="stage-subtitle">tengu eval</div>
-          <div class="stage-desc">Fixtures replayed. Four kinds of checks. Rolling metrics.json + history.jsonl.</div>
+          <div class="stage-desc">Fixtures replayed. Six kinds of checks. Rolling metrics.json + history.jsonl.</div>
         </div>
       </div>
 
@@ -564,16 +564,16 @@
 
   <div class="status-bar">
     <div class="stat">
-      <div class="stat-value">4</div>
+      <div class="stat-value">6</div>
       <div class="stat-label">Metric kinds</div>
     </div>
     <div class="stat">
-      <div class="stat-value">3</div>
-      <div class="stat-label">CLI commands</div>
+      <div class="stat-value">10</div>
+      <div class="stat-label">CLI commands (eval + skill ×9)</div>
     </div>
     <div class="stat">
-      <div class="stat-value">128</div>
-      <div class="stat-label">Unit tests</div>
+      <div class="stat-value">~210</div>
+      <div class="stat-label">Unit tests (skill_lifecycle · eval_builder · plugins)</div>
     </div>
     <div class="stat">
       <div class="stat-value">~$1.00</div>
@@ -596,8 +596,11 @@
   </div>
   <p class="lead">
     An agent with <code style="color:var(--accent);font-family:var(--mono);">skill_distill</code> in its
-    <code style="color:var(--accent);font-family:var(--mono);">workspace_tools</code> can author a complete skill
+    <code style="color:var(--accent);font-family:var(--mono);">workspace_tools</code> (or in <code style="color:var(--accent);font-family:var(--mono);">tools</code> on a subagent block) can author a complete skill
     from the current conversation. The tool writes files atomically; no LLM call runs inside the tool.
+    In-chat lifecycle verbs ("create skill from our dialog", "evaluate", "adjust yourself") route to
+    <code style="color:var(--accent);font-family:var(--mono);">[agents.learning-agent]</code> +
+    <code style="color:var(--accent);font-family:var(--mono);">manage_skill</code> instead.
   </p>
 
   <div class="steps">
@@ -628,7 +631,7 @@
     <div class="step">
       <span class="step-num">5</span>
       <div class="step-title">Atomic write</div>
-      <div class="step-desc">tmp dir → rename. SKILL.md, evals/prompts.yaml, metrics/*.md.</div>
+      <div class="step-desc">tmp dir → rename. SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/*.md.</div>
       <span class="step-file">std::fs::rename</span>
     </div>
     <div class="step">
@@ -659,7 +662,7 @@
   <p class="lead">
     Per-row: dispatch the agent, let the row-judge verdict pass/fail, then score every
     <code style="color:var(--accent);font-family:var(--mono);">metrics:</code> entry declared in SKILL.md frontmatter.
-    Four kinds of checks:
+    Six kinds of checks:
   </p>
 
   <div class="steps" style="grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
@@ -686,6 +689,18 @@
       <div class="step-title">script</div>
       <div class="step-desc">Invokes sh &lt;path&gt; with fixture data as env vars. Parses stdout JSON. Escape hatch for custom checks.</div>
       <span class="step-file">metric_kinds/script.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num" style="color:var(--accent);border-color:var(--accent-soft);">dr</span>
+      <div class="step-title">dialog_replay</div>
+      <div class="step-desc">Scores the current dialog slice from from_message_index by delegating to a sibling llm_judge / tool_assertion metric (delegate_metric).</div>
+      <span class="step-file">metric_kinds/dialog_replay.rs</span>
+    </div>
+    <div class="step">
+      <span class="step-num" style="color:var(--blue);border-color:var(--blue-soft);">dt</span>
+      <div class="step-title">description_trigger</div>
+      <div class="step-desc">Judge LLM decides whether the planner would route to this skill per query in queries_file (should_trigger). runs_per_query 3, holdout 0.4.</div>
+      <span class="step-file">metric_kinds/description_trigger.rs</span>
     </div>
   </div>
 
@@ -845,10 +860,11 @@
 
   <div class="fs-tree">
 <span class="dir">skills/</span>
+  <span class="hot">.audit.jsonl</span>                           <span class="comment">append-only — manage_skill / install / remove audit log</span>
   <span class="dir">my-skill/</span>
     <span class="new">SKILL.md</span>                            <span class="comment">frontmatter: name, description, metrics: […]; body</span>
     <span class="dir">evals/</span>
-      <span class="new">config.toml</span>                       <span class="comment">per-skill eval agent config (hand-written)</span>
+      <span class="new">config.toml</span>                       <span class="comment">per-skill eval agent config (auto-seeded by skill_distill; engine + model from the calling agent)</span>
       <span class="new">prompts.yaml</span>                      <span class="comment">flat list: [{id, prompt, expected}, …]</span>
     <span class="dir">metrics/</span>
       <span class="new">&lt;rubric_name&gt;.md</span>                   <span class="comment">llm_judge rubric</span>
@@ -856,6 +872,8 @@
       <span class="hot">evolve_log.md</span>                     <span class="comment">append-only — one line per evolve attempt</span>
       <span class="dir">runs/&lt;ts&gt;/</span>
         <span class="mem">report.json</span>                     <span class="comment">capped at N by max_per_run_reports</span>
+    <span class="dir">state/</span>
+      <span class="hot">&lt;learner_id&gt;.json</span>                <span class="comment">per-learner sidecar (learner_facing: true)</span>
     <span class="hot">metrics.json</span>                         <span class="comment">rolling snapshot, overwritten each run</span>
 
 <span class="dir">evals/runs/&lt;ts&gt;/</span>                        <span class="comment">global eval runs — capped by --keep-runs</span>
@@ -948,6 +966,8 @@
 ├── SKILL.md
 │   <span class="c"># frontmatter + body + metrics</span>
 ├── evals/
+│   ├── config.toml
+│   │   <span class="c"># auto-seeded eval agent</span>
 │   └── prompts.yaml
 │       <span class="c"># 1 fixture, tool args</span>
 │       <span class="c"># schema-redacted</span>
@@ -990,9 +1010,10 @@ Rationale:
   </div>
 
   <div class="callout" style="margin-top: 20px;">
-    <div class="label">Known gap</div>
-    <code>skill_distill</code> does <strong>not</strong> seed <code>evals/config.toml</code> — the user writes it by hand
-    before <code>tengu eval</code> can run. Template lives at <code>skills/skill-creator/evals/config.toml</code>.
+    <div class="label">Eval config</div>
+    <code>skill_distill</code> seeds <code>evals/config.toml</code>: <code>engine</code> + <code>model</code> mirror the calling agent,
+    <code>workspace_tools</code> = tool names seen in the fixtures. <code>tengu eval &lt;skill&gt; --sandbox &lt;name&gt;</code> overrides it.
+    Reference: <code>skills/skill-creator/evals/config.toml</code>.
   </div>
 </div>
 
@@ -1015,7 +1036,7 @@ Rationale:
     <div class="code-ref">
       <div class="code-ref-title">Plugin registration</div>
       <div class="code-ref-path">channel_runtime.rs</div>
-      <div class="code-ref-fn">fn build_tool_executor — SKILL_DISTILL_TOOL_NAME branch</div>
+      <div class="code-ref-fn">fn register_core_plugins — want_distill || want_apply_improver; ManageSkillPlugin · ViewSkillPlugin · WORKSPACE_TOOLS_ALLOWLIST</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Config parsing</div>
@@ -1025,7 +1046,7 @@ Rationale:
     <div class="code-ref">
       <div class="code-ref-title">workspace_tools allowlist</div>
       <div class="code-ref-path">config.rs</div>
-      <div class="code-ref-fn">fn validate_workspace_tools</div>
+      <div class="code-ref-fn">fn validate_agent — valid_workspace_tools array</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Metric types + trait</div>
@@ -1051,6 +1072,31 @@ Rationale:
       <div class="code-ref-title">script</div>
       <div class="code-ref-path">skill_lifecycle/metric_kinds/script.rs</div>
       <div class="code-ref-fn">fn ScriptKind::run</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">dialog_replay</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/dialog_replay.rs</div>
+      <div class="code-ref-fn">fn DialogReplayKind::run</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">description_trigger</div>
+      <div class="code-ref-path">skill_lifecycle/metric_kinds/description_trigger.rs</div>
+      <div class="code-ref-fn">fn DescriptionTriggerKind::run</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">In-chat write API</div>
+      <div class="code-ref-path">plugins/manage_skill/mod.rs</div>
+      <div class="code-ref-fn">manage_skill — create · edit_body · patch · add_resource · remove_resource · delete</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">In-chat read API</div>
+      <div class="code-ref-path">plugins/view_skill/mod.rs</div>
+      <div class="code-ref-fn">view_skill — list · read · read_resource</div>
+    </div>
+    <div class="code-ref">
+      <div class="code-ref-title">Threat scanner · audit · learner state</div>
+      <div class="code-ref-path">skill_lifecycle/{scanner,audit,learner_state}.rs</div>
+      <div class="code-ref-fn">fn scan_skill · skills/.audit.jsonl · skills/&lt;name&gt;/state/&lt;learner_id&gt;.json</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Rolling storage</div>
@@ -1100,7 +1146,7 @@ Rationale:
     <div class="code-ref">
       <div class="code-ref-title">CLI dispatch</div>
       <div class="code-ref-path">main.rs</div>
-      <div class="code-ref-fn">Commands::Eval · SkillEvolve · SkillMetrics · SkillAcceptProposal</div>
+      <div class="code-ref-fn">Commands::Eval · Commands::Skill { SkillAction::Evolve · Metrics · AcceptProposal · Remove · List · Doctor · Export · Install · Seed }</div>
     </div>
   </div>
 </div>

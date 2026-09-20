@@ -1,5 +1,7 @@
 # Skill Metrics + Evolution Implementation Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 > **⚠️ Status (as of 2026-04-21):**
 > - **Tasks 1–11 landed on main** via commits `2dc6e6d`..`acae292` (14 commits incl. minor fixes).
 > - **Tasks 12–21 were SUPERSEDED** by the phase-2 plan after `feature/harness-orchestration` merged to main and `eval_builder.rs` (1666 lines) came back with it. The phase-2 plan integrates `metrics:` frontmatter scoring into the existing `eval_builder.rs` rather than replacing it. Read the phase-2 plan instead of executing Tasks 12–21 below.

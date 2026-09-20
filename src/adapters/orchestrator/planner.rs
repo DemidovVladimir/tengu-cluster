@@ -235,6 +235,9 @@ pub struct RagPlanner {
     orchestrator_agent: String,
     chat: Arc<dyn OrchestratorChatPort>,
     memory_config: crate::adapters::config::MemoryConfig,
+    /// Routable subagents (`[agents.*]` blocks with a `description`),
+    /// rendered into `TENGU_PLANNER_REGISTRY.md` every planner turn.
+    agents: Vec<(String, crate::adapters::config::AgentConfig)>,
     workspace: std::path::PathBuf,
     /// Phase 4c — body of `skills/orchestrator/SKILL.md` (frontmatter
     /// stripped) used as the planner system prompt. Falls back to a
@@ -262,7 +265,7 @@ pub struct RagPlanner {
     mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
     /// Lazily-filled cache of the MCP enumeration above. Filled on the
     /// first `plan()`/`replan()`; restart `tengu chat` to pick up server
-    /// changes (same rule as `agents/*.toml`).
+    /// changes (same rule as `[agents.*]` edits in the sandbox config).
     mcp_tools: tokio::sync::OnceCell<Vec<crate::adapters::types::ToolDef>>,
 }
 
@@ -271,6 +274,7 @@ impl RagPlanner {
         orchestrator_agent: String,
         chat: Arc<dyn OrchestratorChatPort>,
         memory_config: crate::adapters::config::MemoryConfig,
+        agents: Vec<(String, crate::adapters::config::AgentConfig)>,
         mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
         bus: Option<crate::adapters::orchestrator::events::EventBus>,
         // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
@@ -291,6 +295,7 @@ impl RagPlanner {
             orchestrator_agent,
             chat,
             memory_config,
+            agents,
             workspace: std::env::current_dir().unwrap_or_default(),
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
@@ -346,6 +351,7 @@ impl RagPlanner {
             .await;
         match crate::adapters::orchestrator::shared_files::ensure_planner_registry(
             &self.workspace,
+            &self.agents,
             mcp_tools,
         ) {
             Ok(snapshot) => {
@@ -473,14 +479,14 @@ impl RagPlanner {
     /// Fix A (2026-05-09) — within-session output recall.
     ///
     /// Returns a formatted prompt block of the top-K semantically-similar
-    /// step outputs from THIS session (filtered by `rag_session_id ==
-    /// self.session_id`), or an empty string when:
+    /// step outputs from THIS session (filtered to `self.session_id`), or
+    /// an empty string when:
     /// - the config knob `memory.within_session_output_top_k` is 0 (default),
-    /// - the RagStore is unavailable, or
+    /// - Postgres `agentic_memory` is unavailable, or
     /// - no outputs in this session match.
     ///
-    /// Pairs with Fix B's unified session_id wiring: `compress_and_store`
-    /// writes `rag_session_id = AgentIpcInput.session_id`, which now equals
+    /// Pairs with Fix B's unified session_id wiring: the `run-agent` step
+    /// summary capture stamps `AgentIpcInput.session_id`, which now equals
     /// the planner's `session_id`. Without Fix B this filter would never
     /// match (parent and child mint independent UUIDs).
     async fn session_output_recall_block(
@@ -656,7 +662,7 @@ impl Planner for RagPlanner {
             .await;
 
         // Phase 6.4 (full, write) — durable persist of user message AFTER
-        // the read above. Fail-soft: if embedder or Qdrant is unavailable
+        // the read above. Fail-soft: if embedder or Postgres is unavailable
         // we still want to plan and respond (in-memory buffer covers this
         // turn for "Recent user messages this session" injection).
         self.persist_user_message(user_message, embed_slice).await;
@@ -794,7 +800,7 @@ impl Planner for RagPlanner {
 
         // Semantic recall over runtime memory.
         // Same shape as the plan() call. Independent of the cross-plan
-        // (`tengu_outputs`) recall above; both can appear in the prompt.
+        // (step-output) recall above; both can appear in the prompt.
         // Replan doesn't pre-cache an embedding for the user message
         // (it has its own composite-query embed for cross-plan recall),
         // so `embed_vec = None` falls through to the str-input path.
@@ -959,8 +965,8 @@ fn emit_rag_query(
         );
     }
 
-    // Structured event — only when a bus is wired (the static-mode path
-    // and the standalone unit tests pass `None`).
+    // Structured event — only when a bus is wired (the standalone unit
+    // tests pass `None`).
     if let Some(bus) = bus {
         let payload_hits: Vec<crate::adapters::orchestrator::events::RagQueriedHit> = hits
             .iter()

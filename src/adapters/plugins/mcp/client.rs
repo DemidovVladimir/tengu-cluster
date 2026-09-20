@@ -109,7 +109,11 @@ impl StdioClient {
         if config.command.len() > 1 {
             cmd.args(&config.command[1..]);
         }
-        // Inherit parent env, then overlay + expand $VAR references.
+        // Inherit parent env, add `[egress]` proxy vars (advisory — the
+        // server is a separate program), then overlay + expand $VAR refs.
+        for (k, v) in crate::adapters::egress::policy().proxy_env() {
+            cmd.env(k, v);
+        }
         for (k, v) in &config.env {
             let resolved = expand_dollar_var(v)?;
             cmd.env(k, resolved);
@@ -288,10 +292,10 @@ impl HttpClient {
         };
 
         Ok(Self {
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            // Proxied per `[egress]`; loopback servers stay direct.
+            http: crate::adapters::egress::policy().mcp_client(
+                reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)),
+            )?,
             url,
             auth_header,
             next_id: AtomicU64::new(1),

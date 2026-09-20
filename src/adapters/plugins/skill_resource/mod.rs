@@ -3,7 +3,7 @@
 //! Lets agents discover and read files under `skills/<name>/resources/` even
 //! when the agent's workspace is a tmpdir. Walks the three-tier shadowing
 //! order (managed → workspace → project) — same precedence as
-//! `rag/indexer.rs::scan_skills`.
+//! `skill_builder.rs::skill_directories`.
 //!
 //! ### When to use
 //! Skills with materials (PDFs, markdown notes, links files, etc.) under
@@ -174,7 +174,7 @@ fn validate_resource_path(rel: &str) -> Result<()> {
 }
 
 /// Walk managed → workspace → project, return the first `resources/` that
-/// exists. Mirrors `rag/indexer.rs::scan_skills`'s shadowing order.
+/// exists. Mirrors `skill_builder.rs::skill_directories`'s shadowing order.
 fn locate_resources_dir(skill: &str) -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let candidates = candidate_resource_dirs(skill, &cwd);

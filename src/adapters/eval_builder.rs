@@ -1,6 +1,6 @@
 //! Skill eval runner — `tengu eval <skill>`.
 //!
-//! Spec: `docs/superpowers/specs/2026-04-19-eval-runner-design.md`.
+//! Spec: `docs/skill-lifecycle-validation.md (the 2026-04-19 eval-runner design spec was not archived)`.
 //! Replays `skills/<skill>/evals/prompts.{md,yaml}` through a live agent,
 //! scores each row pass/fail via an LLM judge, and writes a report.
 
@@ -1367,7 +1367,6 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             &secret_registry,
             log_activity,
             None, // cancel
-            None, // shared_http_client
             Some(&cfg.memory),
             agent,
             &cfg.mcp_servers,
@@ -1714,7 +1713,6 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
                 &None,
                 &secret_registry,
                 log_activity,
-                None,
                 None,
                 Some(&self.cfg.memory),
                 agent,

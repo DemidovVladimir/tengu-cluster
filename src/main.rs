@@ -35,7 +35,15 @@ enum Commands {
     /// Print static runtime status snapshot.
     Status,
     /// Run runtime/environment diagnostics.
-    Doctor,
+    Doctor {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Also send a live request through the `[egress]` proxy to
+        /// check.torproject.org and fail unless it reports a Tor exit.
+        #[arg(long)]
+        tor: bool,
+    },
     /// Run Telegram bot adapter.
     Telegram {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
@@ -125,8 +133,8 @@ enum Commands {
     },
     /// INTERNAL — subprocess mode invoked by SubprocessRunner. Not intended for
     /// direct user invocation. Refuses to run unless TENGU_AGENT_IPC=1 is set.
-    /// Phase 3 of the redesign ships a stub body; Phase 4 wires the real LLM
-    /// mini-loop.
+    /// Runs one plan step's LLM mini-loop (`run_agent_subprocess`) on the
+    /// `[agents.<name>]` block of the parent's config.
     #[command(hide = true)]
     RunAgent,
 }
@@ -184,8 +192,11 @@ enum SkillAction {
         #[arg(long)]
         tier: Option<String>,
     },
-    /// Cross-check agents/*.toml skill refs vs filesystem; report orphans / phantoms.
+    /// Cross-check `[agents.*].skill_packages` refs vs filesystem; report orphans / phantoms.
     Doctor {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
         /// Print findings only; do not exit non-zero on phantoms (CI use case).
         #[arg(long)]
         no_fail: bool,
@@ -380,6 +391,11 @@ async fn main() -> Result<()> {
     }
 
     let config_path = cli.config.unwrap_or_else(default_config_path);
+    // `run-agent` children and the MCP bridge resolve the config through
+    // `default_config_path` (`$TENGU_CONFIG` first) — pin it to the file this
+    // process actually uses so `-c/--config` reaches them like `--sandbox`
+    // does (via IPC).
+    std::env::set_var("TENGU_CONFIG", &config_path);
 
     let config = if config_path.exists() {
         Config::load(&config_path)
@@ -396,6 +412,10 @@ async fn main() -> Result<()> {
         config
     };
 
+    // Egress policy before anything builds an HTTP client or spawns a child;
+    // `load_sandbox_or` re-installs from the sandbox config.
+    adapters::egress::install(&config.egress)?;
+
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
@@ -407,7 +427,10 @@ async fn main() -> Result<()> {
             print_status(&config, profile);
             Ok(())
         }
-        Commands::Doctor => run_doctor(&config),
+        Commands::Doctor { sandbox, tor } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            run_doctor(&config, tor).await
+        }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
@@ -604,17 +627,18 @@ async fn try_persist_agentic_step_summary(
 ///
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
-/// 3. Loads `agents/<name>.toml` to resolve model + skills + tools.
+/// 3. Loads the parent's config (sandbox via IPC, else the default config) and
+///    takes `[agents.<name>]` from it — model, engine, tools, skills, limits.
 /// 4. Composes the system prompt: base template + skill bodies (three-tier
 ///    loader) + mandatory `compress_and_store` suffix.
-/// 5. Builds an OpenRouter engine for the spec's model.
-/// 6. Builds the tool stack: `effective_tools = (base ∩ spec.tools) ∪ {compress_and_store}`
+/// 5. Builds the engine (`engine` = `openrouter` | `claude_code`) for the agent's model.
+/// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪ {compress_and_store}`
 ///    plus a `PluginToolExecutor` over those tools.
 /// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
 ///    dispatch each → append assistant + tool messages → repeat. Stop on:
 ///    - empty tool_calls (model done)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
-///    - `max_turns` exceeded (return Failed status)
+///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit.
 async fn run_agent_subprocess() -> Result<()> {
     use crate::adapters::types::{EngineContext, Message, Role};
@@ -644,19 +668,53 @@ async fn run_agent_subprocess() -> Result<()> {
     );
 
     // Phase 7.6 Bug B — expose session_id via env so plugins (notably
-    // CompressAndStoreTool) can stamp it on their writes without needing it
+    // `agentic_memory` `capture`) can stamp it on their writes without needing it
     // threaded through ToolCtx. Set BEFORE building the tool executor so any
     // plugin construction that reads it sees the right value.
     std::env::set_var("TENGU_SESSION_ID", &input.session_id);
 
-    // ----- Resolve agent spec from agents/<name>.toml -----
+    // ----- Resolve parent config (Phase 7.2 sandbox inheritance) -----
+    //
+    // The child runs on the SAME config as the parent: `sandbox_config`
+    // names the sandbox (`sandboxes/<name>/config.toml`), otherwise the
+    // default config chain applies. `load_sandbox_or` returns `Err` only
+    // when the file exists but fails to parse; we fall back to the default
+    // config in that case (warn-and-continue).
+    let parent_config = match load_sandbox_or(
+        input.sandbox_config.clone(),
+        load_config_or_default_unconditional(),
+    ) {
+        Ok(cfg) => {
+            if let Some(ref name) = input.sandbox_config {
+                tracing::info!(
+                    sandbox = %name,
+                    "subprocess loaded sandbox config (Phase 7.2)"
+                );
+            }
+            cfg
+        }
+        Err(e) => {
+            tracing::warn!(
+                sandbox = ?input.sandbox_config,
+                error = %e,
+                "subprocess failed to load sandbox config; falling back to default"
+            );
+            load_config_or_default_unconditional()
+        }
+    };
+
+    // Parent's `[egress]` (TENGU_EGRESS) wins; an invalid policy aborts the
+    // child rather than running tools unproxied.
+    adapters::egress::install(&parent_config.egress).context("run-agent: install egress policy")?;
+
+    // ----- Resolve the agent: `[agents.<name>]` of that config -----
     //
     // Phase 6.7 (C→B B-half): when `input.compose` is set, the parent has
-    // composed a transient agent. Load the BASE spec from
-    // `agents/<compose.base_agent>.toml` (not `agents/<input.agent_name>.toml`,
+    // composed a transient agent. Take the BASE block
+    // `[agents.<compose.base_agent>]` (not `[agents.<input.agent_name>]`,
     // which may be a synthetic label for events/logs), then override the
     // base's `skills` and `tools` with the values the planner picked from
-    // the rejected RAG roster. The override is in-memory only — the file
+    // the planner registry roster. The override is in-memory only — the config
     // on disk is unchanged.
     let (spec_load_name, compose_override) = match &input.compose {
         Some(c) => {
@@ -671,19 +729,44 @@ async fn run_agent_subprocess() -> Result<()> {
         }
         None => (input.agent_name.clone(), None),
     };
-    let spec_path = std::path::PathBuf::from("agents").join(format!("{}.toml", spec_load_name));
-    let mut spec = adapters::agents::load_agent_file(&spec_path)
-        .with_context(|| format!("load agent spec from {}", spec_path.display()))?;
+    // Only routable blocks (with a `description`) may run as a plan step —
+    // the same rule `SubprocessRunner::run_step` and the registry apply.
+    let mut spec = parent_config
+        .agents
+        .get(&spec_load_name)
+        .filter(|a| a.description.is_some())
+        .cloned()
+        .with_context(|| {
+            let mut known: Vec<&str> = parent_config
+                .agents
+                .iter()
+                .filter(|(_, a)| a.description.is_some())
+                .map(|(n, _)| n.as_str())
+                .collect();
+            known.sort();
+            format!(
+                "no agent `{}` in the active config (sandbox: {}); routable agents (with a `description`): {:?}",
+                spec_load_name,
+                input.sandbox_config.as_deref().unwrap_or("default config"),
+                known
+            )
+        })?;
+    // `~` in `workspace` is expanded by every in-process consumer; do the
+    // same here so scopes / memory / the engine agree on one absolute path.
+    spec.workspace = spec
+        .workspace
+        .as_ref()
+        .map(|p| adapters::tool_builder::expand_tilde(p));
     if let Some(c) = compose_override {
-        spec.skills = c.skills;
+        spec.skill_packages = c.skills;
         spec.tools = c.tools;
     }
-    // Resolved spec name (the base spec for composed agents) — exposed like
+    // Resolved agent name (the base for composed agents) — exposed like
     // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.
-    std::env::set_var("TENGU_AGENT_NAME", &spec.name);
+    std::env::set_var("TENGU_AGENT_NAME", &spec_load_name);
 
-    // IPC `model` overrides spec when non-empty (the orchestrator can swap
-    // models per-step in the future). Falls back to the spec's model.
+    // IPC `model` overrides the agent block's `model` when non-empty (the
+    // orchestrator can swap models per-step in the future).
     let model = if input.model.is_empty() {
         spec.model.clone()
     } else {
@@ -692,7 +775,7 @@ async fn run_agent_subprocess() -> Result<()> {
 
     // ----- Compose system prompt: base + skill bodies + suffix -----
     let mut system_prompt = String::from(BASE_AGENT_TEMPLATE);
-    for skill_name in &spec.skills {
+    for skill_name in &spec.skill_packages {
         match load_skill_body_three_tier(skill_name) {
             Some(body) => {
                 system_prompt.push_str("\n\n---\n\n");
@@ -720,53 +803,12 @@ async fn run_agent_subprocess() -> Result<()> {
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
-    // ----- Resolve parent config (Phase 7.2 sandbox inheritance) -----
-    //
-    // Phase 7.7 refactor #2 — was a duplicate of `load_sandbox_or` inlined
-    // here with a fallback path; now delegates to the canonical loader so
-    // a single change to sandbox path resolution stays consistent across
-    // parent + child. `load_sandbox_or` returns `Err` only when the file
-    // exists but fails to parse; we fall back to the default config in
-    // that case (warn-and-continue, same as before).
-    //
-    // Done BEFORE engine construction (Phase 7.3) because the engine
-    // builder needs `parent_config.claude_code` when spec.engine = "claude_code".
-    let parent_config = match load_sandbox_or(
-        input.sandbox_config.clone(),
-        load_config_or_default_unconditional(),
-    ) {
-        Ok(cfg) => {
-            if let Some(ref name) = input.sandbox_config {
-                tracing::info!(
-                    sandbox = %name,
-                    "subprocess loaded sandbox config (Phase 7.2)"
-                );
-            }
-            cfg
-        }
-        Err(e) => {
-            tracing::warn!(
-                sandbox = ?input.sandbox_config,
-                error = %e,
-                "subprocess failed to load sandbox config; falling back to default"
-            );
-            load_config_or_default_unconditional()
-        }
-    };
-
-    // ----- Build engine (Phase 7.3 — honour spec.engine) -----
-    //
-    // Pre-7.3 this hardcoded `build_openrouter_engine`, so an agent
-    // declaring `engine = "claude_code"` in its TOML was silently ignored
-    // when dispatched as a subagent step. Now we synthesize an `AgentConfig`
-    // from the spec (propagating spec.engine) and let `build_engine` route
-    // to the right backend.
+    // ----- Build engine (Phase 7.3 — honour the agent's engine) -----
     let workspace = spec
-        .sandbox
+        .workspace
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let mut agent_cfg_for_engine =
-        adapters::channel_runtime::agent_config_from_spec(&spec, &parent_config.default_scopes);
+    let mut agent_cfg_for_engine = adapters::channel_runtime::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
     adapters::channel_runtime::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
@@ -787,7 +829,7 @@ async fn run_agent_subprocess() -> Result<()> {
         model = %model,
         "subprocess engine built"
     );
-    let stream_event_timeout_secs = 120u64;
+    let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
 
     // ----- Build tool stack (Phase 5b) -----
     let secret_registry = std::sync::Arc::new(adapters::secret_builder::SecretRegistry::new());
@@ -821,7 +863,7 @@ async fn run_agent_subprocess() -> Result<()> {
     );
     // Diagnostic: log the actual tool NAMES the subprocess can call, so we
     // can verify (in the parent log) whether expected tools like
-    // `persistent_store` made it through the spec.tools allow-list +
+    // `persistent_store` made it through the `[agents.<name>].tools` allow-list +
     // workspace_tools opt-in machinery. Critical for debugging "agent says
     // tool unavailable" symptoms — without this we have no visibility into
     // the subprocess's tool world.
@@ -865,11 +907,11 @@ async fn run_agent_subprocess() -> Result<()> {
             None
         };
     let context = EngineContext {
-        workspace: spec.sandbox.clone(),
+        workspace: spec.workspace.clone(),
         system_prompt: Some(system_prompt),
         bridge_tools: bridge_tools_for_ctx,
         max_tool_rounds: Some(input.max_turns),
-        max_mcp_result_chars: None,
+        max_mcp_result_chars: Some(spec.limits.max_mcp_result_chars),
     };
 
     // ----- Multi-turn loop (Phase 5b) -----
@@ -1099,19 +1141,25 @@ impl crate::adapters::ports::ToolActivityPort for SubprocessActivity {
 /// Config loader used by the `run-agent` subprocess path — needs
 /// `parent_config.default_scopes` regardless of which memory features are
 /// compiled in.
+/// The `run-agent` child's base config: the same file the parent resolved
+/// (`$TENGU_CONFIG`, pinned by `main`), loaded with env substitution and
+/// validation. Built-in defaults only when there is no file; a file that
+/// fails to load is an error worth seeing, not a silent `Config::default()`.
 fn load_config_or_default_unconditional() -> Config {
     let path = default_config_path();
     if !path.is_file() {
         return Config::default();
     }
-    match std::fs::read_to_string(&path) {
-        Ok(s) => toml::from_str(&s)
-            .map(|mut c: Config| {
-                c.fold_default_scopes();
-                c
-            })
-            .unwrap_or_else(|_| Config::default()),
-        Err(_) => Config::default(),
+    match Config::load(&path) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!(
+                path = %path.display(),
+                error = %format!("{e:#}"),
+                "run-agent: config failed to load; falling back to built-in defaults (no agents from it)"
+            );
+            Config::default()
+        }
     }
 }
 
@@ -1366,7 +1414,10 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
         }
         SkillAction::Remove { name, tier, yes } => skill_remove(&name, &tier, yes).await,
         SkillAction::List { tier } => skill_list(tier.as_deref()).await,
-        SkillAction::Doctor { no_fail } => skill_doctor(no_fail).await,
+        SkillAction::Doctor { sandbox, no_fail } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            skill_doctor(&config, no_fail).await
+        }
         SkillAction::Export { name, out } => skill_export(&name, out.as_deref()).await,
         SkillAction::Install {
             source,
@@ -1582,8 +1633,8 @@ async fn skill_list(tier_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// `tengu skill doctor` — cross-check agents/*.toml::skills vs filesystem.
-async fn skill_doctor(no_fail: bool) -> Result<()> {
+/// `tengu skill doctor` — cross-check `[agents.*].skill_packages` vs filesystem.
+async fn skill_doctor(config: &Config, no_fail: bool) -> Result<()> {
     let workspace = std::env::current_dir()?;
 
     // Collect all installed skill names across the three tiers.
@@ -1602,35 +1653,15 @@ async fn skill_doctor(no_fail: bool) -> Result<()> {
         })
         .collect();
 
-    // Walk agents/*.toml and collect referenced skills.
-    let agents_dir = workspace.join("agents");
+    // Skills referenced by the `[agents.*]` blocks of the active config.
     let mut referenced: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
-    if agents_dir.is_dir() {
-        for e in std::fs::read_dir(&agents_dir)?.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("toml") {
-                continue;
-            }
-            let agent_name = p
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("?")
-                .to_string();
-            let body = match std::fs::read_to_string(&p) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            #[derive(serde::Deserialize)]
-            struct AgentLite {
-                #[serde(default)]
-                skills: Vec<String>,
-            }
-            if let Ok(a) = toml::from_str::<AgentLite>(&body) {
-                for s in a.skills {
-                    referenced.entry(s).or_default().push(agent_name.clone());
-                }
-            }
+    for (agent_name, agent) in &config.agents {
+        for s in &agent.skill_packages {
+            referenced
+                .entry(s.clone())
+                .or_default()
+                .push(agent_name.clone());
         }
     }
 
@@ -2367,7 +2398,7 @@ fn print_status(config: &Config, profile: RuntimeProfile) {
 /// `tengu doctor` — build every configured agent's engine and print its
 /// diagnostics. Returns `Err` (→ non-zero exit) when any engine fails to
 /// build; the Docker `HEALTHCHECK` relies on that exit code.
-fn run_doctor(config: &Config) -> Result<()> {
+async fn run_doctor(config: &Config, tor_check: bool) -> Result<()> {
     println!();
     println!("  TENGU CLUSTER — Doctor");
     println!("  ─────────────────────────────────────");
@@ -2392,6 +2423,8 @@ fn run_doctor(config: &Config) -> Result<()> {
         }
     }
 
+    doctor_egress(tor_check, &mut failures).await;
+
     println!("  ─────────────────────────────────────");
     println!();
 
@@ -2399,7 +2432,7 @@ fn run_doctor(config: &Config) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!(
-            "doctor: {} agent engine(s) failed to build:\n{}",
+            "doctor: {} check(s) failed:\n{}",
             failures.len(),
             failures
                 .iter()
@@ -2408,6 +2441,104 @@ fn run_doctor(config: &Config) -> Result<()> {
                 .join("\n")
         )
     }
+}
+
+/// `[egress]` block of `tengu doctor`: prints the installed policy, checks
+/// the proxy port accepts TCP, and with `--tor` asks check.torproject.org
+/// (through the tool client) whether traffic exits via Tor.
+async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
+    let policy = adapters::egress::policy();
+    let cfg = policy.config();
+    println!("  Egress:");
+    println!("    network: {}", policy.network());
+    println!(
+        "    proxy: {}",
+        cfg.proxy.as_deref().unwrap_or("none (direct)")
+    );
+    println!(
+        "    llm api: {}",
+        if policy.route_llm_api() {
+            "via proxy"
+        } else {
+            "direct"
+        }
+    );
+    println!(
+        "    hosts: allow={:?} deny={:?} https_only={}",
+        cfg.allow_hosts, cfg.deny_hosts, cfg.https_only
+    );
+    let shell = match (policy.is_isolated_shell(), cfg.proxy.is_some()) {
+        (true, _) => "isolated (sandbox-exec: only the proxy port)",
+        (false, true) => "proxy_env (advisory — programs may ignore it)",
+        (false, false) => "direct",
+    };
+    println!("    shell: {shell}");
+    println!(
+        "    audit: {}",
+        policy
+            .audit_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "off".to_string())
+    );
+
+    if let Some(url) = cfg
+        .proxy
+        .as_deref()
+        .and_then(|p| reqwest::Url::parse(p).ok())
+    {
+        let host = url
+            .host_str()
+            .unwrap_or("")
+            .trim_matches(|c| c == '[' || c == ']');
+        let addr = format!("{}:{}", host, url.port().unwrap_or(0));
+        let connect = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::net::TcpStream::connect(addr.as_str()),
+        )
+        .await;
+        match connect {
+            Ok(Ok(_)) => println!("    proxy port: {addr} reachable"),
+            Ok(Err(e)) => {
+                println!("    proxy port: {addr} UNREACHABLE ({e})");
+                failures.push(format!(
+                    "egress: proxy {addr} unreachable ({e}) — is tor running?"
+                ));
+            }
+            Err(_) => {
+                println!("    proxy port: {addr} UNREACHABLE (timeout)");
+                failures.push(format!("egress: proxy {addr} connect timed out"));
+            }
+        }
+    }
+
+    if tor_check {
+        match tor_exit_check(&policy).await {
+            Ok((true, ip)) => println!("    tor: IsTor=true exit={ip}"),
+            Ok((false, ip)) => {
+                println!("    tor: IsTor=false exit={ip}");
+                failures.push(format!("egress: traffic exits at {ip}, NOT via Tor"));
+            }
+            Err(e) => {
+                println!("    tor: check failed ({e:#})");
+                failures.push(format!("egress: tor check failed: {e:#}"));
+            }
+        }
+    }
+}
+
+async fn tor_exit_check(policy: &adapters::egress::EgressPolicy) -> Result<(bool, String)> {
+    let body: serde_json::Value = policy
+        .tool_client(std::time::Duration::from_secs(60))?
+        .get("https://check.torproject.org/api/ip")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok((
+        body["IsTor"].as_bool().unwrap_or(false),
+        body["IP"].as_str().unwrap_or("unknown").to_string(),
+    ))
 }
 
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
@@ -2421,17 +2552,25 @@ fn run_doctor(config: &Config) -> Result<()> {
 /// scopes/secrets/MCP servers — concretely, http_request scope-denies in the
 /// child even when the parent's sandbox allows it.
 fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
-    match sandbox {
-        None => Ok(default),
+    let cfg = match sandbox {
+        None => default,
         Some(name) => {
             let path = PathBuf::from("sandboxes").join(&name).join("config.toml");
             let mut cfg = Config::load(&path).with_context(|| {
                 format!("Failed to load sandbox '{}' from {}", name, path.display())
             })?;
             cfg.sandbox_name = Some(name);
-            Ok(cfg)
+            adapters::egress::install(&cfg.egress)?;
+            cfg
         }
+    };
+    // The effective policy is known only now (sandbox wins over the base
+    // config). Children inherit it via `TENGU_EGRESS` and stay quiet — the
+    // parent already printed the warning.
+    if std::env::var_os("TENGU_AGENT_IPC").is_none() {
+        adapters::egress::policy().warn_if_proxy_unreachable();
     }
+    Ok(cfg)
 }
 
 /// Config file used when `--config` is absent: `$TENGU_CONFIG` if set,

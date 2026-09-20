@@ -4,8 +4,19 @@
 # Run with: tengu chat --sandbox aura
 # Or Telegram: tengu telegram --sandbox aura
 # Agents here use engine = "claude_code" — build with `--features claude_code`.
+#
+# One file = the whole sandbox. `[agents.<name>]` blocks with a `description`
+# are the subagents the planner can route to (they run as `tengu run-agent`
+# subprocesses); blocks without one are in-process only.
 
 runtime_profile = "cloud"
+
+# --- Network -----------------------------------------------------------------
+# Default is Tor (`network = "tor"`: Arti + lyrebird-rs from `make tor`,
+# socks5h://127.0.0.1:9050, LLM API included). This sandbox talks to paid
+# APIs (Molecule, Privy, Beach) that block Tor exits, so it opts out.
+[egress]
+network = "open"
 
 [hub]
 bind = "127.0.0.1"
@@ -85,6 +96,8 @@ content = """# DeSci Project
 # Planner-role trade-off: CLAUDE.md doctrine says the planner belongs on OpenRouter —
 # Claude Code ignores per-turn tool stripping and may act instead of emitting plan JSON
 # (parse_verdict's prose fallback catches it). Kept on claude_code to run on the Claude subscription.
+# This block is BOTH the planner ([orchestrator].agent) and the DeSci subagent
+# the planner routes pipeline steps to (`description` makes it routable).
 engine = "claude_code"
 model = "claude-sonnet-4-6"
 role = "aura"
@@ -92,18 +105,42 @@ default = true
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
+tools = ["shared_cache", "http_request", "read_file", "list_directory"]
+description = """
+Runs the full Decentralised Science pipeline end-to-end: document analysis, \
+Proof-of-Invention registration, IP-NFT minting, Molecule project creation, \
+file uploads, announcements, Beach.science posting, and NFT transfer. \
+Best for: DeSci researchers who need a single-shot pipeline from paper to \
+published IP-NFT. NOT for: simple questions, code tasks, or anything outside \
+the Molecule/Beach.science/IPNFT ecosystem.
+"""
+example_queries = [
+    "mint an IP-NFT from this paper",
+    "register Proof of Invention for my research PDF",
+    "create a Molecule project from this whitepaper",
+    "upload my research files to the Molecule data room",
+    "post a Beach.science announcement about this discovery",
+    "run the full DeSci pipeline from paper to IP-NFT",
+    "transfer this IP-NFT to a colleague's wallet",
+    "set up an agentic wallet for the lab and fund it",
+]
 
-# Optional [agents.aura.claude_code] block (only read when engine = "claude_code").
-# Left commented out on purpose — the planner role does not need editor/shell builtins.
-# [agents.aura.claude_code]
-# builtin_tools_profile = "editor_shell"
+# Claude builtins for this block (planner AND DeSci subagent): read-only.
+# The planner never needs editor/shell builtins, and as a plan-step
+# subagent aura keeps the contract of the old openrouter spec — only the
+# `tools` above (via the MCP bridge), no builtin Bash/Write.
+[agents.aura.claude_code]
+builtin_tools_profile = "read_only"
 
 [agents.aura.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.
 max_tokens_per_flow = 3_000_000
 # Full pipeline is ~40+ tool calls (phases 0-7 + Beach posting). Default 30 is not enough.
+# Also the turn cap when aura runs as a plan-step subprocess.
 max_tool_rounds = 120
 stream_event_timeout_secs = 720
+# Wall-clock cap for one plan step run by `tengu run-agent` (default 600).
+step_timeout_secs = 720
 # Max chars per tool result before adaptive truncation kicks in (default 300_000).
 max_tool_result_chars = 10_000
 # Max chars for compacted tool results during 2-phase pruning (default 200).
@@ -117,6 +154,98 @@ name = "Aura DeSci Agent"
 instructions = """You are the single DeSci agent handling the ENTIRE pipeline: wallet setup, document analysis, POI registration, IPNFT minting, Molecule project creation, file upload, announcements, Beach.science posting, and NFT transfer. You do ALL of these yourself — no other agent is needed for the pipeline.
 
 For general user questions that fall outside the DeSci pipeline — looking up prices, fetching facts from the web, quick research, or any simple question where an HTTP call would answer it — use the `http_request` tool freely. You are not locked to the pipeline; you can also be a helpful general-purpose agent when the user asks something off-topic."""
+
+# --- Subagents the planner can route to ---------------------------------------
+# `description` + `example_queries` are rendered into TENGU_PLANNER_REGISTRY.md,
+# which the planner LLM reads to pick an agent. Say what the agent is good at
+# AND what it is NOT good at. Edits take effect on the next planner turn after
+# restarting `tengu chat` — no reindex step.
+
+[agents.researcher]
+engine = "claude_code"
+model = "claude-sonnet-4-6"
+# Stateless — the runner creates a temp dir per step. Set `workspace` to pin one.
+tools = ["http_request", "read_file", "list_directory", "memory_ingest"]
+description = """
+Generic research and live-data agent. Fetches information from the public web \
+via HTTP. \
+Best for: looking up real-time prices (BTC, ETH, stocks, FX rates) from APIs \
+like CoinGecko, CoinMarketCap, or Yahoo Finance; checking weather; reading \
+news; summarising web pages; due diligence on companies, projects, or tokens; \
+fact-finding on unfamiliar subjects; gathering context from public REST APIs \
+or HTML pages. \
+Tools: http_request for any web API or page; read_file and list_directory for \
+local docs already on disk; memory_ingest to persist findings. \
+NOT for: writing code, system administration, shell commands, sending money, \
+or anything requiring authenticated/paid APIs.
+"""
+example_queries = [
+    "what is the current BTC price in USD?",
+    "how much is ETH right now?",
+    "current price of AAPL stock",
+    "fetch the latest news about Anthropic",
+    "what's the weather in Tokyo today?",
+    "summarise this Wikipedia article on protein folding",
+    "find recent papers on diffusion models from arXiv",
+    "what is the EUR/USD exchange rate?",
+    "look up the GitHub stars for tokio-rs/tokio",
+    "due diligence on the Molecule Protocol project",
+]
+
+[agents.researcher.limits]
+max_tool_rounds = 20
+step_timeout_secs = 180
+
+[agents.learning-agent]
+# Single-purpose lifecycle agent for tengu skills (create / evaluate / adjust
+# a skill, fetch resources). The harness wires `view_skill` (read) and
+# `manage_skill` (atomic writes) so this agent IS the manager — it calls
+# tools, it does not emit JSON proposals. See skills/orchestrator/SKILL.md
+# "Lifecycle verbs" + docs/skill-redesign-2026-04-29.md.
+engine = "openrouter"
+model = "anthropic/claude-opus-4-7"
+# `manage_skill` is a workspace-tool-allowlist name — listing it in `tools`
+# opts it in (same as `workspace_tools`). `view_skill` is a regular core tool.
+tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]
+skill_packages = ["skill-creator"]
+description = """
+Single-purpose lifecycle agent for tengu skills. Handles ALL of:
+- Creating a new skill from the current dialog
+- Evaluating an existing skill against the current dialog
+- Adjusting / improving / fixing a skill based on the dialog
+- Fetching new web resources to populate a skill's resources/ folder
+You ARE the skill manager. The harness applies your tool calls atomically.
+You do not emit JSON proposals as chat text.
+You do not return prose like "here's what should be applied" — you APPLY it.
+
+WORKFLOW:
+1. Use view_skill(action="read", skill=<name>) to inspect the current state.
+2. Use view_skill(action="read_resource", skill=<name>, path=<file>) to read existing material.
+3. Use http_request to fetch new web resources if needed (only when the user
+   asked for material expansion, not for every adjustment).
+4. Use manage_skill(action="patch" | "add_resource" | "edit_body" | "create", ...)
+   to apply changes ATOMICALLY. Each call writes to disk + appends to the
+   audit log.
+5. Tell the user (in plain prose) what you did and that changes activate on
+   NEXT session start (cache discipline). Suggest they restart the chat.
+
+CRITICAL: NEVER write a JSON proposal as your chat response. NEVER tell the
+user "the apply tool isn't available" — manage_skill IS your tool. Call it.
+"""
+example_queries = [
+    "create a skill from our current dialog",
+    "save this conversation as a skill",
+    "evaluate this skill",
+    "evaluate the spanish-teacher skill against this session",
+    "fix it",
+    "adjust yourself",
+    "improve the skill we just used",
+    "add a YouTube link to the german-teacher resources",
+]
+
+[agents.learning-agent.limits]
+max_tool_rounds = 12
+step_timeout_secs = 300
 
 # --- Skill Lifecycle ---
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
@@ -132,8 +261,9 @@ default_rolling_window = 10              # Window over which metrics.json pass_r
 [agents.skill-improver]
 engine = "claude_code"
 model = "claude-opus-4-7"
-# `read_file` / `list_directory` are normal tools, not workspace_tools.
-# The workspace_tools allowlist is just shared_cache / persistent_store / skill_distill.
+# `read_file` / `list_directory` are normal tools; names from the
+# workspace-tools allow-list (shared_cache, persistent_store, …) listed here
+# are opted in the same way as `workspace_tools`.
 tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 
 [agents.skill-improver.identity]

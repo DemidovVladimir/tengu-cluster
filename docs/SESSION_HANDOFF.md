@@ -6,7 +6,86 @@
 
 ---
 
-## TL;DR — current state (2026-09-12)
+## TL;DR — current state (2026-09-18)
+
+Tor-by-default egress, one config per sandbox, deploy/tor = Arti + lyrebird-rs.
+Everything below is **uncommitted on `main`** (on top of the 2026-09-12 /
+2026-09-16 work, also uncommitted). `cargo check --all-features`, `cargo fmt
+--check`, scoped tests, `tests/run_agent_ipc.rs`, `tests/scope_lint.rs` pass.
+
+| Area | Change |
+|---|---|
+| `[egress]` default = Tor | `EgressConfig.network = "tor" \| "open"` (default `tor`). `resolved()`: tor → `proxy` = `TENGU_TOR_PROXY` or `socks5h://127.0.0.1:9050`, `route_llm_api = true`; open → direct. Explicit values win; `route_llm_api` is now `Option<bool>`. Children receive the *resolved* config via `TENGU_EGRESS`. `warn_if_proxy_unreachable` (parent only, after sandbox resolution). `tengu doctor` prints `network`. |
+| Claude Code + Telegram over Tor | `claude_code_profile` no longer refuses `route_llm_api`; the CLI child gets `HTTPS_PROXY`/`HTTP_PROXY` = HTTP CONNECT form of the proxy (`EgressPolicy::http_connect_proxy`, `claude_cli_env`; Arti serves CONNECT on the SOCKS port). `TelegramPipe::build_bot` builds teloxide's reqwest 0.11 client itself (`reqwest011` alias, 2026-09-19). |
+| One agent schema | `agents/*.toml` + `src/adapters/agents/` (`AgentSpec`) **deleted**. `AgentConfig` gained `description` (presence = planner-routable), `example_queries`, `tools`, alias `skills` → `skill_packages`; `LimitsConfig.step_timeout_secs` (default 600). `shared_files::routable_agents` feeds `render_registry`; `RagPlanner::new(.., agents, ..)`; `SubprocessRunner::new(sandbox, session, agents)` — fail-fast on unknown agent, per-step `max_tool_rounds` / `step_timeout_secs` (the old spec `max_turns`/`timeout_secs` were never wired — parent always sent 20 / 180s). `run_agent_subprocess` loads the parent config first, then `[agents.<name>]`; `channel_runtime::subagent_config` replaces `agent_config_from_spec`; subagents now run with their real `limits` and per-agent `claude_code` profile. `skill_doctor(&config, ..)`. Also fixed: `tools = [...]` on `[agents.*]` used to be silently dropped (no field). |
+| Sandboxes | `aura`: `[egress] network = "open"` (Molecule/Privy/Beach block Tor); `[agents.aura]` = planner + DeSci subagent (description, tools, `step_timeout_secs = 720`); new `[agents.researcher]`, `[agents.learning-agent]` (from the deleted specs). `storage-test`: description/tools, `model = "claude-sonnet-4-6"`. `unlimited`: explicit `[egress] network = "tor"`. `config.example.toml` documents `[egress]` + a subagent example. |
+| deploy/tor | `deploy/snowflake/` (Go lyrebird + socat, fixed-IP subnet) and `refresh-snowflake-bridges.sh` deleted. `deploy/tor/Dockerfile` = Arti 2.6.0 (`--features http-connect`) + lyrebird-rs built from the BuildKit named context `lyrebird-rs` (`../lyrebird-rs`, `LYREBIRD_RS_SRC` = dir or git URL). `arti.toml`: managed transport (`path = /usr/local/bin/lyrebird`, `run_on_startup = true`, protocols obfs4 + snowflake), Tor Browser bridge lines (7 obfs4 + 2 snowflake from lyrebird-rs `tools/arti-e2e/bridges-*.txt`), `tor-state` volume. `compose.yml`: one `tor` service on `127.0.0.1:9050`, healthcheck = `check.torproject.org` `IsTor:true`. `docker-compose.tor.yml` includes it and sets `TENGU_TOR_PROXY=socks5h://tor:9050`. |
+| Makefile | `NETWORK=tor` (default) / `open` selects the compose file set for `up`/`up-memory`/`down`/`logs`/`status`/`doctor`/`clean`/`build`. `tor`, `tor-down`, `tor-logs`, `tor-bridges` (calls lyrebird-rs `bridges.sh`). Removed `up-tor`, `down-tor`, `tor-native`, `tor-native-down`. `LYREBIRD_RS_DIR` (default `../lyrebird-rs`) exported as `LYREBIRD_RS_SRC`. |
+| Docker sandbox (2026-09-19) | `make up` had no way to pick a sandbox (always `./config.toml`). Now `SANDBOX=<name>` → `TENGU_CONFIG_FILE=sandboxes/<name>/config.toml`, bind-mounted by compose at `/opt/tengu/config.toml`; `NETWORK` defaults to that file's `[egress] network` (explicit `NETWORK=` still overrides); `check-config` guard on `up`/`up-memory` (a missing file used to make Docker create a `config.toml/` directory); `down --remove-orphans`; `make down-all` (both compose file sets + standalone `make tor`); `make chat` = `run --rm tengu chat` with the same wiring (README's `docker compose run tengu chat --sandbox aura` could never work: missing `./config.toml` becomes a directory, aura is `claude_code`). Open: `install.sh` / `cloud-init.yml` take no sandbox; image has no Claude Code CLI (`aura` can't run in Docker); `~` in sandbox paths = `/root` (not persisted). |
+| Telegram over Tor (2026-09-19) | Docker `make up SANDBOX=unlimited` crash-looped: `GetMe` timed out. teloxide 0.10 defaults are 5s connect / 17s total and it does not extend the total for the 10s long poll; `api.telegram.org` over Tor measured 11–15s (sometimes >10s to connect). `TelegramPipe::build_bot` now builds the reqwest 0.11 client itself (`reqwest011` alias in `Cargo.toml`, `telegram` feature; lockfile gains only the dep edge) — proxy + 30s connect / 60s total; open network keeps teloxide defaults. `TELOXIDE_PROXY` no longer used. `sandboxes/unlimited` gained `[telegram] allowed_users` (empty rejected every message). |
+| unlimited: LLM off Tor (2026-09-20) | OpenRouter is Cloudflare-fronted -- 403 "Just a moment..." on Tor exit IPs. `sandboxes/unlimited` set `route_llm_api = false` (network stays `tor`): LLM API direct, `http_request`/shell still proxied. Works for NATIVE `chat`/`telegram`. Does NOT work for Docker `make up SANDBOX=unlimited`: the container is on the internal `tor-front` net, so "direct" has no route to OpenRouter (`doctor` `IsTor=true`/`llm api: direct` only tests the tool client, not an LLM call). Docker + this sandbox would need `network = "open"` or a second internet-capable network on the tengu service. |
+| Docker/installer | `Dockerfile` no longer copies `agents/`; `.dockerignore` no longer excludes `sandboxes/` (the previous `COPY sandboxes` could not have worked). `install.sh`: `TENGU_NETWORK`, `LYREBIRD_RS_SRC`/`LYREBIRD_RS_REPO`, clones lyrebird-rs, drives `make up NETWORK=…`; `cloud-init.yml` clones lyrebird-rs to `/opt/lyrebird-rs`, systemd uses `make up`/`make down`. |
+| `http_request` | Hop-0 egress + `net_hosts` gate moved from `PreparedRequest::from_args` into `execute` (audit record on denial unchanged); `tests/scope_lint.rs` passes again. |
+| Repo cleanup | Root `index/features/howto/memory/context.html` deleted (`docs/*.html` are the maintained pages); `Adaptive_AI_Learning_Marketplace_PRD.md` + `tengu/ideas/*` → `docs/ideas/`; `docs/configs/tui-memory-smoke.toml` deleted; empty `memory/`, `scripts/`, `.worktrees/` removed; `.githooks/pre-commit` now `cargo fmt --all --check` (it pointed at a script that did not exist). |
+| Docs | README, `docs/configuration.md`, `docs/egress-2026-09-16.md`, `CLAUDE.md`/`AGENTS.md`, `config.example.toml` rewritten by hand; every other doc/diagram/skill/inline comment audited and fixed in place by the 2026-09-18 workflow (11 auditors, 65 files). `docs/architecture-v2.md` deleted (condensed duplicate of `REDESIGN.md`); superseded banners on `docs/architecture.md`, `docs/harness-architecture.md`, comparison/radar pages, every `docs/superpowers/*`. |
+
+### Review findings applied (2026-09-18 workflow: 4 lenses × 3 skeptics, 22 raised, 20 confirmed)
+
+| Finding | Fix |
+|---|---|
+| `-c/--config` never reached `run-agent` children (they resolve `$TENGU_CONFIG`) | `main` pins `TENGU_CONFIG` to the resolved path right after clap; verified with a live child run |
+| `AgentConfig` lost the strict schema `AgentSpec` had | `#[serde(deny_unknown_fields)]` on `AgentConfig` + tests (`max_turns`/`timeout_secs`/`sandbox` rejected, `skills` alias, blank `description`, `step_timeout_secs = 0`) — all three sandboxes, `~/.tengu/config.toml` and `config.example.toml` still load |
+| Non-routable blocks (no `description`) could still be dispatched | `run_step` and the child both filter on `description.is_some()`; error lists routable agents |
+| Child used raw `toml::from_str` (no env substitution / validation) and swallowed parse errors | `Config::load` with an `error!` log; built-in defaults only when the file is absent |
+| Child used `workspace = "~/…"` unexpanded | `expand_tilde` before scopes/memory/engine |
+| aura subagent silently moved from OpenRouter (4 tools) to Claude Code with builtin Bash/Write | `[agents.aura.claude_code] builtin_tools_profile = "read_only"` (planner never needed builtins; subagent keeps the old no-shell contract) |
+| `tengu skill doctor` could not see sandbox agents | `skill doctor --sandbox <name>` |
+| Telegram `set_var(TELOXIDE_PROXY)` per message from tokio workers | `Bot` built once in `TelegramPipe::new` (`build_bot`), cloned per send |
+| `http_connect_proxy` broke IPv6 proxy hosts | authority built from `host_str()` (brackets kept) + test |
+| Startup probe checked only the first resolved address | tries every address (reqwest semantics) |
+| MCP stdio / shells got `NO_PROXY=""` while MCP http exempted loopback | one `LOOPBACK_NO_PROXY` for all proxied children |
+| Standalone `tengu mcp-bridge` ignored the operator's `[egress]` (forced Tor) | loads `$TENGU_CONFIG` / `<TENGU_HOME>/config.toml` `[egress]` when `TENGU_EGRESS` is absent |
+| `make doctor` always passed `--tor` (fails under `NETWORK=open`) | `--tor` only under `NETWORK=tor` |
+| `make tor` + `make up` both published 127.0.0.1:9050 | `deploy/tor/compose.internal.yml` (`ports: !reset []`) merged via the include path list in `docker-compose.tor.yml` |
+| Relative `LYREBIRD_RS_SRC` resolved against `deploy/tor/`; `tor-bridges` ignored it | `LYREBIRD_RS_DIR` is the single knob (abspath unless `://`), exported as `LYREBIRD_RS_SRC` |
+| cloud-init unit `TimeoutStartSec=120` < Tor bootstrap; ufw/bind comments implied 7080 is reachable under Tor | `TimeoutStartSec=900`; comments scoped to `NETWORK=open` |
+| rustfmt failing on the hoisted `http_request` gate; scope_lint regex needs `scope.check_` on one line | formatted; gate kept on one line |
+| Deleted `AgentSpec` tests had no successors; new paths untested | `config::` (3), `shared_files::registry_lists_routable_agents_only`, `channel_runtime::subagent_config_merges_workspace_tool_optins_from_tools`, `runner::run_step_fails_fast_on_unknown_agent`, `egress::` (+3) |
+| Stale help text / comments (`agents/*.toml`, `agent_config_from_spec`, `tengu_outputs`, `RagStore`, Qdrant, `tengu.toml`, missing spec paths) | swept across `src/` (inline-comment auditor + follow-up); `skills/orchestrator/plan_schema.json` wording; `skills/orchestration-e2e/evals/config.toml` workers gained `description` so the eval can route |
+
+### Verified (2026-09-18)
+
+| Check | Result |
+|---|---|
+| `make tor` (Arti + lyrebird-rs image, obfs4 managed transport) | container healthy; Arti log `[pt lyrebird] connected`, `guard [… via obfs4 …] is usable` |
+| `curl --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip` | `IsTor:true` |
+| `curl -x http://127.0.0.1:9050 …` (HTTP CONNECT — the Claude CLI / teloxide path) | `IsTor:true` |
+| `tengu doctor --sandbox unlimited --tor` and `tengu doctor --tor` on a config with no `[egress]` | `network: tor`, `llm api: via proxy`, `tor: IsTor=true`, exit 0 |
+| OpenRouter `GET /api/v1/models` and `api.telegram.org` through the proxy | HTTP 200 / 302 |
+| `docker compose … config` for `deploy/tor/compose.yml`, base, base + tor override | resolves; `lyrebird-rs` context = `/Users/…/lyrebird-rs`, `TENGU_TOR_PROXY` set on tengu |
+| CI gate (final) | `cargo fmt --all --check` clean; `cargo test --all-features` = 375 unit + 4 `run_agent_ipc` + 2 `scope_lint`, 0 failed; `cargo clippy --all-features` = same 40 pre-existing warnings as before this session, none new |
+| Strict schema | `tengu doctor --sandbox {aura,storage-test,unlimited}`, `tengu status` on `~/.tengu/config.toml`, `config.example.toml` all load under `deny_unknown_fields` |
+| `--config` propagation | child spawned with only `TENGU_CONFIG` (as pinned by the parent) resolves `[agents.foo]` from that file and builds its engine |
+| `make -n doctor` / `NETWORK=open` / `LYREBIRD_RS_DIR=../foo` / `LYREBIRD_RS_DIR=https://…` | expand as intended; `bash -n deploy/install.sh` ok |
+| Docker | `tengu-cluster:latest` builds (bakes `sandboxes/` + `skills/`, no `agents/`); `tengu-tor:latest` builds; merged compose config: `tor` has no host port inside the project, `tengu` no ports, `TENGU_TOR_PROXY` set |
+
+### Open after this pass
+
+| Item | Note |
+|---|---|
+| lyrebird-rs on GitHub | **Closed 2026-09-18** — pushed to `DemidovVladimir/lyrebird-rs` at `082ea0254fd057c617fdad86158129d0ec78aaec`; a fresh clone matches the local checkout, and `LYREBIRD_RS_DIR=https://github.com/DemidovVladimir/lyrebird-rs.git` builds `tengu-tor` from the git context (every lyrebird layer a content cache hit against the local build). `install.sh` / `cloud-init.yml` clones now work. |
+| Claude Code CLI proxying is env-based | `HTTPS_PROXY` (advisory); network-enforced only under Docker `make up`. |
+| Docker `make up` end-to-end | both images build and the merged compose config is right; a full Telegram session over Tor was not exercised in this pass. |
+| `sandboxes/unlimited` model | The working tree changed `moonshotai/kimi-k3` → `qwen/qwen3.8-27b` (+ identity name) **before** this session (already modified at session start); the 900 s timeout / 32k cap comments still mention kimi-k3. Confirm or revert that hunk before committing. |
+| `skills/orchestration-e2e/evals/config.toml` | Pre-existing: `workspace_tools` lists `http_request` / `memory_search` / `memory_ingest`, which `Config::validate` rejects (`tengu status` on it fails with 5 issues); `tengu eval` loads it through its own path. Also `skill_distill` seeds `evals/config.toml` with the calling agent's engine while `eval_builder::load_eval_config` refuses `claude_code` (auditor finding, not fixed). |
+| Skill tier precedence | `shared_files::scan_skill_summaries` (registry) is project-first while `skill_builder::skill_directories` / `view_skill` are managed-first (auditor finding, not fixed). |
+| `engine_builder::build_planner_engine` | `#[allow(dead_code)]`, only consumer of `[claude_code] timeout_secs`; delete or wire (auditor finding). |
+| Local Docker leftovers | `tengu-snowflake:latest` image from the deleted stack is still in the local Docker cache (`docker rmi tengu-snowflake:latest`). |
+| Secrets in git history | unchanged from 2026-09-12 — rotate + purge. |
+
+---
+
+## Previous state (2026-09-12)
 
 Audit-and-fix pass over the uncommitted agentic-memory tree (two Workflow
 runs: 6 finders + 6 skeptics, then 4 fix clusters + 1 verifier). Everything
@@ -27,6 +106,7 @@ tests pass, `cargo fmt --check` is clean.
 | `unlimited` sandbox (2026-09-13) | `sandboxes/unlimited/config.toml` — direct-agent bench on OpenRouter DeepSeek (`unlimited`=v4-flash default, `pro`=v4-pro, `r1`=r1-0528; Telegram `@pro:` routing). Verified through `tengu run-agent` on all three models — recipe + results in `sandboxes/unlimited/BENCH.md`. |
 | `tengu prune --hard` (2026-09-14) | `prune.rs::plan_prune` now takes `PruneOptions` (was 3 positional args). New `--hard` flag: with `--sandbox`, **empties the workspace root entirely** — enumerates every direct child (`.tengu/`, `memory/`, and any arbitrary agent-created dir like `image_payload/`) so the allow-list gap no longer leaves generated folders behind; keeps the root dir itself so it's reusable. Soft prune unchanged (allow-list + `scaffold.project.directories`). Never touches `sandboxes/<name>/config.toml`; does not clear Postgres `agentic_memory` (that's `make clean`). 2 unit tests in `prune.rs`; `docs/configuration.md` Reset section updated. |
 | OpenRouter body-read timeout + output cap → config (2026-09-16) | Two `[limits]` knobs now drive the OpenRouter engine (were hardcoded / dead). **`request_timeout_secs`** (default 600) is the reqwest total timeout, body read included — `stream: false` means the body arrives only when generation ends, so slow reasoning models (`kimi-k3`) previously hit the 120s wall as `error decoding response body`. **`max_output_tokens_per_turn`** is now actually sent: set → `max_tokens: <n>`, unset → field **omitted** (model/provider default; no more synthetic `context÷8` send-ceiling). The `context÷8` formula survives only as a budget-reservation estimate when unset (`OpenRouterEngine::max_output_tokens_per_turn`, prompt-budget/TUI only). Body-read errors print the full cause via anyhow `{:#}`. Wiring: `build_openrouter_engine_with_limits(model, ctx, timeout, cap_opt)`; `build_engine` passes `agent_config.limits.{request_timeout_secs,max_output_tokens_per_turn}`; planner/eval use `config::default_request_timeout_secs()` + `None`. Tests: `engine_builder::tests::{body_read_failure_surfaces_source_chain, max_tokens_omitted_when_unset_sent_when_configured, budget_reservation_reflects_configured_cap}`. Note: `engine.run().await` sits outside the `stream_event_timeout_secs` idle loop, so `request_timeout_secs` is the only limit on a non-streaming call, and cancel isn't checked while it waits. |
+| `[egress]` — Tor / host allowlist / audit (2026-09-16; **superseded by the 2026-09-18 section above**: Tor is now the default, `deploy/snowflake` + `tor-native`/`up-tor` are gone) | New `src/adapters/egress.rs`, process-wide policy (`install`; `TENGU_EGRESS` to `run-agent` + `mcp-bridge`). `proxy` (socks5h, reqwest `socks` feature) on the tool client (http_request, crypto), MCP-http, and — with `route_llm_api` — OpenRouter/embeddings/wiki compiler. `allow_hosts`/`deny_hosts`/`https_only` ceiling on every `http_request` hop (redirects now followed manually; credentials dropped cross-origin — previously reqwest auto-followed redirects past `net_hosts`). `run_command`/shell skills: URL-literal guard + proxy env; `shell_network = "isolated"` wraps `sh` in macOS `sandbox-exec` (only the proxy port). Claude Code `editor_shell` → `editor` under a proxy; `route_llm_api` refuses `claude_code`. JSONL audit per hop / network-looking shell command. `build_tool_executor` lost its `shared_http_client` arg (all callers passed `None`). `OpenRouterEngine::new` returns `Result`. `tengu doctor [--sandbox] [--tor]`. Docker: `deploy/tor/compose.yml` = **Arti 2.6.0** (SOCKS + HTTP CONNECT on 9050, internal networks only) **→ Snowflake** (`deploy/snowflake/`, lyrebird 0.8.1 pinned by tag+commit, `socat`-exposed unmanaged PT at 10.213.47.2:9150; `[bridges] enabled = true`, official Tor Browser 15.0.23 lines). `make tor-native` (adds `tor-port` → 127.0.0.1:9050) / `make up-tor` (`docker-compose.tor.yml` includes the stack; tengu on internal `tor-front`) / `make tor-bridges` (signed-bundle refresh). Arti deliberately not embedded (see egress doc). Upkeep: bump Arti + lyrebird pins and bridge lines with Tor Browser releases. Verified against real Tor — `docs/egress-2026-09-16.md`. Open: Linux `isolated` shell (use Docker override); `http_request` sends no `User-Agent`. |
 | Secrets | `.env.example` values blanked. **The old values are still in git history (`0266655`, `d9037e3`) — rotate Molecule, Beach, Alchemy and the Qdrant Cloud JWT, then purge history.** |
 
 ### Decisions left to the maintainer
@@ -36,9 +116,6 @@ tests pass, `cargo fmt --check` is clean.
 | Planner agent on `claude_code` (`sandboxes/aura/config.toml` `[agents.aura]`) | Doctrine says OpenRouter for the planner; the sandbox keeps `claude_code` for the subscription. Comment now states the trade-off; value unchanged. |
 | `[hub]` config + `HubConfig` | Nothing listens on it (only `tengu status` prints it). Remove the struct, or keep as a placeholder. Container ports now point at the webhook listener. |
 | `allowed_users = ['848344935']` in aura sandbox | Personal Telegram id in a tracked file; `${TELEGRAM_ALLOWED_USER}` substitution is available. |
-| `Adaptive_AI_Learning_Marketplace_PRD.md` at repo root | Unrelated PRD; move to `tengu/ideas/` or delete. |
-| Root HTML pages still name `tengu_outputs` / `tengu_messages` collections in prose | Rewrite to `agentic_memory` or delete the pages in favour of `docs/*.html`. |
-| `sandboxes/storage-test/config.toml` `model = "sonnet"` | Alias accepted by the CLI; strict form is `claude-sonnet-4-6`. |
 | `build_tool_executor` is sync and drives MCP connect via `futures::executor::block_on`; the TUI calls it outside a tokio context | Latent panic if a sandbox sets `mcp_servers` and runs `tengu chat`. Make it `async` (all other callers already are). |
 | `OrchestratorChatPort::run_orchestrator_turn` + `memory/injector.rs` + `MemoryProvider::prefetch` | Dead path (only `run_orchestrator_turn_with_system` is live). Delete in a follow-up. |
 | Postgres connection per memory call | DDL is now once per process; connections are still per call. Pool if it shows up in latency. |

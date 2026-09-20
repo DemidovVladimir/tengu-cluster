@@ -1,5 +1,7 @@
 # Harness-Owned Orchestration + Memory — Implementation Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the deleted skill-based orchestration with a harness-owned supervisor pattern: a dedicated orchestrator agent producing DAG plans dispatched by a Rust DAG executor, with a Hermes-shaped memory provider layer that injects context pre-turn and writes summaries post-turn.

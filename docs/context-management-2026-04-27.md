@@ -47,9 +47,9 @@ prior-round tool results to first-line-only mid-loop).
 
 A user message hits Layers 1→2→3 (potentially →4) on the planner-side
 turn, then Layers 5→3 (→4) on each subagent step. Layers 0, 6, 7 are
-infrastructure consumed by the others. Layer 6 is now Open Brain live memory
-plus Karpathy LLM Wiki compiled state; legacy vector cleanup is compatibility
-only. **Layer 8 is orthogonal** — it
+infrastructure consumed by the others. Layer 6 is Open Brain live memory
+(Postgres `agentic_memory`) plus Karpathy LLM Wiki compiled state.
+**Layer 8 is orthogonal** — it
 observes the output of layers 2/3/5 (LLM calls) and the embedder, then
 emits records onto a process-global broadcast bus + tracing. It never
 mutates a prompt.
@@ -93,7 +93,7 @@ Counts back N user turns from the end and drains everything before. Per-scope de
 | `per-pipe-sender` | 25 |
 | (other) | 20 |
 
-Override in `agents/<name>.toml::[flow] max_history_turns = N`.
+Override: `[agents.<name>.flow] max_history_turns = N` in `sandboxes/<name>/config.toml`.
 
 ### 2. `maybe_compact_flow` (`flow_builder.rs:165`)  — *the auto-compact*
 
@@ -164,8 +164,9 @@ Driven by `MemoryConfig`. Default knobs:
 | `cross_session_msg_top_k` | 0 | semantic match across sessions; 0 = disabled |
 | `cross_plan_top_k` | 5 | planner replan recall over prior step outputs |
 
-Planner registry context now comes from root `TENGU_PLANNER_REGISTRY.md`,
-regenerated from agents/skills/tools before planner calls. Builds with
+Planner registry context comes from root `TENGU_PLANNER_REGISTRY.md`,
+regenerated from the `[agents.*]` blocks that carry a `description`, skills,
+and core + MCP tools before planner calls. Builds with
 `postgres_memory` use Postgres `agentic_memory` for planner user-message
 persistence, cross-session message recall, within-session step-output
 recall, and replan cross-plan recall. Without `postgres_memory`, these
@@ -193,11 +194,11 @@ instruction.
 
 The planner-side LLM call sets `suppress_grounding_nudge = true` so the
 nudge doesn't compete with the SKILL.md "emit JSON only" instruction.
-This is set inside `channel_runtime::run_turn_with_system:1038`.
+This is set inside `channel_runtime::run_turn_with_system:1160`.
 
 ### 8. Skill body assembly
 
-`skill_builder.rs:1120-1150`. Three nested truncations:
+`skill_builder.rs:1103-1159`. Three nested truncations:
 
 | knob | default | what |
 |---|---|---|
@@ -215,13 +216,13 @@ No dedup or per-skill-count cap — selection happens upstream.
 context-cutting layer. See `context-cutting-flow-2026-04-27.html` for
 the interactive walkthrough.
 
-### 9. `truncate_tool_result` (`engine_builder.rs:878`)
+### 9. `truncate_tool_result` (`engine_builder.rs:944`)
 
 Each tool result char-capped at `max_tool_result_chars` (default
 **300 000**) when first inserted into messages. Footer:
 `[truncated — showing X of Y chars]`. UTF-8 boundary safe.
 
-### 10. `compact_tool_result` mid-loop (`engine_builder.rs:855`)  — *the closest to /compact*
+### 10. `compact_tool_result` mid-loop (`engine_builder.rs:921`)  — *the closest to /compact*
 
 After `round >= 1`, walks `messages[..compact_cutoff]`. Every
 `Role::Tool` message in that prefix gets rewritten in place to its first
@@ -238,7 +239,7 @@ Rationale (from the inline comment): tool results "typically put key
 info on the first line" — tx hashes, IDs, status — so keeping the first
 line preserves working memory cheaply.
 
-### 11. `[OUTPUT_TRUNCATED]` auto-continue (`engine_builder.rs:637`)
+### 11. `[OUTPUT_TRUNCATED]` auto-continue (`engine_builder.rs:706`)
 
 When the model's response ends with the sentinel, the engine appends
 `"Your output was truncated. Continue from where you left off."` as a
@@ -247,7 +248,7 @@ user turn and re-rolls. Extends, doesn't cut.
 ### 12. `max_tool_rounds` hard stop (default **70**)
 
 After 70 rounds the loop exits and forces one final `tools=[]` engine
-turn at `engine_builder.rs:727`.
+turn at `engine_builder.rs:793`.
 
 ### 13. `token_budget` mid-loop early-exit
 
@@ -261,7 +262,7 @@ the loop exits with a warn log.
 
 `claude_code_engine.rs`.
 
-### 14. `max_mcp_result_chars` (`claude_code_engine.rs:520`)
+### 14. `max_mcp_result_chars` (`claude_code_engine.rs:551`)
 
 Caps tool results returned to the Claude Code CLI through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**, env-overridable
@@ -284,8 +285,10 @@ the picture.
 
 The child `tengu run-agent` process starts with **empty `messages`** —
 it never inherits the parent's chat history. The IPC payload
-(`AgentIpcInput`) carries only `goal`, `agent_name`, `model`, `tools`,
-`skills`, `session_id`, `step_id`, `sandbox_config`. By design — keeps
+(`AgentIpcInput`) carries `goal`, `agent_name`, `max_turns`, `session_id`,
+`step_id`, `sandbox_config`, `plan_state` (plus `compose` for composed steps);
+`model` / `tools` / `skills` travel empty — the child re-loads the same sandbox
+config and takes them from its own `[agents.<name>]` block. By design — keeps
 subagents focused and prevents accidental context leakage between
 steps.
 
@@ -294,15 +297,15 @@ steps.
 The harness-enforced "step is done" signal. Implicitly appended to every
 subagent's tool list. The model calls it with a `summary` string. With
 `postgres_memory`, the summary is written to Postgres `agentic_memory`
-with embeddings when available and text-only fallback otherwise. Legacy vector
-builds keep the old compatibility path. Dispatch:
+with embeddings when available and text-only fallback otherwise
+(`try_persist_agentic_step_summary`). Dispatch:
 
 | Path | Trigger |
 |---|---|
-| **A — Out-of-band** | OpenRouter subagents — `main.rs:821` intercepts the call before the executor runs |
-| **B — Plugin** | Claude Code subagents via MCP bridge — `CompressAndStoreTool::execute` |
+| **A — Out-of-band** | OpenRouter subagents — `main.rs:971` intercepts the call before the executor runs |
+| **B — Backstop** | Claude Code subagents — no bridge handler (`CompressAndStoreTool` removed in Phase 6); the model usually just stops, `compress_called` stays false, and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
 
-### 17. Phase 5c middle-ground protocol (`main.rs:900`)
+### 17. Phase 5c middle-ground protocol (`main.rs:1075`)
 
 | compress_called? | final_text non-empty? | Verdict |
 |---|---|---|
@@ -310,10 +313,13 @@ builds keep the old compatibility path. Dispatch:
 | ✗ | ✓ | **Ok** — graceful (warn logged, summary = final_text) |
 | ✗ | ✗ | **Failed** — DagExecutor retries / replans |
 
-### 18. Subprocess `max_turns` (default **20**)
+### 18. Subprocess `max_turns` (= `limits.max_tool_rounds`, default **70**)
 
-`AgentIpcInput.max_turns`. Hard cap on the subagent's mini-loop. Hits
-the `compress_and_store` warn path on exhaust.
+`AgentIpcInput.max_turns`, set by `SubprocessRunner::run_step` from the agent
+block's `limits.max_tool_rounds` (the serde default 20 only applies to payloads
+without the field). Hard cap on the subagent's mini-loop; hits the
+`compress_and_store` warn path on exhaust. Wall clock per step:
+`limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout`.
 
 ### 19. Cross-plan recall (planner replan side)
 
@@ -326,19 +332,19 @@ lanes are empty. Capped by `cross_plan_top_k` (default 5).
 
 ## Layer 6 — Open Brain / Wiki State
 
-`orchestrator/shared_files.rs`, `plugins/agentic_memory/`, and legacy
-`rag/cleanup.rs`.
+`orchestrator/shared_files.rs`, `plugins/agentic_memory/`.
 
 ### 20. Open Brain live memory
 
 With `postgres_memory`, user messages, step summaries, files, and transcript
 chunks land in Postgres `agentic_memory` tables. Recall uses pgvector first
-and FTS fallback. Legacy vector cleanup remains only for compatibility builds.
+and FTS fallback. No TTL / cleanup pass.
 
 ### 21. Karpathy LLM Wiki + planner files
 
-Root `TENGU_PLANNER_REGISTRY.md` is regenerated from agent TOMLs, skill
-frontmatter, and core tool definitions before planner calls. It is loaded
+Root `TENGU_PLANNER_REGISTRY.md` is regenerated from the `[agents.*]` blocks
+with a `description`, skill frontmatter, and core + MCP tool definitions before
+planner calls. It is loaded
 directly into the planner prompt, so planner routing no longer depends on
 old registry search or registry fingerprints. Stable promoted knowledge
 is compiled into `.tengu/agentic-memory/wiki/*.md`.
@@ -353,11 +359,11 @@ is compiled into `.tengu/agentic-memory/wiki/*.md`.
 
 Defaults: `chunk_size=1000`, `chunk_overlap=200`. Used when an agent
 calls `persistent_store` to save a file. Mechanical chunking — no LLM,
-no summarisation. Per-chunk embeddings live in the vector backend with
-a per-file manifest.
+no summarisation. Per-chunk embeddings live in the disk bincode store
+(`memory/vector/disk.rs`) with a per-file manifest.
 
 Orthogonal to LLM context: never reads back into a turn directly. Only
-surfaces via vector search through `memory_recall` (Layer 2 #6).
+surfaces via the `memory_search` tool or the chat-side recall block (Layer 2 #6).
 
 ---
 
@@ -454,18 +460,18 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 9 | 2 | `cross_session_msg_top_k` | (planner side) | 0 (off) |
 | 10 | 2 | `<memory-context>` fencing | fencing.rs | +50 tok |
 | 11 | 2 | grounding nudge / suppress | chat_builder.rs:248 | trigger words |
-| 12 | 2 | skill body / file caps | skill_builder.rs:1120 | 16K / 2K |
+| 12 | 2 | skill body / file caps | skill_builder.rs:1129 | 16K / 2K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
-| 14 | 3 | `truncate_tool_result` | engine_builder.rs:878 | 300 000 chars |
-| 15 | 3 | `compact_tool_result` | engine_builder.rs:855 | 200 chars |
-| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | engine_builder.rs:637 | sentinel |
-| 17 | 3 | `max_tool_rounds` | config.rs:424 | 70 |
-| 18 | 3 | `token_budget` early-exit | engine_builder.rs:617 | per-flow |
-| 19 | 4 | `max_mcp_result_chars` | claude_code_engine.rs:520 | 50 000 |
-| 20 | 5 | subprocess fresh ctx | runner.rs:23 | by design |
-| 21 | 5 | `compress_and_store` | skill_lifecycle/...rs | implicit append |
-| 22 | 5 | Phase 5c protocol | main.rs:900 | three rows |
-| 23 | 5 | subprocess `max_turns` | runner.rs:39 | 20 |
+| 14 | 3 | `truncate_tool_result` | engine_builder.rs:944 | 300 000 chars |
+| 15 | 3 | `compact_tool_result` | engine_builder.rs:921 | 200 chars |
+| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | engine_builder.rs:706 | sentinel |
+| 17 | 3 | `max_tool_rounds` | config.rs:411 | 70 |
+| 18 | 3 | `token_budget` early-exit | engine_builder.rs:683 | per-flow |
+| 19 | 4 | `max_mcp_result_chars` | claude_code_engine.rs:551 | 50 000 |
+| 20 | 5 | subprocess fresh ctx | runner.rs:26 | by design |
+| 21 | 5 | `compress_and_store` | plugins/skill_lifecycle/compress_and_store.rs (def) · main.rs:971 (intercept) | implicit append |
+| 22 | 5 | Phase 5c protocol | main.rs:1075 | three rows |
+| 23 | 5 | subprocess `max_turns` / step wall clock | runner.rs:43 · `run_step` | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
 | 24 | 6 | Open Brain memory | plugins/agentic_memory | Postgres |
 | 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
 | 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
@@ -490,11 +496,12 @@ Comparison points for future sessions:
 - **No semantic dedupe** of repeated tool calls. Two identical
   `http_request` calls keep both full responses.
 - **No automatic chat-loop recall from Open Brain yet.** Planner-side opt-in
-  recall reads Postgres `agentic_memory`; chat-side recall still uses the
-  legacy memory provider.
+  recall reads Postgres `agentic_memory`; chat-side recall uses the in-process
+  `MemoryManager` (disk bincode store).
 - **Subagent step traces are NEVER fed back into the planner's history.**
   Only the `compress_and_store` summary survives. With `postgres_memory`,
-  planner replan can read those summaries for cross-plan recall.
+  `replan` reads those summaries for cross-plan recall and `plan` reads them
+  within-session when `within_session_output_top_k > 0`.
 - **Claude Code engine has zero in-loop compaction.** Layer 4's
   `max_mcp_result_chars` is the only governor on that path. If a Claude
   Code subagent fans out a lot of tool calls, Claude's own context
@@ -532,5 +539,5 @@ Comparison points for future sessions:
 - **[`context-cutting-flow-2026-04-27.{svg,html}`](./context-cutting-flow-2026-04-27.svg)** — focused view: Layer 3 (the inner tool loop). Most useful when debugging something inside `collect_engine_response`.
 - **[`compression-flow-2026-04-27.{md,svg}`](./compression-flow-2026-04-27.md)** — focused view: Layer 5 (the subagent step protocol). Most useful when touching `run_agent_subprocess` or Open Brain summary capture.
 
-*Last updated 2026-04-27. If you change any of the mechanisms above,
+*Last updated 2026-09-18. If you change any of the mechanisms above,
 update this doc in the same commit.*

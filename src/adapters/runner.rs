@@ -19,23 +19,26 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::adapters::config::AgentConfig;
+
 /// JSON schema of the IPC input stream (stdin of `tengu run-agent`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentIpcInput {
     /// What the subagent has to accomplish.
     pub goal: String,
-    /// Name of the agent spec (resolved to `agents/<name>.toml` by the child).
+    /// Name of the agent — the child resolves `[agents.<name>]` from the
+    /// same config the parent runs on (`sandbox_config` / default config).
     pub agent_name: String,
     /// OpenRouter model slug.
     pub model: String,
     /// Tool allow-list provided by the parent. The child intersects this with
-    /// the agent spec's declared tools and always appends `compress_and_store`.
+    /// the `[agents.<name>]` block's `tools` and always appends `compress_and_store`.
     #[serde(default)]
     pub tools: Vec<String>,
     /// Skills to load into the system prompt. Resolved via the three-tier loader.
     #[serde(default)]
     pub skills: Vec<String>,
-    /// Hard cap on LLM mini-loop turns.
+    /// Hard cap on LLM mini-loop turns (the agent's `limits.max_tool_rounds`).
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
     /// Optional sandbox workspace. None → runner creates a temp dir.
@@ -46,7 +49,7 @@ pub struct AgentIpcInput {
     /// Parent-assigned step id for tagging memory writes.
     pub step_id: String,
     /// Phase 6.7 (C→B B-half) — when set, the child loads
-    /// `agents/<compose.base_agent>.toml` and overrides its `skills` and
+    /// `[agents.<compose.base_agent>]` and overrides its `skills` and
     /// `tools` with the values supplied here. `agent_name` above remains
     /// the label used for events/logs (typically the same as
     /// `compose.base_agent`, but kept separate so the parent can pass
@@ -111,8 +114,13 @@ pub enum AgentIpcOutput {
 pub struct SubprocessRunner {
     /// Explicit path to the tengu binary. None → `current_exe()`.
     pub tengu_path: Option<std::path::PathBuf>,
-    /// Hard timeout for the child.
+    /// Hard timeout for the child when the step's agent is unknown
+    /// (`run` direct callers); `run_step` uses the agent's
+    /// `limits.step_timeout_secs`.
     pub timeout_secs: u64,
+    /// `[agents.*]` of the parent config — fail-fast on unknown agents and
+    /// per-step `max_tool_rounds` / `step_timeout_secs`.
+    pub agents: std::collections::HashMap<String, AgentConfig>,
     /// Stable session id for tagging memory writes from this orchestrator
     /// instance. Generated once per runner construction.
     pub session_id: String,
@@ -128,7 +136,8 @@ impl Default for SubprocessRunner {
     fn default() -> Self {
         Self {
             tengu_path: None,
-            timeout_secs: 180,
+            timeout_secs: crate::adapters::config::default_step_timeout_secs(),
+            agents: std::collections::HashMap::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             sandbox_name: None,
         }
@@ -150,10 +159,15 @@ impl SubprocessRunner {
     /// Standalone test harnesses can still call `SubprocessRunner::default()`
     /// to get a runner with an independently-minted UUID — the unified-id
     /// guarantee is at the `build_orchestrator` boundary, not the runner's.
-    pub fn new(sandbox_name: Option<String>, session_id: String) -> Self {
+    pub fn new(
+        sandbox_name: Option<String>,
+        session_id: String,
+        agents: std::collections::HashMap<String, AgentConfig>,
+    ) -> Self {
         Self {
             sandbox_name,
             session_id,
+            agents,
             ..Self::default()
         }
     }
@@ -162,6 +176,15 @@ impl SubprocessRunner {
 impl SubprocessRunner {
     /// Run the subagent to completion and return its output.
     pub async fn run(&self, input: AgentIpcInput) -> Result<AgentIpcOutput> {
+        self.run_with_timeout(input, self.timeout_secs).await
+    }
+
+    /// `run` with an explicit wall-clock cap for the child.
+    pub async fn run_with_timeout(
+        &self,
+        input: AgentIpcInput,
+        timeout_secs: u64,
+    ) -> Result<AgentIpcOutput> {
         let exe = match &self.tengu_path {
             Some(p) => p.clone(),
             None => std::env::current_exe().context("current_exe() failed")?,
@@ -170,6 +193,11 @@ impl SubprocessRunner {
         let mut cmd = Command::new(exe);
         cmd.arg("run-agent")
             .env("TENGU_AGENT_IPC", "1")
+            // Child applies the parent's `[egress]` policy verbatim.
+            .env(
+                crate::adapters::egress::EGRESS_ENV,
+                crate::adapters::egress::policy().child_env(),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Forward subprocess stderr (tracing logs) to the parent's
@@ -195,11 +223,11 @@ impl SubprocessRunner {
 
         // Wait with timeout.
         let output = tokio::time::timeout(
-            std::time::Duration::from_secs(self.timeout_secs),
+            std::time::Duration::from_secs(timeout_secs),
             child.wait_with_output(),
         )
         .await
-        .context("run-agent timed out")?
+        .with_context(|| format!("run-agent timed out after {timeout_secs}s"))?
         .context("wait_with_output failed")?;
 
         if !output.status.success() {
@@ -219,13 +247,9 @@ impl SubprocessRunner {
 }
 
 // =====================================================================
-// WorkerHandle impl — Phase 4b cutover.
-//
-// Lets the DagExecutor drive `SubprocessRunner` exactly the same way it
-// drives `ChatWorker`. The only difference is the execution model: each
-// step spawns `tengu run-agent` as a child process via the existing IPC
-// (Phase 3). The child's body is still a stub that returns a canned
-// summary — Phase 5 replaces that body with a real LLM mini-loop.
+// WorkerHandle impl — each plan step spawns `tengu run-agent` as a child
+// process over the JSON IPC above; the child runs the real LLM + tools loop
+// for its `[agents.<name>]` block and returns one `AgentIpcOutput`.
 // =====================================================================
 
 #[async_trait::async_trait]
@@ -235,28 +259,42 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
         step: &crate::adapters::orchestrator::plan::Step,
         step_inputs: &str,
     ) -> anyhow::Result<String> {
-        // Fail fast when the planner picked a name that has no `agents/<name>.toml`
-        // on disk. Without this we burn 3 retry attempts × subprocess spawn cost
+        // Fail fast when the planner picked a name with no `[agents.<name>]`
+        // block. Without this we burn 3 retry attempts × subprocess spawn cost
         // before the orchestrator gives up and replans. The most common cause is
         // the planner LLM putting a SKILL or TOOL name in the `agent` field
         // (the orchestrator SKILL.md forbids it but enforcement is still useful).
-        // We only check when there's no `compose` override — composed plans
-        // resolve `compose.base_agent` instead of `step.agent`.
-        if step.compose.is_none() {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let toml_path = cwd.join("agents").join(format!("{}.toml", step.agent));
-            if !toml_path.exists() {
-                anyhow::bail!(
-                    "no agent spec at {} — the planner picked '{}' but there is no \
-                     `agents/{}.toml` on disk. Likely cause: a SKILL or TOOL name was \
-                     placed in the plan's `agent` field. The agent field MUST come \
-                     from the `## Available agents` section of the roster.",
-                    toml_path.display(),
-                    step.agent,
-                    step.agent
-                );
-            }
-        }
+        // Composed plans (C→B B-half) resolve `compose.base_agent` instead.
+        let spec_name = step
+            .compose
+            .as_ref()
+            .map(|c| c.base_agent.as_str())
+            .unwrap_or(step.agent.as_str());
+        let Some(agent_cfg) = self
+            .agents
+            .get(spec_name)
+            .filter(|a| a.description.is_some())
+        else {
+            let mut known: Vec<&str> = self
+                .agents
+                .iter()
+                .filter(|(_, a)| a.description.is_some())
+                .map(|(n, _)| n.as_str())
+                .collect();
+            known.sort();
+            anyhow::bail!(
+                "no agent '{}' in the active config — the planner picked '{}' but there is \
+                 no `[agents.{}]` block (routable agents: {:?}). Likely cause: a SKILL or \
+                 TOOL name was placed in the plan's `agent` field. The agent field MUST \
+                 come from the `## Available agents` section of the roster.",
+                spec_name,
+                step.agent,
+                spec_name,
+                known
+            );
+        };
+        let max_turns = agent_cfg.limits.max_tool_rounds;
+        let step_timeout_secs = agent_cfg.limits.step_timeout_secs;
 
         let goal = if step_inputs.is_empty() {
             step.goal.clone()
@@ -264,18 +302,19 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
             format!("{}\n\nUpstream context:\n{}", step.goal, step_inputs)
         };
 
-        // Phase 4b: pass minimal IPC payload. Phase 5 will load
-        // `agents/<step.agent>.toml` here and populate model/tools/skills
-        // from the spec instead of leaving them empty.
+        // The child re-loads the same config (`sandbox_config`) and takes
+        // `[agents.<agent_name>]` from it, so model/tools/skills stay empty
+        // here; only the per-agent turn cap travels in the payload.
         // Phase 6.7: forward `step.compose` so a composed agent (C→B B-half)
-        // reaches the child as an explicit override rather than a renamed spec.
+        // reaches the child as an explicit override rather than a renamed
+        // agent block.
         let input = AgentIpcInput {
             goal,
             agent_name: step.agent.clone(),
             model: String::new(),
             tools: Vec::new(),
             skills: Vec::new(),
-            max_turns: default_max_turns(),
+            max_turns,
             sandbox: None,
             session_id: self.session_id.clone(),
             step_id: step.id.0.clone(),
@@ -289,7 +328,7 @@ impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner 
             plan_state: crate::adapters::orchestrator::shared_files::active_plan(&self.session_id),
         };
 
-        match self.run(input).await? {
+        match self.run_with_timeout(input, step_timeout_secs).await? {
             AgentIpcOutput::Ok {
                 output, metrics, ..
             } => {
@@ -325,10 +364,39 @@ mod tests {
     /// within-session output recall in `RagPlanner::plan`.
     #[test]
     fn new_uses_explicit_session_id() {
-        let runner =
-            SubprocessRunner::new(Some("aura".to_string()), "sess-from-planner".to_string());
+        let runner = SubprocessRunner::new(
+            Some("aura".to_string()),
+            "sess-from-planner".to_string(),
+            Default::default(),
+        );
         assert_eq!(runner.session_id, "sess-from-planner");
         assert_eq!(runner.sandbox_name.as_deref(), Some("aura"));
+    }
+
+    /// A step naming an agent with no `[agents.<name>]` block fails before
+    /// any subprocess is spawned, and the message lists the routable agents.
+    #[tokio::test]
+    async fn run_step_fails_fast_on_unknown_agent() {
+        use crate::adapters::orchestrator::executor::WorkerHandle;
+        use crate::adapters::orchestrator::plan::{Step, StepId};
+        let mut agents = std::collections::HashMap::new();
+        let mut researcher = crate::adapters::config::Config::default()
+            .agents
+            .remove("main")
+            .unwrap();
+        researcher.description = Some("web research".into());
+        agents.insert("researcher".to_string(), researcher);
+        let runner = SubprocessRunner::new(None, "s".into(), agents);
+        let step = Step {
+            id: StepId("s1".into()),
+            agent: "spanish-teacher".into(),
+            goal: "g".into(),
+            depends_on: vec![],
+            compose: None,
+        };
+        let err = runner.run_step(&step, "").await.unwrap_err().to_string();
+        assert!(err.contains("no agent 'spanish-teacher'"), "{err}");
+        assert!(err.contains("researcher"), "{err}");
     }
 
     /// Default still mints a fresh UUID for standalone use cases (tests,

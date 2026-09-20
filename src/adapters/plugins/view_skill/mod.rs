@@ -16,7 +16,7 @@
 //!
 //! ### Three-tier walk
 //!
-//! Mirrors `rag/indexer.rs::scan_skills` precedence: managed (`~/.tengu/skills`)
+//! Mirrors `skill_builder.rs::skill_directories` precedence: managed (`~/.tengu/skills`)
 //! → workspace (`<cwd>/.tengu/skills`) → project (`<cwd>/skills`). First
 //! match wins; the winning tier is reported in `list` and `read` outputs.
 //!

@@ -43,11 +43,15 @@ impl Embedder {
     /// API key; the `model` string is passed through verbatim (e.g.
     /// `"text-embedding-3-small"`).
     pub fn new(api_key: String, model: String) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
+        // Proxied iff `[egress] route_llm_api`. Build only fails where the
+        // old `unwrap_or_default()` (reqwest `Client::new`) panicked too.
+        let client = crate::adapters::egress::policy()
+            .llm_api_client(
+                reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(30))
+                    .timeout(std::time::Duration::from_secs(60)),
+            )
+            .expect("egress: build embeddings http client");
         Self {
             mode: Mode::Real {
                 client,

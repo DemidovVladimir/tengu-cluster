@@ -98,8 +98,10 @@ fn register_plugin_safe(
 /// The `activity` port is channel-specific — each channel adapter provides its own
 /// implementation (TUI dialogs, Telegram inline keyboards, Slack messages, etc.).
 ///
-/// `shared_http_client` — when `Some`, all HTTP and crypto executors share one
-/// `reqwest::Client` instead of each building their own connection pool.
+/// The HTTP client comes from `egress::policy().tool_client` — proxied per
+/// `[egress]`, redirects off. There is deliberately no way to pass in a
+/// client: an unproxied one would bypass the egress policy. If the client
+/// can't be built the executor is not built (no tools, fail-closed).
 ///
 /// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Every tool is
 /// backed by a domain plugin (workspace, http, crypto, cache, memory, skill,
@@ -112,7 +114,6 @@ pub(crate) fn build_tool_executor(
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    shared_http_client: Option<&reqwest::Client>,
     memory_config: Option<&crate::adapters::config::MemoryConfig>,
     agent_config: &AgentConfig,
     mcp_servers: &[McpServerConfig],
@@ -126,12 +127,15 @@ pub(crate) fn build_tool_executor(
         None => LocalShellExecutor::new(),
     });
 
-    let http_client = shared_http_client.cloned().unwrap_or_else(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    });
+    let http_client = match crate::adapters::egress::policy()
+        .tool_client(std::time::Duration::from_secs(60))
+    {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::error!(error = %format!("{e:#}"), "egress: tool http client unavailable — tools disabled");
+            return None;
+        }
+    };
 
     let allowed_names: HashSet<String> = tools.iter().map(|tool| tool.name.clone()).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
@@ -148,9 +152,10 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
     };
 
-    // Phase 7.7 — register the seven shared plugins via the consolidated
-    // helper (workspace, memory, cache, skill-lifecycle, compress_and_store,
-    // http, crypto). Adding a new shared plugin only requires editing
+    // Phase 7.7 — register the shared plugin set via the consolidated
+    // helper (workspace, memory, cache, skill-lifecycle, http, crypto,
+    // skill-resource, view-skill, manage-skill, `agentic_memory` when
+    // compiled in). Adding a new shared plugin only requires editing
     // `register_core_plugins` — both this builder and the MCP bridge pick
     // it up.
     futures::executor::block_on(register_core_plugins(
@@ -192,8 +197,9 @@ pub(crate) fn build_tool_executor(
 
     // Per-tool scope map — ENFORCED. `agent_config.scopes` already has the
     // parent's `[default_scopes]` folded in (`Config::fold_default_scopes`
-    // for the parent path, `agent_config_from_spec` for subprocess children).
-    // A tool with no configured entry falls back to `permissive_scope`.
+    // at `Config::load`; `run-agent` children load the same config and go
+    // through `subagent_config`). A tool with no configured entry falls
+    // back to `permissive_scope`.
     let scopes = resolve_tool_scopes(workspace, &agent_config.scopes, registry.tool_names());
 
     Some(PluginToolExecutor {
@@ -212,15 +218,16 @@ pub(crate) fn build_tool_executor(
     })
 }
 
-/// Phase 7.7 refactor #5 — single source of truth for the three opt-in
-/// workspace tools. Pre-7.7 this list was duplicated in
-/// `agent_config_from_spec` (as `VALID_WORKSPACE_TOOLS`) and
+/// Phase 7.7 refactor #5 — single source of truth for the opt-in
+/// workspace tools. Pre-7.7 this list was duplicated in the subprocess
+/// config builder (now `subagent_config`; then `WORKSPACE_TOOLS_ALLOWLIST`) and
 /// `mcp_bridge::build_bridge_executor` (as `SYNTHESIZED_WORKSPACE_TOOLS`),
-/// with a real risk that adding a fourth opt-in would silently work in one
+/// with a real risk that adding another opt-in would silently work in one
 /// path and not the other. Now both filter against this constant.
 ///
-/// Adding a new opt-in workspace tool: append the name here, then add
-/// the matching plugin registration in `register_core_plugins`.
+/// Adding a new opt-in workspace tool: append the name here, add the
+/// matching plugin registration in `register_core_plugins`, and add it to
+/// `config.rs::valid_workspace_tools` (config validation).
 pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
     "agentic_memory",
     "shared_cache",
@@ -253,7 +260,7 @@ pub(crate) fn resolve_tool_scopes(
 }
 
 /// Inherited `[default_scopes]` were authored for the parent's workspace. A
-/// subprocess child runs in its own workspace (`spec.sandbox`, or a temp /
+/// subprocess child runs in its own workspace (`agent.workspace`, or a temp /
 /// cwd when unset), so grant that root on every inherited scope — otherwise
 /// `read_file` / multipart `http_request` under the child's own workspace is
 /// scope-denied. Tools without a configured scope already get the workspace
@@ -1277,11 +1284,13 @@ pub(crate) fn build_orchestrator(
         Arc::new(crate::adapters::runner::SubprocessRunner::new(
             config.sandbox_name.clone(),
             session_id.clone(),
+            config.agents.clone(),
         ));
     let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
         cfg.agent.clone(),
         chat_port,
         config.memory.clone(),
+        crate::adapters::orchestrator::shared_files::routable_agents(&config.agents),
         config.mcp_servers.clone(),
         Some(bus.clone()),
         session_id,
@@ -1298,66 +1307,35 @@ pub(crate) fn build_orchestrator(
     ))
 }
 
-/// Phase 5b — synthesize an `AgentConfig` from an `AgentSpec` so the existing
-/// `build_tool_executor` can be reused inside the run-agent subprocess.
-///
-/// Most fields use sensible defaults; the few that matter for tool dispatch
-/// (workspace, model, scopes, workspace_tools) are propagated from the spec
-/// or from the parent `Config` (default_scopes).
-pub(crate) fn agent_config_from_spec(
-    spec: &crate::adapters::agents::AgentSpec,
-    parent_default_scopes: &HashMap<String, ToolScope>,
-) -> AgentConfig {
-    // Phase 7.7 refactor #5 — single shared constant (was duplicated in
-    // mcp_bridge::build_bridge_executor as SYNTHESIZED_WORKSPACE_TOOLS).
-    let workspace_tools: Vec<String> = spec
-        .tools
-        .iter()
-        .filter(|t| WORKSPACE_TOOLS_ALLOWLIST.contains(&t.as_str()))
-        .cloned()
-        .collect();
-
-    AgentConfig {
-        default: false,
-        // Phase 7.3 — propagate spec.engine so subagents honour the
-        // engine field declared in their TOML (`openrouter` default for
-        // back-compat; `claude_code` available when --features claude_code).
-        engine: spec.engine.clone(),
-        model: spec.model.clone(),
-        workspace: spec.sandbox.clone(),
-        default_lens: "eco".to_string(),
-        identity: Default::default(),
-        flow: Default::default(),
-        limits: Default::default(),
-        lens: Default::default(),
-        role: None,
-        skill_packages: Vec::new(),
-        prompt_budget: Default::default(),
-        workspace_tools,
-        // Inherit the parent's default_scopes so http_request etc. honour the
-        // permissive scope when the parent config has one.
-        scopes: parent_default_scopes.clone(),
-        // Per-agent claude_code override left at None — uses the top-level
-        // [claude_code] block defaults when engine = "claude_code". Add a
-        // `claude_code: Option<AgentClaudeCodeConfig>` to AgentSpec if you
-        // need per-agent profile control later.
-        claude_code: None,
+/// The `[agents.<name>]` block as the `run-agent` child uses it: identical
+/// to the in-process config (scopes already folded with `[default_scopes]`
+/// by `Config::load`), plus the workspace-tool opt-ins the agent listed in
+/// `tools` merged into `workspace_tools`. Single shared allow-list
+/// (`WORKSPACE_TOOLS_ALLOWLIST`) — the MCP bridge filters the same way.
+pub(crate) fn subagent_config(agent: &AgentConfig) -> AgentConfig {
+    let mut cfg = agent.clone();
+    for t in &agent.tools {
+        if WORKSPACE_TOOLS_ALLOWLIST.contains(&t.as_str()) && !cfg.workspace_tools.contains(t) {
+            cfg.workspace_tools.push(t.clone());
+        }
     }
+    cfg
 }
 
 /// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`.
 ///
-/// Resolves `effective_tools = (compute_base_tools ∩ spec.tools) ∪ {compress_and_store}`,
+/// Resolves `effective_tools = (compute_base_tools ∩ agent.tools) ∪ {compress_and_store}`,
 /// then constructs a `PluginToolExecutor` over those tools. Returns the
 /// resolved ToolDef list (so `run-agent` can pass it to `engine.run`) plus
 /// the executor.
 ///
 /// `compress_and_store` is dispatched out-of-band by the run-agent loop
-/// (it writes to `tengu_outputs` directly via a helper) so its `ToolDef`
-/// is appended to the advertised list but its execution path bypasses the
+/// (the summary is captured there and persisted to Postgres
+/// `agentic_memory` with `postgres_memory`) so its `ToolDef` is appended
+/// to the advertised list but its execution path bypasses the
 /// `PluginToolExecutor`.
 pub(crate) fn build_subprocess_tool_executor(
-    spec: &crate::adapters::agents::AgentSpec,
+    agent: &AgentConfig,
     config: &Config,
     workspace: &Path,
     secret_registry: &Arc<SecretRegistry>,
@@ -1370,7 +1348,7 @@ pub(crate) fn build_subprocess_tool_executor(
     // tools in its allow-list.
     memory_manager: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
-    let mut agent_cfg = agent_config_from_spec(spec, &config.default_scopes);
+    let mut agent_cfg = subagent_config(agent);
     grant_workspace_root(&mut agent_cfg.scopes, workspace);
 
     // Full base tool list (workspace + http + crypto + memory if enabled).
@@ -1380,20 +1358,20 @@ pub(crate) fn build_subprocess_tool_executor(
         &agent_cfg.workspace_tools,
     );
 
-    // Filter to spec.tools when the spec declares an allow-list. Empty
-    // spec.tools means "no allow-list" — keep all base tools available.
-    // compress_and_store is appended unconditionally regardless of spec.tools.
+    // Filter to `tools` when the agent declares an allow-list. Empty
+    // `tools` means "no allow-list" — keep all base tools available.
+    // compress_and_store is appended unconditionally regardless of `tools`.
     //
     // Workspace-tools opt-ins are always-on for this agent regardless of
-    // whether they appear in spec.tools — they're separately gated by the
+    // whether they appear in `tools` — they're separately gated by the
     // workspace_tools allowlist + per-agent declaration. Pre-fix bug: an
     // agent with `tools = ["read_file", ...]` and `workspace_tools = ["foo"]`
     // would NOT get `foo` because `tools` filtered it out.
-    let mut effective: Vec<ToolDef> = if spec.tools.is_empty() {
+    let mut effective: Vec<ToolDef> = if agent.tools.is_empty() {
         base_tools
     } else {
         let mut allow: std::collections::HashSet<&str> =
-            spec.tools.iter().map(|s| s.as_str()).collect();
+            agent.tools.iter().map(|s| s.as_str()).collect();
         for wt in &agent_cfg.workspace_tools {
             allow.insert(wt.as_str());
         }
@@ -1420,7 +1398,6 @@ pub(crate) fn build_subprocess_tool_executor(
         secret_registry,
         activity,
         None, // cancel
-        None, // shared_http_client
         Some(&config.memory),
         &agent_cfg,
         &config.mcp_servers,
@@ -1548,6 +1525,27 @@ mod golden_tests {
     /// End-to-end through `build_tool_executor`: the executor's scope map
     /// carries the agent's configured entry, not the permissive default.
     #[test]
+    fn subagent_config_merges_workspace_tool_optins_from_tools() {
+        let mut agent = crate::adapters::config::Config::default()
+            .agents
+            .remove("main")
+            .unwrap();
+        agent.tools = vec![
+            "http_request".into(),
+            "shared_cache".into(),
+            "persistent_store".into(),
+        ];
+        agent.workspace_tools = vec!["persistent_store".into()];
+        let cfg = subagent_config(&agent);
+        assert_eq!(
+            cfg.workspace_tools,
+            vec!["persistent_store", "shared_cache"]
+        );
+        assert_eq!(cfg.tools, agent.tools);
+        assert_eq!(cfg.engine, agent.engine);
+    }
+
+    #[test]
     fn build_tool_executor_honours_agent_scopes() {
         let tmp = TempDir::new().unwrap();
         let tools = crate::adapters::plugins::http::tool_defs();
@@ -1573,7 +1571,6 @@ mod golden_tests {
             &None,
             &secret_registry,
             activity,
-            None,
             None,
             None,
             agent_config,
@@ -1613,7 +1610,6 @@ mod golden_tests {
             &None, // memory_manager: omit — memory plugin gates on ctx.memory_manager.
             &secret_registry,
             activity,
-            None,
             None,
             None,
             agent_config,

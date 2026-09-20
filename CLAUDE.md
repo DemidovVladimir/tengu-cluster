@@ -16,16 +16,22 @@ Tengu-Cluster is a multi-agent harness in **Rust**. Single binary. The user runs
 `tengu chat --sandbox <name>` (or `tengu telegram --sandbox <name>`) and types
 messages into a TUI / Telegram chat. The harness:
 
-1. Loads `sandboxes/<name>/config.toml` (which agent is the orchestrator, what
-   model to use, MCP servers, scope rules).
+1. Loads `sandboxes/<name>/config.toml` — **the one config file**: every
+   agent (`[agents.<name>]`), which one is the planner, models, MCP servers,
+   scope rules, `[egress]` network policy.
 2. Builds `RagPlanner` (legacy name) — an LLM planner that picks which agent
    should handle the message from root `TENGU_PLANNER_REGISTRY.md` (generated
-   from agents/skills/tools and loaded into the planner prompt).
+   from the `[agents.*]` blocks that carry a `description`, plus skills/tools,
+   and loaded into the planner prompt).
 3. Dispatches plan steps to `SubprocessRunner`, which spawns
-   `tengu run-agent` as a child process for each step. The child loads the
-   `agents/<step.agent>.toml` spec, runs an LLM-with-tools loop until it calls
-   `compress_and_store`, then writes the result to Postgres `agentic_memory`
-   when `postgres_memory` is enabled.
+   `tengu run-agent` as a child process for each step. The child re-loads the
+   same sandbox config, takes `[agents.<step.agent>]`, runs an LLM-with-tools
+   loop until it calls `compress_and_store`, then writes the result to
+   Postgres `agentic_memory` when `postgres_memory` is enabled.
+
+All network traffic is **Tor by default** (`[egress] network = "tor"`, the
+Arti + lyrebird-rs proxy from `make tor`); a sandbox opts out with
+`network = "open"`. See `docs/egress-2026-09-16.md`.
 
 The doctrine is **LLM = heart, Open Brain + Karpathy LLM Wiki = brain,
 tools = hands**. Open Brain is live agent memory; the Karpathy LLM Wiki is
@@ -117,8 +123,9 @@ flow, audit these for staleness **before declaring done**:
 | `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `flow_builder.rs`, `engine_builder.rs::collect_engine_response`, `chat_builder.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
 | `CLAUDE.md` (this file) **and** `AGENTS.md` (its twin) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc. Update both — they must not drift. |
 | Inline `mod.rs` doc comments in `src/adapters/memory/` and `src/adapters/rag/` | If you changed the layering between memory/ (low-level) and rag/ (legacy facade) |
-| `agents/*.toml` | If you changed the AgentSpec schema, document the new field in `src/adapters/agents/mod.rs` and update each agent file |
+| `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/adapters/config.rs`, `src/adapters/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/webhook_builder.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
+| `docs/egress-2026-09-16.md` + `src/adapters/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
 | `src/adapters/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
@@ -161,10 +168,17 @@ global metrics sink so the TUI sees a unified stream.
 
 ## How to add a new agent
 
-1. Drop `agents/<name>.toml` in the workspace root.
+1. Add an `[agents.<name>]` block to `sandboxes/<name>/config.toml` (or the
+   base config) with a `description` — that is what makes it routable.
 2. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 
-Schema: `name`, `description`, optional `example_queries`, `engine` (default `"openrouter"`), `model`, `tools`, `skills`, `max_turns`, `timeout_secs`, `sandbox`. See `src/adapters/agents/mod.rs::AgentSpec` for fields.
+Fields (same `AgentConfig` as every in-process agent, `src/adapters/config.rs`):
+`engine`, `model`, `description`, `example_queries`, `tools` (subprocess
+allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias),
+`workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap
+per step), `limits.step_timeout_secs` (wall clock per step, default 600),
+`identity`, `claude_code`. There is no separate subagent schema and no
+`agents/` directory.
 
 ## How to add a new skill
 
@@ -184,8 +198,8 @@ These are not preferences. They're load-bearing.
    their own subprocess with their own tools.
 
 2. **Behaviour changes via TOML and SKILL.md, not Rust.** If a feature
-   *can* be expressed by editing `agents/*.toml`, `skills/*/SKILL.md`, or a
-   sandbox config, do that. Adding new Rust types or trait methods is a last
+   *can* be expressed by editing `sandboxes/*/config.toml` (agents, scopes,
+   egress) or `skills/*/SKILL.md`, do that. Adding new Rust types or trait methods is a last
    resort. The root `TENGU_PLANNER_REGISTRY.md` is regenerated on planner
    turns, so TOML/skill edits take effect without rebuilds.
 
@@ -211,15 +225,17 @@ These are not preferences. They're load-bearing.
   canonical unified skill write API (see `plugins/manage_skill/`);
   `agentic_memory` is the Postgres-backed Open Brain memory tool
   (`postgres_memory` feature).
-- **`agents/*.toml` has NO `workspace_tools` field — and unknown keys are a
-  HARD ERROR (2026-09-12)** — `AgentSpec` (`src/adapters/agents/mod.rs`) is
-  `#[serde(deny_unknown_fields)]`, so a `workspace_tools = […]` line (or any
-  typo) fails to parse instead of being silently ignored; `engine` must be
-  `openrouter` or `claude_code`. Workspace-tool opt-ins go in `tools = [...]`;
-  `agent_config_from_spec` derives the synthesized `workspace_tools` by
-  filtering `tools` against `WORKSPACE_TOOLS_ALLOWLIST`. The parent's
-  `[agents.*]` block in `sandboxes/<name>/config.toml` DOES have a real
-  `workspace_tools` field on `AgentConfig`.
+- **One agent schema (2026-09-18)** — `agents/*.toml` and `AgentSpec` are
+  gone. A subagent is an `[agents.<name>]` block with a `description`;
+  `channel_runtime::subagent_config` merges workspace-tool names found in
+  `tools` into `workspace_tools` (filtered by `WORKSPACE_TOOLS_ALLOWLIST`).
+  `limits.max_tool_rounds` is the per-step turn cap and
+  `limits.step_timeout_secs` the per-step wall clock — the parent
+  `SubprocessRunner` reads both from the agent block (the old
+  `max_turns`/`timeout_secs` spec fields were never wired). Only blocks WITH
+  a `description` may run as plan steps (runner + child both check).
+  `AgentConfig` is `deny_unknown_fields`: a typo or an old spec key
+  (`max_turns`; `skills` is fine — it is an alias) fails config load.
 - **Per-tool scopes are ENFORCED at runtime (2026-09-12)** —
   `[default_scopes.<tool>]` / `[agents.<id>.scopes.<tool>]` are folded into
   `AgentConfig.scopes` at `Config::load` (`fold_default_scopes`; per-agent wins
@@ -234,7 +250,12 @@ These are not preferences. They're load-bearing.
   honours the `"*"` wildcard like `net_hosts` / `shell_bins`.
 - **Config resolution** — `--sandbox <name>` replaces the base config
   wholesale; otherwise `--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`.
-  Same chain in the `run-agent` child. Docker passes `TENGU_CONFIG`.
+  The `run-agent` child gets the same file: `--sandbox` travels over IPC and
+  `main` pins `TENGU_CONFIG` to the resolved path so `-c/--config` reaches
+  children and the MCP bridge too; it then takes `[agents.<name>]` from it.
+  Docker mounts `./config.toml` (or `sandboxes/<name>/config.toml` via
+  `make up SANDBOX=<name>`) as `TENGU_CONFIG`; `make` derives `NETWORK` from
+  that file's `[egress] network`.
 - **The accepted plan reaches subagents via IPC, not the file** —
   `AgentIpcInput.plan_state` carries the rendered plan per session
   (`shared_files::set_active_plan`, keyed by the shared `session_id`);
@@ -252,8 +273,8 @@ These are not preferences. They're load-bearing.
   (`tests/run_agent_ipc.rs`) replaced `scripts/test-runner.sh`. Pre-loop
   failures (missing `TENGU_AGENT_IPC`, bad stdin JSON, unknown agent) exit
   non-zero with the anyhow chain on stderr and empty stdout.
-- **`compress_and_store` is appended IMPLICITLY** — never list it in
-  `agents/*.toml::tools`. The runner appends it itself for every subagent.
+- **`compress_and_store` is appended IMPLICITLY** — never list it in an
+  agent's `tools`. The runner appends it itself for every subagent.
 - **Planner LLM call strips tools/memory/grounding** —
   `run_turn_with_system` in `channel_runtime.rs` sets `tools = []`,
   `tool_executor = None`, `memory_manager = None`,
@@ -264,10 +285,11 @@ These are not preferences. They're load-bearing.
   The name is historical; current routing is file-registry + Open Brain
   memory, not retrieval-first memory.
 - **Planner registry is file-backed** — `RagPlanner` regenerates root
-  `TENGU_PLANNER_REGISTRY.md` from `agents/`, skills, and core tool
+  `TENGU_PLANNER_REGISTRY.md` from the `[agents.*]` blocks with a
+  `description` (`shared_files::routable_agents`), skills, and core tool
   definitions before planner calls (`orchestrator/shared_files.rs`).
-  Editing `agents/*.toml` and restarting `tengu chat` is sufficient to pick
-  up the change. The planner LLM is asked to use its own judgement reading
+  Editing the sandbox config and restarting `tengu chat` is sufficient to
+  pick up the change. The planner LLM is asked to use its own judgement reading
   each description — there is no similarity score gate anymore.
 - **`TENGU_PLAN.md` carries the accepted plan to subagents** — `replan.rs::drive`
   overwrites root `TENGU_PLAN.md` on every accepted plan/replan;
@@ -315,12 +337,14 @@ These are not preferences. They're load-bearing.
   `postgres_memory`, `RagPlanner::plan` injects a `## Recent step outputs
   (this session)` block from Postgres `agentic_memory` filtered by the shared
   `session_id`. Recommended `3–5`.
-- **`spec.engine` selects the subagent engine (Phase 7.3)** —
-  `agents/<name>.toml::engine` defaults to `"openrouter"` for back-compat;
-  set to `"claude_code"` to run that agent through the Claude Code CLI.
+- **`[agents.<name>].engine` selects the subagent engine (Phase 7.3)** —
+  `"openrouter"` or `"claude_code"` (required field, no default); the same
+  block serves in-process chat and `run-agent` steps.
   `model` slug format depends on engine: OpenRouter wants
   `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`.
   Building with `--features claude_code` is required.
+- **`sandboxes/aura` is `network = "open"`** — Molecule / Privy / Beach block
+  Tor exits. Every other sandbox and the base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI
   has tool access via MCP at engine-construction time, so the planner-side
   tool stripping (intended for OpenRouter's per-turn `tools = []`) doesn't
@@ -366,6 +390,22 @@ These are not preferences. They're load-bearing.
   directly against `TENGU_MEMORY_DATABASE_URL` or run the ignored
   `postgres_*_smoke` tests. A Postgres-native inspect CLI is a tracked
   follow-up.
+- **All network traffic goes through `egress.rs`, and the default is Tor
+  (2026-09-18)** — no `[egress]` section means `network = "tor"`:
+  `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides), `route_llm_api =
+  true`, fail-closed. `network = "open"` = direct. Build HTTP clients for
+  tools with `egress::policy().tool_client` (redirects off — `http_request`
+  follows them itself so every hop is re-checked), LLM provider clients with
+  `llm_api_client`, MCP-http with `mcp_client`; spawn shells via
+  `shell_command`. The Claude Code CLI gets `HTTPS_PROXY` (`claude_cli_env`)
+  and teloxide gets a reqwest 0.11 client (`reqwest011`, 30s/60s timeouts), both via the HTTP CONNECT form of the proxy
+  (Arti serves CONNECT on the SOCKS port). A bare `reqwest::Client::builder()`
+  on a runtime path bypasses Tor. The *resolved* policy crosses to
+  `run-agent` / `mcp-bridge` as `TENGU_EGRESS` (wins over the child's
+  config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl`. `tengu doctor
+  --tor` verifies the exit; `make tor` runs the proxy (`deploy/tor/`: Arti +
+  lyrebird-rs from `../lyrebird-rs`). Unit tests must not call
+  `egress::install` (process-global).
 - **MCP bridge tool names are prefixed `mcp__tengu-tools__<name>`** — when
   Claude Code calls a tengu tool through the bridge, the model sees
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
@@ -410,7 +450,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-12 (audit pass: scope enforcement, plan_state IPC, run-docs rewrite; previously 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-18 (Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

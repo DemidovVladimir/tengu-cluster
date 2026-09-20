@@ -74,6 +74,10 @@ pub(crate) fn build_engine(
                     .as_ref()
                     .map(|c| c.builtin_tools_profile.as_str())
                     .unwrap_or("editor_shell");
+                // `[egress]`: builtin Bash has no egress control — dropped
+                // while a proxy is set. The CLI's own API traffic follows
+                // `claude_cli_env` (HTTPS_PROXY) inside the engine.
+                let profile = crate::adapters::egress::policy().claude_code_profile(profile);
                 let model_opt = if agent_config.model.is_empty() {
                     None
                 } else {
@@ -139,7 +143,7 @@ pub fn build_openrouter_engine_with_limits(
         context_window,
         request_timeout_secs,
         max_output_tokens_override,
-    )))
+    )?))
 }
 
 // ---------------------------------------------------------------------------
@@ -238,9 +242,19 @@ impl OpenRouterEngine {
         context_window: usize,
         request_timeout_secs: u64,
         max_output_tokens_override: Option<u32>,
-    ) -> Self {
+    ) -> Result<Self> {
         let context_window_tokens = context_window;
-        Self {
+        // Proxied iff `[egress] route_llm_api`.
+        let client = crate::adapters::egress::policy().llm_api_client(
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                // Total timeout covers the body read. With `stream: false`
+                // OpenRouter sends 200 immediately and holds the body until
+                // generation ends, so long reasoning turns need headroom.
+                // Sourced from `[limits] request_timeout_secs`.
+                .timeout(std::time::Duration::from_secs(request_timeout_secs)),
+        )?;
+        Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
             api_key: api_key.to_string(),
@@ -248,16 +262,8 @@ impl OpenRouterEngine {
             max_output_tokens_override,
             referer: std::env::var("OPENROUTER_REFERER").ok(),
             title: std::env::var("OPENROUTER_TITLE").ok(),
-            client: reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(30))
-                // Total timeout covers the body read. With `stream: false`
-                // OpenRouter sends 200 immediately and holds the body until
-                // generation ends, so long reasoning turns need headroom.
-                // Sourced from `[limits] request_timeout_secs`.
-                .timeout(std::time::Duration::from_secs(request_timeout_secs))
-                .build()
-                .unwrap_or_default(),
-        }
+            client,
+        })
     }
 
     fn convert_tools(tools: &[ToolDef]) -> Vec<OpenRouterToolDef> {
@@ -985,7 +991,8 @@ mod tests {
                 .await;
         });
 
-        let engine = OpenRouterEngine::new(&format!("http://{addr}"), "m", "k", 8_000, 600, None);
+        let engine =
+            OpenRouterEngine::new(&format!("http://{addr}"), "m", "k", 8_000, 600, None).unwrap();
         let messages = vec![Message {
             role: Role::User,
             content: "hi".to_string(),
@@ -1042,11 +1049,12 @@ mod tests {
 
     #[test]
     fn budget_reservation_reflects_configured_cap() {
-        let capped = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, Some(8192));
+        let capped =
+            OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, Some(8192)).unwrap();
         assert_eq!(capped.max_output_tokens_per_turn(), 8192);
 
         // Unset falls back to the context-scaled reservation estimate.
-        let unset = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, None);
+        let unset = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, None).unwrap();
         assert_eq!(unset.max_output_tokens_per_turn(), 16_384);
     }
 }

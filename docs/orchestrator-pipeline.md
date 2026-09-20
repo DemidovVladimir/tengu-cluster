@@ -4,6 +4,8 @@ Precise map of how orchestration was built, how it runs, and where every piece l
 
 Covers: construction history, runtime pipeline, parallel + sequential + diamond execution, retention.
 
+Current shape (post-#13): planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), step memory = Postgres `agentic_memory` (`postgres_memory`). `OrchestratorAgentPlanner`, in-process `ChatWorker`, `roster.rs`, `telemetry.rs`, `orchestrator/config.rs`, `vector/qdrant.rs` are gone. Line numbers below are as of 2026-09-18.
+
 ---
 
 ## 1. How this was built — PR timeline
@@ -31,7 +33,8 @@ gitGraph
 | #10 | `18711e1` | +~400 / −~50 | Fixed 6 limitations (batch embed, delete, clear_all, stats, `@role:` toggle, activity) |
 | #11 | `1002957` | +~500 | 20-scenario runbook + eval orchestrator dispatch + prose-JSON parser |
 | #12 | `f14bfc6` | +~1200 | Skill lifecycle (metrics + distill + evolve) |
-| #13 | open | +~600 | Retention, `--no-persist`, TUI memory config, validation checklist |
+| #13 | `695f19d` | +~600 | Retention, `--no-persist`, TUI memory config, validation checklist |
+| post-#13 | see `docs/SESSION_HANDOFF.md` | — | Phases 4–7: `RagPlanner` + `SubprocessRunner` (`tengu run-agent`) replaced `OrchestratorAgentPlanner` + `ChatWorker`; single sandbox config (`agents/*.toml` removed); Tor-by-default egress |
 
 ---
 
@@ -42,49 +45,55 @@ flowchart TB
     subgraph Channel["Channel layer"]
         TG["Telegram<br/><code>telegram_builder.rs</code>"]
         TUI["TUI<br/><code>tui/mod.rs</code>"]
+        WH["Webhooks<br/><code>webhook_builder.rs</code>"]
         Eval["Eval runner<br/><code>eval_builder.rs</code>"]
     end
 
     subgraph Orchestration["Orchestrator subsystem<br/><code>src/adapters/orchestrator/</code>"]
         Handle["Orchestrator::handle<br/><code>mod.rs:93</code>"]
-        Replan["replan::drive<br/><code>replan.rs</code>"]
-        Planner["OrchestratorAgentPlanner<br/><code>planner.rs</code>"]
-        Executor["DagExecutor::run<br/><code>executor.rs:64</code>"]
+        Replan["replan::drive<br/><code>replan.rs:12</code>"]
+        Planner["RagPlanner<br/><code>planner.rs:234</code><br/>TENGU_PLANNER_REGISTRY.md"]
+        Executor["DagExecutor::run<br/><code>executor.rs:38</code>"]
         Retry["RetryPolicy<br/><code>retry.rs</code>"]
         Events["EventBus<br/><code>events.rs</code>"]
     end
 
-    subgraph Workers["Worker step dispatch"]
-        Factory["ChatServiceFactory<br/><code>wiring.rs:30</code>"]
-        ChatWorker["ChatWorker::run_step<br/><code>wiring.rs:47</code>"]
-        Inject["MemoryInjector<br/><code>memory/injector.rs</code>"]
+    subgraph PlannerTurn["Planner-side LLM turn (tools=[])"]
+        Port["ChatOrchestratorPortImpl<br/><code>wiring.rs:91</code>"]
         Write["MemoryWriter<br/><code>memory/writer.rs</code>"]
+        Factory["RuntimeChatServiceFactory<br/><code>channel_runtime.rs:1007</code>"]
+        ChatRT["ChatRuntimeService<br/><code>chat_builder.rs</code>"]
+        EngineCall["collect_engine_response<br/><code>engine_builder.rs:640</code>"]
     end
 
-    subgraph Engine["Per-agent LLM loop"]
-        ChatRT["ChatRuntimeService<br/><code>chat_builder.rs</code>"]
-        EngineCall["collect_engine_response<br/><code>engine_builder.rs:598</code>"]
+    subgraph Workers["Worker step dispatch (subprocess)"]
+        Runner["SubprocessRunner::run_step<br/><code>runner.rs:261</code>"]
+        Child["tengu run-agent<br/><code>main.rs::run_agent_subprocess</code><br/>own LLM + tools loop"]
+        AM["Postgres agentic_memory<br/><code>plugins/agentic_memory/</code><br/>compress_and_store"]
     end
 
     TG -->|per-message snapshot| Handle
     TUI -->|per-turn snapshot| Handle
+    WH -->|one-shot turn per POST| Handle
     Eval -->|EvalChatServiceFactory| Handle
 
     Handle --> Replan
     Replan --> Planner
-    Planner -->|JSON plan| Replan
-    Replan --> Executor
-    Executor --> Retry
-    Retry --> ChatWorker
-    Executor -.broadcast.-> Events
-
-    ChatWorker --> Inject
-    Inject -->|"<memory-context>"| Factory
+    Planner --> Port
+    Port --> Factory
     Factory --> ChatRT
     ChatRT --> EngineCall
-    EngineCall -->|assistant text| Factory
-    Factory --> Write
-    Write -.spawned.-> ChatWorker
+    EngineCall -->|plan JSON| Port
+    Port -.-> Write
+    Planner -->|PlannerVerdict| Replan
+    Replan --> Executor
+    Executor --> Retry
+    Retry --> Runner
+    Runner -->|AgentIpcInput · stdin JSON · plan_state| Child
+    Child -->|AgentIpcOutput · summary + metrics| Runner
+    Child -.-> AM
+    AM -.recall lanes.-> Planner
+    Executor -.broadcast.-> Events
 
     Events -.subscribers.-> TG
     Events -.subscribers.-> TUI
@@ -94,24 +103,25 @@ flowchart TB
 **ASCII mirror** (same graph, text only):
 
 ```
-┌─────────── Channels ───────────┐
-│ Telegram │ TUI │ Eval runner   │
-└────┬───────┬──────┬────────────┘
-     │       │      │
-     ▼       ▼      ▼   (each provides a ChatServiceFactory closure)
-┌─────────────────────────────────┐
-│   Orchestrator::handle          │   orchestrator/mod.rs:93
-│    └─▶ replan::drive            │   orchestrator/replan.rs
-│         ├─▶ Planner::plan       │   orchestrator/planner.rs
-│         │   (returns verdict)   │
-│         └─▶ DagExecutor::run    │   orchestrator/executor.rs:64
-│              ├─▶ RetryPolicy    │   orchestrator/retry.rs
-│              └─▶ ChatWorker     │   orchestrator/wiring.rs:47
-│                   ├ Inject ─┐   │   memory/injector.rs
-│                   ├ Factory │   │   orchestrator/wiring.rs:30
-│                   │    └ ChatRuntimeService → collect_engine_response
-│                   └ Write    │   memory/writer.rs  (spawned)
-└─────────────────────────────────┘
+┌────────────── Channels ──────────────┐
+│ Telegram │ TUI │ Webhooks │ Eval     │
+└────┬───────┬───────┬────────┬────────┘
+     │       │       │        │
+     ▼       ▼       ▼        ▼   (each provides a ChatServiceFactory for the planner turn)
+┌────────────────────────────────────────┐
+│   Orchestrator::handle                 │   orchestrator/mod.rs:93
+│    └─▶ replan::drive                   │   orchestrator/replan.rs:12
+│         ├─▶ RagPlanner::plan           │   orchestrator/planner.rs:638
+│         │    ├ ensure_planner_registry │   orchestrator/shared_files.rs:80
+│         │    ├ ChatOrchestratorPortImpl│   orchestrator/wiring.rs:91 (tools=[])
+│         │    └ parse_verdict           │   orchestrator/planner.rs:109
+│         ├─▶ set_active_plan + TENGU_PLAN.md   shared_files.rs:39 / :128
+│         └─▶ DagExecutor::run           │   orchestrator/executor.rs:38
+│              ├─▶ RetryPolicy           │   orchestrator/retry.rs:37
+│              └─▶ SubprocessRunner      │   runner.rs:261
+│                   └ tengu run-agent    │   main.rs:635 (own LLM + tools loop)
+│                        └ compress_and_store → Postgres agentic_memory
+└────────────────────────────────────────┘
         │
         └─▶ EventBus (broadcast) ─▶ subscribers render progress
 ```
@@ -123,23 +133,27 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant User
-    participant Channel as Channel<br/>(TG/TUI/Eval)
+    participant Channel as Channel<br/>(TG/TUI/Webhook/Eval)
     participant Orch as Orchestrator
-    participant Plan as Planner
+    participant Plan as RagPlanner
+    participant LLM as Planner LLM<br/>(tools=[])
     participant Exec as DagExecutor
     participant Retry as RetryPolicy
-    participant W as ChatWorker
-    participant Mem as MemoryManager
-    participant LLM as LLM engine
+    participant Runner as SubprocessRunner
+    participant Child as tengu run-agent
+    participant Mem as agentic_memory<br/>(Postgres)
 
     User->>Channel: prompt
     Channel->>Channel: build orchestrator_snapshots<br/>(one ChatTurnInputs per agent)
     Channel->>Orch: handle(prompt)
     Orch->>Plan: plan(prompt)
-    Plan->>LLM: orchestrator agent turn<br/>(tools=[])
+    Plan->>Plan: ensure_planner_registry<br/>(regenerate TENGU_PLANNER_REGISTRY.md)
+    Plan->>Mem: recall lanes (postgres_memory)
+    Plan->>LLM: run_turn_with_system<br/>(skills/orchestrator/SKILL.md, tools=[])
     LLM-->>Plan: JSON verdict
-    Plan->>Plan: parse_verdict<br/>(raw → fences → prose)
+    Plan->>Plan: parse_verdict<br/>(raw → fences → prose → Direct fallback)
     Plan-->>Orch: PlannerVerdict::Plan{steps}
+    Orch->>Orch: set_active_plan(session_id) + write TENGU_PLAN.md
     Orch->>Exec: run(plan, worker, cancel)
     Orch-->>Channel: emit PlanCreated
 
@@ -148,14 +162,13 @@ sequenceDiagram
         Exec->>Exec: tokio::spawn per ready step
         Exec-->>Channel: emit StepStarted
         Exec->>Retry: run_step_with_retry
-        Retry->>W: run_step(step, step_inputs)
-        W->>Mem: injector::for_turn(agent, goal)
-        Mem-->>W: <memory-context> block
-        W->>W: compose content = memblock + inputs + goal
-        W->>LLM: ChatServiceFactory.run_turn(agent, content)
-        LLM-->>W: assistant text
-        W->>Mem: writer::sync_turn (spawned)
-        W-->>Retry: Ok(output) or Err
+        Retry->>Runner: run_step(step, step_inputs)
+        Runner->>Runner: agents.get(step.agent) — fail fast if unknown
+        Runner->>Child: spawn; AgentIpcInput on stdin<br/>(goal + step_inputs, plan_state, sandbox_config)
+        Child->>Child: LLM + tools loop (max_tool_rounds)
+        Child->>Mem: compress_and_store / summary backstop
+        Child-->>Runner: AgentIpcOutput (summary, metrics) on stdout
+        Runner-->>Retry: Ok(summary) or Err (step_timeout_secs)
         Retry-->>Exec: StepOutcome::Ok | Exhausted
         Exec-->>Channel: emit StepSucceeded/Failed
     end
@@ -178,20 +191,24 @@ sequenceDiagram
 
 | Step in diagram | File | Line |
 |---|---|---|
-| Channel builds snapshots | `telegram_builder.rs::execute_orchestrator_turn` | 1397 |
-|  | `tui/mod.rs` snapshot block | ~138 |
+| Channel builds snapshots | `telegram_builder.rs::execute_orchestrator_turn` | 1420 (loop 1451, publish 1538, handle 1551) |
+|  | `tui/mod.rs` | ~189 (construct), 798 (snapshot write), 804 (handle) |
+|  | `webhook_builder.rs` | 257 |
 | `Orchestrator::handle` | `orchestrator/mod.rs` | 93 |
-| `replan::drive` | `orchestrator/replan.rs` | — |
-| `Planner::plan` (verdict parsing) | `orchestrator/planner.rs` | 77 (parse_verdict) |
-| `DagExecutor::run` | `orchestrator/executor.rs` | 64 |
-| `ready_steps` | `orchestrator/plan.rs` | 94 |
-| `tokio::spawn` per step | `orchestrator/executor.rs` | ~85 |
-| `run_step_with_retry` | `orchestrator/retry.rs` | — |
-| `ChatWorker::run_step` | `orchestrator/wiring.rs` | 47 |
-| `MemoryInjector::for_turn` | `memory/injector.rs` | — |
-| `ChatServiceFactory::run_turn` | `orchestrator/wiring.rs` | 30 (trait) |
-| `MemoryWriter::sync_turn` | `memory/writer.rs` | — |
-| `collect_engine_response` | `engine_builder.rs` | 598 |
+| `replan::drive` | `orchestrator/replan.rs` | 12 |
+| `RagPlanner::plan` / `parse_verdict` | `orchestrator/planner.rs` | 638 / 109 |
+| Registry + active plan | `orchestrator/shared_files.rs` | `ensure_planner_registry` 80, `routable_agents` 168, `set_active_plan` 39 |
+| `DagExecutor::run` | `orchestrator/executor.rs` | 38 |
+| `ready_steps` | `orchestrator/plan.rs` | 91 |
+| `tokio::spawn` per step | `orchestrator/executor.rs` | 74 |
+| `render_step_inputs` | `orchestrator/executor.rs` | 136 |
+| `run_step_with_retry` | `orchestrator/retry.rs` | 37 |
+| `SubprocessRunner::run_step` / `run_with_timeout` | `runner.rs` | 261 / 183 |
+| `run_agent_subprocess` (child) | `main.rs` | 635 |
+| `ChatOrchestratorPortImpl` (planner LLM turn) | `orchestrator/wiring.rs` | 91 |
+| `ChatServiceFactory` trait | `orchestrator/wiring.rs` | 49 |
+| `MemoryWriter::sync_turn` (planner turn only) | `memory/writer.rs` | 11 |
+| `collect_engine_response` | `engine_builder.rs` | 640 |
 
 ---
 
@@ -238,21 +255,23 @@ T+22.9s  orchestrator:plan_completed  cancelled=false
 
 ### Key invariant proved
 
-`s2` starts **only after** `s1 succeeds` (gap between lines 4 and 5 above). `DagExecutor::run` at `executor.rs:64` loops:
+`s2` starts **only after** `s1 succeeds` (gap between lines 4 and 5 above). `DagExecutor::run` at `executor.rs:38` loops:
 
 1. `let ready = plan.ready_steps(&completed)` — `s2` is NOT in ready while `s1` is in-flight (its dep isn't completed).
 2. When s1 succeeds, `completed.insert(s1)`, next iteration includes s2 in ready.
-3. `render_step_inputs` at `executor.rs:~175` builds `<step-input from="s1">...</step-input>` and prepends to s2's user message.
+3. `render_step_inputs` at `executor.rs:136` builds `<step-input from="s1">...</step-input>` and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
 
 ### Code reference
 
-`orchestrator/plan.rs:94` — `Plan::ready_steps`:
+`orchestrator/plan.rs:91` — `Plan::ready_steps`:
 ```rust
 pub fn ready_steps(&self, completed: &HashSet<StepId>) -> Vec<&Step> {
-    self.steps.iter().filter(|s|
-        !completed.contains(&s.id)
-        && s.depends_on.iter().all(|d| completed.contains(d))
-    ).collect()
+    self.steps
+        .iter()
+        .filter(|s| {
+            !completed.contains(&s.id) && s.depends_on.iter().all(|d| completed.contains(d))
+        })
+        .collect()
 }
 ```
 
@@ -318,20 +337,24 @@ T+15.2s  orchestrator:plan_completed
 
 ### Key invariant proved
 
-**Interleaving of tool calls** is the signature of true concurrency. If one researcher had done all four sequentially, tool calls would be grouped by researcher (all of s1's calls, then all of s2's, etc.). The interleaving visible in timeline rows 5–8 = `tokio::spawn` ran them concurrently.
+**Interleaving of tool calls** is the signature of true concurrency. If one researcher had done all four sequentially, tool calls would be grouped by researcher (all of s1's calls, then all of s2's, etc.). The interleaving visible in timeline rows 5–8 = `tokio::spawn` ran them concurrently — each step is its own `tengu run-agent` child, so the tool calls come from four processes.
 
 ### Code reference
 
-`orchestrator/executor.rs:64` — the loop:
+`orchestrator/executor.rs:62` — the loop (spawn at `:74`):
 ```rust
-for step in ready {
-    if !in_flight.contains(&step.id) {
-        in_flight.insert(step.id.clone());
-        futures.push(tokio::spawn(async move {
-            let outcome = run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events).await;
-            (step_clone.id, outcome)
-        }));
+for step in plan.ready_steps(&completed) {
+    if in_flight.contains(&step.id) {
+        continue;
     }
+    let step_inputs = render_step_inputs(step, &completed_outputs);
+    // ... clone worker / policy / events / step ...
+    in_flight.insert(step.id.clone());
+    let _ = events.send(OrchestratorEvent::StepStarted { step_id: step.id.clone(), agent: step.agent.clone() });
+    futures.push(tokio::spawn(async move {
+        let outcome = run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events).await;
+        (step_clone.id, outcome)
+    }));
 }
 ```
 
@@ -422,13 +445,13 @@ The planner's first plan was valid topology but used an invented agent name `ana
 
 ```mermaid
 flowchart TB
-    A["Plan #1 — s1:analyst ..."] --> B{"plan.validate<br/>known_agents=[orchestrator, researcher, writer]"}
-    B -->|PlanError::UnknownAgent| C["run_step_with_retry<br/>3 attempts"]
+    A["Plan #1 — s1:analyst ..."] --> B{"SubprocessRunner::run_step<br/>agents.get(&quot;analyst&quot;) — runner.rs:261"}
+    B -->|Err: no agents.analyst block| C["run_step_with_retry<br/>3 attempts"]
     C -->|all fail| D["StepExhausted"]
     D --> E["ReplanTriggered"]
     E --> F["planner.replan with failure context"]
     F --> G["Plan #2 — s1:researcher ..."]
-    G --> H{"plan.validate"}
+    G --> H{"agents.get(&quot;researcher&quot;)"}
     H -->|Ok| I["DagExecutor::run"]
     I --> J["PlanCompleted"]
 ```
@@ -438,20 +461,20 @@ flowchart TB
 ```
 T+0.0s   plan_created  steps=[s1:analyst(deps=[]), ...]   ← bad agent
 T+0.1s   step_started  s1:analyst
-T+0.2s   step_failed   s1 attempt=1 err=unknown agent: analyst
-T+0.3s   step_failed   s1 attempt=2 err=unknown agent: analyst
-T+0.4s   step_failed   s1 attempt=3 err=unknown agent: analyst
+T+0.2s   step_failed   s1 attempt=1 err=step s1: agent "analyst" has no `[agents.analyst]` block ...
+T+0.3s   step_failed   s1 attempt=2 err=(same)
+T+0.4s   step_failed   s1 attempt=3 err=(same)
 T+0.5s   step_exhausted  s1
-T+0.5s   replan_triggered  unknown agent: analyst
+T+0.5s   replan_triggered  step s1: agent "analyst" has no `[agents.analyst]` block ...
 T+3.2s   plan_created  steps=[s1:researcher(deps=[]), ...]   ← repaired plan
 ...continues normally
 ```
 
 ### Code reference
 
-- Validation rejects: `orchestrator/plan.rs::validate` (lines ~60)
-- Retry at step level: `orchestrator/retry.rs::run_step_with_retry` — 3 attempts then `StepExhausted`
-- Replan driver: `orchestrator/replan.rs::drive`:
+- Unknown agent fails fast (no spawn): `runner.rs::run_step` (`:261`) — `agents` = the parent config's `[agents.*]`; the planner only sees the `description`-bearing subset (`shared_files::routable_agents`). `plan.rs::validate` (`:104`) is topology-only and exercised by unit tests, not the runtime path.
+- Retry at step level: `orchestrator/retry.rs::run_step_with_retry` (`:37`) — 3 attempts, backoff 1s/3s/9s, then `StepExhausted`
+- Replan driver: `orchestrator/replan.rs::drive` (`:12`):
 
 ```rust
 ExecResult::NeedsReplan { failed, error } => {
@@ -468,7 +491,7 @@ Bounded by `OrchestratorConfig.max_replans` (default 2).
 
 ## 8. How each channel provides the factory
 
-The same `Orchestrator::handle` works for all three channels. They differ only in **how** they build the `ChatInputsFn` closure that `RuntimeChatServiceFactory::run_turn` calls.
+The same `Orchestrator::handle` works for all four channels. They differ only in **how** they build the `ChatInputsFn` closure that `RuntimeChatServiceFactory::run_turn` calls — this feeds the **planner-side** turn only; worker steps are `tengu run-agent` subprocesses (`SubprocessRunner`) and never touch the snapshots.
 
 ### 8.1 Telegram (per-message snapshot)
 
@@ -485,19 +508,23 @@ flowchart TB
     BuildService --> Loop["collect_engine_response + tool loop"]
 ```
 
-**Code:** `telegram_builder.rs:1397` — `execute_orchestrator_turn`. Snapshot loop at lines 1416–1486. Publish at 1488. Handle at 1521.
+**Code:** `telegram_builder.rs:1420` — `execute_orchestrator_turn`. Snapshot loop at lines 1451–1536. Publish at 1538. Handle at 1551.
 
 ### 8.2 TUI (per-turn snapshot)
 
-Same shape; the engine thread's `ChatRequest::UserMessage` branch writes snapshots before `rt.block_on(orch.handle(text))`.
+Same shape; the engine thread's `ChatRequest::UserMessage` branch (`tui/mod.rs:705`) writes snapshots (`:798`) before `rt.block_on(orch.handle(text))` (`:804`).
 
-**Code:** `tui/mod.rs:~540+` — same snapshot pattern.
+**Code:** `tui/mod.rs:189` — snapshots + `build_orchestrator`; `:798` — same snapshot pattern.
 
 ### 8.3 Eval (per-step factory closure)
 
 The eval runner doesn't need snapshots — it rebuilds the per-agent ChatRuntimeService inside each `run_turn` call, using the `EvalRowAccum` to thread the row's stubs + observation tap across every worker step.
 
-**Code:** `eval_builder.rs::EvalChatServiceFactory::run_turn` — search for the comment "Shared state threaded through every worker step".
+**Code:** `eval_builder.rs::run_row_via_orchestrator` (`:1796`), `EvalChatServiceFactory` (`:1632`) — search for the comment "Shared state threaded through every worker step" (`:1803`). Row stubs apply to the planner turn; worker steps run as real `tengu run-agent` children and their metrics cross the IPC boundary (`AgentIpcOutput.metrics`).
+
+### 8.4 Webhooks (one-shot turn per POST)
+
+`webhook_builder.rs:257` — `build_orchestrator` per request, `session_id = webhook-<name>-<uuid>`. Canonical doc: `docs/webhooks-2026-05-11.md`.
 
 ---
 
@@ -588,11 +615,13 @@ So even if retention fires AFTER a run (pruning last time), nothing between runs
 # Zero files written, single row, ~$0.05
 ```
 
-### Interactive (TUI with memory)
+### Interactive (TUI, orchestrated sandbox)
 ```bash
-# See docs/configs/tui-memory-smoke.toml for setup
-cd ~/tengu-memory-smoke
-/Users/vladimirdemidov/development/tengu-cluster/target/release/tengu chat
+# aura sets [egress] network = "open"; any other sandbox needs `make tor` first (Tor is the default)
+cargo run --features claude_code -- chat --sandbox aura
+# researcher/writer scenarios: sandboxes/<name>/config.toml = config.example.toml + [orchestrator]
+# + one [agents.<name>] block per worker with a `description` (only those are routable)
+cargo run -- chat --sandbox <name>
 # Then manually test scenarios from docs/orchestration-test-scenarios.md
 ```
 
@@ -610,15 +639,18 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 |---|---|---|
 | **Orchestrator public API** | `src/adapters/orchestrator/mod.rs` | `Orchestrator::new`, `::handle`, `::subscribe`, `::cancel` |
 | **Replan loop** | `src/adapters/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events, cancel)` |
-| **Planner** | `src/adapters/orchestrator/planner.rs` | `Planner` trait, `OrchestratorAgentPlanner`, `parse_verdict`, `extract_balanced_json_object` |
-| **DAG executor** | `src/adapters/orchestrator/executor.rs` | `DagExecutor::run`, `WorkerHandle` trait, `ExecResult` |
+| **Planner** | `src/adapters/orchestrator/planner.rs` | `Planner` trait, `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` |
+| **Planner registry + plan state** | `src/adapters/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry`, `set_active_plan`, `write_plan_state`, `enumerate_mcp_tools` |
+| **DAG executor** | `src/adapters/orchestrator/executor.rs` | `DagExecutor::run`, `WorkerHandle` trait, `ExecResult`, `render_step_inputs` |
+| **Worker (subprocess)** | `src/adapters/runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput` |
+| **Subagent child** | `src/main.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`) |
 | **Retry** | `src/adapters/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`, backoff `{1s, 3s, 9s}` |
 | **Plan types + topology** | `src/adapters/orchestrator/plan.rs` | `Step`, `StepId`, `Plan::ready_steps`, `Plan::validate`, `Plan::single_leaf` |
 | **Events** | `src/adapters/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
-| **ChatServiceFactory wiring** | `src/adapters/orchestrator/wiring.rs` | `ChatServiceFactory` trait, `ChatWorker`, `ChatOrchestratorPortImpl` |
-| **Roster rendering** | `src/adapters/orchestrator/roster.rs` | `render_roster(agents, exclude)`, `substitute_roster(template, md)` |
-| **Telegram channel dispatch** | `src/adapters/telegram_builder.rs` | `execute_orchestrator_turn` (line 1397), orchestrator_snapshots field (line 497) |
-| **TUI channel dispatch** | `src/adapters/tui/mod.rs` | orchestrator branch in engine thread (~line 540) |
+| **ChatServiceFactory wiring** | `src/adapters/orchestrator/wiring.rs` | `ChatServiceFactory` trait, `ChatOrchestratorPortImpl` (planner turn; `ChatWorker` removed) |
+| **Telegram channel dispatch** | `src/adapters/telegram_builder.rs` | `execute_orchestrator_turn` (line 1420), orchestrator_snapshots field (line 514) |
+| **TUI channel dispatch** | `src/adapters/tui/mod.rs` | orchestrator branch in engine thread (~line 798) |
+| **Webhook channel dispatch** | `src/adapters/webhook_builder.rs` | `build_orchestrator` per POST (line 257) |
 | **Eval channel dispatch** | `src/adapters/eval_builder.rs` | `run_row_via_orchestrator`, `EvalChatServiceFactory` |
 | **Eval retention** | `src/adapters/eval_builder.rs` | `prune_old_run_dirs`, `EvalArgs::keep_runs` / `no_persist` / `max_per_run_reports` |
 | **Memory provider** | `src/adapters/memory/provider.rs` | `MemoryProvider` trait |
@@ -629,10 +661,10 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **Builtin provider** | `src/adapters/memory/builtin.rs` | `BuiltinMemoryProvider` |
 | **Vector store trait** | `src/adapters/memory/vector.rs` | `VectorStore` trait: `write`, `search`, `delete`, `clear_all`, `entry_count`, `storage_bytes` |
 | **Disk store** | `src/adapters/memory/vector/disk.rs` | `DiskVectorStore`, bincode-backed |
-| **legacy vector DB store** | `src/adapters/memory/vector/qdrant.rs` | `QdrantVectorStore`, optional feature |
+| **Agentic memory (Postgres)** | `src/adapters/plugins/agentic_memory/mod.rs` | `AgenticMemoryPlugin` (`postgres_memory` feature) — step summaries, planner recall lanes |
 | **Embedder** | `src/adapters/memory/vector/embedder.rs` | `Embedder::embed`, `::embed_batch` (single HTTP call for N inputs) |
-| **Channel runtime helpers** | `src/adapters/channel_runtime.rs` | `build_orchestrator`, `build_memory_manager`, `RuntimeChatServiceFactory`, `OrchestratorSnapshots`, `snapshots_inputs_fn` |
-| **Config schema** | `src/adapters/config.rs` | `OrchestratorConfig` (agent, max_attempts_per_step, max_replans, route_explicit_agents) |
+| **Channel runtime helpers** | `src/adapters/channel_runtime.rs` | `build_orchestrator`, `build_memory_manager`, `RuntimeChatServiceFactory`, `OrchestratorSnapshots`, `snapshots_inputs_fn`, `subagent_config`, `build_subprocess_tool_executor` |
+| **Config schema** | `src/adapters/config.rs` | `OrchestratorConfig` (agent, max_attempts_per_step, max_replans, route_explicit_agents, engine=`"rag"`); `AgentConfig.description` (routable subagent), `LimitsConfig.{max_tool_rounds,step_timeout_secs}` |
 
 ---
 
@@ -640,12 +672,13 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 
 | Doc | Purpose |
 |---|---|
-| `docs/architecture.md` | Top-level doctrine (what the harness owns) |
-| `docs/harness-architecture.md` | Full subsystem map, file tables, request lifecycle |
+| `docs/architecture-2026-04-27.md` | Canonical per-turn walkthrough + file map |
+| `docs/configuration.md` | Sandbox config reference (`[orchestrator]`, `[agents.*]`, `[egress]`) |
+| `docs/harness-architecture.md` (superseded) | Historical (PR #6–#13) subsystem map; pre-`SubprocessRunner` |
 | `docs/orchestration-test-scenarios.md` | 20 manual TUI/Telegram test scenarios (S-01 through S-20) |
 | `docs/validation-checklist.md` | Top-to-bottom validation runbook (~30 min pass) |
-| `docs/configs/tui-memory-smoke.toml` | Ready-to-paste config for memory scenarios |
-| `docs/superpowers/specs/2026-04-20-harness-orchestration-memory-design.md` | Original design spec |
-| `docs/superpowers/plans/2026-04-20-harness-orchestration-memory.md` | Original implementation plan (40 tasks) |
+| `config.example.toml` | Commented config template (uncomment `[orchestrator]` + `[agents.<name>]` with `description`) |
+| `docs/superpowers/specs/2026-04-20-harness-orchestration-memory-design.md` | Original design spec (archived) |
+| `docs/superpowers/plans/2026-04-20-harness-orchestration-memory.md` | Original implementation plan, archived (40 tasks) |
 | `skills/orchestration-e2e/evals/prompts.yaml` | 9 automated eval rows |
 | `skills/orchestration-e2e/evals/config.toml` | Eval-runner config (prompt + agents) |

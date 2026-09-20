@@ -1,5 +1,5 @@
 //! Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]`
-//! TOML section of `tengu.toml`.
+//! TOML section of `sandboxes/<name>/config.toml` (or `~/.tengu/config.toml`).
 
 use serde::{Deserialize, Serialize};
 

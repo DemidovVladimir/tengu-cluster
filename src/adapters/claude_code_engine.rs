@@ -148,6 +148,9 @@ impl ClaudeCodeEngine {
         });
         env[crate::adapters::mcp_bridge::TENGU_BRIDGE_SCOPES_ENV] =
             serde_json::Value::String(scopes_json);
+        // The bridge runs the tools — it must apply the parent's egress policy.
+        env[crate::adapters::egress::EGRESS_ENV] =
+            serde_json::Value::String(crate::adapters::egress::policy().child_env());
         // Forward persistent store chunk config if set in the parent process.
         if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_SIZE") {
             env["TENGU_PERSISTENT_STORE_CHUNK_SIZE"] = serde_json::Value::String(v);
@@ -155,14 +158,14 @@ impl ClaudeCodeEngine {
         if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP") {
             env["TENGU_PERSISTENT_STORE_CHUNK_OVERLAP"] = serde_json::Value::String(v);
         }
-        // Phase 7.6 — forward session id so the bridge's compress_and_store
-        // handler stamps writes to tengu_outputs with the right key.
-        // Without this the plugin falls back to the placeholder "subagent".
+        // Phase 7.6 — forward session id so `agentic_memory` `capture` in the
+        // bridge stamps `session_id` on Open Brain writes when the LLM omits
+        // it (the MCP config replaces the inherited env).
         if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
             env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
         }
         // Forward OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
-        // + Embedder) and the compress_and_store plugin's RagStore both need it.
+        // + Embedder) needs it.
         // The MCP config replaces inherited env, so without explicit forwarding
         // the bridge process boots without API access and memory tools silently
         // fail to register.
@@ -509,6 +512,11 @@ impl Engine for ClaudeCodeEngine {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .env_remove("ANTHROPIC_API_KEY");
+        // `[egress]`: with `route_llm_api` the CLI's own Anthropic traffic
+        // goes through the proxy's HTTP CONNECT port (Arti serves it on 9050).
+        for (k, v) in crate::adapters::egress::policy().claude_cli_env() {
+            cmd.env(k, v);
+        }
 
         // Model
         if let Some(ref model) = self.model {

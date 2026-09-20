@@ -71,6 +71,7 @@
 <div class="meta">
   Snapshot 2026-05-08 · source <a href="comparison-2026-04-26.md">comparison-2026-04-26.md</a> + <a href="SESSION_HANDOFF.md">SESSION_HANDOFF.md</a> · 9 axes · 0 = absent → 100 = parity-mature.
   Numbers are authored estimates from the cited sections, not measurements.
+  <br><strong>Superseded 2026-09-18:</strong> scores are the 2026-05-08 estimates; Tengu facts in the cite column were corrected in place (Postgres <code>agentic_memory</code>, one config per sandbox — <code>[agents.&lt;name&gt;]</code> with <code>description</code>, Tor-by-default <code>[egress]</code>).
 </div>
 
 <div class="legend">
@@ -118,31 +119,31 @@
       key: "memory",
       label: "Memory & recall",
       tengu: 60, hermes: 90, pi: 50,
-      cite: "§Memory model — Tengu writes durably to agentic_memory user events but read-back hydration (6.4) not wired; Hermes SQLite+FTS5+Honcho dialectic+summarisation; PI plain markdown, no vector recall."
+      cite: "§Memory model — Tengu: Postgres agentic_memory (pgvector + FTS, feature postgres_memory) captures user messages + step summaries; planner recall lanes cross-session (cross_session_msg_top_k) / within-session / cross-plan; promote → compile_wiki; no LLM summarisation of old sessions. Hermes SQLite+FTS5+Honcho dialectic+summarisation; PI plain markdown, no vector recall."
     },
     {
       key: "skills",
       label: "Skills lifecycle",
       tengu: 65, hermes: 95, pi: 60,
-      cite: "§Skills + self-adjustment + 2026-04-29 redesign — Tengu now has learning-agent + view_skill/manage_skill unified, 3-tier scanner; no closed auto-trigger loop. Hermes closed learning loop. PI curated marketplace + manual skill-creator."
+      cite: "§Skills + self-adjustment + 2026-04-29 redesign — Tengu: learning-agent + view_skill/manage_skill, tengu skill evolve (metric-gated, approval gate), tengu skill install, 3-tier scanner; no closed auto-trigger loop. Hermes closed learning loop. PI curated marketplace + manual skill-creator."
     },
     {
       key: "tools",
       label: "Tool breadth",
       tengu: 55, hermes: 95, pi: 80,
-      cite: "§Tools — Tengu PluginToolExecutor + MCP bridge but registry uses placeholder_tools() (open #6.6). Hermes 40+ tools, 6 terminal backends, cron, voice memo. PI Read/Write/Bash + MCP marketplace + Chrome ext + computer-use."
+      cite: "§Tools — Tengu PluginToolExecutor + MCP bridge; registry lists core + MCP tools (#6.6 closed 2026-09-12); egress.rs: Tor by default, host allow/deny ceiling, JSONL audit (code-enforced). Hermes 40+ tools, 6 terminal backends, cron, voice memo. PI Read/Write/Bash + MCP marketplace + Chrome ext + computer-use."
     },
     {
       key: "routing",
       label: "Routing & planning",
       tengu: 90, hermes: 60, pi: 75,
-      cite: "§Routing model — Tengu Open Brain / Karpathy LLM Wiki-first registry + dedicated planner LLM with stripped tools/memory (doctrine-clean). Hermes single-agent loop, model decides. PI two-tier orchestration + AskUserQuestion gate."
+      cite: "§Routing model — Tengu file-backed registry (TENGU_PLANNER_REGISTRY.md rendered from [agents.<name>] descriptions + example_queries) + dedicated planner LLM with stripped tools/memory (doctrine-clean); C→B compose fallback. Hermes single-agent loop, model decides. PI two-tier orchestration + AskUserQuestion gate."
     },
     {
       key: "surfaces",
       label: "Surfaces (chat platforms)",
       tengu: 35, hermes: 100, pi: 70,
-      cite: "§TL;DR row 'Surfaces' — Tengu: TUI + Telegram. Hermes: CLI, Telegram, Discord, Slack, WhatsApp, Signal. PI: Desktop app + Chrome ext."
+      cite: "§TL;DR row 'Surfaces' — Tengu: TUI + Telegram + webhooks listener (feature webhooks). Hermes: CLI, Telegram, Discord, Slack, WhatsApp, Signal. PI: Desktop app + Chrome ext."
     },
     {
       key: "observability",
@@ -160,13 +161,13 @@
       key: "selflearn",
       label: "Self-learning loop",
       tengu: 35, hermes: 95, pi: 35,
-      cite: "§Skills 'Self-improvement' row + §What can be improved #1 — Tengu has skill_distill + manage_skill building blocks but no post-turn auto-trigger. Hermes live in-use refinement. PI none (manual skill-creator only)."
+      cite: "§Skills 'Self-improvement' row + §What can be improved #1 — Tengu has skill_distill + manage_skill + tengu skill evolve (improver agent, approval gate) but no post-turn auto-trigger. Hermes live in-use refinement. PI none (manual skill-creator only)."
     },
     {
       key: "orchestration",
       label: "Multi-agent orchestration",
       tengu: 90, hermes: 70, pi: 75,
-      cite: "§Routing + §Tools 'Subagents' bullets — Tengu SubprocessRunner + IPC + sandbox-cross-IPC + plan/replan. Hermes subagents spawn isolated workstreams from the main loop. PI Agent tool spawns subagents."
+      cite: "§Routing + §Tools 'Subagents' bullets — Tengu SubprocessRunner + IPC (plan_state, sandbox name, resolved egress) + per-step max_tool_rounds / step_timeout_secs + plan/replan. Hermes subagents spawn isolated workstreams from the main loop. PI Agent tool spawns subagents."
     }
   ];
 

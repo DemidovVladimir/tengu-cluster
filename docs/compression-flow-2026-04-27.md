@@ -26,8 +26,8 @@ on; the other two are mechanical helpers.
 
 This is the harness-enforced "step is done" signal. Every subagent has the
 tool implicitly appended to its tool list (in
-`channel_runtime::build_subprocess_tool_executor`, gated by the `qdrant`
-feature). The model is told in its system prompt that its FINAL action MUST
+`channel_runtime::build_subprocess_tool_executor`; only the tool *definition* —
+there is no plugin handler). The model is told in its system prompt that its FINAL action MUST
 be calling `compress_and_store(summary)`.
 
 ### Why "compression"?
@@ -40,17 +40,18 @@ persists across plan/replan cycles.
 
 | Path | When | Where it runs |
 |---|---|---|
-| **A — Out-of-band** | OpenRouter subagents | `main.rs::run_agent_subprocess` intercepts the tool call BEFORE the executor. Sets `compress_called = true`, calls `write_summary` directly, breaks loop. |
-| **B — Plugin** | Claude Code subagents (Phase 7.6 fix) | MCP bridge routes through `PluginToolExecutor`. `CompressAndStoreTool::execute` calls the same `write_summary` internally. |
+| **A — Out-of-band** | OpenRouter subagents | `main.rs::run_agent_subprocess` (L971) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks loop. |
+| **B — Backstop** | Claude Code subagents | No bridge handler (`CompressAndStoreTool` removed in Phase 6) — the model usually just stops; `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
 
 With `postgres_memory`, `main.rs::run_agent_subprocess` writes the final
 summary into Open Brain-style Postgres `agentic_memory`, with embeddings when
-available and text-only fallback otherwise. Legacy vector builds keep the old
-`write_summary(rag, session_id, step_id, summary)` compatibility path.
+available and text-only fallback otherwise
+(`agentic_memory::write_step_summary_with_embedding`). Without the feature the
+summary only travels back to the parent over IPC.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 
-`main.rs:900` decides the IPC verdict:
+`main.rs:1075` decides the IPC verdict:
 
 | `compress_and_store` called? | final_text non-empty? | Verdict |
 |---|---|---|
@@ -83,7 +84,7 @@ persistent_store_chunk_overlap = 200
 When an agent calls `persistent_store` to save a file:
 1. Extract text (PDF / DOCX / XLSX / UTF-8 fallback).
 2. Run `chunk_text` to split into overlapping windows.
-3. Embed each chunk, upsert into the vector backend with a manifest.
+3. Embed each chunk, upsert into the disk bincode store (`memory/vector/disk.rs`) with a manifest.
 
 This is **mechanical chunking** — no LLM in the loop, no summarisation. It
 exists so vector search can hit sub-document granularity. Different layer
@@ -118,10 +119,10 @@ no summarisation pass — oldest turns simply drop off the end.
   per-turn flow.
 - `TENGU_PLANNER_REGISTRY.md` — root file-backed planner roster generated from
   agents, skills, and tools.
-- `src/adapters/rag/mod.rs` — legacy vector compatibility facade; not the
-  current brain architecture.
+- `src/adapters/plugins/agentic_memory/mod.rs` — Open Brain Postgres memory
+  (`postgres_memory`) that receives the step summaries.
 - `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol.
 
 ---
 
-*Last updated 2026-04-27.*
+*Last updated 2026-09-18.*

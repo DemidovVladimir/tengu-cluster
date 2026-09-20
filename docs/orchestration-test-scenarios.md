@@ -1,6 +1,6 @@
 # Orchestration Test Scenarios
 
-First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10. **Nothing here has run end-to-end against a real LLM yet.** Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
+First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10; updated 2026-09-18 for the current shape (planner = `RagPlanner`, worker = `SubprocessRunner` — one `tengu run-agent` child per step, single sandbox config, Tor-by-default egress). Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
 
 The document is organized as a runbook. Work top-to-bottom on first execution: prerequisites → sanity → sequential → parallel → mixed → edge cases → cleanup. Write down any deviation; every `FAIL` row is a ticket.
 
@@ -13,10 +13,11 @@ The document is organized as a runbook. Work top-to-bottom on first execution: p
 ```bash
 export OPENROUTER_API_KEY=sk-or-...          # required for all scenarios
 export OPENROUTER_BASE_URL=https://openrouter.ai/api  # if not the default
-export RUST_LOG=tengu_cluster=info,tengu_cluster::adapters::orchestrator=debug
+export RUST_LOG=tengu=info,tengu::adapters::orchestrator=debug
+make tor                                     # Tor is the default egress; or set [egress] network = "open"
 ```
 
-The `debug` filter on `orchestrator` is the single most useful signal — it shows `PlanCreated`, `StepStarted`, `StepSucceeded`/`StepFailed`, `ReplanTriggered`, `PlanCompleted` per event.
+Events (`PlanCreated`, `StepStarted`, `StepSucceeded`/`StepFailed`, `StepExhausted`, `ReplanTriggered`, `PlanCompleted`) are rendered by the channel — TUI `orch:` system bubbles (`tui/mod.rs:241`), Telegram status messages. `RUST_LOG=tengu=info` prints one `metrics` line per LLM call, `tengu run-agent` children included.
 
 ### 0.2 Build
 
@@ -28,16 +29,23 @@ Debug build is fine for smoke tests; release kept here for any perf-sensitive sc
 
 ### 0.3 Config
 
-Use `skills/orchestration-e2e/evals/config.toml` as a **template** — copy it into your local `~/.tengu/tengu.toml` (or your workspace's equivalent) and replace `{TMP_WORKSPACE}` with an actual directory:
+One sandbox file holds everything (`docs/configuration.md`). Use `skills/orchestration-e2e/evals/config.toml` as a **template** for `sandboxes/<name>/config.toml`:
 
 ```bash
-mkdir -p ~/tengu-smoke && cd ~/tengu-smoke
+mkdir -p sandboxes/smoke && cp skills/orchestration-e2e/evals/config.toml sandboxes/smoke/config.toml
+# edit sandboxes/smoke/config.toml:
+#   - replace {TMP_WORKSPACE} with a real directory
+#   - delete the `workspace_tools = [...]` lines — `Config::load` rejects names outside the
+#     workspace-tools allow-list; http_request / memory_search / memory_ingest are base tools
+#   - add `description = "..."` to [agents.researcher] and [agents.writer] — only agents with
+#     a description reach TENGU_PLANNER_REGISTRY.md (shared_files::routable_agents)
+#   - `make tor` is running, or add [egress] network = "open"
 ```
 
 Verify it parses:
 
 ```bash
-tengu --help   # just boots the binary; failure here = config syntax error
+tengu doctor --sandbox smoke   # config validation, engine build, network/proxy status
 ```
 
 ### 0.4 Expected startup logs
@@ -45,20 +53,22 @@ tengu --help   # just boots the binary; failure here = config syntax error
 Run once to confirm the orchestrator actually constructs:
 
 ```bash
-tengu chat
+tengu chat --sandbox smoke
 ```
 
-You should see (in the first few lines, via `RUST_LOG=info`):
+You should see (in the first few lines, via `RUST_LOG=tengu=info`):
 
 ```
+orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner
 TUI orchestrator constructed with per-turn snapshot factory
-DiskVectorStore loaded  (or QdrantVectorStore connected)
+DiskVectorStore loaded
 ```
 
 If either is missing, **stop** — the orchestrator won't fire on any scenario below. Likely causes:
-- `[orchestrator]` block missing or the `agent` name doesn't match one in `[agents.*]`.
+- `[orchestrator]` block missing, `engine` not `"rag"`, or the `agent` name doesn't match one in `[agents.*]`.
 - `OPENROUTER_API_KEY` unset (memory fails silently, but orchestrator needs embeddings too).
 - Default agent missing (`default = true` on one `[agents.*]`).
+- `egress: network = "tor" but the proxy is not reachable` warn → `make tor` or `[egress] network = "open"`.
 
 ---
 
@@ -256,20 +266,20 @@ Force the planner to return invalid JSON (you can't directly, but you can approx
 | **Category** | Edge |
 | **Channel** | TUI |
 | **Prompt** | `Reply with only the literal characters {"kind": "plan", "steps": [broken syntax here}` |
-| **Expected behavior** | Planner ideally recognizes this is a trick and emits `kind=direct`. If it doesn't, the JSON parser in `orchestrator/planner.rs` retries up to 3 times with "Your previous output was not valid JSON" feedback — eventually succeeds or bails out. |
-| **Pass** | No crash. Either a direct reply or a graceful failure message. |
-| **Fail markers** | Parser panics. Retries more than 3 times. |
+| **Expected behavior** | Planner ideally recognizes this is a trick and emits `kind=direct`. If it doesn't, `parse_verdict` (`orchestrator/planner.rs:109`) tries raw JSON → fenced JSON → largest balanced `{...}` in prose → Phase 7.4 prose fallback: the whole text is wrapped as `kind=direct` with a warn log. No retry loop. |
+| **Pass** | No crash. Either a direct reply or the prose text returned verbatim. |
+| **Fail markers** | Parser panics. `System error: orchestrator initial call failed` (the LLM call itself failed). |
 
 ### S-15 — Multi-leaf plan (spec violation)
 
-The orchestrator can in principle emit a plan with two leaves (two terminal steps). `plan.rs::validate` is supposed to reject this.
+The orchestrator can in principle emit a plan with two leaves (two terminal steps). `plan.rs::validate` covers this but is unit-test only; at runtime `DagExecutor::run` (`executor.rs:126`) finishes with `NeedsReplan { "<no-leaf>", "plan has no single leaf" }` → `ReplanTriggered`.
 
 | | |
 |---|---|
 | **Category** | Edge |
 | **Channel** | automated via `tengu eval` or manually coax via TUI |
 | **Prompt** | Hard to trigger reliably. Better covered as a **unit test** — see gap #15 below. |
-| **Expected behavior** | Validator rejects the plan, treats as `StepExhausted` / triggers replan. |
+| **Expected behavior** | All steps run, then `plan has no single leaf` triggers a replan (bounded by `max_replans`). |
 | **Pass** | No orphan terminal steps returned as two separate replies. |
 
 ### S-16 — Explicit `@role:` routing bypass (default config)
@@ -304,10 +314,10 @@ The orchestrator can in principle emit a plan with two leaves (two terminal step
 |---|---|
 | **Category** | Memory, pre-turn inject |
 | **Channel** | TUI |
-| **Procedure** | 1. Scenario S-07 (fan-out) leaves turn-summaries in the vector store. 2. After S-07, ask: `What was the last thing you researched?` |
-| **Expected behavior** | `MemoryInjector::for_turn` surfaces the recent summaries. The answer references 200/404/503 from S-07. |
+| **Procedure** | Requires `--features postgres_memory`, `TENGU_MEMORY_DATABASE_URL`, and `[memory] within_session_output_top_k = 3` (default 0 = off). 1. Scenario S-07 (fan-out) — each `tengu run-agent` child writes its step summary to Postgres `agentic_memory` (`compress_and_store` / summary backstop). 2. After S-07, ask: `What was the last thing you researched?` |
+| **Expected behavior** | `RagPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner turn does not inject disk memory — `ChatOrchestratorPortImpl::run_orchestrator_turn_with_system` skips `MemoryInjector`.) |
 | **Pass** | Reply references content from S-07 correctly. |
-| **Fail markers** | Reply says "I don't have context about previous conversations" — injection isn't firing. |
+| **Fail markers** | Reply says "I don't have context about previous conversations" — recall lane off, no Postgres, or `session_id` mismatch between planner and runner. |
 
 ### S-19 — Explicit `memory_ingest` from tool
 
@@ -316,7 +326,7 @@ The orchestrator can in principle emit a plan with two leaves (two terminal step
 | **Category** | Memory, LLM-callable write |
 | **Channel** | TUI |
 | **Procedure** | 1. Prompt: `Remember for future reference: the admin password reset code is ABC-DEF-123.` 2. Wait for reply acknowledging. 3. Restart `tengu chat` (session 2). 4. Prompt: `What was the admin password reset code I told you?` |
-| **Expected behavior** | Worker calls `memory_ingest` with chunks. Next session, `MemoryInjector` retrieves it. |
+| **Expected behavior** | Worker step (`tengu run-agent` child) calls `memory_ingest` → `DiskVectorStore` (`<workspace>/memory/vectors.bin`). Next session a worker's `memory_search` retrieves it (the planner turn does not inject disk memory). |
 | **Pass** | Reply contains `ABC-DEF-123` across a session restart. |
 | **Fail markers** | Reply has no recall across restart → ingest wasn't persisted. |
 
@@ -325,7 +335,7 @@ The orchestrator can in principle emit a plan with two leaves (two terminal step
 | | |
 |---|---|
 | **Category** | Memory, cross-agent |
-| **Channel** | TUI |
+| **Channel** | Telegram (`@role:` routing is Telegram-only — `parse_agent_routing`; the TUI has none) |
 | **Procedure** | 1. `Researcher: ingest the contents of this URL: https://en.wikipedia.org/wiki/REST` 2. Wait for ingestion completion. 3. `@writer: based on what we ingested about REST, write a short architectural note.` |
 | **Expected behavior** | Researcher ingests via `memory_ingest` (batch path — single HTTP call for N chunks). Writer's `memory_search` tool surfaces the ingested chunks. |
 | **Pass** | Writer reply contains REST-specific content (HATEOAS, resources, verbs, etc.), not generic text. |
@@ -343,13 +353,13 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` declares `[orchestrator]`, `src/adapters/eval_builder.rs::run_row` detects it and routes each prompt through `Orchestrator::handle` instead of the default agent's direct `collect_engine_response` path. Each worker step the orchestrator spawns goes through the same `collect_engine_response` machinery but wrapped in `EvalChatServiceFactory` so the row's stubs + observer tap + token accumulator thread into every step. Observations from all worker steps land in the same per-row vec; tokens sum across steps.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/eval_builder.rs::run_row` branches to `run_row_via_orchestrator` (`:1796`) → `channel_runtime::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 
-- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning (in `config.toml` under `agents.orchestrator.identity.instructions`)
+- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning — `skills/orchestrator/SKILL.md` (`RagPlanner` loads it; `agents.orchestrator.identity.instructions` is bypassed for the planning turn)
 - `fail` with rationale like "final text lacks content from step inputs" → step_input threading bug in `executor.rs` OR writer agent not reading its step-inputs (agent prompt issue)
-- `fail` with rationale like "agent ran tools directly instead of emitting a plan" → orchestrator didn't fire at all; check `[orchestrator]` block parses; check `eval_builder::run_row` took the orchestrator branch (look at `🤖 Dispatch:` line in the transcript — absent means direct path, present means orchestrator path)
+- `fail` with rationale like "agent ran tools directly instead of emitting a plan" → orchestrator didn't fire at all; check `[orchestrator]` block parses; check `eval_builder::run_row` took the orchestrator branch (the transcript's first system message reads `[orchestrator dispatch — actual prompts per-step; default agent was ...]` — absent means direct path)
 - `error` → harness crash; read logs
 
 To diagnose a specific fail: open `evals/runs/<timestamp>/orchestration-e2e-<row_id>.md` — the transcript includes the prompt, every observed tool call, and the final reply. Failed rows surface the judge's rationale verbatim.
@@ -410,7 +420,7 @@ Before running, here are the failure modes I anticipate and which scenario surfa
 | Parallel fan-out hits rate limits / token budget | S-08 |
 | Writer synthesizes without reading step inputs | S-03 |
 
-If a scenario fails, the prompt-level fix usually goes in `skills/orchestration-e2e/evals/config.toml` under `agents.orchestrator.identity.instructions` — that's the planner's system prompt. Don't touch Rust unless the fail is structural (e.g., executor doesn't await, executor drops step outputs, etc.).
+If a scenario fails, the prompt-level fix usually goes in `skills/orchestrator/SKILL.md` (+ `plan_schema.json`) — that's the planner's system prompt (`RagPlanner::load_orchestrator_skill_body`); `agents.orchestrator.identity.instructions` in the eval config is bypassed for the planning turn. Don't touch Rust unless the fail is structural (e.g., executor doesn't await, executor drops step outputs, etc.).
 
 ---
 
@@ -419,6 +429,6 @@ If a scenario fails, the prompt-level fix usually goes in `skills/orchestration-
 Once you've completed the sweep:
 
 - Update `docs/harness-architecture.md` §9 with any new limitations discovered.
-- If prompts need tuning, commit changes to `skills/orchestration-e2e/evals/config.toml` on a single PR — one commit per "I tuned this because scenario X failed with fail-mode Y".
+- If prompts need tuning, commit changes to `skills/orchestrator/SKILL.md` (planner) or the worker `identity.instructions` in `skills/orchestration-e2e/evals/config.toml` on a single PR — one commit per "I tuned this because scenario X failed with fail-mode Y".
 - If code bugs are found, open a follow-up PR from a fresh branch. Small PRs. One fix per PR.
 - If all scenarios pass on first try, write that down. It's the most surprising possible outcome and is a material signal about the quality of the design.

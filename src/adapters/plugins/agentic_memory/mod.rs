@@ -1197,11 +1197,11 @@ async fn chat_complete(system: &str, user: &str) -> Result<String> {
     let base_url = std::env::var("OPENROUTER_BASE_URL")
         .unwrap_or_else(|_| "https://openrouter.ai/api".to_string());
     let model = wiki_compiler_model();
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .unwrap_or_default();
+    let client = crate::adapters::egress::policy().llm_api_client(
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(120)),
+    )?;
 
     let request = json!({
         "model": model.clone(),

@@ -2,6 +2,8 @@
 
 Same question, N models, through the real subagent loop (`tengu run-agent`), no TUI.
 
+> **2026-09-18 — historical.** Standalone `agents/*.toml` specs were removed; a bench model is now an `[agents.<name>]` block in `sandboxes/<name>/config.toml`, and the IPC `agent_name` must match a configured agent (`run-agent` fails on an unknown one). The `unlimited` sandbox now ships a single `qwen` agent, not the three DeepSeek agents below. To re-run: add one `[agents.<model>]` block per model to the sandbox config, point each IPC input's `agent_name` at it, and run under `network = "open"` (or with `make tor` up). Recipe and results kept for reference.
+
 | Step | Command |
 |---|---|
 | 1. Bench dir | `mkdir -p /tmp/bench/agents && ln -s $PWD/sandboxes /tmp/bench/sandboxes && ln -s $PWD/skills /tmp/bench/skills` |

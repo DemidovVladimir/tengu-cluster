@@ -30,7 +30,7 @@ Add a `claude_code` backend alongside `openrouter`, with backend selection contr
 
 ## Functional Requirements
 - `engine = "openrouter"` or `engine = "claude_code"` per agent
-- `planner_engine = "openrouter"` or `planner_engine = "claude_code"` for orchestrator
+- Planner backend = the `engine` of the `[orchestrator] agent` block (the `planner_engine` key was removed with the orchestration collapse)
 - Claude-backed agents run through local `claude` CLI
 - Builtin tool profiles: `none`, `read_only`, `editor`, `editor_shell`
 - Tengu-native tools bridged via MCP (not lost when using Claude)
@@ -45,10 +45,10 @@ Add a `claude_code` backend alongside `openrouter`, with backend selection contr
 
 ## Implementation
 All requirements met in the current codebase:
-- Backend selection: `engine = "claude_code"` per agent, `planner_engine = "claude_code"` for planner
-- Claude execution: via `claude-agents-sdk` one-shot `query_result()` in `src/adapters/claude_code_engine.rs`
+- Backend selection: `engine = "claude_code"` per `[agents.<name>]` block; the planner uses the `[orchestrator] agent` block's engine (per `CLAUDE.md`: keep the planner on OpenRouter, subagents on Claude Code)
+- Claude execution: one `claude -p --output-format stream-json` subprocess per turn in `src/adapters/claude_code_engine.rs` (no SDK dependency)
 - Tool bridge: external stdio MCP server in `src/adapters/mcp_bridge.rs`
-- Safety: `can_use_tool` callback enforces profile, workspace containment, destructive command denial
+- Safety: `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`, per-tool scopes via `TENGU_BRIDGE_SCOPES`, `[egress]` drops builtin Bash under a proxy — the `can_use_tool` callback, workspace containment and destructive-command denial were not implemented (see [[engine-backends#Claude Code]])
 - Config: `[claude_code]` global + `[agents.<id>.claude_code]` per-agent
 - Mixed operation: verified with both engines in the same config
 

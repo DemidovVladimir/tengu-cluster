@@ -1,0 +1,43 @@
+# Tor proxy for tengu — one container: Arti + lyrebird-rs (managed transport).
+#
+#   tengu ─► tor (Arti :9050) ─► lyrebird-rs ─► obfs4 / snowflake bridge ─► Tor
+#
+# Native tengu:  make tor            -> 127.0.0.1:9050 ([egress] default)
+# Docker tengu:  make up             (docker-compose.tor.yml includes this file;
+#                                     tengu sits on the internal `tor-front`
+#                                     network and can reach nothing but `tor`)
+#
+# lyrebird-rs is a separate repo. Default: ../lyrebird-rs next to this checkout;
+# override with LYREBIRD_RS_SRC=<dir or git URL> (BuildKit named context).
+name: tengu-tor
+
+services:
+  tor:
+    build:
+      context: .
+      additional_contexts:
+        lyrebird-rs: ${LYREBIRD_RS_SRC:-../../../lyrebird-rs}
+    image: tengu-tor:latest
+    restart: unless-stopped
+    networks: [tor-front, tor-out]
+    ports:
+      - "127.0.0.1:9050:9050"
+    volumes:
+      - tor-state:/var/lib/arti
+    healthcheck:
+      # Healthy only once check.torproject.org confirms a Tor exit.
+      test: ["CMD-SHELL", "curl -fsS --max-time 20 --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | grep -q '\"IsTor\":true'"]
+      interval: 15s
+      timeout: 25s
+      start_period: 60s
+      retries: 40
+
+networks:
+  # tengu <-> tor only; no gateway, so a tengu container on it has no
+  # route to the internet except through Arti.
+  tor-front:
+    internal: true
+  tor-out: {}
+
+volumes:
+  tor-state:

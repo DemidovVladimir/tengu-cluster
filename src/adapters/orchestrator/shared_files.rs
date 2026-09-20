@@ -11,10 +11,10 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
-use crate::adapters::config::McpServerConfig;
+use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::orchestrator::plan::Plan;
 use crate::adapters::types::ToolDef;
 
@@ -79,9 +79,10 @@ pub(crate) struct PlannerRegistrySnapshot {
 /// only logged.
 pub(crate) fn ensure_planner_registry(
     workspace: &Path,
+    agents: &[(String, AgentConfig)],
     mcp_tools: &[ToolDef],
 ) -> Result<PlannerRegistrySnapshot> {
-    let content = render_registry(workspace, mcp_tools)?;
+    let content = render_registry(workspace, agents, mcp_tools)?;
     let path = workspace.join(PLANNER_REGISTRY_FILE);
     if let Err(e) = std::fs::write(&path, &content) {
         tracing::warn!(
@@ -162,29 +163,48 @@ pub(crate) fn render_plan_state(phase: &str, plan: &Plan) -> Result<String> {
     Ok(out)
 }
 
-fn render_registry(workspace: &Path, mcp_tools: &[ToolDef]) -> Result<String> {
-    let agents = crate::adapters::agents::load_agents_dir(&workspace.join("agents"))?;
+/// Subagents = `[agents.<name>]` blocks with a `description`. Sorted by
+/// name so the registry (and the planner prompt) is stable across turns.
+pub(crate) fn routable_agents(
+    agents: &std::collections::HashMap<String, AgentConfig>,
+) -> Vec<(String, AgentConfig)> {
+    let mut out: Vec<(String, AgentConfig)> = agents
+        .iter()
+        .filter(|(_, a)| a.description.is_some())
+        .map(|(n, a)| (n.clone(), a.clone()))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+fn render_registry(
+    workspace: &Path,
+    agents: &[(String, AgentConfig)],
+    mcp_tools: &[ToolDef],
+) -> Result<String> {
     let skills = scan_skill_summaries(workspace);
     let tools = registry_tools(mcp_tools);
 
     let mut out = String::from("# Tengu Planner Registry\n\n");
-    out.push_str("This file is generated from `agents/`, skills, core tool definitions, and the tools of every configured MCP server (`<server>.<tool>`). The planner loads it into every planner turn.\n\n");
+    out.push_str("This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`<server>.<tool>`). The planner loads it into every planner turn.\n\n");
 
     out.push_str("## Agents\n\n");
     if agents.is_empty() {
         out.push_str("_No agents found._\n\n");
     }
-    for agent in agents {
-        out.push_str(&format!("### {}\n\n", agent.name));
-        out.push_str(&format!(
-            "- source: `{}`\n",
-            display_source(&agent.source_path)
-        ));
+    for (name, agent) in agents {
+        out.push_str(&format!("### {}\n\n", name));
         out.push_str(&format!("- engine: `{}`\n", agent.engine));
         out.push_str(&format!("- model: `{}`\n", agent.model));
         out.push_str(&format!("- tools: `{}`\n", join_or_dash(&agent.tools)));
-        out.push_str(&format!("- skills: `{}`\n", join_or_dash(&agent.skills)));
-        out.push_str(&format!("\n{}\n\n", agent.description.trim()));
+        out.push_str(&format!(
+            "- skills: `{}`\n",
+            join_or_dash(&agent.skill_packages)
+        ));
+        out.push_str(&format!(
+            "\n{}\n\n",
+            agent.description.as_deref().unwrap_or("").trim()
+        ));
         if !agent.example_queries.is_empty() {
             out.push_str("Example queries:\n");
             for query in &agent.example_queries {
@@ -394,13 +414,6 @@ fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
     serde_yaml::from_str(&rest[..end]).ok()
 }
 
-fn display_source(source: &Option<PathBuf>) -> String {
-    source
-        .as_ref()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| "-".to_string())
-}
-
 fn join_or_dash(items: &[String]) -> String {
     if items.is_empty() {
         "-".to_string()
@@ -476,7 +489,7 @@ mod tests {
             description: "Search Beach.science posts.\nSecond line ignored.".into(),
             parameters: serde_json::json!({"type": "object"}),
         }];
-        let snapshot = ensure_planner_registry(dir.path(), &mcp).unwrap();
+        let snapshot = ensure_planner_registry(dir.path(), &[], &mcp).unwrap();
         assert!(snapshot
             .prompt_block
             .contains("- `beach.search_posts`: Search Beach.science posts."));
@@ -492,13 +505,47 @@ mod tests {
     }
 
     #[test]
+    fn registry_lists_routable_agents_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = crate::adapters::config::Config::default()
+            .agents
+            .remove("main")
+            .unwrap();
+        let mut routable = base.clone();
+        routable.description = Some("Fetches prices from the web.".into());
+        routable.example_queries = vec!["what is the BTC price?".into()];
+        routable.tools = vec!["http_request".into()];
+        routable.skill_packages = vec!["web-research".into()];
+        let mut agents = std::collections::HashMap::new();
+        agents.insert("researcher".to_string(), routable);
+        agents.insert("planner".to_string(), base); // no description → not listed
+        let list = routable_agents(&agents);
+        assert_eq!(
+            list.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["researcher"]
+        );
+        let snapshot = ensure_planner_registry(dir.path(), &list, &[]).unwrap();
+        let block = &snapshot.prompt_block;
+        assert!(block.contains("### researcher"), "{block}");
+        assert!(block.contains("- tools: `http_request`"), "{block}");
+        assert!(block.contains("- skills: `web-research`"), "{block}");
+        assert!(block.contains("Fetches prices from the web."), "{block}");
+        assert!(block.contains("- what is the BTC price?"), "{block}");
+        assert!(!block.contains("### planner"), "{block}");
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|e| e.kind == "agent" && e.name == "researcher"));
+    }
+
+    #[test]
     fn registry_survives_unwritable_workspace() {
         // A regular file as "workspace": `<file>/TENGU_PLANNER_REGISTRY.md`
         // cannot be written, but the snapshot must still carry the roster.
         let dir = tempfile::tempdir().unwrap();
         let not_a_dir = dir.path().join("file");
         std::fs::write(&not_a_dir, "x").unwrap();
-        let snapshot = ensure_planner_registry(&not_a_dir, &[]).unwrap();
+        let snapshot = ensure_planner_registry(&not_a_dir, &[], &[]).unwrap();
         assert!(snapshot.prompt_block.contains("## Tools"));
         assert!(!snapshot.entries.is_empty());
     }

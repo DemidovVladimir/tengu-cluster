@@ -1,5 +1,7 @@
 # Harness-Owned Orchestration + Memory — Design
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 **Date:** 2026-04-20
 **Status:** Draft pending user review
 **Supersedes:** PR #5 (`feature/phase-b-orchestration-collapse`) and the deleted Phase B/C/D/E specs

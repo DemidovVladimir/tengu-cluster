@@ -1,5 +1,8 @@
 # Harness-Owned Orchestration + Memory — Architecture
 
+> **Superseded (2026-09-18):** PR #6–#8-era snapshot. Current architecture: `docs/architecture-2026-04-27.md`; config shape: `docs/configuration.md` — the `tengu.toml` examples in §7 / §12 predate today's `AgentConfig` (`workspace_tools = ["memory_search"]` fails validation; subagents use `tools` + `description`).
+> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`); plan steps run as `tengu run-agent` subprocesses (`runner.rs`), not `ChatWorker`.
+
 This document describes the architecture that landed across PRs #6, #7, #8. It replaces the heart/brain/sensors doctrine and all prior skill-based orchestration.
 
 ---
@@ -76,16 +79,16 @@ Each step dispatch:
 | File | What it does |
 |---|---|
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
-| `config.rs` | `OrchestratorConfig` bridging to the runtime config. |
+| `config.rs` | Removed — `OrchestratorConfig` lives in `src/adapters/config.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
 | `plan.rs` | `Step`, `StepId`, `Plan` types. Topology helpers: `ready_steps`, `validate` (cycles, single-leaf, known agents), `single_leaf`. |
 | `planner.rs` | `Planner` trait + `OrchestratorAgentPlanner` impl. Wraps the orchestrator agent's LLM call. Parses verdicts (handles markdown fences). |
 | `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Exponential backoff, emits `StepFailed` / `StepExhausted`. |
 | `executor.rs` | `DagExecutor` + `WorkerHandle` trait. Parallel ready-set scheduling via `tokio::spawn`. Observes cancel flag. |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
-| `wiring.rs` | `ChatServiceFactory` trait. `ChatWorker` + `ChatOrchestratorPortImpl` concrete impls that do memory injection + dispatch. |
-| `roster.rs` | Agent-roster table rendering and `{{ roster }}` template substitution. |
-| `telemetry.rs` | Event → `tracing` bridge (placeholder). |
+| `wiring.rs` | `ChatServiceFactory` trait + `ChatOrchestratorPortImpl` (planner LLM port). `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`runner.rs`) is the only `WorkerHandle`. |
+| `roster.rs` | Removed (Phase 7.1) — roster is rendered to `TENGU_PLANNER_REGISTRY.md` by `shared_files.rs`. |
+| `telemetry.rs` | Removed — see `src/adapters/metrics.rs`. |
 
 ### `src/adapters/memory/`
 
@@ -101,7 +104,7 @@ Each step dispatch:
 | `context_block.rs` | Shared types: `PinnedMemoryBlock`, `ChunkMetadata`, `MemoryHit`. |
 | `vector.rs` | `VectorStore` trait + submodules. |
 | `vector/disk.rs` | `DiskVectorStore` — bincode on disk. |
-| `vector/qdrant.rs` | `QdrantVectorStore` — optional, behind `qdrant` feature. |
+| `vector/qdrant.rs` | Removed Phase 6 (2026-05-14) — `DiskVectorStore` is the only built-in `VectorStore`; durable memory is Postgres `plugins/agentic_memory/` (feature `postgres_memory`). |
 | `vector/embedder.rs` | `Embedder` — OpenRouter embeddings client, `text-embedding-3-small`. |
 
 LLM-callable memory tools live in `src/adapters/plugins/memory/` and go through `MemoryManager`:
@@ -238,7 +241,7 @@ max_replans = 2                  # tier 2: planner re-invocation budget
 [agents.orchestrator]
 engine = "openrouter"
 model = "anthropic/claude-haiku-4-5"
-workspace_tools = ["memory_search"]
+# planner turn: tools are stripped (channel_runtime::run_turn_with_system)
 [agents.orchestrator.identity]
 instructions = """
 You decompose user requests into plans of steps dispatched to specialist agents.
@@ -257,14 +260,16 @@ Use memory_search before planning when the request references prior work.
 [agents.researcher]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
-workspace_tools = ["http_request", "memory_search", "memory_ingest"]
+description = "Focused researcher"   # present ⇒ planner-routable subagent
+tools = ["http_request", "memory_search", "memory_ingest"]
 [agents.researcher.identity]
 instructions = "You are a focused researcher..."
 
 [agents.writer]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
-workspace_tools = ["memory_search"]
+description = "Drafts polished responses"
+tools = ["memory_search"]
 [agents.writer.identity]
 instructions = "You draft polished responses..."
 ```
@@ -292,8 +297,8 @@ Presence of `[orchestrator]` activates orchestration. Absence → single-agent d
 - `SubagentRegistry`, `SubagentHandle` + all session-spawn LLM-callable tools
 
 ### Deleted doctrine
-- `docs/superpowers/specs/2026-04-15-phase-0-doctrine-design.md`
-- `docs/superpowers/specs/2026-04-16-phase-0-implementation-design.md`
+- `docs/superpowers/specs/2026-04-15-phase-0-doctrine-design.md` (not in the archive)
+- `docs/superpowers/specs/2026-04-16-phase-0-implementation-design.md` (not in the archive)
 - `docs/superpowers/plans/2026-04-16-phase-0-doctrine.md`
 - "heart / brain / sensors" language in `docs/architecture.md`
 
@@ -513,14 +518,14 @@ Status:
 
 - Telegram: `/purge` — clears conversations + calls `MemoryManager::clear_all()`.
 - TUI: `/purge` — same.
-- CLI file-level: delete `<workspace>/memory/vectors.bin` manually. Still supported as a fallback (safe to do when the harness isn't running).
+- CLI file-level: delete `<store_path>/vectors.bin` (`[memory] store_path`, default `~/.tengu/memory/`) manually. Still supported as a fallback (safe to do when the harness isn't running).
 
 ### 12.6 Adding a new worker agent
 
 1. Add `[agents.<name>]` + `[agents.<name>.identity]` block to `tengu.toml` (see the example in §7).
-2. List any tools the agent should have in `workspace_tools`.
+2. Set `description` (makes it planner-routable) and list its tools in `tools`.
 3. Restart.
-4. The orchestrator agent's `{{ roster }}` substitution picks up the new entry automatically — the planner sees the new agent as a dispatch target.
+4. `TENGU_PLANNER_REGISTRY.md` is regenerated on the next planner turn — the planner sees the new agent as a dispatch target.
 
 ### 12.7 Tuning retry / replan budgets
 

@@ -9,9 +9,9 @@
 //!
 //! Response: `202 Accepted` with `{"session_id": "..."}` JSON body.
 //! Agents can take minutes — webhook senders typically time out at 10s,
-//! so we never block waiting for the agent. Final output goes to
-//! `tengu_outputs` (Fix C+D apply on every step) and the tracing log.
-//! Recall later with `tengu memory inspect --session <id>`.
+//! so we never block waiting for the agent. Final output goes to Open
+//! Brain (Postgres `agentic_memory`, with `postgres_memory`) and the
+//! tracing log. Recall later by querying Postgres for the `session_id`.
 //!
 //! ## Files / responsibilities
 //!
@@ -101,7 +101,7 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
         .with_context(|| format!("invalid bind address {}:{}", bind, port))?;
 
     // Memory manager is shared across all requests — opening it per
-    // request would be wasteful (Qdrant gRPC handshake per webhook).
+    // request would be wasteful (store open + embedder per webhook).
     let memory_manager = Arc::new(MemoryManager::new());
     let state = Arc::new(WebhookAppState {
         config,
@@ -240,7 +240,7 @@ async fn dispatch_webhook(
 
 /// Run one orchestrator turn for the synthesized webhook user message.
 /// Final agent text is written to the tracing log; durable side-effects
-/// (compress_and_store rows, metrics records) flow through the standard
+/// (`agentic_memory` step summaries, metrics records) flow through the standard
 /// pipeline. Errors are logged and discarded — the listener stays up.
 async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_message: String) {
     // Per-request orchestrator construction. Uses `WebhookChatServiceFactory`
@@ -517,8 +517,9 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
         // Orchestrator agent gets NO tools — its job is to emit JSON only.
-        // Doctrinal: LLM = heart, RAG = brain, tools = hands. The planner
-        // call must not have hands. Mirrors `EvalChatServiceFactory`.
+        // Doctrinal: LLM = heart, Open Brain + LLM Wiki = brain, tools =
+        // hands. The planner call must not have hands. Mirrors
+        // `EvalChatServiceFactory`.
         let is_orchestrator_agent = self
             .cfg
             .orchestrator
@@ -558,7 +559,6 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
             &None,
             &secret_registry,
             log_activity,
-            None,
             None,
             Some(&self.cfg.memory),
             agent,

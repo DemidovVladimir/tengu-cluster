@@ -3,6 +3,10 @@
 > **Superseded note (2026-05-14):** old retrieval-first phases are kept for
 > history. Current target is Open Brain live memory + Karpathy LLM Wiki
 > compiled Markdown; planner routing is file-backed.
+> Current reference: `docs/architecture-2026-04-27.md`. Gone since: `agents/*.toml` +
+> `src/adapters/agents/` (→ `[agents.<name>]` in `sandboxes/<name>/config.toml`, 2026-09-18),
+> `src/adapters/rag/` + `tengu registry` CLI + Qdrant (Phase 6, 2026-05-14), `orchestrator/roster.rs`
+> + `engine = "static"` (Phase 7.1), `tengu/ideas/` (→ `docs/ideas/`), `deploy/snowflake/` (2026-09-18).
 >
 > **Status (2026-04-25): Phases 0–6.5 done and verified end-to-end.**
 > Real BTC USD price fetched through the legacy planner pipeline. See
@@ -13,8 +17,8 @@
 > | Phase | Status | Notes |
 > |---|---|---|
 > | 0 — baseline | ✅ done | Config blocks, manual checklist. `phase-0-checks.sh` retired 2026-09 (hard-failed on Qdrant, which is gone) |
-> | 1 — legacy vector facade | ✅ done | `src/adapters/rag/`, registry CLI |
-> | 2 — agents + orchestrator skill | ✅ done | `agents/*.toml`, `skills/orchestrator/` |
+> | 1 — legacy vector facade | ✅ done → removed | `src/adapters/rag/` + `tengu registry` CLI deleted in Phase 6 (2026-05-14) |
+> | 2 — agents + orchestrator skill | ✅ done → revised | `agents/*.toml` replaced by `[agents.<name>]` in `sandboxes/<name>/config.toml` (2026-09-18); `skills/orchestrator/` |
 > | 3 — runner subprocess | ✅ done | `runner.rs`, run-agent subcommand, IPC |
 > | 4 — dual-mode planner | ✅ done | `RagPlanner`, build_orchestrator branch |
 > | 4b — SubprocessRunner cutover | ✅ done | impl WorkerHandle for subprocess |
@@ -25,14 +29,14 @@
 > | 6.1 (lite) — planner tracing | ✅ done | tracing::info per plan/replan |
 > | 6.5 — cross-plan recall | ✅ done | replan queries prior step outputs; `postgres_memory` uses Postgres |
 > | 6.4 (lite) — session history buffer | ✅ done | In-memory ring buffer of last-N user messages in RagPlanner; injected as "Recent user messages" block in plan/replan |
-> | 6.1 (full) — RagQueried event | ⏸ deferred | Needs event bus plumbed into RagPlanner |
-> | 6.2 — content-hash dedup | ⏸ deferred | Indexer always re-embeds today |
-> | 6.3 — filter-based TTL purge | ⏸ deferred | No-op when ttl_days == 0 (default) |
-> | 6.4 (full) — Open Brain user-event persistence | ⏸ deferred | Survives restart, keyed by session_id, supports cross-session recall |
-> | 6.6 — MCP tool indexing | ⏸ deferred | Replaces `placeholder_tools()` |
-> | 6.7 — C→B fallback (B half) | ⏸ deferred | Compose generic agent on confirmation |
-> | 7.1 — delete legacy | ⏸ deferred | Drop roster.rs / wiring.rs static path |
-> | 7.2 — v1 dead-code cleanup | ⏸ deferred | ~17 pre-existing warnings |
+> | 6.1 (full) — RagQueried event | ✅ done | `RagPlanner` fires `OrchestratorEvent::RagQueried` on every plan/replan; TUI panel via `TENGU_TUI_RAG_DEBUG=1` |
+> | 6.2 — content-hash dedup | — moot | No indexer: the registry is re-rendered to `TENGU_PLANNER_REGISTRY.md` each planner turn (Phase 6) |
+> | 6.3 — filter-based TTL purge | — moot | `ttl_days` removed with Qdrant (ignored if present) |
+> | 6.4 (full) — Open Brain user-event persistence | ✅ done | `RagPlanner::persist_user_message` → Postgres `agentic_memory`; recall via `[memory] cross_session_msg_top_k` |
+> | 6.6 — MCP tool indexing | ✅ done | MCP tools rendered into the registry by `shared_files::render_registry(workspace, agents, mcp_tools)` |
+> | 6.7 — C→B fallback (B half) | ✅ done | `Step.compose` / `AgentIpcInput.compose` override the base agent's skills/tools wholesale |
+> | 7.1 — delete legacy | ✅ done | `roster.rs`, `ChatWorker`, `engine = "static"` removed; `wiring.rs` kept for the planner LLM port |
+> | 7.2 — v1 dead-code cleanup | ✅ done | `#[allow(dead_code)]` sweep |
 
 > Companion to `REDESIGN.md`. Where REDESIGN says *what the target looks like*,
 > this plan says *what order to land it in so nothing breaks between commits*.
@@ -61,7 +65,8 @@
    TUI or Telegram fails, the phase is not done.
 4. **Rollback is always trivial until Phase 5.** Until then, the old roster
    still exists. If the new path misbehaves, set
-   `[orchestrator] engine = "static"` and the old path runs.
+   `[orchestrator] engine = "static"` and the old path runs. *(Removed in
+   Phase 7.1 — `"rag"` is the only accepted value.)*
 5. **Bootstrap assets are committed files, not Vladimir's homework.** The
    minimum-viable `skills/orchestrator/SKILL.md`, `plan_schema.json`, and an
    example `agents/*.toml` all ship with the PR that enables them.
@@ -77,6 +82,11 @@ Extend the EXISTING `[memory]` block (see `src/adapters/config.rs::MemoryConfig`
 — already has enabled, embedding_model, backend, qdrant_url, qdrant_collection,
 vector_size, persistent_store_chunk_*, etc.). Phase 0 adds three fields. Do
 not create a parallel block.
+
+> Today (2026-09-18): `ttl_days`, `qdrant_*`, `backend`, `vector_size` are gone
+> (ignored if present — `memory_config_ignores_removed_qdrant_keys`);
+> `session_recent_n` / `cross_plan_top_k` remain; there is no `[rag]` block;
+> `[orchestrator] engine` accepts only `"rag"`.
 
 ```toml
 [memory]
@@ -116,7 +126,7 @@ Establish a reproducible manual smoke test for both channels so every subsequent
 2. Create `docs/manual-test-checklist.md` — a copy-pasteable script for the TUI and Telegram smoke tests.
 3. Extend `[memory]` and `[orchestrator]` structs in `src/adapters/config.rs` with the new fields (inert). Add new `RagConfig` struct + `Config.rag` field. Mirror in `config.example.toml` as commented examples.
 4. Run the manual smoke test on `main` and record the expected output so later phases can diff against it.
-5. Confirm legacy vector DB is reachable (the codebase default is port **6334**, not 6333):
+5. ~~Confirm legacy vector DB is reachable~~ (Qdrant removed in Phase 6 — skip; the codebase default was port **6334**, not 6333):
    ```bash
    curl http://localhost:6334/collections
    ```
@@ -155,7 +165,7 @@ None needed — no behaviour change.
 
 ---
 
-## Phase 1 — legacy vector facade (read-only)  (1–1½ days)
+## Phase 1 — legacy vector facade (read-only)  (1–1½ days) — removed in Phase 6 (2026-05-14)
 
 ### Goal
 `TENGU_PLANNER_REGISTRY.md`, `agentic_memory user events`, and `agentic_memory step outputs` exist in legacy vector DB, the indexer populates `TENGU_PLANNER_REGISTRY.md` with compiled-in tools and MCP tools on startup, but NOTHING in the orchestrator uses it yet. Zero behaviour change.
@@ -216,7 +226,7 @@ The baseline behaviour MUST match Phase 0 exactly. Only difference the user shou
 
 ---
 
-## Phase 2 — Agent specs + skills on disk (indexed, unused)  (1 day)
+## Phase 2 — Agent specs + skills on disk (indexed, unused)  (1 day) — `agents/*.toml` replaced by `[agents.<name>]` in the sandbox config (2026-09-18)
 
 ### Goal
 `agents/*.toml` and `skills/` directories exist, the indexer picks them up, and the Open Brain / Karpathy LLM Wiki can answer "find me an agent for X." Planner still uses the static roster.
@@ -287,10 +297,10 @@ A runner subprocess exists, has a JSON IPC contract, and can be driven manually 
 3. Implement three-tier skill loader in a shared helper so the `run-agent` mode uses it. Hard-fail on missing skill.
 4. Implement `src/adapters/runner.rs`:
    - `SubprocessRunner` impl of `WorkerHandle`.
-   - Loads agent spec from `agents/<name>.toml`.
+   - Child loads `[agents.<name>]` from the parent's config (was `agents/<name>.toml`).
    - Computes `effective_tools = spec.tools ∩ ipc.tools ∪ {compress_and_store}`.
    - `Command::new(current_exe())` with the IPC env var, pipes stdin/stdout/stderr.
-   - Times out via `spec.timeout_secs`.
+   - Times out via `limits.step_timeout_secs` (was `spec.timeout_secs`).
 5. Integration test:
    - Spawn `SubprocessRunner::run_step` with a goal like "say hello and store a summary".
    - Verify it exits with `status: "ok"`, a summary is in `agentic_memory step outputs`, and an `OrchestratorEvent::StepProgress` was emitted.
@@ -350,7 +360,7 @@ Flip `[orchestrator] engine = "rag"` and the full flow works end-to-end via the 
 3. Emit `OrchestratorEvent::RagQueried` before every planner call.
 4. Wire `agentic_memory user events` writes on user message receipt (both TUI and Telegram paths — one shared handler).
 5. On replan (existing `replan.rs`), query prior step outputs for top-K (from `cross_plan_top_k`) and inject as a context block. Default builds use legacy vector DB `agentic_memory step outputs`; `postgres_memory` builds use Postgres `agentic_memory`. Query recent dialogue separately.
-6. Add `--engine rag` CLI override on `tengu chat` / `tengu telegram` so you can test without editing config.toml.
+6. Add `--engine rag` CLI override on `tengu chat` / `tengu telegram` so you can test without editing config.toml. *(Not present today — only `--sandbox`.)*
 7. Add an E2E smoke test: `tests/e2e_rag_flow.rs` (use `cargo test --ignored`) that boots the harness with a stub embedding model + stub legacy vector DB (or a legacy vector DB test container), sends a message, and asserts the final response arrives via the event bus.
 
 ### Files touched
@@ -423,9 +433,9 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
 3. Delete the legacy files confirmed present by reconnaissance (REDESIGN §12 after corrections):
    - `src/adapters/orchestrator/roster.rs`
    - `src/adapters/orchestrator/wiring.rs`
-   - `src/adapters/eval_builder.rs` (move body to `tengu/ideas/eval/`)
-   - `src/adapters/skill_lifecycle/evolve.rs` (move body to `tengu/ideas/auto-skill-research/`)
-   - `sandboxes/aura/`, `sandboxes/storage-test/` (after Phase 2 migration completes)
+   - `src/adapters/eval_builder.rs` (kept in-tree — `tengu eval`; ideas moved to `docs/ideas/`)
+   - `src/adapters/skill_lifecycle/evolve.rs` (kept in-tree — `tengu skill evolve`; `docs/ideas/auto-improving-agent-skills.md`)
+   - `sandboxes/aura/`, `sandboxes/storage-test/` (NOT deleted — reversed 2026-09-18: sandboxes are the single config; `agents/` was removed instead)
 4. Remove the `engine` flag — Open Brain / Karpathy LLM Wiki is the only path. Remove the `static` branch from `planner.rs` and `main.rs`.
 5. Update `README.md` with the new architecture summary + link to REDESIGN.md.
 6. Compile, test, clippy.

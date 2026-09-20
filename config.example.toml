@@ -1,5 +1,11 @@
 # Tengu Cluster — Example Configuration
-# Copy to ~/.tengu/config.toml and customize
+# Copy to ~/.tengu/config.toml and customize. A sandbox (`tengu chat --sandbox
+# <name>` → sandboxes/<name>/config.toml) uses this exact schema — one file
+# holds the channel settings, the planner, and every agent.
+#
+# Network: Tor by default. `make tor` starts the Arti + lyrebird-rs proxy on
+# 127.0.0.1:9050 and everything (tools, OpenRouter, Telegram, Claude Code)
+# goes through it. Set `[egress] network = "open"` for the plain internet.
 
 # --- Secrets ---
 # Store API keys in ~/.tengu/secrets.vault (AES-256-GCM encrypted, chmod 600).
@@ -29,6 +35,7 @@ engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
+# skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
 # workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill
 
 # OpenRouter model examples (just change the model line):
@@ -110,17 +117,40 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # goal_template = "Webhook arrived. Summarise the payload."
 
 # --- Orchestration ---
-# The planner agent emits plan JSON; each step runs `agents/<name>.toml` as a
-# `tengu run-agent` subprocess. Run with: tengu chat --sandbox <name>
-# (or tengu telegram --sandbox <name>). Domain teams live in sandboxes/<name>/config.toml
-# — see README "Sandboxes".
+# The planner agent emits plan JSON; each step runs one `[agents.<name>]`
+# block as a `tengu run-agent` subprocess. An agent is routable (listed in
+# TENGU_PLANNER_REGISTRY.md for the planner) when it has a `description`.
+# Run with: tengu chat --sandbox <name> (or tengu telegram --sandbox <name>).
+# Domain teams live in sandboxes/<name>/config.toml — see README "Sandboxes".
 
 # [orchestrator]
-# agent = "orchestrator"                # Name of the agent (in `[agents.*]`) that runs the planner LLM call
+# agent = "main"                        # Name of the agent (in `[agents.*]`) that runs the planner LLM call
 # engine = "rag"                        # REQUIRED — the only supported value (historical name; file-registry planner). Anything else disables orchestration.
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
 # max_replans = 2                       # Tier 2: how many times the planner is re-invoked to replan before bailing out
 # route_explicit_agents = false         # true = `@role:` messages also go through the planner
+
+# A subagent the planner can route to. `description` + `example_queries` are
+# what the planner LLM reads — say what it is good at AND what it is NOT for.
+# `tools` is the allow-list for its subprocess runs (empty = every base tool;
+# workspace-tool names listed here are opted in like `workspace_tools`).
+# `limits.max_tool_rounds` caps its LLM turns per step, `limits.step_timeout_secs`
+# the wall clock (default 600). No `workspace` = a temp dir per step.
+
+# [agents.researcher]
+# engine = "openrouter"
+# model = "anthropic/claude-sonnet-4-6"
+# tools = ["http_request", "read_file", "list_directory", "memory_ingest"]
+# description = """
+# Generic research and live-data agent. Fetches information from the public web via HTTP. \
+# Best for: real-time prices, weather, news, summarising web pages, due diligence. \
+# NOT for: writing code, shell commands, sending money, or authenticated/paid APIs.
+# """
+# example_queries = ["what is the current BTC price in USD?", "what's the weather in Tokyo today?"]
+#
+# [agents.researcher.limits]
+# max_tool_rounds = 20
+# step_timeout_secs = 180
 
 # Roles are dynamic — any non-empty string works.
 # Define role behavior in identity.instructions.
@@ -187,6 +217,21 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.editor.limits]
 # max_tokens_per_flow = 5_000_000
 
+# --- Network egress (Tor by default, host allowlist, audit) ---
+# Code-enforced policy for every request tengu makes. docs/egress-2026-09-16.md
+# Tor proxy:  make tor   (Arti + lyrebird-rs over obfs4/snowflake bridges, 127.0.0.1:9050)
+# Check:      tengu doctor --tor
+
+# [egress]
+# network = "tor"                      # DEFAULT. "open" = plain internet (no proxy, LLM API direct)
+# proxy = "socks5h://127.0.0.1:9050"   # default under tor (TENGU_TOR_PROXY overrides); socks5:// is rejected (DNS leak)
+# route_llm_api = true                 # default under tor: OpenRouter, embeddings and the Claude Code CLI via proxy too
+# allow_hosts = ["*.wikipedia.org"]    # sandbox-wide ceiling; empty = none
+# deny_hosts = []
+# https_only = true
+# shell_network = "isolated"           # proxy_env (advisory) | isolated (macOS kernel sandbox)
+# audit = true                         # JSONL at ~/.tengu/logs/egress.jsonl
+
 # --- Skill Lifecycle ---
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
 # `tengu skill evolve <skill>`. All three drive the metrics: frontmatter
@@ -220,6 +265,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- Planner registry ---
 # The planner routes from root `TENGU_PLANNER_REGISTRY.md`, regenerated from
-# `agents/`, skills, and core tool definitions on every planner turn. There is
-# no config block — it is file-backed. (The legacy `[rag]` Qdrant indexer block
-# was removed in Phase 6.)
+# the `[agents.*]` blocks that carry a `description`, skills, and core tool
+# definitions on every planner turn. There is no config block — it is
+# file-backed.

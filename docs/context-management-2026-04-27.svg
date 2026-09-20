@@ -28,7 +28,7 @@
       .L3 { stroke: #A78BFA; }   /* inner tool loop     -- purple */
       .L4 { stroke: #F59E0B; }   /* mcp bridge          -- amber */
       .L5 { stroke: #4ADE80; }   /* subagent ipc        -- green */
-      .L6 { stroke: #60A5FA; }   /* rag hygiene         -- blue */
+      .L6 { stroke: #60A5FA; }   /* open brain / wiki   -- blue */
       .L7 { stroke: #FB923C; }   /* file chunking       -- orange */
       .badge { font-weight: 700; font-size: 13px; fill: #0F0F1A; }
     </style>
@@ -62,7 +62,7 @@
       <text x="20" y="76" class="small">Drains everything before the Nth user-turn from the end.</text>
       <text x="20" y="96" class="small">Per scope:</text>
       <text x="20" y="112" class="small mono">main=40 · per-group=30 · per-pipe-sender=25 · default=20</text>
-      <text x="20" y="132" class="tiny">override: agents/&lt;name&gt;.toml::[flow] max_history_turns</text>
+      <text x="20" y="132" class="tiny">override: [agents.&lt;name&gt;.flow] max_history_turns (sandbox config)</text>
     </g>
 
     <g transform="translate(530,20)">
@@ -163,7 +163,7 @@
       <circle cx="28" cy="28" r="14" fill="#2DD4BF"/>
       <text x="28" y="33" text-anchor="middle" class="badge">12</text>
       <text x="52" y="32" class="mech">Skill body assembly</text>
-      <text x="20" y="56" class="small mono">skill_builder.rs:1120-1150</text>
+      <text x="20" y="56" class="small mono">skill_builder.rs:1103-1159</text>
       <text x="20" y="76" class="small">Per-file truncate + per-skill-set truncate.</text>
       <text x="20" y="92" class="small mono">max_skill_context_tokens = 16_000</text>
       <text x="20" y="108" class="small mono">max_file_tokens = 2_000</text>
@@ -195,7 +195,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">14</text>
       <text x="52" y="32" class="mech">truncate_tool_result</text>
-      <text x="20" y="56" class="small mono">engine_builder.rs:878</text>
+      <text x="20" y="56" class="small mono">engine_builder.rs:944</text>
       <text x="20" y="76" class="small">Per-call char-cap on insert.</text>
       <text x="20" y="92" class="small mono">max_tool_result_chars = 300_000</text>
       <text x="20" y="108" class="small">UTF-8 boundary safe.</text>
@@ -207,7 +207,7 @@
       <circle cx="28" cy="28" r="16" fill="#A78BFA"/>
       <text x="28" y="34" text-anchor="middle" class="badge" font-size="15">15</text>
       <text x="56" y="32" class="mech" fill="#fff">★ compact_tool_result — closest to /compact</text>
-      <text x="20" y="56" class="small mono">engine_builder.rs:855  (caller: L714)</text>
+      <text x="20" y="56" class="small mono">engine_builder.rs:921  (caller: L779)</text>
       <text x="20" y="76" class="small">After round ≥ 1, walks messages[..compact_cutoff],</text>
       <text x="20" y="92" class="small">rewrites every Role::Tool to first line in place.</text>
       <text x="20" y="108" class="small mono">compact_result_limit = 200 chars</text>
@@ -219,7 +219,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">16</text>
       <text x="52" y="32" class="mech">[OUTPUT_TRUNCATED] auto-continue (extends, not cuts)</text>
-      <text x="20" y="56" class="small mono">engine_builder.rs:637</text>
+      <text x="20" y="56" class="small mono">engine_builder.rs:706</text>
       <text x="20" y="76" class="small">Inverse mechanism: when MODEL output ends with sentinel,</text>
       <text x="20" y="92" class="small">inject user msg "Your output was truncated. Continue…"</text>
       <text x="20" y="108" class="small">Re-rolls the engine. Triggers a new round.</text>
@@ -231,10 +231,10 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">17</text>
       <text x="52" y="32" class="mech">max_tool_rounds hard stop</text>
-      <text x="20" y="56" class="small mono">engine_builder.rs:599 · config.rs:424</text>
+      <text x="20" y="56" class="small mono">engine_builder.rs:665 · config.rs:411</text>
       <text x="20" y="76" class="small">Default 70 rounds.</text>
       <text x="20" y="92" class="small">After exhaust: forces tools=[] turn</text>
-      <text x="20" y="108" class="small">at L727 to extract closing message.</text>
+      <text x="20" y="108" class="small">at L793 to extract closing message.</text>
     </g>
 
     <g transform="translate(405,170)">
@@ -242,7 +242,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">18</text>
       <text x="52" y="32" class="mech">token_budget mid-loop early-exit</text>
-      <text x="20" y="56" class="small mono">engine_builder.rs:617</text>
+      <text x="20" y="56" class="small mono">engine_builder.rs:683</text>
       <text x="20" y="76" class="small">If total_input_delta + total_output_delta &gt; budget,</text>
       <text x="20" y="92" class="small">break loop with warn log.</text>
       <text x="20" y="116" class="tiny">eval path uses this; chat path passes None today.</text>
@@ -273,7 +273,7 @@
       <circle cx="28" cy="28" r="14" fill="#F59E0B"/>
       <text x="28" y="33" text-anchor="middle" class="badge">19</text>
       <text x="52" y="32" class="mech">max_mcp_result_chars</text>
-      <text x="20" y="56" class="small mono">claude_code_engine.rs:520 · env TENGU_BRIDGE_MAX_RESULT_CHARS</text>
+      <text x="20" y="56" class="small mono">claude_code_engine.rs:551 · env TENGU_BRIDGE_MAX_RESULT_CHARS</text>
       <text x="20" y="72" class="small">Default 50_000 chars (~12.5K tok). Caps each tool result through the bridge.</text>
     </g>
     <g transform="translate(785,20)">
@@ -300,7 +300,7 @@
       <text x="20" y="56" class="small mono">runner.rs::AgentIpcInput</text>
       <text x="20" y="76" class="small">Child starts with empty messages.</text>
       <text x="20" y="92" class="small">Inherits only:</text>
-      <text x="20" y="108" class="small mono">goal · agent · tools · skills</text>
+      <text x="20" y="108" class="small mono">goal · agent_name · max_turns · plan_state</text>
       <text x="20" y="124" class="small mono">session_id · step_id · sandbox_config</text>
       <text x="20" y="148" class="tiny">by design — no parent-history leakage</text>
     </g>
@@ -312,9 +312,9 @@
       <text x="52" y="32" class="mech">compress_and_store ★ durable summary</text>
       <text x="20" y="56" class="small mono">plugins/skill_lifecycle/compress_and_store.rs</text>
       <text x="20" y="76" class="small">Implicitly appended to every subagent's tools.</text>
-      <text x="20" y="92" class="small">Two paths converge on write_summary:</text>
-      <text x="20" y="108" class="small">A — out-of-band  (OpenRouter, main.rs:821)</text>
-      <text x="20" y="124" class="small">B — plugin       (Claude Code via MCP bridge)</text>
+      <text x="20" y="92" class="small">Two paths, one durable write:</text>
+      <text x="20" y="108" class="small">A — out-of-band  (OpenRouter, main.rs:971)</text>
+      <text x="20" y="124" class="small">B — backstop     (Claude Code: no handler, final_text)</text>
       <text x="20" y="148" class="tiny">writes Open Brain Postgres with postgres_memory</text>
     </g>
 
@@ -323,7 +323,7 @@
       <circle cx="28" cy="28" r="14" fill="#4ADE80"/>
       <text x="28" y="33" text-anchor="middle" class="badge">22</text>
       <text x="52" y="32" class="mech">Phase 5c protocol</text>
-      <text x="20" y="56" class="small mono">main.rs:900</text>
+      <text x="20" y="56" class="small mono">main.rs:1075</text>
       <text x="20" y="76" class="small">✓ called → Ok</text>
       <text x="20" y="92" class="small">✗ but text → Ok+warn</text>
       <text x="20" y="108" class="small">✗ no text → Failed</text>
@@ -336,8 +336,8 @@
       <circle cx="28" cy="28" r="14" fill="#4ADE80"/>
       <text x="28" y="33" text-anchor="middle" class="badge">23</text>
       <text x="52" y="32" class="mech">Subprocess max_turns</text>
-      <text x="20" y="56" class="small mono">runner.rs:39</text>
-      <text x="20" y="76" class="small">Default 20 mini-loop turns.</text>
+      <text x="20" y="56" class="small mono">runner.rs:43 · run_step</text>
+      <text x="20" y="76" class="small">= max_tool_rounds (70) · 600 s</text>
       <text x="20" y="100" class="small mech">+ #19 cross_plan_top_k</text>
       <text x="20" y="116" class="small">Planner replan reads</text>
       <text x="20" y="132" class="small">step outputs to surface</text>
@@ -356,10 +356,10 @@
       <rect class="panel2" width="745" height="110"/>
       <circle cx="28" cy="28" r="14" fill="#60A5FA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">24</text>
-      <text x="52" y="32" class="mech">ttl_cleanup (Phase 6.3)</text>
-      <text x="20" y="56" class="small mono">rag/cleanup.rs:24</text>
-      <text x="20" y="76" class="small">Open Brain Postgres + LLM Wiki Markdown; legacy cleanup optional.</text>
-      <text x="20" y="92" class="small">Trigger: <tspan class="mono">MemoryConfig.ttl_days &gt; 0</tspan> · default 0 (permanent).</text>
+      <text x="52" y="32" class="mech">Open Brain live memory</text>
+      <text x="20" y="56" class="small mono">plugins/agentic_memory/mod.rs</text>
+      <text x="20" y="76" class="small">Postgres agentic_memory (postgres_memory): user msgs, step summaries, files.</text>
+      <text x="20" y="92" class="small">Recall: pgvector first, FTS fallback · no TTL / cleanup pass.</text>
     </g>
     <g transform="translate(785,20)">
       <rect class="panel2" width="715" height="110"/>
@@ -367,7 +367,7 @@
       <text x="28" y="33" text-anchor="middle" class="badge">25</text>
       <text x="52" y="32" class="mech">Planner registry file</text>
       <text x="20" y="56" class="small mono">TENGU_PLANNER_REGISTRY.md</text>
-      <text x="20" y="76" class="small">Generated from agents/skills/tools before planner calls.</text>
+      <text x="20" y="76" class="small">Generated from [agents.*] blocks with a description, skills, tools.</text>
       <text x="20" y="92" class="small">Loaded directly into the planner prompt.</text>
     </g>
   </g>

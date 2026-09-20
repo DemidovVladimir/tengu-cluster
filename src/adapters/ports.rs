@@ -68,6 +68,19 @@ pub(crate) struct ToolScope {
     pub wallets: Vec<String>,
 }
 
+/// Host pattern match shared by `ToolScope::check_net_host` and the
+/// `[egress]` host ceiling: exact, `*.suffix` (subdomains only, not the
+/// apex), or `"*"` — the allow-any wildcard `permissive_scope` uses.
+pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
+    if pattern == "*" || pattern == host {
+        return true;
+    }
+    pattern
+        .strip_prefix("*.")
+        .and_then(|suffix| host.strip_suffix(suffix))
+        .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+}
+
 #[allow(dead_code)] // Phase A wires these into ToolCtx
 impl ToolScope {
     pub(crate) fn check_fs_read(&self, path: &Path) -> anyhow::Result<PathBuf> {
@@ -79,23 +92,12 @@ impl ToolScope {
     }
 
     pub(crate) fn check_net_host(&self, host: &str) -> anyhow::Result<()> {
-        for pattern in &self.net_hosts {
-            // `"*"` is an allow-any wildcard — used by `permissive_scope`
-            // (the fallback for tools with no configured scope) to keep http
-            // access ungated. Mirrors the `check_shell_bin` wildcard.
-            if pattern == "*" {
-                return Ok(());
-            }
-            if pattern == host {
-                return Ok(());
-            }
-            if let Some(suffix) = pattern.strip_prefix("*.") {
-                if let Some(prefix) = host.strip_suffix(suffix) {
-                    if prefix.ends_with('.') && prefix.len() > 1 {
-                        return Ok(());
-                    }
-                }
-            }
+        if self
+            .net_hosts
+            .iter()
+            .any(|pattern| host_matches(pattern, host))
+        {
+            return Ok(());
         }
         anyhow::bail!(
             "host '{}' not in allowed net_hosts {:?}",

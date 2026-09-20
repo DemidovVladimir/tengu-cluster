@@ -13,7 +13,7 @@ Today's lifecycle has 4 specialized agents (skill-author / skill-evaluator / res
 | Skill name routed as agent | Roster mixed kinds; planner picked top-scoring entry |
 | resources/ unreachable | Agent workspace ≠ project root |
 | Improver returned prose, not JSON | LLM saw "no write_file" and gave up |
-| Tool not in agent's tool list | `AgentSpec` has no `workspace_tools` field; field silently ignored |
+| Tool not in agent's tool list | `AgentSpec` had no `workspace_tools` field; silently ignored (historical — `AgentSpec` deleted 2026-09-18; `[agents.<name>].tools` opts allow-list names in) |
 | Lifecycle plan target ambiguous | Plan goal lacks the skill name |
 
 Each is a real bug. But the meta-bug is the architecture: too many agents + too many tools + too much plumbing.
@@ -72,9 +72,13 @@ All `manage_skill` writes:
 Replace `skill-author / skill-evaluator / resource-finder / skill-improver-inline` with ONE `learning-agent`:
 
 ```toml
-name = "learning-agent"
-tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]
-skills = ["skill-creator"]
+# sandboxes/aura/config.toml
+[agents.learning-agent]
+engine = "openrouter"
+model = "anthropic/claude-opus-4-7"
+tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]  # manage_skill opts in via the allow-list
+skill_packages = ["skill-creator"]   # `skills = [...]` accepted
+description = "..."                 # presence = planner-routable
 ```
 
 Description tells the agent: "you handle the full skill lifecycle — view existing state, fetch web resources if needed, apply changes via `manage_skill`. Don't emit JSON to the user; call the tool."
@@ -123,7 +127,7 @@ All `manage_skill` writes return `loaded_in_current_conversation: false`. Agent 
 |---|---|---|
 | Tool list confusion (3 lifecycle tools, each with subtly different params) | LLM picks wrong one or invents schema | One tool, action enum, schema is the LLM's only option |
 | Multi-step plan coordination | JSON proposals shuttled, plan steps can fail independently | One step, one agent, atomic |
-| `workspace_tools` silently ignored on agent specs | `apply_improver_proposal` never made it to the agent | New tools live in regular `tools = [...]` (no workspace_tools opt-in needed) |
+| `workspace_tools` silently ignored on agent specs (historical) | `apply_improver_proposal` never made it to the agent | New tools live in regular `tools = [...]` (allow-list names listed there opt in like `workspace_tools`) |
 | Improver "doesn't have write_file" excuse | LLM gave up, returned prose | Agent has `manage_skill` directly; tool description says "this is how you write skill files" |
 | `resources/` unreadable | Workspace mismatch | `view_skill(read_resource)` walks tiers, returns content |
 | Whitespace drift on body edits | `apply_proposal_to_skill_md` whole-body replace lost precision | `patch` with fuzzy matching handles drift |
@@ -132,14 +136,14 @@ All `manage_skill` writes return `loaded_in_current_conversation: false`. Agent 
 
 ## Execution order
 
-1. (parallel) Implement `view_skill` plugin (Subagent X) + `manage_skill` plugin (Subagent Y) + `learning-agent` spec + orchestrator SKILL.md update (Subagent Z).
+1. (parallel) Implement `view_skill` plugin (Subagent X) + `manage_skill` plugin (Subagent Y) + `[agents.learning-agent]` block + orchestrator SKILL.md update (Subagent Z).
 2. Integrate: register plugins, update `compute_base_tools` / bridge / allowlist, write SESSION_HANDOFF entry.
 3. Smoke test: `mkdir -p`-free seed, `adjust yourself`, paste output.
 
 Code pointers (existing, reusable):
 - Atomic write pattern: `src/adapters/plugins/skill_lifecycle/distill.rs:148–204`
 - Path validation: `src/adapters/skill_lifecycle/evolve.rs::validate_resource_path`
-- Three-tier walk: `src/adapters/rag/indexer.rs::scan_skills`
+- Three-tier walk: `src/adapters/plugins/view_skill/mod.rs` (managed → workspace → project, first wins)
 - `editable_by_learner` check: `src/adapters/skill_lifecycle/evolve.rs::is_editable_by_learner`
 - Audit log: `src/adapters/skill_lifecycle/audit.rs`
 

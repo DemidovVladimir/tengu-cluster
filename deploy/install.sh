@@ -6,6 +6,12 @@
 #
 # Options (env vars):
 #   TENGU_DIR        Install directory       (default: ./tengu-cluster)
+#   TENGU_NETWORK    tor (default) | open    tor = tengu runs behind the Arti + lyrebird-rs
+#                    proxy (docker-compose.tor.yml); open = plain internet, and
+#                    config.toml gets `[egress] network = "open"`
+#   LYREBIRD_RS_SRC  lyrebird-rs checkout    (default: <TENGU_DIR>/../lyrebird-rs, cloned from
+#                    LYREBIRD_RS_REPO when missing; only needed for TENGU_NETWORK=tor)
+#   LYREBIRD_RS_REPO Git URL of lyrebird-rs  (default: https://github.com/DemidovVladimir/lyrebird-rs.git)
 #   TENGU_PROFILE    Compose profile         (default: none — OpenRouter + Telegram only)
 #                    Options: postgres-memory (Postgres + pgvector agentic memory;
 #                    sets TENGU_FEATURES=openrouter,telegram,postgres_memory so the
@@ -32,6 +38,8 @@ err()   { echo -e "${RED}[tengu]${NC} $*" >&2; }
 TENGU_DIR="${TENGU_DIR:-./tengu-cluster}"
 TENGU_BRANCH="${TENGU_BRANCH:-main}"
 TENGU_PROFILE="${TENGU_PROFILE:-}"
+TENGU_NETWORK="${TENGU_NETWORK:-tor}"
+LYREBIRD_RS_REPO="${LYREBIRD_RS_REPO:-https://github.com/DemidovVladimir/lyrebird-rs.git}"
 SKIP_DOCKER="${SKIP_DOCKER:-false}"
 SKIP_START="${SKIP_START:-false}"
 
@@ -108,6 +116,25 @@ setup_repo() {
     cd "$TENGU_DIR"
 }
 
+# ── lyrebird-rs (Tor pluggable transports, built into deploy/tor) ──
+setup_lyrebird() {
+    if [ "$TENGU_NETWORK" != "tor" ]; then
+        return
+    fi
+    LYREBIRD_RS_SRC="${LYREBIRD_RS_SRC:-$(cd .. && pwd)/lyrebird-rs}"
+    case "$LYREBIRD_RS_SRC" in
+        http://*|https://*|git@*) ok "lyrebird-rs from $LYREBIRD_RS_SRC" ;;
+        *)
+            if [ ! -f "$LYREBIRD_RS_SRC/Cargo.toml" ]; then
+                info "Cloning lyrebird-rs into $LYREBIRD_RS_SRC..."
+                git clone --depth 1 "$LYREBIRD_RS_REPO" "$LYREBIRD_RS_SRC"
+            fi
+            ok "lyrebird-rs at $LYREBIRD_RS_SRC"
+            ;;
+    esac
+    export LYREBIRD_RS_SRC
+}
+
 # ── Configure ───────────────────────────────────────────────────
 configure() {
     if [ ! -f .env ]; then
@@ -118,6 +145,10 @@ configure() {
     if [ ! -f config.toml ]; then
         cp config.example.toml config.toml
         info "Created config.toml from template"
+        if [ "$TENGU_NETWORK" = "open" ]; then
+            printf '\n[egress]\nnetwork = "open"\n' >> config.toml
+            info "config.toml: [egress] network = \"open\" (TENGU_NETWORK=open)"
+        fi
     fi
 
     ok "Configuration ready"
@@ -140,16 +171,14 @@ start_services() {
         export TENGU_FEATURES="${TENGU_FEATURES:-openrouter,telegram,postgres_memory}"
     fi
     if [ -n "$TENGU_PROFILE" ]; then
-        docker compose --profile "$TENGU_PROFILE" build
-        docker compose --profile "$TENGU_PROFILE" up -d
+        make up-memory NETWORK="$TENGU_NETWORK"
     else
-        docker compose build
-        docker compose up -d
+        make up NETWORK="$TENGU_NETWORK"
     fi
 
     ok "Tengu is running!"
     echo ""
-    docker compose ps
+    make status NETWORK="$TENGU_NETWORK"
 }
 
 # ── Summary ─────────────────────────────────────────────────────
@@ -159,13 +188,14 @@ summary() {
     ok "Tengu Cluster installed successfully"
     echo ""
     echo "  Directory:  $(pwd)"
+    echo "  Network:    $TENGU_NETWORK (make targets take NETWORK=tor|open)"
     echo "  Profile:    ${TENGU_PROFILE:-default (OpenRouter + Telegram)}"
     echo ""
     echo "  Commands:"
-    echo "    make up           Start tengu"
+    echo "    make up           Start tengu (over Tor; NETWORK=open for direct)"
     echo "    make up-memory    Start tengu + Postgres/pgvector agentic memory"
     echo "    make logs         View logs"
-    echo "    make doctor       Run diagnostics"
+    echo "    make doctor       Run diagnostics (+ live Tor-exit check)"
     echo "    make down         Stop all"
     echo ""
     echo "  Manual:"
@@ -186,6 +216,7 @@ main() {
     detect_os
     install_docker
     setup_repo
+    setup_lyrebird
     configure
     start_services
     summary

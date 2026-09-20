@@ -104,7 +104,7 @@ Example call:
 | Claude Cowork / Claude Code | MCP server + Markdown wiki + behavior proposals |
 | ChatGPT MCP clients | MCP server |
 | Codex | MCP server + Markdown wiki + proposed `AGENTS.md`/skill patches |
-| Humans | Markdown wiki, Git diff, inspect CLI |
+| Humans | Markdown wiki, Git diff, SQL against `TENGU_MEMORY_DATABASE_URL` (no inspect CLI) |
 
 The final product should expose a standalone MCP server command owned by the
 portable plugin. The current `tengu agentic-memory-server` shape is only a
@@ -146,11 +146,11 @@ Example behavior proposal:
 
 | Step | Command/config |
 |---|---|
-| Start DB | Postgres + pgvector container |
+| Start DB | `docker compose --profile postgres-memory up -d postgres-memory` (loopback / compose-internal; not routed through Tor) |
 | Start plugin | Standalone MCP server command from the portable plugin |
 | First write | `capture(kind="preference", content="...")` |
 | Codex/Cowork | Add MCP server + wiki root to project context |
-| Tengu | Optional reference spike only |
+| Tengu | Optional reference spike: `cargo run --features postgres_memory -- chat --sandbox <name>` with `TENGU_MEMORY_DATABASE_URL`; embeddings go through `[egress]` (Tor by default, `network = "open"` for direct) |
 
 ## Source Summary
 

@@ -1,6 +1,6 @@
 # Validation Checklist
 
-End-to-end acceptance check for the work landed across PRs #6 → #12, plus the retention + TUI-memory-config follow-up. Work top-to-bottom. Each section states **what to do**, **what to expect**, and **what a failure looks like**.
+End-to-end acceptance check for the work landed across PRs #6 → #13, updated 2026-09-18 for the current shape: planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), single sandbox config (`sandboxes/<name>/config.toml`), Tor-by-default egress. Work top-to-bottom. Each section states **what to do**, **what to expect**, and **what a failure looks like**.
 
 Runs in ~30 minutes of your time. Automated parts cost ~$0.50–$1.00 in OpenRouter API fees.
 
@@ -9,13 +9,14 @@ Runs in ~30 minutes of your time. Automated parts cost ~$0.50–$1.00 in OpenRou
 ## 0. Prerequisites
 
 ```bash
-# Current main at time of writing: f14bfc6 (#12).
-# PR #13 adds retention + --no-persist + TUI memory config.
 cd /Users/vladimirdemidov/development/tengu-cluster
 git log --oneline -5
 
 export OPENROUTER_API_KEY=sk-or-...
-export RUST_LOG=tengu_cluster=info,tengu_cluster::adapters::orchestrator=debug
+export RUST_LOG=tengu=info,tengu::adapters::orchestrator=debug
+
+# Egress is Tor by default: start the proxy, or put `[egress] network = "open"` in the config
+make tor                              # Arti + lyrebird-rs on 127.0.0.1:9050 (needs ../lyrebird-rs)
 
 cargo build --release --all-features 2>&1 | tail -3
 ```
@@ -35,7 +36,7 @@ ls src/adapters/memory/
 ls src/adapters/memory/vector/
 ```
 
-**Expect:** `builtin.rs`, `context_block.rs`, `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `provider.rs`, `vector.rs`, `writer.rs` + `vector/{disk.rs,qdrant.rs,embedder.rs}`.
+**Expect:** `builtin.rs`, `context_block.rs`, `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `provider.rs`, `vector.rs`, `writer.rs` + `vector/{disk.rs,embedder.rs}`. No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/plugins/agentic_memory/`).
 
 ### 1.2 Orchestrator subsystem files exist
 
@@ -43,15 +44,18 @@ ls src/adapters/memory/vector/
 ls src/adapters/orchestrator/
 ```
 
-**Expect:** `config.rs`, `events.rs`, `executor.rs`, `mod.rs`, `plan.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `roster.rs`, `telemetry.rs`, `wiring.rs`.
+**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `plan.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs`. No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/runner.rs` (`SubprocessRunner`).
 
 ### 1.3 Legacy files are gone
 
 ```bash
-ls src/adapters/agent_builder.rs src/adapters/event_orchestrator.rs \
+ls -d src/adapters/agent_builder.rs src/adapters/event_orchestrator.rs \
    src/adapters/task_builder.rs src/adapters/orchestrator.rs \
    src/adapters/memory_builder.rs src/adapters/qdrant_memory_store.rs \
-   src/adapters/embedding.rs 2>&1 | grep -v "No such"
+   src/adapters/embedding.rs src/adapters/rag src/adapters/agents \
+   src/adapters/orchestrator/roster.rs src/adapters/orchestrator/telemetry.rs \
+   src/adapters/orchestrator/config.rs src/adapters/memory/vector/qdrant.rs \
+   agents 2>&1 | rg -v "No such"
 ```
 
 **Expect:** empty output — every listed file should return "No such file or directory".
@@ -75,15 +79,15 @@ ls src/adapters/plugins/memory/
 ### 1.6 Doctrine scrubbed
 
 ```bash
-grep -r 'heart.*brain\|brain.*heart' docs/architecture.md src/ 2>&1
+rg -n 'LLM = heart' CLAUDE.md docs/architecture-2026-04-27.md
 ```
 
-**Expect:** empty. The old "heart / brain / sensors" doctrine is gone.
+**Expect:** hits. The doctrine is "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — enforced in `channel_runtime::run_turn_with_system` (planner turn strips tools/memory/grounding).
 
 ### 1.7 No legacy types leak into production code
 
 ```bash
-grep -rn 'MemoryServiceHandle\|EmbeddingPort\|MemoryStorePort\|DiskVectorMemoryStore\|OpenRouterEmbeddingAdapter\|QdrantMemoryStore' src/ --include='*.rs' | grep -v '//' | grep -v '^Binary'
+rg -n 'MemoryServiceHandle|EmbeddingPort|MemoryStorePort|DiskVectorMemoryStore|OpenRouterEmbeddingAdapter|QdrantMemoryStore|QdrantVectorStore|OrchestratorAgentPlanner|ChatWorker|AgentSpec' src/ -g '*.rs' | rg -v '//'
 ```
 
 **Expect:** empty (or only matches inside doc comments that start with `//`). If there's a real import, something's wrong.
@@ -100,15 +104,17 @@ cargo test --bin tengu adapters::orchestrator 2>&1 | tail -3
 cargo test --bin tengu adapters::plugins::memory 2>&1 | tail -3
 cargo test --bin tengu adapters::config 2>&1 | tail -3
 cargo test --test scope_lint 2>&1 | tail -3
+cargo test --test run_agent_ipc 2>&1 | tail -3
 ```
 
-| Filter | Expected |
+| Filter | Expected (2026-09-18) |
 |---|---|
 | `adapters::memory` | 21 passed, 0 failed |
-| `adapters::orchestrator` | 31 passed, 0 failed |
-| `adapters::plugins::memory` | ~17 passed, 0 failed |
-| `adapters::config` | 12 passed, 0 failed |
+| `adapters::orchestrator` | 30 passed, 0 failed |
+| `adapters::plugins::memory` | 17 passed, 0 failed |
+| `adapters::config` | 20 passed, 0 failed |
 | `scope_lint` | 2 passed, 0 failed |
+| `run_agent_ipc` | 4 passed, 0 failed |
 
 **If any fail:** don't continue — something regressed.
 
@@ -151,11 +157,11 @@ orchestration-e2e  (9 rows, ~350s)
 
 | Row fails with rationale | Likely cause |
 |---|---|
-| "Orchestrator errored out, expected value at line 1 column 1" | Planner prompt produced non-JSON. Check `skills/orchestration-e2e/evals/config.toml` orchestrator prompt. |
-| "Agent made direct HTTP calls" | Orchestrator didn't fire at all (eval path bypassed). Verify `[orchestrator]` block parses in the config. |
-| "unknown agent: X" | Planner invented an agent name. Prompt should forbid this — check §rules in the orchestrator prompt. |
+| "Orchestrator errored out ..." | The planner LLM call itself failed (non-JSON output no longer errors — Phase 7.4 wraps it as `kind=direct` with a warn log). Planner prompt = `skills/orchestrator/SKILL.md` (`RagPlanner` loads it; `identity.instructions` is bypassed for the planning turn). |
+| "Agent made direct HTTP calls" | Orchestrator didn't fire at all (eval path bypassed). Verify `[orchestrator]` block parses in the config (`tengu eval --sandbox <name>` overrides the skill-local `evals/config.toml`). |
+| `step sN: agent "X" has no [agents.X] block` | Planner invented a name (`skills/orchestrator/SKILL.md` forbids this), or the worker `[agents.X]` lacks a `description` — only those reach `TENGU_PLANNER_REGISTRY.md` (`shared_files::routable_agents`); `SubprocessRunner::run_step` fails fast without spawning. |
 | "step inputs not threaded" | `executor.rs` `render_step_inputs` bug — check the `<step-input from="...">` block format. |
-| Row times out | Increase `timeout_secs` in `prompts.yaml` for that row. |
+| Row times out | Increase `timeout_secs` in `prompts.yaml` for that row; a single step is capped by the agent's `limits.step_timeout_secs` (default 600). |
 
 Transcripts land in `evals/runs/<ts>/orchestration-e2e-<row_id>.md` for diagnosis.
 
@@ -219,23 +225,30 @@ The eval path has its own `EvalChatServiceFactory`. This tests the real TUI path
 
 ### 5.1 Setup
 
+One sandbox file holds everything (`docs/configuration.md`):
+
 ```bash
-mkdir -p ~/tengu-tui-smoke && cd ~/tengu-tui-smoke
-cp /Users/vladimirdemidov/development/tengu-cluster/docs/configs/tui-memory-smoke.toml ./tengu.toml
-sed -i '' "s|\$WORKSPACE|$PWD|g" tengu.toml
+mkdir -p sandboxes/smoke && cp config.example.toml sandboxes/smoke/config.toml
+# edit sandboxes/smoke/config.toml:
+#   - uncomment [orchestrator] (agent = the planner agent, engine = "rag")
+#   - one [agents.<name>] per worker (researcher, writer) WITH a `description` — only those are routable
+#   - [memory] enabled = true
+#   - `make tor` is running, or add [egress] network = "open"
+./target/release/tengu doctor --sandbox smoke     # config parses, engines build, network/proxy status
 ```
 
 ### 5.2 Start the TUI
 
 ```bash
-/Users/vladimirdemidov/development/tengu-cluster/target/release/tengu chat
+./target/release/tengu chat --sandbox smoke
 ```
 
-**Expected log lines (grep from a separate terminal):**
+**Expected log lines (`RUST_LOG=tengu=info`, from a separate terminal):**
+- `orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner`
 - `TUI orchestrator constructed with per-turn snapshot factory`
-- `DiskVectorStore loaded` with `entries=0` on first boot
+- `DiskVectorStore loaded` with `entries=0` on first boot (`[memory] enabled = true`)
 
-**If missing:** orchestrator didn't construct. Check `[orchestrator]` block + default agent present.
+**If missing:** orchestrator didn't construct. Check `[orchestrator]` block (`agent` names an `[agents.*]` block, `engine = "rag"`) + default agent present.
 
 ### 5.3 Sanity prompts
 
@@ -243,8 +256,8 @@ Type these one at a time in the TUI and observe:
 
 | Prompt | Expected |
 |---|---|
-| `hi` | Short greeting. No orchestrator event lines in logs. Reply in <3s. |
-| `What is 2 + 2?` | Reply contains `4`. Planner fires (`orchestrator:plan_created` in log) but returns `kind=direct`. |
+| `hi` | Short greeting. Planner returns `kind=direct` → no `orch: plan created` bubble (only `orch: plan completed`). Reply in <3s. |
+| `What is 2 + 2?` | Reply contains `4`. Planner fires but returns `kind=direct` — no `orch: plan created`, no `tengu run-agent` child spawned. |
 
 ### 5.4 Sequential smoke
 
@@ -252,13 +265,13 @@ Type these one at a time in the TUI and observe:
 Look up the HTTP status codes for 200 and 404, then write a two-sentence summary contrasting them.
 ```
 
-**Expected log sequence:**
-1. `orchestrator:plan_created` — two steps, s2 depends on s1
-2. `orchestrator:step_started s1:researcher`
-3. `orchestrator:step_succeeded s1`
-4. `orchestrator:step_started s2:writer`
-5. `orchestrator:step_succeeded s2`
-6. `orchestrator:plan_completed`
+**Expected event sequence** (TUI `orch:` system bubbles — `OrchestratorEvent` rendered in `tui/mod.rs:241`; `RUST_LOG=tengu=info` adds one `metrics` line per LLM call, children included):
+1. `orch: plan created (2 steps)` — s2 depends on s1
+2. `orch: ▶ s1 [researcher]` — a `tengu run-agent` child spawns
+3. `orch: ✓ s1`
+4. `orch: ▶ s2 [writer]`
+5. `orch: ✓ s2`
+6. `orch: plan completed`
 
 Reply: polished paragraph referencing 200 and 404.
 
@@ -270,7 +283,7 @@ Reply: polished paragraph referencing 200 and 404.
 In parallel, give a one-line definition of tRPC and a one-line definition of GraphQL. Then write one paragraph contrasting them.
 ```
 
-**Expected:** three steps — `s1:researcher` + `s2:researcher` both with `depends_on=[]`, `s3:writer depends_on=[s1,s2]`. `step_started s1` and `step_started s2` fire within ~100ms of each other.
+**Expected:** three steps — `s1:researcher` + `s2:researcher` both with `depends_on=[]`, `s3:writer depends_on=[s1,s2]`. `orch: ▶ s1` and `orch: ▶ s2` fire within ~100ms of each other (two `tengu run-agent` children in parallel).
 
 **Pass:** both codes fire in parallel (observable in log timestamps), synthesizer pulls from both.
 
@@ -289,7 +302,7 @@ What's my favorite HTTP status code?
 
 **Pass:** reply contains `418`.
 
-**Fail:** reply says "I don't have that information" → `DiskVectorStore` isn't persisting, or `MemoryInjector::for_turn` isn't running. Check `<workspace>/memory/vectors.bin` exists and has non-zero size between sessions.
+**Fail:** reply says "I don't have that information" → `DiskVectorStore` isn't persisting (check `<workspace>/memory/vectors.bin` exists and has non-zero size between sessions), or nothing searched it: in orchestrated mode the planner turn skips disk-memory injection (`ChatOrchestratorPortImpl::run_orchestrator_turn_with_system`), so recall needs a worker step calling `memory_search`, or Postgres `agentic_memory` (`--features postgres_memory`, `[memory] within_session_output_top_k`).
 
 ---
 
@@ -297,16 +310,20 @@ What's my favorite HTTP status code?
 
 Only if you have a Telegram bot token and want to verify that channel too. Skip if not.
 
-Add to `tengu.toml`:
+Add to `sandboxes/smoke/config.toml` (the token is an env var, not a config key):
 ```toml
 [telegram]
 enabled = true
-token = "YOUR_BOT_TOKEN"
 ```
 
-Run `tengu telegram` instead of `tengu chat`. Same log expectations as §5.2 but with `Telegram orchestrator constructed with per-message snapshot factory`.
+```bash
+export TELEGRAM_BOT_TOKEN=...
+./target/release/tengu telegram --sandbox smoke
+```
 
-Send the sequential prompt from §5.4 via Telegram. Verify the `/stop` command actually interrupts a mid-run plan: send a long multi-step prompt, wait for the first `orchestrator:step_started`, then send `/stop`. Expect `Stopped by user.` reply within 5 seconds.
+Same log expectations as §5.2 but with `Telegram orchestrator constructed with per-message snapshot factory`.
+
+Send the sequential prompt from §5.4 via Telegram. Verify the `/stop` command actually interrupts a mid-run plan: send a long multi-step prompt, wait for the first step-started status message, then send `/stop`. Expect `Stopped by user.` reply within 5 seconds.
 
 ---
 
@@ -336,7 +353,9 @@ If anything fails:
 Known gaps (documented in `docs/harness-architecture.md` §9):
 
 - **Concurrent multi-user sessions** — only one orchestrator session per test.
-- **legacy vector DB backend** — all tests use disk. legacy vector DB port exists but not validated against a live server.
+- **Postgres `agentic_memory`** — needs `--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`; not exercised here (ignored `postgres_*_smoke` tests cover it).
+- **Tor egress** — sections above run with `make tor` or `[egress] network = "open"`; `tengu doctor --tor` is the only live exit check.
+- **Eval stubs vs subprocess workers** — row `stubs` reach the planner turn (`EvalChatServiceFactory`) only; worker steps are real `tengu run-agent` children.
 - **5+ step plans** — `prompts.yaml` tops out at 4 steps (diamond).
 - **Mid-step LLM streaming cancellation** — `/stop` between steps is tested; mid-LLM-call cancel is not.
 

@@ -14,10 +14,9 @@ RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 ARG FEATURES="openrouter,telegram"
 RUN cargo build --release --features "${FEATURES}" 2>/dev/null || true
 
-# Copy real source + skills + agents + sandboxes
+# Copy real source + skills + sandboxes
 COPY src src
 COPY skills skills
-COPY agents agents
 COPY sandboxes sandboxes
 
 # Touch source to invalidate the stub build
@@ -40,9 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/src/tengu/target/release/tengu /usr/local/bin/tengu
 
-# Skills, subagent specs and sandbox configs are baked into the image
+# Skills and sandbox configs (each `sandboxes/<name>/config.toml` carries its
+# agents) are baked into the image
 COPY skills /opt/tengu/skills
-COPY agents /opt/tengu/agents
 COPY sandboxes /opt/tengu/sandboxes
 
 # Default working directory (planner registry + TENGU_PLAN.md are written here)

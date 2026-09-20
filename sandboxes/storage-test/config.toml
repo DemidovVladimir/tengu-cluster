@@ -2,8 +2,14 @@
 # Test persistent_store tool: file storage + vector indexing.
 # Run with: tengu telegram --sandbox storage-test
 # Or TUI:   tengu chat --sandbox storage-test
+# The agent uses engine = "claude_code" — build with `--features claude_code`.
 
 runtime_profile = "auto"
+
+# Network: Tor by default (`make tor` must be running). Uncomment for the
+# open internet:
+# [egress]
+# network = "open"
 
 [hub]
 bind = "127.0.0.1"
@@ -24,11 +30,31 @@ directories = ["uploads", "documents"]
 
 [agents.storage]
 engine = "claude_code"
-model = "sonnet"
+model = "claude-sonnet-4-6"
 default = true
 workspace = "~/storage-test-workspace"
 workspace_tools = ["persistent_store"]
 skill_packages = ["telegram-rag-ingest"]
+# Subagent view (used when an [orchestrator] routes a step here): tool
+# allow-list + planner-facing description.
+tools = ["persistent_store", "read_file"]
+description = """
+Stores files and searches them by semantic query. Best for: ingesting a set \
+of documents (PDFs, notes, transcripts) and later retrieving them by natural \
+language questions. Supports store, search, list, delete operations on a \
+single workspace. NOT for: research or fact-finding against the open web, \
+code generation, or running shell commands.
+"""
+example_queries = [
+    "save this PDF to my workspace",
+    "store these meeting notes",
+    "find the document about Q4 budget",
+    "search my files for the protein folding paper",
+    "list all PDFs I've uploaded",
+    "delete the draft from last week",
+    "what files do I have on machine learning?",
+    "ingest the attached transcript and index it",
+]
 
 [agents.storage.identity]
 name = "Storage Agent"
@@ -51,3 +77,4 @@ idle_timeout_minutes = 30
 [agents.storage.limits]
 max_tokens_per_flow = 500_000
 max_tool_rounds = 30
+step_timeout_secs = 300

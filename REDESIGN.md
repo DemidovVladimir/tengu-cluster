@@ -5,6 +5,10 @@
 > brain, tools = hands**. Planner routing is file-backed via
 > `TENGU_PLANNER_REGISTRY.md`; live memory is Postgres `agentic_memory`;
 > stable knowledge compiles to Markdown wiki pages.
+> Current reference: `docs/architecture-2026-04-27.md`. Gone since: `agents/*.toml` +
+> `src/adapters/agents/` (→ `[agents.<name>]` in `sandboxes/<name>/config.toml`, 2026-09-18),
+> `src/adapters/rag/` + `tengu registry` CLI + Qdrant (Phase 6, 2026-05-14), `orchestrator/roster.rs`
+> + `engine = "static"` (Phase 7.1), `tengu/ideas/` (→ `docs/ideas/`), `deploy/snowflake/` (2026-09-18).
 >
 > **Status (2026-04-25): functionally complete and end-to-end verified.**
 >
@@ -15,11 +19,9 @@
 > works in legacy planner mode via an in-memory ring buffer of recent user messages
 > in `RagPlanner` (6.4 lite). The static path is preserved.
 >
-> Remaining items are polish, not capability: 6.1 (full event-bus
-> RagQueried), 6.2 (content-hash dedup), 6.3 (filter-based TTL purge),
-> 6.4 (full — durable persistence to `agentic_memory user events` keyed by
-> `session_id`), 6.6 (MCP tool indexing), 6.7 (C→B fallback B half),
-> 7.1 (delete legacy), 7.2 (v1 dead-code cleanup).
+> Remaining items as of 2026-04-25 have since landed (6.1 full, 6.4 full, 6.6,
+> 6.7, 7.1, 7.2) or became moot with the file-backed registry (6.2, 6.3) —
+> see the status table in `docs/IMPLEMENTATION_PLAN.md`.
 >
 > **For session handoff context, read `docs/SESSION_HANDOFF.md` first.**
 
@@ -91,7 +93,7 @@ do not file a PR. **If behaviour requires a PR to change, that is a doctrine vio
 
 ```
 Startup
-  ├── scan skills/, agents/
+  ├── scan skills/, [agents.*] in sandboxes/<name>/config.toml
   ├── connect to each MCP server → tools/list
   ├── embed descriptions → legacy vector DB (TENGU_PLANNER_REGISTRY.md, permanent)
   ├── TTL cleanup: delete from agentic_memory user events/agentic_memory step outputs older than ttl_days
@@ -188,10 +190,7 @@ User message arrives (TUI / Telegram)
 │   └── [any skill]/
 │       └── SKILL.md
 │
-├── agents/
-│   ├── researcher.toml
-│   ├── coder.toml
-│   └── [any agent].toml
+├── sandboxes/<name>/config.toml   ← [agents.<name>] blocks (agents/*.toml removed 2026-09-18)
 │
 └── (no tools/ directory)
     Tools = compiled-in plugins + MCP servers in config.toml
@@ -260,22 +259,23 @@ No file watcher. No daemon. Runs at startup + when user provides new files via c
 
 ## 6. Agent Spec Format
 
-`agents/<name>.toml` — one file per agent.
+`[agents.<name>]` block in `sandboxes/<name>/config.toml` (`AgentConfig`, `src/adapters/config.rs`) — `agents/*.toml` removed 2026-09-18; a `description` makes the block planner-routable.
 
 ```toml
-name        = "researcher"
+[agents.researcher]
+engine      = "openrouter"             # or "claude_code"
+model       = "openai/gpt-4o"          # any OpenRouter slug
 description = "Researches topics using web search and document reading. \
                Best for: fact-finding, summarising sources, due diligence. \
                NOT for: code generation, system administration."
-model       = "openai/gpt-4o"          # any OpenRouter slug
-tools       = ["http_request", "read_file", "remember"]
-skills      = ["web-research", "summarizer"]
-max_turns   = 20
-timeout_secs = 180
+example_queries = ["what is the BTC price?"]
+tools       = ["http_request", "read_file", "memory_ingest"]
+skill_packages = ["web-research", "summarizer"]   # `skills = [...]` is an accepted alias
+# workspace = "workspaces/researcher"   # optional; absent → temp dir per step
 
-# Optional: if set, this path is the agent's persistent workspace.
-# If absent, runner creates a temp dir and deletes it after the step.
-# sandbox = "workspaces/researcher"
+[agents.researcher.limits]
+max_tool_rounds   = 20    # LLM turns per step (was `max_turns`)
+step_timeout_secs = 180   # wall-clock per step (was `timeout_secs`)
 ```
 
 The `description` field IS what gets embedded in `TENGU_PLANNER_REGISTRY.md`. Write it for semantic
@@ -356,7 +356,7 @@ The mandatory suffix is appended by the runner, not the skill. The LLM cannot av
 This is the harness-enforced approach (called "Option C" in the design session) — skill
 edits cannot lose the behaviour.
 
-### Three-tier skill loader (required — mirrors `docs/architecture-v2.md`)
+### Three-tier skill loader (required — mirrors `REDESIGN.md` (its condensed copy `REDESIGN.md` was deleted 2026-09-18))
 
 When resolving a skill name in `ipc.skills`, the runner looks it up in this order
 (later tiers shadow earlier ones):
@@ -374,7 +374,7 @@ empty prompt — that silently degrades agent quality.
 ### Trust boundary on the stdin `tools` list
 
 The runner MUST NOT trust the stdin `tools` list on its own. It loads
-`agents/<agent_name>.toml` itself and computes:
+`[agents.<agent_name>]` from the parent's config itself (`sandbox_config` over IPC) and computes:
 
 ```
 effective_tools = (spec.tools ∩ ipc.tools) ∪ {compress_and_store}
@@ -564,8 +564,8 @@ When Open Brain / Karpathy LLM Wiki returns no agent above the similarity thresh
 - Base: closest-matching `.toml` spec
 - Augmented with highest-scoring skills and tools from the Open Brain / Karpathy LLM Wiki results
 - Config used for this run only — NOT persisted as a new agent spec
-- Unless user explicitly says "save this as a new agent" — then the runner writes
-  `agents/<user-provided-name>.toml` and triggers re-indexing
+- Unless user explicitly says "save this as a new agent" — then it becomes an
+  `[agents.<user-provided-name>]` block in the sandbox config (registry regenerates on the next planner turn)
 
 ---
 
@@ -577,9 +577,9 @@ Remove these. Their functionality is replaced or deferred.
 |--------|--------|
 | `src/adapters/orchestrator/roster.rs` | Replaced by Open Brain / Karpathy LLM Wiki |
 | `src/adapters/orchestrator/wiring.rs` | Replaced by Open Brain / Karpathy LLM Wiki + runner.rs |
-| `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 |
-| `src/adapters/eval_builder.rs` | Deferred → move to `tengu/ideas/` |
-| `src/adapters/skill_lifecycle/evolve.rs` | Deferred → move to `tengu/ideas/` (path verified — evolve.rs lives under `skill_lifecycle/`, NOT under `plugins/skill_lifecycle/`) |
+| `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 — **reversed 2026-09-18**: `agents/*.toml` removed, the sandbox config is the single agent source |
+| `src/adapters/eval_builder.rs` | Deferred → kept in-tree (`tengu eval`); ideas live in `docs/ideas/` |
+| `src/adapters/skill_lifecycle/evolve.rs` | Deferred → kept in-tree (`tengu skill evolve`); ideas live in `docs/ideas/` |
 
 > **Reconciled with repo, 2026-04-24 (revised):** verified against the actual
 > checkout. `sandboxes/` DOES exist (contains `aura/` and `storage-test/`) — those
@@ -665,9 +665,9 @@ pub type EventBus = broadcast::Sender<OrchestratorEvent>;
 > best built as a thin facade on top of that, not as a parallel stack. Think
 > "promote memory to central Open Brain / Karpathy LLM Wiki" rather than "write Open Brain / Karpathy LLM Wiki from scratch."
 
-### `src/adapters/rag/mod.rs`
+### `src/adapters/rag/mod.rs` (removed Phase 6, 2026-05-14)
 
-legacy vector facade. Public API:
+legacy vector facade — replaced by the file-backed registry (`orchestrator/shared_files.rs`) + Postgres `agentic_memory`. Public API was:
 
 ```rust
 pub struct RagStore { /* legacy vector DB client + config */ }
@@ -697,23 +697,23 @@ pub struct MemoryEntry {
 }
 ```
 
-### `src/adapters/rag/indexer.rs`
+### `src/adapters/rag/indexer.rs` (removed Phase 6)
 
 Startup indexer. Scans skills/, agents/, MCP tool list, compiled-in tool list. Diffs by
 content_hash (sha256 of description). Only embeds changed or new entries.
 
-### `src/adapters/rag/query.rs`
+### `src/adapters/rag/query.rs` (removed Phase 6)
 
 Thin wrapper over legacy vector DB search. Deserializes payload into `RagResult`.
 
-### `src/adapters/rag/cleanup.rs`
+### `src/adapters/rag/cleanup.rs` (removed Phase 6)
 
 TTL purge. Runs at startup before indexing. No-op when `ttl_days == 0`.
 
 ### `src/adapters/runner.rs`
 
-Implements `WorkerHandle` trait by spawning a subprocess. Loads agent spec from
-`agents/<name>.toml`. Assembles system prompt. Writes stdin JSON. Reads stdout JSON.
+Implements `WorkerHandle` trait by spawning a subprocess. The child loads
+`[agents.<name>]` from the parent's config. Assembles system prompt. Writes stdin JSON. Reads stdout JSON.
 Returns output as `anyhow::Result<String>`.
 
 ```rust
@@ -733,9 +733,9 @@ impl WorkerHandle for SubprocessRunner {
 }
 ```
 
-### `src/adapters/agents/mod.rs`
+### `src/adapters/agents/mod.rs` (removed 2026-09-18)
 
-Loads and validates `agents/*.toml`. Caches in memory after startup.
+Loaded `agents/*.toml`. Replaced by `AgentConfig` in `config.rs`: `description`, `example_queries`, `tools`, `skill_packages` (alias `skills`), `limits.max_tool_rounds`, `limits.step_timeout_secs`, `workspace`.
 
 ```rust
 pub struct AgentSpec {
@@ -787,7 +787,7 @@ Two-layer enforcement stays exactly as-is:
 
 ---
 
-## 16. Cold Start Fallback
+## 16. Cold Start Fallback (historical — never landed; migration reversed 2026-09-18)
 
 On startup, if `TENGU_PLANNER_REGISTRY.md` returns zero results for any query:
 
@@ -805,7 +805,7 @@ Migration steps (happens in Phase 2 of IMPLEMENTATION_PLAN.md):
 1. For each `sandboxes/<name>/config.toml` → extract the `[agents.*]` blocks
    into `agents/<name>.toml` per §6's format.
 2. Run `tengu` once — startup indexer picks up new files.
-3. Verify: `tengu registry list --type agent` shows the migrated agents.
+3. Verify: ~~`tengu registry list --type agent`~~ (CLI removed Phase 6) — read `TENGU_PLANNER_REGISTRY.md` after a planner turn.
 4. Delete `sandboxes/<name>/` directories in Phase 5.
 
 ---
@@ -880,9 +880,9 @@ These are real ideas that were discussed but intentionally deferred to keep the 
 scope manageable:
 
 - **Skill evolution loop** (auto-improving skills, Karpathy-style eval loop)
-  → Files: `tengu/ideas/auto-skill-research/`
+  → Files: `docs/ideas/auto-improving-agent-skills.md`; `skill_lifecycle/evolve.rs` (`tengu skill evolve`) is in-tree
 - **Eval harness** (skill performance benchmarking)
-  → Files: `tengu/ideas/eval/`
+  → In-tree: `eval_builder.rs` (`tengu eval <skill>`)
 - **File watcher** (re-index on SKILL.md / agent spec change without restart)
   → Startup re-index is sufficient for now
 - **Sandbox persistence for composed agents** (C→B result saved as permanent spec)
@@ -907,7 +907,7 @@ it in a comment but implement what is specified here.
 | Cold start | Fallback to sandbox configs temporarily | Backwards compatibility; user migrates at their own pace |
 | When to index new files | At startup + when user provides files via channel | Open Brain / Karpathy LLM Wiki is the central authority; all user-provided content goes into memory immediately |
 | Plan schema location | File beside SKILL.md (`plan_schema.json`) | User can read it; version-controlled; harness loads from disk |
-| Agent spec format | `.toml` files in `agents/` | Simple, readable, file-based — no Rust changes to add an agent |
+| Agent spec format | `.toml` files in `agents/` — **reversed 2026-09-18**: `[agents.<name>]` in `sandboxes/<name>/config.toml` | Simple, readable, file-based — no Rust changes to add an agent; one file per sandbox |
 | Unknown agent handling | C → B | Ask user first (C), then compose generic agent (B); never silently use wrong agent |
 | Sandbox for agents | Optional in agent spec; if absent use temp dir | Keeps stateless agents stateless; persistent agents declare their workspace |
 | Tool access for orchestrator | Orchestrator has no separate config — it is the default user entry point | Orchestrator is not a peer agent; it loads SKILL.md and that's it |
@@ -956,9 +956,9 @@ cat src/main.rs                              # Entry point — add run-agent sub
 
 ## Appendix B — Architecture Doctrine File
 
-The authoritative architecture reference is `docs/architecture-v2.md` in this repository.
+The authoritative architecture reference is now `docs/architecture-2026-04-27.md`; `REDESIGN.md` (its condensed copy `REDESIGN.md` was deleted 2026-09-18) was the v2 doctrine companion of this brief.
 This REDESIGN.md is the implementation brief. If there is a conflict between the two,
-`docs/architecture-v2.md` is the doctrine and this document provides the implementation
+`REDESIGN.md` (its condensed copy `REDESIGN.md` was deleted 2026-09-18) is the doctrine and this document provides the implementation
 detail. Neither supersedes the other — they are complementary.
 
 The day-to-day execution plan with commands, acceptance criteria, and rollback steps

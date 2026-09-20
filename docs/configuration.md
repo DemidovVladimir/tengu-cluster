@@ -1,6 +1,6 @@
 # Configuration
 
-One TOML file. Resolution: `--sandbox <name>` loads `sandboxes/<name>/config.toml` and replaces the base config wholesale; without it, `-c/--config <path>` > `TENGU_CONFIG=<path>` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`). The `run-agent` child follows the same chain. Commented reference: `config.example.toml`.
+One TOML file — channel settings, `[egress]`, the planner and **every agent** (in-process and subagent alike). Resolution: `--sandbox <name>` loads `sandboxes/<name>/config.toml` and replaces the base config wholesale; without it, `-c/--config <path>` > `TENGU_CONFIG=<path>` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`). The `run-agent` child gets the same file (`--sandbox` over IPC; otherwise `TENGU_CONFIG`, which the parent pins to its resolved path) and takes `[agents.<name>]` from it. Commented reference: `config.example.toml`.
 
 ## Initial setup
 
@@ -9,6 +9,7 @@ tengu secret init                              # vault + master password
 tengu secret set OPENROUTER_API_KEY sk-or-...
 tengu secret set TELEGRAM_BOT_TOKEN 123:ABC-..
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
+make tor                                       # Tor proxy (default network); or set [egress] network = "open"
 tengu chat                                     # or: tengu chat --sandbox aura
 ```
 
@@ -24,10 +25,11 @@ tengu chat                                     # or: tengu chat --sandbox aura
 | `[orchestrator]` | Planner + subprocess runner (see below) |
 | `[memory]` | Disk vector store + agentic-memory knobs |
 | `[telegram]` | Telegram bot adapter |
-| `[webhooks]` | Inbound HTTP listener (feature `webhooks`) — `docs/webhooks-2026-05-11.md` |
+| `[webhooks]` | Inbound HTTP listener (feature `webhooks`); each POST runs a one-shot turn through `[orchestrator].agent` (the endpoint `agent` is informational) — `docs/webhooks-2026-05-11.md` |
 | `[scaffold]` | Workspace directory/file scaffolding |
 | `[claude_code]` | Global Claude Code backend settings |
 | `[skill_lifecycle]` | `tengu eval` / `tengu skill metrics` / `tengu skill evolve` |
+| `[egress]` | `network = "tor"` (default) / `"open"`, proxy, host allowlist, shell isolation, audit log — `docs/egress-2026-09-16.md` |
 
 ## Agent configuration
 
@@ -39,15 +41,21 @@ default = true                     # at most one default agent
 workspace = "~/projects/my-app"
 default_lens = "eco"               # "eco" | "standard" | "precise"
 role = "backend_engineer"          # optional
-skill_packages = ["aura-orchestrator"]
+skill_packages = ["aura-orchestrator"]   # `skills = [...]` is an accepted alias
 workspace_tools = ["shared_cache", "skill_distill"]
+# --- subagent view (planner-routable when `description` is set) ---
+description = "What this agent handles and what it is NOT for — read by the planner LLM."
+example_queries = ["what is the BTC price?"]
+tools = ["http_request", "read_file"]   # allow-list for `tengu run-agent` steps; empty = every base tool
 ```
 
 | Field | Notes |
 |---|---|
 | `engine` | `openrouter` needs `OPENROUTER_API_KEY`; `claude_code` needs the `claude` CLI + `--features claude_code`. See [[engine-backends]]. |
 | `workspace_tools` | Allow-list: `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill` (`config.rs::valid_workspace_tools`). |
-| Subagent specs | `agents/<name>.toml` (`AgentSpec`) has NO `workspace_tools` field — put opt-ins in `tools = [...]`. |
+| `description` | Present ⇒ rendered into `TENGU_PLANNER_REGISTRY.md`; the planner may dispatch plan steps to this agent as a `tengu run-agent` subprocess. Absent ⇒ in-process only (planner role, `@role:` chat). |
+| `tools` | Subprocess tool allow-list. Names from the workspace-tools allow-list listed here are opted in like `workspace_tools`. `compress_and_store` is appended implicitly — never list it. |
+| Unknown keys | `AgentConfig` is not strict — a typo is silently ignored. Check `tengu status`. |
 
 ### Identity / Flow / Limits
 
@@ -76,7 +84,10 @@ compact_result_limit = 200
 max_output_tokens_per_turn = 4096  # optional (<= context_window); unset = omit max_tokens, model default applies
 max_cost_per_flow = 5.0            # optional (USD)
 warn_at_cost = 4.0                 # optional (<= max_cost_per_flow)
+step_timeout_secs = 600            # wall clock for one plan step when this agent runs as a subprocess
 ```
+
+As a subagent, `max_tool_rounds` is also the LLM-turn cap per plan step and `step_timeout_secs` the wall clock the parent enforces.
 
 ### Claude Code
 
@@ -105,9 +116,10 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 
 | Fact | Where |
 |---|---|
-| `engine` defaults to `"static"`, which logs a warn and disables orchestration | `channel_runtime.rs` (`cfg.engine != "rag"`) |
-| Subagents are `agents/<name>.toml`; registry regenerated into `TENGU_PLANNER_REGISTRY.md` each planner turn | `orchestrator/shared_files.rs` |
-| Accepted plan written to `TENGU_PLAN.md` for subagents | `orchestrator/replan.rs` |
+| `engine` defaults to `"rag"`; any other value fails validation | `config.rs::OrchestratorConfig`, `validation_errors` |
+| Subagents are the `[agents.*]` blocks with a `description`; registry regenerated into `TENGU_PLANNER_REGISTRY.md` each planner turn | `orchestrator/shared_files.rs::routable_agents` |
+| The child re-loads the same config (sandbox name over IPC) and takes `[agents.<step.agent>]`; unknown names fail before any spawn | `runner.rs::run_step`, `main.rs::run_agent_subprocess` |
+| Accepted plan reaches the child as IPC `plan_state`; `TENGU_PLAN.md` is a debug mirror | `orchestrator/replan.rs`, `shared_files.rs` |
 
 ## Memory
 
@@ -141,7 +153,7 @@ allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS
 ```toml
 [skill_lifecycle]
 improver_agent       = "skill-improver"   # required for `tengu skill evolve`
-fixture_runner_agent = "fixture-runner"   # serde-required but unused — `tengu eval` runs rows on the eval config default agent
+fixture_runner_agent = "fixture-runner"   # optional and unused — `tengu eval` runs rows on the eval config default agent
 default_max_evolve_cycles = 3
 default_rolling_window    = 10
 
@@ -153,9 +165,20 @@ tools  = ["read_file", "list_directory"]
 
 See [[skills#Metrics & Evolution]] for the frontmatter contract.
 
+## Egress
+
+Tor by default. Full reference: `docs/egress-2026-09-16.md`.
+
+```toml
+[egress]
+network = "tor"          # default; "open" = plain internet
+# proxy = "socks5h://127.0.0.1:9050"   # tor default (TENGU_TOR_PROXY overrides)
+# route_llm_api = true                 # tor default; false under open
+```
+
 ## Sandboxes
 
-`sandboxes/<name>/config.toml` — `aura` (DeSci pipeline), `storage-test`, `unlimited` (OpenRouter DeepSeek model bench, see `sandboxes/unlimited/BENCH.md`).
+`sandboxes/<name>/config.toml` — `aura` (DeSci pipeline, `network = "open"`), `storage-test`, `unlimited` (single OpenRouter agent; bench recipe in `sandboxes/unlimited/BENCH.md`). Each file carries its own agents — there is no shared `agents/` directory.
 
 ```bash
 tengu chat --sandbox aura
@@ -189,6 +212,9 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 | `PRIVY_APP_SECRET` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
 | `PRIVY_WALLET_ID` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
 | `EVM_RPC_URL` | `plugins/crypto/helpers.rs` | `https://ethereum-rpc.publicnode.com` | JSON-RPC endpoint |
+| `TENGU_EGRESS` | `egress.rs::install` | unset | Parent → child resolved `[egress]` hand-off (JSON), set by `runner.rs` / `claude_code_engine.rs`; wins over the child's config |
+| `TENGU_TOR_PROXY` | `egress.rs::EgressConfig::resolved` | `socks5h://127.0.0.1:9050` | Tor proxy under `network = "tor"` when `[egress].proxy` is unset (`docker-compose.tor.yml` sets `socks5h://tor:9050`) |
+| `LYREBIRD_RS_DIR` | `Makefile` (exported to compose as `LYREBIRD_RS_SRC`, absolute) | `../lyrebird-rs` | Where the Tor image builds lyrebird-rs from (dir or git URL) |
 | `RUST_LOG` | `main.rs` (`tracing_subscriber::EnvFilter`) | `info` | Log filter; `tengu=info` prints one `metrics` line per LLM call |
 
 ## Feature flags
@@ -206,6 +232,8 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 - Engine must be `openrouter` or `claude_code`; `builtin_tools_profile` must be `none|read_only|editor|editor_shell`.
 - Limits positive; `warn_at_cost <= max_cost_per_flow`; `max_output_tokens_per_turn <= context_window`.
 - `workspace_tools` entries must be in the allow-list above.
+- `[egress]`: unknown keys fail; `network` must be `tor|open`; `proxy` must be `socks5h|http|https` with a port (`socks5://` rejected — DNS leak); `route_llm_api = true` needs a `proxy`; `shell_network = "isolated"` is macOS-only and needs a loopback proxy.
+- `limits.step_timeout_secs > 0`; `description`, when set, must not be empty.
 
 ## Reset
 

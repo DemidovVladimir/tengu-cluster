@@ -1,6 +1,9 @@
 # Architecture
 
-> Every implementation plan references this document. Every PR is reviewed against it.
+> **Superseded (2026-09-18):** PR #6–#8-era doc. Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` / `.html`); config: `docs/configuration.md`.
+> Doctrine below (harness owns control flow; orchestrator = agent with one `memory_search` tool) was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — see `CLAUDE.md`.
+
+> Historical: every implementation plan referenced this document; every PR was reviewed against it.
 
 Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `src/main.rs` — flat structure, no sub-crates.
 
@@ -44,7 +47,7 @@ Order of checks:
 2. Tool in allow-list → plugin registers it; `PluginToolExecutor` gives it a scope entry.
 3. At call time, `Tool::execute`'s first logic line is `ctx.scope.check_*()` — enforced by `tests/scope_lint.rs`. Tools that legitimately have no resource access (e.g. `abi_encode`) declare this with a `// scope: pure-compute` annotation.
 
-The allow-list lives in the `tools` list the caller builds and passes in; `ToolAllowList` as a type was removed in Phase A when the registry replaced the old `ToolUseService`. `ToolScope` is the per-agent fine-grained gate (see [[configuration#Scopes]]).
+The allow-list lives in the `tools` list the caller builds and passes in; `ToolAllowList` as a type was removed in Phase A when the registry replaced the old `ToolUseService`. `ToolScope` is the per-agent fine-grained gate (see [[configuration]]).
 
 ---
 
@@ -98,9 +101,8 @@ Passed to every `engine.run()` call:
 
 ### Tool Assembly (`src/adapters/channel_runtime.rs`)
 - `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache, and skill-lifecycle plugins for the outer loop (`skill_distill`, `shared_cache`, `persistent_store` are opt-in per agent via `workspace_tools`)
-- `compute_subagent_tools()` — subagent-spawn tool defs, added when the orchestrator is enabled
 - `compute_bridge_tools()` — tool defs for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers each plugin (workspace, skill, memory, cache, http, crypto, subagents, skill-lifecycle, mcp) filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers the core plugins through `register_core_plugins` (agentic_memory, workspace, memory, cache, http, crypto, skill-lifecycle) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
 
 ### Skill Lifecycle (`src/adapters/skill_lifecycle/`, `src/adapters/plugins/skill_lifecycle/`)
 A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
@@ -113,12 +115,12 @@ All three honour harness-owned doctrine: cycle counts, regression tolerance, bes
 
 ### Plugin Architecture (`src/adapters/plugins/`, `src/adapters/tool_plugin.rs`)
 
-Every tool is a small struct implementing the async `Tool` trait. Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, activity port, and subagent registry.
+Every tool is a small struct implementing the async `Tool` trait. Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, and activity port.
 
-- **Static plugins** (tool defs known at compile time): `workspace`, `http`, `crypto`, `cache`, `memory`, `skill`, `subagents`
+- **Static plugins** (tool defs known at compile time): `workspace`, `http`, `crypto`, `cache`, `memory`, `skill`, `skill_lifecycle`, `agentic_memory` (feature `postgres_memory`)
 - **Dynamic plugin** (tool defs discovered at boot): `mcp` — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}.{tool_name}`
 
-Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and register it in `channel_runtime::build_tool_executor`. No changes to the engine loop, no new executor plumbing.
+Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and add one registration line in `channel_runtime::register_core_plugins` (the in-process executor and the MCP bridge both call it). No changes to the engine loop, no new executor plumbing.
 
 ## Module Map
 
@@ -154,11 +156,10 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 | `plugins/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
 | `plugins/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
 | `plugins/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
-| `plugins/memory/` | `remember` + `persistent_store` (chunked Open Brain / Karpathy LLM Wiki, opt-in via `workspace_tools`) |
+| `plugins/memory/` | `memory_ingest`, `memory_search` + `persistent_store` (chunked file store, opt-in via `workspace_tools`) |
 | `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
-| `plugins/subagents/` | `sessions_spawn`, `sessions_fan_out`, `subagents` — registered when orchestrator is enabled |
 | `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
-| `plugins/skill_lifecycle/` | `skill_distill` — LLM-callable skill authoring from the active conversation (opt-in via `workspace_tools`) |
+| `plugins/skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (opt-in via `workspace_tools`); `compress_and_store` definition (appended implicitly to every `run-agent` subagent) |
 | `skill_lifecycle/` | Metric types + 4 kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
 | `tool_builder.rs` | Path validation + tool-activity UI helpers (no executors) |
 | `shell_executor.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
@@ -168,9 +169,8 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 ### Memory
 | Module | Purpose |
 |--------|---------|
-| `memory_builder.rs` | Memory types, service, disk store, tool defs |
-| `embedding.rs` | Embedding generation (OpenRouter API) |
-| `qdrant_memory_store.rs` | legacy vector DB vector store backend (feature-gated) |
+| `memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `vector/disk.rs` (bincode store), `vector/embedder.rs` (OpenRouter `text-embedding-3-small`) |
+| `plugins/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
 
 ### Channel Adapters
 | Module | Purpose |
@@ -181,10 +181,8 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 ### Orchestration
 | Module | Purpose |
 |--------|---------|
-| `orchestrator.rs` | Multi-agent fleet orchestrator (CLI) |
-| `event_orchestrator.rs` | Event-based orchestrator (Telegram) |
-| `agent_builder.rs` | Agent worker loop (Telegram) |
-| `task_builder.rs` | Task/plan management (Telegram) |
+| `orchestrator/` | `RagPlanner` (`planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `plan.rs`, `events.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state), `wiring.rs` (planner LLM port) |
+| `runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
 
 ### Infrastructure
 | Module | Purpose |
@@ -198,4 +196,4 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 - [[configuration]] — config reference
 - [[mcp-bridge]] — MCP tool bridge details
 - [[skills]] — skill system architecture (incl. metrics, distillation, evolve)
-- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec
+- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — skill-lifecycle design spec (archived; live reference: `docs/skill-lifecycle-validation.md`)

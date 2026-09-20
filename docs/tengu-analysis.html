@@ -329,7 +329,7 @@
 <!-- HEADER -->
 <div class="header">
   <h1>🧭 Tengu-Cluster · Deep Architecture Analysis</h1>
-  <div class="sub">Comparative study: Tengu vs Hermes Agent vs Cowork/PI · April 2026</div>
+  <div class="sub">Comparative study: Tengu vs Hermes Agent vs Cowork/PI · April 2026 · <strong>superseded 2026-09-18</strong> — Tengu facts corrected in place (Postgres <code>agentic_memory</code>, one config per sandbox, Tor-by-default <code>[egress]</code>); maturity percentages are the April estimates. Canonical: <code>docs/architecture-2026-04-27.md</code>, <code>README.md</code>.</div>
   <div class="badges">
     <span class="badge tengu">Tengu-Cluster</span>
     <span class="badge rust">Rust</span>
@@ -366,25 +366,26 @@
     <div>
       <div class="col-title tengu">🔮 Tengu-Cluster</div>
       <div class="stack">
-        <div class="stack-item level-0">CLI / TUI (cursive) &nbsp;·&nbsp; Telegram</div>
+        <div class="stack-item level-0">CLI / TUI (cursive) &nbsp;·&nbsp; Telegram &nbsp;·&nbsp; Webhooks</div>
         <div class="stack-item level-1" style="background:rgba(124,58,237,.35);color:#C4B5FD;">Channel Runtime Layer</div>
         <div class="stack-item level-2" style="background:rgba(124,58,237,.5);color:#DDD6FE;">ChatRuntimeService · PromptBudget</div>
         <div class="stack-item level-3" style="background:var(--tengu);color:#fff;">Engine (OpenRouter / Claude Code)</div>
         <div class="stack-item level-2" style="background:rgba(124,58,237,.5);color:#DDD6FE;">PluginToolExecutor · ToolRegistry</div>
-        <div class="stack-item level-1" style="background:rgba(124,58,237,.35);color:#C4B5FD;">Tool Plugins (workspace/http/crypto/mcp)</div>
-        <div class="stack-item level-0">Skills · Memory · Subagents · Secrets</div>
+        <div class="stack-item level-1" style="background:rgba(124,58,237,.35);color:#C4B5FD;">Tool Plugins (workspace/http/crypto/mcp/agentic_memory)</div>
+        <div class="stack-item level-0">Skills · Memory · Subagents · Secrets · Egress (Tor)</div>
       </div>
       <div class="mt-16">
         <ul class="check-list">
           <li>Single Rust binary, compiled</li>
-          <li>Ports/Adapters architecture</li>
+          <li>Flat <code>src/adapters/</code> layout, <code>ports.rs</code> traits</li>
           <li>Dual engine: OpenRouter + Claude Code</li>
           <li>Blockchain/crypto tools (Privy)</li>
-          <li>Skill distill tool implemented</li>
-          <li class="partial">Memory: basic vector store</li>
+          <li>Tor-by-default egress policy (<code>egress.rs</code>, code-enforced)</li>
+          <li>Skill distill tool + <code>tengu skill evolve</code> implemented</li>
+          <li class="partial">Memory: Postgres <code>agentic_memory</code> (pgvector) + disk vector store</li>
           <li class="missing">No cron scheduler</li>
           <li class="missing">No voice / multi-platform</li>
-          <li class="missing">Skill evolution loop incomplete</li>
+          <li class="partial">Skill evolution: no post-turn auto-trigger</li>
         </ul>
       </div>
     </div>
@@ -504,7 +505,7 @@
     <tbody>
       <tr>
         <td>Core philosophy</td>
-        <td>LLM is heart, skills are brain, tools are hands. No Rust encodes policy.</td>
+        <td>LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands. Behaviour via TOML / SKILL.md, not Rust.</td>
         <td>Self-improving loop. Agent creates & improves its own skills from experience.</td>
         <td>Human-AI collaboration. Clarify first, plan, execute, verify.</td>
       </tr>
@@ -516,7 +517,7 @@
       </tr>
       <tr>
         <td>Tool extensibility</td>
-        <td>Rebuild required for new tools <span class="tag missing">friction</span></td>
+        <td>Rust tools need a rebuild; MCP servers (<code>mcp_servers</code> in config) + shell skills hot-add <span class="tag partial">mixed</span></td>
         <td>New tools via Python files <span class="tag done">hot-add</span></td>
         <td>MCP plugins (no rebuild) <span class="tag done">hot-add</span></td>
       </tr>
@@ -540,7 +541,7 @@
       </tr>
       <tr>
         <td>Multi-platform</td>
-        <td>TUI + Telegram <span class="tag partial">limited</span></td>
+        <td>TUI + Telegram + webhooks listener <span class="tag partial">limited</span></td>
         <td>CLI + Telegram + Discord + Slack + WhatsApp + Signal <span class="tag done">broad</span></td>
         <td>Desktop + Browser <span class="tag partial">desktop-focused</span></td>
       </tr>
@@ -559,24 +560,24 @@
 
       <div class="mem-tier t2">
         <div class="mem-tier-header">
-          🔮 Permanent Tier <small>(PLANNED — not implemented)</small>
-          <span class="tag missing">Missing</span>
+          🔮 Open Brain + Karpathy LLM Wiki <small>(Postgres, feature <code>postgres_memory</code>)</small>
+          <span class="tag done">Implemented</span>
         </div>
         <div class="mem-tier-body">
-          Design exists in <code>tengu/ideas/memory-idea/</code>. Would use <code>PermanentDiskStore</code> + <code>remember_permanently</code> tool. Never prunable. Auto-promotion after N recalls.
+          <code>agentic_memory</code> tool (<code>src/adapters/plugins/agentic_memory/</code>): <code>capture</code> / <code>recall</code> (pgvector → FTS hybrid) / <code>ingest_source</code> / <code>promote</code> / <code>compile_wiki</code> / <code>lint</code>. Planner recall lanes: cross-session, within-session, cross-plan. Subagent summaries captured on every step. The earlier <code>PermanentDiskStore</code> design (<code>docs/ideas/permanent-memory-in-tengu.md</code>) was superseded by <code>promote</code> → LLM Wiki.
         </div>
       </div>
 
       <div class="mem-tier t1">
         <div class="mem-tier-header">
-          🗄 Persistent Tier <small>(vectors.bin / legacy vector DB)</small>
+          🗄 Disk Vector Tier <small>(bincode, <code>memory/vector/disk.rs</code>)</small>
           <span class="tag done">Implemented</span>
         </div>
         <div class="mem-tier-body">
-          <code>DiskVectorMemoryStore</code> — brute-force cosine similarity, bincode-serialized.<br>
-          <code>QdrantMemoryStore</code> — ANN search, feature-gated. <code>OpenRouterEmbeddingAdapter</code>.<br>
-          <strong>Tool:</strong> <code>remember</code> — stores fact, returns UUID.<br>
-          <strong>Recall:</strong> <code>recall_filtered</code> — semantic search at query time.
+          <code>DiskVectorMemoryStore</code> — brute-force cosine similarity, bincode-serialized; the only built-in <code>VectorStore</code> (Qdrant removed 2026-05-14).<br>
+          <code>Embedder</code> — OpenRouter <code>text-embedding-3-small</code> (1536-dim, pinned).<br>
+          <strong>Tools:</strong> <code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code> (opt-in).<br>
+          <strong>Recall:</strong> <code>MemoryManager::search</code> at turn start in <code>chat_builder.rs</code>.
         </div>
       </div>
 
@@ -726,33 +727,33 @@
     <div class="gap-item critical">
       <div class="gap-icon">🔴</div>
       <div>
-        <div class="gap-title">Pre-turn Memory Prefetch</div>
-        <div class="gap-desc">Tengu recalls memory only at query time via <code>recall_filtered</code>. There's no proactive pre-turn semantic prefetch or <code>&lt;memory-context&gt;</code> fence injection like Hermes has.</div>
-        <div class="gap-fix">→ Add a <code>prefetch()</code> phase in ChatRuntimeService before each LLM call</div>
+        <div class="gap-title">Pre-turn Memory Prefetch <span class="tag partial">Partial</span></div>
+        <div class="gap-desc">Planner side: <code>RagPlanner::plan</code> injects cross-session / within-session / cross-plan recall blocks from Postgres before the LLM call. In-process chat: <code>MemoryManager::search</code> runs at turn start. <code>memory/injector.rs</code> + <code>MemoryProvider::prefetch</code> exist but sit on a dead path.</div>
+        <div class="gap-fix">→ Wire or delete the injector path (tracked in SESSION_HANDOFF)</div>
       </div>
     </div>
     <div class="gap-item critical">
       <div class="gap-icon">🔴</div>
       <div>
-        <div class="gap-title">Permanent Memory Tier</div>
-        <div class="gap-desc">Design exists in ideas folder. <code>PermanentDiskStore</code>, <code>MemoryTier</code> enum, <code>remember_permanently</code> tool — all planned, none implemented.</div>
-        <div class="gap-fix">→ Implement per the ideas/memory-idea design doc (3-4 day Rust task)</div>
+        <div class="gap-title">Permanent Memory Tier <span class="tag done">Superseded</span></div>
+        <div class="gap-desc">The <code>PermanentDiskStore</code> / <code>remember_permanently</code> design (<code>docs/ideas/permanent-memory-in-tengu.md</code>) was never built; Postgres <code>agentic_memory</code> <code>promote</code> + <code>compile_wiki</code> (Karpathy LLM Wiki, tracked Markdown) covers the role.</div>
+        <div class="gap-fix">→ Nothing to build; remaining gaps are <code>memory_claims</code>/<code>memory_links</code> graph tables and a Postgres-native inspect CLI</div>
       </div>
     </div>
     <div class="gap-item medium">
       <div class="gap-icon">🟡</div>
       <div>
-        <div class="gap-title">Session Search / FTS</div>
-        <div class="gap-desc">No cross-session conversation search. Hermes has FTS5 SQLite with LLM summarization for cross-session recall.</div>
-        <div class="gap-fix">→ Add rusqlite FTS5 session indexer + recall tool</div>
+        <div class="gap-title">Session Search / FTS <span class="tag partial">Partial</span></div>
+        <div class="gap-desc">Postgres <code>agentic_memory</code> has FTS + HNSW indexes and hybrid recall over all sessions. Missing: Hermes-style LLM summarisation of old sessions.</div>
+        <div class="gap-fix">→ Summarisation pass over session-old <code>memory_events</code> written back as promoted memories</div>
       </div>
     </div>
     <div class="gap-item medium">
       <div class="gap-icon">🟡</div>
       <div>
-        <div class="gap-title">Memory Context Fencing</div>
-        <div class="gap-desc">When memory is injected, there's no protection against the model treating recalled facts as current user input. Hermes solves this with the <code>&lt;memory-context&gt;</code> pattern.</div>
-        <div class="gap-fix">→ Wrap recalled memory in a fenced system note in ChatRuntimeService</div>
+        <div class="gap-title">Memory Context Fencing <span class="tag done">Done</span></div>
+        <div class="gap-desc"><code>memory/fencing.rs</code> provides the <code>&lt;memory-context&gt;</code> block helpers (<code>sanitize_context</code>, used by <code>memory/builtin.rs</code>); <code>chat_builder.rs</code> adds a system note telling the model not to trust recalled summaries for "latest" questions.</div>
+        <div class="gap-fix">→ Verify every recall lane (planner blocks included) goes through the fence</div>
       </div>
     </div>
   </div>
@@ -806,7 +807,7 @@ Full procedural instructions here...</pre>
   <div class="grid-2" style="margin-bottom:24px;">
     <!-- Tengu Evolution -->
     <div>
-      <div class="label-row"><span class="dot tengu"></span><strong>Tengu: Designed Evolution Loop</strong><span class="tag partial">Partially Implemented</span></div>
+      <div class="label-row"><span class="dot tengu"></span><strong>Tengu: Metric-Gated Evolution Loop</strong><span class="tag partial">Built · manual trigger</span></div>
       <div class="evo-loop">
         <div class="evo-nodes">
           <div class="evo-node active-tengu">
@@ -817,17 +818,17 @@ Full procedural instructions here...</pre>
           <div class="evo-node partial-node">
             <div class="icon">🧪</div>
             <div class="label">tengu eval</div>
-            <div class="desc">Run fixtures through skill. Score with 4 metric kinds (llm_judge, shell_check, tool_assertion, script). <span style="color:var(--yellow)">◑ PARTIAL</span></div>
+            <div class="desc">Run fixtures through skill. Score with 4 metric kinds (llm_judge, shell_check, tool_assertion, script). <span style="color:var(--pi-mid)">✓ LIVE</span></div>
           </div>
-          <div class="evo-node missing-node">
+          <div class="evo-node active-tengu">
             <div class="icon">🤖</div>
             <div class="label">skill-improver</div>
-            <div class="desc">Agent proposes edits to SKILL.candidate.md based on metric delta. <span style="color:var(--warn)">✗ MISSING</span></div>
+            <div class="desc"><code>tengu skill evolve</code> runs the <code>[skill_lifecycle].improver_agent</code> in a scratch worktree; <code>apply_improver_proposal</code> applies it. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
           </div>
-          <div class="evo-node missing-node">
+          <div class="evo-node active-tengu">
             <div class="icon">✅</div>
             <div class="label">Approval Gate</div>
-            <div class="desc">User reviews diff + metric delta, approves or rejects. Rollback via /versions/. <span style="color:var(--warn)">✗ MISSING</span></div>
+            <div class="desc"><code>skill_lifecycle/approval_gate.rs</code> + <code>tengu skill accept-proposal</code>. Not wired to a post-turn trigger. <span style="color:var(--pi-mid)">✓ LIVE</span></div>
           </div>
         </div>
         <div style="margin-top:16px;font-size:12px;color:var(--text-muted);">
@@ -837,7 +838,7 @@ Full procedural instructions here...</pre>
       </div>
 
       <div class="mt-16">
-        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Metric kinds (implemented in skill_lifecycle/):</div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Metric kinds (implemented in <code>src/adapters/skill_lifecycle/</code>, run by <code>eval_builder.rs</code>):</div>
         <div class="plugin-grid">
           <div class="plugin-box tengu-plugin">
             <div class="picon">⚖️</div>
@@ -857,7 +858,7 @@ Full procedural instructions here...</pre>
           <div class="plugin-box tengu-plugin">
             <div class="picon">📜</div>
             <div class="pname">script</div>
-            <div class="pdesc">Execute metrics/<n>.sh, parse JSON output.</div>
+            <div class="pdesc">Execute metrics/&lt;n&gt;.sh, parse JSON output.</div>
           </div>
         </div>
       </div>
@@ -891,7 +892,7 @@ Full procedural instructions here...</pre>
         </div>
         <div style="margin-top:16px;font-size:12px;color:var(--text-muted);">
           Key difference: Hermes has <strong>no metric harness</strong> — improvement is purely LLM-driven and reactive.<br>
-          Tengu's designed approach (metric-gated evolution) is actually <em>more rigorous</em> — when built.
+          Tengu's approach (metric-gated evolution) is <em>more rigorous</em>; it runs on <code>tengu skill evolve</code>, not after every task.
         </div>
       </div>
 
@@ -979,16 +980,19 @@ Full procedural instructions here...</pre>
         <div class="plugin-box tengu-plugin"><div class="picon">🌐</div><div class="pname">http</div><div class="pdesc">http_request (async, auth)</div></div>
         <div class="plugin-box tengu-plugin"><div class="picon">🔐</div><div class="pname">crypto</div><div class="pdesc">sign_tx, sign_msg, wallet_address, abi_encode</div></div>
         <div class="plugin-box tengu-plugin"><div class="picon">💾</div><div class="pname">cache</div><div class="pdesc">shared_cache (SQLite)</div></div>
-        <div class="plugin-box tengu-plugin"><div class="picon">🧠</div><div class="pname">memory</div><div class="pdesc">remember, persistent_store</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🧠</div><div class="pname">memory</div><div class="pdesc">memory_ingest, memory_search, persistent_store</div></div>
         <div class="plugin-box tengu-plugin"><div class="picon">⚡</div><div class="pname">skill</div><div class="pdesc">shell skill tools (dynamic)</div></div>
         <div class="plugin-box tengu-plugin"><div class="picon">🤖</div><div class="pname">subagents</div><div class="pdesc">spawn, fan_out, manage</div></div>
         <div class="plugin-box tengu-plugin"><div class="picon">🔌</div><div class="pname">mcp</div><div class="pdesc">any MCP server (dynamic)</div></div>
-        <div class="plugin-box tengu-plugin"><div class="picon">🔬</div><div class="pname">skill_lifecycle</div><div class="pdesc">skill_distill (NEW)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🔬</div><div class="pname">skill_lifecycle</div><div class="pdesc">skill_distill, apply_improver_proposal, compress_and_store</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">🗄</div><div class="pname">agentic_memory</div><div class="pdesc">Postgres Open Brain (postgres_memory)</div></div>
+        <div class="plugin-box tengu-plugin"><div class="picon">📚</div><div class="pname">view_skill / manage_skill</div><div class="pdesc">read + atomic skill writes, skill_resource</div></div>
       </div>
       <div class="mt-16" style="font-size:12px;color:var(--text-muted);">
-        <strong>Access Control (2-layer):</strong><br>
-        1. Allow-list: tool exists for this agent?<br>
-        2. ToolScope: what can this tool touch? (default-deny, filesystem roots, etc.)<br>
+        <strong>Access Control (3-layer):</strong><br>
+        1. Allow-list: tool exists for this agent? (<code>[agents.&lt;name&gt;].tools</code>)<br>
+        2. ToolScope: what can this tool touch? (default-deny, filesystem roots, <code>net_hosts</code>; enforced at runtime since 2026-09-12)<br>
+        3. Egress policy (<code>egress.rs</code>): Tor by default, sandbox-wide host allow/deny ceiling, <code>https_only</code>, every redirect hop re-checked, JSONL audit.<br>
         Enforced by <code>tests/scope_lint.rs</code> — structural guarantee.
       </div>
     </div>
@@ -1051,7 +1055,8 @@ Full procedural instructions here...</pre>
       <tr><td>Filesystem scope</td><td>✓ ToolScope (default-deny) with fs_roots</td><td>Workspace-relative by convention</td><td>✓ Sandboxed /sessions/ path</td></tr>
       <tr><td>Structural enforcement</td><td>✓ scope_lint.rs test (compile-time guarantee)</td><td>—</td><td>Built into platform</td></tr>
       <tr><td>Secret redaction</td><td>✓ SecretRegistry.redact() on all tool inputs</td><td>✓ redact.py</td><td>Platform-level</td></tr>
-      <tr><td>Network access control</td><td>✓ ToolScope net_hosts allow-list</td><td>—</td><td>Admin-configurable</td></tr>
+      <tr><td>Network access control</td><td>✓ ToolScope net_hosts allow-list + sandbox-wide <code>[egress]</code> allow/deny ceiling</td><td>—</td><td>Admin-configurable</td></tr>
+      <tr><td>Egress routing (Tor)</td><td>✓ Tor by default (<code>[egress] network = "tor"</code>, Arti + lyrebird-rs); fail-closed proxy; children inherit via <code>TENGU_EGRESS</code>; <code>tengu doctor --tor</code></td><td>—</td><td>Platform-level</td></tr>
       <tr><td>Dynamic tool discovery</td><td>✓ MCP plugin (stdio + http)</td><td>✓ MCP integration</td><td>✓ MCP server ecosystem</td></tr>
     </tbody>
   </table>
@@ -1062,21 +1067,21 @@ Full procedural instructions here...</pre>
   <div class="section-header"><h2>🚨 Critical Gaps in Tengu-Cluster</h2><div class="line"></div></div>
   <p style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">Items Hermes Agent has shipped that Tengu has designed but not built (or not yet started).</p>
 
-  <div class="gap-item critical">
-    <div class="gap-icon">🔴</div>
+  <div class="gap-item medium">
+    <div class="gap-icon">🟡</div>
     <div>
-      <div class="gap-title">Skill Evolution Loop (tengu skill evolve)</div>
-      <div class="gap-desc">The design is excellent (spec in docs/superpowers/specs/). The <code>skill_distill</code> tool is live. But <code>skill-improver</code> agent, approval gate, scratch-worktree, and the <code>tengu skill evolve</code> CLI command are missing. The full loop exists only on paper.</div>
-      <div class="gap-fix">→ Implement <code>evolve.rs</code> + <code>skill-improver</code> agent profile in sandboxes/. Estimated: 1–2 weeks.</div>
+      <div class="gap-title">Skill Evolution Loop — no post-turn trigger <span class="tag partial">Built</span></div>
+      <div class="gap-desc">Spec: <code>docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md</code>. Landed: <code>skill_distill</code>, <code>tengu skill evolve</code> (<code>skill_lifecycle/evolve.rs</code>, scratch worktree, approval gate), <code>[agents.skill-improver]</code> in <code>sandboxes/aura</code>, <code>learning-agent</code> with <code>manage_skill</code>. Missing: anything that runs it after a successful task.</div>
+      <div class="gap-fix">→ Post-turn hook (user-confirmed) that queues <code>skill_distill</code> / evolve for long successful sessions.</div>
     </div>
   </div>
 
-  <div class="gap-item critical">
-    <div class="gap-icon">🔴</div>
+  <div class="gap-item low">
+    <div class="gap-icon">🔵</div>
     <div>
-      <div class="gap-title">Permanent Memory Tier</div>
-      <div class="gap-desc">Fully designed in <code>tengu/ideas/memory-idea/</code> with Rust pseudocode. <code>MemoryTier</code> enum, <code>PermanentDiskStore</code>, <code>remember_permanently</code> tool, prune protection — all unimplemented. Agent currently forgets everything on prune.</div>
-      <div class="gap-fix">→ Follow the design doc exactly. Main risk: deciding global vs per-agent permanent scope. Estimated: 3–5 days.</div>
+      <div class="gap-title">Permanent Memory Tier <span class="tag done">Superseded</span></div>
+      <div class="gap-desc">The <code>docs/ideas/permanent-memory-in-tengu.md</code> design (<code>MemoryTier</code>, <code>PermanentDiskStore</code>, <code>remember_permanently</code>) was never built. Postgres <code>agentic_memory</code> is the durable tier: <code>promote</code> → <code>compile_wiki</code> writes the tracked Karpathy LLM Wiki; <code>tengu prune</code> does not touch it.</div>
+      <div class="gap-fix">→ Remaining: <code>memory_claims</code> / <code>memory_links</code> graph tables, real <code>lint</code>, Postgres-native inspect CLI (SESSION_HANDOFF).</div>
     </div>
   </div>
 
@@ -1092,27 +1097,27 @@ Full procedural instructions here...</pre>
   <div class="gap-item medium">
     <div class="gap-icon">🟡</div>
     <div>
-      <div class="gap-title">Pre-turn Memory Prefetch + Context Fencing</div>
-      <div class="gap-desc">Memory recall happens reactively (agent calls <code>remember</code>/<code>recall</code> tools). There's no proactive semantic prefetch injected before each LLM call, and no <code>&lt;memory-context&gt;</code> fence to prevent recalled facts being confused with user input.</div>
-      <div class="gap-fix">→ Add <code>prefetch_memory(query)</code> call in <code>ChatRuntimeService::handle_turn()</code> before building the LLM prompt. Wrap output in system note.</div>
+      <div class="gap-title">Pre-turn Memory Prefetch + Context Fencing <span class="tag partial">Partial</span></div>
+      <div class="gap-desc">Planner: <code>RagPlanner::plan</code> injects Postgres recall blocks (cross-session / within-session / cross-plan) before the LLM call. Chat: <code>MemoryManager::search</code> at turn start + <code>memory/fencing.rs</code> <code>&lt;memory-context&gt;</code> helpers. The <code>memory/injector.rs</code> / <code>MemoryProvider::prefetch</code> path is dead code.</div>
+      <div class="gap-fix">→ Wire or delete the injector path; confirm every lane is fenced.</div>
     </div>
   </div>
 
   <div class="gap-item medium">
     <div class="gap-icon">🟡</div>
     <div>
-      <div class="gap-title">Context Compression / Sliding Window</div>
-      <div class="gap-desc">Tengu has <code>prompt_budget.rs</code> for token counting but no automatic context compression when the window fills. Hermes has <code>context_compressor.py</code> with LLM summarization + <code>/compress</code> command.</div>
-      <div class="gap-fix">→ When token budget &lt; threshold: call engine with a compression-system-prompt on the current transcript. Truncate old messages, insert summary. Estimated: 3–4 days.</div>
+      <div class="gap-title">Context Compression / Sliding Window <span class="tag done">Done</span></div>
+      <div class="gap-desc"><code>flow_builder.rs</code> compaction (<code>[agents.*.flow] compaction_threshold_ratio</code> / <code>compaction_keep_turns</code> / <code>compaction_summary_max_tokens</code>), 2-phase tool-result pruning in <code>engine_builder.rs</code>. Reference: <code>docs/context-management-2026-04-27.md</code>. Hermes: <code>context_compressor.py</code> + <code>/compress</code>.</div>
+      <div class="gap-fix">→ No manual <code>/compress</code> command yet.</div>
     </div>
   </div>
 
   <div class="gap-item medium">
     <div class="gap-icon">🟡</div>
     <div>
-      <div class="gap-title">Cross-session FTS / Session Search</div>
-      <div class="gap-desc">No ability to search past conversations. Hermes has SQLite FTS5 indexing all sessions + LLM summarization of relevant results. This makes recall of old knowledge genuinely useful.</div>
-      <div class="gap-fix">→ Add rusqlite FTS5 table in the existing SQLite infrastructure. Index each completed session. Add <code>session_search</code> tool. 1 week.</div>
+      <div class="gap-title">Cross-session FTS / Session Search <span class="tag partial">Partial</span></div>
+      <div class="gap-desc">Postgres <code>agentic_memory</code>: FTS + HNSW indexes, hybrid <code>recall</code> across sessions, planner cross-session lane (<code>cross_session_msg_top_k</code>). Missing vs Hermes: LLM summarisation of matched old sessions.</div>
+      <div class="gap-fix">→ Summarisation pass over old <code>memory_events</code>; needs <code>postgres_memory</code> at runtime.</div>
     </div>
   </div>
 
@@ -1120,17 +1125,17 @@ Full procedural instructions here...</pre>
     <div class="gap-icon">🔵</div>
     <div>
       <div class="gap-title">Messaging Platform Breadth</div>
-      <div class="gap-desc">Tengu supports Telegram only. Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
-      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust around the existing <code>event_orchestrator.rs</code> pattern.</div>
+      <div class="gap-desc">Tengu supports Telegram + an inbound webhooks listener (<code>tengu webhooks</code>, HMAC-verified). Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
+      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>telegram_builder.rs</code> / <code>webhook_builder.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
     </div>
   </div>
 
   <div class="gap-item low">
     <div class="gap-icon">🔵</div>
     <div>
-      <div class="gap-title">Skill Catalog / Hub Integration</div>
-      <div class="gap-desc">No skill discovery or sharing mechanism. Hermes integrates with agentskills.io. Skills stay local forever in Tengu unless manually copied.</div>
-      <div class="gap-fix">→ Add <code>tengu skill install &lt;url&gt;</code> CLI command. Git clone to ~/.tengu/skills/. 2–3 days.</div>
+      <div class="gap-title">Skill Catalog / Hub Integration <span class="tag partial">Partial</span></div>
+      <div class="gap-desc"><code>tengu skill install &lt;source&gt; --tier</code> / <code>export</code> exist; no discovery or catalog. Hermes integrates with agentskills.io.</div>
+      <div class="gap-fix">→ A registry manifest behind <code>tengu skill install</code>; same shape as the proposed <code>tengu mcp install</code>.</div>
     </div>
   </div>
 
@@ -1140,8 +1145,8 @@ Full procedural instructions here...</pre>
   <div class="gap-item" style="border-left:3px solid var(--tengu);">
     <div class="gap-icon">💜</div>
     <div>
-      <div class="gap-title">Metric-Gated Skill Evolution (when built)</div>
-      <div class="gap-desc">Hermes improves skills reactively and LLM-only. Tengu's design has a rigorous metric harness (4 metric types, eval fixtures, score delta gate, scratch-worktree isolation). When implemented, this is far more reliable than Hermes's approach.</div>
+      <div class="gap-title">Metric-Gated Skill Evolution</div>
+      <div class="gap-desc">Hermes improves skills reactively and LLM-only. Tengu's <code>tengu skill evolve</code> has a rigorous metric harness (4 metric types, eval fixtures, score delta gate, scratch-worktree isolation, approval gate). More reliable than Hermes's approach; not yet auto-triggered.</div>
     </div>
   </div>
 
@@ -1156,8 +1161,16 @@ Full procedural instructions here...</pre>
   <div class="gap-item" style="border-left:3px solid var(--tengu);">
     <div class="gap-icon">💜</div>
     <div>
-      <div class="gap-title">Architectural Cleanliness (Ports/Adapters)</div>
-      <div class="gap-desc">Tengu's Rust core enforces clean separation — ports for all external dependencies, structural scope enforcement via lint tests, doctrine that prevents Rust encoding policy. Hermes's Python codebase is more pragmatic and less structured.</div>
+      <div class="gap-title">Architectural Cleanliness (flat <code>src/adapters/</code> + <code>ports.rs</code>)</div>
+      <div class="gap-desc">Tengu's Rust core enforces clean separation — trait ports for external dependencies, structural scope enforcement via lint tests, doctrine that keeps behaviour in TOML / SKILL.md instead of Rust. Hermes's Python codebase is more pragmatic and less structured.</div>
+    </div>
+  </div>
+
+  <div class="gap-item" style="border-left:3px solid var(--tengu);">
+    <div class="gap-icon">💜</div>
+    <div>
+      <div class="gap-title">Tor-by-Default, Code-Enforced Egress</div>
+      <div class="gap-desc"><code>[egress] network = "tor"</code> is the default: every tool and LLM-API request goes through the Arti + lyrebird-rs proxy (<code>deploy/tor/</code>), fail-closed — the Claude Code CLI and Telegram via <code>HTTPS_PROXY</code> / a proxied teloxide client; sandbox-wide host allow/deny ceiling, <code>https_only</code>, per-hop redirect checks, JSONL audit log; a sandbox opts out with <code>network = "open"</code>. Neither Hermes nor PI ships an equivalent policy layer.</div>
     </div>
   </div>
 
@@ -1197,7 +1210,7 @@ Full procedural instructions here...</pre>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu</span><span>42%</span></div>
         <div class="progress-bar"><div class="progress-fill tengu" style="width:42%"></div></div>
-        <div class="tooltip-hint">Has vector store. Missing: permanent tier, prefetch, FTS, compression nudge</div>
+        <div class="tooltip-hint">April 2026 estimate. Now: Postgres agentic_memory (pgvector + FTS) + disk store, 3 planner recall lanes, compaction. Missing: LLM summarisation of old sessions, inspect CLI</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-label"><span>☤ Hermes</span><span>92%</span></div>
@@ -1215,7 +1228,7 @@ Full procedural instructions here...</pre>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu</span><span>65%</span></div>
         <div class="progress-bar"><div class="progress-fill tengu" style="width:65%"></div></div>
-        <div class="tooltip-hint">Skill loading great. Distill tool live. Eval/evolve loop incomplete.</div>
+        <div class="tooltip-hint">April 2026 estimate. Now: distill, tengu eval, tengu skill evolve (approval gate), learning-agent + manage_skill. Missing: post-turn auto-trigger.</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-label"><span>☤ Hermes</span><span>88%</span></div>
@@ -1235,7 +1248,7 @@ Full procedural instructions here...</pre>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu</span><span>72%</span></div>
         <div class="progress-bar"><div class="progress-fill tengu" style="width:72%"></div></div>
-        <div class="tooltip-hint">Strong plugin arch + crypto. Missing voice, browser, more platforms.</div>
+        <div class="tooltip-hint">Strong plugin arch + crypto + Tor-by-default egress. Missing voice, browser, more platforms.</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-label"><span>☤ Hermes</span><span>95%</span></div>
@@ -1253,7 +1266,7 @@ Full procedural instructions here...</pre>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu</span><span>30%</span></div>
         <div class="progress-bar"><div class="progress-fill tengu" style="width:30%"></div></div>
-        <div class="tooltip-hint">TUI + Telegram only</div>
+        <div class="tooltip-hint">TUI + Telegram + webhooks listener</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-label"><span>☤ Hermes</span><span>95%</span></div>
@@ -1271,7 +1284,7 @@ Full procedural instructions here...</pre>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu — Security</span><span>88%</span></div>
         <div class="progress-bar"><div class="progress-fill tengu" style="width:88%"></div></div>
-        <div class="tooltip-hint">AES-256 secrets vault, ToolScope, scope_lint tests, secret redaction</div>
+        <div class="tooltip-hint">AES-GCM secrets vault, ToolScope (runtime-enforced), scope_lint tests, secret redaction, Tor-by-default egress + audit log</div>
       </div>
       <div class="progress-wrap">
         <div class="progress-label"><span>🔮 Tengu — Scheduling</span><span>5%</span></div>
@@ -1299,31 +1312,31 @@ Full procedural instructions here...</pre>
       <tbody>
         <tr>
           <td>1</td>
-          <td><strong>Permanent Memory Tier</strong> <span class="tag missing">Critical</span></td>
-          <td>High — users stop forgetting things between restarts</td>
-          <td>3–5 days</td>
-          <td><code>memory_builder.rs</code>, <code>prune.rs</code>, new <code>permanent_store.rs</code></td>
+          <td><strong>Permanent Memory Tier</strong> <span class="tag done">Superseded</span></td>
+          <td>Covered by Postgres <code>agentic_memory</code> <code>promote</code> + <code>compile_wiki</code></td>
+          <td>—</td>
+          <td><code>plugins/agentic_memory/mod.rs</code></td>
         </tr>
         <tr>
           <td>2</td>
-          <td><strong>Pre-turn Memory Prefetch</strong> <span class="tag missing">Critical</span></td>
-          <td>High — memory becomes proactive instead of reactive</td>
+          <td><strong>Pre-turn Memory Prefetch</strong> <span class="tag partial">Partial</span></td>
+          <td>Planner recall lanes + chat-turn <code>MemoryManager::search</code> live; injector path dead</td>
           <td>1–2 days</td>
-          <td><code>chat_builder.rs</code></td>
+          <td><code>orchestrator/planner.rs</code>, <code>chat_builder.rs</code>, <code>memory/injector.rs</code></td>
         </tr>
         <tr>
           <td>3</td>
-          <td><strong>Context Compression</strong> <span class="tag partial">Medium</span></td>
-          <td>High — enables long conversations without degradation</td>
-          <td>3–4 days</td>
-          <td><code>prompt_budget.rs</code>, <code>chat_builder.rs</code></td>
+          <td><strong>Context Compression</strong> <span class="tag done">Done</span></td>
+          <td>Flow compaction + 2-phase tool-result pruning shipped</td>
+          <td>—</td>
+          <td><code>flow_builder.rs</code>, <code>engine_builder.rs</code>, <code>prompt_budget.rs</code></td>
         </tr>
         <tr>
           <td>4</td>
-          <td><strong>Skill Evolve Loop</strong> <span class="tag planned">Planned</span></td>
-          <td>High — closes the auto-improvement gap vs Hermes</td>
-          <td>1–2 weeks</td>
-          <td><code>skill_lifecycle/evolve.rs</code>, <code>skill-improver</code> sandbox</td>
+          <td><strong>Skill Evolve Loop</strong> <span class="tag partial">Built · manual</span></td>
+          <td><code>tengu skill evolve</code> shipped; auto-trigger after tasks still open</td>
+          <td>2–3 days (trigger)</td>
+          <td><code>skill_lifecycle/evolve.rs</code>, <code>[agents.skill-improver]</code> in <code>sandboxes/aura/config.toml</code></td>
         </tr>
         <tr>
           <td>5</td>
@@ -1334,10 +1347,10 @@ Full procedural instructions here...</pre>
         </tr>
         <tr>
           <td>6</td>
-          <td><strong>Session FTS Search</strong> <span class="tag missing">Missing</span></td>
-          <td>Medium — cross-session recall without full replay</td>
-          <td>1 week</td>
-          <td>new <code>session_index.rs</code>, SQLite FTS5 table</td>
+          <td><strong>Session FTS Search</strong> <span class="tag partial">Partial</span></td>
+          <td>Postgres FTS + hybrid recall shipped; LLM summarisation of old sessions open</td>
+          <td>3–4 days</td>
+          <td><code>plugins/agentic_memory/mod.rs</code></td>
         </tr>
       </tbody>
     </table>

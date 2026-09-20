@@ -2,7 +2,7 @@
 //!
 //! **Phase 7.1 note:** like `injector.rs`, this module's only remaining
 //! caller is `ChatOrchestratorPortImpl` (the planner-side LLM turn). Subagent
-//! step output writes go through `compress_and_store` → `tengu_outputs`
+//! step output writes go through the run-agent step-summary capture → Postgres `agentic_memory`
 //! instead.
 
 use crate::adapters::memory::manager::MemoryManager;

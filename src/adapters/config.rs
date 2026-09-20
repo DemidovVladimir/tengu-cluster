@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use sysinfo::System;
 use tracing::info;
 
+pub use crate::adapters::egress::EgressConfig;
 use crate::adapters::ports::ToolScope;
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,13 @@ pub struct Config {
     #[serde(default)]
     pub default_scopes: HashMap<String, ToolScope>,
 
+    /// Network egress policy for LLM-initiated traffic: `network = "tor"`
+    /// (default — everything through the Tor proxy) or `"open"`,
+    /// sandbox-wide host ceiling, shell isolation, audit log. Installed
+    /// process-wide by `egress::install`; see `adapters/egress.rs`.
+    #[serde(default)]
+    pub egress: EgressConfig,
+
     /// Inbound MCP client connections — external MCP servers this install
     /// connects to. At boot the MCP plugin connects to each entry, calls
     /// `tools/list`, and exposes every remote tool as `{server_name}.{tool}`.
@@ -165,9 +173,9 @@ pub struct Config {
     /// `None` for the default user config. Populated by `load_sandbox_or` in
     /// `main.rs`. Plumbed through `SubprocessRunner` and the IPC payload so
     /// `tengu run-agent` children resolve `sandboxes/<name>/config.toml` for
-    /// scopes/secrets/MCP servers — without this the parent + child would
-    /// see different scope rules and tool calls would scope-deny in the
-    /// child even when the sandbox config in the parent allows them.
+    /// the `[agents.<name>]` block they run plus scopes/secrets/MCP servers —
+    /// without this the parent + child would see different agents and scope
+    /// rules.
     ///
     /// `#[serde(skip)]` because this is a runtime-resolved field, never
     /// written to the TOML on disk. Skip on serialise too so dumping the
@@ -276,11 +284,31 @@ fn default_debounce_ms() -> u64 {
 
 /// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One block = one agent: in-process (planner, `@role:` chat) and, when it
+/// carries a `description`, a planner-routable subagent (`tengu run-agent`).
+/// Unknown keys are a parse error so a typo never silently disables a knob.
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     #[serde(default)]
     pub default: bool,
     pub engine: String,
     pub model: String,
+    /// Planner-facing description. **Present ⇒ the agent is a routable
+    /// subagent**: it is rendered into `TENGU_PLANNER_REGISTRY.md` and the
+    /// planner may dispatch plan steps to it (`tengu run-agent`). Write it
+    /// for the planner LLM: what the agent handles, what it is NOT for.
+    /// Absent ⇒ in-process only (planner role, direct `@role:` chat).
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Example user questions rendered under the registry entry so the
+    /// planner can match short casual messages. Only used with `description`.
+    #[serde(default)]
+    pub example_queries: Vec<String>,
+    /// Tool allow-list for subagent runs. Empty = every base tool. Names
+    /// from the workspace-tools allow-list (`shared_cache`, …) listed here
+    /// are opted in exactly like `workspace_tools`.
+    #[serde(default)]
+    pub tools: Vec<String>,
     #[serde(default)]
     pub workspace: Option<PathBuf>,
     #[serde(default = "default_lens")]
@@ -296,8 +324,9 @@ pub struct AgentConfig {
     /// Fleet orchestration role (qa|backend_engineer|integration_master).
     #[serde(default)]
     pub role: Option<String>,
-    /// Optional workflow/document packages loaded into the prompt and tool registry.
-    #[serde(default)]
+    /// Skills loaded into the prompt (in-process) / system prompt (subagent).
+    /// `skills = [...]` is accepted as an alias.
+    #[serde(default, alias = "skills")]
     pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
@@ -404,6 +433,11 @@ pub struct LimitsConfig {
     /// has no per-turn compaction. Defaults to 50 000 (~12.5K tokens).
     #[serde(default = "default_max_mcp_result_chars")]
     pub max_mcp_result_chars: u32,
+    /// Wall-clock cap for one plan step when this agent runs as a
+    /// `tengu run-agent` subprocess (the parent kills the child after it).
+    /// `max_tool_rounds` caps the child's LLM turns. Defaults to 600s.
+    #[serde(default = "default_step_timeout_secs")]
+    pub step_timeout_secs: u64,
 }
 
 impl Default for LimitsConfig {
@@ -420,6 +454,7 @@ impl Default for LimitsConfig {
             request_timeout_secs: default_request_timeout_secs(),
             compact_result_limit: default_compact_result_limit(),
             max_mcp_result_chars: default_max_mcp_result_chars(),
+            step_timeout_secs: default_step_timeout_secs(),
         }
     }
 }
@@ -444,6 +479,9 @@ fn default_compact_result_limit() -> u32 {
 }
 fn default_max_mcp_result_chars() -> u32 {
     50_000
+}
+pub(crate) fn default_step_timeout_secs() -> u64 {
+    600
 }
 
 fn default_max_tokens() -> u64 {
@@ -522,9 +560,9 @@ pub struct TelegramConfig {
 ///
 /// The listener responds **202 Accepted** with `{"session_id": "..."}`
 /// immediately — agents can take minutes, longer than typical webhook
-/// timeouts. Final agent output goes to `tengu_outputs` (Fix C+D apply
-/// on every step) and the tracing log; recall it later with
-/// `tengu memory inspect --session webhook-<name>-<uuid>`.
+/// timeouts. Final agent output goes to Open Brain (Postgres
+/// `agentic_memory`, with `postgres_memory`) and the tracing log; recall
+/// it later by querying Postgres for `session_id = webhook-<name>-<uuid>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
     /// Whether the listener is enabled. `tengu webhooks --sandbox <name>`
@@ -558,7 +596,7 @@ impl Default for WebhookConfig {
 /// One inbound webhook endpoint binding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookEndpointConfig {
-    /// Agent name to dispatch to (must match an `agents/<name>.toml`).
+    /// Agent name to dispatch to (an `[agents.<name>]` block with a `description`).
     pub agent: String,
     /// Name of the environment variable holding the HMAC shared secret.
     /// At verify time the listener reads `std::env::var(secret_env)`;
@@ -691,12 +729,12 @@ pub struct MemoryConfig {
     #[serde(default = "default_session_recent_n")]
     pub session_recent_n: usize,
     /// Top-K breadth for fuzzy cross-plan recall during replan (vector
-    /// search over `tengu_outputs` only; messages are excluded to keep
-    /// signal/noise apart).
+    /// search over `agentic_memory` step outputs only; user messages are
+    /// excluded to keep signal/noise apart).
     #[serde(default = "default_cross_plan_top_k")]
     pub cross_plan_top_k: usize,
     /// Top-K breadth for fuzzy cross-session message recall (vector
-    /// search over `tengu_messages`). Defaults to `0` = off — the planner
+    /// search over `agentic_memory` user messages). Defaults to `0` = off — the planner
     /// prompt stays unchanged for users who haven't opted in. Pair with
     /// Phase 6.4 (full) durable user-message persistence: setting this
     /// to e.g. `3` injects a "Cross-session message recall" block of the
@@ -707,13 +745,14 @@ pub struct MemoryConfig {
     #[serde(default = "default_cross_session_msg_top_k")]
     pub cross_session_msg_top_k: usize,
     /// Top-K breadth for fuzzy WITHIN-session output recall on the planner's
-    /// normal `plan()` path (vector search over `tengu_outputs` filtered by
-    /// the planner's `session_id`). Defaults to `0` = off — back-compat.
+    /// normal `plan()` path (vector search over `agentic_memory` step
+    /// outputs filtered by the planner's `session_id`). Defaults to `0` =
+    /// off — back-compat.
     /// Pair with the unified-session_id wiring (Fix B 2026-05-09): the
     /// planner and `SubprocessRunner` share one `session_id`, so step
-    /// outputs persisted by `compress_and_store` in this session are
-    /// retrievable on the next user turn. Without this, `tengu_outputs`
-    /// is only read on `replan()` (`cross_plan_top_k`) — which is why
+    /// summaries captured by `run-agent` in this session are
+    /// retrievable on the next user turn. Without this, step outputs
+    /// are only read on `replan()` (`cross_plan_top_k`) — which is why
     /// follow-up questions like "was the molecule project created?"
     /// previously got "I have no record of that step" answers.
     /// Recommended `3–5` once your sandbox config opts in.
@@ -901,8 +940,8 @@ impl Config {
     /// Post-load normalisation: fold `[default_scopes]` into every agent's
     /// `scopes` map (per-agent entries win wholesale, never field-merged) and
     /// expand `~` in `fs_roots`. `build_tool_executor` only holds an
-    /// `AgentConfig`, so the fallback has to be materialised here — mirrors
-    /// what `agent_config_from_spec` does for subprocess children.
+    /// `AgentConfig`, so the fallback has to be materialised here; `run-agent`
+    /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
         for agent in self.agents.values_mut() {
             for (tool, scope) in &self.default_scopes {
@@ -979,6 +1018,10 @@ impl Config {
             Self::validate_agent(agent_id, agent, &mut errors);
         });
 
+        for issue in self.egress.validation_errors() {
+            errors.push(issue);
+        }
+
         errors.into_vec()
     }
 
@@ -1041,6 +1084,16 @@ impl Config {
             agent.limits.max_tokens_per_flow > 0,
             format!("agents.{agent_id}.limits.max_tokens_per_flow must be greater than 0"),
         );
+        errors.require(
+            agent.limits.step_timeout_secs > 0,
+            format!("agents.{agent_id}.limits.step_timeout_secs must be greater than 0"),
+        );
+        if let Some(desc) = &agent.description {
+            errors.require(
+                !desc.trim().is_empty(),
+                format!("agents.{agent_id}.description must not be empty when set"),
+            );
+        }
         errors.require_positive_opt_f64(
             &format!("agents.{agent_id}.limits.max_cost_per_flow"),
             agent.limits.max_cost_per_flow,
@@ -1173,6 +1226,9 @@ impl Default for Config {
                 default: true,
                 engine: "openrouter".to_string(),
                 model: "anthropic/claude-sonnet-4.6".to_string(),
+                description: None,
+                example_queries: vec![],
+                tools: vec![],
                 workspace: None,
                 default_lens: "eco".to_string(),
                 identity: IdentityConfig {
@@ -1202,6 +1258,7 @@ impl Default for Config {
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
+            egress: EgressConfig::default(),
             mcp_servers: Vec::new(),
             skill_lifecycle: None,
             sandbox_name: None,
@@ -1563,5 +1620,56 @@ ttl_days = 7
         "#;
         let config: Config = toml::from_str(toml_str).expect("should parse");
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn agent_block_rejects_unknown_keys() {
+        // The old agents/*.toml spec was strict (`max_turns`, `timeout_secs`,
+        // `skills`, `sandbox`); the merged schema keeps a typo from being
+        // silently dropped.
+        for bad in [
+            "max_turns = 20",
+            "timeout_secs = 180",
+            "sandbox = \"x\"",
+            "tool = []",
+        ] {
+            let toml = format!("[agents.x]\nengine = \"openrouter\"\nmodel = \"m\"\n{bad}\n");
+            let err = toml::from_str::<Config>(&toml).unwrap_err().to_string();
+            let key = bad.split(' ').next().unwrap();
+            assert!(err.contains(key), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn agent_block_accepts_subagent_fields_and_skills_alias() {
+        let cfg: Config = toml::from_str(
+            "[agents.researcher]\nengine = \"openrouter\"\nmodel = \"m\"\n\
+             description = \"web research\"\nexample_queries = [\"btc price?\"]\n\
+             tools = [\"http_request\", \"shared_cache\"]\nskills = [\"a\", \"b\"]\n\
+             [agents.researcher.limits]\nstep_timeout_secs = 42\n",
+        )
+        .unwrap();
+        let a = &cfg.agents["researcher"];
+        assert_eq!(a.description.as_deref(), Some("web research"));
+        assert_eq!(a.skill_packages, vec!["a", "b"]);
+        assert_eq!(a.tools, vec!["http_request", "shared_cache"]);
+        assert_eq!(a.limits.step_timeout_secs, 42);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_blank_description_and_zero_step_timeout() {
+        let blank: Config = toml::from_str(
+            "[agents.x]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"  \"\n",
+        )
+        .unwrap();
+        let err = blank.validate().unwrap_err().to_string();
+        assert!(err.contains("description must not be empty"), "{err}");
+        let zero: Config = toml::from_str(
+            "[agents.x]\nengine = \"openrouter\"\nmodel = \"m\"\n[agents.x.limits]\nstep_timeout_secs = 0\n",
+        )
+        .unwrap();
+        let err = zero.validate().unwrap_err().to_string();
+        assert!(err.contains("step_timeout_secs"), "{err}");
     }
 }

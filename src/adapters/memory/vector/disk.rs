@@ -58,7 +58,7 @@ impl Entry {
 }
 
 /// Brute-force cosine-similarity disk store. Appropriate for local /
-/// single-workspace use; swap in `QdrantVectorStore` once collections grow.
+/// single-workspace use; the only built-in `VectorStore` (durable memory is Postgres `agentic_memory`).
 pub struct DiskVectorStore {
     entries: RwLock<Vec<Entry>>,
     store_path: PathBuf,

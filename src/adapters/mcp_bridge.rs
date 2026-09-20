@@ -12,7 +12,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
@@ -122,6 +122,22 @@ impl ToolActivityPort for BridgeActivity {
 /// subprocess is launched from within Tengu's `#[tokio::main]`, so creating a
 /// second runtime here would panic). Returns when stdin closes.
 pub async fn run_mcp_bridge() -> Result<()> {
+    // Parent's policy arrives as TENGU_EGRESS (wins inside `install`). A
+    // standalone bridge (registered directly in a user's Claude Code) follows
+    // the operator's own config chain — `$TENGU_CONFIG` / `<TENGU_HOME>/config.toml`
+    // — and only falls back to the built-in default (`network = "tor"`) when
+    // there is no config file at all.
+    let standalone_egress = {
+        let path = crate::default_config_path();
+        if path.is_file() {
+            crate::adapters::config::Config::load(&path)
+                .with_context(|| format!("mcp-bridge: load [egress] from {}", path.display()))?
+                .egress
+        } else {
+            crate::adapters::egress::EgressConfig::default()
+        }
+    };
+    crate::adapters::egress::install(&standalone_egress)?;
     let workspace = std::env::var("TENGU_BRIDGE_WORKSPACE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
@@ -401,7 +417,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         .get("main")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("default config missing 'main' agent"))?;
-    // Phase 7.7 refactor #5 — same allowlist that agent_config_from_spec uses.
+    // Phase 7.7 refactor #5 — same allowlist `channel_runtime::subagent_config` uses.
     agent_config.workspace_tools = crate::adapters::channel_runtime::WORKSPACE_TOOLS_ALLOWLIST
         .iter()
         .filter(|t| allowed_names.contains(**t))
@@ -411,10 +427,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
         Arc::new(LocalShellExecutor::new());
 
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    let http_client =
+        crate::adapters::egress::policy().tool_client(std::time::Duration::from_secs(60))?;
 
     let secret_registry = Arc::new(SecretRegistry::new());
 
@@ -473,7 +487,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     // routing. SkillPlugin needs a `SkillRegistry` that the bridge's
     // standalone subprocess context can't sensibly construct.
 
-    // Phase 7.7 — register the seven shared plugins via the consolidated
+    // Phase 7.7 — register the shared plugin set via the consolidated
     // helper. Adding a new shared plugin only requires editing
     // `register_core_plugins` in channel_runtime; this bridge picks it up
     // automatically. Bug B/C wouldn't have happened if this had been

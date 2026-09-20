@@ -1,0 +1,19 @@
+# Minimal sandbox to verify tengu's egress path over Tor (Arti + lyrebird-rs).
+runtime_profile = "auto"
+
+[egress]
+network = "tor"   # socks5h://127.0.0.1:9050, route_llm_api = true, fail-closed
+
+[memory]
+enabled = false
+
+[agents.probe]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+role = "probe"
+workspace = "~/tor-check-workspace"
+
+[agents.probe.identity]
+name = "Probe"
+instructions = "You are a connectivity probe. Answer briefly."

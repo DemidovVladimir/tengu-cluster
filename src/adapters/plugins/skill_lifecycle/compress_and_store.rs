@@ -20,7 +20,7 @@ use crate::adapters::types::ToolDef;
 
 /// The canonical tool definition. The runner appends it implicitly to every
 /// subagent (`build_subprocess_tool_executor`) — never list it in
-/// `agents/*.toml::tools`.
+/// `[agents.<name>].tools`.
 pub fn definition() -> ToolDef {
     ToolDef {
         name: "compress_and_store".to_string(),

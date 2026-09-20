@@ -23,6 +23,7 @@ pub(crate) mod prompt_budget;
 pub(crate) mod channel_runtime;
 #[cfg(feature = "claude_code")]
 pub(crate) mod claude_code_engine;
+pub(crate) mod egress;
 pub(crate) mod engine_builder;
 pub(crate) mod eval_builder;
 pub(crate) mod mcp_bridge;
@@ -30,7 +31,6 @@ pub(crate) mod noop;
 pub mod orchestrator;
 pub(crate) mod plugins;
 // `rag` (legacy Qdrant facade) was removed in Phase 6 — Open Brain (Postgres `agentic_memory`) is the memory backend.
-pub mod agents;
 pub(crate) mod prune;
 pub mod runner;
 pub(crate) mod scaffold;

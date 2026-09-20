@@ -16,11 +16,11 @@ impl StepId {
 /// compose a transient agent on the fly when no listed agent fits the
 /// request.
 ///
-/// `base_agent` is the closest-matching `agents/<name>.toml` to use as a
-/// starting point (loaded normally — it must exist on disk). `skills` and
+/// `base_agent` is the closest-matching `[agents.<name>]` block to use as a
+/// starting point (it must exist in the active config). `skills` and
 /// `tools`, when present, REPLACE the corresponding fields on that base
-/// spec for THIS run only. The override is not persisted; the original
-/// `agents/<base_agent>.toml` is unchanged on disk.
+/// agent for THIS run only. The override is not persisted; the config on
+/// disk is unchanged.
 ///
 /// Use case (REDESIGN §11): user asks a question no listed agent fits.
 /// Planner emits a Direct asking the user to confirm the closest match
@@ -30,7 +30,7 @@ impl StepId {
 /// from the rejected RAG roster.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCompose {
-    /// Name of the base spec to load from `agents/<base_agent>.toml`.
+    /// Name of the base `[agents.<base_agent>]` block.
     pub base_agent: String,
     /// Skills to attach for this run. Replaces the base spec's `skills`.
     /// Must reference skills the three-tier scanner can find on disk.
@@ -50,8 +50,8 @@ pub struct Step {
     #[serde(default)]
     pub depends_on: Vec<StepId>,
     /// Phase 6.7 (C→B B-half) — if set, the runner builds a transient
-    /// agent spec from `compose.base_agent` overriding `skills`/`tools`,
-    /// rather than loading `agents/<step.agent>.toml` verbatim. `step.agent`
+    /// agent from `compose.base_agent` overriding `skills`/`tools`,
+    /// rather than using `[agents.<step.agent>]` verbatim. `step.agent`
     /// becomes a label for the composed agent (used in events / logs);
     /// the actual base lives in `compose.base_agent`. None for normal
     /// fixed-roster routing.

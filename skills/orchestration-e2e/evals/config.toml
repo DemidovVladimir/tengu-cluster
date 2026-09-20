@@ -96,6 +96,8 @@ engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 workspace = "{TMP_WORKSPACE}"
 workspace_tools = ["http_request", "memory_search", "memory_ingest"]
+# Routable by the planner (registry lists blocks with a description).
+description = "Research subagent for the e2e eval: fetches facts and live data from the public web via http_request and summarises them. NOT for: writing the final deliverable."
 
 [agents.researcher.identity]
 instructions = "You are a focused researcher. Given a single goal, gather and return concise findings."
@@ -112,6 +114,8 @@ engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 workspace = "{TMP_WORKSPACE}"
 workspace_tools = ["memory_search"]
+# Routable by the planner (registry lists blocks with a description).
+description = "Writer subagent for the e2e eval: turns research notes into the final deliverable text. NOT for: fetching data from the web."
 
 [agents.writer.identity]
 instructions = "You draft polished responses synthesizing inputs handed to you. Be concise."

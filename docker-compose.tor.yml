@@ -1,0 +1,33 @@
+# Tor topology override — network-level enforcement for Docker tengu.
+#
+# Pulls in deploy/tor/compose.yml (Arti + lyrebird-rs). tengu and Postgres sit
+# on the internal `tor-front` network with no gateway: the only thing tengu
+# can reach is Arti, and Arti only reaches Tor bridges through lyrebird-rs.
+#
+#   make up                 (NETWORK=tor is the default)
+#   docker compose -f docker-compose.yml -f docker-compose.tor.yml up -d --build
+#
+# config.toml: `[egress]` default (`network = "tor"`) — TENGU_TOR_PROXY below
+# points it at the `tor` service instead of 127.0.0.1.
+#
+# Trade-off: containers on an internal network can't publish ports, so the
+# webhook listener (7080) is not reachable from the host in this mode.
+include:
+  # compose.internal.yml drops the host port the standalone stack publishes.
+  - path:
+      - deploy/tor/compose.yml
+      - deploy/tor/compose.internal.yml
+
+services:
+  tengu:
+    networks: [tor-front]
+    ports: !reset []
+    environment:
+      - TENGU_TOR_PROXY=socks5h://tor:9050
+    depends_on:
+      tor:
+        condition: service_healthy
+
+  postgres-memory:
+    networks: [tor-front]
+    ports: !reset []

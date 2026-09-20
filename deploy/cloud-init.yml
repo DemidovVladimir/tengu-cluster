@@ -15,8 +15,8 @@
 #   ssh root@<ip>
 #   cd /opt/tengu-cluster
 #   nano .env                # set API keys
-#   nano config.toml         # customize agents
-#   make up
+#   nano config.toml         # customize agents; [egress] network = "open" to skip Tor
+#   make up                  # tengu behind the Tor proxy (make up NETWORK=open for direct)
 
 package_update: true
 package_upgrade: true
@@ -35,21 +35,23 @@ runcmd:
   - curl -fsSL https://get.docker.com | sh
   - systemctl enable --now docker
 
-  # Clone tengu-cluster
+  # Clone tengu-cluster + lyrebird-rs (Tor pluggable transports for deploy/tor)
   - git clone --depth 1 https://github.com/DemidovVladimir/tengu-cluster.git /opt/tengu-cluster
+  - git clone --depth 1 https://github.com/DemidovVladimir/lyrebird-rs.git /opt/lyrebird-rs
 
   # Configure
   - cd /opt/tengu-cluster && cp .env.example .env && cp config.example.toml config.toml
 
   # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu webhooks`,
   # feature `webhooks`) to 0.0.0.0 for external access. Only the [webhooks]
-  # section is rewritten; nothing listens on [hub].port. Only takes effect
-  # when the [webhooks] block is uncommented and the image is built with
+  # section is rewritten; nothing listens on [hub].port. Only matters for
+  # `make up NETWORK=open` (the default Tor topology publishes no ports),
+  # with the [webhooks] block uncommented and the image built with
   # TENGU_FEATURES=openrouter,telegram,webhooks.
   - sed -i '/^\[webhooks\]/,/^\[/ s/^bind = "127.0.0.1"/bind = "0.0.0.0"/' /opt/tengu-cluster/config.toml
 
-  # Build image (so it's ready when user SSH's in)
-  - cd /opt/tengu-cluster && docker compose build
+  # Build images (tengu + Tor proxy) so they're ready when the user SSH's in
+  - cd /opt/tengu-cluster && make build
 
   # Create systemd service for auto-start on reboot
   - |
@@ -63,9 +65,11 @@ runcmd:
     Type=oneshot
     RemainAfterExit=yes
     WorkingDirectory=/opt/tengu-cluster
-    ExecStart=/usr/bin/docker compose up -d
-    ExecStop=/usr/bin/docker compose down
-    TimeoutStartSec=120
+    ExecStart=/usr/bin/make up
+    ExecStop=/usr/bin/make down
+    # `make up` blocks until the tor service is healthy (bootstrap through a
+    # bridge: ~30 s for obfs4, minutes for snowflake on a cold volume).
+    TimeoutStartSec=900
 
     [Install]
     WantedBy=multi-user.target
@@ -73,7 +77,8 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable tengu.service
 
-  # Firewall: allow SSH + webhook listener port (7080, `tengu webhooks`)
+  # Firewall: allow SSH + the webhook listener port (7080 — reachable only
+  # under `make up NETWORK=open`; harmless otherwise)
   - ufw allow 22/tcp
   - ufw allow 7080/tcp
   - ufw --force enable

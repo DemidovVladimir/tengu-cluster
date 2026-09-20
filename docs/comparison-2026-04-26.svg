@@ -1,6 +1,6 @@
 <svg viewBox="0 0 980 880" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
   <title id="title">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture comparison, April 2026</title>
-  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, and four deltas landed today (per-example vectors, TUI debug panel, durable user-message persistence, plus the registry recall + auto-reindex from earlier this session).</desc>
+  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18: Postgres agentic_memory, one config per sandbox, Tor-by-default egress; the "landed today" boxes are historical.</desc>
   <style>
     .h1 { font-size: 16px; font-weight: 700; fill: #0f172a; }
     .h2 { font-size: 12px; font-weight: 700; fill: #0f172a; letter-spacing: .4px; text-transform: uppercase; }
@@ -23,7 +23,7 @@
   </style>
 
   <text x="20" y="26" class="h1">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture snapshot</text>
-  <text x="20" y="44" class="small">April 26, 2026 · post per-example vectors + TUI debug panel + durable msg persistence (today) · companion to docs/tengu-analysis.html</text>
+  <text x="20" y="44" class="small">April 26, 2026 snapshot · Tengu facts refreshed 2026-09-18 (Postgres agentic_memory · one config per sandbox · Tor-by-default egress) · companion to docs/tengu-analysis.html</text>
 
   <g transform="translate(20, 58)">
     <rect width="940" height="22" rx="4" class="row" />
@@ -50,8 +50,8 @@
   <g transform="translate(20, 132)">
     <rect x="0" y="0" width="305" height="44" rx="4" class="col-tengu" />
     <text x="10" y="16" class="h3">Surfaces</text>
-    <text x="10" y="30" class="body">TUI (cursive) · Telegram</text>
-    <text x="10" y="42" class="small">cargo run -- chat / telegram</text>
+    <text x="10" y="30" class="body">TUI (cursive) · Telegram · webhooks</text>
+    <text x="10" y="42" class="small">tengu chat / telegram / webhooks --sandbox &lt;name&gt;</text>
     <rect x="317" y="0" width="305" height="44" rx="4" class="col-hermes" />
     <text x="327" y="16" class="h3">Surfaces</text>
     <text x="327" y="30" class="body">CLI · TG · Discord · Slack · WA · Signal</text>
@@ -64,9 +64,9 @@
     <rect x="0" y="50" width="305" height="56" rx="4" class="col-tengu" />
     <text x="10" y="66" class="h3">Orchestration / planner</text>
     <text x="10" y="80" class="body">RagPlanner → SubprocessRunner → run-agent</text>
-    <text x="10" y="92" class="mono">engine = "rag" | "static"</text>
+    <text x="10" y="92" class="mono">engine = "rag" · [agents.*] with description</text>
     <circle cx="296" cy="98" r="3" class="new" />
-    <text x="10" y="103" class="small">+ event bus, RagQueried, auto-reindex</text>
+    <text x="10" y="103" class="small">+ event bus, RagQueried, file-backed registry</text>
     <rect x="317" y="50" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="66" class="h3">Orchestration / planner</text>
     <text x="327" y="80" class="body">run_agent() loop · memory prefetch + sync</text>
@@ -82,7 +82,7 @@
     <text x="10" y="128" class="h3">Model + tools</text>
     <text x="10" y="142" class="body">OpenRouter (any model) + Claude Code engine</text>
     <text x="10" y="154" class="mono">PluginToolExecutor · http · crypto · MCP</text>
-    <text x="10" y="165" class="small">workspace_tools allow-list of THREE</text>
+    <text x="10" y="165" class="small">6 workspace_tools · Tor-by-default egress (enforced)</text>
     <rect x="317" y="112" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="128" class="h3">Model + tools</text>
     <text x="327" y="142" class="body">200+ providers · 6 terminal backends</text>
@@ -96,8 +96,8 @@
 
     <rect x="0" y="174" width="305" height="44" rx="4" class="col-tengu" />
     <text x="10" y="190" class="h3">State / persistence</text>
-    <text x="10" y="204" class="body">legacy vector DB: TENGU_PLANNER_REGISTRY.md/messages/outputs</text>
-    <text x="10" y="216" class="small">embeds via OpenAI text-embedding-3-small</text>
+    <text x="10" y="204" class="body">Postgres agentic_memory (pgvector) + disk bincode store</text>
+    <text x="10" y="216" class="small">registry .md from [agents.*] · text-embedding-3-small</text>
     <rect x="317" y="174" width="305" height="44" rx="4" class="col-hermes" />
     <text x="327" y="190" class="h3">State / persistence</text>
     <text x="327" y="204" class="body">SQLite (FTS5) + Honcho dialectic model</text>
@@ -128,10 +128,10 @@
     <text x="10" y="34" class="small">how state persists</text>
     <text x="10" y="50" class="small">across turns/sessions</text>
     <rect x="162" y="0" width="265" height="68" rx="4" class="row" />
-    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3 legacy vector DB collections</text>
-    <circle cx="172" cy="32" r="4" class="warn" /><text x="182" y="36" class="body">in-mem ring buffer (lite)</text>
-    <circle cx="172" cy="50" r="4" class="new" /><text x="182" y="54" class="body">durable msg writes (today)</text>
-    <text x="172" y="65" class="small">no cross-restart read-back yet</text>
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">Postgres agentic_memory (postgres_memory)</text>
+    <circle cx="172" cy="32" r="4" class="warn" /><text x="182" y="36" class="body">in-mem ring buffer (session_recent_n)</text>
+    <circle cx="172" cy="50" r="4" class="new" /><text x="182" y="54" class="body">durable msg writes (2026-04-26)</text>
+    <text x="172" y="65" class="small">recall lanes: cross-session · session · plan</text>
     <rect x="429" y="0" width="265" height="68" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">FTS5 session search</text>
     <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">LLM summarisation pass</text>
@@ -174,7 +174,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">PluginToolExecutor + MCP bridge</text>
     <circle cx="172" cy="32" r="4" class="ok" /><text x="182" y="36" class="body">Privy crypto + http + workspace</text>
-    <circle cx="172" cy="50" r="4" class="warn" /><text x="182" y="54" class="body">placeholder_tools (6 hardcoded)</text>
+    <circle cx="172" cy="50" r="4" class="ok" /><text x="182" y="54" class="body">registry lists core + MCP tools</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">40+ tools · 6 terminal backends</text>
     <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">cron scheduler + voice + RPC</text>
@@ -191,9 +191,9 @@
     <text x="10" y="34" class="small">how the agent</text>
     <text x="10" y="50" class="small">decides what to do</text>
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
-    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">Open Brain / Karpathy LLM Wiki over registry · cosine ≥ ~0.15</text>
-    <circle cx="172" cy="32" r="4" class="new" /><text x="182" y="36" class="body">per-example vectors (today)</text>
-    <text x="172" y="52" class="small">LLM judges roster (no hard gate)</text>
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">planner LLM reads [agents.*] descriptions</text>
+    <circle cx="172" cy="32" r="4" class="new" /><text x="182" y="36" class="body">example_queries in the registry</text>
+    <text x="172" y="52" class="small">no score gate · C→B compose fallback</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">single-agent loop · tool choice</text>
     <circle cx="439" cy="32" r="4" class="ok" /><text x="449" y="36" class="body">subagent.spawn() for parallel work</text>
@@ -205,15 +205,15 @@
   </g>
 
   <line x1="20" y1="710" x2="960" y2="710" stroke="#e2e8f0" />
-  <text x="20" y="730" class="h2">What landed today (2026-04-26 — extends prior commits c3fe7fd, e248d82, 7d1fa55)</text>
+  <text x="20" y="730" class="h2">What landed on 2026-04-26 (historical — src/adapters/rag/ removed 2026-05-14; extends c3fe7fd, e248d82, 7d1fa55)</text>
 
   <g transform="translate(20, 740)">
     <rect x="0" y="0" width="225" height="86" rx="4" class="col-tengu" />
     <circle cx="14" cy="14" r="4" class="new" />
     <text x="24" y="18" class="h3">Per-example vectors</text>
-    <text x="10" y="36" class="body">indexer.rs writes one vector per</text>
-    <text x="10" y="48" class="body">agents/*.toml example_queries entry</text>
-    <text x="10" y="64" class="small">tighter cosine to user phrasing;</text>
+    <text x="10" y="36" class="body">rag/indexer.rs (removed) wrote one</text>
+    <text x="10" y="48" class="body">vector per example_queries entry</text>
+    <text x="10" y="64" class="small">now plain lines in the .md registry;</text>
     <text x="10" y="76" class="small">expect 0.355 → 0.5+ on BTC query</text>
     <rect x="237" y="0" width="225" height="86" rx="4" class="col-tengu" />
     <circle cx="251" cy="14" r="4" class="new" />
@@ -230,12 +230,12 @@
     <text x="484" y="64" class="small">forward-compat search_messages;</text>
     <text x="484" y="76" class="small">no read-back hydration yet</text>
     <rect x="711" y="0" width="229" height="86" rx="4" class="col-tengu" />
-    <circle cx="725" cy="14" r="4" class="warn" />
-    <text x="735" y="18" class="h3">Still open · prioritised</text>
-    <text x="721" y="36" class="small">6.4 read-back · 6.6 MCP indexing ·</text>
-    <text x="721" y="48" class="small">6.7 C→B fallback B-half ·</text>
-    <text x="721" y="60" class="small">6.2 content-hash dedup ·</text>
-    <text x="721" y="72" class="small">7.1 delete legacy static path</text>
+    <circle cx="725" cy="14" r="4" class="ok" />
+    <text x="735" y="18" class="h3">Status 2026-09-18</text>
+    <text x="721" y="36" class="small">6.4 read-back · 6.6 MCP indexing: done</text>
+    <text x="721" y="48" class="small">6.7 C→B compose · 7.1 static path: done</text>
+    <text x="721" y="60" class="small">6.2 dedup: moot (no embeddings)</text>
+    <text x="721" y="72" class="small">open: skill auto-trigger · cron</text>
   </g>
 
   <g transform="translate(20, 838)">

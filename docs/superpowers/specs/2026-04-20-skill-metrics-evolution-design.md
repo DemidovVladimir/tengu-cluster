@@ -1,5 +1,7 @@
 # Skill Metrics + Evolution — Design
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 **Date:** 2026-04-20
 **Status:** Draft pending user review
 **Depends on:** `docs/superpowers/specs/2026-04-20-harness-orchestration-memory-design.md` (orchestrator skeleton must land first; memory tools must be stabilised)

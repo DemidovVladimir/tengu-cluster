@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Opt-in: git config core.hooksPath .githooks
 set -euo pipefail
 
-scripts/check_rust_file_descriptions.sh
+cargo fmt --all --check

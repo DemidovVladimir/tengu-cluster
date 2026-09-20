@@ -1,5 +1,7 @@
 # Skill Metrics + Evolution — Phase 2 Plan
 
+> **Archived (2026-09-18)** — historical; current behaviour: see `README.md` / `docs/architecture-2026-04-27.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan.
 
 **Supersedes (partial):** `docs/superpowers/plans/2026-04-20-skill-metrics-evolution.md` Tasks 12-21. Tasks 1-11 already landed on `main` (commits `2dc6e6d`..`acae292`).

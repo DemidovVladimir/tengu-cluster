@@ -49,13 +49,13 @@
               },
               "compose": {
                 "type": "object",
-                "description": "Phase 6.7 (C→B B-half) — optional. When present, the runner loads agents/<base_agent>.toml as the spec then OVERRIDES skills+tools with these values for THIS run only. Use ONLY after a prior turn asked the user to confirm a generic-agent fallback (REDESIGN §11). For normal routing, leave out.",
+                "description": "Phase 6.7 (C→B B-half) — optional. When present, the runner takes the [agents.<base_agent>] block of the active sandbox config as the base then OVERRIDES skills+tools with these values for THIS run only. Use ONLY after a prior turn asked the user to confirm a generic-agent fallback (REDESIGN §11). For normal routing, leave out.",
                 "additionalProperties": false,
                 "properties": {
                   "base_agent": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Exact agent name to load from agents/<name>.toml as the base spec — typically the closest-matching agent from the RAG roster."
+                    "description": "Exact agent name of an [agents.<name>] block from the planner registry roster — typically the closest-matching listed agent."
                   },
                   "skills": {
                     "type": "array",
