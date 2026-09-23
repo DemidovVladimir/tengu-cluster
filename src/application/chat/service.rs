@@ -239,6 +239,9 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
     /// Tools to expose via MCP bridge (Claude Code engine only).
     pub bridge_tools: Option<&'a [ToolDef]>,
+    /// `[[mcp_servers]]` behind any `{server}__{tool}` entry in
+    /// `bridge_tools` — handed to the engine so its bridge can proxy them.
+    pub mcp_servers: &'a [crate::config::McpServerConfig],
     /// Phase 4c: when `true`, the "last/latest/most recent" fresh-grounding
     /// system message at the top of `process_user_text` is skipped. Set by
     /// the planner path (`run_turn_with_system`) so the grounding nudge does
@@ -404,7 +407,7 @@ impl<'a> ChatRuntimeService<'a> {
             bridge_tools: self.bridge_tools.map(|t| t.to_vec()),
             max_tool_rounds: Some(self.agent_config.limits.max_tool_rounds),
             max_mcp_result_chars: Some(self.agent_config.limits.max_mcp_result_chars),
-            mcp_servers: Vec::new(),
+            mcp_servers: self.mcp_servers.to_vec(),
         };
         let resp = collect_engine_response(
             self.engine,

@@ -382,10 +382,13 @@ pub fn run_tui(
         // tools so Tengu-native tools are still accessible via MCP bridge.
         let bridge_base_tools: Vec<crate::domain::message::ToolDef> =
             if manages_workspace && workspace.is_some() {
-                crate::adapters::outbound::tools::advertised_defs(
-                    has_memory,
-                    &engine_agent_config.workspace_tools,
-                )
+                rt.block_on(channel_runtime::with_mcp_bridge_tools(
+                    crate::adapters::outbound::tools::advertised_defs(
+                        has_memory,
+                        &engine_agent_config.workspace_tools,
+                    ),
+                    &mcp_servers,
+                ))
             } else {
                 vec![]
             };
@@ -649,6 +652,7 @@ pub fn run_tui(
                                 } else {
                                     Some(&current_bridge_tools)
                                 },
+                                mcp_servers: &mcp_servers,
                                 suppress_grounding_nudge: false,
                             };
 
@@ -800,6 +804,7 @@ pub fn run_tui(
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
                             bridge_tools: bridge_tools_opt,
+                            mcp_servers: mcp_servers.clone(),
                             tool_observer: None,
                             cancel: None,
                         };
@@ -859,6 +864,7 @@ pub fn run_tui(
                             tool_observer: None,
                             cancel: None,
                             bridge_tools: None,
+                            mcp_servers: &mcp_servers,
                             suppress_grounding_nudge: false,
                         };
 

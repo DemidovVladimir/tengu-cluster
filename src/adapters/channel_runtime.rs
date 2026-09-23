@@ -281,6 +281,21 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
 // Base tool computation
 // ---------------------------------------------------------------------------
 
+/// Bridge tool list for an in-process Claude Code agent: `base` (the catalog
+/// defs) plus every `[[mcp_servers]]` tool as `{server}__{tool}`, which the
+/// bridge then proxies (the engine passes the servers along via
+/// `EngineContext.mcp_servers`). Listed once at agent setup — live
+/// `tools/list`, fail-soft per server.
+pub(crate) async fn with_mcp_bridge_tools(
+    mut base: Vec<ToolDef>,
+    mcp_servers: &[McpServerConfig],
+) -> Vec<ToolDef> {
+    if !base.is_empty() {
+        base.extend(crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers).await);
+    }
+    base
+}
+
 /// Compute the base tool list from workspace primitives and memory subsystem tools.
 ///
 /// This is the set of tools available before skill tools are added.
@@ -705,6 +720,8 @@ pub(crate) struct ChatTurnInputs {
     pub max_recall_entries: usize,
     pub max_recall_tokens: usize,
     pub bridge_tools: Option<Vec<ToolDef>>,
+    /// `[[mcp_servers]]` behind `{server}__{tool}` bridge entries.
+    pub mcp_servers: Vec<McpServerConfig>,
     /// Optional per-turn callback invoked after each tool executes.
     /// Boxed so channels can close over their own event channels.
     pub tool_observer: Option<Arc<dyn Fn(&ToolCall, &str) + Send + Sync>>,
@@ -789,6 +806,7 @@ fn clone_chat_turn_inputs(src: &ChatTurnInputs) -> ChatTurnInputs {
         max_recall_entries: src.max_recall_entries,
         max_recall_tokens: src.max_recall_tokens,
         bridge_tools: src.bridge_tools.clone(),
+        mcp_servers: src.mcp_servers.clone(),
         tool_observer: src.tool_observer.clone(),
         cancel: src.cancel.clone(),
     }
@@ -880,6 +898,7 @@ impl RuntimeChatServiceFactory {
             tool_observer: observer_ref,
             cancel: inputs.cancel.as_deref(),
             bridge_tools: inputs.bridge_tools.as_deref(),
+            mcp_servers: &inputs.mcp_servers,
             suppress_grounding_nudge: system_override.is_some(),
         };
 
@@ -1225,6 +1244,7 @@ pub(crate) async fn build_cli_chat_factory(
             max_recall_entries: 10,
             max_recall_tokens: 2000,
             bridge_tools: None,
+            mcp_servers: Vec::new(),
             tool_observer: None,
             cancel: None,
         };
@@ -1454,5 +1474,99 @@ mod golden_tests {
         let listed = advertised(&["read_file", "fake__echo"]);
         assert!(listed.contains(&"fake__echo".to_string()));
         assert!(listed.contains(&"read_file".to_string()));
+    }
+
+    // In-process Claude Code agents (TUI / Telegram): the bridge tool list
+    // gains the `[[mcp_servers]]` tools, and `ChatRuntimeService` hands the
+    // servers to the engine so its bridge can proxy them. (Engine → bridge
+    // env: `claude_code` tests; bridge → server: `tests/mcp_bridge_external.rs`.)
+    #[tokio::test]
+    async fn in_process_claude_code_agent_gets_mcp_tools_and_servers() {
+        use crate::domain::message::{Message, ModelInfo, StreamEvent};
+        use crate::ports::engine::{Engine, EngineContext};
+        use std::sync::Mutex;
+
+        let servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+        let base = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
+        let bridge = with_mcp_bridge_tools(base, &servers).await;
+        let names: Vec<&str> = bridge.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["read_file", "fake__echo"]);
+        // No bridge (non-Claude-Code agent) stays empty — servers not dialled.
+        assert!(with_mcp_bridge_tools(Vec::new(), &servers).await.is_empty());
+
+        #[derive(Default)]
+        struct Recording(Mutex<Option<(Vec<String>, Vec<String>)>>);
+        #[async_trait::async_trait]
+        impl Engine for Recording {
+            fn id(&self) -> &str {
+                "recording"
+            }
+            fn context_window(&self) -> usize {
+                100_000
+            }
+            fn supports_tool_use(&self) -> bool {
+                false
+            }
+            fn manages_own_workspace(&self) -> bool {
+                true
+            }
+            fn available_models(&self) -> Vec<ModelInfo> {
+                Vec::new()
+            }
+            async fn run(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDef],
+                context: &EngineContext,
+            ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+            {
+                *self.0.lock().unwrap() = Some((
+                    context.mcp_servers.iter().map(|s| s.name.clone()).collect(),
+                    context
+                        .bridge_tools
+                        .iter()
+                        .flatten()
+                        .map(|t| t.name.clone())
+                        .collect(),
+                ));
+                Ok(Box::pin(futures::stream::iter(vec![
+                    StreamEvent::TextDelta { text: "ok".into() },
+                    StreamEvent::Done,
+                ])))
+            }
+        }
+
+        let engine = Recording::default();
+        let agent = Config::default().agents.get("main").unwrap().clone();
+        let service = ChatRuntimeService {
+            engine: &engine,
+            agent_id: "main",
+            agent_config: &agent,
+            history_turn_limit: 10,
+            compaction_policy: crate::application::chat::flow::resolve_flow_compaction_policy(
+                &agent.flow,
+                agent.limits.max_tokens_per_flow,
+                100_000,
+                4_096,
+            ),
+            system_prompt: "sys".into(),
+            tools: &[],
+            tool_executor: None,
+            memory_manager: None,
+            max_recall_entries: 0,
+            max_recall_tokens: 0,
+            tool_observer: None,
+            cancel: None,
+            bridge_tools: Some(&bridge),
+            mcp_servers: &servers,
+            suppress_grounding_nudge: true,
+        };
+        let mut state = create_chat_loop_state(&agent);
+        service.process_user_text(&mut state, "hi").await.unwrap();
+        let (seen_servers, seen_bridge) = engine.0.lock().unwrap().clone().unwrap();
+        assert_eq!(seen_servers, ["fake"]);
+        assert!(seen_bridge.contains(&"fake__echo".to_string()));
     }
 }

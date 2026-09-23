@@ -607,10 +607,13 @@ impl TelegramSession {
                 &agent_config.workspace_tools,
             );
             let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
-                crate::adapters::outbound::tools::advertised_defs(
-                    has_memory,
-                    &agent_config.workspace_tools,
-                )
+                rt.block_on(channel_runtime::with_mcp_bridge_tools(
+                    crate::adapters::outbound::tools::advertised_defs(
+                        has_memory,
+                        &agent_config.workspace_tools,
+                    ),
+                    &config.mcp_servers,
+                ))
             } else {
                 vec![]
             };
@@ -1321,6 +1324,7 @@ impl TelegramSession {
             } else {
                 Some(&agent.current_bridge_tools)
             },
+            mcp_servers: &self.config.mcp_servers,
             suppress_grounding_nudge: false,
         };
 
@@ -1524,6 +1528,7 @@ impl TelegramSession {
                 max_recall_entries: self.memory_config.max_recall_entries,
                 max_recall_tokens: self.memory_config.max_recall_tokens,
                 bridge_tools,
+                mcp_servers: self.config.mcp_servers.clone(),
                 tool_observer: None,
                 cancel: Some(Arc::clone(&self.turn_cancel)),
             };
@@ -1958,6 +1963,7 @@ impl TelegramSession {
             } else {
                 Some(&agent.current_bridge_tools)
             },
+            mcp_servers: &self.config.mcp_servers,
             suppress_grounding_nudge: false,
         };
 

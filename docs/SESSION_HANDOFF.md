@@ -13,7 +13,8 @@ Plan + status: `docs/hexagonal-plan-2026-09-23.md`. Layers `domain/ ports/ confi
 | Open | Detail |
 |---|---|
 | ~~`[[mcp_servers]]` tools invisible to plan-step subagents~~ fixed 2026-09-23 | `build_subprocess_tool_executor` now advertises the executor's MCP tools (through `tools`); Claude Code engine passes servers to the bridge (`TENGU_BRIDGE_MCP_SERVERS` + forwarded `$VAR`s), bridge registers `McpPlugin`. Names `{server}.{tool}` → `{server}__{tool}` (providers reject `.`). Tests: `mcp_client` fake-server test, `subprocess_executor_advertises_mcp_server_tools`, `claude_code` bridge-config test, `tests/mcp_bridge_external.rs` (real `tengu mcp-bridge` ↔ `tests/fixtures/fake_mcp_server.sh`). Not tested against a live LLM. |
-| In-process Claude Code agents (TUI/Telegram) don't see `[[mcp_servers]]` tools | their `bridge_tools` come from the catalog (`advertised_defs`) and `chat_builder`'s `EngineContext.mcp_servers` is empty. OpenRouter in-process agents are fine. |
+| ~~In-process Claude Code agents (TUI/Telegram) don't see `[[mcp_servers]]` tools~~ fixed 2026-09-23 | `channel_runtime::with_mcp_bridge_tools` lists the servers once at agent setup and appends `{server}__{tool}` to the bridge list; `ChatRuntimeService.mcp_servers` / `ChatTurnInputs.mcp_servers` reach `EngineContext`. Test: `in_process_claude_code_agent_gets_mcp_tools_and_servers`. |
+| Webhook agents on `engine = "claude_code"` get no bridge tools | `webhook_builder` builds `EngineContext { bridge_tools: None }` — no tengu tools, no MCP tools. Pre-existing; found 2026-09-23. |
 
 ---
 
