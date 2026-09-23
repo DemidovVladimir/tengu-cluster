@@ -5,7 +5,7 @@
 > compiled Markdown + file-backed planner registry. Since 2026-09-18: one config
 > per sandbox (`agents/*.toml` + `AgentSpec` deleted — a subagent is an
 > `[agents.<name>]` block with a `description`), Tor-by-default egress
-> (`[egress] network = "tor"`, code-enforced in `src/adapters/egress.rs`), no
+> (`[egress] network = "tor"`, code-enforced in `src/adapters/outbound/egress.rs`), no
 > Qdrant / `rag/`. Tengu facts below are corrected in place; the
 > "What landed today" table is historical.
 >
@@ -82,9 +82,9 @@ PI/Cowork takes a different path: rather than autonomous evolution, it leans on 
 
 ### Tengu
 - `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped.
-- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the six-element `WORKSPACE_TOOLS_ALLOWLIST` opt-ins (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`); `[agents.<name>].tools` narrows it per subagent.
+- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the six-element `WORKSPACE_TOOLS` opt-ins (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`); `[agents.<name>].tools` narrows it per subagent.
 - `compress_and_store` is implicitly appended to every subagent — never list it in `[agents.<name>].tools`.
-- Real MCP bridge via `mcp/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>.<tool>`, once per `RagPlanner`). Item 6.6 closed 2026-09-12.
+- Real MCP bridge via `outbound/mcp_client/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>__<tool>`, once per `RagPlanner`). Item 6.6 closed 2026-09-12.
 - Every network path goes through `egress.rs`: Tor by default (`socks5h://127.0.0.1:9050`, fail-closed), `allow_hosts` / `deny_hosts` / `https_only` re-checked on each redirect hop, JSONL audit; children inherit the resolved policy via `TENGU_EGRESS`.
 
 ### Hermes
@@ -121,8 +121,8 @@ Historical — `src/adapters/rag/` was deleted 2026-05-14; per-example vectors a
 | # | Item | Files | Purpose |
 |---|---|---|---|
 | 1 | Per-example vectors | `src/adapters/rag/indexer.rs`, `src/adapters/rag/query.rs` | Each `agents/*.toml::example_queries` entry indexed as its own vector. Embed bare query text (tight cosine), store snippet = full description (planner sees full context after dedup). Over-fetch margin in `query::search_registry` bumped 4× → 6× for the wider per-agent vector count. Expected score lift on BTC query: 0.355 → 0.5+. |
-| 2 | TUI debug panel | `src/adapters/tui/mod.rs` | Renders `OrchestratorEvent::RagQueried` as a single compact System bubble: `rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) ...`. Top-3 of top-10 hits. Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`. |
-| 3 | Durable user-message persistence | `src/adapters/orchestrator/planner.rs`, `src/adapters/rag/{mod.rs,query.rs}` | `RagPlanner` mints `session_id` (`TENGU_SESSION_ID` override or fresh UUID). `plan()` writes the user message to `agentic_memory user events` with `MemoryKind::Message` via `RagStore::store_memory`. Fail-soft on errors. New `RagStore::search_messages` is forward-compat for the next commit (prompt-side read-back). |
+| 2 | TUI debug panel | `src/adapters/inbound/tui/mod.rs` | Renders `OrchestratorEvent::RagQueried` as a single compact System bubble: `rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) ...`. Top-3 of top-10 hits. Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`. |
+| 3 | Durable user-message persistence | `src/application/orchestrator/planner.rs`, `src/adapters/rag/{mod.rs,query.rs}` | `RagPlanner` mints `session_id` (`TENGU_SESSION_ID` override or fresh UUID). `plan()` writes the user message to `agentic_memory user events` with `MemoryKind::Message` via `RagStore::store_memory`. Fail-soft on errors. New `RagStore::search_messages` is forward-compat for the next commit (prompt-side read-back). |
 
 Carryover from earlier this session (already committed):
 
@@ -144,13 +144,13 @@ The smaller-effort polish items are at the top; structural work below.
 
 ### Architectural completeness
 
-4. **6.6 real MCP tool indexing** — **Done 2026-09-12**: registry TOOLS section = core tool defs + MCP server tools. Original note: Replace `placeholder_tools()` (6 hardcoded) with `compute_base_tools()` for real compiled-in tools plus enumerated MCP server tools via `mcp/client.rs::tools/list`. Touches the registry CLI subcommand.
+4. **6.6 real MCP tool indexing** — **Done 2026-09-12**: registry TOOLS section = core tool defs + MCP server tools. Original note: Replace `placeholder_tools()` (6 hardcoded) with `compute_base_tools()` for real compiled-in tools plus enumerated MCP server tools via `outbound/mcp_client/client.rs::tools/list`. Touches the registry CLI subcommand.
 5. **6.7 C→B unknown-agent fallback (B half)** — **Done**: `Step.compose` (`plan.rs`, `plan_schema.json`, SKILL.md "C → B fallback"). Original note: REDESIGN §11. When all Open Brain / Karpathy LLM Wiki hits score below the threshold, today the SKILL.md tells the planner to ask the user. The B half — compose generic agent on user confirmation, run for one turn — isn't implemented. Multi-turn UX, deserves its own session.
 6. **session_id sharing with `SubprocessRunner`** — **Done 2026-05-09** (Fix B): `build_orchestrator` resolves one id for `RagPlanner` + `SubprocessRunner`. Original note: The open question from the original handoff is still open. Today the planner and child subprocess each mint their own UUID. Pass via IPC env or stdin payload to unify the conversation across the entire orchestration.
 
 ### Cleanup (do last)
 
-7. **7.1 delete legacy** — **Done**: `roster.rs` and the `static` engine are gone; `engine = "rag"` is the only value. Original note: Drop `src/adapters/orchestrator/roster.rs`, the `engine = "static"` branch in `OrchestratorAgentPlanner` and `build_orchestrator`, the `ChatWorker` static-mode branch. Make `engine = "rag"` the only path. Requires confidence legacy planner mode is bulletproof for every sandbox you care about — needs full manual checklist run on each sandbox + Telegram + cancel/replan flows.
+7. **7.1 delete legacy** — **Done**: `roster.rs` and the `static` engine are gone; `engine = "rag"` is the only value. Original note: Drop `src/application/orchestrator/roster.rs`, the `engine = "static"` branch in `OrchestratorAgentPlanner` and `build_orchestrator`, the `ChatWorker` static-mode branch. Make `engine = "rag"` the only path. Requires confidence legacy planner mode is bulletproof for every sandbox you care about — needs full manual checklist run on each sandbox + Telegram + cancel/replan flows.
 
 ---
 
@@ -160,7 +160,7 @@ Added 2026-04-28 to Tengu; included here so the comparison stays current.
 
 ### Tengu
 
-First-class. `src/adapters/metrics.rs` records one `MetricsRecord` per LLM call (planner + each subagent inner-loop turn) and per embedding call. Three surfaces: `RUST_LOG=tengu=info` baseline (always-on), in-process broadcast bus (`OnceLock<broadcast::Sender>`), and `OrchestratorEvent::MetricsRecorded` re-broadcast on the event bus. Per-call telemetry includes prompt/completion/total tokens, prompt chars + bytes, response chars, latency, and (for the planner) per-context-layer breakdown (`system` / `roster` / `cross_session` / `history` / `recall` / `failure` / `user_message`). Subagent records cross the IPC boundary in `AgentIpcOutput.metrics`. TUI bubble opt-in via `TENGU_TUI_METRICS=1`.
+First-class. `src/domain/metrics.rs` records one `MetricsRecord` per LLM call (planner + each subagent inner-loop turn) and per embedding call. Three surfaces: `RUST_LOG=tengu=info` baseline (always-on), in-process broadcast bus (`OnceLock<broadcast::Sender>`), and `OrchestratorEvent::MetricsRecorded` re-broadcast on the event bus. Per-call telemetry includes prompt/completion/total tokens, prompt chars + bytes, response chars, latency, and (for the planner) per-context-layer breakdown (`system` / `roster` / `cross_session` / `history` / `recall` / `failure` / `user_message`). Subagent records cross the IPC boundary in `AgentIpcOutput.metrics`. TUI bubble opt-in via `TENGU_TUI_METRICS=1`.
 
 ### Hermes
 

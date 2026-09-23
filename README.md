@@ -219,43 +219,22 @@ Restart=on-failure
 | `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
 | `docs/SESSION_HANDOFF.md` | Running state log, open items, gotchas |
 | `docs/agentic-memory-*-2026-05-13.md` | Open Brain + LLM Wiki spec |
+| `docs/code-map.md` · `docs/code-map.html` | Where every file lives + how to add tools / engines / config / channels |
+| `docs/tools.md` | Tools: add one, give it to an agent, MCP servers |
 | `docs/context-management-2026-04-27.md` | Every mechanism that shapes what an LLM sees |
 | `docs/configuration.md` · `docs/engine-backends.md` · `docs/skills.md` · `docs/mcp-bridge.md` · `docs/webhooks-2026-05-11.md` · `docs/egress-2026-09-16.md` | Reference |
 
 ## Module map
 
-Flat: all code in `src/adapters/` + `src/main.rs`, no sub-crates. Ownership per file: `docs/architecture-2026-04-27.md` §2.
+Hexagonal, single crate. Every file, extension recipe (tools, engines, config, channels) and dependency: **`docs/code-map.md`** (interactive graph: `docs/code-map.html`). Layer rules are enforced by `tests/layering_lint.rs`.
 
 ```
-src/main.rs                     CLI entry (clap subcommands, run-agent subprocess body)
-src/adapters/
-  channel_runtime.rs            build_orchestrator, register_core_plugins, WORKSPACE_TOOLS_ALLOWLIST, subagent_config
-  chat_builder.rs               per-turn runtime (process_user_text)
-  claude_code_engine.rs         Claude Code CLI engine (feature claude_code)
-  config.rs                     Config / AgentConfig (in-process + subagent fields) / OrchestratorConfig / WebhookConfig
-  egress.rs                     [egress] policy: network tor|open, proxy, host allowlist, shell sandbox, JSONL audit
-  engine_builder.rs             OpenRouter engine + tool loop
-  eval_builder.rs               tengu eval runner + LLM judge
-  flow_builder.rs               session/flow management
-  mcp_bridge.rs                 MCP stdio server (tengu mcp-bridge)
-  memory/                       disk vector store, embedder, MemoryManager
-  metrics.rs                    MetricsRecord + global sink
-  orchestrator/                 RagPlanner, replan, shared_files (TENGU_PLANNER_REGISTRY.md from [agents.*] / TENGU_PLAN.md)
-  plugins/                      tools: workspace, http, crypto, cache, memory, skill, mcp, agentic_memory, skill_lifecycle, manage_skill, ...
-  ports.rs                      ToolScope, ShellExecutionPort, EmbeddingPort, MemoryStorePort
-  prompt_budget.rs              per-turn prompt assembly budget
-  prune.rs                      tengu prune
-  runner.rs                     SubprocessRunner (spawns tengu run-agent)
-  scaffold.rs                   workspace scaffolding
-  secret_builder.rs             encrypted vault
-  shell_executor.rs             LocalShellExecutor
-  skill_builder.rs              skill registry + three-tier scanner
-  skill_lifecycle/              evolve / metrics / proposals
-  telegram_builder.rs           Telegram adapter
-  token.rs · usage.rs           token counting + usage accounting
-  tool_builder.rs · tool_plugin.rs · tool_utils.rs   tool plumbing
-  tui/                          terminal UI
-  types.rs                      Engine trait, Message, ToolCall, StreamEvent
-  webhook_builder.rs            tengu webhooks listener (feature webhooks)
-  noop.rs · mod.rs              stubs / module root
+src/main.rs                 14 lines → adapters::inbound::cli::run
+src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory
+src/ports/                  traits: engine (Engine, ToolExecutor), tool (Tool, ToolPlugin, ToolDirectory), memory, orchestration, shell
+src/config/                 TOML schema + validation + defaults (mod.rs), [egress] (egress.rs), paths (TENGU_HOME, default config)
+src/application/            use cases: chat/ (turn + tool loop), orchestrator/ (planner, DAG, replan), memory/, skills/, tools/ (dispatch), metrics bus
+src/bootstrap/              composition root: tools.rs (executor), memory.rs, orchestrator.rs (build_orchestrator), sandbox.rs
+src/adapters/outbound/      engines/ (openrouter, claude_code), tools/ (catalog + every tool), mcp_client/, memory/, egress, secrets, shell, subprocess_runner
+src/adapters/inbound/       cli/ (commands, run-agent child), tui/, telegram.rs, webhooks.rs, mcp_bridge.rs, eval.rs, evolve.rs
 ```

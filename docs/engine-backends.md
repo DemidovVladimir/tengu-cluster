@@ -6,7 +6,7 @@ Tengu supports two engine backends. Each `[agents.<name>]` block selects its bac
 
 **Transport:** HTTP JSON to OpenRouter API
 **Feature flag:** `openrouter` (default)
-**File:** `src/adapters/engine_builder.rs`
+**File:** `src/adapters/outbound/engines/mod.rs`
 
 The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
 
@@ -29,7 +29,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 
 **Transport:** `claude` CLI subprocess, `-p --output-format stream-json` (NDJSON on stdout)
 **Feature flag:** `claude_code` (opt-in: `cargo build --features claude_code`)
-**File:** `src/adapters/claude_code_engine.rs`
+**File:** `src/adapters/outbound/engines/claude_code.rs`
 
 Runs agents through the local Claude Code CLI. Uses the operator's Claude subscription instead of API tokens (`ANTHROPIC_API_KEY` is removed from the child env).
 
@@ -53,7 +53,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 
 ### Builtin Tools Profiles
 
-Configured via `[agents.<id>.claude_code].builtin_tools_profile` (default `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`channel_runtime::subagent_config` → `engine_builder::build_engine`).
+Configured via `[agents.<id>.claude_code].builtin_tools_profile` (default `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`bootstrap::tools::subagent_config` → `adapters::outbound::engines::build_engine`).
 
 | Profile | Claude Native Tools (`--tools`) |
 |---------|-------------------|
@@ -88,7 +88,7 @@ To add a new engine backend:
 1. Create `src/adapters/my_engine.rs` implementing the `Engine` trait
 2. Add a feature flag in `Cargo.toml`
 3. Register in `src/adapters/mod.rs` (feature-gated)
-4. Add dispatch in `engine_builder.rs` `build_engine()` (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is unused)
+4. Add dispatch in `adapters/outbound/engines/mod.rs` `build_engine()` (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is unused)
 5. Add engine name to config validation in `config.rs` `validate_agent()`
 6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`
 7. Build its HTTP client with `egress::policy().llm_api_client` (or pass `claude_cli_env()` to a subprocess) — a bare `reqwest::Client` bypasses `[egress]`

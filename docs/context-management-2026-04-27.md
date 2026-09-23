@@ -32,17 +32,17 @@ prior-round tool results to first-line-only mid-loop).
 ## The seven layers, top-down
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Layer 0  Token primitives        token.rs                        │
-│ Layer 1  Per-flow lifecycle      flow_builder.rs, chat_builder.rs│
-│ Layer 2  Per-turn assembly       prompt_budget.rs, chat_builder  │
-│ Layer 3  Inner tool loop         engine_builder.rs               │
-│ Layer 4  MCP bridge              claude_code_engine.rs           │
-│ Layer 5  Subagent IPC            runner.rs, main.rs::run_agent   │
-│ Layer 6  Open Brain / Wiki state orchestrator/shared_files.rs     │
-│ Layer 7  File chunking           plugins/memory/persistent_store │
-│ Layer 8  Observability           metrics.rs (added 2026-04-28)   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ Layer 0  Token primitives        domain/token.rs                                         │
+│ Layer 1  Per-flow lifecycle      application/chat/flow.rs, chat/service.rs               │
+│ Layer 2  Per-turn assembly       application/chat/prompt_budget.rs, service.rs           │
+│ Layer 3  Inner tool loop         application/chat/tool_loop.rs                           │
+│ Layer 4  MCP bridge              outbound/engines/claude_code.rs, inbound/mcp_bridge.rs  │
+│ Layer 5  Subagent IPC            outbound/subprocess_runner.rs, inbound/cli/run_agent.rs │
+│ Layer 6  Open Brain / Wiki state application/orchestrator/shared_files.rs                │
+│ Layer 7  File chunking           outbound/tools/memory/persistent_store.rs               │
+│ Layer 8  Observability           domain/metrics.rs + application/metrics.rs              │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 A user message hits Layers 1→2→3 (potentially →4) on the planner-side
@@ -58,7 +58,7 @@ mutates a prompt.
 
 ## Layer 0 — Token estimation primitives
 
-`src/adapters/token.rs`
+`src/domain/token.rs`
 
 | Helper | What | Used by |
 |---|---|---|
@@ -75,14 +75,14 @@ of leaving headroom. No tokeniser is invoked.
 
 ## Layer 1 — Per-flow lifecycle (the auto-compact layer)
 
-`src/adapters/flow_builder.rs`, called from
-`chat_builder.rs::ChatRuntimeService::process_user_text`.
+`src/application/chat/flow.rs`, called from
+`application/chat/service.rs::ChatRuntimeService::process_user_text`.
 
 A "flow" is a conversation scoped by `flow.scope` (one of `main`,
 `per-group`, `per-pipe-sender`, anything else). Each new user message
 runs through three flow-level guards **before** the per-turn assembly:
 
-### 1. `enforce_history_turn_limit` (`flow_builder.rs:61`)
+### 1. `enforce_history_turn_limit` (`application/chat/flow.rs:61`)
 
 Counts back N user turns from the end and drains everything before. Per-scope defaults:
 
@@ -95,7 +95,7 @@ Counts back N user turns from the end and drains everything before. Per-scope de
 
 Override: `[agents.<name>.flow] max_history_turns = N` in `sandboxes/<name>/config.toml`.
 
-### 2. `maybe_compact_flow` (`flow_builder.rs:165`)  — *the auto-compact*
+### 2. `maybe_compact_flow` (`application/chat/flow.rs:165`)  — *the auto-compact*
 
 Runs after every push. If `flow_token_usage >= threshold_tokens`:
 1. Find split index that keeps the most recent `keep_turns` user turns.
@@ -122,7 +122,7 @@ is a deliberate choice — Layer 2's sliding window catches whatever Layer
 
 ### 3. Hard stop on `max_tokens_per_flow`
 
-`chat_builder.rs:309` — if `state.flow_token_usage >= max_tokens_per_flow`
+`application/chat/service.rs:309` — if `state.flow_token_usage >= max_tokens_per_flow`
 (default 100 000) **after** Layer 1 compaction, the turn returns immediately
 with a system notice: *"Flow token limit reached. Use /reset to start a
 new session."*
@@ -131,7 +131,7 @@ new session."*
 
 ## Layer 2 — Per-turn assembly
 
-`chat_builder.rs::process_user_text` (continued) +
+`application/chat/service.rs::process_user_text` (continued) +
 `prompt_budget.rs`.
 
 ### 4. Budget arithmetic (`prompt_budget.rs:52-91`)
@@ -179,7 +179,7 @@ per recall block.
 
 ### 7. Grounding nudge + `suppress_grounding_nudge`
 
-`chat_builder.rs:248`. When the user message contains *"last", "latest",
+`application/chat/service.rs:248`. When the user message contains *"last", "latest",
 "most recent", "newest", "previous", "recently", "before that"*, the
 chat layer prepends a system message:
 
@@ -194,11 +194,11 @@ instruction.
 
 The planner-side LLM call sets `suppress_grounding_nudge = true` so the
 nudge doesn't compete with the SKILL.md "emit JSON only" instruction.
-This is set inside `channel_runtime::run_turn_with_system:1160`.
+This is set inside `bootstrap::orchestrator::run_turn_with_system:1160`.
 
 ### 8. Skill body assembly
 
-`skill_builder.rs:1103-1159`. Three nested truncations:
+`application/skills/registry.rs:1103-1159`. Three nested truncations:
 
 | knob | default | what |
 |---|---|---|
@@ -212,17 +212,17 @@ No dedup or per-skill-count cap — selection happens upstream.
 
 ## Layer 3 — Inner tool-calling loop
 
-`engine_builder.rs::collect_engine_response`. The **per-turn**
+`application/chat/tool_loop.rs::collect_engine_response`. The **per-turn**
 context-cutting layer. See `context-cutting-flow-2026-04-27.html` for
 the interactive walkthrough.
 
-### 9. `truncate_tool_result` (`engine_builder.rs:944`)
+### 9. `truncate_tool_result` (`adapters/outbound/engines/mod.rs:944`)
 
 Each tool result char-capped at `max_tool_result_chars` (default
 **300 000**) when first inserted into messages. Footer:
 `[truncated — showing X of Y chars]`. UTF-8 boundary safe.
 
-### 10. `compact_tool_result` mid-loop (`engine_builder.rs:921`)  — *the closest to /compact*
+### 10. `compact_tool_result` mid-loop (`adapters/outbound/engines/mod.rs:921`)  — *the closest to /compact*
 
 After `round >= 1`, walks `messages[..compact_cutoff]`. Every
 `Role::Tool` message in that prefix gets rewritten in place to its first
@@ -239,7 +239,7 @@ Rationale (from the inline comment): tool results "typically put key
 info on the first line" — tx hashes, IDs, status — so keeping the first
 line preserves working memory cheaply.
 
-### 11. `[OUTPUT_TRUNCATED]` auto-continue (`engine_builder.rs:706`)
+### 11. `[OUTPUT_TRUNCATED]` auto-continue (`adapters/outbound/engines/mod.rs:706`)
 
 When the model's response ends with the sentinel, the engine appends
 `"Your output was truncated. Continue from where you left off."` as a
@@ -248,7 +248,7 @@ user turn and re-rolls. Extends, doesn't cut.
 ### 12. `max_tool_rounds` hard stop (default **70**)
 
 After 70 rounds the loop exits and forces one final `tools=[]` engine
-turn at `engine_builder.rs:793`.
+turn at `adapters/outbound/engines/mod.rs:793`.
 
 ### 13. `token_budget` mid-loop early-exit
 
@@ -260,9 +260,9 @@ the loop exits with a warn log.
 
 ## Layer 4 — MCP bridge
 
-`claude_code_engine.rs`.
+`adapters/outbound/engines/claude_code.rs`.
 
-### 14. `max_mcp_result_chars` (`claude_code_engine.rs:551`)
+### 14. `max_mcp_result_chars` (`adapters/outbound/engines/claude_code.rs:551`)
 
 Caps tool results returned to the Claude Code CLI through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**, env-overridable
@@ -277,7 +277,7 @@ leak unbounded context into Claude. Layer 3's `truncate_tool_result` and
 
 ## Layer 5 — Subagent IPC
 
-`runner.rs`, `main.rs::run_agent_subprocess`, plus the
+`subprocess_runner.rs`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess`, plus the
 `compress_and_store` protocol. See `compression-flow-2026-04-27.svg` for
 the picture.
 
@@ -332,7 +332,7 @@ lanes are empty. Capped by `cross_plan_top_k` (default 5).
 
 ## Layer 6 — Open Brain / Wiki State
 
-`orchestrator/shared_files.rs`, `plugins/agentic_memory/`.
+`orchestrator/shared_files.rs`, `outbound/tools/agentic_memory/`.
 
 ### 20. Open Brain live memory
 
@@ -353,14 +353,14 @@ is compiled into `.tengu/agentic-memory/wiki/*.md`.
 
 ## Layer 7 — File chunking
 
-`plugins/memory/persistent_store.rs::chunk_text`.
+`outbound/tools/memory/persistent_store.rs::chunk_text`.
 
 ### 22. Char-window splitter
 
 Defaults: `chunk_size=1000`, `chunk_overlap=200`. Used when an agent
 calls `persistent_store` to save a file. Mechanical chunking — no LLM,
 no summarisation. Per-chunk embeddings live in the disk bincode store
-(`memory/vector/disk.rs`) with a per-file manifest.
+(`outbound/memory/disk_vector.rs`) with a per-file manifest.
 
 Orthogonal to LLM context: never reads back into a turn directly. Only
 surfaces via the `memory_search` tool or the chat-side recall block (Layer 2 #6).
@@ -369,7 +369,7 @@ surfaces via the `memory_search` tool or the chat-side recall block (Layer 2 #6)
 
 ## Layer 8 — Observability (metrics)
 
-`src/adapters/metrics.rs` (added 2026-04-28). Records what every other
+`src/domain/metrics.rs` (added 2026-04-28). Records what every other
 layer produced; never mutates a prompt.
 
 ### 27. `MetricsRecord` — one per LLM/embedding call
@@ -451,34 +451,34 @@ the chat-pane bottom (a true status bar) is on the open list.
 |---:|---|---|---|---|
 | 1 | 0 | `estimate_tokens_approx` | token.rs | `~4 chars/token` |
 | 2 | 0 | `truncate_at_boundary` | token.rs | UTF-8 safe |
-| 3 | 1 | `enforce_history_turn_limit` | flow_builder.rs:61 | 20-40 turns / scope |
-| 4 | 1 | `maybe_compact_flow` | flow_builder.rs:165 | ratio 0.82-0.88 |
-| 5 | 1 | `max_tokens_per_flow` hard stop | chat_builder.rs:309 | 100 000 |
+| 3 | 1 | `enforce_history_turn_limit` | application/chat/flow.rs:61 | 20-40 turns / scope |
+| 4 | 1 | `maybe_compact_flow` | application/chat/flow.rs:165 | ratio 0.82-0.88 |
+| 5 | 1 | `max_tokens_per_flow` hard stop | application/chat/service.rs:309 | 100 000 |
 | 6 | 2 | `compute_total_input_budget` | prompt_budget.rs:82 | derived |
 | 7 | 2 | `assemble_recent_history` | prompt_budget.rs:8 | 20 msgs |
-| 8 | 2 | `memory recall` block | chat_builder.rs:326 | top-5, 600 tok |
+| 8 | 2 | `memory recall` block | application/chat/service.rs:326 | top-5, 600 tok |
 | 9 | 2 | `cross_session_msg_top_k` | (planner side) | 0 (off) |
 | 10 | 2 | `<memory-context>` fencing | fencing.rs | +50 tok |
-| 11 | 2 | grounding nudge / suppress | chat_builder.rs:248 | trigger words |
-| 12 | 2 | skill body / file caps | skill_builder.rs:1129 | 16K / 2K |
+| 11 | 2 | grounding nudge / suppress | application/chat/service.rs:248 | trigger words |
+| 12 | 2 | skill body / file caps | application/skills/registry.rs:1129 | 16K / 2K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
-| 14 | 3 | `truncate_tool_result` | engine_builder.rs:944 | 300 000 chars |
-| 15 | 3 | `compact_tool_result` | engine_builder.rs:921 | 200 chars |
-| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | engine_builder.rs:706 | sentinel |
+| 14 | 3 | `truncate_tool_result` | adapters/outbound/engines/mod.rs:944 | 300 000 chars |
+| 15 | 3 | `compact_tool_result` | adapters/outbound/engines/mod.rs:921 | 200 chars |
+| 16 | 3 | `[OUTPUT_TRUNCATED]` continue | adapters/outbound/engines/mod.rs:706 | sentinel |
 | 17 | 3 | `max_tool_rounds` | config.rs:411 | 70 |
-| 18 | 3 | `token_budget` early-exit | engine_builder.rs:683 | per-flow |
-| 19 | 4 | `max_mcp_result_chars` | claude_code_engine.rs:551 | 50 000 |
-| 20 | 5 | subprocess fresh ctx | runner.rs:26 | by design |
-| 21 | 5 | `compress_and_store` | plugins/skill_lifecycle/compress_and_store.rs (def) · main.rs:971 (intercept) | implicit append |
+| 18 | 3 | `token_budget` early-exit | adapters/outbound/engines/mod.rs:683 | per-flow |
+| 19 | 4 | `max_mcp_result_chars` | adapters/outbound/engines/claude_code.rs:551 | 50 000 |
+| 20 | 5 | subprocess fresh ctx | subprocess_runner.rs:26 | by design |
+| 21 | 5 | `compress_and_store` | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · main.rs:971 (intercept) | implicit append |
 | 22 | 5 | Phase 5c protocol | main.rs:1075 | three rows |
-| 23 | 5 | subprocess `max_turns` / step wall clock | runner.rs:43 · `run_step` | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
-| 24 | 6 | Open Brain memory | plugins/agentic_memory | Postgres |
+| 23 | 5 | subprocess `max_turns` / step wall clock | subprocess_runner.rs:43 · `run_step` | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
+| 24 | 6 | Open Brain memory | outbound/tools/agentic_memory | Postgres |
 | 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
 | 26 | 7 | `chunk_text` | persistent_store.rs:54 | 1000/200 |
 | 27 | 8 | `MetricsRecord` (Planner/Subagent/Embedding) | metrics.rs | always-on |
 | 28 | 8 | Per-context-layer attribution | orchestrator/planner.rs::emit_planner_metrics | approximate |
 | 29 | 8 | Three surfaces (trace + bus + TUI bubble) | metrics.rs + tui/mod.rs | `TENGU_TUI_METRICS=1` |
-| 30 | 8 | `AgentIpcOutput.metrics` IPC plumbing | runner.rs + main.rs | skip-if-empty |
+| 30 | 8 | `AgentIpcOutput.metrics` IPC plumbing | subprocess_subprocess_runner.rs + cli/run_agent.rs | skip-if-empty |
 | 31 | 8 | `AggregatorState` rollup (overall + by-agent + by-kind) | metrics.rs | in-memory only |
 
 ---

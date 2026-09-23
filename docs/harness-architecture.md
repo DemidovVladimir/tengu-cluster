@@ -74,12 +74,12 @@ Each step dispatch:
 
 ## 3. The two subsystems
 
-### `src/adapters/orchestrator/`
+### `src/application/orchestrator/`
 
 | File | What it does |
 |---|---|
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
-| `config.rs` | Removed — `OrchestratorConfig` lives in `src/adapters/config.rs`. |
+| `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
 | `plan.rs` | `Step`, `StepId`, `Plan` types. Topology helpers: `ready_steps`, `validate` (cycles, single-leaf, known agents), `single_leaf`. |
 | `planner.rs` | `Planner` trait + `OrchestratorAgentPlanner` impl. Wraps the orchestrator agent's LLM call. Parses verdicts (handles markdown fences). |
@@ -88,9 +88,9 @@ Each step dispatch:
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
 | `wiring.rs` | `ChatServiceFactory` trait + `ChatOrchestratorPortImpl` (planner LLM port). `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`runner.rs`) is the only `WorkerHandle`. |
 | `roster.rs` | Removed (Phase 7.1) — roster is rendered to `TENGU_PLANNER_REGISTRY.md` by `shared_files.rs`. |
-| `telemetry.rs` | Removed — see `src/adapters/metrics.rs`. |
+| `telemetry.rs` | Removed — see `src/domain/metrics.rs`. |
 
-### `src/adapters/memory/`
+### `src/application/memory/`
 
 | File | What it does |
 |---|---|
@@ -104,16 +104,16 @@ Each step dispatch:
 | `context_block.rs` | Shared types: `PinnedMemoryBlock`, `ChunkMetadata`, `MemoryHit`. |
 | `vector.rs` | `VectorStore` trait + submodules. |
 | `vector/disk.rs` | `DiskVectorStore` — bincode on disk. |
-| `vector/qdrant.rs` | Removed Phase 6 (2026-05-14) — `DiskVectorStore` is the only built-in `VectorStore`; durable memory is Postgres `plugins/agentic_memory/` (feature `postgres_memory`). |
+| `vector/qdrant.rs` | Removed Phase 6 (2026-05-14) — `DiskVectorStore` is the only built-in `VectorStore`; durable memory is Postgres `outbound/tools/agentic_memory/` (feature `postgres_memory`). |
 | `vector/embedder.rs` | `Embedder` — OpenRouter embeddings client, `text-embedding-3-small`. |
 
-LLM-callable memory tools live in `src/adapters/plugins/memory/` and go through `MemoryManager`:
+LLM-callable memory tools live in `src/adapters/outbound/tools/memory/` and go through `MemoryManager`:
 
 | Tool | File | Purpose |
 |---|---|---|
-| `memory_ingest` | `plugins/memory/ingest.rs` | Explicit document/fact ingestion (chunks + metadata). |
-| `memory_search` | `plugins/memory/search.rs` | Targeted vector read mid-turn. |
-| `persistent_store` | `plugins/memory/persistent_store.rs` | Deterministic KV scratchpad (SQLite-backed). |
+| `memory_ingest` | `outbound/tools/memory/ingest.rs` | Explicit document/fact ingestion (chunks + metadata). |
+| `memory_search` | `outbound/tools/memory/search.rs` | Targeted vector read mid-turn. |
+| `persistent_store` | `outbound/tools/memory/persistent_store.rs` | Deterministic KV scratchpad (SQLite-backed). |
 
 Pre-turn retrieval and post-turn writes are ALSO automatic through `MemoryInjector` / `MemoryWriter` — the LLM-callable tools are a complement, not the only path.
 
@@ -178,7 +178,7 @@ and draft a reply to legal."
 
 The problem: `ChatRuntimeService<'a>` is lifetime-parameterized with 14 borrowed fields and bound to one agent at construction. It can't live behind `Arc`, and the orchestrator needs to dispatch to any agent per step.
 
-The solution in `channel_runtime.rs`:
+The solution in `bootstrap/`:
 
 ```
 OrchestratorSnapshots = Arc<RwLock<HashMap<agent, ChatTurnInputs>>>
@@ -199,14 +199,14 @@ OrchestratorSnapshots = Arc<RwLock<HashMap<agent, ChatTurnInputs>>>
                              borrowing into the snapshot, calls process_user_text.
 ```
 
-Helpers in `channel_runtime.rs`:
+Helpers in `bootstrap/`:
 
 - `ChatInputsFn = Arc<dyn Fn(&str) -> Result<ChatTurnInputs> + Send + Sync>` — the closure shape.
 - `RuntimeChatServiceFactory::new(inputs_fn)` — impl of the `ChatServiceFactory` trait.
 - `snapshots_inputs_fn(snapshots: OrchestratorSnapshots) -> ChatInputsFn` — returns a closure that reads from the shared map.
 - `build_orchestrator(config, factory, memory) -> Option<Orchestrator>` — builds the full stack.
 
-**Telegram** (`telegram_builder.rs`): `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. Writes snapshots for every agent, awaits `handle`, sends the reply chunked + secret-redacted.
+**Telegram** (`adapters/inbound/telegram.rs`): `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. Writes snapshots for every agent, awaits `handle`, sends the reply chunked + secret-redacted.
 
 **TUI** (`tui/mod.rs`): engine thread promotes `Box<dyn Engine>` → `Arc<dyn Engine>`. The `ChatRequest::UserMessage` branch writes snapshots, runs `rt.block_on(orch.handle(text))`, marks `tools_dirty = true` so the next direct-dispatch turn rebuilds its executor.
 
@@ -241,7 +241,7 @@ max_replans = 2                  # tier 2: planner re-invocation budget
 [agents.orchestrator]
 engine = "openrouter"
 model = "anthropic/claude-haiku-4-5"
-# planner turn: tools are stripped (channel_runtime::run_turn_with_system)
+# planner turn: tools are stripped (bootstrap::orchestrator::run_turn_with_system)
 [agents.orchestrator.identity]
 instructions = """
 You decompose user requests into plans of steps dispatched to specialist agents.
@@ -288,8 +288,8 @@ Presence of `[orchestrator]` activates orchestration. Absence → single-agent d
 - `src/adapters/memory_builder.rs` (~290 LOC)
 - `src/adapters/qdrant_memory_store.rs` (~230 LOC)
 - `src/adapters/embedding.rs` (~80 LOC)
-- `src/adapters/plugins/subagents/` (entire dir: `mod.rs`, `spawn.rs`, `fan_out.rs`, `manage.rs`)
-- `src/adapters/plugins/memory/remember.rs` (renamed to `ingest.rs`)
+- `src/adapters/outbound/tools/subagents/` (entire dir: `mod.rs`, `spawn.rs`, `fan_out.rs`, `manage.rs`)
+- `src/adapters/outbound/tools/memory/remember.rs` (renamed to `ingest.rs`)
 
 ### Deleted types
 - `MemoryService`, `MemoryServiceHandle`, `EmbeddingPort`, `MemoryStorePort`, `MemoryEntry`, `MemorySearchResult`
@@ -305,7 +305,7 @@ Presence of `[orchestrator]` activates orchestration. Absence → single-agent d
 ### Renamed / refactored
 - `remember` tool → `memory_ingest` (extended with `chunks`, `metadata`)
 - `OrchestratorConfig` fields: dropped `enabled` / `max_concurrent` / `planner_engine` / `planner_model`; added `agent` / `max_attempts_per_step` / `max_replans`
-- `plugins/memory/mod.rs` — three tools, all routing through `MemoryManager`
+- `outbound/tools/memory/mod.rs` — three tools, all routing through `MemoryManager`
 
 ---
 
@@ -406,14 +406,14 @@ When the TL;DR isn't enough. Follow these paths in order.
 
 ### 11.1 A user message arrives in Telegram
 
-1. `telegram_builder.rs:878` — dispatcher calls `route_and_chat(msg, sender_id)`.
-2. `telegram_builder.rs:1026` — `route_and_chat` parses `@role:` prefix via `channel_runtime::parse_agent_routing`. Resolves `target_agent_id`.
-3. `telegram_builder.rs:1072` — `execute_chat_turn` is called. Hot-reloads skills, rebuilds tools/prompt if dirty.
-4. `telegram_builder.rs:1146` — orchestrator-gate check:
+1. `adapters/inbound/telegram.rs:878` — dispatcher calls `route_and_chat(msg, sender_id)`.
+2. `adapters/inbound/telegram.rs:1026` — `route_and_chat` parses `@role:` prefix via `adapters::inbound::channel::parse_agent_routing`. Resolves `target_agent_id`.
+3. `adapters/inbound/telegram.rs:1072` — `execute_chat_turn` is called. Hot-reloads skills, rebuilds tools/prompt if dirty.
+4. `adapters/inbound/telegram.rs:1146` — orchestrator-gate check:
    - orchestrator configured AND (default agent OR `route_explicit_agents=true`) → branches to `execute_orchestrator_turn`
    - otherwise → direct dispatch below
-5. **Direct path:** `telegram_builder.rs:1258` injects activity context, builds `ChatRuntimeService<'a>` inline, calls `process_user_text`.
-6. **Orchestrator path:** `telegram_builder.rs:1384` is `execute_orchestrator_turn`:
+5. **Direct path:** `adapters/inbound/telegram.rs:1258` injects activity context, builds `ChatRuntimeService<'a>` inline, calls `process_user_text`.
+6. **Orchestrator path:** `adapters/inbound/telegram.rs:1384` is `execute_orchestrator_turn`:
    - Hot-reload every agent (lines 1392–1407).
    - For each agent, build a `ChatTurnInputs` snapshot (lines 1416–1486) with per-agent `current_tools`, `current_system_prompt` + activity context, per-agent `OwnedSanitizedToolExecutor`, the shared memory manager.
    - Publish the snapshots atomically (lines 1492–1508).
@@ -441,7 +441,7 @@ When the TL;DR isn't enough. Follow these paths in order.
   2. Assemble user content: `memory_block + (step_inputs if any) + step.goal`.
   3. `ChatServiceFactory::run_turn(agent, content)` → real LLM call.
   4. `writer::sync_turn(memory, agent, step.goal, reply)` — spawned, non-blocking.
-- `channel_runtime.rs` `RuntimeChatServiceFactory::run_turn`:
+- `bootstrap/` `RuntimeChatServiceFactory::run_turn`:
   1. Calls `inputs_fn(agent)` → snapshot.
   2. Constructs `ChatRuntimeService<'a>` borrowing into the snapshot.
   3. Calls `process_user_text(&mut ChatLoopState::default(), content)`.
@@ -461,10 +461,10 @@ Post-turn (inside `ChatWorker::run_step`, after LLM call):
   - Returns immediately — user-visible reply never waits.
 
 LLM-tool path (inside `process_user_text` if the LLM calls `memory_search`):
-- `plugins/memory/search.rs` → `MemoryManager::search(query, top_k, filter)` → `Embedder::embed` + `VectorStore::search`.
+- `outbound/tools/memory/search.rs` → `MemoryManager::search(query, top_k, filter)` → `Embedder::embed` + `VectorStore::search`.
 
 Explicit ingest path (if the LLM calls `memory_ingest`):
-- `plugins/memory/ingest.rs` → `MemoryManager::ingest_batch` (multi-chunk) OR `ingest_one` (single) → `Embedder::embed_batch` + N × `VectorStore::write`.
+- `outbound/tools/memory/ingest.rs` → `MemoryManager::ingest_batch` (multi-chunk) OR `ingest_one` (single) → `Embedder::embed_batch` + N × `VectorStore::write`.
 
 ---
 
@@ -554,18 +554,18 @@ Each interface is ≤10 methods and documented in its defining file.
 
 | Area | Location | Count |
 |---|---|---|
-| orchestrator unit + e2e | `src/adapters/orchestrator/*` inline | 28 |
-| memory subsystem | `src/adapters/memory/*` inline | 19 |
-| memory plugin tools | `src/adapters/plugins/memory/*` inline | 17 |
+| orchestrator unit + e2e | `src/application/orchestrator/*` inline | 28 |
+| memory subsystem | `src/application/memory/*` inline | 19 |
+| memory plugin tools | `src/adapters/outbound/tools/memory/*` inline | 17 |
 | scope_lint | `tests/scope_lint.rs` | 2 |
-| config | `src/adapters/config.rs` inline | 12 |
-| eval runner | `src/adapters/eval_builder.rs` inline | ~25 |
+| config | `src/config/mod.rs` inline | 12 |
+| eval runner | `src/adapters/inbound/eval.rs` inline | ~25 |
 
 All pass under `cargo test --bin tengu <filter>` with narrow filters (per project rule: ≤30s test runs, no blind full `cargo test`).
 
 ### 14.1 End-to-end eval dispatch
 
-`tengu eval <skill>` has two dispatch paths in `src/adapters/eval_builder.rs::run_row`:
+`tengu eval <skill>` has two dispatch paths in `src/adapters/inbound/eval.rs::run_row`:
 
 - **Direct** (default): row prompt → default agent's `collect_engine_response`. Used by config files without an `[orchestrator]` block — `skills/<name>/evals/config.toml`.
 - **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle`. The orchestrator agent plans, the DAG executor spawns worker steps, each worker step calls `collect_engine_response` inside an `EvalChatServiceFactory` closure that threads the row's stubs + observer + token accumulator. Used by `skills/orchestration-e2e/evals/config.toml`.

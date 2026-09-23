@@ -141,10 +141,10 @@ All `manage_skill` writes return `loaded_in_current_conversation: false`. Agent 
 3. Smoke test: `mkdir -p`-free seed, `adjust yourself`, paste output.
 
 Code pointers (existing, reusable):
-- Atomic write pattern: `src/adapters/plugins/skill_lifecycle/distill.rs:148–204`
-- Path validation: `src/adapters/skill_lifecycle/evolve.rs::validate_resource_path`
-- Three-tier walk: `src/adapters/plugins/view_skill/mod.rs` (managed → workspace → project, first wins)
-- `editable_by_learner` check: `src/adapters/skill_lifecycle/evolve.rs::is_editable_by_learner`
-- Audit log: `src/adapters/skill_lifecycle/audit.rs`
+- Atomic write pattern: `src/adapters/outbound/tools/skill_lifecycle/distill.rs:148–204`
+- Path validation: `src/application/skills/lifecycle/evolve.rs::validate_resource_path`
+- Three-tier walk: `src/adapters/outbound/tools/view_skill/mod.rs` (managed → workspace → project, first wins)
+- `editable_by_learner` check: `src/application/skills/lifecycle/evolve.rs::is_editable_by_learner`
+- Audit log: `src/application/skills/lifecycle/audit.rs`
 
 Fuzzy matching is new (no existing helper). Implement only **two strategies** for v1: exact match, then whitespace-normalized. The other 6 hermes strategies can land later if drift remains a problem.

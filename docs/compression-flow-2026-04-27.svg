@@ -66,7 +66,7 @@
 
   <!-- Section header for #1 -->
   <text x="40" y="190" class="title accent">1. compress_and_store — the "step is done" protocol</text>
-  <text x="40" y="210" class="sub">Defined in <tspan class="mono">src/adapters/plugins/skill_lifecycle/compress_and_store.rs</tspan>. ToolDef appended IMPLICITLY to every subagent.</text>
+  <text x="40" y="210" class="sub">Defined in <tspan class="mono">src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs</tspan>. ToolDef appended IMPLICITLY to every subagent.</text>
 
   <!-- Parent panel -->
   <g transform="translate(40,235)">
@@ -74,7 +74,7 @@
     <rect class="panelH" x="14" y="14" width="200" height="22"/>
     <text x="22" y="30" class="tag">PARENT  tengu chat</text>
     <text x="24" y="60" font-size="13"><tspan class="mono blue">RagPlanner</tspan> emits plan JSON  →  <tspan class="mono blue">DagExecutor</tspan> drives steps  →  <tspan class="mono blue">SubprocessRunner.run(AgentIpcInput)</tspan></text>
-    <text x="24" y="82" class="small mono">channel_runtime.rs::run_turn_with_system  (planner-side: tools=[], memory=None — strict separation)</text>
+    <text x="24" y="82" class="small mono">bootstrap/orchestrator.rs::run_turn_with_system  (planner-side: tools=[], memory=None — strict separation)</text>
     <text x="24" y="100" class="small">Each plan step spawns a fresh child <tspan class="mono">tengu run-agent</tspan> process. IPC over stdin/stdout JSON.</text>
   </g>
 
@@ -86,8 +86,8 @@
   <g transform="translate(40,400)">
     <rect class="panel" width="1320" height="120"/>
     <rect class="panelH" x="14" y="14" width="270" height="22"/>
-    <text x="22" y="30" class="tag">CHILD  tengu run-agent  (main.rs::run_agent_subprocess)</text>
-    <text x="24" y="60" font-size="13" class="mono">build_subprocess_tool_executor(agent, config, ...)  →  channel_runtime.rs:1333</text>
+    <text x="22" y="30" class="tag">CHILD  tengu run-agent  (adapters/inbound/cli/run_agent.rs::run_agent_subprocess)</text>
+    <text x="24" y="60" font-size="13" class="mono">build_subprocess_tool_executor(agent, config, ...)  →  bootstrap/:1333</text>
     <text x="24" y="82" font-size="13">effective_tools = (compute_base_tools ∩ agent.tools) <tspan font-weight="700" class="accent">∪ {compress_and_store}</tspan>   <tspan class="muted">// always-on, definition only (no handler)</tspan></text>
     <text x="24" y="100" class="small">System prompt = base + each skill body + mandatory <tspan class="mono">"...your FINAL action MUST be the compress_and_store tool with a concise summary..."</tspan></text>
   </g>
@@ -228,7 +228,7 @@
   <text x="40" y="1535" class="title teal">2. persistent_store chunking</text>
   <g transform="translate(40,1550)">
     <rect class="panel" width="650" height="120"/>
-    <text x="20" y="28" class="small mono">src/adapters/plugins/memory/persistent_store.rs::chunk_text</text>
+    <text x="20" y="28" class="small mono">src/adapters/outbound/tools/memory/persistent_store.rs::chunk_text</text>
     <text x="20" y="50" class="small">Char-window splitter. Defaults: <tspan class="mono">chunk_size=1000, overlap=200</tspan> (config.rs).</text>
     <text x="20" y="70" class="small">Used by the <tspan class="mono">persistent_store</tspan> tool when an agent saves a file:</text>
     <text x="20" y="88" class="small">extract text (PDF/DOCX/XLSX/raw) → chunk → embed each chunk → upsert manifest + chunks.</text>
@@ -238,7 +238,7 @@
   <text x="720" y="1535" class="title warn">3. Prompt-budget truncation</text>
   <g transform="translate(720,1550)">
     <rect class="panel" width="640" height="120"/>
-    <text x="20" y="28" class="small mono">src/adapters/prompt_budget.rs</text>
+    <text x="20" y="28" class="small mono">src/application/chat/prompt_budget.rs</text>
     <text x="20" y="50" class="small"><tspan class="mono">assemble_recent_history</tspan> — newest contiguous suffix that fits the input budget (≤ 20 msgs).</text>
     <text x="20" y="70" class="small"><tspan class="mono">truncate_to_token_budget</tspan> — char-cap with ~4 chars/token; appends <tspan class="mono">"\n\n[truncated]"</tspan>.</text>
     <text x="20" y="90" class="small"><tspan class="mono">reserved_output_tokens / compute_total_input_budget</tspan> — context-window arithmetic.</text>

@@ -1,7 +1,7 @@
 # Claude Code Backend Technical Plan
 
 > **Status:** Implemented. This is an archived planning document. For live documentation see [[engine-backends]] and [[mcp-bridge]].
-> **Key files:** `claude_code_engine.rs`, `mcp_bridge.rs`, `engine_builder.rs`, `config.rs`
+> **Key files:** `adapters/outbound/engines/claude_code.rs`, `mcp_bridge.rs`, `adapters/outbound/engines/mod.rs`, `config.rs`
 
 ## Summary
 Add `claude_code` as a real backend next to `openrouter`, using the local Claude Code CLI for execution while keeping Tengu's orchestration, channel adapters, prompts, and routing intact.
@@ -41,13 +41,13 @@ This is a config-only backend switch. The same agent definition can run on eithe
 
 | Plan Item | Implemented In |
 |-----------|---------------|
-| Config + validation | `src/adapters/config.rs` — `ClaudeCodeConfig`, `AgentClaudeCodeConfig`, engine validation |
-| Runtime refactor | `src/adapters/channel_runtime.rs` — `compute_bridge_tools()`, TUI/Telegram wiring |
-| EngineContext extension | `src/adapters/types.rs` — `bridge_tools` field |
-| Claude engine | `src/adapters/claude_code_engine.rs` — `ClaudeCodeEngine` |
-| MCP bridge | `src/adapters/mcp_bridge.rs` + `tengu mcp-bridge` subcommand |
-| Engine dispatch | `src/adapters/engine_builder.rs` — `build_engine()`, `build_planner_engine()` |
-| Safety policy | `src/adapters/claude_code_engine.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/mcp_bridge.rs` — `TENGU_BRIDGE_SCOPES`; `src/adapters/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
+| Config + validation | `src/config/mod.rs` — `ClaudeCodeConfig`, `AgentClaudeCodeConfig`, engine validation |
+| Runtime refactor | `src/bootstrap/` — `advertised_defs()`, TUI/Telegram wiring |
+| EngineContext extension | `src/domain/message.rs` — `bridge_tools` field |
+| Claude engine | `src/adapters/outbound/engines/claude_code.rs` — `ClaudeCodeEngine` |
+| MCP bridge | `src/adapters/inbound/mcp_bridge.rs` + `tengu mcp-bridge` subcommand |
+| Engine dispatch | `src/adapters/outbound/engines/mod.rs` — `build_engine()`, `build_planner_engine()` |
+| Safety policy | `src/adapters/outbound/engines/claude_code.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/inbound/mcp_bridge.rs` — `TENGU_BRIDGE_SCOPES`; `src/adapters/outbound/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
 | Sandbox | `sandboxes/aura/config.toml` (`[agents.aura]`, `researcher`, `skill-improver`, `fixture-runner` on `engine = "claude_code"`; `sandboxes/aura-claude/` no longer exists) |
 
 ## Safety Policy

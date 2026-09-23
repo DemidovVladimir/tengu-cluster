@@ -57,26 +57,26 @@ Concrete scenario driving every batch below:
 
 | Capability | Status | Code |
 |---|---|---|
-| `skill_distill` LLM tool (the create-skill metaskill) | Shipped | `src/adapters/plugins/skill_lifecycle/distill.rs` |
-| `tengu eval <skill>` | Shipped | `src/adapters/eval_builder.rs::run` |
-| `tengu skill evolve <skill>` (bounded rewrite→rescore) | Shipped | `src/adapters/skill_lifecycle/evolve.rs` |
+| `skill_distill` LLM tool (the create-skill metaskill) | Shipped | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
+| `tengu eval <skill>` | Shipped | `src/adapters/inbound/eval.rs::run` |
+| `tengu skill evolve <skill>` (bounded rewrite→rescore) | Shipped | `src/application/skills/lifecycle/evolve.rs` |
 | `tengu skill metrics <skill>` | Shipped | `src/main.rs` (`SkillAction::Metrics`) |
 | `tengu skill accept-proposal` | Placeholder | `src/main.rs` (`SkillAction::AcceptProposal`) |
-| 6 `MetricKind` impls: `shell_check / llm_judge / tool_assertion / script / dialog_replay / description_trigger` | Shipped | `src/adapters/skill_lifecycle/metric_kinds/` |
-| Rolling `metrics.json` + `metrics/history.jsonl` + per-run reports | Shipped | `src/adapters/skill_lifecycle/storage.rs` |
-| Approval gate (diff + delta + y/n/d/o) | Shipped | `src/adapters/skill_lifecycle/approval_gate.rs` |
-| Scratch git-worktree with stale-sweep | Shipped | `src/adapters/skill_lifecycle/scratch_worktree.rs` |
-| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/adapters/skill_builder.rs::skill_directories` (loader) · `src/adapters/plugins/view_skill/mod.rs` (in-chat) · `src/adapters/orchestrator/shared_files.rs::scan_skill_summaries` (planner registry) |
+| 6 `MetricKind` impls: `shell_check / llm_judge / tool_assertion / script / dialog_replay / description_trigger` | Shipped | `src/application/skills/lifecycle/metric_kinds/` |
+| Rolling `metrics.json` + `metrics/history.jsonl` + per-run reports | Shipped | `src/application/skills/lifecycle/storage.rs` |
+| Approval gate (diff + delta + y/n/d/o) | Shipped | `src/application/skills/lifecycle/approval_gate.rs` |
+| Scratch git-worktree with stale-sweep | Shipped | `src/application/skills/lifecycle/scratch_worktree.rs` |
+| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_summaries` (planner registry) |
 | Planner registry regenerated on every planner turn (no reindex step) | Shipped | `shared_files::ensure_planner_registry` |
 | Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `distill.rs:217` |
 | `[skill_lifecycle]` config block enabled in a sandbox | Shipped | `sandboxes/aura/config.toml` (+ `[agents.skill-improver]`); commented sample in `config.example.toml` |
 | `tengu skill remove / list / install / export / doctor / seed` | Shipped | `src/main.rs` (`SkillAction::*`) |
-| Description-triggering eval | Shipped | `src/adapters/skill_lifecycle/metric_kinds/description_trigger.rs` |
+| Description-triggering eval | Shipped | `src/application/skills/lifecycle/metric_kinds/description_trigger.rs` |
 | Human qualitative review | **Missing** | — |
-| `evals/config.toml` seeded by `skill_distill` | Shipped (G3) | `src/adapters/plugins/skill_lifecycle/distill.rs` |
-| Threat scanner on install / doctor | Shipped | `src/adapters/skill_lifecycle/scanner.rs` |
-| In-chat lifecycle verbs → single `learning-agent` with `view_skill` / `manage_skill` | Shipped | `skills/orchestrator/SKILL.md` "Lifecycle verbs" · `[agents.learning-agent]` in `sandboxes/aura/config.toml` · `src/adapters/plugins/{view_skill,manage_skill}/` |
-| Per-learner sidecar state (A1) | Shipped | `src/adapters/skill_lifecycle/learner_state.rs` |
+| `evals/config.toml` seeded by `skill_distill` | Shipped (G3) | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
+| Threat scanner on install / doctor | Shipped | `src/application/skills/lifecycle/scanner.rs` |
+| In-chat lifecycle verbs → single `learning-agent` with `view_skill` / `manage_skill` | Shipped | `skills/orchestrator/SKILL.md` "Lifecycle verbs" · `[agents.learning-agent]` in `sandboxes/aura/config.toml` · `src/adapters/outbound/tools/{view_skill,manage_skill}/` |
+| Per-learner sidecar state (A1) | Shipped | `src/application/skills/lifecycle/learner_state.rs` |
 | `editable_by_learner` frontmatter flag (A3) | Shipped | `skill_lifecycle/evolve.rs::is_editable_by_learner` |
 
 ---
@@ -174,8 +174,8 @@ New modules first:
 
 | Module | Purpose |
 |---|---|
-| `src/adapters/skill_lifecycle/scanner.rs` | `ThreatPattern { id, severity, category, regex, description }` + `Finding` + `ScanResult { verdict ∈ safe/caution/dangerous }`. ~15 patterns: shell-injection in `Script`/`ShellCheck` cmd strings, env-var exfil, `rm -rf $HOME`, `curl … \| sh`. No matrix, no policy. |
-| `src/adapters/skill_lifecycle/audit.rs` | Append `{ts, op, name, verdict, source, sha256}` to `skills/.audit.jsonl` |
+| `src/application/skills/lifecycle/scanner.rs` | `ThreatPattern { id, severity, category, regex, description }` + `Finding` + `ScanResult { verdict ∈ safe/caution/dangerous }`. ~15 patterns: shell-injection in `Script`/`ShellCheck` cmd strings, env-var exfil, `rm -rf $HOME`, `curl … \| sh`. No matrix, no policy. |
+| `src/application/skills/lifecycle/audit.rs` | Append `{ts, op, name, verdict, source, sha256}` to `skills/.audit.jsonl` |
 
 Then five subcommands:
 
@@ -356,23 +356,23 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 
 | Concern | File |
 |---|---|
-| `skill_distill` tool | `src/adapters/plugins/skill_lifecycle/distill.rs` |
-| Plugin registration | `src/adapters/channel_runtime.rs` (`register_core_plugins`, `WORKSPACE_TOOLS_ALLOWLIST`) |
-| Metric types + dispatch | `src/adapters/skill_lifecycle/metrics.rs` |
-| Metric kinds | `src/adapters/skill_lifecycle/metric_kinds/{shell_check,llm_judge,tool_assertion,script,dialog_replay,description_trigger}.rs` |
-| Rolling storage + retention | `src/adapters/skill_lifecycle/storage.rs` |
-| Fixture YAML + extraction | `src/adapters/skill_lifecycle/fixtures.rs` |
-| Eval runner | `src/adapters/eval_builder.rs` |
-| Evolve driver | `src/adapters/skill_lifecycle/evolve.rs` |
-| Approval gate | `src/adapters/skill_lifecycle/approval_gate.rs` |
-| Scratch worktree | `src/adapters/skill_lifecycle/scratch_worktree.rs` |
+| `skill_distill` tool | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
+| Plugin registration | `src/bootstrap/` (`register_catalog`, `WORKSPACE_TOOLS`) |
+| Metric types + dispatch | `src/application/skills/lifecycle/metrics.rs` |
+| Metric kinds | `src/application/skills/lifecycle/metric_kinds/{shell_check,llm_judge,tool_assertion,script,dialog_replay,description_trigger}.rs` |
+| Rolling storage + retention | `src/application/skills/lifecycle/storage.rs` |
+| Fixture YAML + extraction | `src/application/skills/lifecycle/fixtures.rs` |
+| Eval runner | `src/adapters/inbound/eval.rs` |
+| Evolve driver | `src/application/skills/lifecycle/evolve.rs` |
+| Approval gate | `src/application/skills/lifecycle/approval_gate.rs` |
+| Scratch worktree | `src/application/skills/lifecycle/scratch_worktree.rs` |
 | CLI dispatch | `src/main.rs` (`Commands::Eval`, `Commands::Skill { SkillAction::Evolve \| Metrics \| AcceptProposal \| Remove \| List \| Doctor \| Export \| Install \| Seed }`) |
-| Threat scanner | `src/adapters/skill_lifecycle/scanner.rs` |
-| Audit log (`skills/.audit.jsonl`) | `src/adapters/skill_lifecycle/audit.rs` |
-| Per-learner sidecar state | `src/adapters/skill_lifecycle/learner_state.rs` |
-| In-chat read / write tools | `src/adapters/plugins/view_skill/mod.rs` · `src/adapters/plugins/manage_skill/mod.rs` |
-| Skill scan for the planner registry | `src/adapters/orchestrator/shared_files.rs::scan_skill_summaries` |
-| In-process three-tier loader (`skill_packages`) | `src/adapters/skill_builder.rs::skill_directories` |
+| Threat scanner | `src/application/skills/lifecycle/scanner.rs` |
+| Audit log (`skills/.audit.jsonl`) | `src/application/skills/lifecycle/audit.rs` |
+| Per-learner sidecar state | `src/application/skills/lifecycle/learner_state.rs` |
+| In-chat read / write tools | `src/adapters/outbound/tools/view_skill/mod.rs` · `src/adapters/outbound/tools/manage_skill/mod.rs` |
+| Skill scan for the planner registry | `src/application/orchestrator/shared_files.rs::scan_skill_summaries` |
+| In-process three-tier loader (`skill_packages`) | `src/application/skills/registry.rs::skill_directories` |
 | Cowork reference | `/var/folders/.../skills/skill-creator/{SKILL.md,scripts/,agents/,eval-viewer/}` |
 | Hermes reference | `/Users/vladimirdemidov/development/hermes-agent/{hermes_cli,tools}/skills_hub.py` + `tools/skills_guard.py` |
 | Design spec | `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` |

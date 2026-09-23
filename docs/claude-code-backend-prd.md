@@ -46,8 +46,8 @@ Add a `claude_code` backend alongside `openrouter`, with backend selection contr
 ## Implementation
 All requirements met in the current codebase:
 - Backend selection: `engine = "claude_code"` per `[agents.<name>]` block; the planner uses the `[orchestrator] agent` block's engine (per `CLAUDE.md`: keep the planner on OpenRouter, subagents on Claude Code)
-- Claude execution: one `claude -p --output-format stream-json` subprocess per turn in `src/adapters/claude_code_engine.rs` (no SDK dependency)
-- Tool bridge: external stdio MCP server in `src/adapters/mcp_bridge.rs`
+- Claude execution: one `claude -p --output-format stream-json` subprocess per turn in `src/adapters/outbound/engines/claude_code.rs` (no SDK dependency)
+- Tool bridge: external stdio MCP server in `src/adapters/inbound/mcp_bridge.rs`
 - Safety: `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`, per-tool scopes via `TENGU_BRIDGE_SCOPES`, `[egress]` drops builtin Bash under a proxy — the `can_use_tool` callback, workspace containment and destructive-command denial were not implemented (see [[engine-backends#Claude Code]])
 - Config: `[claude_code]` global + `[agents.<id>.claude_code]` per-agent
 - Mixed operation: verified with both engines in the same config

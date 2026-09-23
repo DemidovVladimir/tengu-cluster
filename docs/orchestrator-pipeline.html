@@ -203,10 +203,10 @@ over IPC as a single final response. No LLM ever sees the orchestration machiner
 <pre class="mermaid">
 flowchart TB
     subgraph CH["Channel layer"]
-      TG["Telegram<br/>telegram_builder.rs"]
+      TG["Telegram<br/>adapters/inbound/telegram.rs"]
       TUI["TUI<br/>tui/mod.rs"]
-      WH["Webhooks<br/>webhook_builder.rs"]
-      EV["Eval runner<br/>eval_builder.rs"]
+      WH["Webhooks<br/>adapters/inbound/webhooks.rs"]
+      EV["Eval runner<br/>adapters/inbound/eval.rs"]
     end
 
     subgraph OR["Orchestrator subsystem"]
@@ -221,15 +221,15 @@ flowchart TB
     subgraph PT["Planner-side LLM turn, tools=[]"]
       PORT["ChatOrchestratorPortImpl<br/>wiring.rs:91"]
       MW["MemoryWriter<br/>memory/writer.rs"]
-      F["RuntimeChatServiceFactory<br/>channel_runtime.rs:1007"]
-      CR["ChatRuntimeService<br/>chat_builder.rs"]
-      CE["collect_engine_response<br/>engine_builder.rs:640"]
+      F["RuntimeChatServiceFactory<br/>bootstrap/:1007"]
+      CR["ChatRuntimeService<br/>application/chat/service.rs"]
+      CE["collect_engine_response<br/>adapters/outbound/engines/mod.rs:640"]
     end
 
     subgraph WK["Worker dispatch, subprocess"]
       SR["SubprocessRunner::run_step<br/>runner.rs:261"]
-      CHILD["tengu run-agent<br/>main.rs::run_agent_subprocess<br/>own LLM + tools loop"]
-      AM["Postgres agentic_memory<br/>plugins/agentic_memory/<br/>compress_and_store"]
+      CHILD["tengu run-agent<br/>adapters/inbound/cli/run_agent.rs::run_agent_subprocess<br/>own LLM + tools loop"]
+      AM["Postgres agentic_memory<br/>outbound/tools/agentic_memory/<br/>compress_and_store"]
     end
 
     TG -- per-message snapshot --> H
@@ -322,24 +322,24 @@ sequenceDiagram
 <table>
   <thead><tr><th>Step</th><th>File</th><th>Line</th></tr></thead>
   <tbody>
-    <tr><td>Channel builds snapshots (TG)</td><td class="file-ref">src/adapters/telegram_builder.rs</td><td>1420 (loop 1451, publish 1538, handle 1551)</td></tr>
-    <tr><td>Channel builds snapshots (TUI)</td><td class="file-ref">src/adapters/tui/mod.rs</td><td>~189 (construct) / 798 (snapshot write) / 804 (handle)</td></tr>
-    <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">src/adapters/webhook_builder.rs</td><td>257</td></tr>
-    <tr><td>Orchestrator::handle</td><td class="file-ref">src/adapters/orchestrator/mod.rs</td><td>93</td></tr>
-    <tr><td>replan::drive</td><td class="file-ref">src/adapters/orchestrator/replan.rs</td><td>12</td></tr>
-    <tr><td>RagPlanner::plan + parse_verdict</td><td class="file-ref">src/adapters/orchestrator/planner.rs</td><td>638 (plan), 109 (parse_verdict), 234 (struct)</td></tr>
-    <tr><td>Registry + active plan</td><td class="file-ref">src/adapters/orchestrator/shared_files.rs</td><td>ensure_planner_registry 80, routable_agents 168, set_active_plan 39</td></tr>
-    <tr><td>DagExecutor::run</td><td class="file-ref">src/adapters/orchestrator/executor.rs</td><td>38</td></tr>
-    <tr><td>plan.ready_steps</td><td class="file-ref">src/adapters/orchestrator/plan.rs</td><td>91</td></tr>
-    <tr><td>tokio::spawn per ready step</td><td class="file-ref">src/adapters/orchestrator/executor.rs</td><td>74</td></tr>
-    <tr><td>render_step_inputs</td><td class="file-ref">src/adapters/orchestrator/executor.rs</td><td>136</td></tr>
-    <tr><td>RetryPolicy::run_step_with_retry</td><td class="file-ref">src/adapters/orchestrator/retry.rs</td><td>37</td></tr>
-    <tr><td>SubprocessRunner::run_step / run_with_timeout</td><td class="file-ref">src/adapters/runner.rs</td><td>261 / 183</td></tr>
+    <tr><td>Channel builds snapshots (TG)</td><td class="file-ref">src/adapters/inbound/telegram.rs</td><td>1420 (loop 1451, publish 1538, handle 1551)</td></tr>
+    <tr><td>Channel builds snapshots (TUI)</td><td class="file-ref">src/adapters/inbound/tui/mod.rs</td><td>~189 (construct) / 798 (snapshot write) / 804 (handle)</td></tr>
+    <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">src/adapters/inbound/webhooks.rs</td><td>257</td></tr>
+    <tr><td>Orchestrator::handle</td><td class="file-ref">src/application/orchestrator/mod.rs</td><td>93</td></tr>
+    <tr><td>replan::drive</td><td class="file-ref">src/application/orchestrator/replan.rs</td><td>12</td></tr>
+    <tr><td>RagPlanner::plan + parse_verdict</td><td class="file-ref">src/application/orchestrator/planner.rs</td><td>638 (plan), 109 (parse_verdict), 234 (struct)</td></tr>
+    <tr><td>Registry + active plan</td><td class="file-ref">src/application/orchestrator/shared_files.rs</td><td>ensure_planner_registry 80, routable_agents 168, set_active_plan 39</td></tr>
+    <tr><td>DagExecutor::run</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>38</td></tr>
+    <tr><td>plan.ready_steps</td><td class="file-ref">src/domain/plan.rs</td><td>91</td></tr>
+    <tr><td>tokio::spawn per ready step</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>74</td></tr>
+    <tr><td>render_step_inputs</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>136</td></tr>
+    <tr><td>RetryPolicy::run_step_with_retry</td><td class="file-ref">src/application/orchestrator/retry.rs</td><td>37</td></tr>
+    <tr><td>SubprocessRunner::run_step / run_with_timeout</td><td class="file-ref">src/adapters/outbound/subprocess_runner.rs</td><td>261 / 183</td></tr>
     <tr><td>run_agent_subprocess (child)</td><td class="file-ref">src/main.rs</td><td>635</td></tr>
-    <tr><td>ChatOrchestratorPortImpl (planner LLM turn)</td><td class="file-ref">src/adapters/orchestrator/wiring.rs</td><td>91</td></tr>
-    <tr><td>ChatServiceFactory (trait)</td><td class="file-ref">src/adapters/orchestrator/wiring.rs</td><td>49</td></tr>
-    <tr><td>collect_engine_response</td><td class="file-ref">src/adapters/engine_builder.rs</td><td>640</td></tr>
-    <tr><td>MemoryWriter::sync_turn (planner turn only, spawned)</td><td class="file-ref">src/adapters/memory/writer.rs</td><td>11</td></tr>
+    <tr><td>ChatOrchestratorPortImpl (planner LLM turn)</td><td class="file-ref">src/application/orchestrator/wiring.rs</td><td>91</td></tr>
+    <tr><td>ChatServiceFactory (trait)</td><td class="file-ref">src/application/orchestrator/wiring.rs</td><td>49</td></tr>
+    <tr><td>collect_engine_response</td><td class="file-ref">src/adapters/outbound/engines/mod.rs</td><td>640</td></tr>
+    <tr><td>MemoryWriter::sync_turn (planner turn only, spawned)</td><td class="file-ref">src/application/memory/writer.rs</td><td>11</td></tr>
   </tbody>
 </table>
 
@@ -639,8 +639,8 @@ flowchart TB
 <table>
   <thead><tr><th>Artifact</th><th>Knob</th><th>Default</th><th>Code</th></tr></thead>
   <tbody>
-    <tr><td><code>evals/runs/&lt;ts&gt;/</code></td><td><code>--keep-runs N</code></td><td>10</td><td class="file-ref">eval_builder.rs::prune_old_run_dirs</td></tr>
-    <tr><td><code>skills/&lt;name&gt;/metrics/runs/&lt;ts&gt;/</code></td><td><code>--max-runs N</code></td><td>10</td><td class="file-ref">eval_builder.rs (RunSkillOptions)</td></tr>
+    <tr><td><code>evals/runs/&lt;ts&gt;/</code></td><td><code>--keep-runs N</code></td><td>10</td><td class="file-ref">adapters/inbound/eval.rs::prune_old_run_dirs</td></tr>
+    <tr><td><code>skills/&lt;name&gt;/metrics/runs/&lt;ts&gt;/</code></td><td><code>--max-runs N</code></td><td>10</td><td class="file-ref">adapters/inbound/eval.rs (RunSkillOptions)</td></tr>
     <tr><td><code>metrics.json</code></td><td>always kept (rolling)</td><td>—</td><td>—</td></tr>
     <tr><td><code>history.jsonl</code></td><td>always appended</td><td>—</td><td>—</td></tr>
   </tbody>
@@ -707,16 +707,16 @@ between retention sweeps.
     <tr><td>Plan topology</td><td class="file-ref">orchestrator/plan.rs</td><td><code>Step</code>, <code>Plan::{ready_steps,validate,single_leaf}</code></td></tr>
     <tr><td>Events</td><td class="file-ref">orchestrator/events.rs</td><td><code>OrchestratorEvent</code>, <code>EventBus</code></td></tr>
     <tr><td>Planner-turn wiring</td><td class="file-ref">orchestrator/wiring.rs</td><td><code>ChatServiceFactory</code>, <code>ChatOrchestratorPortImpl</code> (<code>ChatWorker</code> removed)</td></tr>
-    <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">telegram_builder.rs</td><td><code>execute_orchestrator_turn</code> @ 1420</td></tr>
+    <tr><td>Channel dispatch (Telegram)</td><td class="file-ref">adapters/inbound/telegram.rs</td><td><code>execute_orchestrator_turn</code> @ 1420</td></tr>
     <tr><td>Channel dispatch (TUI)</td><td class="file-ref">tui/mod.rs</td><td>orchestrator branch in engine thread @ ~798</td></tr>
-    <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">webhook_builder.rs</td><td><code>build_orchestrator</code> per POST @ 257</td></tr>
-    <tr><td>Eval dispatch + retention</td><td class="file-ref">eval_builder.rs</td><td><code>run_row_via_orchestrator</code>, <code>EvalChatServiceFactory</code>, <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>
+    <tr><td>Channel dispatch (Webhooks)</td><td class="file-ref">adapters/inbound/webhooks.rs</td><td><code>build_orchestrator</code> per POST @ 257</td></tr>
+    <tr><td>Eval dispatch + retention</td><td class="file-ref">adapters/inbound/eval.rs</td><td><code>run_row_via_orchestrator</code>, <code>EvalChatServiceFactory</code>, <code>prune_old_run_dirs</code>, <code>RunSkillOptions</code></td></tr>
     <tr><td>Memory manager</td><td class="file-ref">memory/manager.rs</td><td><code>MemoryManager::{prefetch_all,sync_all,ingest_one,ingest_batch,search,clear_all,stats}</code></td></tr>
     <tr><td>Pre-turn inject</td><td class="file-ref">memory/injector.rs</td><td><code>for_turn</code></td></tr>
     <tr><td>Post-turn write</td><td class="file-ref">memory/writer.rs</td><td><code>sync_turn</code> (spawned)</td></tr>
     <tr><td>Vector store</td><td class="file-ref">memory/vector.rs</td><td><code>VectorStore</code> trait</td></tr>
     <tr><td>Disk backend</td><td class="file-ref">memory/vector/disk.rs</td><td><code>DiskVectorStore</code> (only built-in <code>VectorStore</code>)</td></tr>
-    <tr><td>Agentic memory (Postgres)</td><td class="file-ref">plugins/agentic_memory/mod.rs</td><td><code>AgenticMemoryPlugin</code> (<code>postgres_memory</code> feature) — step summaries, planner recall lanes</td></tr>
+    <tr><td>Agentic memory (Postgres)</td><td class="file-ref">outbound/tools/agentic_memory/mod.rs</td><td><code>AgenticMemoryPlugin</code> (<code>postgres_memory</code> feature) — step summaries, planner recall lanes</td></tr>
     <tr><td>Embedder</td><td class="file-ref">memory/vector/embedder.rs</td><td><code>Embedder::{embed,embed_batch}</code></td></tr>
     <tr><td>Config</td><td class="file-ref">config.rs</td><td><code>OrchestratorConfig</code> (agent, max_attempts_per_step, max_replans, route_explicit_agents, engine="rag"); <code>AgentConfig.description</code> (routable subagent); <code>LimitsConfig.{max_tool_rounds,step_timeout_secs}</code></td></tr>
   </tbody>

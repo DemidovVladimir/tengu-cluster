@@ -406,75 +406,75 @@
 const STEPS = [
   {
     title: "Turn assembly",
-    where: "chat_builder.rs::process_user_text",
+    where: "application/chat/service.rs::process_user_text",
     what: "Before any engine call, the chat layer arithmetics out a token budget for the message history and picks the newest contiguous suffix that fits.",
     files: [
-      ["src/adapters/chat_builder.rs", "L370 — assemble_recent_history(messages, history_budget)"],
-      ["src/adapters/prompt_budget.rs", "compute_base_input_budget, assemble_recent_history"],
+      ["src/application/chat/service.rs", "L370 — assemble_recent_history(messages, history_budget)"],
+      ["src/application/chat/prompt_budget.rs", "compute_base_input_budget, assemble_recent_history"],
     ],
     cuts: ["1"],
     detail: "history_budget = total_input − system_tokens − memory_tokens. The window is capped at 20 messages even when budget would allow more — bounding pathological-history cases."
   },
   {
     title: "Round 0 — first engine call",
-    where: "engine_builder.rs::collect_engine_response",
+    where: "application/chat/tool_loop.rs::collect_engine_response",
     what: "Stream the model. Get back text + tool_calls + token usage. No compaction yet.",
     files: [
-      ["src/adapters/engine_builder.rs", "L665 — for round in 0..tool_rounds"],
-      ["src/adapters/engine_builder.rs", "L677 — run_single_engine_turn"],
+      ["src/adapters/outbound/engines/mod.rs", "L665 — for round in 0..tool_rounds"],
+      ["src/adapters/outbound/engines/mod.rs", "L677 — run_single_engine_turn"],
     ],
     cuts: [],
     detail: "If tool_calls is empty AND response ends with [OUTPUT_TRUNCATED], inject a 'continue from where you left off' user message and loop. That's mechanism #5 — extends, doesn't cut."
   },
   {
     title: "Round 0 — execute tool calls",
-    where: "engine_builder.rs L739",
+    where: "adapters/outbound/engines/mod.rs L739",
     what: "compact_cutoff snapshot. Push assistant msg with tool_calls. For each call: execute, then truncate_tool_result(result, max_tool_result_chars), push as Role::Tool.",
     files: [
-      ["src/adapters/engine_builder.rs", "L739 — compact_cutoff = messages.len()"],
-      ["src/adapters/engine_builder.rs", "L768 — truncate_tool_result(&result, result_chars_limit)"],
-      ["src/adapters/engine_builder.rs", "L944 — fn truncate_tool_result"],
+      ["src/adapters/outbound/engines/mod.rs", "L739 — compact_cutoff = messages.len()"],
+      ["src/adapters/outbound/engines/mod.rs", "L768 — truncate_tool_result(&result, result_chars_limit)"],
+      ["src/adapters/outbound/engines/mod.rs", "L944 — fn truncate_tool_result"],
     ],
     cuts: ["3", "4"],
     detail: "compact_cutoff is the watermark the next round's compaction pass uses. truncate_tool_result is char-cap with [truncated — showing X of Y chars] footer; max_mcp_result_chars (#4) caps bridge-routed results separately inside Claude Code engine."
   },
   {
     title: "Round 1 — repeat",
-    where: "engine_builder.rs (round=1)",
+    where: "adapters/outbound/engines/mod.rs (round=1)",
     what: "Engine call again. Model sees: system + memory + history-suffix + assistant(round0) + tool_results(round0) + new context. New tool_calls dispatched, new results pushed.",
     files: [
-      ["src/adapters/engine_builder.rs", "L739-L775 — same body, round 1"],
+      ["src/adapters/outbound/engines/mod.rs", "L739-L775 — same body, round 1"],
     ],
     cuts: [],
     detail: "Tool results from round 0 are still at FULL size at this point — they were pushed before the round 1 engine call. Only AFTER round 1's tool calls run does compaction kick in."
   },
   {
     title: "Round 1 — IN-PLACE COMPACTION",
-    where: "engine_builder.rs L779",
+    where: "adapters/outbound/engines/mod.rs L779",
     what: "if round >= 1: walk messages[..compact_cutoff]. For each Role::Tool message in that prefix, rewrite content via compact_tool_result(content, 200). First-line-only.",
     files: [
-      ["src/adapters/engine_builder.rs", "L779-L788 — in-place rewrite"],
-      ["src/adapters/engine_builder.rs", "L921 — fn compact_tool_result"],
+      ["src/adapters/outbound/engines/mod.rs", "L779-L788 — in-place rewrite"],
+      ["src/adapters/outbound/engines/mod.rs", "L921 — fn compact_tool_result"],
     ],
     cuts: ["2"],
     detail: "This is the closest tengu has to Claude Code's /compact. The rationale (in the inline comment): tool results 'typically put key info on the first line' — tx hashes, IDs, status — so keeping the first line preserves the model's working memory of what happened without paying for the body."
   },
   {
     title: "Round 2..N",
-    where: "engine_builder.rs (round=2+)",
+    where: "adapters/outbound/engines/mod.rs (round=2+)",
     what: "Same pattern. Every round re-walks the prefix. Already-compacted results stay short. New round's results are full size until the round AFTER them.",
     files: [
-      ["src/adapters/engine_builder.rs", "L665-L789"],
+      ["src/adapters/outbound/engines/mod.rs", "L665-L789"],
     ],
     cuts: [],
     detail: "Loop exits when: model emits no tool_calls, token_budget exceeded, max_tool_rounds hit (default 70), or cancel flag set. On token-budget exceeded, returns immediately with a warn log."
   },
   {
     title: "Loop exit",
-    where: "engine_builder.rs L793",
+    where: "adapters/outbound/engines/mod.rs L793",
     what: "If we exhausted all rounds without the model producing a final text, force one last engine turn with tools=[] to extract a closing message.",
     files: [
-      ["src/adapters/engine_builder.rs", "L793 — force final turn"],
+      ["src/adapters/outbound/engines/mod.rs", "L793 — force final turn"],
     ],
     cuts: [],
     detail: "Most well-behaved sessions exit normally on round k where the model produces text instead of tool_calls. The fallback at L793 catches the model-stuck-calling-tools case."
@@ -486,7 +486,7 @@ const MECHS = [
     n: 1, tier: "t1",
     title: "Sliding history window",
     where: "prompt_budget.rs::assemble_recent_history",
-    file: "src/adapters/prompt_budget.rs:8",
+    file: "src/application/chat/prompt_budget.rs:8",
     body: "Picks the newest contiguous suffix of <code>state.messages</code> whose token estimate fits <code>history_budget</code>. Hard ceiling of 20 messages even when budget allows more.",
     config: ["MAX_HISTORY_MESSAGES = 20", "history_budget computed per turn"],
     code: `<span class="kw">pub(crate) fn</span> <span class="fn">assemble_recent_history</span>(
@@ -508,8 +508,8 @@ const MECHS = [
   {
     n: 2, tier: "t2",
     title: "Mid-loop in-place compaction",
-    where: "engine_builder.rs::compact_tool_result",
-    file: "src/adapters/engine_builder.rs:921",
+    where: "application/chat/tool_loop.rs::compact_tool_result",
+    file: "src/adapters/outbound/engines/mod.rs:921",
     body: "After round ≥ 1 of the tool-calling loop, walks <code>messages[..compact_cutoff]</code> and rewrites every <code>Role::Tool</code> message in place to its first line, capped at <code>compact_result_limit</code> (default 200 chars). The closest tengu has to Claude Code's <code>/compact</code>.",
     config: ["compact_result_limit = 200 chars", "kicks in at round &gt;= 1"],
     code: `<span class="kw">fn</span> <span class="fn">compact_tool_result</span>(content: &amp;<span class="kw">str</span>, limit: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
@@ -523,7 +523,7 @@ const MECHS = [
     <span class="fn">format!</span>(<span class="str">"{}…"</span>, &amp;first_line[..end])
 }
 
-<span class="cm">// Caller (engine_builder.rs L779):</span>
+<span class="cm">// Caller (adapters/outbound/engines/mod.rs L779):</span>
 <span class="kw">if</span> round &gt;= <span class="num">1</span> {
     <span class="kw">for</span> msg <span class="kw">in</span> &amp;<span class="kw">mut</span> messages[..compact_cutoff] {
         <span class="kw">if</span> <span class="fn">matches!</span>(msg.role, Role::Tool) {
@@ -536,8 +536,8 @@ const MECHS = [
   {
     n: 3, tier: "t3",
     title: "Per-result truncation",
-    where: "engine_builder.rs::truncate_tool_result",
-    file: "src/adapters/engine_builder.rs:944",
+    where: "application/chat/tool_loop.rs::truncate_tool_result",
+    file: "src/adapters/outbound/engines/mod.rs:944",
     body: "Each tool result is char-capped at <code>max_tool_result_chars</code> (default 300_000) when it's first inserted into <code>messages</code>. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe.",
     config: ["max_tool_result_chars = 300_000", "applied on every tool result"],
     code: `<span class="kw">fn</span> <span class="fn">truncate_tool_result</span>(result: &amp;<span class="kw">str</span>, max_chars: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
@@ -553,11 +553,11 @@ const MECHS = [
   {
     n: 4, tier: "t4",
     title: "MCP bridge cap",
-    where: "claude_code_engine.rs (env <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>)",
-    file: "src/adapters/claude_code_engine.rs:551",
+    where: "adapters/outbound/engines/claude_code.rs (env <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>)",
+    file: "src/adapters/outbound/engines/claude_code.rs:551",
     body: "Caps tool results returned to the Claude Code CLI through the MCP bridge. Default <strong>50_000 chars / ~12.5K tokens</strong>. Exists because the Claude Code engine has NO per-turn compaction of its own — without this, bridge-routed tools would leak unbounded context into Claude.",
     config: ["max_mcp_result_chars = 50_000", "TENGU_BRIDGE_MAX_RESULT_CHARS env"],
-    code: `<span class="cm">// claude_code_engine.rs L551:</span>
+    code: `<span class="cm">// adapters/outbound/engines/claude_code.rs L551:</span>
 <span class="kw">let</span> mcp_limit = context.max_mcp_result_chars.unwrap_or(<span class="num">50_000</span>);
 
 <span class="cm">// Forwarded to the bridge subprocess as env (L147):</span>
@@ -566,8 +566,8 @@ const MECHS = [
   {
     n: 5, tier: "t5",
     title: "[OUTPUT_TRUNCATED] auto-continue",
-    where: "engine_builder.rs (L706)",
-    file: "src/adapters/engine_builder.rs:706",
+    where: "adapters/outbound/engines/mod.rs (L706)",
+    file: "src/adapters/outbound/engines/mod.rs:706",
     body: "Not really cutting — the inverse. When the model's own response ends with the truncation sentinel, the engine appends <code>\"Your output was truncated. Continue from where you left off.\"</code> as a user turn and re-rolls.",
     config: ["sentinel: [OUTPUT_TRUNCATED]", "extends, doesn't cut"],
     code: `<span class="kw">if</span> tool_calls.is_empty()
@@ -630,7 +630,7 @@ const OVERVIEW_SVG = `
 
   <!-- Phase A panel -->
   <rect class="ov-panel" x="20" y="40" width="540" height="200"/>
-  <text x="36" y="64" class="ov-title">A. Turn assembly  (chat_builder)</text>
+  <text x="36" y="64" class="ov-title">A. Turn assembly  (chat/service.rs)</text>
   <text x="36" y="84" class="ov-small">runs once per chat turn before the engine call</text>
 
   <rect class="ov-bx" x="36" y="100" width="240" height="50" rx="6"/>
@@ -651,7 +651,7 @@ const OVERVIEW_SVG = `
 
   <!-- Phase B panel -->
   <rect class="ov-panel" x="620" y="40" width="640" height="380"/>
-  <text x="636" y="64" class="ov-title">B. Tool-calling loop  (engine_builder::collect_engine_response)</text>
+  <text x="636" y="64" class="ov-title">B. Tool-calling loop  (application::chat::tool_loop::collect_engine_response)</text>
   <text x="636" y="84" class="ov-small">for round in 0..max_tool_rounds (default 70)</text>
 
   <!-- Round 0 -->

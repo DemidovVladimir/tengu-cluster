@@ -39,6 +39,20 @@ compiled, reviewed knowledge. The planner picks; subagents execute. The
 boundary is enforced in code (`run_turn_with_system` strips
 tools/memory/grounding on the planner-side LLM call).
 
+## Code layout — hexagonal (2026-09-23)
+
+| Layer | Path | Holds | May import |
+|---|---|---|---|
+| domain | `src/domain/` | plain data + pure policy (messages, plan, `ToolScope`, secrets redaction, metrics records) | nothing else |
+| ports | `src/ports/` | traits: `Engine`, `Tool`, `MemoryService`, `RecallStore`, `Planner`, `WorkerHandle`, … | domain, config |
+| config | `src/config/` | TOML schema, validation, paths | domain |
+| application | `src/application/` | use cases: chat turn + tool loop, orchestrator, memory manager, skills, tool dispatch | domain, ports, config |
+| outbound adapters | `src/adapters/outbound/` | engines, **tools**, memory stores, MCP client, egress, secrets, subprocess runner | all but inbound/bootstrap |
+| bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox | all but inbound |
+| inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, MCP bridge, eval/evolve | everything |
+
+Enforced by `tests/layering_lint.rs`. **Where does X live / how do I add Y** → `docs/code-map.md` (+ `docs/code-map.html`, interactive knowledge graph).
+
 ---
 
 ## Output style — read this before writing ANY doc or response
@@ -62,7 +76,9 @@ Why this rule exists: an earlier draft of `docs/skill-research-2026-04-28.md` ba
 
 ## REQUIRED reading before any code changes
 
-Read in this order. Do not skip.
+Read in this order. Do not skip. **Start with `docs/code-map.md`** when you
+only need to know where something lives or how to extend it (tools, engines,
+config, channels) — it is the index into everything below.
 
 1. **`docs/architecture-2026-04-27.md`** — the line-by-line architecture
    walkthrough. Five-sentence TL;DR up top, then §1 walks the seven steps from
@@ -80,8 +96,8 @@ Read in this order. Do not skip.
    LLM Wiki memory subsystem. PRD = product decisions + correction log;
    implementation = phase plan, schema, tool API, Tengu touchpoints; examples =
    workflows + MVP setup. Read these BEFORE touching
-   `src/adapters/plugins/agentic_memory/`,
-   `src/adapters/orchestrator/shared_files.rs`, or the planner recall lanes.
+   `src/adapters/outbound/tools/agentic_memory/`,
+   `src/application/orchestrator/shared_files.rs`, or the planner recall lanes.
 6. **`REDESIGN.md`** — original v2 design brief. The "why" behind the doctrine.
 7. **`docs/IMPLEMENTATION_PLAN.md`** — phase-by-phase roadmap. Many phases
    are now done; the doc tracks what shipped and what didn't.
@@ -93,8 +109,8 @@ Read in this order. Do not skip.
    ~25 mechanisms (token primitives, per-flow lifecycle, per-turn
    assembly, inner tool loop, MCP bridge cap, subagent IPC, Open Brain /
    LLM Wiki hygiene, file chunking). Read this BEFORE touching `prompt_budget.rs`,
-   `flow_builder.rs`, `engine_builder.rs::collect_engine_response`,
-   `chat_builder.rs::process_user_text`, or any of the `LimitsConfig`
+   `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`,
+   `application/chat/service.rs::process_user_text`, or any of the `LimitsConfig`
    knobs. The .html is interactive (search mechanisms, walk a turn,
    symptom → cause lookup); the .md is the canonical narrative.
    Two focused companions slice this further:
@@ -116,19 +132,21 @@ flow, audit these for staleness **before declaring done**:
 | `docs/architecture-2026-04-27.md` | If you changed the per-turn flow, added/removed a subsystem, or moved a file's responsibilities |
 | `docs/architecture-2026-04-27.svg` | If you changed the per-turn flow OR added/removed a file in a subsystem panel |
 | `docs/architecture-2026-04-27.html` | Same triggers as the svg + md. The SUBSYSTEMS / STEPS / FILE_MAP arrays in the inline `<script>` need to stay in sync |
-| `docs/agentic-memory-*-2026-05-13.md` + `src/adapters/plugins/agentic_memory/mod.rs` doc-comment | If you changed the memory schema, the `agentic_memory` tool API / operations, the recall lanes, or the Open Brain ↔ LLM Wiki split |
-| `src/adapters/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `TENGU_PLAN.md` shape, or who writes/reads them |
+| `docs/agentic-memory-*-2026-05-13.md` + `src/adapters/outbound/tools/agentic_memory/mod.rs` doc-comment | If you changed the memory schema, the `agentic_memory` tool API / operations, the recall lanes, or the Open Brain ↔ LLM Wiki split |
+| `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `TENGU_PLAN.md` shape, or who writes/reads them |
 | `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing |
 | `docs/skill-research-2026-04-28.md` | If the skill-lifecycle plan, gap inventory, or learning-platform A1/A2/A3 decisions change. |
-| `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `flow_builder.rs`, `engine_builder.rs::collect_engine_response`, `chat_builder.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
+| `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`, `application/chat/service.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
 | `CLAUDE.md` (this file) **and** `AGENTS.md` (its twin) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc. Update both — they must not drift. |
-| Inline `mod.rs` doc comments in `src/adapters/memory/` and `src/adapters/rag/` | If you changed the layering between memory/ (low-level) and rag/ (legacy facade) |
-| `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/adapters/config.rs`, `src/adapters/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
-| `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/webhook_builder.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
-| `docs/egress-2026-09-16.md` + `src/adapters/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
+| `docs/code-map.md` + `docs/code-map.html` (inline `GRAPH` data) | If you added/moved/removed a file, port, layer, tool, engine, config section, or changed an extension recipe. Keep the two in sync. |
+| `tests/layering_lint.rs` | If you added a layer or changed who may import whom (`RULES` / `FORBIDDEN`). |
+| `docs/tools.md` | If you changed the tool catalog, tool gating, `[[mcp_servers]]` handling, or how agents get tools. |
+| `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
+| `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
+| `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
-| `src/adapters/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
+| `src/domain/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
 
 **Rule of thumb:** if a future Claude opening this project would learn the
 "wrong" thing from a doc, the doc is stale. Fix it in the same commit that
@@ -139,7 +157,7 @@ made the doc stale, not later.
 ## How to read context/token metrics
 
 Every LLM and embedding call emits a `MetricsRecord` (see
-`src/adapters/metrics.rs`). Three surfaces:
+`src/domain/metrics.rs`). Three surfaces:
 
 1. **Always-on tracing** — `RUST_LOG=tengu=info` prints one structured line
    per call: `kind=`, `agent=`, `model=`, `prompt_tokens=`,
@@ -158,13 +176,21 @@ field; `default + skip_serializing_if = Vec::is_empty` keeps the payload
 byte-compatible). The parent's `SubprocessRunner` re-emits each one on the
 global metrics sink so the TUI sees a unified stream.
 
-## How to add a new tool (single source of truth — Phase 7.7)
+## How to add a new tool (one catalog row)
 
-1. Create the plugin module at `src/adapters/plugins/<name>/mod.rs` (and `tool_defs()` returning a `Vec<ToolDef>`).
-2. If it should be available everywhere (in-process planner-side AND Claude Code subagents via the MCP bridge), add ONE registration line to `channel_runtime::register_core_plugins`. That's it. The bridge picks it up automatically.
-3. If the tool is workspace-tools opt-in (like `shared_cache`/`persistent_store`/`skill_distill`/`agentic_memory`), add it to `channel_runtime::WORKSPACE_TOOLS_ALLOWLIST` and to the `valid_workspace_tools` list in `config.rs`.
+1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*` or `// scope: pure-compute` (`tests/scope_lint.rs`).
+2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
+3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
 
-**Do NOT** add registration lines to both `build_tool_executor` and `build_bridge_executor`. That duplication is the whole reason for `register_core_plugins`. The exceptions (registered outside the helper) are `SkillPlugin` and `McpPlugin` — both have inputs the bridge can't sensibly provide.
+No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
+
+## How to add an inference engine / extend config
+
+| Task | Where | Recipe |
+|---|---|---|
+| New engine (e.g. another provider) | `src/adapters/outbound/engines/<name>.rs` + `build_engine` match in `engines/mod.rs` | `docs/code-map.md` § Add an engine |
+| New config field / section | `src/config/mod.rs` (struct + `#[serde(default)]` + `Default`) → validation in `validation_errors` | `docs/code-map.md` § Extend config |
+| Built-in defaults | `impl Default for Config` + `default_*` fns in `src/config/mod.rs`; commented example `config.example.toml` | — |
 
 ## How to add a new agent
 
@@ -172,7 +198,7 @@ global metrics sink so the TUI sees a unified stream.
    base config) with a `description` — that is what makes it routable.
 2. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 
-Fields (same `AgentConfig` as every in-process agent, `src/adapters/config.rs`):
+Fields (same `AgentConfig` as every in-process agent, `src/config/mod.rs`):
 `engine`, `model`, `description`, `example_queries`, `tools` (subprocess
 allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias),
 `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap
@@ -192,7 +218,7 @@ These are not preferences. They're load-bearing.
 
 1. **LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands.**
    The planner LLM has exactly one job: emit plan JSON. Tools, memory,
-   grounding all stripped on its turn (see `channel_runtime::run_turn_with_system`).
+   grounding all stripped on its turn (see `bootstrap::orchestrator::run_turn_with_system`).
    Open Brain stores live events/context in Postgres; the Karpathy LLM Wiki
    compiles stable knowledge into Markdown. Subagents do the actual work in
    their own subprocess with their own tools.
@@ -221,14 +247,14 @@ These are not preferences. They're load-bearing.
 - **`workspace_tools` is a narrow allow-list** —
   `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`,
   `apply_improver_proposal`, `manage_skill`. Anything else fails config
-  validation (`config.rs::valid_workspace_tools`). `manage_skill` is the
-  canonical unified skill write API (see `plugins/manage_skill/`);
+  validation (`domain/tools.rs::WORKSPACE_TOOLS`). `manage_skill` is the
+  canonical unified skill write API (see `outbound/tools/manage_skill/`);
   `agentic_memory` is the Postgres-backed Open Brain memory tool
   (`postgres_memory` feature).
 - **One agent schema (2026-09-18)** — `agents/*.toml` and `AgentSpec` are
   gone. A subagent is an `[agents.<name>]` block with a `description`;
-  `channel_runtime::subagent_config` merges workspace-tool names found in
-  `tools` into `workspace_tools` (filtered by `WORKSPACE_TOOLS_ALLOWLIST`).
+  `bootstrap::tools::subagent_config` merges workspace-tool names found in
+  `tools` into `workspace_tools` (filtered by `WORKSPACE_TOOLS`).
   `limits.max_tool_rounds` is the per-step turn cap and
   `limits.step_timeout_secs` the per-step wall clock — the parent
   `SubprocessRunner` reads both from the agent block (the old
@@ -276,7 +302,7 @@ These are not preferences. They're load-bearing.
 - **`compress_and_store` is appended IMPLICITLY** — never list it in an
   agent's `tools`. The runner appends it itself for every subagent.
 - **Planner LLM call strips tools/memory/grounding** —
-  `run_turn_with_system` in `channel_runtime.rs` sets `tools = []`,
+  `run_turn_with_system` in `bootstrap/` sets `tools = []`,
   `tool_executor = None`, `memory_manager = None`,
   `suppress_grounding_nudge = true` when `system_override.is_some()`.
 - **`engine = "rag"` is the only orchestrator engine and now the default.**
@@ -324,7 +350,7 @@ These are not preferences. They're load-bearing.
   happens in `SubprocessRunner::run_step` for both the Ok and Failed paths,
   so a partial subagent run still surfaces its consumed tokens.
 - **`session_id` is unified between planner and runner (Fix B 2026-05-09)** —
-  `channel_runtime::build_orchestrator` resolves the id ONCE
+  `bootstrap::orchestrator::build_orchestrator` resolves the id ONCE
   (env override `TENGU_SESSION_ID` > fresh UUID), passes the same string to
   `RagPlanner::new(...)` AND `SubprocessRunner::new(sandbox_name, session_id)`.
   Planner messages and subagent step summaries share the same session key,
@@ -356,17 +382,21 @@ These are not preferences. They're load-bearing.
   whole text as a `Direct { response }` verdict with a warn log. No more
   `System error: orchestrator initial call failed`. Watch for the warn line
   to know when this is firing.
-- **Adding a new tool: ONE place (Phase 7.7)** —
-  `channel_runtime::register_core_plugins`. Both the in-process executor and
-  the MCP bridge call this single helper. Don't add registration lines to
-  `build_tool_executor` or `build_bridge_executor` directly. The exceptions
-  (registered outside) are `SkillPlugin` (needs a SkillRegistry the bridge
-  can't construct) and `McpPlugin` (the bridge would create double-hop
-  routing).
-- **Adding a workspace-tool opt-in: ONE constant (Phase 7.7)** —
-  `channel_runtime::WORKSPACE_TOOLS_ALLOWLIST`. Both `agent_config_from_spec`
-  and the bridge filter against it. Keep `config.rs::valid_workspace_tools`
-  in sync — a name missing there fails config validation.
+- **Adding a new tool: ONE catalog row (2026-09-23)** — `catalog()` in
+  `adapters/outbound/tools/mod.rs`; `register_catalog` (in-process executor
+  AND MCP bridge) and `advertised_defs` both read it. Opt-in names also go in
+  `domain/tools.rs::WORKSPACE_TOOLS` (config validation + `subagent_config` +
+  bridge filter). `SkillPlugin` / `McpPlugin` are registered outside the
+  catalog; the bridge registers `McpPlugin` only for servers the Claude Code
+  engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
+- **`[[mcp_servers]]` tools are named `{server}__{tool}` (2026-09-23)** — was
+  `{server}.{tool}`; model APIs reject `.`. They reach plan-step subagents
+  (both engines), in-process TUI/Telegram agents and webhook agents.
+- **Layering is lint-enforced (2026-09-23)** — `tests/layering_lint.rs` fails
+  when `domain` / `ports` / `config` / `application` import an adapter, or
+  outbound imports inbound/bootstrap. Need something from an adapter in a use
+  case? Add a port in `src/ports/`, implement it in `adapters/outbound/`, wire
+  it in `src/bootstrap/`.
 - **`compress_and_store` reliability with Claude Code subagents** — Claude
   Code subagents don't reliably call `compress_and_store` as their final
   action; they just stop. The Phase 5c middle-ground protocol forgives this —
@@ -382,7 +412,7 @@ These are not preferences. They're load-bearing.
   `rag/` facade and the `qdrant` cargo feature were removed in Phase 6
   (2026-05-14). The only built-in `VectorStore` is now the disk-backed bincode
   store. Embedding model is pinned to `text-embedding-3-small` (1536-dim,
-  `memory::vector::embedder::DEFAULT_EMBEDDING_MODEL`) because the Postgres
+  `domain::memory::DEFAULT_EMBEDDING_MODEL`) because the Postgres
   schema hardcodes `vector(1536)`; a wrong-dimension vector now warns and
   falls back to text-only writes / FTS-only recall (fail-soft).
 - **No write-landed diagnostic CLI yet** — `tengu memory inspect` was removed
@@ -439,8 +469,8 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
    postgres_memory` to exercise Open Brain recall), type "what is the BTC
    price?", and follow the logs. The flow is in §1 of
    `docs/architecture-2026-04-27.md`.
-2. **Open `docs/architecture-2026-04-27.html` in a browser** — the file map
-   tab is searchable. Type the symbol you're looking for; it'll surface
+2. **Open `docs/code-map.html` or `docs/architecture-2026-04-27.html` in a
+   browser** — both are searchable. Type the symbol you're looking for; it'll surface
    which subsystem owns it.
 3. **`SESSION_HANDOFF.md` "Active gotchas" section** — most weird symptoms
    are documented there with the fix.
@@ -450,7 +480,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-18 (Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-23 (hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

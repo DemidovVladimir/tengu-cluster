@@ -1,44 +1,11 @@
-// --- types & config ---
-pub mod config;
-pub(crate) mod token;
-pub mod types;
+//! Adapters — everything that talks to the outside world.
+//!
+//! - `inbound/` — driving adapters: CLI commands, TUI, Telegram, webhooks,
+//!   MCP bridge, `tengu eval` / `tengu skill evolve`.
+//! - `outbound/` — driven adapters: engines, tools, memory stores, MCP client,
+//!   egress, secrets, shell, subprocess runner.
+//!
+//! Wiring lives in `crate::bootstrap`. See `docs/hexagonal-plan-2026-09-23.md`.
 
-// Re-export engine types at the adapters level for ergonomic access.
-pub use types::{Engine, EngineContext, EngineDiagnostics};
-
-pub(crate) mod chat_builder;
-pub mod memory;
-pub mod metrics;
-pub(crate) mod secret_builder;
-pub(crate) mod skill_builder;
-pub(crate) mod tool_builder;
-pub(crate) mod tool_utils;
-pub(crate) mod usage;
-
-// --- services & ports ---
-pub(crate) mod flow_builder;
-pub(crate) mod ports;
-pub(crate) mod prompt_budget;
-// --- adapters ---
-pub(crate) mod channel_runtime;
-#[cfg(feature = "claude_code")]
-pub(crate) mod claude_code_engine;
-pub(crate) mod egress;
-pub(crate) mod engine_builder;
-pub(crate) mod eval_builder;
-pub(crate) mod mcp_bridge;
-pub(crate) mod noop;
-pub mod orchestrator;
-pub(crate) mod plugins;
-// `rag` (legacy Qdrant facade) was removed in Phase 6 — Open Brain (Postgres `agentic_memory`) is the memory backend.
-pub(crate) mod prune;
-pub mod runner;
-pub(crate) mod scaffold;
-pub(crate) mod shell_executor;
-pub(crate) mod skill_lifecycle;
-#[cfg(feature = "telegram")]
-pub(crate) mod telegram_builder;
-pub(crate) mod tool_plugin;
-pub(crate) mod tui;
-#[cfg(feature = "webhooks")]
-pub(crate) mod webhook_builder;
+pub(crate) mod inbound;
+pub(crate) mod outbound;

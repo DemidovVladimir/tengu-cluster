@@ -314,9 +314,9 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "`[skill_lifecycle]` config missing" | No `[skill_lifecycle]` block in config | Add per section 0.3 |
-| "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) | Fix the name; the list lives in `src/adapters/config.rs::validate_agent` + `channel_runtime::WORKSPACE_TOOLS_ALLOWLIST` |
+| "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) | Fix the name; the list lives in `src/config/mod.rs::validate_agent` + `domain::tools::WORKSPACE_TOOLS` |
 | "yaml prompts parse failed" | Fixtures file is wrong schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}`, not `{schema_version, fixtures: [...]}` |
-| Every row fails with "agent only described skill_distill in text" | `SkillLifecyclePlugin` not registered → tool not advertised to LLM | Check `src/adapters/channel_runtime.rs::register_core_plugins` for the `SkillLifecyclePlugin` block (`want_distill \|\| want_apply_improver`) |
+| Every row fails with "agent only described skill_distill in text" | `SkillLifecyclePlugin` not registered → tool not advertised to LLM | Check `src/adapters/outbound/tools/mod.rs::register_catalog` for the `SkillLifecyclePlugin` block (`want_distill \|\| want_apply_improver`) |
 | llm_judge fails with "model does not support assistant prefill" | Old prefill-based judge prompt | Verify commit `6d88028` or later — `LlmJudgeKind::run` should build the prompt with `""` prefill |
 
 ---

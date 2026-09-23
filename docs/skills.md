@@ -2,7 +2,7 @@
 
 Skills are portable, cross-platform workflow documents that compose Tengu's [[architecture#Key Abstractions|platform primitives]] into higher-level capabilities. Skills are never modified by the platform — they are copied as-is from external sources.
 
-**File:** `src/adapters/skill_builder.rs`
+**File:** `src/application/skills/registry.rs`
 
 ## Skill Types
 
@@ -15,7 +15,7 @@ API skills are documentation-only — they describe API endpoints for the agent 
 
 ## Loading
 
-Skills are loaded from three tiers — first match wins (`skill_builder.rs::skill_directories`):
+Skills are loaded from three tiers — first match wins (`application/skills/registry.rs::skill_directories`):
 1. **Managed:** `~/.tengu/skills/` (`tengu skill install --tier managed`)
 2. **Workspace (dotdir):** `<workspace>/.tengu/skills/`
 3. **Project:** `<workspace>/skills/`
@@ -67,7 +67,7 @@ Gating metadata (`requires_bins`, `requires_env`, `os`) is evaluated at load tim
 
 ## Metrics & Evolution
 
-A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Six built-in kinds (`src/adapters/skill_lifecycle/metric_kinds/`):
+A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Six built-in kinds (`src/application/skills/lifecycle/metric_kinds/`):
 
 | Kind | What it does |
 |------|--------------|

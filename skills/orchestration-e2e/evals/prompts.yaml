@@ -1,6 +1,6 @@
 # End-to-end orchestration eval prompts.
 #
-# Format: src/adapters/eval_builder.rs::YamlRow — fields are
+# Format: src/adapters/inbound/eval.rs::YamlRow — fields are
 # id / prompt / expected / timeout_secs (default 120) / stubs (optional).
 #
 # The judge sees: the "expected" text, the ordered tool-call observations,

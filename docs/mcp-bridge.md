@@ -2,7 +2,7 @@
 
 The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines that manage their own workspace (currently [[engine-backends#Claude Code|Claude Code]]). It implements the [Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 over stdin/stdout).
 
-**File:** `src/adapters/mcp_bridge.rs`
+**File:** `src/adapters/inbound/mcp_bridge.rs`
 **Subcommand:** `tengu mcp-bridge`
 
 ## Why a Bridge?
@@ -43,7 +43,7 @@ Claude sees each tool as `mcp__tengu-tools__<name>` (e.g. `mcp__tengu-tools__per
 
 ## Dispatch
 
-The bridge builds its own `ToolRegistry` through `channel_runtime::register_core_plugins` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): workspace, memory (`memory_ingest`, `memory_search`, `persistent_store`), cache, skill_lifecycle, http, crypto, skill_resource, view_skill, manage_skill, and `agentic_memory` under `postgres_memory`. `compress_and_store` is advertised only — the `run-agent` child intercepts it out-of-band. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits `executor.execute(&call)` directly.
+The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): workspace, memory (`memory_ingest`, `memory_search`, `persistent_store`), cache, skill_lifecycle, http, crypto, skill_resource, view_skill, manage_skill, and `agentic_memory` under `postgres_memory`. `compress_and_store` is advertised only — the `run-agent` child intercepts it out-of-band. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits `executor.execute(&call)` directly.
 
 The bridge does **not** register:
 - The `skill` plugin — shell-skill tools need a `SkillRegistry` the bridge cannot construct; they run in the main Tengu process only
@@ -109,7 +109,7 @@ overridable via `TENGU_BRIDGE_WORKSPACE`. Wire it into an external MCP client:
 
 **Env forwarding matters.** MCP clients typically launch the server with a
 *replaced* environment (only the keys in the `env` block), not the inherited
-shell env — same trap `claude_code_engine.rs` documents for the bridge. So:
+shell env — same trap `adapters/outbound/engines/claude_code.rs` documents for the bridge. So:
 
 - `TENGU_MEMORY_DATABASE_URL` — required; without it every tool call errors.
 - `OPENROUTER_API_KEY` — without it `recall` falls back to FTS-only,
@@ -118,7 +118,7 @@ shell env — same trap `claude_code_engine.rs` documents for the bridge. So:
   but silently degraded.
 - `TENGU_WIKI_COMPILER_MODEL` — optional; defaults to `anthropic/claude-sonnet-4-6`.
 
-Both entry points share `serve_mcp_stdio` in `src/adapters/mcp_bridge.rs`. The
+Both entry points share `serve_mcp_stdio` in `src/adapters/inbound/mcp_bridge.rs`. The
 server starts even without these — tool calls just error or degrade.
 
 ## Testing
@@ -134,7 +134,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 - Memory tools (`memory_ingest`, `memory_search`, `persistent_store`) need `OPENROUTER_API_KEY` for embeddings (forwarded by the engine) and use a disk `DiskVectorStore` under `<workspace>/memory`; missing key → skipped with a warn
 - `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the engine does not put it in the MCP `env` block, so through the bridge the tool errors unless the CLI passes the variable through
 - No secret redaction in the bridge: `SanitizedToolExecutor` wraps only the TUI / Telegram executors, and the bridge's `SecretRegistry` starts empty
-- The bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS_ALLOWLIST`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) do flow through; other per-agent fields do not
+- The bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) do flow through; other per-agent fields do not
 
 ## Related
 - [[engine-backends#Claude Code]] — the engine that spawns the bridge
