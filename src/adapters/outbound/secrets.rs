@@ -4,15 +4,14 @@
 //! PBKDF2-HMAC-SHA256 derived key.  The master password is read from
 //! the `TENGU_MASTER_PASSWORD` env var or prompted interactively.
 //!
-//! **Redaction** — `SecretRegistry` holds known secret values and replaces
-//! any occurrence in arbitrary text with `[REDACTED]`.
+//! **Redaction** — `SanitizedToolExecutor` (below) redacts tool output through
+//! `domain::secrets::SecretRegistry`.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{bail, Context, Result};
 use pbkdf2::pbkdf2_hmac;
 use sha2::Sha256;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -27,49 +26,6 @@ const MAGIC: &[u8; 12] = b"TENGU_VAULT\x01";
 const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const PBKDF2_ITERATIONS: u32 = 600_000;
-
-// ── SecretRegistry (runtime redaction) ──────────────────────────
-
-/// Registry of secret values that must never appear in tool output,
-/// flow transcripts, or memory storage.
-pub(crate) struct SecretRegistry {
-    /// Sorted longest-first to avoid partial-match issues during redaction.
-    values: Vec<String>,
-    seen: HashSet<String>,
-}
-
-impl SecretRegistry {
-    pub fn new() -> Self {
-        Self {
-            values: Vec::new(),
-            seen: HashSet::new(),
-        }
-    }
-
-    /// Register a secret value for redaction. Empty or duplicate values are ignored.
-    pub fn register(&mut self, value: String) {
-        if value.is_empty() || self.seen.contains(&value) {
-            return;
-        }
-        self.seen.insert(value.clone());
-        self.values.push(value);
-        // Re-sort longest-first so longer secrets are replaced before
-        // any shorter substring match.
-        self.values.sort_by(|a, b| b.len().cmp(&a.len()));
-    }
-
-    /// Replace every occurrence of any registered secret value with `[REDACTED]`.
-    pub fn redact(&self, text: &str) -> String {
-        if self.values.is_empty() {
-            return text.to_string();
-        }
-        let mut result = text.to_string();
-        for secret in &self.values {
-            result = result.replace(secret.as_str(), "[REDACTED]");
-        }
-        result
-    }
-}
 
 // ── vault crypto primitives ─────────────────────────────────────
 
@@ -404,13 +360,13 @@ fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 /// site.
 pub(crate) struct SanitizedToolExecutor {
     inner: std::sync::Arc<dyn ToolExecutor>,
-    registry: std::sync::Arc<crate::adapters::outbound::secrets::SecretRegistry>,
+    registry: std::sync::Arc<crate::domain::secrets::SecretRegistry>,
 }
 
 impl SanitizedToolExecutor {
     pub fn new(
         inner: std::sync::Arc<dyn ToolExecutor>,
-        registry: std::sync::Arc<crate::adapters::outbound::secrets::SecretRegistry>,
+        registry: std::sync::Arc<crate::domain::secrets::SecretRegistry>,
     ) -> Self {
         Self { inner, registry }
     }

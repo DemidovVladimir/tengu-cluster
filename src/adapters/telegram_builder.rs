@@ -32,7 +32,6 @@ use crate::adapters::chat_builder::{
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
@@ -40,6 +39,7 @@ use crate::config::Config;
 use crate::domain::message::{
     DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
 };
+use crate::domain::secrets::SecretRegistry;
 use crate::domain::session::ChatLoopState;
 use crate::ports::engine::Engine;
 use crate::ports::engine::ToolExecutor;

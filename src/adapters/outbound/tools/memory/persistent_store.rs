@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::outbound::tools::args::require_str;
 use crate::domain::memory::ChunkMetadata;
 use crate::domain::message::ToolDef;
+use crate::ports::memory::MemoryService;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) const PERSISTENT_STORE_TOOL_NAME: &str = "persistent_store";
@@ -196,7 +196,7 @@ fn current_epoch() -> u64 {
 pub(crate) struct PersistentStoreTool {
     def: ToolDef,
     workspace: PathBuf,
-    memory_manager: Arc<MemoryManager>,
+    memory_manager: Arc<dyn MemoryService>,
     chunk_size: usize,
     chunk_overlap: usize,
 }
@@ -204,7 +204,7 @@ pub(crate) struct PersistentStoreTool {
 impl PersistentStoreTool {
     pub(crate) fn new(
         workspace: PathBuf,
-        memory_manager: Arc<MemoryManager>,
+        memory_manager: Arc<dyn MemoryService>,
         chunk_size: usize,
         chunk_overlap: usize,
     ) -> Self {
@@ -585,6 +585,7 @@ impl Tool for PersistentStoreTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::memory::manager::MemoryManager;
 
     #[test]
     fn test_chunk_text_basic() {

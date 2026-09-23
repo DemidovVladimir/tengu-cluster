@@ -616,10 +616,10 @@ fn mime_from_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::secrets::SecretRegistry;
     use crate::adapters::outbound::shell::LocalShellExecutor;
     use crate::domain::message::ToolCall;
     use crate::domain::scope::ToolScope;
+    use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
     use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;

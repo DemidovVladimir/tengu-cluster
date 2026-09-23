@@ -128,9 +128,9 @@ pub(crate) fn is_server_tool(server: &str, tool_name: &str) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::adapters::outbound::secrets::SecretRegistry;
     use crate::adapters::outbound::shell::LocalShellExecutor;
     use crate::config::Config;
+    use crate::domain::secrets::SecretRegistry;
     use tempfile::TempDir;
 
     fn plugin_ctx<'a>(

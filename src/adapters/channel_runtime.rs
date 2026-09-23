@@ -28,13 +28,13 @@ use crate::ports::memory::VectorStore;
 // registered here, outside the catalog — they need the config's
 // `[[mcp_servers]]` / a skill registry.
 use crate::adapters::outbound::mcp_client::McpPlugin;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::adapters::outbound::tools::skill::SkillPlugin;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::{Lens, ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
+use crate::domain::secrets::SecretRegistry;
 use crate::domain::session::ChatLoopState;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::PluginCtx;
@@ -151,7 +151,9 @@ pub(crate) fn build_tool_executor(
         config: agent_config,
         http: http_client.clone(),
         shell: Arc::clone(&shell),
-        memory_manager: memory_manager.clone(),
+        memory_manager: memory_manager
+            .clone()
+            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry: Arc::clone(secret_registry),
     };
 
@@ -206,7 +208,9 @@ pub(crate) fn build_tool_executor(
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory_manager: memory_manager.clone(),
+        memory_manager: memory_manager
+            .clone()
+            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,

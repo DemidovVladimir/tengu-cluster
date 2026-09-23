@@ -16,12 +16,12 @@ use crate::adapters::chat_builder::{
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{
     self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
 use crate::config::{Config, RuntimeProfile};
 use crate::domain::message::{ToolCall, ToolDef};
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::tool_activity::ToolActivityPort;
 use app::{BubbleRole, ChatRequest, SkillCommand};

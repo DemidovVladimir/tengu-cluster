@@ -383,9 +383,9 @@ fn count_fixtures(skill_dir: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::secrets::SecretRegistry;
     use crate::domain::message::{Message, Role, ToolCall};
     use crate::domain::scope::ToolScope;
+    use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
     use crate::ports::tool::ConversationView;
     use crate::ports::tool_activity::ToolActivityPort;

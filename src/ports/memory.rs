@@ -87,3 +87,34 @@ pub trait VectorStore: Send + Sync {
     /// that can't cheaply compute this may return `0`.
     async fn storage_bytes(&self) -> Result<u64>;
 }
+
+/// Text → vector. Impl: `adapters::outbound::memory::embedder::Embedder`.
+#[async_trait]
+pub trait Embedding: Send + Sync {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+}
+
+/// What memory tools (`memory_ingest`, `memory_search`, `persistent_store`)
+/// need from the memory subsystem. Impl: `application::memory::manager::MemoryManager`.
+#[async_trait]
+pub trait MemoryService: Send + Sync {
+    /// Embed + store one entry; returns its id.
+    async fn ingest_one(&self, text: &str, agent: &str, metadata: ChunkMetadata) -> Result<String>;
+    /// Embed + store several entries with one embedding call; returns the count.
+    async fn ingest_batch(
+        &self,
+        texts: &[&str],
+        agent: &str,
+        metadata: ChunkMetadata,
+    ) -> Result<usize>;
+    /// Embed `query` and return the `top_k` nearest entries.
+    async fn search(
+        &self,
+        query: &str,
+        top_k: usize,
+        filter: Option<&ChunkMetadata>,
+    ) -> Result<Vec<MemoryHit>>;
+    /// Remove one entry; `true` if it existed.
+    async fn delete_entry(&self, id: &str) -> Result<bool>;
+}

@@ -15,7 +15,7 @@ use crate::config::{Config, RuntimeProfile};
 
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets;
-use crate::adapters::outbound::secrets::SecretRegistry;
+use crate::domain::secrets::SecretRegistry;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -848,8 +848,7 @@ async fn run_agent_subprocess() -> Result<()> {
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
 
     // ----- Build tool stack (Phase 5b) -----
-    let secret_registry =
-        std::sync::Arc::new(crate::adapters::outbound::secrets::SecretRegistry::new());
+    let secret_registry = std::sync::Arc::new(crate::domain::secrets::SecretRegistry::new());
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so

@@ -6,10 +6,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::domain::message::ToolCall;
 use crate::domain::scope::ToolScope;
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::ToolCtx;
 use crate::ports::tool_activity::ToolActivityPort;

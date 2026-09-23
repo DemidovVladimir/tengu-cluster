@@ -254,7 +254,7 @@ mod tests {
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: None,
-            secret_registry: Arc::new(crate::adapters::outbound::secrets::SecretRegistry::new()),
+            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -273,7 +273,7 @@ mod tests {
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: Some(manager),
-            secret_registry: Arc::new(crate::adapters::outbound::secrets::SecretRegistry::new()),
+            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();
@@ -299,7 +299,7 @@ mod tests {
             http: reqwest::Client::new(),
             shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
             memory_manager: Some(manager),
-            secret_registry: Arc::new(crate::adapters::outbound::secrets::SecretRegistry::new()),
+            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         };
         let plugin = MemoryPlugin::new(1000, 200);
         let tools = plugin.tools(&ctx).await.unwrap();

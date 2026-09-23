@@ -868,10 +868,10 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 
 use crate::adapters::channel_runtime;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
 use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
 use crate::config::AgentConfig;
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::tool_activity::ToolActivityPort;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;

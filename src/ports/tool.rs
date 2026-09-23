@@ -11,10 +11,10 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
+use crate::domain::secrets::SecretRegistry;
+use crate::ports::memory::MemoryService;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool_activity::ToolActivityPort;
 
@@ -93,7 +93,7 @@ pub(crate) struct ToolCtx<'a> {
     pub scope: &'a ToolScope,
     pub shell: &'a dyn ShellExecutionPort,
     pub http: &'a reqwest::Client,
-    pub memory_manager: Option<&'a MemoryManager>,
+    pub memory_manager: Option<&'a dyn MemoryService>,
     pub secret_registry: &'a SecretRegistry,
     pub activity: &'a dyn ToolActivityPort,
     pub conversation: ConversationView<'a>,
@@ -111,6 +111,6 @@ pub(crate) struct PluginCtx<'a> {
     pub config: &'a crate::config::AgentConfig,
     pub http: reqwest::Client,
     pub shell: Arc<dyn ShellExecutionPort>,
-    pub memory_manager: Option<Arc<MemoryManager>>,
+    pub memory_manager: Option<Arc<dyn MemoryService>>,
     pub secret_registry: Arc<SecretRegistry>,
 }

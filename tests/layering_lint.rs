@@ -56,19 +56,7 @@ const DOMAIN_IO_CRATES: &[&str] = &[
 
 /// Known violations: (file relative to `src/`, forbidden path prefix).
 /// Remove entries as they are fixed; never add without a plan entry.
-const EXCEPTIONS: &[(&str, &str)] = &[
-    // ToolCtx / PluginCtx carry concrete handles until they become ports.
-    ("ports/tool.rs", "crate::adapters::memory::manager"),
-    ("ports/tool.rs", "crate::adapters::outbound::secrets"),
-    (
-        "application/tools/registry.rs",
-        "crate::adapters::memory::manager",
-    ),
-    (
-        "application/tools/registry.rs",
-        "crate::adapters::outbound::secrets",
-    ),
-];
+const EXCEPTIONS: &[(&str, &str)] = &[];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {

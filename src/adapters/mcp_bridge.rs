@@ -27,11 +27,11 @@ use crate::ports::memory::VectorStore;
 // The plugin set comes from `outbound::tools::register_catalog`; this file
 // stays focused on stdio JSON-RPC + executor wiring.
 use crate::adapters::inbound::activity::build_tool_activity_text;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::tool::PluginCtx;
 use crate::ports::tool_activity::ToolActivityPort;
 
@@ -494,7 +494,9 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         config: &agent_config,
         http: http_client.clone(),
         shell: Arc::clone(&shell),
-        memory_manager: memory_manager_handle.clone(),
+        memory_manager: memory_manager_handle
+            .clone()
+            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry: Arc::clone(&secret_registry),
     };
 
@@ -549,7 +551,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory_manager: memory_manager_handle,
+        memory_manager: memory_manager_handle
+            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry,
         activity: Arc::new(BridgeActivity),
         scopes,

@@ -24,9 +24,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
 use crate::domain::memory::ChunkMetadata;
 use crate::domain::message::ToolDef;
+use crate::ports::memory::MemoryService;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Tool name (kept constant for cross-module reference).
@@ -35,11 +35,11 @@ pub(crate) const MEMORY_INGEST_TOOL_NAME: &str = "memory_ingest";
 
 pub(crate) struct MemoryIngestTool {
     def: ToolDef,
-    memory_manager: Arc<MemoryManager>,
+    memory_manager: Arc<dyn MemoryService>,
 }
 
 impl MemoryIngestTool {
-    pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
+    pub(crate) fn new(memory_manager: Arc<dyn MemoryService>) -> Self {
         Self {
             def: super::memory_ingest_def(),
             memory_manager,

@@ -179,6 +179,16 @@ async fn embed_batch_openrouter(
     Ok(out)
 }
 
+#[async_trait::async_trait]
+impl crate::ports::memory::Embedding for Embedder {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        Embedder::embed(self, text).await
+    }
+    async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        Embedder::embed_batch(self, texts).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -150,8 +150,8 @@ pub(crate) struct MetricRunCtx<'a> {
     pub judge: Option<Arc<dyn JudgeClient>>,
     // Fields needed for live tool dispatch via `tool_assertion`.
     pub http: Option<&'a reqwest::Client>,
-    pub memory_manager: Option<&'a crate::adapters::memory::manager::MemoryManager>,
-    pub secret_registry: Option<&'a crate::adapters::outbound::secrets::SecretRegistry>,
+    pub memory_manager: Option<&'a dyn crate::ports::memory::MemoryService>,
+    pub secret_registry: Option<&'a crate::domain::secrets::SecretRegistry>,
     pub activity: Option<&'a dyn crate::ports::tool_activity::ToolActivityPort>,
     pub tool_scopes: Option<&'a std::collections::HashMap<String, crate::domain::scope::ToolScope>>,
     /// Conversation slice the metric may inspect (used by `dialog_replay`).

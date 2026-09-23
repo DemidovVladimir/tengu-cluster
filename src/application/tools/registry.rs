@@ -10,11 +10,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
+use crate::ports::memory::MemoryService;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::{ConversationView, PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 use crate::ports::tool_activity::ToolActivityPort;
@@ -99,7 +99,7 @@ pub(crate) struct PluginToolExecutor {
     pub workspace: std::path::PathBuf,
     pub shell: Arc<dyn ShellExecutionPort>,
     pub http: reqwest::Client,
-    pub memory_manager: Option<Arc<MemoryManager>>,
+    pub memory_manager: Option<Arc<dyn MemoryService>>,
     pub secret_registry: Arc<SecretRegistry>,
     pub activity: Arc<dyn ToolActivityPort>,
     pub scopes: HashMap<String, ToolScope>,
@@ -172,8 +172,8 @@ impl ToolExecutor for PluginToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::outbound::secrets::SecretRegistry;
     use crate::adapters::outbound::shell::LocalShellExecutor;
+    use crate::domain::secrets::SecretRegistry;
     use serde_json::Value;
 
     struct StubTool {

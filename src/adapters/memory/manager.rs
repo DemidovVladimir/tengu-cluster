@@ -4,10 +4,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::domain::memory::{ChunkMetadata, MemoryHit};
 use crate::ports::memory::MemoryProvider;
-use crate::ports::memory::VectorStore;
+use crate::ports::memory::{Embedding, MemoryService, VectorStore};
 
 pub struct MemoryManager {
     providers: Arc<RwLock<Vec<Box<dyn MemoryProvider>>>>,
@@ -18,7 +17,7 @@ pub struct MemoryManager {
     /// store without going through the provider indirection (which is
     /// shaped for pre-turn fetch / post-turn sync, not user-driven
     /// ingestion).
-    vector: RwLock<Option<(Arc<Embedder>, Arc<dyn VectorStore>)>>,
+    vector: RwLock<Option<(Arc<dyn Embedding>, Arc<dyn VectorStore>)>>,
 }
 
 impl MemoryManager {
@@ -50,7 +49,11 @@ impl MemoryManager {
     /// search paths. Call once alongside `add_provider(BuiltinMemoryProvider)`
     /// so both the provider's pre/post-turn path and the tool path address
     /// the same store.
-    pub async fn set_vector_backend(&self, embedder: Arc<Embedder>, store: Arc<dyn VectorStore>) {
+    pub async fn set_vector_backend(
+        &self,
+        embedder: Arc<dyn Embedding>,
+        store: Arc<dyn VectorStore>,
+    ) {
         *self.vector.write().await = Some((embedder, store));
     }
 
@@ -218,6 +221,37 @@ impl MemoryManager {
         for p in providers.iter().rev() {
             p.shutdown().await;
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl MemoryService for MemoryManager {
+    async fn ingest_one(
+        &self,
+        text: &str,
+        agent: &str,
+        metadata: ChunkMetadata,
+    ) -> anyhow::Result<String> {
+        MemoryManager::ingest_one(self, text, agent, metadata).await
+    }
+    async fn ingest_batch(
+        &self,
+        texts: &[&str],
+        agent: &str,
+        metadata: ChunkMetadata,
+    ) -> anyhow::Result<usize> {
+        MemoryManager::ingest_batch(self, texts, agent, metadata).await
+    }
+    async fn search(
+        &self,
+        query: &str,
+        top_k: usize,
+        filter: Option<&ChunkMetadata>,
+    ) -> anyhow::Result<Vec<MemoryHit>> {
+        MemoryManager::search(self, query, top_k, filter).await
+    }
+    async fn delete_entry(&self, id: &str) -> anyhow::Result<bool> {
+        MemoryManager::delete_entry(self, id).await
     }
 }
 

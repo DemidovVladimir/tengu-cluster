@@ -7,6 +7,7 @@ pub(crate) mod message;
 pub(crate) mod metrics;
 pub(crate) mod plan;
 pub(crate) mod scope;
+pub(crate) mod secrets;
 pub(crate) mod session;
 pub(crate) mod token;
 pub(crate) mod tools;

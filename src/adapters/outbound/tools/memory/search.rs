@@ -14,10 +14,10 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::outbound::tools::args::require_str;
 use crate::domain::memory::ChunkMetadata;
 use crate::domain::message::ToolDef;
+use crate::ports::memory::MemoryService;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Tool name (kept constant for cross-module reference).
@@ -29,11 +29,11 @@ const DEFAULT_TOP_K: usize = 5;
 
 pub(crate) struct MemorySearchTool {
     def: ToolDef,
-    memory_manager: Arc<MemoryManager>,
+    memory_manager: Arc<dyn MemoryService>,
 }
 
 impl MemorySearchTool {
-    pub(crate) fn new(memory_manager: Arc<MemoryManager>) -> Self {
+    pub(crate) fn new(memory_manager: Arc<dyn MemoryService>) -> Self {
         Self {
             def: super::memory_search_def(),
             memory_manager,
@@ -140,6 +140,7 @@ impl Tool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::memory::manager::MemoryManager;
     use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
     use crate::adapters::outbound::memory::embedder::Embedder;
     use crate::adapters::outbound::tools::memory::ingest::MemoryIngestTool;
@@ -169,7 +170,8 @@ mod tests {
         let harness = TestHarness::new(tmp.path());
         let manager = make_manager();
 
-        let ingest = MemoryIngestTool::new(Arc::clone(&manager));
+        let ingest =
+            MemoryIngestTool::new(manager.clone() as Arc<dyn crate::ports::memory::MemoryService>);
         let ingest_args = json!({
             "content": "The Alpha Protocol was signed on 2026-01-15.",
             "agent_id": "researcher",
@@ -180,7 +182,7 @@ mod tests {
             .await
             .expect("ingest should succeed");
 
-        let search = MemorySearchTool::new(Arc::clone(&manager));
+        let search = MemorySearchTool::new(manager.clone());
         let search_args = json!({
             "query": "Alpha Protocol signing date",
             "top_k": 5,
@@ -222,7 +224,8 @@ mod tests {
         let harness = TestHarness::new(tmp.path());
         let manager = make_manager();
 
-        let ingest = MemoryIngestTool::new(Arc::clone(&manager));
+        let ingest =
+            MemoryIngestTool::new(manager.clone() as Arc<dyn crate::ports::memory::MemoryService>);
         ingest
             .execute(
                 &json!({
@@ -246,7 +249,7 @@ mod tests {
             .await
             .unwrap();
 
-        let search = MemorySearchTool::new(Arc::clone(&manager));
+        let search = MemorySearchTool::new(manager.clone());
         let out = search
             .execute(
                 &json!({
