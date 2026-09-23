@@ -29,10 +29,10 @@ use crate::adapters::chat_builder::{
     handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
     EngineInfo,
 };
-use crate::adapters::engine_builder::build_engine;
-use crate::adapters::engine_builder::SanitizedToolExecutor;
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::secrets::SanitizedToolExecutor;
+use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
@@ -100,7 +100,7 @@ impl TelegramPipe {
     /// takes 10–15s and each `getUpdates` is the 10s long poll plus that.
     fn build_bot(token: &str) -> Result<teloxide::Bot> {
         let mut builder = teloxide::net::default_reqwest_settings();
-        if let Some(proxy) = crate::adapters::egress::policy().http_connect_proxy() {
+        if let Some(proxy) = crate::adapters::outbound::egress::policy().http_connect_proxy() {
             builder = builder
                 .proxy(reqwest011::Proxy::all(proxy).context("telegram proxy url")?)
                 .connect_timeout(std::time::Duration::from_secs(30))
@@ -426,7 +426,7 @@ struct TelegramToolActivityAdapter {
 
 impl ToolActivityPort for TelegramToolActivityAdapter {
     fn publish_tool_activity(&self, call: &ToolCall) {
-        let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+        let (title, detail) = crate::adapters::inbound::activity::build_tool_activity_text(call);
         let mut text = format!("[{}] {}", self.agent_label, title);
         if let Some(detail) = detail {
             text.push_str(": ");
@@ -570,7 +570,7 @@ impl TelegramSession {
             channel_runtime::build_memory_manager(&memory_config, rt, first_workspace.as_deref());
         let has_memory = rt.block_on(async { memory_manager_early.has_vector_backend().await });
 
-        crate::adapters::scaffold::maybe_apply_scaffold(&config);
+        crate::adapters::outbound::scaffold::maybe_apply_scaffold(&config);
 
         // Build per-agent runtime state.
         let mut agent_states: HashMap<String, TelegramAgentState> = HashMap::new();
@@ -607,7 +607,10 @@ impl TelegramSession {
                 &agent_config.workspace_tools,
             );
             let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
-                channel_runtime::compute_bridge_tools(has_memory, &agent_config.workspace_tools)
+                crate::adapters::outbound::tools::advertised_defs(
+                    has_memory,
+                    &agent_config.workspace_tools,
+                )
             } else {
                 vec![]
             };
@@ -1640,7 +1643,7 @@ impl TelegramSession {
                     .unwrap_or_default(),
                 project: None,
             };
-            if let Err(e) = crate::adapters::scaffold::apply_scaffold(&project_scaffold) {
+            if let Err(e) = crate::adapters::outbound::scaffold::apply_scaffold(&project_scaffold) {
                 self.pipe
                     .send_text(
                         sender,

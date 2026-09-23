@@ -1,0 +1,96 @@
+//! Human-readable tool-activity lines shown by the TUI and Telegram.
+
+use crate::domain::message::ToolCall;
+
+pub(crate) fn build_tool_activity_text(call: &ToolCall) -> (String, Option<String>) {
+    let title = prettify_tool_name(&call.name);
+    let detail = summarize_tool_args_for(&call.name, &call.arguments);
+    let detail = if detail.is_empty() {
+        None
+    } else {
+        Some(detail)
+    };
+    (title, detail)
+}
+
+/// Build a short human-readable summary of tool arguments for activity lines.
+///
+/// Tool-aware: uses the tool name to pick the most informative arguments
+/// (e.g. URL for http_request, destination for sign_and_send_transaction).
+fn summarize_tool_args_for(tool_name: &str, args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(m) if !m.is_empty() => m,
+        _ => return String::new(),
+    };
+
+    match tool_name {
+        "http_request" => {
+            let method = obj.get("method").and_then(|v| v.as_str()).unwrap_or("?");
+            let url = obj.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("{} {}", method, truncate_detail(url, 100))
+        }
+        "sign_and_send_transaction" => {
+            let to = obj.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            let chain = obj.get("chain_id").and_then(|v| v.as_u64());
+            match chain {
+                Some(id) => format!("to={} chain={}", to, id),
+                None => format!("to={}", to),
+            }
+        }
+        _ => summarize_tool_args(args),
+    }
+}
+
+/// Generic argument summary fallback for tools without special handling.
+fn summarize_tool_args(args: &serde_json::Value) -> String {
+    let obj = match args.as_object() {
+        Some(m) if !m.is_empty() => m,
+        _ => return String::new(),
+    };
+
+    if obj.len() == 1 {
+        if let Some(val) = obj.values().next().and_then(|v| v.as_str()) {
+            return truncate_detail(val, 120);
+        }
+    }
+
+    let mut short_args: Vec<(&str, &str)> = obj
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.as_str(), s)))
+        .collect();
+    short_args.sort_by_key(|(_, v)| v.len());
+
+    if let Some(&(_, val)) = short_args.first() {
+        if val.len() <= 120 {
+            return truncate_detail(val, 120);
+        }
+    }
+
+    let parts: Vec<String> = obj
+        .iter()
+        .filter_map(|(k, v)| {
+            v.as_str()
+                .map(|s| format!("{}={}", k, truncate_detail(s, 60)))
+        })
+        .collect();
+    parts.join(" ")
+}
+
+/// Convert "run_command" → "Run Command".
+fn prettify_tool_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Truncate a display string, appending "…" if it exceeds the limit.
+fn truncate_detail(s: &str, max: usize) -> String {
+    crate::domain::token::truncate_with_suffix(s, max, "…")
+}

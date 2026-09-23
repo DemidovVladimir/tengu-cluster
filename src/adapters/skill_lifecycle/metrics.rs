@@ -151,7 +151,7 @@ pub(crate) struct MetricRunCtx<'a> {
     // Fields needed for live tool dispatch via `tool_assertion`.
     pub http: Option<&'a reqwest::Client>,
     pub memory_manager: Option<&'a crate::adapters::memory::manager::MemoryManager>,
-    pub secret_registry: Option<&'a crate::adapters::secret_builder::SecretRegistry>,
+    pub secret_registry: Option<&'a crate::adapters::outbound::secrets::SecretRegistry>,
     pub activity: Option<&'a dyn crate::ports::tool_activity::ToolActivityPort>,
     pub tool_scopes: Option<&'a std::collections::HashMap<String, crate::domain::scope::ToolScope>>,
     /// Conversation slice the metric may inspect (used by `dialog_replay`).

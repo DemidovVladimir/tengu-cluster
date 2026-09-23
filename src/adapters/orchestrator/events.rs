@@ -2,7 +2,7 @@
 
 use tokio::sync::broadcast;
 
-use crate::adapters::metrics::MetricsRecord;
+use crate::domain::metrics::MetricsRecord;
 use crate::domain::plan::{Plan, StepId};
 
 /// Phase 6.1 (full) — flat projection of a single RAG search hit attached

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
 use crate::ports::engine::ToolExecutor;
@@ -172,8 +172,8 @@ impl ToolExecutor for PluginToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::secret_builder::SecretRegistry;
-    use crate::adapters::shell_executor::LocalShellExecutor;
+    use crate::adapters::outbound::secrets::SecretRegistry;
+    use crate::adapters::outbound::shell::LocalShellExecutor;
     use serde_json::Value;
 
     struct StubTool {

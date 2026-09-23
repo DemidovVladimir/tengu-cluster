@@ -9,7 +9,7 @@
 //! | `ports` | `domain`, `config` |
 //! | `config` | `domain` |
 //! | `application` | `domain`, `ports`, `config`, `application` |
-//! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` |
+//! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` (`FORBIDDEN`) |
 //!
 //! `EXCEPTIONS` lists known violations still being unwound. It may only
 //! shrink; the rewrite is done when it is empty.
@@ -34,6 +34,13 @@ const RULES: &[(&str, &[&str])] = &[
     ("application", &["domain", "ports", "config", "application"]),
 ];
 
+/// (layer dir under `src/`, path prefixes it must not reference) — for
+/// layers that may use most of the crate.
+const FORBIDDEN: &[(&str, &[&str])] = &[(
+    "adapters/outbound",
+    &["crate::adapters::inbound", "crate::bootstrap"],
+)];
+
 /// Crates that do IO; `domain` must not name them.
 const DOMAIN_IO_CRATES: &[&str] = &[
     "reqwest::",
@@ -52,14 +59,14 @@ const DOMAIN_IO_CRATES: &[&str] = &[
 const EXCEPTIONS: &[(&str, &str)] = &[
     // ToolCtx / PluginCtx carry concrete handles until they become ports.
     ("ports/tool.rs", "crate::adapters::memory::manager"),
-    ("ports/tool.rs", "crate::adapters::secret_builder"),
+    ("ports/tool.rs", "crate::adapters::outbound::secrets"),
     (
         "application/tools/registry.rs",
         "crate::adapters::memory::manager",
     ),
     (
         "application/tools/registry.rs",
-        "crate::adapters::secret_builder",
+        "crate::adapters::outbound::secrets",
     ),
 ];
 
@@ -143,6 +150,25 @@ fn violations() -> Vec<String> {
                         if line.contains(io) {
                             found.push(format!("src/{rel}:{n}: `domain` must not do IO (`{io}`)"));
                         }
+                    }
+                }
+            }
+        }
+    }
+    for (dir, forbidden) in FORBIDDEN {
+        let mut files = Vec::new();
+        rust_files(&src.join(dir), &mut files);
+        for file in files {
+            let rel = file
+                .strip_prefix(&src)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = fs::read_to_string(&file).unwrap();
+            for (n, line) in code_lines(&text) {
+                for path in crate_paths(line) {
+                    if forbidden.iter().any(|p| path.starts_with(p)) {
+                        found.push(format!("src/{rel}:{n}: `{dir}` must not use `{path}`"));
                     }
                 }
             }

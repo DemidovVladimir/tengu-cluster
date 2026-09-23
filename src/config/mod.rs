@@ -1175,14 +1175,7 @@ impl Config {
             format!("{pb_prefix}.max_skill_context_tokens cannot exceed max_total_tokens"),
         );
 
-        let valid_workspace_tools = [
-            "agentic_memory",
-            "shared_cache",
-            "persistent_store",
-            "skill_distill",
-            "apply_improver_proposal",
-            "manage_skill",
-        ];
+        let valid_workspace_tools = crate::domain::tools::WORKSPACE_TOOLS;
         for wt in &agent.workspace_tools {
             if !valid_workspace_tools.contains(&wt.as_str()) {
                 errors.push(format!(

@@ -10,12 +10,12 @@
 
 use anyhow::Result;
 
-use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
 use crate::adapters::flow_builder::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::prompt_budget::{assemble_recent_history, compute_base_input_budget};
+use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
 use crate::config::AgentConfig;
 use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
 use crate::domain::session::{ChatLoopState, FlowCompactionPolicy};

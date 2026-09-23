@@ -18,18 +18,17 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
+use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::config::Config;
 use crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::memory::VectorStore;
-// Phase 7.7 — plugin imports removed; bridge delegates to
-// `channel_runtime::register_core_plugins` which has its own local imports.
-// Keeps the bridge file focused on stdio JSON-RPC + executor wiring rather
-// than re-listing the plugin set.
-use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::shell_executor::LocalShellExecutor;
-use crate::adapters::tool_builder::build_tool_activity_text;
+// The plugin set comes from `outbound::tools::register_catalog`; this file
+// stays focused on stdio JSON-RPC + executor wiring.
+use crate::adapters::inbound::activity::build_tool_activity_text;
+use crate::adapters::outbound::secrets::SecretRegistry;
+use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
@@ -140,7 +139,7 @@ pub async fn run_mcp_bridge() -> Result<()> {
             crate::config::egress::EgressConfig::default()
         }
     };
-    crate::adapters::egress::install(&standalone_egress)?;
+    crate::adapters::outbound::egress::install(&standalone_egress)?;
     let workspace = std::env::var("TENGU_BRIDGE_WORKSPACE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
@@ -178,7 +177,7 @@ pub async fn run_agentic_memory_mcp_server() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_MCP_RESULT_CHARS);
 
-    let tools = crate::adapters::plugins::agentic_memory::tool_defs();
+    let tools = crate::adapters::outbound::tools::agentic_memory::tool_defs();
     serve_mcp_stdio(&workspace, tools, max_result_chars, "tengu-agentic-memory").await
 }
 
@@ -421,7 +420,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("default config missing 'main' agent"))?;
     // Phase 7.7 refactor #5 — same allowlist `channel_runtime::subagent_config` uses.
-    agent_config.workspace_tools = crate::adapters::channel_runtime::WORKSPACE_TOOLS_ALLOWLIST
+    agent_config.workspace_tools = crate::domain::tools::WORKSPACE_TOOLS
         .iter()
         .filter(|t| allowed_names.contains(**t))
         .map(|t| t.to_string())
@@ -430,8 +429,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     let shell: Arc<dyn crate::ports::shell::ShellExecutionPort> =
         Arc::new(LocalShellExecutor::new());
 
-    let http_client =
-        crate::adapters::egress::policy().tool_client(std::time::Duration::from_secs(60))?;
+    let http_client = crate::adapters::outbound::egress::policy()
+        .tool_client(std::time::Duration::from_secs(60))?;
 
     let secret_registry = Arc::new(SecretRegistry::new());
 
@@ -442,7 +441,8 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     // the same backing store.
     let needs_memory = allowed_names.contains("memory_ingest")
         || allowed_names.contains("memory_search")
-        || allowed_names.contains(crate::adapters::plugins::memory::PERSISTENT_STORE_TOOL_NAME);
+        || allowed_names
+            .contains(crate::adapters::outbound::tools::memory::PERSISTENT_STORE_TOOL_NAME);
     let memory_manager_handle: Option<Arc<MemoryManager>> = if needs_memory {
         match std::env::var("OPENROUTER_API_KEY") {
             Ok(api_key) => {
@@ -490,17 +490,13 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     // routing. SkillPlugin needs a `SkillRegistry` that the bridge's
     // standalone subprocess context can't sensibly construct.
 
-    // Phase 7.7 — register the shared plugin set via the consolidated
-    // helper. Adding a new shared plugin only requires editing
-    // `register_core_plugins` in channel_runtime; this bridge picks it up
-    // automatically. Bug B/C wouldn't have happened if this had been
-    // consolidated from day one.
-    crate::adapters::channel_runtime::register_core_plugins(
+    // Same catalog as the in-process executor (`build_tool_executor`).
+    crate::adapters::outbound::tools::register_catalog(
         &mut registry,
         &plugin_ctx,
         &allowed_names,
         &allowed_list,
-        crate::adapters::channel_runtime::CoreRegistrationOpts {
+        crate::adapters::outbound::tools::CatalogOpts {
             cancel: None,
             memory_config: Some(&crate::config::MemoryConfig::default()),
         },

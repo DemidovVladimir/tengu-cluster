@@ -20,19 +20,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
+use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::config::{AgentConfig, McpServerConfig};
 use crate::ports::memory::VectorStore;
-// Phase 7.7 — most plugin type imports moved into `register_core_plugins`'s
-// local `use` block. Only McpPlugin + SkillPlugin stay top-level because
-// build_tool_executor still registers them outside the shared helper
-// (they need extra inputs the bridge doesn't have). persistent_store_tool_defs
-// is a module-level helper used by compute_*_tools below.
-use crate::adapters::plugins::mcp::McpPlugin;
-use crate::adapters::plugins::memory::persistent_store_tool_defs;
-use crate::adapters::plugins::skill::SkillPlugin;
-use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::shell_executor::LocalShellExecutor;
+// Plugin set: `outbound::tools::catalog`. McpPlugin + SkillPlugin are
+// registered here, outside the catalog — they need inputs the MCP bridge
+// doesn't have.
+use crate::adapters::outbound::mcp_client::McpPlugin;
+use crate::adapters::outbound::secrets::SecretRegistry;
+use crate::adapters::outbound::shell::LocalShellExecutor;
+use crate::adapters::outbound::tools::skill::SkillPlugin;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::{Lens, ToolCall, ToolDef};
@@ -132,7 +130,7 @@ pub(crate) fn build_tool_executor(
         None => LocalShellExecutor::new(),
     });
 
-    let http_client = match crate::adapters::egress::policy()
+    let http_client = match crate::adapters::outbound::egress::policy()
         .tool_client(std::time::Duration::from_secs(60))
     {
         Ok(client) => client,
@@ -157,18 +155,14 @@ pub(crate) fn build_tool_executor(
         secret_registry: Arc::clone(secret_registry),
     };
 
-    // Phase 7.7 — register the shared plugin set via the consolidated
-    // helper (workspace, memory, cache, skill-lifecycle, http, crypto,
-    // skill-resource, view-skill, manage-skill, `agentic_memory` when
-    // compiled in). Adding a new shared plugin only requires editing
-    // `register_core_plugins` — both this builder and the MCP bridge pick
-    // it up.
-    futures::executor::block_on(register_core_plugins(
+    // Register the tool catalog (`outbound/tools/mod.rs`) — the same call
+    // the MCP bridge makes, so a new catalog row reaches both.
+    futures::executor::block_on(crate::adapters::outbound::tools::register_catalog(
         &mut registry,
         &plugin_ctx,
         &allowed_names,
         &allowed_list,
-        CoreRegistrationOpts {
+        crate::adapters::outbound::tools::CatalogOpts {
             cancel: cancel.clone(),
             memory_config,
         },
@@ -223,25 +217,6 @@ pub(crate) fn build_tool_executor(
     })
 }
 
-/// Phase 7.7 refactor #5 — single source of truth for the opt-in
-/// workspace tools. Pre-7.7 this list was duplicated in the subprocess
-/// config builder (now `subagent_config`; then `WORKSPACE_TOOLS_ALLOWLIST`) and
-/// `mcp_bridge::build_bridge_executor` (as `SYNTHESIZED_WORKSPACE_TOOLS`),
-/// with a real risk that adding another opt-in would silently work in one
-/// path and not the other. Now both filter against this constant.
-///
-/// Adding a new opt-in workspace tool: append the name here, add the
-/// matching plugin registration in `register_core_plugins`, and add it to
-/// `config/mod.rs::valid_workspace_tools` (config validation).
-pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
-    "agentic_memory",
-    "shared_cache",
-    "persistent_store",
-    "skill_distill",
-    "apply_improver_proposal",
-    "manage_skill",
-];
-
 /// Resolve the per-tool scope map for an executor: a configured entry in
 /// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
 /// already folded in) wins; any tool without one gets `permissive_scope`.
@@ -292,189 +267,9 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
         net_hosts: vec!["*".to_string()],
         env_reads: vec!["*".to_string()],
         shell_bins: vec!["*".to_string()],
-        wallets: vec![crate::adapters::plugins::crypto::helpers::DEFAULT_WALLET_LABEL.to_string()],
-    }
-}
-
-/// Phase 7.7 — opts struct for `register_core_plugins`. Carries the few
-/// inputs that differ between in-process and bridge call sites (cancel
-/// flag, memory config). The plugin SET registered here is identical
-/// across paths; `SkillPlugin` and `McpPlugin` (which need extra inputs
-/// that don't make sense in the bridge) stay outside this function and
-/// are registered by callers that need them.
-pub(crate) struct CoreRegistrationOpts<'a> {
-    pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    pub memory_config: Option<&'a crate::config::MemoryConfig>,
-}
-
-/// Phase 7.7 — register the core plugins shared by every executor:
-/// workspace, memory, cache (opt-in), skill-lifecycle (opt-in), http, crypto,
-/// plus optional feature-gated plugins (e.g. `agentic_memory`). Note:
-/// `compress_and_store` has no plugin handler — only its tool *definition* is
-/// advertised (the runner intercepts the call out-of-band).
-///
-/// Before this consolidation, `channel_runtime::build_tool_executor` and
-/// `mcp_bridge::build_bridge_executor` each had their own copy of this
-/// registration loop, with subtle drift (different error messages,
-/// different gating order, the bridge missing the compress_and_store
-/// plugin entirely until Phase 7.6 etc.). The "Bug B / Bug C" loop in
-/// `docs/SESSION_HANDOFF.md` was caused by fixing one copy and forgetting
-/// the other. Adding a new shared plugin now means editing this function
-/// once — both call sites pick it up.
-pub(crate) async fn register_core_plugins(
-    registry: &mut crate::application::tools::registry::ToolRegistry,
-    ctx: &crate::ports::tool::PluginCtx<'_>,
-    allowed_names: &HashSet<String>,
-    allowed_list: &[String],
-    opts: CoreRegistrationOpts<'_>,
-) {
-    use crate::adapters::plugins::cache::{CachePlugin, SHARED_CACHE_TOOL_NAME};
-    use crate::adapters::plugins::crypto::CryptoPlugin;
-    use crate::adapters::plugins::http::HttpPlugin;
-    use crate::adapters::plugins::memory::MemoryPlugin;
-    use crate::adapters::plugins::workspace::WorkspacePlugin;
-
-    #[cfg(feature = "postgres_memory")]
-    if allowed_names.contains(crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME) {
-        if let Err(e) = registry
-            .register_plugin(
-                &crate::adapters::plugins::agentic_memory::AgenticMemoryPlugin,
-                ctx,
-                allowed_list,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "register_core_plugins: agentic_memory plugin failed");
-        }
-    }
-
-    // Workspace — read_file, list_directory, write_file, run_command.
-    if let Err(e) = registry
-        .register_plugin(&WorkspacePlugin, ctx, allowed_list)
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: workspace plugin failed");
-    }
-
-    // Memory — memory_ingest unconditionally; persistent_store gated by
-    // ctx.config.workspace_tools (the plugin handles that gating itself).
-    let chunk_size = opts
-        .memory_config
-        .map(|mc| mc.persistent_store_chunk_size)
-        .unwrap_or(1000);
-    let chunk_overlap = opts
-        .memory_config
-        .map(|mc| mc.persistent_store_chunk_overlap)
-        .unwrap_or(200);
-    let memory_plugin = MemoryPlugin::new(chunk_size, chunk_overlap);
-    if let Err(e) = registry
-        .register_plugin(&memory_plugin, ctx, allowed_list)
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: memory plugin failed");
-    }
-
-    // Cache — shared_cache (opt-in via workspace_tools).
-    if allowed_names.contains(SHARED_CACHE_TOOL_NAME) {
-        if let Err(e) = registry
-            .register_plugin(&CachePlugin, ctx, allowed_list)
-            .await
-        {
-            tracing::warn!(error = %e, "register_core_plugins: cache plugin failed");
-        }
-    }
-
-    // Skill-lifecycle — skill_distill and/or apply_improver_proposal (each
-    // opt-in via workspace_tools). Plugin registers BOTH tools; the
-    // allowlist filter inside `register_plugin` keeps only the names listed
-    // in `allowed_list`. We just need to register the plugin once when
-    // either name is opted in.
-    let want_distill =
-        allowed_names.contains(crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME);
-    let want_apply_improver = allowed_names
-        .contains(crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME);
-    if want_distill || want_apply_improver {
-        if let Err(e) = registry
-            .register_plugin(
-                &crate::adapters::plugins::skill_lifecycle::SkillLifecyclePlugin,
-                ctx,
-                allowed_list,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "register_core_plugins: skill-lifecycle plugin failed");
-        }
-    }
-
-    // `compress_and_store` has no plugin handler — the runner intercepts the
-    // call out-of-band (OpenRouter path) and the `postgres_memory` backstop in
-    // `run-agent` covers the Claude Code path. Only the tool *definition* is
-    // advertised (appended by `build_subprocess_tool_executor`). The legacy
-    // Qdrant `CompressAndStorePlugin` was removed in Phase 6.
-
-    // HTTP — http_request.
-    if let Err(e) = registry
-        .register_plugin(&HttpPlugin, ctx, allowed_list)
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: http plugin failed");
-    }
-
-    // Crypto — sign_and_send_transaction, sign_message, get_wallet_address,
-    // abi_encode, hex_to_uint256.
-    let crypto_plugin = CryptoPlugin::new(opts.cancel);
-    if let Err(e) = registry
-        .register_plugin(&crypto_plugin, ctx, allowed_list)
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: crypto plugin failed");
-    }
-
-    // Skill-resource — skill_resource (always-on; no opt-in). Lets agents
-    // read files under `skills/<name>/resources/` regardless of their own
-    // workspace path. See `plugins/skill_resource/mod.rs`.
-    // KEPT FOR BACK-COMPAT: see `plugins/view_skill/` for the unified read API.
-    if let Err(e) = registry
-        .register_plugin(
-            &crate::adapters::plugins::skill_resource::SkillResourcePlugin,
-            ctx,
-            allowed_list,
-        )
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: skill_resource plugin failed");
-    }
-
-    // View-skill — view_skill (always-on; no opt-in). Unified read API for
-    // listing / reading skills + their resources. Replaces `skill_resource`
-    // (which stays alive for back-compat). See `plugins/view_skill/mod.rs`.
-    if let Err(e) = registry
-        .register_plugin(
-            &crate::adapters::plugins::view_skill::ViewSkillPlugin,
-            ctx,
-            allowed_list,
-        )
-        .await
-    {
-        tracing::warn!(error = %e, "register_core_plugins: view_skill plugin failed");
-    }
-
-    // Manage-skill — manage_skill (opt-in via workspace_tools). Unified write
-    // API: create / edit_body / patch / add_resource / remove_resource /
-    // delete. Atomic + audit-logged + editable_by_learner gated. Supersedes
-    // `apply_improver_proposal` (kept for back-compat) and is the canonical
-    // in-chat skill mutation path. See `plugins/manage_skill/mod.rs`.
-    if allowed_names.contains(crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME) {
-        if let Err(e) = registry
-            .register_plugin(
-                &crate::adapters::plugins::manage_skill::ManageSkillPlugin,
-                ctx,
-                allowed_list,
-            )
-            .await
-        {
-            tracing::warn!(error = %e, "register_core_plugins: manage_skill plugin failed");
-        }
+        wallets: vec![
+            crate::adapters::outbound::tools::crypto::helpers::DEFAULT_WALLET_LABEL.to_string(),
+        ],
     }
 }
 
@@ -496,94 +291,7 @@ pub(crate) fn compute_base_tools(
     if !uses_tools {
         return vec![];
     }
-    let mut tools = crate::adapters::plugins::workspace::tool_defs();
-    if has_memory {
-        tools.extend(crate::adapters::plugins::memory::tool_defs());
-    }
-    if workspace_tools.iter().any(|t| t == "shared_cache") {
-        tools.extend(crate::adapters::plugins::cache::tool_defs());
-    }
-    #[cfg(feature = "postgres_memory")]
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::agentic_memory::tool_defs());
-    }
-    if workspace_tools.iter().any(|t| t == "persistent_store") {
-        tools.extend(persistent_store_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::manage_skill::tool_defs());
-    }
-    tools.extend(crate::adapters::plugins::http::tool_defs());
-    tools.extend(crate::adapters::plugins::crypto::tool_defs());
-    tools.extend(crate::adapters::plugins::skill_resource::tool_defs());
-    tools.extend(crate::adapters::plugins::view_skill::tool_defs());
-    tools
-}
-
-/// Compute the full bridge tool set for engines that manage their own workspace.
-///
-/// Unlike `compute_base_tools`, this ALWAYS returns all tools (workspace + platform +
-/// memory + cache) regardless of engine capabilities. Used to populate the MCP bridge
-/// when a Claude Code engine needs access to Tengu-native tools.
-pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String]) -> Vec<ToolDef> {
-    let mut tools = crate::adapters::plugins::workspace::tool_defs();
-    if has_memory {
-        tools.extend(crate::adapters::plugins::memory::tool_defs());
-    }
-    if workspace_tools.iter().any(|t| t == "shared_cache") {
-        tools.extend(crate::adapters::plugins::cache::tool_defs());
-    }
-    #[cfg(feature = "postgres_memory")]
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::agentic_memory::AGENTIC_MEMORY_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::agentic_memory::tool_defs());
-    }
-    if workspace_tools.iter().any(|t| t == "persistent_store") {
-        tools.extend(persistent_store_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::skill_lifecycle::SKILL_DISTILL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::distill_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::skill_lifecycle::APPLY_IMPROVER_PROPOSAL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::skill_lifecycle::apply_improver_tool_defs());
-    }
-    if workspace_tools
-        .iter()
-        .any(|t| t == crate::adapters::plugins::manage_skill::MANAGE_SKILL_TOOL_NAME)
-    {
-        tools.extend(crate::adapters::plugins::manage_skill::tool_defs());
-    }
-    tools.extend(crate::adapters::plugins::http::tool_defs());
-    tools.extend(crate::adapters::plugins::crypto::tool_defs());
-    tools.extend(crate::adapters::plugins::skill_resource::tool_defs());
-    tools.extend(crate::adapters::plugins::view_skill::tool_defs());
-    tools
+    crate::adapters::outbound::tools::advertised_defs(has_memory, workspace_tools)
 }
 
 // ---------------------------------------------------------------------------
@@ -629,8 +337,8 @@ pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> Arc<crate::adapters::memory::manager::MemoryManager> {
-    use crate::adapters::memory::builtin::BuiltinMemoryProvider;
     use crate::adapters::memory::manager::MemoryManager;
+    use crate::adapters::outbound::memory::builtin::BuiltinMemoryProvider;
 
     let manager = Arc::new(MemoryManager::new());
 
@@ -846,7 +554,7 @@ pub(crate) fn format_tool_for_activity(call: &ToolCall) -> Option<String> {
         return None;
     }
 
-    let (title, detail) = crate::adapters::tool_builder::build_tool_activity_text(call);
+    let (title, detail) = crate::adapters::inbound::activity::build_tool_activity_text(call);
     let detail_str = detail.unwrap_or_default();
     let truncated = truncate_summary(&detail_str, 80);
     Some(format!("{}: {}", title, truncated))
@@ -956,10 +664,10 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
 use async_trait::async_trait;
 
 use crate::adapters::chat_builder::ChatRuntimeService;
-use crate::adapters::engine_builder::ToolResultObserver;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::orchestrator::planner::RagPlanner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::application::chat::tool_loop::ToolResultObserver;
 use crate::config::Config;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::orchestration::Planner;
@@ -1252,7 +960,7 @@ pub(crate) fn build_orchestrator(
     // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
     // subsequent `build_orchestrator` calls reuse the already-installed
     // sink. Bridge task lives as long as the metrics sink exists.
-    let metrics_tx = crate::adapters::metrics::install_global_sink();
+    let metrics_tx = crate::application::metrics::install_global_sink();
     {
         let mut metrics_rx = metrics_tx.subscribe();
         let bus_tx = bus.clone();
@@ -1288,12 +996,13 @@ pub(crate) fn build_orchestrator(
         sandbox = ?config.sandbox_name,
         "orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner"
     );
-    let worker: Arc<dyn crate::ports::orchestration::WorkerHandle> =
-        Arc::new(crate::adapters::runner::SubprocessRunner::new(
+    let worker: Arc<dyn crate::ports::orchestration::WorkerHandle> = Arc::new(
+        crate::adapters::outbound::subprocess_runner::SubprocessRunner::new(
             config.sandbox_name.clone(),
             session_id.clone(),
             config.agents.clone(),
-        ));
+        ),
+    );
     let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
         cfg.agent.clone(),
         chat_port,
@@ -1319,11 +1028,13 @@ pub(crate) fn build_orchestrator(
 /// to the in-process config (scopes already folded with `[default_scopes]`
 /// by `Config::load`), plus the workspace-tool opt-ins the agent listed in
 /// `tools` merged into `workspace_tools`. Single shared allow-list
-/// (`WORKSPACE_TOOLS_ALLOWLIST`) — the MCP bridge filters the same way.
+/// (`crate::domain::tools::WORKSPACE_TOOLS`) — the MCP bridge filters the same way.
 pub(crate) fn subagent_config(agent: &AgentConfig) -> AgentConfig {
     let mut cfg = agent.clone();
     for t in &agent.tools {
-        if WORKSPACE_TOOLS_ALLOWLIST.contains(&t.as_str()) && !cfg.workspace_tools.contains(t) {
+        if crate::domain::tools::WORKSPACE_TOOLS.contains(&t.as_str())
+            && !cfg.workspace_tools.contains(t)
+        {
             cfg.workspace_tools.push(t.clone());
         }
     }
@@ -1391,7 +1102,8 @@ pub(crate) fn build_subprocess_tool_executor(
 
     // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
     // only need its description here for the LLM to see + call.
-    effective.push(crate::adapters::plugins::skill_lifecycle::compress_and_store::definition());
+    effective
+        .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
 
     // Skill registry is empty for the subprocess (skill bodies are loaded
     // separately and merged into the system prompt; no shell-skills exposed
@@ -1426,8 +1138,8 @@ pub(crate) async fn build_cli_chat_factory(
     config: &Config,
     workspace: &std::path::Path,
 ) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
-    use crate::adapters::engine_builder::build_engine;
     use crate::adapters::memory::manager::MemoryManager;
+    use crate::adapters::outbound::engines::build_engine;
 
     // Build a shared memory manager (no vector backend for CLI — acceptable
     // degradation; the improver only needs text generation context).
@@ -1556,7 +1268,7 @@ mod golden_tests {
     #[test]
     fn build_tool_executor_honours_agent_scopes() {
         let tmp = TempDir::new().unwrap();
-        let tools = crate::adapters::plugins::http::tool_defs();
+        let tools = crate::adapters::outbound::tools::http::tool_defs();
 
         let mut config = Config::default();
         let agent_config = config.agents.get_mut("main").unwrap();
@@ -1599,11 +1311,11 @@ mod golden_tests {
         let tmp = TempDir::new().unwrap();
 
         // Compute the same base-tool list the channel adapters use at startup.
-        let mut tools = crate::adapters::plugins::workspace::tool_defs();
-        tools.extend(crate::adapters::plugins::memory::tool_defs());
-        tools.extend(crate::adapters::plugins::cache::tool_defs());
-        tools.extend(crate::adapters::plugins::http::tool_defs());
-        tools.extend(crate::adapters::plugins::crypto::tool_defs());
+        let mut tools = crate::adapters::outbound::tools::workspace::tool_defs();
+        tools.extend(crate::adapters::outbound::tools::memory::tool_defs());
+        tools.extend(crate::adapters::outbound::tools::cache::tool_defs());
+        tools.extend(crate::adapters::outbound::tools::http::tool_defs());
+        tools.extend(crate::adapters::outbound::tools::crypto::tool_defs());
 
         let config = Config::default();
         let agent_config = config.agents.get("main").unwrap();

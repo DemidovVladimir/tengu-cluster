@@ -100,7 +100,7 @@ pub trait WorkerHandle: Send + Sync {
 }
 
 /// Pure-data telemetry returned alongside an LLM-call response so the caller
-/// can construct a [`crate::adapters::metrics::MetricsRecord`]. Defaults to
+/// can construct a [`crate::domain::metrics::MetricsRecord`]. Defaults to
 /// all-zero so trait impls that don't (yet) wire telemetry stay valid.
 ///
 /// Token counts come from the engine's `StreamEvent::Usage` frame; latency is

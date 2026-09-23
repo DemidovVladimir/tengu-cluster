@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::adapters::memory::vector::Embedder;
+use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::domain::memory::{ChunkMetadata, MemoryHit};
 use crate::ports::memory::MemoryProvider;
 use crate::ports::memory::VectorStore;

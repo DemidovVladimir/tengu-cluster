@@ -27,9 +27,7 @@
 //! - shared types (`MemoryHit`, `ChunkMetadata`, …) live in `domain/memory.rs`;
 //!   the `MemoryProvider` / `VectorStore` traits in `ports/memory.rs`.
 
-pub mod builtin;
 pub mod fencing;
 pub mod injector;
 pub mod manager;
-pub mod vector;
 pub mod writer;

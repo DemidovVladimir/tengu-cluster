@@ -304,7 +304,7 @@ pub struct StubSpec {
 pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::ports::engine::Engine>> {
     let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
     let box_engine =
-        crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000)?;
+        crate::adapters::outbound::engines::build_openrouter_engine(&judge_model, 64_000)?;
     Ok(Arc::from(box_engine))
 }
 
@@ -867,9 +867,9 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
 use crate::config::AgentConfig;
 use crate::ports::tool_activity::ToolActivityPort;
 use std::sync::atomic::AtomicU32;
@@ -1007,7 +1007,7 @@ pub struct RowCtx<'a> {
 // `NoopActivity` and `NoopRuntimeToolExecutor` live in `adapters::noop`
 // (shared with `webhook_builder`). Local re-exports keep call sites in
 // this file readable without the longer path.
-use crate::adapters::noop::{NoopActivity, NoopRuntimeToolExecutor};
+use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -1323,8 +1323,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         .find(|(_, v)| std::ptr::eq(*v, agent))
         .map(|(k, _)| k.as_str())
         .unwrap_or("default");
-    let engine_box =
-        crate::adapters::engine_builder::build_engine(agent_id, agent, cfg.claude_code.as_ref())?;
+    let engine_box = crate::adapters::outbound::engines::build_engine(
+        agent_id,
+        agent,
+        cfg.claude_code.as_ref(),
+    )?;
     let engine: Arc<dyn Engine> = Arc::from(engine_box);
 
     // 4. Build tool executor using the orchestrator.rs pattern.
@@ -1453,7 +1456,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         Ok(Err(e)) => return Err(e),
         Err(_) => (
             true,
-            crate::adapters::engine_builder::EngineResponse {
+            crate::application::chat::tool_loop::EngineResponse {
                 text: String::new(),
                 input_tokens_delta: 0,
                 output_tokens_delta: 0,
@@ -1526,7 +1529,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             FixtureContext, MetricKind, MetricOutcome, MetricRunCtx,
         };
 
-        let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+        let shell = crate::adapters::outbound::shell::LocalShellExecutor::new();
         let fixture = FixtureContext {
             prompt: &ctx.row.prompt,
             expected_outcome: Some(ctx.row.expected.as_str()),
@@ -1648,7 +1651,7 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
 
         // Per-step engine + tools + system prompt. Mirrors the direct
         // eval path (run_row steps 3–5), parameterized by agent name.
-        let engine_box = crate::adapters::engine_builder::build_engine(
+        let engine_box = crate::adapters::outbound::engines::build_engine(
             agent_name,
             agent,
             self.cfg.claude_code.as_ref(),
@@ -1770,7 +1773,7 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
             max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
         };
 
-        let response = crate::adapters::engine_builder::collect_engine_response(
+        let response = crate::application::chat::tool_loop::collect_engine_response(
             &*engine,
             &messages,
             &tool_defs,

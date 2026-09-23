@@ -268,3 +268,13 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # the `[agents.*]` blocks that carry a `description`, skills, and core tool
 # definitions on every planner turn. There is no config block — it is
 # file-backed.
+
+# --- External MCP servers (see docs/tools.md) ---------------------------------
+# Each server's tools appear as `<name>.<tool>`. Available to in-process agents
+# (TUI / Telegram); NOT yet advertised to plan-step subagents.
+# [[mcp_servers]]
+# name = "github"
+# transport = "stdio"                       # or "http" with url = "https://..."
+# command = ["npx", "-y", "@modelcontextprotocol/server-github"]
+# env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }  # $VAR resolved from the environment
+# # auth = { type = "bearer", token = "$MCP_TOKEN" }   # http transport only

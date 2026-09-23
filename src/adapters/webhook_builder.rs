@@ -57,11 +57,12 @@ use sha2::Sha256;
 use tracing::{error, info, warn};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::engine_builder::{build_engine, collect_engine_response};
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::noop::{NoopActivity, NoopRuntimeToolExecutor};
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
+use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::application::chat::tool_loop::collect_engine_response;
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role};
 use crate::ports::engine::ToolExecutor;
@@ -305,7 +306,7 @@ async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_messag
 async fn persist_webhook_output(state: &Arc<WebhookAppState>, session_id: &str, final_text: &str) {
     let embedding = match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
-            let embedder = crate::adapters::memory::vector::Embedder::new(
+            let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
                 state.config.memory.embedding_model.clone(),
             );
@@ -323,7 +324,7 @@ async fn persist_webhook_output(state: &Arc<WebhookAppState>, session_id: &str, 
         }
         Err(_) => None,
     };
-    match crate::adapters::plugins::agentic_memory::write_step_summary_with_embedding(
+    match crate::adapters::outbound::tools::agentic_memory::write_step_summary_with_embedding(
         session_id,
         "webhook-handler",
         final_text,

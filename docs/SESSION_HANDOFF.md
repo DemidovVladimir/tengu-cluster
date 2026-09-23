@@ -6,6 +6,16 @@
 
 ---
 
+## In progress — hexagonal rewrite (2026-09-23, branch `refactor/hexagonal`)
+
+Plan + status: `docs/hexagonal-plan-2026-09-23.md`. Layers `domain/ ports/ config/ application/ adapters/{inbound,outbound}/` enforced by `tests/layering_lint.rs`. Old paths in this file and the architecture docs are stale until phase 6.
+
+| Open | Detail |
+|---|---|
+| `[[mcp_servers]]` tools invisible to plan-step subagents | `build_subprocess_tool_executor` registers `McpPlugin` but builds the advertised list from the catalog only (`additional_tool_defs` is called by TUI/Telegram, not `run-agent`); the MCP bridge doesn't register `McpPlugin`. Found 2026-09-23; left as-is (restructure is behaviour-neutral). See `docs/tools.md`. |
+
+---
+
 ## TL;DR — current state (2026-09-18)
 
 Tor-by-default egress, one config per sandbox, deploy/tor = Arti + lyrebird-rs.

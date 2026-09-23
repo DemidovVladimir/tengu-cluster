@@ -13,9 +13,9 @@ mod ports;
 use crate::config::paths::{default_config_path, resolve_tengu_home};
 use crate::config::{Config, RuntimeProfile};
 
-use crate::adapters::engine_builder::build_engine;
-use crate::adapters::secret_builder;
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::secrets;
+use crate::adapters::outbound::secrets::SecretRegistry;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -317,7 +317,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        match secret_builder::load_secrets_into_env(&secrets_path) {
+        match secrets::load_secrets_into_env(&secrets_path) {
             Ok(secret_values) => {
                 for v in secret_values {
                     secret_registry.register(v);
@@ -419,7 +419,7 @@ async fn main() -> Result<()> {
 
     // Egress policy before anything builds an HTTP client or spawns a child;
     // `load_sandbox_or` re-installs from the sandbox config.
-    crate::adapters::egress::install(&config.egress)?;
+    crate::adapters::outbound::egress::install(&config.egress)?;
 
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
@@ -521,18 +521,22 @@ async fn main() -> Result<()> {
                      pruning global state only."
                 );
             }
-            let targets =
-                crate::adapters::prune::plan_prune(&crate::adapters::prune::PruneOptions {
+            let targets = crate::adapters::outbound::prune::plan_prune(
+                &crate::adapters::outbound::prune::PruneOptions {
                     tengu_home: &tengu_home,
                     workspaces: &workspaces,
                     project_dirs: &project_dirs,
                     hard,
-                });
+                },
+            );
             if targets.iter().all(|t| !t.exists) {
                 println!("Nothing to prune.");
                 return Ok(());
             }
-            println!("{}", crate::adapters::prune::format_prune_plan(&targets));
+            println!(
+                "{}",
+                crate::adapters::outbound::prune::format_prune_plan(&targets)
+            );
             if !yes {
                 eprint!("Proceed? [y/N] ");
                 let mut buf = String::new();
@@ -542,7 +546,7 @@ async fn main() -> Result<()> {
                     return Ok(());
                 }
             }
-            let results = crate::adapters::prune::execute_prune(&targets);
+            let results = crate::adapters::outbound::prune::execute_prune(&targets);
             for (label, result) in &results {
                 match result {
                     Ok(()) => println!("  ✓ {}", label),
@@ -565,15 +569,13 @@ async fn main() -> Result<()> {
             )
         }
         Commands::Secret { action } => {
-            let path = secret_builder::secrets_file_path(&resolve_tengu_home());
+            let path = secrets::secrets_file_path(&resolve_tengu_home());
             match action {
-                SecretAction::Init => secret_builder::init_secrets_file(&path)?,
-                SecretAction::Set { key, value } => {
-                    secret_builder::set_secret(&path, &key, &value)?
-                }
-                SecretAction::Remove { key } => secret_builder::remove_secret(&path, &key)?,
+                SecretAction::Init => secrets::init_secrets_file(&path)?,
+                SecretAction::Set { key, value } => secrets::set_secret(&path, &key, &value)?,
+                SecretAction::Remove { key } => secrets::remove_secret(&path, &key)?,
                 SecretAction::List => {
-                    let keys = secret_builder::list_secret_keys(&path)?;
+                    let keys = secrets::list_secret_keys(&path)?;
                     if keys.is_empty() {
                         println!("  (no secrets)");
                     } else {
@@ -582,7 +584,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                SecretAction::ChangePassword => secret_builder::change_password(&path)?,
+                SecretAction::ChangePassword => secrets::change_password(&path)?,
                 SecretAction::Path => println!("{}", path.display()),
             }
             Ok(())
@@ -605,7 +607,7 @@ async fn try_persist_agentic_step_summary(
 ) -> anyhow::Result<String> {
     let embedding = match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
-            let embedder = crate::adapters::memory::vector::Embedder::new(
+            let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
                 parent_config.memory.embedding_model.clone(),
             );
@@ -622,7 +624,7 @@ async fn try_persist_agentic_step_summary(
         }
         Err(_) => None,
     };
-    crate::adapters::plugins::agentic_memory::write_step_summary_with_embedding(
+    crate::adapters::outbound::tools::agentic_memory::write_step_summary_with_embedding(
         session_id,
         step_id,
         summary,
@@ -666,7 +668,7 @@ async fn run_agent_subprocess() -> Result<()> {
         .read_to_end(&mut buf)
         .await
         .context("read IPC input from stdin")?;
-    let input: crate::adapters::runner::AgentIpcInput =
+    let input: crate::adapters::outbound::subprocess_runner::AgentIpcInput =
         serde_json::from_slice(&buf).context("parse IPC input JSON")?;
 
     tracing::info!(
@@ -714,7 +716,7 @@ async fn run_agent_subprocess() -> Result<()> {
 
     // Parent's `[egress]` (TENGU_EGRESS) wins; an invalid policy aborts the
     // child rather than running tools unproxied.
-    crate::adapters::egress::install(&parent_config.egress)
+    crate::adapters::outbound::egress::install(&parent_config.egress)
         .context("run-agent: install egress policy")?;
 
     // ----- Resolve the agent: `[agents.<name>]` of that config -----
@@ -826,7 +828,7 @@ async fn run_agent_subprocess() -> Result<()> {
         &mut agent_cfg_for_engine.scopes,
         &workspace,
     );
-    let engine = crate::adapters::engine_builder::build_engine(
+    let engine = crate::adapters::outbound::engines::build_engine(
         &input.agent_name,
         &agent_cfg_for_engine,
         parent_config.claude_code.as_ref(),
@@ -847,7 +849,7 @@ async fn run_agent_subprocess() -> Result<()> {
 
     // ----- Build tool stack (Phase 5b) -----
     let secret_registry =
-        std::sync::Arc::new(crate::adapters::secret_builder::SecretRegistry::new());
+        std::sync::Arc::new(crate::adapters::outbound::secrets::SecretRegistry::new());
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
@@ -935,7 +937,7 @@ async fn run_agent_subprocess() -> Result<()> {
     let mut compress_called = false;
     // Per-turn metrics records — shipped back to the parent in the IPC
     // output so they can be re-emitted on the parent's metrics bus.
-    let mut subagent_metrics: Vec<crate::adapters::metrics::MetricsRecord> = Vec::new();
+    let mut subagent_metrics: Vec<crate::domain::metrics::MetricsRecord> = Vec::new();
 
     for turn in 0..input.max_turns {
         // Compute the prompt size BEFORE the engine call so the metric
@@ -948,7 +950,7 @@ async fn run_agent_subprocess() -> Result<()> {
         let turn_started = std::time::Instant::now();
 
         let (text, tool_calls, input_delta, output_delta) =
-            crate::adapters::engine_builder::run_single_engine_turn(
+            crate::application::chat::tool_loop::run_single_engine_turn(
                 engine.as_ref(),
                 &messages,
                 &tools,
@@ -962,10 +964,10 @@ async fn run_agent_subprocess() -> Result<()> {
         // Record one metric per engine turn. `input_delta`/`output_delta`
         // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
         // both supply them); they're 0 when the engine doesn't return usage.
-        let rec = crate::adapters::metrics::MetricsRecord {
-            ts_unix: crate::adapters::metrics::now_unix(),
+        let rec = crate::domain::metrics::MetricsRecord {
+            ts_unix: crate::domain::metrics::now_unix(),
             session_id: input.session_id.clone(),
-            kind: crate::adapters::metrics::MetricsKind::Subagent,
+            kind: crate::domain::metrics::MetricsKind::Subagent,
             agent: input.agent_name.clone(),
             model: model.clone(),
             prompt_tokens: input_delta,
@@ -981,7 +983,7 @@ async fn run_agent_subprocess() -> Result<()> {
         // Emit into the subprocess's own tracing log too (the parent forwards
         // stderr — Phase 7.5) so the user sees the same line whether they
         // grep the parent log or a future subprocess log file.
-        crate::adapters::metrics::record(rec.clone());
+        crate::application::metrics::record(rec.clone());
         subagent_metrics.push(rec);
 
         // If no tool calls, the model produced its final answer. Save the
@@ -1124,7 +1126,7 @@ async fn run_agent_subprocess() -> Result<()> {
         );
     }
     let out = if compress_called || !final_text.is_empty() {
-        crate::adapters::runner::AgentIpcOutput::Ok {
+        crate::adapters::outbound::subprocess_runner::AgentIpcOutput::Ok {
             output,
             summary,
             metrics: subagent_metrics,
@@ -1132,7 +1134,7 @@ async fn run_agent_subprocess() -> Result<()> {
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
         // Surface as Failed so the orchestrator can retry / replan.
-        crate::adapters::runner::AgentIpcOutput::Failed {
+        crate::adapters::outbound::subprocess_runner::AgentIpcOutput::Failed {
             error: format!(
                 "subagent '{}' produced no output and did not call compress_and_store",
                 input.agent_name
@@ -1831,7 +1833,7 @@ async fn skill_export(name: &str, out: Option<&Path>) -> Result<()> {
 
     // Shell out to `tar -czf <out> -C <staging> <name>`. `tar` crate isn't a
     // dep; system tar is fine for v1 (Linux + macOS both ship one).
-    let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+    let shell = crate::adapters::outbound::shell::LocalShellExecutor::new();
     use crate::ports::shell::ShellExecutionPort;
     let cmd = format!(
         "tar -czf {} -C {} {}",
@@ -1879,7 +1881,7 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
     std::fs::create_dir_all(&quarantine_root)
         .with_context(|| format!("create quarantine {}", quarantine_root.display()))?;
 
-    let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+    let shell = crate::adapters::outbound::shell::LocalShellExecutor::new();
     use crate::ports::shell::ShellExecutionPort;
 
     // Step 2: bring source into quarantine_root.
@@ -2464,7 +2466,7 @@ async fn run_doctor(config: &Config, tor_check: bool) -> Result<()> {
 /// the proxy port accepts TCP, and with `--tor` asks check.torproject.org
 /// (through the tool client) whether traffic exits via Tor.
 async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
-    let policy = crate::adapters::egress::policy();
+    let policy = crate::adapters::outbound::egress::policy();
     let cfg = policy.config();
     println!("  Egress:");
     println!("    network: {}", policy.network());
@@ -2543,7 +2545,9 @@ async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
     }
 }
 
-async fn tor_exit_check(policy: &crate::adapters::egress::EgressPolicy) -> Result<(bool, String)> {
+async fn tor_exit_check(
+    policy: &crate::adapters::outbound::egress::EgressPolicy,
+) -> Result<(bool, String)> {
     let body: serde_json::Value = policy
         .tool_client(std::time::Duration::from_secs(60))?
         .get("https://check.torproject.org/api/ip")
@@ -2577,7 +2581,7 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
                 format!("Failed to load sandbox '{}' from {}", name, path.display())
             })?;
             cfg.sandbox_name = Some(name);
-            crate::adapters::egress::install(&cfg.egress)?;
+            crate::adapters::outbound::egress::install(&cfg.egress)?;
             cfg
         }
     };
@@ -2585,7 +2589,7 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
     // config). Children inherit it via `TENGU_EGRESS` and stay quiet — the
     // parent already printed the warning.
     if std::env::var_os("TENGU_AGENT_IPC").is_none() {
-        crate::adapters::egress::policy().warn_if_proxy_unreachable();
+        crate::adapters::outbound::egress::policy().warn_if_proxy_unreachable();
     }
     Ok(cfg)
 }

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::secret_builder::SecretRegistry;
+use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
 use crate::ports::shell::ShellExecutionPort;

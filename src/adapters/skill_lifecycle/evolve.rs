@@ -380,7 +380,7 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
         anyhow::anyhow!("[skill_lifecycle] config missing; needed for tengu skill evolve")
     })?;
     let max_cycles = args.max_cycles.unwrap_or(sl.default_max_evolve_cycles);
-    let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+    let shell = crate::adapters::outbound::shell::LocalShellExecutor::new();
 
     // 0. Startup sweep — remove any leaked scratch worktrees older than the
     //    configured threshold (default 24h). Covers crashes / Ctrl-C exits.

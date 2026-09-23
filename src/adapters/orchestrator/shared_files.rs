@@ -243,7 +243,7 @@ fn render_registry(
 /// Core tool defs (every workspace-tool opt-in included) followed by the
 /// MCP tool defs the planner enumerated for this session.
 fn registry_tools(mcp_tools: &[ToolDef]) -> Vec<ToolDef> {
-    let workspace_tools = crate::adapters::channel_runtime::WORKSPACE_TOOLS_ALLOWLIST
+    let workspace_tools = crate::domain::tools::WORKSPACE_TOOLS
         .iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -265,7 +265,7 @@ fn registry_tools(mcp_tools: &[ToolDef]) -> Vec<ToolDef> {
 /// list). Fail-soft per server: an unreachable server logs a warning and is
 /// skipped. Returns an empty `Vec` when `servers` is empty.
 pub(crate) async fn enumerate_mcp_tools(servers: &[McpServerConfig]) -> Vec<ToolDef> {
-    use crate::adapters::plugins::mcp::client::{McpCaller, McpClient};
+    use crate::adapters::outbound::mcp_client::client::{McpCaller, McpClient};
 
     let mut out: Vec<ToolDef> = Vec::new();
     for cfg in servers {

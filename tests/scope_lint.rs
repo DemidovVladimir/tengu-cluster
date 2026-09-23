@@ -1,6 +1,6 @@
 //! Scope enforcement lint.
 //!
-//! Asserts that every `Tool::execute` body under `src/adapters/plugins/`
+//! Asserts that every `Tool::execute` body under `src/adapters/outbound/{tools,mcp_client}/`
 //! begins with a `ctx.scope.check_*()` call. This prevents new tools from
 //! shipping without explicit scope gating.
 
@@ -47,8 +47,16 @@ fn can_read_all_adapter_sources() {
 fn every_tool_execute_checks_scope() {
     use regex::Regex;
 
-    let plugins_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/plugins");
-    let files = collect_rs_files(&plugins_dir);
+    // Every `Tool` impl: the tool catalog + MCP proxy tools.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters/outbound");
+    let mut files = collect_rs_files(&root.join("tools"));
+    files.extend(collect_rs_files(&root.join("mcp_client")));
+    assert!(
+        files.len() >= 10,
+        "scope lint found only {} tool files under {} — did the tools move?",
+        files.len(),
+        root.display()
+    );
 
     // Pattern: find `fn execute(` inside an impl block, then check the body
     // contains `scope.check_` within the next ~30 lines. A `// scope: pure-compute`

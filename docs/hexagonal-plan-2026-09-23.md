@@ -22,24 +22,25 @@ Lint starts with an explicit exception list; the list must be empty before the P
 ```
 src/
   main.rs                    thin: clap parse → adapters::inbound::cli::dispatch
-  domain/                    message.rs (Role, Message, ToolCall, ToolDef, StreamEvent, Lens, Inbound*) · session.rs (ChatLoopState, PromptAssemblyReport …) · memory.rs (MemoryHit, ChunkMetadata) · plan.rs · scope.rs (ToolScope) · token.rs · usage.rs · metrics.rs (MetricsRecord/Kind/Layer)
-  ports/                     engine.rs (Engine, EngineContext, ToolExecutor) · tool.rs (Tool, ToolPlugin, ToolCtx, PluginCtx, ToolOutput) · memory.rs (MemoryProvider, VectorStore) · shell.rs · skill_source.rs · tool_activity.rs · orchestration.rs (Planner, PlannerVerdict, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry) · metrics_sink.rs · judge.rs (JudgeClient, MetricKind)
+  domain/                    message.rs (Role, Message, ToolCall, ToolDef, StreamEvent, Lens, Inbound*) · session.rs (ChatLoopState, PromptAssemblyReport …) · memory.rs (MemoryHit, ChunkMetadata) · plan.rs · scope.rs (ToolScope) · token.rs · usage.rs · metrics.rs (MetricsRecord/Kind/Layer, AggregatorState) · tools.rs (opt-in tool names)
+  ports/                     engine.rs (Engine, EngineContext, ToolExecutor) · tool.rs (Tool, ToolPlugin, ToolCtx, PluginCtx, ToolOutput) · memory.rs (MemoryProvider, VectorStore) · shell.rs · skill_source.rs · tool_activity.rs · orchestration.rs (Planner, PlannerVerdict, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry) · judge.rs (JudgeClient, MetricKind)
   config/                    mod.rs (Config, AgentConfig, LimitsConfig, McpServerConfig …) · egress.rs (EgressConfig + validation) · skill_lifecycle.rs · paths.rs (TENGU_HOME, default config path, expand_tilde)
   application/
-    chat/                    service.rs (chat_builder) · flow.rs · prompt_budget.rs
+    chat/                    tool_loop.rs (collect_engine_response) · service.rs (chat_builder) · flow.rs · prompt_budget.rs
     orchestrator/            planner.rs · replan.rs · executor.rs · retry.rs · events.rs · shared_files.rs
     memory/                  manager.rs · builtin.rs · injector.rs · fencing.rs · writer.rs
     skills/                  registry.rs (skill_builder) · lifecycle/ (evolve, scanner, metrics, approval_gate …)
     tools/                   registry.rs (ToolRegistry, PluginToolExecutor)
+    metrics.rs               global metrics bus (record / install_global_sink)
     eval.rs
   adapters/
-    inbound/                 cli/ (one file per subcommand, out of main.rs) · tui/ · telegram.rs · webhooks.rs · mcp_bridge.rs · run_agent.rs (IPC child)
+    inbound/                 activity.rs (tool activity lines) · cli/ (one file per subcommand, out of main.rs) · tui/ · telegram.rs · webhooks.rs · mcp_bridge.rs · run_agent.rs (IPC child)
     outbound/
-      engines/               openrouter.rs · claude_code.rs · noop.rs
+      engines/               mod.rs (build_engine factory) · openrouter.rs · claude_code.rs
       tools/                 ONE DIR PER TOOL + mod.rs = the tool catalog (see below)
-      memory/                disk_vector.rs · embedder.rs · agentic_postgres.rs
+      memory/                builtin.rs · disk_vector.rs · embedder.rs   (Postgres agentic_memory = tools/agentic_memory/)
       mcp_client/            client.rs · protocol.rs · proxy_tool.rs
-      subprocess_runner.rs · egress.rs · secrets.rs · shell.rs · metrics_sink.rs · scaffold.rs · prune.rs
+      tools/args.rs (arg + path helpers) · subprocess_runner.rs · egress.rs · secrets.rs (+ SanitizedToolExecutor) · shell.rs · noop.rs · scaffold.rs · prune.rs
   bootstrap/                 runtime.rs (build_orchestrator, build_tool_executor — was channel_runtime) · wiring.rs
 ```
 
@@ -48,9 +49,10 @@ src/
 | Today | After |
 |---|---|
 | `plugins/` name hides that these are tools | `adapters/outbound/tools/<name>/` |
-| Opt-in tool = 3 edits (`register_core_plugins`, `WORKSPACE_TOOLS_ALLOWLIST`, `valid_workspace_tools`) | 1 row in `tools/mod.rs::CATALOG: &[ToolEntry { name, opt_in, feature, register }]`; allowlist + validation derived from it |
-| No guide | `docs/tools.md`: Rust tool vs MCP server vs skill, scopes, sandbox/subagent TOML examples |
-| `[[mcp_servers]]` absent from examples | Documented block in `config.example.toml` |
+| Opt-in tool = 3 edits (`register_core_plugins`, `WORKSPACE_TOOLS_ALLOWLIST`, `valid_workspace_tools`) | ✅ 1 `ToolEntry` row in `tools/mod.rs::catalog()` (+ name in `domain/tools.rs` if opt-in, test-enforced); replaced `register_core_plugins`, `compute_base_tools`/`compute_bridge_tools` bodies, `WORKSPACE_TOOLS_ALLOWLIST`, `valid_workspace_tools`. Parity test: identical defs for all 64 opt-in combos × memory on/off |
+| ✅ No guide | `docs/tools.md` |
+| ✅ `[[mcp_servers]]` absent from examples | Documented block in `config.example.toml` |
+| Found: MCP server tools not advertised to plan-step subagents | documented, not fixed (behaviour-neutral rewrite) — `SESSION_HANDOFF.md` |
 
 ## Phases
 
@@ -59,7 +61,7 @@ src/
 | 0 ✅ | lint + skeleton | branch, empty layer dirs, `tests/layering_lint.rs` with exception list | — |
 | 1 ✅ | domain + ports | split `types.rs`, `ports.rs`, `tool_plugin.rs`, `orchestrator/plan.rs`; pull traits out of `planner.rs`, `executor.rs`, `wiring.rs`, `provider.rs`, `vector.rs`, `engine_builder.rs` | `ToolCtx`/`PluginCtx` still hold concrete `MemoryManager` + `SecretRegistry` (lint exceptions; cleared in 4) |
 | 2 ✅ | config | `config.rs` → `config/`; `EgressConfig` → `config/egress.rs`, `SkillLifecycleConfig` → `config/skill_lifecycle.rs`, path helpers → `config/paths.rs`, `DEFAULT_EMBEDDING_MODEL` → `domain/memory.rs` | `load_sandbox_or` installs egress → stays in `main.rs` until `bootstrap/` (5) |
-| 3 | outbound adapters + tool catalog | engines, tools, memory stores, mcp client, egress, secrets, shell, runner; metrics record → `domain/metrics.rs`, sink → outbound | catalog replaces the 3-place registration |
+| 3 ✅ | outbound adapters + tool catalog | engines, tools, memory stores, mcp client, egress, secrets, shell, runner; metrics record → `domain/metrics.rs`, sink → outbound | catalog replaces the 3-place registration |
 | 4 | application | chat, flow, prompt_budget, orchestrator, memory manager, skills, eval | `planner.rs` → `plugins`, `shared_files.rs` → `channel_runtime`: invert through ports |
 | 5 | inbound + bootstrap | `main.rs` (2.6k lines) → `inbound/cli/*`; `channel_runtime.rs` → `bootstrap/`; telegram/webhooks/tui/mcp_bridge | inbound adapters constructing runtime themselves |
 | 6 | zero exceptions + docs | empty the lint exception list; update every doc in CLAUDE.md's "REQUIRED updates" table (arch md/svg/html, context-management, SESSION_HANDOFF, CLAUDE.md + AGENTS.md) + `docs/tools.md` | doc volume (html inline FILE_MAP arrays) |

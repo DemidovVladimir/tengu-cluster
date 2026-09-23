@@ -224,9 +224,9 @@ impl RagPlanner {
     }
 
     #[cfg(feature = "postgres_memory")]
-    fn embedder(&self) -> Option<crate::adapters::memory::vector::Embedder> {
+    fn embedder(&self) -> Option<crate::adapters::outbound::memory::embedder::Embedder> {
         std::env::var("OPENROUTER_API_KEY").ok().map(|api_key| {
-            crate::adapters::memory::vector::Embedder::new(
+            crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
                 self.memory_config.embedding_model.clone(),
             )
@@ -349,7 +349,7 @@ impl RagPlanner {
         #[cfg(feature = "postgres_memory")]
         {
             let hits =
-                match crate::adapters::plugins::agentic_memory::recall_user_messages_with_vec(
+                match crate::adapters::outbound::tools::agentic_memory::recall_user_messages_with_vec(
                     user_message,
                     embed_vec,
                     k,
@@ -418,7 +418,7 @@ impl RagPlanner {
         #[cfg(feature = "postgres_memory")]
         {
             let hits =
-                match crate::adapters::plugins::agentic_memory::recall_step_outputs_for_session_with_vec(
+                match crate::adapters::outbound::tools::agentic_memory::recall_step_outputs_for_session_with_vec(
                     &self.session_id,
                     user_message,
                     embed_vec,
@@ -478,7 +478,7 @@ impl RagPlanner {
         }
         #[cfg(feature = "postgres_memory")]
         {
-            match crate::adapters::plugins::agentic_memory::write_user_message_with_embedding(
+            match crate::adapters::outbound::tools::agentic_memory::write_user_message_with_embedding(
                 &self.session_id,
                 trimmed,
                 embed_vec,
@@ -608,18 +608,15 @@ impl Planner for RagPlanner {
         // immutable from here on). System prompt is a fifth layer — not
         // part of `combined` but still part of what the LLM sees.
         let layers = vec![
-            crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
-            crate::adapters::metrics::MetricsLayer::from_text("roster", &registry_block),
-            crate::adapters::metrics::MetricsLayer::from_text(
-                "cross_session",
-                &cross_session_block,
-            ),
-            crate::adapters::metrics::MetricsLayer::from_text("history", &history_block),
-            crate::adapters::metrics::MetricsLayer::from_text(
+            crate::domain::metrics::MetricsLayer::from_text("system", &self.system_prompt),
+            crate::domain::metrics::MetricsLayer::from_text("roster", &registry_block),
+            crate::domain::metrics::MetricsLayer::from_text("cross_session", &cross_session_block),
+            crate::domain::metrics::MetricsLayer::from_text("history", &history_block),
+            crate::domain::metrics::MetricsLayer::from_text(
                 "session_recall",
                 &session_recall_block,
             ),
-            crate::adapters::metrics::MetricsLayer::from_text("user_message", user_message),
+            crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
         let (raw, telemetry) = self
@@ -666,7 +663,7 @@ impl Planner for RagPlanner {
             {
                 let embed_vec = self.embed_text(&recall_query).await;
                 let hits =
-                    match crate::adapters::plugins::agentic_memory::recall_step_outputs_with_vec(
+                    match crate::adapters::outbound::tools::agentic_memory::recall_step_outputs_with_vec(
                         &recall_query,
                         embed_vec.as_deref(),
                         recall_k,
@@ -742,16 +739,13 @@ impl Planner for RagPlanner {
         );
 
         let layers = vec![
-            crate::adapters::metrics::MetricsLayer::from_text("system", &self.system_prompt),
-            crate::adapters::metrics::MetricsLayer::from_text("roster", &registry_block),
-            crate::adapters::metrics::MetricsLayer::from_text(
-                "cross_session",
-                &cross_session_block,
-            ),
-            crate::adapters::metrics::MetricsLayer::from_text("history", &history_block),
-            crate::adapters::metrics::MetricsLayer::from_text("recall", &recall_block),
-            crate::adapters::metrics::MetricsLayer::from_text("failure", &failure_block),
-            crate::adapters::metrics::MetricsLayer::from_text("user_message", user_message),
+            crate::domain::metrics::MetricsLayer::from_text("system", &self.system_prompt),
+            crate::domain::metrics::MetricsLayer::from_text("roster", &registry_block),
+            crate::domain::metrics::MetricsLayer::from_text("cross_session", &cross_session_block),
+            crate::domain::metrics::MetricsLayer::from_text("history", &history_block),
+            crate::domain::metrics::MetricsLayer::from_text("recall", &recall_block),
+            crate::domain::metrics::MetricsLayer::from_text("failure", &failure_block),
+            crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
         let (raw, telemetry) = self
@@ -787,7 +781,7 @@ fn emit_planner_metrics(
     orchestrator_agent: &str,
     combined_prompt: &str,
     system_prompt: &str,
-    layers: Vec<crate::adapters::metrics::MetricsLayer>,
+    layers: Vec<crate::domain::metrics::MetricsLayer>,
     telemetry: &crate::ports::orchestration::TurnTelemetry,
     raw_response: &str,
 ) {
@@ -801,10 +795,10 @@ fn emit_planner_metrics(
     } else {
         format!("replanner/{}", orchestrator_agent)
     };
-    crate::adapters::metrics::record(crate::adapters::metrics::MetricsRecord {
-        ts_unix: crate::adapters::metrics::now_unix(),
+    crate::application::metrics::record(crate::domain::metrics::MetricsRecord {
+        ts_unix: crate::domain::metrics::now_unix(),
         session_id: session_id.to_string(),
-        kind: crate::adapters::metrics::MetricsKind::Planner,
+        kind: crate::domain::metrics::MetricsKind::Planner,
         agent: agent_label,
         model: telemetry.model.clone(),
         prompt_tokens: telemetry.prompt_tokens,
