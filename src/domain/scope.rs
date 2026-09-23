@@ -1,38 +1,8 @@
-//! Port traits — interfaces for external dependencies.
-//!
-//! Concrete implementations live alongside these traits in `src/adapters/`.
-//!
-//! Sync ports: `ToolActivityPort`, `SkillSourcePort`, `ShellExecutionPort`.
-//!
-//! The legacy `EmbeddingPort` / `MemoryStorePort` async traits were removed
-//! in the memory-service-port migration — the harness memory stack now
-//! lives in `crate::adapters::memory::vector::{Embedder, VectorStore}`.
+//! `ToolScope` — default-deny, per-tool access control. Pure policy logic;
+//! enforced by every `Tool::execute` (see `tests/scope_lint.rs`).
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-
-use crate::adapters::types::ToolCall;
-
-/// Output port for publishing tool activity events to the UI/log layer.
-pub(crate) trait ToolActivityPort: Send + Sync {
-    fn publish_tool_activity(&self, call: &ToolCall);
-}
-
-/// Port for discovering skill.md files from the workspace.
-pub(crate) trait SkillSourcePort: Send + Sync {
-    /// Returns a list of (filename, file_content) pairs for all discovered skill files.
-    fn discover_skill_files(&self) -> Vec<(String, String)>;
-}
-
-/// Port for executing shell commands in a workspace directory.
-pub(crate) trait ShellExecutionPort: Send + Sync {
-    fn execute_shell(&self, command: &str, workspace: &std::path::Path) -> Result<String>;
-}
-
-// ---------------------------------------------------------------------------
-// ToolScope — default-deny, per-tool access control
-// ---------------------------------------------------------------------------
 
 /// Fine-grained scope for tool execution. Default-deny: every field empty
 /// means the tool can do nothing. Config must grant access explicitly.

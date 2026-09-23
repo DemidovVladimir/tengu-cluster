@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::memory::context_block::{ChunkMetadata, MemoryHit};
-use crate::adapters::memory::vector::VectorStore;
+use crate::domain::memory::{ChunkMetadata, MemoryHit};
+use crate::ports::memory::VectorStore;
 
 /// Internal on-disk record. Distinct from the legacy `MemoryEntry` in
 /// `types.rs` so the new module has its own wire-format surface.

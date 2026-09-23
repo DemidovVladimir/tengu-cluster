@@ -13,9 +13,9 @@ use std::sync::Arc;
 use crate::adapters::plugins::crypto::helpers::{
     privy_send_transaction, resolve_default_chain_id, wait_for_receipt, DEFAULT_WALLET_LABEL,
 };
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct SignAndSendTransactionTool {
     def: ToolDef,
@@ -115,7 +115,7 @@ impl Tool for SignAndSendTransactionTool {
 mod tests {
     use super::*;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use tempfile::TempDir;
 
     #[tokio::test]

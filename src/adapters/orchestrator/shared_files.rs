@@ -15,8 +15,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use crate::adapters::config::{AgentConfig, McpServerConfig};
-use crate::adapters::orchestrator::plan::Plan;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::domain::plan::Plan;
 
 pub(crate) const PLANNER_REGISTRY_FILE: &str = "TENGU_PLANNER_REGISTRY.md";
 pub(crate) const PLAN_STATE_FILE: &str = "TENGU_PLAN.md";
@@ -429,7 +429,7 @@ fn first_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orchestrator::plan::{Step, StepId};
+    use crate::domain::plan::{Step, StepId};
 
     fn plan(step: &str) -> Plan {
         Plan {

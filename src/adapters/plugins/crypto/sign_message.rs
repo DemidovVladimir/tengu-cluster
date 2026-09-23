@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 use crate::adapters::plugins::crypto::helpers::{
     privy_personal_sign, privy_wallet_address, DEFAULT_WALLET_LABEL,
 };
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct SignMessageTool {
     def: ToolDef,
@@ -61,7 +61,7 @@ impl Tool for SignMessageTool {
 mod tests {
     use super::*;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use tempfile::TempDir;
 
     #[tokio::test]

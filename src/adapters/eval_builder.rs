@@ -113,14 +113,14 @@ pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
     let judge_model = args
         .judge_model
         .unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
-    let judge: Arc<dyn crate::adapters::types::Engine> =
-        match build_judge(Some(judge_model.clone())) {
-            Ok(j) => j,
-            Err(e) => {
-                eprintln!("Error: build judge engine: {}", e);
-                return Ok(2);
-            }
-        };
+    let judge: Arc<dyn crate::ports::engine::Engine> = match build_judge(Some(judge_model.clone()))
+    {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error: build judge engine: {}", e);
+            return Ok(2);
+        }
+    };
 
     let sandbox_config = args
         .sandbox
@@ -301,7 +301,7 @@ pub struct StubSpec {
 ///
 /// Called from both `eval_builder::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
 /// Default model: `anthropic/claude-opus-4-7`, 64 k context window.
-pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::adapters::types::Engine>> {
+pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::ports::engine::Engine>> {
     let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
     let box_engine =
         crate::adapters::engine_builder::build_openrouter_engine(&judge_model, 64_000)?;
@@ -589,8 +589,8 @@ pub(crate) fn load_skill_metrics(
 // StubbedExecutor — wraps any ToolExecutor with per-tool response queues
 // ---------------------------------------------------------------------------
 
-use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::types::ToolCall;
+use crate::domain::message::ToolCall;
+use crate::ports::engine::ToolExecutor;
 use async_trait::async_trait;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -621,7 +621,7 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
     async fn execute(
         &self,
         call: &ToolCall,
-        messages: &[crate::adapters::types::Message],
+        messages: &[crate::domain::message::Message],
     ) -> anyhow::Result<String> {
         {
             let mut guard = self.queues.lock().unwrap();
@@ -725,7 +725,8 @@ pub fn parse_verdict(raw: &str) -> anyhow::Result<Verdict> {
 // Observation + judge prompt helpers + judge_row
 // ---------------------------------------------------------------------------
 
-use crate::adapters::types::{Engine, EngineContext, Message, Role, StreamEvent};
+use crate::domain::message::{Message, Role, StreamEvent};
+use crate::ports::engine::{Engine, EngineContext};
 use futures::StreamExt;
 
 const JUDGE_SYSTEM_PROMPT: &str = r#"You are evaluating whether an AI agent's behaviour matches an expected behaviour.
@@ -868,9 +869,9 @@ pub async fn judge_row(
 use crate::adapters::channel_runtime;
 use crate::adapters::config::AgentConfig;
 use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
-use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::ports::tool_activity::ToolActivityPort;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1156,7 +1157,7 @@ impl Default for RunSkillOptions {
 
 pub async fn run_skill(
     skill: &SkillUnderTest,
-    judge: Arc<dyn crate::adapters::types::Engine>,
+    judge: Arc<dyn crate::ports::engine::Engine>,
     out_dir: &Path,
     filter: Option<&str>,
     concurrency: usize,
@@ -1358,7 +1359,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
 
     let mut tool_defs = current_tools.clone();
-    let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
+    let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
         match channel_runtime::build_tool_executor(
             &workspace_path,
             &current_tools,
@@ -1376,10 +1377,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 if !extra.is_empty() {
                     tool_defs.extend(extra);
                 }
-                Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+                Arc::new(executor) as Arc<dyn crate::ports::engine::ToolExecutor>
             }
-            None => Arc::new(NoopRuntimeToolExecutor)
-                as Arc<dyn crate::adapters::engine_builder::ToolExecutor>,
+            None => {
+                Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>
+            }
         };
 
     // 5. Wrap in StubbedExecutor for this row.
@@ -1636,7 +1638,7 @@ struct EvalChatServiceFactory {
 }
 
 #[async_trait]
-impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServiceFactory {
+impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory {
     async fn run_turn(&self, agent_name: &str, text: &str) -> anyhow::Result<String> {
         let agent = self
             .cfg
@@ -1705,7 +1707,7 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
             channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
 
         let mut tool_defs = current_tools.clone();
-        let inner_executor: Arc<dyn crate::adapters::engine_builder::ToolExecutor> =
+        let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
             match channel_runtime::build_tool_executor(
                 &workspace_path,
                 &current_tools,
@@ -1723,10 +1725,11 @@ impl crate::adapters::orchestrator::wiring::ChatServiceFactory for EvalChatServi
                     if !extra.is_empty() {
                         tool_defs.extend(extra);
                     }
-                    Arc::new(executor) as Arc<dyn crate::adapters::engine_builder::ToolExecutor>
+                    Arc::new(executor) as Arc<dyn crate::ports::engine::ToolExecutor>
                 }
-                None => Arc::new(NoopRuntimeToolExecutor)
-                    as Arc<dyn crate::adapters::engine_builder::ToolExecutor>,
+                None => {
+                    Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>
+                }
             };
 
         let stubbed = StubbedExecutor::new(&*inner_executor, &self.accum.stubs);
@@ -1811,7 +1814,7 @@ async fn run_row_via_orchestrator(
     });
 
     let cfg_arc = Arc::new(cfg);
-    let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+    let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
         Arc::new(EvalChatServiceFactory {
             cfg: Arc::clone(&cfg_arc),
             ws_path: ws_path.clone(),
@@ -2096,8 +2099,8 @@ mod tests {
     // Shared test helpers (used by stubbed_executor_* tests)
     // ---------------------------------------------------------------------------
 
-    use crate::adapters::engine_builder::ToolExecutor;
-    use crate::adapters::types::ToolCall;
+    use crate::domain::message::ToolCall;
+    use crate::ports::engine::ToolExecutor;
     use async_trait::async_trait;
 
     struct CountingExecutor {
@@ -2109,7 +2112,7 @@ mod tests {
         async fn execute(
             &self,
             call: &ToolCall,
-            _messages: &[crate::adapters::types::Message],
+            _messages: &[crate::domain::message::Message],
         ) -> anyhow::Result<String> {
             self.counter.lock().unwrap().push(call.name.clone());
             Ok(format!("live-result-for-{}", call.name))

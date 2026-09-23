@@ -145,20 +145,19 @@ pub(crate) trait JudgeClient: Send + Sync {
 pub(crate) struct MetricRunCtx<'a> {
     pub skill_dir: &'a Path,
     pub workspace: &'a Path,
-    pub shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
-    pub tools: Option<&'a crate::adapters::tool_plugin::ToolRegistry>,
+    pub shell: &'a dyn crate::ports::shell::ShellExecutionPort,
+    pub tools: Option<&'a crate::application::tools::registry::ToolRegistry>,
     pub judge: Option<Arc<dyn JudgeClient>>,
     // Fields needed for live tool dispatch via `tool_assertion`.
     pub http: Option<&'a reqwest::Client>,
     pub memory_manager: Option<&'a crate::adapters::memory::manager::MemoryManager>,
     pub secret_registry: Option<&'a crate::adapters::secret_builder::SecretRegistry>,
-    pub activity: Option<&'a dyn crate::adapters::ports::ToolActivityPort>,
-    pub tool_scopes:
-        Option<&'a std::collections::HashMap<String, crate::adapters::ports::ToolScope>>,
+    pub activity: Option<&'a dyn crate::ports::tool_activity::ToolActivityPort>,
+    pub tool_scopes: Option<&'a std::collections::HashMap<String, crate::domain::scope::ToolScope>>,
     /// Conversation slice the metric may inspect (used by `dialog_replay`).
     /// `None` outside of in-chat reflective evals; pre-authored fixtures
     /// don't need it.
-    pub conversation: Option<&'a [crate::adapters::types::Message]>,
+    pub conversation: Option<&'a [crate::domain::message::Message]>,
     /// Sibling metric specs on the same skill, used by `dialog_replay` to
     /// resolve the named `delegate_metric`. `None` falls through to
     /// "delegate not found".

@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
-use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::memory::ChunkMetadata;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) const PERSISTENT_STORE_TOOL_NAME: &str = "persistent_store";
 
@@ -622,9 +622,10 @@ mod tests {
 
     // -- integration-ish tests using plugin context ------------------------
 
-    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
+    use crate::ports::memory::VectorStore;
     use std::sync::Arc;
     use tempfile::TempDir;
 

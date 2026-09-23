@@ -128,7 +128,7 @@ mod tests {
     }
 
     struct NoShell;
-    impl crate::adapters::ports::ShellExecutionPort for NoShell {
+    impl crate::ports::shell::ShellExecutionPort for NoShell {
         fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
             Ok(String::new())
         }

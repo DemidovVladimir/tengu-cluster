@@ -6,11 +6,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
-use crate::adapters::tool_plugin::ToolCtx;
-use crate::adapters::types::ToolCall;
+use crate::domain::message::ToolCall;
+use crate::domain::scope::ToolScope;
+use crate::ports::shell::ShellExecutionPort;
+use crate::ports::tool::ToolCtx;
+use crate::ports::tool_activity::ToolActivityPort;
 
 /// No-op activity port for tests.
 pub(crate) struct NoopActivity;
@@ -70,7 +72,7 @@ impl TestHarness {
             memory_manager: None,
             secret_registry: &self.secrets,
             activity: self.activity.as_ref(),
-            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
         }
     }

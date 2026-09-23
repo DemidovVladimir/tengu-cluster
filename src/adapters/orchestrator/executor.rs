@@ -1,19 +1,7 @@
 //! DAG executor: parallel step dispatch with retry escalation.
 
-use async_trait::async_trait;
-
-use crate::adapters::orchestrator::plan::Step;
-
-/// Abstracts "how to run a worker step." The real impl calls
-/// `ChatRuntimeService::process_user_text` under the hood. Tests
-/// inject fake impls.
-#[async_trait]
-pub trait WorkerHandle: Send + Sync {
-    /// Run `step.agent` with `step.goal + step_inputs` as the user turn.
-    /// `step_inputs` is the rendered `<step-input>` blocks from upstream
-    /// completed steps.
-    async fn run_step(&self, step: &Step, step_inputs: &str) -> anyhow::Result<String>;
-}
+use crate::domain::plan::Step;
+use crate::ports::orchestration::WorkerHandle;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,8 +11,8 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::info;
 
 use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orchestrator::plan::{Plan, StepId};
 use crate::adapters::orchestrator::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
+use crate::domain::plan::{Plan, StepId};
 
 pub enum ExecResult {
     Done { final_output: String },
@@ -153,8 +141,8 @@ fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> Strin
 mod tests {
     use super::*;
     use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::plan::{Plan, Step, StepId};
     use crate::adapters::orchestrator::retry::RetryPolicy;
+    use crate::domain::plan::{Plan, Step, StepId};
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;

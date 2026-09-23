@@ -7,7 +7,7 @@ use sysinfo::System;
 use tracing::info;
 
 pub use crate::adapters::egress::EgressConfig;
-use crate::adapters::ports::ToolScope;
+use crate::domain::scope::ToolScope;
 
 // ---------------------------------------------------------------------------
 // Runtime profile
@@ -334,7 +334,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub workspace_tools: Vec<String>,
     /// Per-tool scope restrictions (default-deny). Key = tool name.
-    /// See `ToolScope` in `ports.rs` for field definitions.
+    /// See `ToolScope` in `domain/scope.rs` for field definitions.
     #[serde(default)]
     pub scopes: HashMap<String, ToolScope>,
     /// Per-agent Claude Code configuration (only used when engine = "claude_code").

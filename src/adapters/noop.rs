@@ -10,9 +10,9 @@
 use anyhow::{bail, Result};
 use async_trait::async_trait;
 
-use crate::adapters::engine_builder::ToolExecutor;
-use crate::adapters::ports::ToolActivityPort;
-use crate::adapters::types::{Message, ToolCall};
+use crate::domain::message::{Message, ToolCall};
+use crate::ports::engine::ToolExecutor;
+use crate::ports::tool_activity::ToolActivityPort;
 
 /// No-op `ToolActivityPort`. Drops every event. Used by per-turn surfaces
 /// (eval, webhook) that don't surface team-activity feeds.

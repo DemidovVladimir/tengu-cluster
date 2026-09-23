@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-use crate::adapters::types::{Message, Role, ToolCall};
+use crate::domain::message::{Message, Role, ToolCall};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct FixturesFile {

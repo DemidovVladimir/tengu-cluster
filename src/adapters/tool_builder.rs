@@ -1,7 +1,7 @@
 //! Tool infrastructure: path utilities and UI helpers shared by plugins and
 //! the MCP bridge.
 
-use crate::adapters::types::ToolCall;
+use crate::domain::message::ToolCall;
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -155,5 +155,5 @@ fn prettify_tool_name(name: &str) -> String {
 
 /// Truncate a display string, appending "…" if it exceeds the limit.
 fn truncate_detail(s: &str, max: usize) -> String {
-    crate::adapters::token::truncate_with_suffix(s, max, "…")
+    crate::domain::token::truncate_with_suffix(s, max, "…")
 }

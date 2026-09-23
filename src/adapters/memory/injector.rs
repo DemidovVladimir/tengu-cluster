@@ -8,9 +8,9 @@
 //! NOT call this. Don't add new callers without thinking about whether
 //! per-turn memory injection is actually what you want.
 
-use crate::adapters::memory::context_block::PinnedMemoryBlock;
 use crate::adapters::memory::fencing::build_memory_context_block;
 use crate::adapters::memory::manager::MemoryManager;
+use crate::domain::memory::PinnedMemoryBlock;
 
 /// Build a `PinnedMemoryBlock` for an agent's upcoming turn.
 /// Caller appends this to the user-turn message of the API call.
@@ -23,7 +23,7 @@ pub async fn for_turn(mgr: &MemoryManager, agent: &str, query: &str) -> PinnedMe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::provider::MemoryProvider;
+    use crate::ports::memory::MemoryProvider;
     use async_trait::async_trait;
     use std::path::Path;
 

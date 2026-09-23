@@ -1,8 +1,8 @@
 //! Prompt budgeting helpers for runtime turns.
 
-use crate::adapters::token::estimate_tokens_approx_min1;
-use crate::adapters::types::HistoryAssembly;
-use crate::adapters::types::Message;
+use crate::domain::message::Message;
+use crate::domain::session::HistoryAssembly;
+use crate::domain::token::estimate_tokens_approx_min1;
 
 /// Assemble newest contiguous history suffix that fits the token budget.
 pub(crate) fn assemble_recent_history(

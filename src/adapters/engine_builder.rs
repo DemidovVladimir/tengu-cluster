@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use tracing::{debug, error};
 
-use crate::adapters::types::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
-use crate::adapters::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
-use crate::adapters::{Engine, EngineContext, EngineDiagnostics};
+use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
+use crate::domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
+use crate::ports::engine::ToolExecutor;
+use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
 
 // ---------------------------------------------------------------------------
 // Factory — build engines from config
@@ -591,16 +592,6 @@ pub struct EngineResponse {
     pub tool_outcomes: Vec<(String, String)>,
 }
 
-/// Trait for executing tool calls.
-#[async_trait]
-pub trait ToolExecutor: Send + Sync {
-    async fn execute(
-        &self,
-        call: &ToolCall,
-        messages: &[crate::adapters::types::Message],
-    ) -> Result<String>;
-}
-
 /// Decorator that redacts registered secret values from all tool output.
 ///
 /// Owns its dependencies behind `Arc` so the decorator is `'static` —
@@ -626,7 +617,7 @@ impl ToolExecutor for SanitizedToolExecutor {
     async fn execute(
         &self,
         call: &ToolCall,
-        messages: &[crate::adapters::types::Message],
+        messages: &[crate::domain::message::Message],
     ) -> Result<String> {
         let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
@@ -942,7 +933,7 @@ fn compact_tool_result(content: &str, limit: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn truncate_tool_result(result: &str, max_chars: usize) -> String {
-    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+    match crate::domain::token::truncate_at_boundary(result, max_chars) {
         None => result.to_string(),
         Some((prefix, end)) => format!(
             "{}\n\n[truncated — showing {} of {} chars]",

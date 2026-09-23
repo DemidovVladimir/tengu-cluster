@@ -1,10 +1,5 @@
 // --- types & config ---
 pub mod config;
-pub(crate) mod token;
-pub mod types;
-
-// Re-export engine types at the adapters level for ergonomic access.
-pub use types::{Engine, EngineContext, EngineDiagnostics};
 
 pub(crate) mod chat_builder;
 pub mod memory;
@@ -13,11 +8,9 @@ pub(crate) mod secret_builder;
 pub(crate) mod skill_builder;
 pub(crate) mod tool_builder;
 pub(crate) mod tool_utils;
-pub(crate) mod usage;
 
 // --- services & ports ---
 pub(crate) mod flow_builder;
-pub(crate) mod ports;
 pub(crate) mod prompt_budget;
 // --- adapters ---
 pub(crate) mod channel_runtime;
@@ -38,7 +31,6 @@ pub(crate) mod shell_executor;
 pub(crate) mod skill_lifecycle;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram_builder;
-pub(crate) mod tool_plugin;
 pub(crate) mod tui;
 #[cfg(feature = "webhooks")]
 pub(crate) mod webhook_builder;

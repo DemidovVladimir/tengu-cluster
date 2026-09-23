@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orchestrator::executor::{DagExecutor, ExecResult, WorkerHandle};
-use crate::adapters::orchestrator::plan::Plan;
-use crate::adapters::orchestrator::planner::{Planner, PlannerVerdict};
+use crate::adapters::orchestrator::executor::{DagExecutor, ExecResult};
 use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::domain::plan::Plan;
+use crate::ports::orchestration::WorkerHandle;
+use crate::ports::orchestration::{Planner, PlannerVerdict};
 
 pub async fn drive(
     planner: Arc<dyn Planner>,
@@ -167,7 +168,7 @@ impl Drop for ActivePlanGuard {
 mod tests {
     use super::*;
     use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::plan::{Step, StepId};
+    use crate::domain::plan::{Step, StepId};
     use async_trait::async_trait;
     use std::sync::Mutex;
     use std::time::Duration;

@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) mod abi_encode;
 pub(crate) mod helpers;

@@ -24,10 +24,10 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::memory::ChunkMetadata;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Tool name (kept constant for cross-module reference).
 #[allow(dead_code)]

@@ -57,7 +57,7 @@ pub struct AgentIpcInput {
     /// Skipped on the wire when None so existing IPC payloads stay
     /// byte-compatible with prior versions of the binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compose: Option<crate::adapters::orchestrator::plan::AgentCompose>,
+    pub compose: Option<crate::domain::plan::AgentCompose>,
     /// Phase 7.2 — name of the sandbox the parent was loaded from
     /// (`--sandbox <name>` on the parent CLI). When `Some`, the child
     /// re-loads `sandboxes/<name>/config.toml` instead of falling
@@ -253,10 +253,10 @@ impl SubprocessRunner {
 // =====================================================================
 
 #[async_trait::async_trait]
-impl crate::adapters::orchestrator::executor::WorkerHandle for SubprocessRunner {
+impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
     async fn run_step(
         &self,
-        step: &crate::adapters::orchestrator::plan::Step,
+        step: &crate::domain::plan::Step,
         step_inputs: &str,
     ) -> anyhow::Result<String> {
         // Fail fast when the planner picked a name with no `[agents.<name>]`
@@ -377,8 +377,8 @@ mod tests {
     /// any subprocess is spawned, and the message lists the routable agents.
     #[tokio::test]
     async fn run_step_fails_fast_on_unknown_agent() {
-        use crate::adapters::orchestrator::executor::WorkerHandle;
-        use crate::adapters::orchestrator::plan::{Step, StepId};
+        use crate::domain::plan::{Step, StepId};
+        use crate::ports::orchestration::WorkerHandle;
         let mut agents = std::collections::HashMap::new();
         let mut researcher = crate::adapters::config::Config::default()
             .agents

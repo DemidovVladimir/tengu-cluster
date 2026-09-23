@@ -30,8 +30,8 @@ use crate::adapters::skill_lifecycle::evolve::{
     apply_proposal_to_skill_md, is_editable_by_learner, nanos, validate_resource_path, ProposalBody,
 };
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
 pub(crate) const MANAGE_SKILL_TOOL_NAME: &str = "manage_skill";
 

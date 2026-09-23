@@ -1,5 +1,6 @@
-// src/adapters/tool_plugin.rs
-//! Tool plugin architecture — per-tool trait, plugin grouping, and registry.
+//! Tool registry + `PluginToolExecutor` — dispatches a model's tool call to
+//! the registered `Tool`, building the per-call `ToolCtx` with the scope
+//! configured for that tool.
 
 #![allow(dead_code)]
 
@@ -7,110 +8,16 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
-use crate::adapters::types::{ToolCall, ToolDef};
-
-// ---------------------------------------------------------------------------
-// Core trait
-// ---------------------------------------------------------------------------
-
-/// A single callable tool exposed to the LLM.
-#[async_trait]
-pub(crate) trait Tool: Send + Sync {
-    fn definition(&self) -> &ToolDef;
-    async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput>;
-}
-
-/// Output of a tool call.
-#[derive(Debug, Clone)]
-pub(crate) struct ToolOutput {
-    pub text: String,
-}
-
-impl From<String> for ToolOutput {
-    fn from(text: String) -> Self {
-        Self { text }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Plugin trait
-// ---------------------------------------------------------------------------
-
-/// A group of related tools instantiated together.
-#[async_trait]
-pub(crate) trait ToolPlugin: Send + Sync {
-    fn name(&self) -> &'static str;
-    async fn tools(&self, ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>>;
-}
-
-// ---------------------------------------------------------------------------
-// Contexts
-// ---------------------------------------------------------------------------
-
-/// Read-only view of the current conversation messages, passed to tools
-/// that need to inspect history (e.g. skill_lifecycle::distill).
-pub(crate) struct ConversationView<'a> {
-    messages: &'a [crate::adapters::types::Message],
-}
-
-impl<'a> ConversationView<'a> {
-    pub(crate) fn new(messages: &'a [crate::adapters::types::Message]) -> Self {
-        Self { messages }
-    }
-    pub(crate) fn empty() -> Self {
-        Self { messages: &[] }
-    }
-    pub(crate) fn len(&self) -> usize {
-        self.messages.len()
-    }
-    pub(crate) fn slice(
-        &self,
-        from: usize,
-        to: usize,
-    ) -> anyhow::Result<&'a [crate::adapters::types::Message]> {
-        if from > to || to > self.messages.len() {
-            anyhow::bail!(
-                "conversation slice out of range: {from}..{to} len={}",
-                self.messages.len()
-            );
-        }
-        Ok(&self.messages[from..to])
-    }
-}
-
-/// Per-call context passed to every `Tool::execute`. Borrowed, never stored.
-pub(crate) struct ToolCtx<'a> {
-    pub workspace: &'a Path,
-    pub scope: &'a ToolScope,
-    pub shell: &'a dyn ShellExecutionPort,
-    pub http: &'a reqwest::Client,
-    pub memory_manager: Option<&'a MemoryManager>,
-    pub secret_registry: &'a SecretRegistry,
-    pub activity: &'a dyn ToolActivityPort,
-    pub conversation: ConversationView<'a>,
-    /// Calling agent's resolved config. `Some(_)` for tool calls dispatched
-    /// from inside an agent loop (populated by `PluginToolExecutor` from the
-    /// `AgentConfig` it was built with); `None` for harness-level invocations
-    /// (e.g. `tengu eval` runner construction, MetricRunCtx-degraded paths,
-    /// most unit tests).
-    pub agent_config: Option<&'a crate::adapters::config::AgentConfig>,
-}
-
-/// Construction-time context passed to `ToolPlugin::tools()`.
-pub(crate) struct PluginCtx<'a> {
-    pub workspace: &'a Path,
-    pub config: &'a crate::adapters::config::AgentConfig,
-    pub http: reqwest::Client,
-    pub shell: Arc<dyn ShellExecutionPort>,
-    pub memory_manager: Option<Arc<MemoryManager>>,
-    pub secret_registry: Arc<SecretRegistry>,
-}
+use crate::domain::message::{ToolCall, ToolDef};
+use crate::domain::scope::ToolScope;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::shell::ShellExecutionPort;
+use crate::ports::tool::{ConversationView, PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
+use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -186,8 +93,6 @@ impl ToolRegistry {
 // PluginToolExecutor — bridges ToolRegistry into the engine's ToolExecutor
 // ---------------------------------------------------------------------------
 
-use crate::adapters::engine_builder::ToolExecutor;
-
 /// Wraps a ToolRegistry + context handles to implement the engine's ToolExecutor.
 pub(crate) struct PluginToolExecutor {
     pub registry: ToolRegistry,
@@ -231,7 +136,7 @@ impl ToolExecutor for PluginToolExecutor {
     async fn execute(
         &self,
         call: &ToolCall,
-        messages: &[crate::adapters::types::Message],
+        messages: &[crate::domain::message::Message],
     ) -> Result<String> {
         self.activity.publish_tool_activity(call);
 

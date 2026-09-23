@@ -6,8 +6,8 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orchestrator::executor::WorkerHandle;
-use crate::adapters::orchestrator::plan::Step;
+use crate::domain::plan::Step;
+use crate::ports::orchestration::WorkerHandle;
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -75,7 +75,7 @@ pub async fn run_step_with_retry(
 mod tests {
     use super::*;
     use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::plan::StepId;
+    use crate::domain::plan::StepId;
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU32, Ordering};
 

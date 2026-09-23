@@ -23,7 +23,7 @@
 //!     /// Conversation slice the metric may inspect (e.g. `DialogReplay`).
 //!     /// `None` outside of in-chat reflective evals; pre-authored fixtures
 //!     /// don't need it.
-//!     pub conversation: Option<&'a [crate::adapters::types::Message]>,
+//!     pub conversation: Option<&'a [crate::domain::message::Message]>,
 //!     /// Sibling metric specs on the same skill, used by `DialogReplay`
 //!     /// to look up the named `delegate_metric`. `None` falls through to
 //!     /// "delegate not found".
@@ -68,7 +68,7 @@ use serde_json::json;
 use crate::adapters::skill_lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
 };
-use crate::adapters::types::{Message, Role};
+use crate::domain::message::{Message, Role};
 
 use super::{LlmJudgeKind, ToolAssertionKind};
 
@@ -231,7 +231,7 @@ mod tests {
     }
 
     struct NoShell;
-    impl crate::adapters::ports::ShellExecutionPort for NoShell {
+    impl crate::ports::shell::ShellExecutionPort for NoShell {
         fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
             Ok(String::new())
         }
@@ -252,7 +252,7 @@ mod tests {
     fn ctx<'a>(
         skill_dir: &'a Path,
         workspace: &'a Path,
-        shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
+        shell: &'a dyn crate::ports::shell::ShellExecutionPort,
         judge: Option<Arc<dyn JudgeClient>>,
         conversation: Option<&'a [Message]>,
         siblings: Option<&'a [MetricSpec]>,

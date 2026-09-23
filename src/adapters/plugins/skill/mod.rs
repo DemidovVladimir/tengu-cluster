@@ -22,8 +22,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::adapters::skill_builder::{SkillExecution, SkillRegistry};
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) mod shell_tool;
 

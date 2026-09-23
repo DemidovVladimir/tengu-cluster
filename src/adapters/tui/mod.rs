@@ -15,14 +15,15 @@ use crate::adapters::chat_builder::{
 };
 use crate::adapters::config::{Config, RuntimeProfile};
 use crate::adapters::engine_builder::build_engine;
-use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
+use crate::adapters::engine_builder::SanitizedToolExecutor;
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
-use crate::adapters::types::{ToolCall, ToolDef};
+use crate::domain::message::{ToolCall, ToolDef};
+use crate::ports::engine::ToolExecutor;
+use crate::ports::tool_activity::ToolActivityPort;
 use app::{BubbleRole, ChatRequest, SkillCommand};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
@@ -42,7 +43,7 @@ fn disable_terminal_mouse_capture() -> Result<()> {
 
 /// Wrapper to send `Box<dyn Engine>` to the engine thread.
 /// Safe because the engine is only ever accessed from the single engine thread.
-struct SendEngine(Box<dyn crate::adapters::Engine>);
+struct SendEngine(Box<dyn crate::ports::engine::Engine>);
 unsafe impl Send for SendEngine {}
 
 /// Format a single `OrchestratorEvent::RagQueried` event as one compact line
@@ -190,7 +191,7 @@ pub fn run_tui(
         Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
         let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
-        let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+        let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
             Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
         channel_runtime::build_orchestrator(
             &config,
@@ -341,7 +342,7 @@ pub fn run_tui(
             .expect("Failed to create tokio runtime for engine thread");
 
         // Promote the engine to an Arc so orchestrator snapshots can share it.
-        let engine: Arc<dyn crate::adapters::Engine> = Arc::from(send_engine.0);
+        let engine: Arc<dyn crate::ports::engine::Engine> = Arc::from(send_engine.0);
 
         // Resolve workspace path (expand tilde)
         let workspace: Option<PathBuf> = engine_agent_config
@@ -375,7 +376,7 @@ pub fn run_tui(
         );
         // For engines that manage their own workspace (claude_code), build bridge
         // tools so Tengu-native tools are still accessible via MCP bridge.
-        let bridge_base_tools: Vec<crate::adapters::types::ToolDef> = if manages_workspace
+        let bridge_base_tools: Vec<crate::domain::message::ToolDef> = if manages_workspace
             && workspace.is_some()
         {
             channel_runtime::compute_bridge_tools(has_memory, &engine_agent_config.workspace_tools)
@@ -406,8 +407,9 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<Arc<crate::adapters::tool_plugin::PluginToolExecutor>> =
-            None;
+        let mut current_executor: Option<
+            Arc<crate::application::tools::registry::PluginToolExecutor>,
+        > = None;
         let mut current_system_prompt = system_prompt;
 
         let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);

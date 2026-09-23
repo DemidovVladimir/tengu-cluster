@@ -12,8 +12,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Thin wrapper that renders a shell skill's command template and runs it.
 pub(crate) struct SkillShellTool {
@@ -105,7 +105,7 @@ fn extract_binary(command: &str) -> &str {
 mod tests {
     use super::*;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use serde_json::json;
     use tempfile::TempDir;
 

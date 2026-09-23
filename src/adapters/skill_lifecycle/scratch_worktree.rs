@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::ports::ShellExecutionPort;
+use crate::ports::shell::ShellExecutionPort;
 
 pub(crate) struct Scratch {
     pub path: PathBuf,

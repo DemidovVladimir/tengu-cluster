@@ -32,9 +32,9 @@ use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
 pub(crate) const VIEW_SKILL_TOOL_NAME: &str = "view_skill";
 

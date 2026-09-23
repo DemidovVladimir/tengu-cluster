@@ -13,9 +13,9 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Reserved tool name — skills cannot shadow this.
 pub(crate) const SHARED_CACHE_TOOL_NAME: &str = "shared_cache";
@@ -171,7 +171,7 @@ mod tests {
     use super::*;
     use crate::adapters::plugins::cache::open_cache_db;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use tempfile::TempDir;
 
     fn make_tool(workspace: &std::path::Path) -> SharedCacheTool {

@@ -1,12 +1,12 @@
-//! `MemoryProvider` — abstract base for pluggable memory backends.
-//!
-//! One built-in provider (`BuiltinMemoryProvider`) is always registered
-//! first. At most one external provider (Letta, Mem0, …) may slot in
-//! alongside it. Harness-level, never exposed as LLM tools — retrieval
-//! and writes are driven by `MemoryInjector` / `MemoryWriter`.
+//! Memory ports — `MemoryProvider` (harness-level memory backends driven by
+//! the injector/writer) and `VectorStore` (embedding store behind the
+//! workspace memory tools; impl: `DiskVectorStore`).
 
+use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
+
+use crate::domain::memory::{ChunkMetadata, MemoryHit};
 
 // Several lifecycle methods on this trait (`is_available`, `initialize`,
 // `system_prompt_block`, `shutdown`) are unused on the v2 RagPlanner /
@@ -48,4 +48,42 @@ pub trait MemoryProvider: Send + Sync {
 
     /// Clean teardown — flush queues, close connections.
     async fn shutdown(&self);
+}
+
+#[async_trait]
+pub trait VectorStore: Send + Sync {
+    /// Append a new entry. The returned identifier is stable for the lifetime
+    /// of the store — callers may later pass it to `delete`. For stores that
+    /// don't naturally have row IDs (e.g. bincode with no primary key),
+    /// implementations must synthesize a UUID/index-based ID.
+    async fn write(
+        &self,
+        embedding: Vec<f32>,
+        text: &str,
+        metadata: ChunkMetadata,
+    ) -> Result<String>;
+
+    async fn search(
+        &self,
+        embedding: &[f32],
+        top_k: usize,
+        filter: Option<&ChunkMetadata>,
+    ) -> Result<Vec<MemoryHit>>;
+
+    /// Remove a single entry by its `id`. Returns `true` if the id existed
+    /// and was removed, `false` if no entry matched. Implementations that
+    /// don't support deletion (e.g. append-only adapters) can return
+    /// `Ok(false)` uniformly — callers must not treat `false` as an error.
+    async fn delete(&self, id: &str) -> Result<bool>;
+
+    /// Purge every entry in the store. Used by channel `/purge` commands.
+    async fn clear_all(&self) -> Result<()>;
+
+    /// Count of entries currently in the store. Used by TUI status lines
+    /// and ops dashboards.
+    async fn entry_count(&self) -> Result<usize>;
+
+    /// Approximate on-disk (or over-the-wire) size in bytes. Implementations
+    /// that can't cheaply compute this may return `0`.
+    async fn storage_bytes(&self) -> Result<u64>;
 }

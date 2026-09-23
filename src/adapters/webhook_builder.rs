@@ -58,14 +58,16 @@ use tracing::{error, info, warn};
 
 use crate::adapters::channel_runtime;
 use crate::adapters::config::{Config, WebhookEndpointConfig};
-use crate::adapters::engine_builder::{build_engine, collect_engine_response, ToolExecutor};
+use crate::adapters::engine_builder::{build_engine, collect_engine_response};
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::noop::{NoopActivity, NoopRuntimeToolExecutor};
-use crate::adapters::orchestrator::wiring::ChatServiceFactory;
-use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
-use crate::adapters::types::{Engine, EngineContext, Message, Role};
+use crate::domain::message::{Message, Role};
+use crate::ports::engine::ToolExecutor;
+use crate::ports::engine::{Engine, EngineContext};
+use crate::ports::orchestration::ChatServiceFactory;
+use crate::ports::tool_activity::ToolActivityPort;
 
 type HmacSha256 = Hmac<Sha256>;
 

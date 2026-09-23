@@ -14,11 +14,11 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::memory::ChunkMetadata;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Tool name (kept constant for cross-module reference).
 #[allow(dead_code)]
@@ -140,9 +140,10 @@ impl Tool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
     use crate::adapters::plugins::memory::ingest::MemoryIngestTool;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
+    use crate::ports::memory::VectorStore;
     use tempfile::TempDir;
 
     fn make_manager() -> Arc<MemoryManager> {

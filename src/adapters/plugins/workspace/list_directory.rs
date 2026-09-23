@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::adapters::tool_builder::validate_path;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct ListDirectoryTool {
     def: ToolDef,
@@ -38,7 +38,7 @@ impl ListDirectoryTool {
 mod tests {
     use super::*;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use serde_json::json;
     use tempfile::TempDir;
 

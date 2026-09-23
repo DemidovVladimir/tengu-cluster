@@ -41,7 +41,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::adapters::ports::host_matches;
+use crate::domain::scope::host_matches;
 
 /// Env var carrying the parent's resolved `EgressConfig` (JSON) to children.
 pub(crate) const EGRESS_ENV: &str = "TENGU_EGRESS";

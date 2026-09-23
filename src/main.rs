@@ -6,11 +6,14 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 mod adapters;
+mod application;
+mod domain;
+mod ports;
 use crate::adapters::config::{Config, RuntimeProfile};
 
-use adapters::engine_builder::build_engine;
-use adapters::secret_builder;
-use adapters::secret_builder::SecretRegistry;
+use crate::adapters::engine_builder::build_engine;
+use crate::adapters::secret_builder;
+use crate::adapters::secret_builder::SecretRegistry;
 
 #[derive(Parser)]
 #[command(name = "tengu")]
@@ -262,7 +265,7 @@ async fn main() -> Result<()> {
             .compact()
             .with_writer(std::io::stderr)
             .init();
-        return adapters::mcp_bridge::run_mcp_bridge().await;
+        return crate::adapters::mcp_bridge::run_mcp_bridge().await;
     }
 
     #[cfg(feature = "postgres_memory")]
@@ -276,7 +279,7 @@ async fn main() -> Result<()> {
             .compact()
             .with_writer(std::io::stderr)
             .init();
-        return adapters::mcp_bridge::run_agentic_memory_mcp_server().await;
+        return crate::adapters::mcp_bridge::run_agentic_memory_mcp_server().await;
     }
 
     if matches!(cli.command, Some(Commands::RunAgent)) {
@@ -414,14 +417,16 @@ async fn main() -> Result<()> {
 
     // Egress policy before anything builds an HTTP client or spawns a child;
     // `load_sandbox_or` re-installs from the sandbox config.
-    adapters::egress::install(&config.egress)?;
+    crate::adapters::egress::install(&config.egress)?;
 
     let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
 
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
         Commands::Chat { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
-            tokio::task::block_in_place(|| adapters::tui::run_tui(config, profile, secret_registry))
+            tokio::task::block_in_place(|| {
+                crate::adapters::tui::run_tui(config, profile, secret_registry)
+            })
         }
         Commands::Status => {
             print_status(&config, profile);
@@ -434,7 +439,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
-            adapters::telegram_builder::run_telegram(config, secret_registry)
+            crate::adapters::telegram_builder::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
         Commands::Telegram { .. } => {
@@ -443,7 +448,7 @@ async fn main() -> Result<()> {
         #[cfg(feature = "webhooks")]
         Commands::Webhooks { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
-            adapters::webhook_builder::run_webhooks(config, secret_registry).await
+            crate::adapters::webhook_builder::run_webhooks(config, secret_registry).await
         }
         #[cfg(not(feature = "webhooks"))]
         Commands::Webhooks { .. } => {
@@ -463,11 +468,11 @@ async fn main() -> Result<()> {
             max_runs,
         } => {
             let format = match format.as_str() {
-                "table" => adapters::eval_builder::OutputFormat::Table,
-                "json" => adapters::eval_builder::OutputFormat::Json,
+                "table" => crate::adapters::eval_builder::OutputFormat::Table,
+                "json" => crate::adapters::eval_builder::OutputFormat::Json,
                 other => anyhow::bail!("invalid --format: {} (expected 'table' or 'json')", other),
             };
-            let args = adapters::eval_builder::EvalArgs {
+            let args = crate::adapters::eval_builder::EvalArgs {
                 skills,
                 sandbox,
                 judge_model,
@@ -480,7 +485,7 @@ async fn main() -> Result<()> {
                 no_persist,
                 max_per_run_reports: max_runs,
             };
-            let exit_code = adapters::eval_builder::run(args).await?;
+            let exit_code = crate::adapters::eval_builder::run(args).await?;
             std::process::exit(exit_code);
         }
         Commands::Prune { sandbox, yes, hard } => {
@@ -493,7 +498,7 @@ async fn main() -> Result<()> {
                         .filter_map(|a| {
                             a.workspace
                                 .as_ref()
-                                .map(|p| adapters::tool_builder::expand_tilde(p))
+                                .map(|p| crate::adapters::tool_builder::expand_tilde(p))
                         })
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
@@ -514,17 +519,18 @@ async fn main() -> Result<()> {
                      pruning global state only."
                 );
             }
-            let targets = adapters::prune::plan_prune(&adapters::prune::PruneOptions {
-                tengu_home: &tengu_home,
-                workspaces: &workspaces,
-                project_dirs: &project_dirs,
-                hard,
-            });
+            let targets =
+                crate::adapters::prune::plan_prune(&crate::adapters::prune::PruneOptions {
+                    tengu_home: &tengu_home,
+                    workspaces: &workspaces,
+                    project_dirs: &project_dirs,
+                    hard,
+                });
             if targets.iter().all(|t| !t.exists) {
                 println!("Nothing to prune.");
                 return Ok(());
             }
-            println!("{}", adapters::prune::format_prune_plan(&targets));
+            println!("{}", crate::adapters::prune::format_prune_plan(&targets));
             if !yes {
                 eprint!("Proceed? [y/N] ");
                 let mut buf = String::new();
@@ -534,7 +540,7 @@ async fn main() -> Result<()> {
                     return Ok(());
                 }
             }
-            let results = adapters::prune::execute_prune(&targets);
+            let results = crate::adapters::prune::execute_prune(&targets);
             for (label, result) in &results {
                 match result {
                     Ok(()) => println!("  ✓ {}", label),
@@ -543,7 +549,7 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Commands::McpBridge => adapters::mcp_bridge::run_mcp_bridge().await,
+        Commands::McpBridge => crate::adapters::mcp_bridge::run_mcp_bridge().await,
         #[cfg(feature = "postgres_memory")]
         Commands::AgenticMemoryServer => {
             // Handled by the early-return in main() (stdout must stay
@@ -590,14 +596,14 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "postgres_memory")]
 async fn try_persist_agentic_step_summary(
-    parent_config: &adapters::config::Config,
+    parent_config: &crate::adapters::config::Config,
     session_id: &str,
     step_id: &str,
     summary: &str,
 ) -> anyhow::Result<String> {
     let embedding = match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
-            let embedder = adapters::memory::vector::Embedder::new(
+            let embedder = crate::adapters::memory::vector::Embedder::new(
                 api_key,
                 parent_config.memory.embedding_model.clone(),
             );
@@ -614,7 +620,7 @@ async fn try_persist_agentic_step_summary(
         }
         Err(_) => None,
     };
-    adapters::plugins::agentic_memory::write_step_summary_with_embedding(
+    crate::adapters::plugins::agentic_memory::write_step_summary_with_embedding(
         session_id,
         step_id,
         summary,
@@ -641,7 +647,8 @@ async fn try_persist_agentic_step_summary(
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit.
 async fn run_agent_subprocess() -> Result<()> {
-    use crate::adapters::types::{EngineContext, Message, Role};
+    use crate::domain::message::{Message, Role};
+    use crate::ports::engine::EngineContext;
     use tokio::io::AsyncReadExt;
 
     if std::env::var("TENGU_AGENT_IPC").ok().as_deref() != Some("1") {
@@ -657,7 +664,7 @@ async fn run_agent_subprocess() -> Result<()> {
         .read_to_end(&mut buf)
         .await
         .context("read IPC input from stdin")?;
-    let input: adapters::runner::AgentIpcInput =
+    let input: crate::adapters::runner::AgentIpcInput =
         serde_json::from_slice(&buf).context("parse IPC input JSON")?;
 
     tracing::info!(
@@ -705,7 +712,8 @@ async fn run_agent_subprocess() -> Result<()> {
 
     // Parent's `[egress]` (TENGU_EGRESS) wins; an invalid policy aborts the
     // child rather than running tools unproxied.
-    adapters::egress::install(&parent_config.egress).context("run-agent: install egress policy")?;
+    crate::adapters::egress::install(&parent_config.egress)
+        .context("run-agent: install egress policy")?;
 
     // ----- Resolve the agent: `[agents.<name>]` of that config -----
     //
@@ -756,7 +764,7 @@ async fn run_agent_subprocess() -> Result<()> {
     spec.workspace = spec
         .workspace
         .as_ref()
-        .map(|p| adapters::tool_builder::expand_tilde(p));
+        .map(|p| crate::adapters::tool_builder::expand_tilde(p));
     if let Some(c) = compose_override {
         spec.skill_packages = c.skills;
         spec.tools = c.tools;
@@ -790,12 +798,13 @@ async fn run_agent_subprocess() -> Result<()> {
     // source of truth; the global `TENGU_PLAN.md` is only a fallback for old
     // parents that don't send it (it is overwritten by every session).
     let plan_state = match input.plan_state.as_deref() {
-        Some(rendered) => {
-            adapters::orchestrator::shared_files::plan_state_block(rendered, "IPC `plan_state`")
-        }
-        None => {
-            adapters::orchestrator::shared_files::read_plan_state_block(&std::env::current_dir()?)
-        }
+        Some(rendered) => crate::adapters::orchestrator::shared_files::plan_state_block(
+            rendered,
+            "IPC `plan_state`",
+        ),
+        None => crate::adapters::orchestrator::shared_files::read_plan_state_block(
+            &std::env::current_dir()?,
+        ),
     };
     if !plan_state.is_empty() {
         system_prompt.push_str("\n\n---\n\n");
@@ -808,11 +817,14 @@ async fn run_agent_subprocess() -> Result<()> {
         .workspace
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let mut agent_cfg_for_engine = adapters::channel_runtime::subagent_config(&spec);
+    let mut agent_cfg_for_engine = crate::adapters::channel_runtime::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
-    adapters::channel_runtime::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
-    let engine = adapters::engine_builder::build_engine(
+    crate::adapters::channel_runtime::grant_workspace_root(
+        &mut agent_cfg_for_engine.scopes,
+        &workspace,
+    );
+    let engine = crate::adapters::engine_builder::build_engine(
         &input.agent_name,
         &agent_cfg_for_engine,
         parent_config.claude_code.as_ref(),
@@ -832,8 +844,9 @@ async fn run_agent_subprocess() -> Result<()> {
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
 
     // ----- Build tool stack (Phase 5b) -----
-    let secret_registry = std::sync::Arc::new(adapters::secret_builder::SecretRegistry::new());
-    let activity: std::sync::Arc<dyn crate::adapters::ports::ToolActivityPort> =
+    let secret_registry =
+        std::sync::Arc::new(crate::adapters::secret_builder::SecretRegistry::new());
+    let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
     // the MemoryPlugin can register persistent_store / memory_ingest as
@@ -843,7 +856,7 @@ async fn run_agent_subprocess() -> Result<()> {
     // in the advertised list.
     let memory_manager = if parent_config.memory.enabled {
         Some(
-            adapters::channel_runtime::build_memory_manager_async(
+            crate::adapters::channel_runtime::build_memory_manager_async(
                 &parent_config.memory,
                 Some(&workspace),
             )
@@ -853,7 +866,7 @@ async fn run_agent_subprocess() -> Result<()> {
         None
     };
 
-    let (tools, executor) = adapters::channel_runtime::build_subprocess_tool_executor(
+    let (tools, executor) = crate::adapters::channel_runtime::build_subprocess_tool_executor(
         &spec,
         &parent_config,
         &workspace,
@@ -900,7 +913,7 @@ async fn run_agent_subprocess() -> Result<()> {
     // OpenRouter path leaves bridge_tools = None (the ToolDef list is
     // registered through the OpenAI-compatible function-calling API
     // instead, handled by `tools` passed to run_single_engine_turn).
-    let bridge_tools_for_ctx: Option<Vec<crate::adapters::types::ToolDef>> =
+    let bridge_tools_for_ctx: Option<Vec<crate::domain::message::ToolDef>> =
         if spec.engine == "claude_code" {
             Some(tools.clone())
         } else {
@@ -920,7 +933,7 @@ async fn run_agent_subprocess() -> Result<()> {
     let mut compress_called = false;
     // Per-turn metrics records — shipped back to the parent in the IPC
     // output so they can be re-emitted on the parent's metrics bus.
-    let mut subagent_metrics: Vec<adapters::metrics::MetricsRecord> = Vec::new();
+    let mut subagent_metrics: Vec<crate::adapters::metrics::MetricsRecord> = Vec::new();
 
     for turn in 0..input.max_turns {
         // Compute the prompt size BEFORE the engine call so the metric
@@ -933,7 +946,7 @@ async fn run_agent_subprocess() -> Result<()> {
         let turn_started = std::time::Instant::now();
 
         let (text, tool_calls, input_delta, output_delta) =
-            adapters::engine_builder::run_single_engine_turn(
+            crate::adapters::engine_builder::run_single_engine_turn(
                 engine.as_ref(),
                 &messages,
                 &tools,
@@ -947,10 +960,10 @@ async fn run_agent_subprocess() -> Result<()> {
         // Record one metric per engine turn. `input_delta`/`output_delta`
         // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
         // both supply them); they're 0 when the engine doesn't return usage.
-        let rec = adapters::metrics::MetricsRecord {
-            ts_unix: adapters::metrics::now_unix(),
+        let rec = crate::adapters::metrics::MetricsRecord {
+            ts_unix: crate::adapters::metrics::now_unix(),
             session_id: input.session_id.clone(),
-            kind: adapters::metrics::MetricsKind::Subagent,
+            kind: crate::adapters::metrics::MetricsKind::Subagent,
             agent: input.agent_name.clone(),
             model: model.clone(),
             prompt_tokens: input_delta,
@@ -966,7 +979,7 @@ async fn run_agent_subprocess() -> Result<()> {
         // Emit into the subprocess's own tracing log too (the parent forwards
         // stderr — Phase 7.5) so the user sees the same line whether they
         // grep the parent log or a future subprocess log file.
-        adapters::metrics::record(rec.clone());
+        crate::adapters::metrics::record(rec.clone());
         subagent_metrics.push(rec);
 
         // If no tool calls, the model produced its final answer. Save the
@@ -1013,7 +1026,7 @@ async fn run_agent_subprocess() -> Result<()> {
                 }
                 "stored".to_string()
             } else if let Some(ref exec) = executor {
-                use crate::adapters::engine_builder::ToolExecutor;
+                use crate::ports::engine::ToolExecutor;
                 match exec.execute(call, &messages).await {
                     Ok(s) => s,
                     Err(e) => format!("tool error: {}", e),
@@ -1109,7 +1122,7 @@ async fn run_agent_subprocess() -> Result<()> {
         );
     }
     let out = if compress_called || !final_text.is_empty() {
-        adapters::runner::AgentIpcOutput::Ok {
+        crate::adapters::runner::AgentIpcOutput::Ok {
             output,
             summary,
             metrics: subagent_metrics,
@@ -1117,7 +1130,7 @@ async fn run_agent_subprocess() -> Result<()> {
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
         // Surface as Failed so the orchestrator can retry / replan.
-        adapters::runner::AgentIpcOutput::Failed {
+        crate::adapters::runner::AgentIpcOutput::Failed {
             error: format!(
                 "subagent '{}' produced no output and did not call compress_and_store",
                 input.agent_name
@@ -1134,8 +1147,8 @@ async fn run_agent_subprocess() -> Result<()> {
 /// Subprocess `ToolActivityPort` impl — silent. The parent runner sees
 /// progress via the engine's StreamEvent::TextDelta path, not via this hook.
 struct SubprocessActivity;
-impl crate::adapters::ports::ToolActivityPort for SubprocessActivity {
-    fn publish_tool_activity(&self, _call: &crate::adapters::types::ToolCall) {}
+impl crate::ports::tool_activity::ToolActivityPort for SubprocessActivity {
+    fn publish_tool_activity(&self, _call: &crate::domain::message::ToolCall) {}
 }
 
 /// Config loader used by the `run-agent` subprocess path — needs
@@ -1347,8 +1360,9 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
             let config = load_sandbox_or(sandbox, config)?;
             let workspace = std::env::current_dir()?;
             let chat_factory =
-                adapters::channel_runtime::build_cli_chat_factory(&config, &workspace).await?;
-            let args = adapters::skill_lifecycle::evolve::EvolveArgs {
+                crate::adapters::channel_runtime::build_cli_chat_factory(&config, &workspace)
+                    .await?;
+            let args = crate::adapters::skill_lifecycle::evolve::EvolveArgs {
                 config: &config,
                 workspace: &workspace,
                 skill: &skill,
@@ -1357,7 +1371,7 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
                 base_branch,
                 chat_factory,
             };
-            adapters::skill_lifecycle::evolve::run_evolve(args).await?;
+            crate::adapters::skill_lifecycle::evolve::run_evolve(args).await?;
             Ok(())
         }
         SkillAction::Metrics { skill, last } => {
@@ -1376,8 +1390,9 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&v)?);
 
             // Friendly per-metric summary with variance band when available.
-            if let Ok(mj) =
-                serde_json::from_slice::<adapters::skill_lifecycle::storage::MetricsJson>(&raw)
+            if let Ok(mj) = serde_json::from_slice::<
+                crate::adapters::skill_lifecycle::storage::MetricsJson,
+            >(&raw)
             {
                 println!("\n-- summary --");
                 for (name, r) in &mj.metrics {
@@ -1814,8 +1829,8 @@ async fn skill_export(name: &str, out: Option<&Path>) -> Result<()> {
 
     // Shell out to `tar -czf <out> -C <staging> <name>`. `tar` crate isn't a
     // dep; system tar is fine for v1 (Linux + macOS both ship one).
-    let shell = adapters::shell_executor::LocalShellExecutor::new();
-    use crate::adapters::ports::ShellExecutionPort;
+    let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+    use crate::ports::shell::ShellExecutionPort;
     let cmd = format!(
         "tar -czf {} -C {} {}",
         shell_quote(&out_path.to_string_lossy()),
@@ -1862,8 +1877,8 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
     std::fs::create_dir_all(&quarantine_root)
         .with_context(|| format!("create quarantine {}", quarantine_root.display()))?;
 
-    let shell = adapters::shell_executor::LocalShellExecutor::new();
-    use crate::adapters::ports::ShellExecutionPort;
+    let shell = crate::adapters::shell_executor::LocalShellExecutor::new();
+    use crate::ports::shell::ShellExecutionPort;
 
     // Step 2: bring source into quarantine_root.
     let is_git = source.starts_with("http://")
@@ -2167,9 +2182,9 @@ async fn skill_seed(
 
     // Stub evals/prompts.yaml — schema_version: 1, one placeholder fixture.
     std::fs::create_dir_all(tmp.join("evals"))?;
-    let stub = adapters::skill_lifecycle::fixtures::FixturesFile {
+    let stub = crate::adapters::skill_lifecycle::fixtures::FixturesFile {
         schema_version: 1,
-        fixtures: vec![adapters::skill_lifecycle::fixtures::Fixture {
+        fixtures: vec![crate::adapters::skill_lifecycle::fixtures::Fixture {
             id: "f1".to_string(),
             prompt: "<TODO: a typical question a learner would ask>".to_string(),
             expected_tool_calls: Vec::new(),
@@ -2177,7 +2192,7 @@ async fn skill_seed(
             metrics: Vec::new(),
         }],
     };
-    adapters::skill_lifecycle::fixtures::write_fixtures(
+    crate::adapters::skill_lifecycle::fixtures::write_fixtures(
         &tmp.join("evals").join("prompts.yaml"),
         &stub,
     )?;
@@ -2350,7 +2365,7 @@ fn locate_skill_root(quarantine: &Path) -> Option<PathBuf> {
     None
 }
 
-fn format_diagnostics_compact(d: &crate::adapters::EngineDiagnostics) -> String {
+fn format_diagnostics_compact(d: &crate::ports::engine::EngineDiagnostics) -> String {
     let caps = &d.capabilities;
     format!(
         "model={} endpoint={} transport={} context={} output_cap={} streaming={}",
@@ -2447,7 +2462,7 @@ async fn run_doctor(config: &Config, tor_check: bool) -> Result<()> {
 /// the proxy port accepts TCP, and with `--tor` asks check.torproject.org
 /// (through the tool client) whether traffic exits via Tor.
 async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
-    let policy = adapters::egress::policy();
+    let policy = crate::adapters::egress::policy();
     let cfg = policy.config();
     println!("  Egress:");
     println!("    network: {}", policy.network());
@@ -2526,7 +2541,7 @@ async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
     }
 }
 
-async fn tor_exit_check(policy: &adapters::egress::EgressPolicy) -> Result<(bool, String)> {
+async fn tor_exit_check(policy: &crate::adapters::egress::EgressPolicy) -> Result<(bool, String)> {
     let body: serde_json::Value = policy
         .tool_client(std::time::Duration::from_secs(60))?
         .get("https://check.torproject.org/api/ip")
@@ -2560,7 +2575,7 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
                 format!("Failed to load sandbox '{}' from {}", name, path.display())
             })?;
             cfg.sandbox_name = Some(name);
-            adapters::egress::install(&cfg.egress)?;
+            crate::adapters::egress::install(&cfg.egress)?;
             cfg
         }
     };
@@ -2568,7 +2583,7 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
     // config). Children inherit it via `TENGU_EGRESS` and stay quiet — the
     // parent already printed the warning.
     if std::env::var_os("TENGU_AGENT_IPC").is_none() {
-        adapters::egress::policy().warn_if_proxy_unreachable();
+        crate::adapters::egress::policy().warn_if_proxy_unreachable();
     }
     Ok(cfg)
 }

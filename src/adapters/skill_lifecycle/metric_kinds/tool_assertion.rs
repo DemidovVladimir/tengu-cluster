@@ -76,9 +76,9 @@ impl MetricKind for ToolAssertionKind {
         // Live-dispatch path: build a ToolCtx and invoke.
         let empty_scopes = std::collections::HashMap::new();
         let scopes = ctx.tool_scopes.unwrap_or(&empty_scopes);
-        let default_scope = crate::adapters::ports::ToolScope::default();
+        let default_scope = crate::domain::scope::ToolScope::default();
         let scope = scopes.get(&tool_name).unwrap_or(&default_scope);
-        let tool_ctx = crate::adapters::tool_plugin::ToolCtx {
+        let tool_ctx = crate::ports::tool::ToolCtx {
             workspace: ctx.workspace,
             scope,
             shell: ctx.shell,
@@ -86,7 +86,7 @@ impl MetricKind for ToolAssertionKind {
             memory_manager: ctx.memory_manager,
             secret_registry,
             activity,
-            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            conversation: crate::ports::tool::ConversationView::empty(),
             // Eval-time tool dispatch: no calling-agent context to thread.
             agent_config: None,
         };

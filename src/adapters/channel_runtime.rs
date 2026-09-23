@@ -21,7 +21,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::config::{AgentConfig, McpServerConfig};
-use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::ports::memory::VectorStore;
 // Phase 7.7 — most plugin type imports moved into `register_core_plugins`'s
 // local `use` block. Only McpPlugin + SkillPlugin stay top-level because
 // build_tool_executor still registers them outside the shared helper
@@ -30,12 +31,16 @@ use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
 use crate::adapters::plugins::mcp::McpPlugin;
 use crate::adapters::plugins::memory::persistent_store_tool_defs;
 use crate::adapters::plugins::skill::SkillPlugin;
-use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
-use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
-use crate::adapters::types::{ChatLoopState, Lens, ToolCall, ToolDef};
+use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
+use crate::domain::message::{Lens, ToolCall, ToolDef};
+use crate::domain::scope::ToolScope;
+use crate::domain::session::ChatLoopState;
+use crate::ports::shell::ShellExecutionPort;
+use crate::ports::tool::PluginCtx;
+use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
 // Tool, executor, and prompt rebuilding
@@ -79,7 +84,7 @@ pub(crate) fn rebuild_system_prompt(
 // TODO(Phase B): drop the block_on once build_tool_executor is async.
 fn register_plugin_safe(
     registry: &mut ToolRegistry,
-    plugin: &dyn crate::adapters::tool_plugin::ToolPlugin,
+    plugin: &dyn crate::ports::tool::ToolPlugin,
     plugin_ctx: &PluginCtx<'_>,
     allow_list: &[String],
     failure_message: &str,
@@ -317,8 +322,8 @@ pub(crate) struct CoreRegistrationOpts<'a> {
 /// the other. Adding a new shared plugin now means editing this function
 /// once — both call sites pick it up.
 pub(crate) async fn register_core_plugins(
-    registry: &mut crate::adapters::tool_plugin::ToolRegistry,
-    ctx: &crate::adapters::tool_plugin::PluginCtx<'_>,
+    registry: &mut crate::application::tools::registry::ToolRegistry,
+    ctx: &crate::ports::tool::PluginCtx<'_>,
     allowed_names: &HashSet<String>,
     allowed_list: &[String],
     opts: CoreRegistrationOpts<'_>,
@@ -807,7 +812,7 @@ pub(crate) fn chunk_message(text: &str, max_len: usize) -> Vec<&str> {
 /// Used by both CLI and Telegram orchestrators to embed previous step output
 /// inline in task prompts instead of referencing file paths.
 pub(crate) fn truncate_output(text: &str, max_chars: usize) -> String {
-    crate::adapters::token::truncate_with_suffix(text, max_chars, "...(truncated)")
+    crate::domain::token::truncate_with_suffix(text, max_chars, "...(truncated)")
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +899,7 @@ pub(crate) fn build_activity_context(
 
 /// Truncate text to at most `max` chars on a char boundary, appending "…" if cut.
 pub(crate) fn truncate_summary(text: &str, max: usize) -> String {
-    crate::adapters::token::truncate_with_suffix(text, max, "…")
+    crate::domain::token::truncate_with_suffix(text, max, "…")
 }
 
 // ---------------------------------------------------------------------------
@@ -952,17 +957,20 @@ use async_trait::async_trait;
 
 use crate::adapters::chat_builder::ChatRuntimeService;
 use crate::adapters::config::Config;
-use crate::adapters::engine_builder::{ToolExecutor, ToolResultObserver};
+use crate::adapters::engine_builder::ToolResultObserver;
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orchestrator::planner::{Planner, RagPlanner};
+use crate::adapters::orchestrator::planner::RagPlanner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::orchestration::Planner;
 // Phase 7.1 (full) — `OrchestratorAgentPlanner`, `ChatWorker`, and the
 // `render_roster` helper were deleted along with the static-mode path.
 // `build_orchestrator` now constructs only `RagPlanner` + `SubprocessRunner`.
-use crate::adapters::orchestrator::wiring::{ChatOrchestratorPortImpl, ChatServiceFactory};
+use crate::adapters::orchestrator::wiring::ChatOrchestratorPortImpl;
 use crate::adapters::orchestrator::Orchestrator;
-use crate::adapters::types::FlowCompactionPolicy;
-use crate::adapters::Engine;
+use crate::domain::session::FlowCompactionPolicy;
+use crate::ports::engine::Engine;
+use crate::ports::orchestration::ChatServiceFactory;
 
 /// Owned snapshot of the inputs a `ChatRuntimeService<'a>` needs for a single
 /// turn. `inputs_fn` closures produce one of these per call; the factory then
@@ -1098,7 +1106,7 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
         agent: &str,
         system_prompt: Option<&str>,
         text: &str,
-    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
+    ) -> anyhow::Result<(String, crate::ports::orchestration::TurnTelemetry)> {
         self.run_turn_inner(agent, system_prompt, text).await
     }
 }
@@ -1113,7 +1121,7 @@ impl RuntimeChatServiceFactory {
         agent: &str,
         system_override: Option<&str>,
         text: &str,
-    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
+    ) -> anyhow::Result<(String, crate::ports::orchestration::TurnTelemetry)> {
         let inputs = (self.inputs_fn)(agent)?;
         let model_slug = inputs.agent_config.model.clone();
         let started = std::time::Instant::now();
@@ -1171,7 +1179,7 @@ impl RuntimeChatServiceFactory {
         // The orchestrator always wants *some* string to feed back into the
         // next step.
         let reply = result.assistant_text.unwrap_or_default();
-        let telemetry = crate::adapters::orchestrator::wiring::TurnTelemetry {
+        let telemetry = crate::ports::orchestration::TurnTelemetry {
             // `process_user_text` writes per-turn deltas onto state.total_*;
             // we read them here so the value reflects only this turn (the
             // caller mints a fresh ChatLoopState per call).
@@ -1280,7 +1288,7 @@ pub(crate) fn build_orchestrator(
         sandbox = ?config.sandbox_name,
         "orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner"
     );
-    let worker: Arc<dyn crate::adapters::orchestrator::executor::WorkerHandle> =
+    let worker: Arc<dyn crate::ports::orchestration::WorkerHandle> =
         Arc::new(crate::adapters::runner::SubprocessRunner::new(
             config.sandbox_name.clone(),
             session_id.clone(),
@@ -1476,7 +1484,7 @@ pub(crate) async fn build_cli_chat_factory(
 mod golden_tests {
     use super::*;
     use crate::adapters::config::Config;
-    use crate::adapters::types::ToolCall;
+    use crate::domain::message::ToolCall;
     use std::collections::HashSet;
     use tempfile::TempDir;
 

@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::json;
 
-use crate::adapters::ports::ShellExecutionPort;
 use crate::adapters::skill_lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
 };
+use crate::ports::shell::ShellExecutionPort;
 
 pub(crate) struct ShellCheckKind;
 

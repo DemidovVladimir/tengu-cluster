@@ -449,7 +449,7 @@ mod tests {
     }
 
     struct NoShell;
-    impl crate::adapters::ports::ShellExecutionPort for NoShell {
+    impl crate::ports::shell::ShellExecutionPort for NoShell {
         fn execute_shell(&self, _: &str, _: &Path) -> Result<String> {
             Ok(String::new())
         }
@@ -475,7 +475,7 @@ mod tests {
     fn ctx_with_judge<'a>(
         skill_dir: &'a Path,
         workspace: &'a Path,
-        shell: &'a dyn crate::adapters::ports::ShellExecutionPort,
+        shell: &'a dyn crate::ports::shell::ShellExecutionPort,
         judge: Arc<dyn JudgeClient>,
     ) -> MetricRunCtx<'a> {
         MetricRunCtx {

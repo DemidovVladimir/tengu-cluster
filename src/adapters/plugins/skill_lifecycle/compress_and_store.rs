@@ -16,7 +16,7 @@
 
 #![allow(dead_code)]
 
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
 
 /// The canonical tool definition. The runner appends it implicitly to every
 /// subagent (`build_subprocess_tool_executor`) — never list it in

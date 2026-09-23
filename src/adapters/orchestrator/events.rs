@@ -3,7 +3,7 @@
 use tokio::sync::broadcast;
 
 use crate::adapters::metrics::MetricsRecord;
-use crate::adapters::orchestrator::plan::{Plan, StepId};
+use crate::domain::plan::{Plan, StepId};
 
 /// Phase 6.1 (full) — flat projection of a single RAG search hit attached
 /// to `OrchestratorEvent::RagQueried`. We deliberately don't ship the full

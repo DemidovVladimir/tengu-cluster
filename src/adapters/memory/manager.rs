@@ -4,9 +4,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::warn;
 
-use crate::adapters::memory::context_block::{ChunkMetadata, MemoryHit};
-use crate::adapters::memory::provider::MemoryProvider;
-use crate::adapters::memory::vector::{Embedder, VectorStore};
+use crate::adapters::memory::vector::Embedder;
+use crate::domain::memory::{ChunkMetadata, MemoryHit};
+use crate::ports::memory::MemoryProvider;
+use crate::ports::memory::VectorStore;
 
 pub struct MemoryManager {
     providers: Arc<RwLock<Vec<Box<dyn MemoryProvider>>>>,

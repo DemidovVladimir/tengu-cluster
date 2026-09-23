@@ -5,9 +5,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct RunCommandTool {
     def: ToolDef,
@@ -43,7 +43,7 @@ fn extract_binary(command: &str) -> &str {
 mod tests {
     use super::*;
     use crate::adapters::plugins::workspace::test_support::TestHarness;
-    use crate::adapters::ports::ToolScope;
+    use crate::domain::scope::ToolScope;
     use serde_json::json;
     use tempfile::TempDir;
 

@@ -27,9 +27,9 @@ use uuid::Uuid;
 
 use crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL;
 use crate::adapters::memory::vector::Embedder;
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
 pub(crate) const AGENTIC_MEMORY_TOOL_NAME: &str = "agentic_memory";
 

@@ -8,8 +8,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) mod list_directory;
 pub(crate) mod read_file;

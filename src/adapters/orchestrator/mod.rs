@@ -11,7 +11,6 @@
 
 pub mod events;
 pub mod executor;
-pub mod plan;
 pub mod planner;
 pub mod replan;
 pub mod retry;
@@ -22,19 +21,14 @@ pub mod wiring;
 
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
-// `Plan`, `Step`, `StepId` are no longer re-exported — the v2 RagPlanner /
-// SubprocessRunner path consumes them via the internal `plan` module path.
-// Keep the module `pub mod plan` above so external consumers can still reach
-// them by full path if needed; Phase 7.1 will remove the static-mode plan
-// machinery wholesale.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orchestrator::executor::WorkerHandle;
-use crate::adapters::orchestrator::planner::Planner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::ports::orchestration::Planner;
+use crate::ports::orchestration::WorkerHandle;
 
 pub struct Orchestrator {
     planner: Arc<dyn Planner>,
@@ -120,11 +114,11 @@ mod e2e_tests {
     use async_trait::async_trait;
 
     use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::executor::WorkerHandle;
-    use crate::adapters::orchestrator::plan::{Plan, Step, StepId};
-    use crate::adapters::orchestrator::planner::{Planner, PlannerVerdict};
     use crate::adapters::orchestrator::replan;
     use crate::adapters::orchestrator::retry::RetryPolicy;
+    use crate::domain::plan::{Plan, Step, StepId};
+    use crate::ports::orchestration::WorkerHandle;
+    use crate::ports::orchestration::{Planner, PlannerVerdict};
 
     struct StaticPlanner {
         plan: Plan,

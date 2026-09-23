@@ -1,6 +1,6 @@
 //! Shell execution adapter for running skill commands.
 
-use crate::adapters::ports::ShellExecutionPort;
+use crate::ports::shell::ShellExecutionPort;
 use anyhow::Result;
 use std::path::Path;
 use std::process::Stdio;

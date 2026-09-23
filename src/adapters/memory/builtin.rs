@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::adapters::memory::context_block::ChunkMetadata;
 use crate::adapters::memory::fencing::sanitize_context;
-use crate::adapters::memory::provider::MemoryProvider;
-use crate::adapters::memory::vector::{Embedder, VectorStore};
+use crate::adapters::memory::vector::Embedder;
+use crate::domain::memory::ChunkMetadata;
+use crate::ports::memory::MemoryProvider;
+use crate::ports::memory::VectorStore;
 
 pub struct BuiltinMemoryProvider {
     // `workspace` and `system_block` are unused on the v2 path (the static

@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::client::McpCaller;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct McpProxyTool {
     pub(crate) def: ToolDef,
@@ -42,10 +42,12 @@ impl Tool for McpProxyTool {
 mod tests {
     use super::*;
     use crate::adapters::plugins::mcp::protocol::McpRemoteTool;
-    use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
     use crate::adapters::secret_builder::SecretRegistry;
     use crate::adapters::shell_executor::LocalShellExecutor;
-    use crate::adapters::types::ToolCall;
+    use crate::domain::message::ToolCall;
+    use crate::domain::scope::ToolScope;
+    use crate::ports::shell::ShellExecutionPort;
+    use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -104,7 +106,7 @@ mod tests {
             memory_manager: None,
             secret_registry: &secrets,
             activity: activity.as_ref(),
-            conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+            conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
         };
 

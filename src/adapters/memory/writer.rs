@@ -17,7 +17,7 @@ pub fn sync_turn(mgr: Arc<MemoryManager>, agent: String, user: String, assistant
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::provider::MemoryProvider;
+    use crate::ports::memory::MemoryProvider;
     use async_trait::async_trait;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};

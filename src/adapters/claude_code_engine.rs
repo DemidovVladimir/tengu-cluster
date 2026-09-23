@@ -17,8 +17,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
 use tracing::{debug, error, warn};
 
-use crate::adapters::types::{EngineContext, Message, ModelInfo, Role, StreamEvent, ToolDef};
-use crate::adapters::{Engine, EngineDiagnostics};
+use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolDef};
+use crate::ports::engine::EngineContext;
+use crate::ports::engine::{Engine, EngineDiagnostics};
 
 // ---------------------------------------------------------------------------
 // Builtin tools profile
@@ -73,7 +74,7 @@ pub(crate) struct ClaudeCodeEngine {
     /// `[default_scopes]` already folded in). Exported to the bridge
     /// subprocess as `TENGU_BRIDGE_SCOPES` so MCP-routed tool calls are
     /// gated the same way in-process calls are. Empty = every tool permissive.
-    scopes: std::collections::HashMap<String, crate::adapters::ports::ToolScope>,
+    scopes: std::collections::HashMap<String, crate::domain::scope::ToolScope>,
 }
 
 impl ClaudeCodeEngine {
@@ -96,7 +97,7 @@ impl ClaudeCodeEngine {
     /// `engine_builder::build_engine` with `agent_config.scopes.clone()`.
     pub fn with_scopes(
         mut self,
-        scopes: std::collections::HashMap<String, crate::adapters::ports::ToolScope>,
+        scopes: std::collections::HashMap<String, crate::domain::scope::ToolScope>,
     ) -> Self {
         self.scopes = scopes;
         self

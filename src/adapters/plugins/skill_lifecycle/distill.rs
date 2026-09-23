@@ -12,8 +12,8 @@ use crate::adapters::skill_lifecycle::fixtures::{
     extract_fixtures, write_fixtures, ExtractOpts, Fixture, FixturesFile,
 };
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) const SKILL_DISTILL_TOOL_NAME: &str = "skill_distill";
 
@@ -383,10 +383,12 @@ fn count_fixtures(skill_dir: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
     use crate::adapters::secret_builder::SecretRegistry;
-    use crate::adapters::tool_plugin::ConversationView;
-    use crate::adapters::types::{Message, Role, ToolCall};
+    use crate::domain::message::{Message, Role, ToolCall};
+    use crate::domain::scope::ToolScope;
+    use crate::ports::shell::ShellExecutionPort;
+    use crate::ports::tool::ConversationView;
+    use crate::ports::tool_activity::ToolActivityPort;
     use tempfile::TempDir;
 
     struct NoShell;

@@ -27,8 +27,8 @@ use crate::adapters::skill_lifecycle::evolve::{
     ResourceFile,
 };
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) const APPLY_IMPROVER_PROPOSAL_TOOL_NAME: &str = "apply_improver_proposal";
 

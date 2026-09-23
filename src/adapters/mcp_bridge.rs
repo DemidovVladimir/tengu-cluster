@@ -18,20 +18,23 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::config::Config;
-use crate::adapters::engine_builder::ToolExecutor;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL;
-use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::ports::engine::ToolExecutor;
+use crate::ports::memory::VectorStore;
 // Phase 7.7 — plugin imports removed; bridge delegates to
 // `channel_runtime::register_core_plugins` which has its own local imports.
 // Keeps the bridge file focused on stdio JSON-RPC + executor wiring rather
 // than re-listing the plugin set.
-use crate::adapters::ports::{ToolActivityPort, ToolScope};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::shell_executor::LocalShellExecutor;
 use crate::adapters::tool_builder::build_tool_activity_text;
-use crate::adapters::tool_plugin::{PluginCtx, PluginToolExecutor, ToolRegistry};
-use crate::adapters::types::{ToolCall, ToolDef};
+use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
+use crate::domain::message::{ToolCall, ToolDef};
+use crate::domain::scope::ToolScope;
+use crate::ports::tool::PluginCtx;
+use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types
@@ -358,7 +361,7 @@ async fn handle_tools_call(
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
 
 fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
-    match crate::adapters::token::truncate_at_boundary(result, max_chars) {
+    match crate::domain::token::truncate_at_boundary(result, max_chars) {
         None => result.to_string(),
         Some((prefix, end)) => format!(
             "{}\n\n[truncated — showing {} of {} chars]",
@@ -424,7 +427,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         .map(|t| t.to_string())
         .collect();
 
-    let shell: Arc<dyn crate::adapters::ports::ShellExecutionPort> =
+    let shell: Arc<dyn crate::ports::shell::ShellExecutionPort> =
         Arc::new(LocalShellExecutor::new());
 
     let http_client =

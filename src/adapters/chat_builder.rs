@@ -11,17 +11,18 @@
 use anyhow::Result;
 
 use crate::adapters::config::AgentConfig;
-use crate::adapters::engine_builder::{collect_engine_response, ToolExecutor, ToolResultObserver};
+use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
 use crate::adapters::flow_builder::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::prompt_budget::{assemble_recent_history, compute_base_input_budget};
-use crate::adapters::token::estimate_tokens_approx_min1;
-use crate::adapters::types::{
-    ChatLoopState, EngineDiagnostics, FlowCompactionPolicy, Lens, Message, Recipient, Role, ToolDef,
-};
-use crate::adapters::{Engine, EngineContext};
+use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
+use crate::domain::session::{ChatLoopState, FlowCompactionPolicy};
+use crate::domain::token::estimate_tokens_approx_min1;
+use crate::ports::engine::EngineDiagnostics;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::engine::{Engine, EngineContext};
 
 // ---------------------------------------------------------------------------
 // Slash commands

@@ -1,94 +1,11 @@
 //! Planner — runs the orchestrator agent's LLM call, returns Plan or direct response.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 
-use crate::adapters::orchestrator::plan::Plan;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PlannerVerdict {
-    Direct {
-        response: String,
-    },
-    Plan {
-        #[serde(flatten)]
-        plan: Plan,
-    },
-}
-
-#[async_trait]
-pub trait Planner: Send + Sync {
-    /// First-plan call: user message + empty context.
-    async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict>;
-
-    /// Replan call: user message + failure context to avoid repeat mistakes.
-    async fn replan(
-        &self,
-        user_message: &str,
-        prior_plan: &Plan,
-        failed_step_id: &str,
-        error: &str,
-    ) -> anyhow::Result<PlannerVerdict>;
-
-    /// Orchestrator session id this planner stamps on memory writes, when it
-    /// has one. `replan::drive` keys the per-session active plan
-    /// (`shared_files::set_active_plan`) on it so `SubprocessRunner` — which
-    /// shares the same id — can hand each child its own session's plan over
-    /// IPC. `None` (default) skips the per-session registration.
-    fn session_id(&self) -> Option<String> {
-        None
-    }
-}
+use crate::domain::plan::Plan;
+use crate::ports::orchestration::{OrchestratorChatPort, Planner, PlannerVerdict};
 
 use std::sync::Arc;
-
-/// Minimal port the planner needs from the chat runtime (avoids cyclic deps).
-#[async_trait]
-pub trait OrchestratorChatPort: Send + Sync {
-    /// Run a single LLM conversation turn and return the final message
-    /// (JSON string). The port handles system-prompt assembly, tool
-    /// loop (memory_search), and memory injection.
-    async fn run_orchestrator_turn(
-        &self,
-        agent: &str,
-        user_message: &str,
-    ) -> anyhow::Result<String>;
-
-    /// Phase 4c — like `run_orchestrator_turn` but with `system_prompt`
-    /// replacing the agent's `identity.instructions` for this single call.
-    /// Used by the RAG planner to inject `skills/orchestrator/SKILL.md`
-    /// as the planner system prompt. Default impl falls back to the
-    /// override-less call.
-    async fn run_orchestrator_turn_with_system(
-        &self,
-        agent: &str,
-        _system_prompt: &str,
-        user_message: &str,
-    ) -> anyhow::Result<String> {
-        self.run_orchestrator_turn(agent, user_message).await
-    }
-
-    /// Metered variant — returns `(reply, telemetry)` so callers can build
-    /// a `MetricsRecord` with prompt/completion tokens and wall-clock
-    /// latency. Default impl falls back to `run_orchestrator_turn_with_system`
-    /// and returns zeroed telemetry. The runtime impl
-    /// (`ChatOrchestratorPortImpl`) overrides this to plumb real numbers.
-    async fn run_orchestrator_turn_with_system_metered(
-        &self,
-        agent: &str,
-        system_prompt: &str,
-        user_message: &str,
-    ) -> anyhow::Result<(String, crate::adapters::orchestrator::wiring::TurnTelemetry)> {
-        let reply = self
-            .run_orchestrator_turn_with_system(agent, system_prompt, user_message)
-            .await?;
-        Ok((
-            reply,
-            crate::adapters::orchestrator::wiring::TurnTelemetry::default(),
-        ))
-    }
-}
 
 /// Parse the orchestrator LLM's response into a [`PlannerVerdict`].
 ///
@@ -266,7 +183,7 @@ pub struct RagPlanner {
     /// Lazily-filled cache of the MCP enumeration above. Filled on the
     /// first `plan()`/`replan()`; restart `tengu chat` to pick up server
     /// changes (same rule as `[agents.*]` edits in the sandbox config).
-    mcp_tools: tokio::sync::OnceCell<Vec<crate::adapters::types::ToolDef>>,
+    mcp_tools: tokio::sync::OnceCell<Vec<crate::domain::message::ToolDef>>,
 }
 
 impl RagPlanner {
@@ -871,7 +788,7 @@ fn emit_planner_metrics(
     combined_prompt: &str,
     system_prompt: &str,
     layers: Vec<crate::adapters::metrics::MetricsLayer>,
-    telemetry: &crate::adapters::orchestrator::wiring::TurnTelemetry,
+    telemetry: &crate::ports::orchestration::TurnTelemetry,
     raw_response: &str,
 ) {
     let prompt_chars = (combined_prompt.chars().count() + system_prompt.chars().count()) as u32;
@@ -990,7 +907,7 @@ fn emit_rag_query(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orchestrator::plan::StepId;
+    use crate::domain::plan::StepId;
 
     #[test]
     fn parses_direct() {

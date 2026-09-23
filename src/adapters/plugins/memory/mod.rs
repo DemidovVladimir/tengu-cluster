@@ -16,8 +16,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) mod ingest;
 pub(crate) mod persistent_store;
@@ -228,7 +228,8 @@ mod tests {
     use super::*;
     use crate::adapters::config::Config;
     use crate::adapters::memory::manager::MemoryManager;
-    use crate::adapters::memory::vector::{DiskVectorStore, Embedder, VectorStore};
+    use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+    use crate::ports::memory::VectorStore;
     use tempfile::TempDir;
 
     /// Test-only `MemoryManager` with a null `Embedder` + in-memory disk

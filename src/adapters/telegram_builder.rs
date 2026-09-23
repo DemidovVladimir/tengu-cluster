@@ -31,17 +31,19 @@ use crate::adapters::chat_builder::{
 };
 use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
-use crate::adapters::engine_builder::{SanitizedToolExecutor, ToolExecutor};
+use crate::adapters::engine_builder::SanitizedToolExecutor;
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::ports::ToolActivityPort;
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
-use crate::adapters::types::{
-    ChatLoopState, DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
+use crate::domain::message::{
+    DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
 };
-use crate::adapters::Engine;
+use crate::domain::session::ChatLoopState;
+use crate::ports::engine::Engine;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::tool_activity::ToolActivityPort;
 
 // ===========================================================================
 // Constants
@@ -465,7 +467,7 @@ struct TelegramAgentState {
     current_system_prompt: String,
     advertise_workspace_tools: bool,
     history_turn_limit: usize,
-    compaction_policy: crate::adapters::types::FlowCompactionPolicy,
+    compaction_policy: crate::domain::session::FlowCompactionPolicy,
     role: Option<String>,
 }
 
@@ -770,7 +772,7 @@ impl TelegramSession {
         let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
             let inputs_fn =
                 channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
-            let factory: Arc<dyn crate::adapters::orchestrator::wiring::ChatServiceFactory> =
+            let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
                 Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
             channel_runtime::build_orchestrator(
                 &config,

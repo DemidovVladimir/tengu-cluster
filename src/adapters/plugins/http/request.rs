@@ -14,9 +14,9 @@ use std::time::Instant;
 
 use crate::adapters::egress;
 use crate::adapters::tool_builder::validate_path;
-use crate::adapters::tool_plugin::{Tool, ToolCtx, ToolOutput};
 use crate::adapters::tool_utils::require_str;
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 pub(crate) struct HttpRequestTool {
     def: ToolDef,
@@ -616,10 +616,12 @@ fn mime_from_filename(filename: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::ports::{ShellExecutionPort, ToolActivityPort, ToolScope};
     use crate::adapters::secret_builder::SecretRegistry;
     use crate::adapters::shell_executor::LocalShellExecutor;
-    use crate::adapters::types::ToolCall;
+    use crate::domain::message::ToolCall;
+    use crate::domain::scope::ToolScope;
+    use crate::ports::shell::ShellExecutionPort;
+    use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -664,7 +666,7 @@ mod tests {
                 memory_manager: None,
                 secret_registry: &self.secrets,
                 activity: self.activity.as_ref(),
-                conversation: crate::adapters::tool_plugin::ConversationView::empty(),
+                conversation: crate::ports::tool::ConversationView::empty(),
                 agent_config: None,
             }
         }

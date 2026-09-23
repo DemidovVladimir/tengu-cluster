@@ -12,8 +12,8 @@ use rusqlite::Connection;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::adapters::tool_plugin::{PluginCtx, Tool, ToolPlugin};
-use crate::adapters::types::ToolDef;
+use crate::domain::message::ToolDef;
+use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) mod shared_cache;
 

@@ -12,8 +12,6 @@
 //!
 //! ## File map
 //!
-//! - `provider`      — `MemoryProvider` trait. `prefetch` is live via
-//!                     `MemoryManager::prefetch_all` (one call chain, below).
 //! - `builtin`       — `BuiltinMemoryProvider` (MEMORY.md, identity, daily logs,
 //!                     vector). The default provider.
 //! - `manager`       — `MemoryManager` holding one builtin + at most one external
@@ -24,15 +22,14 @@
 //! - `writer`        — post-turn spawned non-blocking memory writes.
 //!                     Same single caller as `injector` (`wiring.rs::sync_turn`).
 //! - `fencing`       — `<memory-context>` block helpers.
-//! - `vector`        — `VectorStore` trait + `DiskVectorStore` (only impl) +
+//! - `vector`        — `DiskVectorStore` (only impl) +
 //!                     `Embedder` (`DEFAULT_EMBEDDING_MODEL`).
-//! - `context_block` — shared types (`MemoryHit`, `ChunkMetadata`, etc.).
+//! - shared types (`MemoryHit`, `ChunkMetadata`, …) live in `domain/memory.rs`;
+//!   the `MemoryProvider` / `VectorStore` traits in `ports/memory.rs`.
 
 pub mod builtin;
-pub mod context_block;
 pub mod fencing;
 pub mod injector;
 pub mod manager;
-pub mod provider;
 pub mod vector;
 pub mod writer;
