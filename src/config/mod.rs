@@ -165,7 +165,7 @@ pub struct Config {
 
     /// Inbound MCP client connections — external MCP servers this install
     /// connects to. At boot the MCP plugin connects to each entry, calls
-    /// `tools/list`, and exposes every remote tool as `{server_name}.{tool}`.
+    /// `tools/list`, and exposes every remote tool as `{server_name}__{tool}`.
     /// Default is empty: MCP is opt-in per user install.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
@@ -193,7 +193,7 @@ pub struct Config {
 /// A single external MCP server that tengu connects to as a client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerConfig {
-    /// Unique server name. Used as the prefix in `{server_name}.{tool_name}`.
+    /// Unique server name. Used as the prefix in `{server_name}__{tool_name}`.
     pub name: String,
     /// Transport: "stdio" or "http".
     pub transport: String,

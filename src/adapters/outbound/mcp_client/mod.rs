@@ -4,7 +4,7 @@
 //! Task A10 of Phase A. Complements `mcp_bridge.rs` (OUTBOUND server), which
 //! exposes tengu's own tools to external Claude Code clients. This plugin is
 //! the opposite direction: tengu CONNECTS to external MCP servers, calls
-//! `tools/list`, and surfaces every remote tool as `{server_name}.{tool_name}`
+//! `tools/list`, and surfaces every remote tool as `{server_name}__{tool_name}`
 //! so an LLM can call it like any other platform tool.
 //!
 //! Only wired in by `channel_runtime::build_tool_executor` when the root
@@ -78,7 +78,7 @@ impl ToolPlugin for McpPlugin {
             };
 
             for remote in manifest {
-                let qualified = format!("{}.{}", cfg.name, remote.name);
+                let qualified = qualified_tool_name(&cfg.name, &remote.name);
                 let def =
                     ToolDef::new(&qualified, &remote.description, remote.input_schema.clone());
                 out.push(Arc::new(McpProxyTool {
@@ -92,12 +92,41 @@ impl ToolPlugin for McpPlugin {
     }
 }
 
+/// Separator between server and tool name. Provider function names allow only
+/// `[a-zA-Z0-9_-]`, so a `.` would be rejected by the model API.
+pub(crate) const MCP_NAME_SEPARATOR: &str = "__";
+
+/// Name an external MCP tool is exposed under: `{server}__{tool}`.
+pub(crate) fn qualified_tool_name(server: &str, tool: &str) -> String {
+    format!("{server}{MCP_NAME_SEPARATOR}{tool}")
+}
+
+/// Environment variables a server config reads through `$VAR` values
+/// (`env` entries and the http bearer token). A child process that
+/// reconnects to the server (the MCP bridge) needs them forwarded.
+pub(crate) fn referenced_env_vars(cfg: &McpServerConfig) -> Vec<String> {
+    cfg.env
+        .values()
+        .chain(cfg.auth.as_ref().map(|a| &a.token))
+        .filter_map(|v| v.trim().strip_prefix('$'))
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether `tool_name` belongs to the `[[mcp_servers]]` entry named `server`.
+pub(crate) fn is_server_tool(server: &str, tool_name: &str) -> bool {
+    tool_name
+        .strip_prefix(server)
+        .is_some_and(|rest| rest.starts_with(MCP_NAME_SEPARATOR))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::adapters::outbound::secrets::SecretRegistry;
     use crate::adapters::outbound::shell::LocalShellExecutor;
@@ -195,5 +224,68 @@ mod tests {
         let plugin = McpPlugin::new(vec![bad_server]);
         let tools = plugin.tools(&ctx).await.unwrap();
         assert!(tools.is_empty(), "bad server must not contribute any tools");
+    }
+
+    /// `[[mcp_servers]]` entry for `tests/fixtures/fake_mcp_server.sh`
+    /// (one tool, `echo`, answering "pong").
+    pub(crate) fn fake_server(name: &str) -> McpServerConfig {
+        McpServerConfig {
+            name: name.to_string(),
+            transport: "stdio".to_string(),
+            command: vec![
+                "sh".to_string(),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/fake_mcp_server.sh"
+                )
+                .to_string(),
+            ],
+            url: None,
+            env: Default::default(),
+            auth: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn stdio_server_tools_are_qualified_and_callable() {
+        let tmp = TempDir::new().unwrap();
+        let config = Config::default();
+        let agent = config.agents.get("main").unwrap().clone();
+        let ctx = plugin_ctx(tmp.path(), &agent);
+
+        let tools = McpPlugin::new(vec![fake_server("fake")])
+            .tools(&ctx)
+            .await
+            .unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.definition().name.as_str()).collect();
+        assert_eq!(names, ["fake__echo"]);
+        assert!(is_server_tool("fake", "fake__echo"));
+        assert!(!is_server_tool("fake", "fakeecho"));
+        assert!(!is_server_tool("fak", "fake__echo"));
+
+        let scope = crate::domain::scope::ToolScope::default();
+        let shell = LocalShellExecutor::new();
+        let http = reqwest::Client::new();
+        let secrets = SecretRegistry::new();
+        struct NoActivity;
+        impl crate::ports::tool_activity::ToolActivityPort for NoActivity {
+            fn publish_tool_activity(&self, _call: &crate::domain::message::ToolCall) {}
+        }
+        let tool_ctx = crate::ports::tool::ToolCtx {
+            workspace: tmp.path(),
+            scope: &scope,
+            shell: &shell,
+            http: &http,
+            memory_manager: None,
+            secret_registry: &secrets,
+            activity: &NoActivity,
+            conversation: crate::ports::tool::ConversationView::empty(),
+            agent_config: None,
+        };
+        let out = tools[0]
+            .execute(&serde_json::json!({}), &tool_ctx)
+            .await
+            .unwrap();
+        assert_eq!(out.text, "pong");
     }
 }

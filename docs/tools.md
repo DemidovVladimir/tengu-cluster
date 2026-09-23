@@ -61,14 +61,19 @@ net_hosts = ["*"]
 
 ```toml
 [[mcp_servers]]
-name = "github"                  # tools appear as "github.<tool>"
+name = "github"                  # tools appear as "github__<tool>"
 transport = "stdio"              # or "http" + url = "..." + auth = { type = "bearer", token = "$TOKEN" }
 command = ["npx", "-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }
 ```
 
-| Agent kind | Sees `[[mcp_servers]]` tools? |
-|---|---|
-| In-process (`tengu chat` TUI, Telegram) | yes — all of them |
-| Plan-step subagent (`tengu run-agent`) | **no** — registered but not advertised (known gap, `SESSION_HANDOFF.md`) |
-| Claude Code engine | via its own MCP config in the workspace, not through tengu |
+List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one.
+
+| Agent kind | Sees `[[mcp_servers]]` tools? | How |
+|---|---|---|
+| Plan-step subagent, `engine = "openrouter"` | yes | `run-agent` executor connects, advertises them |
+| Plan-step subagent, `engine = "claude_code"` | yes | engine passes the servers to the tengu bridge (`TENGU_BRIDGE_MCP_SERVERS`), which proxies them under the egress policy — as `mcp__tengu-tools__<server>__<tool>` |
+| In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
+| In-process Claude Code agent (TUI, Telegram) | no | open gap — its bridge list comes from the catalog only (`SESSION_HANDOFF.md`) |
+
+Names use `__` because model APIs reject `.` in tool names.

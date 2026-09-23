@@ -25,8 +25,8 @@ use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::config::{AgentConfig, McpServerConfig};
 use crate::ports::memory::VectorStore;
 // Plugin set: `outbound::tools::catalog`. McpPlugin + SkillPlugin are
-// registered here, outside the catalog — they need inputs the MCP bridge
-// doesn't have.
+// registered here, outside the catalog — they need the config's
+// `[[mcp_servers]]` / a skill registry.
 use crate::adapters::outbound::mcp_client::McpPlugin;
 use crate::adapters::outbound::secrets::SecretRegistry;
 use crate::adapters::outbound::shell::LocalShellExecutor;
@@ -180,9 +180,9 @@ pub(crate) fn build_tool_executor(
         "Failed to register skill plugin — shell skills unavailable",
     );
 
-    // MCP plugin — in-process only (the bridge would create double-hop
-    // routing if it advertised inbound MCP). Connects to each configured
-    // external server and registers tools as `{server_name}.{tool_name}`.
+    // MCP plugin — connects to each configured external server and registers
+    // its tools as `{server_name}__{tool_name}`. The Claude Code bridge does
+    // the same for the servers its engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
         register_plugin_safe(
@@ -1123,6 +1123,19 @@ pub(crate) fn build_subprocess_tool_executor(
         &config.mcp_servers,
     );
 
+    // `[[mcp_servers]]` tools are only known once the executor has connected
+    // to the servers. Advertise them too, through the same `tools` allow-list
+    // (empty = all). Claude Code subagents get them via the bridge, which
+    // receives this list as `bridge_tools`.
+    if let Some(exec) = &executor {
+        let mcp_defs: Vec<ToolDef> = exec
+            .additional_tool_defs(&effective)
+            .into_iter()
+            .filter(|d| agent.tools.is_empty() || agent.tools.contains(&d.name))
+            .collect();
+        effective.extend(mcp_defs);
+    }
+
     (effective, executor)
 }
 
@@ -1370,5 +1383,38 @@ mod golden_tests {
             "tool surface drift: registry has {:?}, expected {:?}",
             names, expected
         );
+    }
+
+    // A plan-step subagent must see `[[mcp_servers]]` tools, filtered by its
+    // `tools` allow-list like every other tool. Multi-thread runtime: the
+    // executor build `block_on`s plugin registration (as in `run-agent`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subprocess_executor_advertises_mcp_server_tools() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.mcp_servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+        let base = config.agents.get("main").unwrap().clone();
+        let secrets = Arc::new(SecretRegistry::new());
+        let advertised = |tools: &[&str]| {
+            let mut agent = base.clone();
+            agent.tools = tools.iter().map(|s| s.to_string()).collect();
+            let (defs, _) = build_subprocess_tool_executor(
+                &agent,
+                &config,
+                tmp.path(),
+                &secrets,
+                Arc::new(crate::adapters::outbound::noop::NoopActivity),
+                None,
+            );
+            defs.into_iter().map(|d| d.name).collect::<Vec<_>>()
+        };
+
+        assert!(advertised(&[]).contains(&"fake__echo".to_string()));
+        assert!(!advertised(&["read_file"]).contains(&"fake__echo".to_string()));
+        let listed = advertised(&["read_file", "fake__echo"]);
+        assert!(listed.contains(&"fake__echo".to_string()));
+        assert!(listed.contains(&"read_file".to_string()));
     }
 }

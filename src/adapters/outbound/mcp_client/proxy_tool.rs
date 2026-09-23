@@ -2,7 +2,7 @@
 //! `McpProxyTool` — forwards an `execute` call to a remote MCP server.
 //!
 //! One instance exists per advertised remote tool. The tool name is always
-//! `{server_name}.{remote_tool_name}` so multiple MCP servers cannot collide.
+//! `{server_name}__{remote_tool_name}` so multiple MCP servers cannot collide.
 
 #![allow(dead_code)]
 
@@ -88,7 +88,7 @@ mod tests {
         });
 
         let tool = McpProxyTool {
-            def: ToolDef::new("github.create_issue", "desc", json!({"type": "object"})),
+            def: ToolDef::new("github__create_issue", "desc", json!({"type": "object"})),
             remote_name: "create_issue".to_string(),
             client: stub,
         };

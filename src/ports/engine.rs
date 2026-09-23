@@ -44,6 +44,10 @@ pub struct EngineContext {
     /// Maximum chars per MCP bridge tool result. Passed to the bridge
     /// subprocess via `TENGU_BRIDGE_MAX_RESULT_CHARS`.
     pub max_mcp_result_chars: Option<u32>,
+    /// `[[mcp_servers]]` the Claude Code engine hands to its tengu bridge so
+    /// `{server}__{tool}` entries in `bridge_tools` can execute there. Empty
+    /// everywhere except `run-agent` today.
+    pub mcp_servers: Vec<crate::config::McpServerConfig>,
 }
 
 #[async_trait]

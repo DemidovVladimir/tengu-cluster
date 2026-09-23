@@ -832,6 +832,7 @@ pub async fn judge_row(
         bridge_tools: None,
         max_tool_rounds: Some(1),
         max_mcp_result_chars: None,
+        mcp_servers: Vec::new(),
     };
     let mut stream = judge.run(&messages, &[], &ctx).await?;
     let mut output = String::new();
@@ -966,6 +967,7 @@ impl JudgeClient for EvalJudgeClient {
             bridge_tools: None,
             max_tool_rounds: Some(1),
             max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
         };
         let mut stream = self.engine.run(&messages, &[], &ctx).await?;
         let mut output = String::new();
@@ -1429,6 +1431,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         bridge_tools: None,
         max_tool_rounds: Some(agent.limits.max_tool_rounds),
         max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+        mcp_servers: Vec::new(),
     };
 
     let driver_fut = collect_engine_response(
@@ -1771,6 +1774,7 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
             bridge_tools: None,
             max_tool_rounds: Some(agent.limits.max_tool_rounds),
             max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+            mcp_servers: Vec::new(),
         };
 
         let response = crate::application::chat::tool_loop::collect_engine_response(

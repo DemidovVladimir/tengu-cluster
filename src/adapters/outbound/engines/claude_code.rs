@@ -136,6 +136,7 @@ impl ClaudeCodeEngine {
         workspace: &std::path::Path,
         bridge_tools: &[ToolDef],
         max_mcp_result_chars: u32,
+        mcp_servers: &[crate::config::McpServerConfig],
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
         // Per-tool scopes cross the process boundary as JSON; the bridge's
@@ -149,6 +150,30 @@ impl ClaudeCodeEngine {
         });
         env[crate::adapters::mcp_bridge::TENGU_BRIDGE_SCOPES_ENV] =
             serde_json::Value::String(scopes_json);
+        // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
+        // `bridge_tools`: the bridge reconnects to them and proxies the calls
+        // under its egress policy. Their `$VAR` references are forwarded
+        // because this env replaces the inherited one.
+        use crate::adapters::outbound::mcp_client::{is_server_tool, referenced_env_vars};
+        let servers: Vec<&crate::config::McpServerConfig> = mcp_servers
+            .iter()
+            .filter(|s| {
+                bridge_tools
+                    .iter()
+                    .any(|t| is_server_tool(&s.name, &t.name))
+            })
+            .collect();
+        if !servers.is_empty() {
+            env[crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV] =
+                serde_json::Value::String(
+                    serde_json::to_string(&servers).unwrap_or_else(|_| "[]".into()),
+                );
+            for var in servers.iter().flat_map(|s| referenced_env_vars(s)) {
+                if let Ok(v) = std::env::var(&var) {
+                    env[var] = serde_json::Value::String(v);
+                }
+            }
+        }
         // The bridge runs the tools — it must apply the parent's egress policy.
         env[crate::adapters::outbound::egress::EGRESS_ENV] =
             serde_json::Value::String(crate::adapters::outbound::egress::policy().child_env());
@@ -541,36 +566,41 @@ impl Engine for ClaudeCodeEngine {
         // MCP config for Tengu bridge tools — write to temp file, keep handle alive
         // The temp file is moved into the spawned task so it stays alive until the
         // subprocess exits.
-        let mcp_temp = if let (Some(ref bridge_tools), Some(ref ws)) =
-            (&context.bridge_tools, &workspace)
-        {
-            if !bridge_tools.is_empty() {
-                let tengu_bin = std::env::current_exe()
-                    .unwrap_or_else(|_| PathBuf::from("tengu"))
-                    .to_string_lossy()
-                    .to_string();
-                let mcp_limit = context.max_mcp_result_chars.unwrap_or(50_000);
-                let config = self.build_mcp_config_json(&tengu_bin, ws, bridge_tools, mcp_limit);
-                let mut tmp = tempfile::NamedTempFile::new()?;
-                serde_json::to_writer(&mut tmp, &config)?;
-                cmd.arg("--mcp-config").arg(tmp.path());
+        let mcp_temp =
+            if let (Some(ref bridge_tools), Some(ref ws)) = (&context.bridge_tools, &workspace) {
+                if !bridge_tools.is_empty() {
+                    let tengu_bin = std::env::current_exe()
+                        .unwrap_or_else(|_| PathBuf::from("tengu"))
+                        .to_string_lossy()
+                        .to_string();
+                    let mcp_limit = context.max_mcp_result_chars.unwrap_or(50_000);
+                    let config = self.build_mcp_config_json(
+                        &tengu_bin,
+                        ws,
+                        bridge_tools,
+                        mcp_limit,
+                        &context.mcp_servers,
+                    );
+                    let mut tmp = tempfile::NamedTempFile::new()?;
+                    serde_json::to_writer(&mut tmp, &config)?;
+                    cmd.arg("--mcp-config").arg(tmp.path());
 
-                // --tools only allowlists BUILT-IN tools; MCP tools need --allowedTools.
-                // Without this, the tengu-tools server spawns but its tools are silently
-                // denied at call time and never appear in the session init manifest.
-                let mcp_tool_args: Vec<String> = bridge_tools
-                    .iter()
-                    .map(|t| format!("mcp__tengu-tools__{}", t.name))
-                    .collect();
-                cmd.arg("--allowedTools").args(&mcp_tool_args);
+                    // --tools only allowlists BUILT-IN tools; MCP tools need --allowedTools.
+                    // Without this, the tengu-tools server spawns but its tools are silently
+                    // denied at call time and never appear in the session init manifest.
+                    let mcp_tool_args: Vec<String> = bridge_tools
+                        .iter()
+                        .map(|t| format!("mcp__tengu-tools__{}", t.name))
+                        .collect();
+                    cmd.arg("--allowedTools").args(&mcp_tool_args);
 
-                Some(tmp)
+                    Some(tmp)
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
+            };
 
         debug!(
             profile = ?self.profile,
@@ -699,5 +729,72 @@ impl Engine for ClaudeCodeEngine {
 
         // Return the channel receiver as an async stream
         Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server(name: &str, env: &[(&str, &str)]) -> crate::config::McpServerConfig {
+        crate::config::McpServerConfig {
+            name: name.to_string(),
+            transport: "stdio".to_string(),
+            command: vec!["true".to_string()],
+            url: None,
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            auth: None,
+        }
+    }
+
+    #[test]
+    fn bridge_config_carries_only_requested_mcp_servers_and_their_vars() {
+        let engine = ClaudeCodeEngine::new(
+            PathBuf::from("claude"),
+            BuiltinToolsProfile::ReadOnly,
+            None,
+            60,
+        );
+        let tools = vec![ToolDef::new("fake__echo", "d", serde_json::json!({}))];
+        // `$HOME` is always set, so the forwarded value is observable.
+        let servers = vec![
+            server("fake", &[("TOKEN", "$HOME")]),
+            server("unused", &[("OTHER", "$PATH")]),
+        ];
+        let cfg = engine.build_mcp_config_json(
+            "tengu",
+            std::path::Path::new("/tmp"),
+            &tools,
+            1000,
+            &servers,
+        );
+        let env = &cfg["mcpServers"]["tengu-tools"]["env"];
+        let passed: Vec<crate::config::McpServerConfig> = serde_json::from_str(
+            env[crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(passed.len(), 1);
+        assert_eq!(passed[0].name, "fake");
+        assert_eq!(env["HOME"], std::env::var("HOME").unwrap());
+        assert!(
+            env.get("PATH").is_none(),
+            "unused server's vars must not leak"
+        );
+
+        let none = engine.build_mcp_config_json(
+            "tengu",
+            std::path::Path::new("/tmp"),
+            &[ToolDef::new("read_file", "d", serde_json::json!({}))],
+            1000,
+            &servers,
+        );
+        assert!(none["mcpServers"]["tengu-tools"]["env"]
+            .get(crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV)
+            .is_none());
     }
 }

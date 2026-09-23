@@ -404,6 +404,7 @@ impl<'a> ChatRuntimeService<'a> {
             bridge_tools: self.bridge_tools.map(|t| t.to_vec()),
             max_tool_rounds: Some(self.agent_config.limits.max_tool_rounds),
             max_mcp_result_chars: Some(self.agent_config.limits.max_mcp_result_chars),
+            mcp_servers: Vec::new(),
         };
         let resp = collect_engine_response(
             self.engine,

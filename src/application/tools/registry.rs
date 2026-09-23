@@ -116,7 +116,7 @@ impl PluginToolExecutor {
     /// Return tool definitions registered in the executor but NOT in `already_advertised`.
     ///
     /// Used to surface dynamically-discovered plugin tools (currently: MCP proxy tools
-    /// with `{server}.{tool}` names) to the LLM. The static plugins (workspace, http,
+    /// with `{server}__{tool}` names) to the LLM. The static plugins (workspace, http,
     /// crypto, cache, memory, skill) contribute tool defs via their own
     /// `tool_defs()` helpers which the caller already includes; this method returns
     /// only the extras.
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn additional_tool_defs_returns_only_unadvertised_tools() {
         let static_def = ToolDef::new("workspace.read", "desc", serde_json::json!({}));
-        let dynamic_def = ToolDef::new("github.create_issue", "desc", serde_json::json!({}));
+        let dynamic_def = ToolDef::new("github__create_issue", "desc", serde_json::json!({}));
         let exec = make_executor(vec![static_def.clone(), dynamic_def.clone()]);
 
         // Caller already advertises only the static tool.
@@ -224,7 +224,7 @@ mod tests {
         let extras = exec.additional_tool_defs(&already);
 
         assert_eq!(extras.len(), 1, "expected exactly one extra tool");
-        assert_eq!(extras[0].name, "github.create_issue");
+        assert_eq!(extras[0].name, "github__create_issue");
     }
 
     #[test]

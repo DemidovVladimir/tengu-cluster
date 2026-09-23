@@ -598,6 +598,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
             bridge_tools: None,
             max_tool_rounds: Some(agent.limits.max_tool_rounds),
             max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
+            mcp_servers: Vec::new(),
         };
 
         let response = collect_engine_response(

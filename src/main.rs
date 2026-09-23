@@ -929,6 +929,7 @@ async fn run_agent_subprocess() -> Result<()> {
         bridge_tools: bridge_tools_for_ctx,
         max_tool_rounds: Some(input.max_turns),
         max_mcp_result_chars: Some(spec.limits.max_mcp_result_chars),
+        mcp_servers: parent_config.mcp_servers.clone(),
     };
 
     // ----- Multi-turn loop (Phase 5b) -----

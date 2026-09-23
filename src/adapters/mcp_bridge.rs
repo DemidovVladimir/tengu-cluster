@@ -381,6 +381,11 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 /// subprocess. Written by `ClaudeCodeEngine::build_mcp_config_json`.
 pub(crate) const TENGU_BRIDGE_SCOPES_ENV: &str = "TENGU_BRIDGE_SCOPES";
 
+/// `[[mcp_servers]]` entries (JSON array of `McpServerConfig`) whose tools
+/// appear in `TENGU_BRIDGE_TOOLS` as `{server}__{tool}`. Set by the Claude
+/// Code engine; absent for a standalone bridge.
+pub(crate) const TENGU_BRIDGE_MCP_SERVERS_ENV: &str = "TENGU_BRIDGE_MCP_SERVERS";
+
 /// Parse `TENGU_BRIDGE_SCOPES`. Unset → empty map (every tool permissive).
 /// Unparsable → warn + empty map, so a malformed export never bricks the
 /// bridge (fail-soft on config plumbing; the per-call `check_*` gates are
@@ -395,6 +400,18 @@ fn bridge_scopes_from_env() -> HashMap<String, ToolScope> {
             }
         },
         Err(_) => HashMap::new(),
+    }
+}
+
+/// `[[mcp_servers]]` passed by the Claude Code engine as
+/// `TENGU_BRIDGE_MCP_SERVERS`. Absent or unparsable = none (warns on the latter).
+fn bridge_mcp_servers_from_env() -> Vec<crate::config::McpServerConfig> {
+    match std::env::var(TENGU_BRIDGE_MCP_SERVERS_ENV) {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            warn!(error = %e, "bridge: unparsable {TENGU_BRIDGE_MCP_SERVERS_ENV}; no external MCP tools");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -483,12 +500,11 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
 
     let mut registry = ToolRegistry::new();
 
-    // NOTE: the outbound bridge deliberately does NOT register the inbound
-    // `McpPlugin` or `SkillPlugin`. External Claude Code clients are their
-    // own host with their own MCP server access; re-advertising tengu's
-    // inbound MCP manifest here would cause name collisions and double-hop
-    // routing. SkillPlugin needs a `SkillRegistry` that the bridge's
-    // standalone subprocess context can't sensibly construct.
+    // `SkillPlugin` is never registered here — it needs a `SkillRegistry` the
+    // bridge's subprocess context can't construct. `McpPlugin` only for the
+    // `[[mcp_servers]]` the Claude Code engine passed in (see below); a
+    // standalone bridge registered in someone's own Claude Code gets none, so
+    // their MCP manifest isn't re-advertised.
 
     // Same catalog as the in-process executor (`build_tool_executor`).
     crate::adapters::outbound::tools::register_catalog(
@@ -502,6 +518,19 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         },
     )
     .await;
+
+    // External MCP servers whose `{server}__{tool}` names were requested —
+    // proxied here so the calls go through this process's egress policy.
+    let mcp_servers = bridge_mcp_servers_from_env();
+    if !mcp_servers.is_empty() {
+        let plugin = crate::adapters::outbound::mcp_client::McpPlugin::new(mcp_servers);
+        if let Err(e) = registry
+            .register_plugin(&plugin, &plugin_ctx, &allowed_list)
+            .await
+        {
+            warn!(error = %e, "bridge: mcp plugin failed — external MCP tools unavailable");
+        }
+    }
 
     // Per-tool scopes — ENFORCED. The parent's `ClaudeCodeEngine` exports the
     // agent's scope map as `TENGU_BRIDGE_SCOPES` (serde_json of

@@ -479,6 +479,7 @@ mod tests {
             bridge_tools: None,
             max_tool_rounds: None,
             max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
         };
         let events: Vec<StreamEvent> = engine
             .run(&messages, &[], &context)
