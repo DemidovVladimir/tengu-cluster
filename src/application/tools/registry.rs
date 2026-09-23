@@ -109,7 +109,7 @@ pub(crate) struct PluginToolExecutor {
     /// harness-built executors that have no associated agent (currently
     /// none in production paths; some tests construct a stub executor
     /// without one).
-    pub agent_config: Option<crate::adapters::config::AgentConfig>,
+    pub agent_config: Option<crate::config::AgentConfig>,
 }
 
 impl PluginToolExecutor {

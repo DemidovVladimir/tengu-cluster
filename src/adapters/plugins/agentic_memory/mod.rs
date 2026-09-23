@@ -25,9 +25,9 @@ use std::sync::Arc;
 use tokio_postgres::{Client, NoTls};
 use uuid::Uuid;
 
-use crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL;
 use crate::adapters::memory::vector::Embedder;
 use crate::adapters::tool_utils::require_str;
+use crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 

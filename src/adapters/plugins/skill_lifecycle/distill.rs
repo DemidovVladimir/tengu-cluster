@@ -433,7 +433,7 @@ mod tests {
         secrets: &'a SecretRegistry,
         activity: &'a dyn ToolActivityPort,
         messages: &'a [Message],
-        agent_config: &'a crate::adapters::config::AgentConfig,
+        agent_config: &'a crate::config::AgentConfig,
     ) -> ToolCtx<'a> {
         ToolCtx {
             workspace: ws,
@@ -681,7 +681,7 @@ mod tests {
         let activity = NoActivity;
 
         // Fake calling-agent config: claude_code engine + opus model.
-        let mut fake_agent = crate::adapters::config::Config::default()
+        let mut fake_agent = crate::config::Config::default()
             .agents
             .remove("main")
             .expect("default config has 'main' agent");

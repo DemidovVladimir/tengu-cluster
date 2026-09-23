@@ -547,7 +547,7 @@ pub fn discover_skills(
     Ok(out)
 }
 
-use crate::adapters::config::Config;
+use crate::config::Config;
 
 // ---------------------------------------------------------------------------
 // Skill metrics frontmatter — load + validate on skill discovery
@@ -867,10 +867,10 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 
 use crate::adapters::channel_runtime;
-use crate::adapters::config::AgentConfig;
 use crate::adapters::engine_builder::{collect_engine_response, ToolResultObserver};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::config::AgentConfig;
 use crate::ports::tool_activity::ToolActivityPort;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -1336,7 +1336,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let workspace_path: PathBuf = agent
         .workspace
         .as_ref()
-        .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+        .map(|p| crate::config::paths::expand_tilde(p))
         .unwrap_or_else(|| ws_path.clone());
 
     let secret_registry = Arc::new(SecretRegistry::new());
@@ -1665,7 +1665,7 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
         let workspace_path: PathBuf = agent
             .workspace
             .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+            .map(|p| crate::config::paths::expand_tilde(p))
             .unwrap_or_else(|| self.ws_path.clone());
 
         let secret_registry = Arc::new(SecretRegistry::new());

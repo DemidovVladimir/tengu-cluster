@@ -19,7 +19,7 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::adapters::config::AgentConfig;
+use crate::config::AgentConfig;
 
 /// JSON schema of the IPC input stream (stdin of `tengu run-agent`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +136,7 @@ impl Default for SubprocessRunner {
     fn default() -> Self {
         Self {
             tengu_path: None,
-            timeout_secs: crate::adapters::config::default_step_timeout_secs(),
+            timeout_secs: crate::config::default_step_timeout_secs(),
             agents: std::collections::HashMap::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             sandbox_name: None,
@@ -380,7 +380,7 @@ mod tests {
         use crate::domain::plan::{Step, StepId};
         use crate::ports::orchestration::WorkerHandle;
         let mut agents = std::collections::HashMap::new();
-        let mut researcher = crate::adapters::config::Config::default()
+        let mut researcher = crate::config::Config::default()
             .agents
             .remove("main")
             .unwrap();

@@ -1,4 +1,10 @@
-//! TOML-backed runtime configuration schema and runtime profile helpers.
+//! Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its
+//! validation, and path resolution. Imports only `domain` (see
+//! `tests/layering_lint.rs`).
+
+pub(crate) mod egress;
+pub(crate) mod paths;
+pub(crate) mod skill_lifecycle;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,8 +12,8 @@ use std::path::PathBuf;
 use sysinfo::System;
 use tracing::info;
 
-pub use crate::adapters::egress::EgressConfig;
 use crate::domain::scope::ToolScope;
+use egress::EgressConfig;
 
 // ---------------------------------------------------------------------------
 // Runtime profile
@@ -167,7 +173,7 @@ pub struct Config {
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
     #[serde(default)]
-    pub skill_lifecycle: Option<crate::adapters::skill_lifecycle::config::SkillLifecycleConfig>,
+    pub skill_lifecycle: Option<crate::config::skill_lifecycle::SkillLifecycleConfig>,
 
     /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
     /// `None` for the default user config. Populated by `load_sandbox_or` in
@@ -792,7 +798,7 @@ fn default_within_session_output_top_k() -> usize {
 }
 
 fn default_embedding_model() -> String {
-    crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL.to_string()
+    crate::domain::memory::DEFAULT_EMBEDDING_MODEL.to_string()
 }
 fn default_max_recall_entries() -> usize {
     5
@@ -952,13 +958,13 @@ impl Config {
             }
             for scope in agent.scopes.values_mut() {
                 for root in scope.fs_roots.iter_mut() {
-                    *root = crate::adapters::tool_builder::expand_tilde(root);
+                    *root = crate::config::paths::expand_tilde(root);
                 }
             }
         }
         for scope in self.default_scopes.values_mut() {
             for root in scope.fs_roots.iter_mut() {
-                *root = crate::adapters::tool_builder::expand_tilde(root);
+                *root = crate::config::paths::expand_tilde(root);
             }
         }
     }

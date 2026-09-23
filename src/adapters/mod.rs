@@ -1,5 +1,4 @@
 // --- types & config ---
-pub mod config;
 
 pub(crate) mod chat_builder;
 pub mod memory;

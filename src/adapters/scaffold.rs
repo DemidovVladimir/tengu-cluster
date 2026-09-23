@@ -1,6 +1,6 @@
 //! Workspace scaffold — creates directories and seed files before agents start.
 
-use crate::adapters::config::ScaffoldConfig;
+use crate::config::ScaffoldConfig;
 use std::path::PathBuf;
 use tracing::info;
 
@@ -63,7 +63,7 @@ pub(crate) fn apply_scaffold(scaffold: &ScaffoldConfig) -> anyhow::Result<PathBu
 }
 
 /// Run scaffold if configured, log result. Called before agents start.
-pub(crate) fn maybe_apply_scaffold(config: &crate::adapters::config::Config) {
+pub(crate) fn maybe_apply_scaffold(config: &crate::config::Config) {
     if let Some(ref scaffold) = config.scaffold {
         match apply_scaffold(scaffold) {
             Ok(root) => {

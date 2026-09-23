@@ -1,6 +1,6 @@
 //! Flow management: key resolution, history turn limits, compaction policy, and compaction.
 
-use crate::adapters::config::FlowConfig;
+use crate::config::FlowConfig;
 use crate::domain::message::{Message, Recipient, Role};
 use crate::domain::session::FlowCompactionPolicy;
 use crate::domain::token::estimate_tokens_approx_min1;

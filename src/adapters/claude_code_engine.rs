@@ -498,7 +498,7 @@ impl Engine for ClaudeCodeEngine {
         let workspace = context
             .workspace
             .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+            .map(|p| crate::config::paths::expand_tilde(p));
 
         // Build subprocess command
         let mut cmd = tokio::process::Command::new(&self.cli_path);

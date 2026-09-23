@@ -226,9 +226,9 @@ impl ToolPlugin for MemoryPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::config::Config;
     use crate::adapters::memory::manager::MemoryManager;
     use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+    use crate::config::Config;
     use crate::ports::memory::VectorStore;
     use tempfile::TempDir;
 

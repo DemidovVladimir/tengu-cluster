@@ -151,10 +151,10 @@ struct RegistryHit {
 pub struct RagPlanner {
     orchestrator_agent: String,
     chat: Arc<dyn OrchestratorChatPort>,
-    memory_config: crate::adapters::config::MemoryConfig,
+    memory_config: crate::config::MemoryConfig,
     /// Routable subagents (`[agents.*]` blocks with a `description`),
     /// rendered into `TENGU_PLANNER_REGISTRY.md` every planner turn.
-    agents: Vec<(String, crate::adapters::config::AgentConfig)>,
+    agents: Vec<(String, crate::config::AgentConfig)>,
     workspace: std::path::PathBuf,
     /// Phase 4c — body of `skills/orchestrator/SKILL.md` (frontmatter
     /// stripped) used as the planner system prompt. Falls back to a
@@ -179,7 +179,7 @@ pub struct RagPlanner {
     /// `Config.mcp_servers` — enumerated (live `tools/list`, fail-soft per
     /// server) once per planner instance so the registry's TOOLS section
     /// lists `<server>.<tool>` entries alongside the core tools.
-    mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
+    mcp_servers: Vec<crate::config::McpServerConfig>,
     /// Lazily-filled cache of the MCP enumeration above. Filled on the
     /// first `plan()`/`replan()`; restart `tengu chat` to pick up server
     /// changes (same rule as `[agents.*]` edits in the sandbox config).
@@ -190,9 +190,9 @@ impl RagPlanner {
     pub fn new(
         orchestrator_agent: String,
         chat: Arc<dyn OrchestratorChatPort>,
-        memory_config: crate::adapters::config::MemoryConfig,
-        agents: Vec<(String, crate::adapters::config::AgentConfig)>,
-        mcp_servers: Vec<crate::adapters::config::McpServerConfig>,
+        memory_config: crate::config::MemoryConfig,
+        agents: Vec<(String, crate::config::AgentConfig)>,
+        mcp_servers: Vec<crate::config::McpServerConfig>,
         bus: Option<crate::adapters::orchestrator::events::EventBus>,
         // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
         // and shared with `SubprocessRunner`, so the parent's recall query

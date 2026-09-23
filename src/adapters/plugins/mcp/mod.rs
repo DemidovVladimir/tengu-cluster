@@ -21,7 +21,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::adapters::config::McpServerConfig;
+use crate::config::McpServerConfig;
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
@@ -99,14 +99,14 @@ impl ToolPlugin for McpPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::config::Config;
     use crate::adapters::secret_builder::SecretRegistry;
     use crate::adapters::shell_executor::LocalShellExecutor;
+    use crate::config::Config;
     use tempfile::TempDir;
 
     fn plugin_ctx<'a>(
         workspace: &'a std::path::Path,
-        agent: &'a crate::adapters::config::AgentConfig,
+        agent: &'a crate::config::AgentConfig,
     ) -> PluginCtx<'a> {
         PluginCtx {
             workspace,

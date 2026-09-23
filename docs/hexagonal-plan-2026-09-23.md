@@ -24,7 +24,7 @@ src/
   main.rs                    thin: clap parse → adapters::inbound::cli::dispatch
   domain/                    message.rs (Role, Message, ToolCall, ToolDef, StreamEvent, Lens, Inbound*) · session.rs (ChatLoopState, PromptAssemblyReport …) · memory.rs (MemoryHit, ChunkMetadata) · plan.rs · scope.rs (ToolScope) · token.rs · usage.rs · metrics.rs (MetricsRecord/Kind/Layer)
   ports/                     engine.rs (Engine, EngineContext, ToolExecutor) · tool.rs (Tool, ToolPlugin, ToolCtx, PluginCtx, ToolOutput) · memory.rs (MemoryProvider, VectorStore) · shell.rs · skill_source.rs · tool_activity.rs · orchestration.rs (Planner, PlannerVerdict, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry) · metrics_sink.rs · judge.rs (JudgeClient, MetricKind)
-  config/                    mod.rs (Config, AgentConfig, LimitsConfig, McpServerConfig …) · egress.rs · skill_lifecycle.rs · load.rs (sandbox resolution)
+  config/                    mod.rs (Config, AgentConfig, LimitsConfig, McpServerConfig …) · egress.rs (EgressConfig + validation) · skill_lifecycle.rs · paths.rs (TENGU_HOME, default config path, expand_tilde)
   application/
     chat/                    service.rs (chat_builder) · flow.rs · prompt_budget.rs
     orchestrator/            planner.rs · replan.rs · executor.rs · retry.rs · events.rs · shared_files.rs
@@ -58,7 +58,7 @@ src/
 |---|---|---|---|
 | 0 ✅ | lint + skeleton | branch, empty layer dirs, `tests/layering_lint.rs` with exception list | — |
 | 1 ✅ | domain + ports | split `types.rs`, `ports.rs`, `tool_plugin.rs`, `orchestrator/plan.rs`; pull traits out of `planner.rs`, `executor.rs`, `wiring.rs`, `provider.rs`, `vector.rs`, `engine_builder.rs` | `ToolCtx`/`PluginCtx` still hold concrete `MemoryManager` + `SecretRegistry` (lint exceptions; cleared in 4) |
-| 2 | config | `config.rs` → `config/`; move `EgressConfig`, `SkillLifecycleConfig`, tool-builder config structs in | config currently imports adapters |
+| 2 ✅ | config | `config.rs` → `config/`; `EgressConfig` → `config/egress.rs`, `SkillLifecycleConfig` → `config/skill_lifecycle.rs`, path helpers → `config/paths.rs`, `DEFAULT_EMBEDDING_MODEL` → `domain/memory.rs` | `load_sandbox_or` installs egress → stays in `main.rs` until `bootstrap/` (5) |
 | 3 | outbound adapters + tool catalog | engines, tools, memory stores, mcp client, egress, secrets, shell, runner; metrics record → `domain/metrics.rs`, sink → outbound | catalog replaces the 3-place registration |
 | 4 | application | chat, flow, prompt_budget, orchestrator, memory manager, skills, eval | `planner.rs` → `plugins`, `shared_files.rs` → `channel_runtime`: invert through ports |
 | 5 | inbound + bootstrap | `main.rs` (2.6k lines) → `inbound/cli/*`; `channel_runtime.rs` → `bootstrap/`; telegram/webhooks/tui/mcp_bridge | inbound adapters constructing runtime themselves |

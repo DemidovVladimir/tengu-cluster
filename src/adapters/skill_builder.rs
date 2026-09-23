@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use crate::adapters::config::AgentConfig;
 use crate::adapters::prompt_budget::truncate_to_token_budget;
+use crate::config::AgentConfig;
 use crate::domain::message::ToolDef;
 use crate::domain::token::estimate_tokens_approx_min1;
 use crate::ports::skill_source::SkillSourcePort;

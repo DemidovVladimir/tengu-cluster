@@ -6,7 +6,6 @@
 
 pub(crate) mod approval_gate;
 pub(crate) mod audit;
-pub(crate) mod config;
 pub(crate) mod evolve;
 pub(crate) mod fixtures;
 pub(crate) mod learner_state;

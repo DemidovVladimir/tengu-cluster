@@ -29,7 +29,6 @@ use crate::adapters::chat_builder::{
     handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
     EngineInfo,
 };
-use crate::adapters::config::Config;
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::SanitizedToolExecutor;
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
@@ -37,6 +36,7 @@ use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
+use crate::config::Config;
 use crate::domain::message::{
     DeliveryOptions, InboundMessage, MediaPayload, Recipient, ToolCall, ToolDef,
 };
@@ -454,7 +454,7 @@ fn make_tool_activity_adapter(agent_label: impl Into<String>) -> Arc<dyn ToolAct
 /// Per-agent runtime state for multi-agent Telegram support.
 struct TelegramAgentState {
     agent_id: String,
-    agent_config: crate::adapters::config::AgentConfig,
+    agent_config: crate::config::AgentConfig,
     engine: Arc<dyn Engine>,
     engine_info: EngineInfo,
     workspace: Option<std::path::PathBuf>,
@@ -493,7 +493,7 @@ struct TelegramSession {
 
     // Config
     config: Config,
-    memory_config: crate::adapters::config::MemoryConfig,
+    memory_config: crate::config::MemoryConfig,
     allowed_users: HashSet<String>,
     is_multi_agent: bool,
     base_workspaces: HashMap<String, std::path::PathBuf>,
@@ -559,7 +559,7 @@ impl TelegramSession {
         let first_workspace: Option<std::path::PathBuf> = config.agents.values().find_map(|ac| {
             ac.workspace
                 .as_ref()
-                .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+                .map(|p| crate::config::paths::expand_tilde(p))
         });
 
         // Memory backend (shared `Embedder` + `VectorStore`) exposed via
@@ -595,7 +595,7 @@ impl TelegramSession {
             let workspace: Option<std::path::PathBuf> = agent_config
                 .workspace
                 .as_ref()
-                .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+                .map(|p| crate::config::paths::expand_tilde(p));
 
             let advertise_workspace_tools =
                 engine.supports_tool_use() && !engine.manages_own_workspace();
@@ -1630,7 +1630,7 @@ impl TelegramSession {
                 .scaffold
                 .as_ref()
                 .and_then(|s| s.project.as_ref());
-            let project_scaffold = crate::adapters::config::ScaffoldConfig {
+            let project_scaffold = crate::config::ScaffoldConfig {
                 root: project_dir.to_string_lossy().to_string(),
                 directories: project_template
                     .map(|p| p.directories.clone())

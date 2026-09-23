@@ -25,7 +25,7 @@ use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
 pub(crate) fn build_planner_engine(
     engine_type: &str,
     model: &str,
-    claude_code_config: Option<&crate::adapters::config::ClaudeCodeConfig>,
+    claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
 ) -> Result<Box<dyn Engine>> {
     match engine_type {
         "claude_code" => {
@@ -53,7 +53,7 @@ pub(crate) fn build_planner_engine(
             }
         }
         _ => {
-            let defaults = crate::adapters::config::LimitsConfig::default();
+            let defaults = crate::config::LimitsConfig::default();
             build_openrouter_engine(model, defaults.context_window as usize)
         }
     }
@@ -62,8 +62,8 @@ pub(crate) fn build_planner_engine(
 /// Build configured engine instance for one agent.
 pub(crate) fn build_engine(
     _agent_id: &str,
-    agent_config: &crate::adapters::config::AgentConfig,
-    claude_code_config: Option<&crate::adapters::config::ClaudeCodeConfig>,
+    agent_config: &crate::config::AgentConfig,
+    claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
 ) -> Result<Box<dyn Engine>> {
     match agent_config.engine.as_str() {
         "claude_code" => {
@@ -120,7 +120,7 @@ pub fn build_openrouter_engine(model: &str, context_window: usize) -> Result<Box
     build_openrouter_engine_with_limits(
         model,
         context_window,
-        crate::adapters::config::default_request_timeout_secs(),
+        crate::config::default_request_timeout_secs(),
         None,
     )
 }

@@ -102,13 +102,13 @@ pub(crate) struct ToolCtx<'a> {
     /// `AgentConfig` it was built with); `None` for harness-level invocations
     /// (e.g. `tengu eval` runner construction, MetricRunCtx-degraded paths,
     /// most unit tests).
-    pub agent_config: Option<&'a crate::adapters::config::AgentConfig>,
+    pub agent_config: Option<&'a crate::config::AgentConfig>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.
 pub(crate) struct PluginCtx<'a> {
     pub workspace: &'a Path,
-    pub config: &'a crate::adapters::config::AgentConfig,
+    pub config: &'a crate::config::AgentConfig,
     pub http: reqwest::Client,
     pub shell: Arc<dyn ShellExecutionPort>,
     pub memory_manager: Option<Arc<MemoryManager>>,

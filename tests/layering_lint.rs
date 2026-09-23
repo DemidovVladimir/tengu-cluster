@@ -53,7 +53,6 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     // ToolCtx / PluginCtx carry concrete handles until they become ports.
     ("ports/tool.rs", "crate::adapters::memory::manager"),
     ("ports/tool.rs", "crate::adapters::secret_builder"),
-    ("ports/tool.rs", "crate::adapters::config"),
     (
         "application/tools/registry.rs",
         "crate::adapters::memory::manager",
@@ -62,7 +61,6 @@ const EXCEPTIONS: &[(&str, &str)] = &[
         "application/tools/registry.rs",
         "crate::adapters::secret_builder",
     ),
-    ("application/tools/registry.rs", "crate::adapters::config"),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -7,9 +7,11 @@ use tracing::info;
 
 mod adapters;
 mod application;
+mod config;
 mod domain;
 mod ports;
-use crate::adapters::config::{Config, RuntimeProfile};
+use crate::config::paths::{default_config_path, resolve_tengu_home};
+use crate::config::{Config, RuntimeProfile};
 
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::secret_builder;
@@ -498,7 +500,7 @@ async fn main() -> Result<()> {
                         .filter_map(|a| {
                             a.workspace
                                 .as_ref()
-                                .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+                                .map(|p| crate::config::paths::expand_tilde(p))
                         })
                         .collect::<std::collections::HashSet<_>>()
                         .into_iter()
@@ -596,7 +598,7 @@ async fn main() -> Result<()> {
 
 #[cfg(feature = "postgres_memory")]
 async fn try_persist_agentic_step_summary(
-    parent_config: &crate::adapters::config::Config,
+    parent_config: &crate::config::Config,
     session_id: &str,
     step_id: &str,
     summary: &str,
@@ -764,7 +766,7 @@ async fn run_agent_subprocess() -> Result<()> {
     spec.workspace = spec
         .workspace
         .as_ref()
-        .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+        .map(|p| crate::config::paths::expand_tilde(p));
     if let Some(c) = compose_override {
         spec.skill_packages = c.skills;
         spec.tools = c.tools;
@@ -2586,27 +2588,4 @@ fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
         crate::adapters::egress::policy().warn_if_proxy_unreachable();
     }
     Ok(cfg)
-}
-
-/// Config file used when `--config` is absent: `$TENGU_CONFIG` if set,
-/// else `<tengu home>/config.toml`. Shared by the parent CLI and the
-/// `run-agent` child so both resolve the same file.
-pub(crate) fn default_config_path() -> PathBuf {
-    std::env::var_os("TENGU_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| resolve_tengu_home().join("config.toml"))
-}
-
-pub(crate) fn resolve_tengu_home() -> PathBuf {
-    if let Ok(home) = std::env::var("TENGU_HOME") {
-        if home.starts_with('~') {
-            if let Some(user_home) = dirs_next::home_dir() {
-                return user_home.join(&home[2..]); // skip "~/"
-            }
-        }
-        return PathBuf::from(home);
-    }
-    dirs_next::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".tengu")
 }

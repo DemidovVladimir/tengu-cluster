@@ -9,12 +9,6 @@
 
 use anyhow::{Context, Result};
 
-/// Single source of truth for the embedding model slug. Every site that
-/// constructs an `Embedder` (config default, `agentic_memory::env_embedder`,
-/// the MCP bridge) uses this so the vector dimension matches the Postgres
-/// `vector(1536)` schema.
-pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
-
 /// Production default dimensionality (`DEFAULT_EMBEDDING_MODEL`). Used by
 /// `Embedder::null()` so test vectors match what the real backend returns.
 #[allow(dead_code)]

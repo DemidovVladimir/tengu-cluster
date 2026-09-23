@@ -6,13 +6,13 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use crate::adapters::config::Config;
 use crate::adapters::skill_lifecycle::approval_gate::{read_decision, render, Decision, GateView};
 use crate::adapters::skill_lifecycle::metrics::MetricSpec;
 use crate::adapters::skill_lifecycle::scratch_worktree::{
     create_scratch, remove_scratch, sweep_stale_worktrees,
 };
 use crate::adapters::skill_lifecycle::storage::{MetricRollup, MetricsJson};
+use crate::config::Config;
 use crate::ports::orchestration::ChatServiceFactory;
 
 // ---------------------------------------------------------------------------

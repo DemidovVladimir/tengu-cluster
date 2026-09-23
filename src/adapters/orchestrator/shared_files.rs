@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::adapters::config::{AgentConfig, McpServerConfig};
+use crate::config::{AgentConfig, McpServerConfig};
 use crate::domain::message::ToolDef;
 use crate::domain::plan::Plan;
 
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn registry_lists_routable_agents_only() {
         let dir = tempfile::tempdir().unwrap();
-        let base = crate::adapters::config::Config::default()
+        let base = crate::config::Config::default()
             .agents
             .remove("main")
             .unwrap();

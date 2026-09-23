@@ -28,7 +28,7 @@ fn can_read_all_adapter_sources() {
     let adapters_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/adapters");
     let files = collect_rs_files(&adapters_dir);
 
-    // Sanity: we should find at least config.rs, egress.rs, channel_runtime.rs
+    // Sanity: we should find at least egress.rs, channel_runtime.rs, runner.rs
     assert!(
         files.len() >= 3,
         "Expected at least 3 .rs files in src/adapters/, found {}",

@@ -20,8 +20,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::adapters::config::{AgentConfig, McpServerConfig};
 use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::config::{AgentConfig, McpServerConfig};
 use crate::ports::memory::VectorStore;
 // Phase 7.7 — most plugin type imports moved into `register_core_plugins`'s
 // local `use` block. Only McpPlugin + SkillPlugin stay top-level because
@@ -119,7 +119,7 @@ pub(crate) fn build_tool_executor(
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    memory_config: Option<&crate::adapters::config::MemoryConfig>,
+    memory_config: Option<&crate::config::MemoryConfig>,
     agent_config: &AgentConfig,
     mcp_servers: &[McpServerConfig],
 ) -> Option<PluginToolExecutor> {
@@ -232,7 +232,7 @@ pub(crate) fn build_tool_executor(
 ///
 /// Adding a new opt-in workspace tool: append the name here, add the
 /// matching plugin registration in `register_core_plugins`, and add it to
-/// `config.rs::valid_workspace_tools` (config validation).
+/// `config/mod.rs::valid_workspace_tools` (config validation).
 pub(crate) const WORKSPACE_TOOLS_ALLOWLIST: &[&str] = &[
     "agentic_memory",
     "shared_cache",
@@ -304,7 +304,7 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
 /// are registered by callers that need them.
 pub(crate) struct CoreRegistrationOpts<'a> {
     pub cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    pub memory_config: Option<&'a crate::adapters::config::MemoryConfig>,
+    pub memory_config: Option<&'a crate::config::MemoryConfig>,
 }
 
 /// Phase 7.7 — register the core plugins shared by every executor:
@@ -593,7 +593,7 @@ pub(crate) fn compute_bridge_tools(has_memory: bool, workspace_tools: &[String])
 /// Resolve the memory store path: workspace-local if a workspace is provided,
 /// otherwise fall back to the global path from config (with tilde expansion).
 pub(crate) fn resolve_memory_store_path(
-    memory_config: &crate::adapters::config::MemoryConfig,
+    memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
     match workspace {
@@ -626,7 +626,7 @@ pub(crate) fn resolve_memory_store_path(
 /// Returns the same fully-wired `MemoryManager` — backed by the bincode
 /// `DiskVectorStore` (the only `VectorStore` impl since Phase 6).
 pub(crate) async fn build_memory_manager_async(
-    memory_config: &crate::adapters::config::MemoryConfig,
+    memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> Arc<crate::adapters::memory::manager::MemoryManager> {
     use crate::adapters::memory::builtin::BuiltinMemoryProvider;
@@ -656,7 +656,7 @@ pub(crate) async fn build_memory_manager_async(
 /// if memory is disabled, `OPENROUTER_API_KEY` is missing, or the store fails
 /// to open. Consumed by `build_memory_manager_async` only.
 async fn build_vector_stack_async(
-    memory_config: &crate::adapters::config::MemoryConfig,
+    memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> Option<(Arc<Embedder>, Arc<dyn VectorStore>)> {
     if !memory_config.enabled {
@@ -690,7 +690,7 @@ async fn build_vector_stack_async(
 /// `add_provider` / `set_vector_backend` call sequence. Now those live in
 /// the async function exclusively; this wrapper just block_on's it.
 pub(crate) fn build_memory_manager(
-    memory_config: &crate::adapters::config::MemoryConfig,
+    memory_config: &crate::config::MemoryConfig,
     rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
 ) -> Arc<crate::adapters::memory::manager::MemoryManager> {
@@ -956,11 +956,11 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
 use async_trait::async_trait;
 
 use crate::adapters::chat_builder::ChatRuntimeService;
-use crate::adapters::config::Config;
 use crate::adapters::engine_builder::ToolResultObserver;
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::orchestrator::planner::RagPlanner;
 use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::config::Config;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::orchestration::Planner;
 // Phase 7.1 (full) — `OrchestratorAgentPlanner`, `ChatWorker`, and the
@@ -1483,7 +1483,7 @@ pub(crate) async fn build_cli_chat_factory(
 #[cfg(test)]
 mod golden_tests {
     use super::*;
-    use crate::adapters::config::Config;
+    use crate::config::Config;
     use crate::domain::message::ToolCall;
     use std::collections::HashSet;
     use tempfile::TempDir;
@@ -1534,7 +1534,7 @@ mod golden_tests {
     /// carries the agent's configured entry, not the permissive default.
     #[test]
     fn subagent_config_merges_workspace_tool_optins_from_tools() {
-        let mut agent = crate::adapters::config::Config::default()
+        let mut agent = crate::config::Config::default()
             .agents
             .remove("main")
             .unwrap();

@@ -13,7 +13,6 @@ use crate::adapters::channel_runtime;
 use crate::adapters::chat_builder::{
     handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
 };
-use crate::adapters::config::{Config, RuntimeProfile};
 use crate::adapters::engine_builder::build_engine;
 use crate::adapters::engine_builder::SanitizedToolExecutor;
 use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
@@ -21,6 +20,7 @@ use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{
     self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
+use crate::config::{Config, RuntimeProfile};
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::tool_activity::ToolActivityPort;
@@ -348,7 +348,7 @@ pub fn run_tui(
         let workspace: Option<PathBuf> = engine_agent_config
             .workspace
             .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p));
+            .map(|p| crate::config::paths::expand_tilde(p));
 
         // Build memory subsystem if enabled. Backed by a shared
         // `Embedder` + `VectorStore` pair via `MemoryManager`.

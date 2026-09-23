@@ -7,16 +7,6 @@ use std::path::{Path, PathBuf};
 
 // ── Path utilities ──────────────────────────────────────────────────────
 
-pub fn expand_tilde(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    if s.starts_with("~/") {
-        if let Some(home) = dirs_next::home_dir() {
-            return home.join(&s[2..]);
-        }
-    }
-    path.to_path_buf()
-}
-
 pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
     let workspace_canonical = workspace
         .canonicalize()

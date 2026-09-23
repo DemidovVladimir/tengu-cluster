@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
-use crate::adapters::config::Config;
 use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::memory::vector::embedder::DEFAULT_EMBEDDING_MODEL;
 use crate::adapters::memory::vector::{DiskVectorStore, Embedder};
+use crate::config::Config;
+use crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::memory::VectorStore;
 // Phase 7.7 — plugin imports removed; bridge delegates to
@@ -131,13 +131,13 @@ pub async fn run_mcp_bridge() -> Result<()> {
     // — and only falls back to the built-in default (`network = "tor"`) when
     // there is no config file at all.
     let standalone_egress = {
-        let path = crate::default_config_path();
+        let path = crate::config::paths::default_config_path();
         if path.is_file() {
-            crate::adapters::config::Config::load(&path)
+            crate::config::Config::load(&path)
                 .with_context(|| format!("mcp-bridge: load [egress] from {}", path.display()))?
                 .egress
         } else {
-            crate::adapters::egress::EgressConfig::default()
+            crate::config::egress::EgressConfig::default()
         }
     };
     crate::adapters::egress::install(&standalone_egress)?;
@@ -502,7 +502,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         &allowed_list,
         crate::adapters::channel_runtime::CoreRegistrationOpts {
             cancel: None,
-            memory_config: Some(&crate::adapters::config::MemoryConfig::default()),
+            memory_config: Some(&crate::config::MemoryConfig::default()),
         },
     )
     .await;

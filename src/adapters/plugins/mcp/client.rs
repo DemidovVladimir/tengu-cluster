@@ -27,7 +27,7 @@ use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, McpListToolsResult, McpRemoteTool};
-use crate::adapters::config::{McpAuthConfig, McpServerConfig};
+use crate::config::{McpAuthConfig, McpServerConfig};
 
 /// Narrow interface: list tools and call them. Kept as a trait so tests can
 /// stub network I/O.

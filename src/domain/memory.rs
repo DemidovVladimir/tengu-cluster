@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Single source of truth for the embedding model slug. Every site that
+/// constructs an `Embedder` (config default, `agentic_memory::env_embedder`,
+/// the MCP bridge) uses this so the vector dimension matches the Postgres
+/// `vector(1536)` schema.
+pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-small";
+
 /// Pinned block produced by `MemoryInjector::for_turn`, appended to the
 /// user-turn message at API-call time. Never persisted in message
 /// history.

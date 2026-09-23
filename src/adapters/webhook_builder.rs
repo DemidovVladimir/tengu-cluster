@@ -57,12 +57,12 @@ use sha2::Sha256;
 use tracing::{error, info, warn};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::config::{Config, WebhookEndpointConfig};
 use crate::adapters::engine_builder::{build_engine, collect_engine_response};
 use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::adapters::secret_builder::SecretRegistry;
 use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
+use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::engine::{Engine, EngineContext};
@@ -512,7 +512,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let workspace_path: PathBuf = agent
             .workspace
             .as_ref()
-            .map(|p| crate::adapters::tool_builder::expand_tilde(p))
+            .map(|p| crate::config::paths::expand_tilde(p))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         let secret_registry = Arc::new(SecretRegistry::new());
