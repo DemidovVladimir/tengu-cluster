@@ -145,7 +145,7 @@ impl Tool for SkillDistillTool {
         let fixtures = extract_fixtures(slice, &opts);
 
         // Atomic write via tempdir + rename
-        let tmp = tier_root.join(format!(".{}.tmp-{}", args.name, nanos()));
+        let tmp = tier_root.join(format!(".{}.tmp-{}", args.name, unique_suffix()));
         std::fs::create_dir_all(&tmp)?;
 
         // Compose SKILL.md
@@ -280,11 +280,10 @@ fn validate_metrics_structural(specs: &[MetricSpec]) -> Result<()> {
     Ok(())
 }
 
-fn nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
+/// Suffix for temp / quarantine names: unique per call. (Clock-based names
+/// collided between concurrent writers — macOS ticks in microseconds.)
+fn unique_suffix() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 fn indent(s: &str, spaces: usize) -> String {

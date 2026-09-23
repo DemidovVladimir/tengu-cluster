@@ -151,7 +151,7 @@ pub(crate) fn apply_proposal_to_skill_md(
         proposal.body_markdown.trim_end()
     );
     let parent = skill_md_path.parent().unwrap();
-    let tmp = parent.join(format!(".SKILL.md.tmp-{}", nanos()));
+    let tmp = parent.join(format!(".SKILL.md.tmp-{}", unique_suffix()));
     std::fs::write(&tmp, new_contents)?;
     std::fs::rename(&tmp, skill_md_path)?;
     Ok(())
@@ -232,7 +232,7 @@ pub(crate) fn apply_proposal_resources(
                 .with_context(|| format!("create_dir_all {}", parent.display()))?;
         }
         let parent = dest.parent().unwrap();
-        let tmp = parent.join(format!(".resource.tmp-{}", nanos()));
+        let tmp = parent.join(format!(".resource.tmp-{}", unique_suffix()));
         std::fs::write(&tmp, &entry.content)
             .with_context(|| format!("write temp {}", tmp.display()))?;
         std::fs::rename(&tmp, &dest)
@@ -308,11 +308,10 @@ fn replace_metrics_block(fm: &str, metrics: &[MetricSpec]) -> Result<String> {
     Ok(serde_yaml::to_string(&v)?)
 }
 
-pub(crate) fn nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
+/// Suffix for temp / quarantine names: unique per call. (Clock-based names
+/// collided between concurrent writers — macOS ticks in microseconds.)
+pub(crate) fn unique_suffix() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 #[cfg(test)]

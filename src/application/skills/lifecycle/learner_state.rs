@@ -24,7 +24,6 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct LearnerState {
@@ -104,11 +103,13 @@ pub(crate) fn save(skill_dir: &Path, state: &LearnerState) -> Result<()> {
     std::fs::create_dir_all(state_dir)
         .with_context(|| format!("create state dir {:?}", state_dir))?;
 
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp_path = state_dir.join(format!(".{}.tmp-{}", state.learner_id, nanos));
+    // Unique per call: a clock-based name collided between concurrent saves
+    // (macOS ticks in microseconds) and the losing rename failed.
+    let tmp_path = state_dir.join(format!(
+        ".{}.tmp-{}",
+        state.learner_id,
+        uuid::Uuid::new_v4()
+    ));
 
     let bytes = serde_json::to_vec_pretty(state).context("serialize learner_state")?;
     std::fs::write(&tmp_path, &bytes).with_context(|| format!("write tmp {:?}", tmp_path))?;
@@ -298,5 +299,32 @@ mod tests {
             .mastery_scores
             .contains_key(&format!("topic.{marker}")));
         assert_eq!(loaded.mastery_scores.len(), 1);
+    }
+
+    /// Regression: temp names were clock-based and collided between threads
+    /// (the losing `rename` failed). 8 writers x 100 saves never error.
+    #[test]
+    fn concurrent_saves_never_collide() {
+        let dir = Arc::new(TempDir::new().unwrap());
+        let handles: Vec<_> = (0..8)
+            .map(|k| {
+                let dir = Arc::clone(&dir);
+                std::thread::spawn(move || {
+                    let state = LearnerState {
+                        learner_id: "alice".into(),
+                        topics_covered: vec![format!("t{k}")],
+                        topics_weak: vec![],
+                        mastery_scores: BTreeMap::new(),
+                        last_session_ts: "x".into(),
+                    };
+                    for _ in 0..100 {
+                        save(dir.path(), &state).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }

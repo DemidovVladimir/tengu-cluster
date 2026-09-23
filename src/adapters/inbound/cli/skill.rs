@@ -631,14 +631,11 @@ fn shell_quote(s: &str) -> String {
 /// scan -> atomic move -> audit.
 async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Result<()> {
     let workspace = std::env::current_dir()?;
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
     let quarantine_root = workspace
         .join(".tengu")
         .join("quarantine")
-        .join(format!("install-{}", nanos));
+        .join(format!("install-{}", suffix));
     std::fs::create_dir_all(&quarantine_root)
         .with_context(|| format!("create quarantine {}", quarantine_root.display()))?;
 
@@ -892,11 +889,8 @@ async fn skill_seed(
 
     // Atomic write via tempdir + rename — same pattern as
     // `src/adapters/outbound/tools/skill_lifecycle/distill.rs:148`.
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let tmp = tier_root.join(format!(".{}.tmp-{}", name, nanos));
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let tmp = tier_root.join(format!(".{}.tmp-{}", name, suffix));
     std::fs::create_dir_all(&tmp).with_context(|| format!("create tmp {}", tmp.display()))?;
 
     // Cleanup-on-drop for the tmp dir if anything below errors before rename.

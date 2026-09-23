@@ -27,7 +27,8 @@ use serde_json::{json, Value};
 
 use crate::application::skills::lifecycle::audit;
 use crate::application::skills::lifecycle::evolve::{
-    apply_proposal_to_skill_md, is_editable_by_learner, nanos, validate_resource_path, ProposalBody,
+    apply_proposal_to_skill_md, is_editable_by_learner, unique_suffix, validate_resource_path,
+    ProposalBody,
 };
 use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
@@ -260,7 +261,7 @@ fn do_create(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     let editable = args.editable_by_learner.unwrap_or(true);
 
     // Atomic write via tempdir + rename.
-    let tmp = tier_root.join(format!(".{}.tmp-{}", args.name, nanos()));
+    let tmp = tier_root.join(format!(".{}.tmp-{}", args.name, unique_suffix()));
     std::fs::create_dir_all(&tmp)?;
     let mut guard = TmpDirGuard {
         path: Some(tmp.clone()),
@@ -986,7 +987,7 @@ fn atomic_write(target: &Path, content: &str) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("atomic_write: {} has no parent", target.display()))?;
     std::fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(".{}.tmp-{}", filename_of(target), nanos()));
+    let tmp = parent.join(format!(".{}.tmp-{}", filename_of(target), unique_suffix()));
     std::fs::write(&tmp, content)
         .map_err(|e| anyhow!("atomic_write: write tmp {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, target).map_err(|e| {

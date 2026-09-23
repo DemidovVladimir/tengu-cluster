@@ -391,8 +391,7 @@ These are not preferences. They're load-bearing.
   engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
 - **`[[mcp_servers]]` tools are named `{server}__{tool}` (2026-09-23)** — was
   `{server}.{tool}`; model APIs reject `.`. They reach plan-step subagents
-  (both engines) and in-process TUI/Telegram agents; not webhook agents on
-  `claude_code` (no bridge tools there at all — open).
+  (both engines), in-process TUI/Telegram agents and webhook agents.
 - **Layering is lint-enforced (2026-09-23)** — `tests/layering_lint.rs` fails
   when `domain` / `ports` / `config` / `application` import an adapter, or
   outbound imports inbound/bootstrap. Need something from an adapter in a use

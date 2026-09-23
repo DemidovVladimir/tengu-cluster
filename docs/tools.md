@@ -75,6 +75,6 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | Plan-step subagent, `engine = "claude_code"` | yes | engine passes the servers to the tengu bridge (`TENGU_BRIDGE_MCP_SERVERS`), which proxies them under the egress policy — as `mcp__tengu-tools__<server>__<tool>` |
 | In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
-| Webhook agent, `engine = "claude_code"` | no | webhooks pass no bridge tools at all (tengu tools included) — open, `SESSION_HANDOFF.md` |
+| Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`webhooks.rs::bridge_inputs`) |
 
 Names use `__` because model APIs reject `.` in tool names.
