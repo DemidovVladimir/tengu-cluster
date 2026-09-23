@@ -4,7 +4,7 @@
 //!
 //! | Layer | Owner | Backing store |
 //! |---|---|---|
-//! | Durable runtime memory (planner recall, step summaries, wiki compile) | `plugins/agentic_memory/` (feature `postgres_memory`) | Postgres + pgvector |
+//! | Durable runtime memory (planner recall, step summaries, wiki compile) | `outbound/tools/agentic_memory/` (feature `postgres_memory`) | Postgres + pgvector |
 //! | Workspace memory tools (`remember`, `persistent_store`, `memory_ingest` / `memory_search`) | THIS MODULE | `vector/disk.rs` bincode file |
 //! | MEMORY.md / daily logs / identity bootstrap | `builtin.rs` via `manager.rs` | workspace files |
 //!

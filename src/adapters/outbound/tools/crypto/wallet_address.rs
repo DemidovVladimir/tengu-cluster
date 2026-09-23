@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/wallet_address.rs
+// src/adapters/outbound/tools/crypto/wallet_address.rs
 //! `get_wallet_address` tool — return the Privy-managed wallet address.
 
 use anyhow::Result;

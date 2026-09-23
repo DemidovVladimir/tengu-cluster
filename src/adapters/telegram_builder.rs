@@ -25,14 +25,14 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::chat_builder::{
+use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::secrets::SanitizedToolExecutor;
+use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
+use crate::application::chat::service::{
     handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
     EngineInfo,
 };
-use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
-use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::secrets::SanitizedToolExecutor;
-use crate::adapters::skill_builder::{
+use crate::application::skills::registry::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry,
 };
 use crate::config::Config;
@@ -505,7 +505,7 @@ struct TelegramSession {
     role_to_agent: HashMap<String, String>,
 
     // Services
-    memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
+    memory_manager_handle: Option<Arc<crate::application::memory::manager::MemoryManager>>,
     secret_registry: Arc<SecretRegistry>,
 
     // Harness-owned orchestration. Constructed when
@@ -519,9 +519,9 @@ struct TelegramSession {
     //
     // `_memory_manager` is held so it stays alive for the lifetime of the
     // orchestrator (which holds an `Arc<MemoryManager>` internally).
-    orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>>,
+    orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>>,
     orchestrator_snapshots: channel_runtime::OrchestratorSnapshots,
-    _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager>,
+    _memory_manager: Arc<crate::application::memory::manager::MemoryManager>,
 
     // Per-user mutable state
     user_states: HashMap<String, ChatLoopState>,
@@ -772,7 +772,7 @@ impl TelegramSession {
         let memory_manager = memory_manager_early;
         let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
             Arc::new(std::sync::RwLock::new(HashMap::new()));
-        let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
+        let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
             let inputs_fn =
                 channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
             let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
@@ -843,7 +843,7 @@ impl TelegramSession {
             if let Some(orch) = self.orchestrator.as_ref() {
                 let mut rx = orch.subscribe();
                 tokio::spawn(async move {
-                    use crate::adapters::orchestrator::OrchestratorEvent;
+                    use crate::application::orchestrator::OrchestratorEvent;
                     loop {
                         match rx.recv().await {
                             Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {

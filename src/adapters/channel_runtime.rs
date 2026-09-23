@@ -30,7 +30,7 @@ use crate::ports::memory::VectorStore;
 use crate::adapters::outbound::mcp_client::McpPlugin;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::adapters::outbound::tools::skill::SkillPlugin;
-use crate::adapters::skill_builder::{self, SkillRegistry, SkillStatus};
+use crate::application::skills::registry::{SkillRegistry, SkillStatus};
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::{Lens, ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
@@ -66,7 +66,7 @@ pub(crate) fn rebuild_system_prompt(
         .into_iter()
         .map(|(_, body)| body)
         .collect();
-    skill_builder::build_system_prompt_with_tools(
+    crate::application::skills::registry::build_system_prompt_with_tools(
         agent_config,
         advertise_workspace_tools,
         &skill_context_strings,
@@ -113,7 +113,7 @@ pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
     skill_registry: &SkillRegistry,
-    memory_manager: &Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
+    memory_manager: &Option<Arc<crate::application::memory::manager::MemoryManager>>,
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -340,9 +340,9 @@ pub(crate) fn resolve_memory_store_path(
 pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
-) -> Arc<crate::adapters::memory::manager::MemoryManager> {
-    use crate::adapters::memory::manager::MemoryManager;
+) -> Arc<crate::application::memory::manager::MemoryManager> {
     use crate::adapters::outbound::memory::builtin::BuiltinMemoryProvider;
+    use crate::application::memory::manager::MemoryManager;
 
     let manager = Arc::new(MemoryManager::new());
 
@@ -405,7 +405,7 @@ pub(crate) fn build_memory_manager(
     memory_config: &crate::config::MemoryConfig,
     rt: &tokio::runtime::Runtime,
     workspace: Option<&Path>,
-) -> Arc<crate::adapters::memory::manager::MemoryManager> {
+) -> Arc<crate::application::memory::manager::MemoryManager> {
     rt.block_on(build_memory_manager_async(memory_config, workspace))
 }
 
@@ -667,19 +667,19 @@ pub(crate) fn format_skill_list(registry: &SkillRegistry) -> String {
 
 use async_trait::async_trait;
 
-use crate::adapters::chat_builder::ChatRuntimeService;
-use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orchestrator::planner::RagPlanner;
-use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::application::chat::service::ChatRuntimeService;
 use crate::application::chat::tool_loop::ToolResultObserver;
+use crate::application::memory::manager::MemoryManager;
+use crate::application::orchestrator::planner::RagPlanner;
+use crate::application::orchestrator::retry::RetryPolicy;
 use crate::config::Config;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::orchestration::Planner;
 // Phase 7.1 (full) — `OrchestratorAgentPlanner`, `ChatWorker`, and the
 // `render_roster` helper were deleted along with the static-mode path.
 // `build_orchestrator` now constructs only `RagPlanner` + `SubprocessRunner`.
-use crate::adapters::orchestrator::wiring::ChatOrchestratorPortImpl;
-use crate::adapters::orchestrator::Orchestrator;
+use crate::application::orchestrator::wiring::ChatOrchestratorPortImpl;
+use crate::application::orchestrator::Orchestrator;
 use crate::domain::session::FlowCompactionPolicy;
 use crate::ports::engine::Engine;
 use crate::ports::orchestration::ChatServiceFactory;
@@ -930,6 +930,36 @@ pub fn resolve_session_id() -> String {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
+/// The planner's durable-memory lanes: Postgres `agentic_memory` when built
+/// with `postgres_memory`, otherwise none (those prompt blocks stay empty).
+fn planner_recall_store() -> Option<Arc<dyn crate::ports::memory::RecallStore>> {
+    #[cfg(feature = "postgres_memory")]
+    {
+        Some(Arc::new(
+            crate::adapters::outbound::tools::agentic_memory::AgenticRecallStore,
+        ))
+    }
+    #[cfg(not(feature = "postgres_memory"))]
+    {
+        None
+    }
+}
+
+/// Embedder for the planner's recall lanes — only when they exist and
+/// `OPENROUTER_API_KEY` is set.
+fn planner_embedder(
+    memory: &crate::config::MemoryConfig,
+) -> Option<Arc<dyn crate::ports::memory::Embedding>> {
+    if !cfg!(feature = "postgres_memory") {
+        return None;
+    }
+    let api_key = std::env::var("OPENROUTER_API_KEY").ok()?;
+    Some(Arc::new(Embedder::new(
+        api_key,
+        memory.embedding_model.clone(),
+    )))
+}
+
 pub(crate) fn build_orchestrator(
     config: &Config,
     chat_factory: Arc<dyn ChatServiceFactory>,
@@ -957,7 +987,7 @@ pub(crate) fn build_orchestrator(
     // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
     // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
     // (TUI, Telegram adapter) see one unified event stream.
-    let bus = crate::adapters::orchestrator::events::new_bus();
+    let bus = crate::application::orchestrator::events::new_bus();
 
     // Metrics — install the process-global metrics sink and bridge it
     // onto the orchestrator event bus so a single subscriber can render
@@ -976,7 +1006,7 @@ pub(crate) fn build_orchestrator(
                         // `bus.send` returns Err only when zero
                         // subscribers — fine, drop and keep listening.
                         let _ = bus_tx.send(
-                            crate::adapters::orchestrator::events::OrchestratorEvent::MetricsRecorded {
+                            crate::application::orchestrator::events::OrchestratorEvent::MetricsRecorded {
                                 record,
                             },
                         );
@@ -1011,8 +1041,12 @@ pub(crate) fn build_orchestrator(
         cfg.agent.clone(),
         chat_port,
         config.memory.clone(),
-        crate::adapters::orchestrator::shared_files::routable_agents(&config.agents),
-        config.mcp_servers.clone(),
+        crate::application::orchestrator::shared_files::routable_agents(&config.agents),
+        Arc::new(crate::adapters::outbound::tools::CatalogDirectory {
+            mcp_servers: config.mcp_servers.clone(),
+        }),
+        planner_recall_store(),
+        planner_embedder(&config.memory),
         Some(bus.clone()),
         session_id,
     ));
@@ -1069,7 +1103,7 @@ pub(crate) fn build_subprocess_tool_executor(
     // tool calls returned "Tool not available" even when the tool def was
     // advertised. Pass `None` only when the agent definitively has no memory
     // tools in its allow-list.
-    memory_manager: Option<Arc<crate::adapters::memory::manager::MemoryManager>>,
+    memory_manager: Option<Arc<crate::application::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
     let mut agent_cfg = subagent_config(agent);
     grant_workspace_root(&mut agent_cfg.scopes, workspace);
@@ -1112,7 +1146,7 @@ pub(crate) fn build_subprocess_tool_executor(
     // Skill registry is empty for the subprocess (skill bodies are loaded
     // separately and merged into the system prompt; no shell-skills exposed
     // as tools yet).
-    let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+    let skill_registry = crate::application::skills::registry::SkillRegistry::new(Vec::new());
 
     let executor = build_tool_executor(
         workspace,
@@ -1155,8 +1189,8 @@ pub(crate) async fn build_cli_chat_factory(
     config: &Config,
     workspace: &std::path::Path,
 ) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
-    use crate::adapters::memory::manager::MemoryManager;
     use crate::adapters::outbound::engines::build_engine;
+    use crate::application::memory::manager::MemoryManager;
 
     // Build a shared memory manager (no vector backend for CLI — acceptable
     // degradation; the improver only needs text generation context).
@@ -1167,7 +1201,7 @@ pub(crate) async fn build_cli_chat_factory(
 
     for (name, agent_cfg) in &config.agents {
         let engine_box = build_engine(name, agent_cfg, config.claude_code.as_ref())?;
-        let compaction_policy = crate::adapters::flow_builder::resolve_flow_compaction_policy(
+        let compaction_policy = crate::application::chat::flow::resolve_flow_compaction_policy(
             &agent_cfg.flow,
             agent_cfg.limits.max_tokens_per_flow,
             engine_box.context_window(),
@@ -1175,9 +1209,9 @@ pub(crate) async fn build_cli_chat_factory(
         );
         let engine: Arc<dyn Engine> = Arc::from(engine_box);
         let system_prompt =
-            crate::adapters::skill_builder::build_system_prompt(agent_cfg, false, &[]);
+            crate::application::skills::registry::build_system_prompt(agent_cfg, false, &[]);
         let history_turn_limit =
-            crate::adapters::flow_builder::resolve_history_turn_limit(&agent_cfg.flow);
+            crate::application::chat::flow::resolve_history_turn_limit(&agent_cfg.flow);
         let inputs = ChatTurnInputs {
             engine,
             agent_id: name.clone(),
@@ -1297,7 +1331,7 @@ mod golden_tests {
             },
         );
         let agent_config = config.agents.get("main").unwrap();
-        let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+        let skill_registry = crate::application::skills::registry::SkillRegistry::new(Vec::new());
         let activity: Arc<dyn ToolActivityPort> = Arc::new(StubActivity);
         let secret_registry = Arc::new(SecretRegistry::new());
 
@@ -1336,7 +1370,7 @@ mod golden_tests {
 
         let config = Config::default();
         let agent_config = config.agents.get("main").unwrap();
-        let skill_registry = crate::adapters::skill_builder::SkillRegistry::new(Vec::new());
+        let skill_registry = crate::application::skills::registry::SkillRegistry::new(Vec::new());
         let activity: Arc<dyn ToolActivityPort> = Arc::new(StubActivity);
         let secret_registry = Arc::new(SecretRegistry::new());
 

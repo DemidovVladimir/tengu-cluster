@@ -1,4 +1,4 @@
-// src/adapters/plugins/http/mod.rs
+// src/adapters/outbound/tools/http/mod.rs
 //! HTTP plugin — generic outbound HTTP client for skill-driven API calls.
 //!
 //! Provides: `http_request`. Gated by `ctx.scope.check_net_host()` per call.

@@ -21,12 +21,12 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::adapters::skill_lifecycle::audit;
-use crate::adapters::skill_lifecycle::evolve::{
+use crate::application::skills::lifecycle::audit;
+use crate::application::skills::lifecycle::evolve::{
     apply_proposal_resources, apply_proposal_to_skill_md, is_editable_by_learner, ProposalBody,
     ResourceFile,
 };
-use crate::adapters::skill_lifecycle::metrics::MetricSpec;
+use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 

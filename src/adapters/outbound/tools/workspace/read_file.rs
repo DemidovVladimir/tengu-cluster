@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/read_file.rs
+// src/adapters/outbound/tools/workspace/read_file.rs
 //! `read_file` tool — read a file from the workspace, with PDF text extraction.
 
 use anyhow::{bail, Result};

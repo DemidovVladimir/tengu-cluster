@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/sign_tx.rs
+// src/adapters/outbound/tools/crypto/sign_tx.rs
 //! `sign_and_send_transaction` tool — submit an EVM transaction via Privy.
 //!
 //! Migrated from `crypto_tool_executor.rs` during Phase A / task A3.

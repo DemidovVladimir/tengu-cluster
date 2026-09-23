@@ -1,4 +1,4 @@
-// src/adapters/plugins/memory/search.rs
+// src/adapters/outbound/tools/memory/search.rs
 //! `memory_search` tool — targeted vector read of the memory store.
 //!
 //! Read-side complement to `memory_ingest`: the LLM issues a
@@ -140,11 +140,11 @@ impl Tool for MemorySearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::manager::MemoryManager;
     use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
     use crate::adapters::outbound::memory::embedder::Embedder;
     use crate::adapters::outbound::tools::memory::ingest::MemoryIngestTool;
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
+    use crate::application::memory::manager::MemoryManager;
     use crate::ports::memory::VectorStore;
     use tempfile::TempDir;
 

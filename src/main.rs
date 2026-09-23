@@ -470,11 +470,11 @@ async fn main() -> Result<()> {
             max_runs,
         } => {
             let format = match format.as_str() {
-                "table" => crate::adapters::eval_builder::OutputFormat::Table,
-                "json" => crate::adapters::eval_builder::OutputFormat::Json,
+                "table" => crate::adapters::inbound::eval::OutputFormat::Table,
+                "json" => crate::adapters::inbound::eval::OutputFormat::Json,
                 other => anyhow::bail!("invalid --format: {} (expected 'table' or 'json')", other),
             };
-            let args = crate::adapters::eval_builder::EvalArgs {
+            let args = crate::adapters::inbound::eval::EvalArgs {
                 skills,
                 sandbox,
                 judge_model,
@@ -487,7 +487,7 @@ async fn main() -> Result<()> {
                 no_persist,
                 max_per_run_reports: max_runs,
             };
-            let exit_code = crate::adapters::eval_builder::run(args).await?;
+            let exit_code = crate::adapters::inbound::eval::run(args).await?;
             std::process::exit(exit_code);
         }
         Commands::Prune { sandbox, yes, hard } => {
@@ -802,11 +802,11 @@ async fn run_agent_subprocess() -> Result<()> {
     // source of truth; the global `TENGU_PLAN.md` is only a fallback for old
     // parents that don't send it (it is overwritten by every session).
     let plan_state = match input.plan_state.as_deref() {
-        Some(rendered) => crate::adapters::orchestrator::shared_files::plan_state_block(
+        Some(rendered) => crate::application::orchestrator::shared_files::plan_state_block(
             rendered,
             "IPC `plan_state`",
         ),
-        None => crate::adapters::orchestrator::shared_files::read_plan_state_block(
+        None => crate::application::orchestrator::shared_files::read_plan_state_block(
             &std::env::current_dir()?,
         ),
     };
@@ -1254,7 +1254,7 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
 // `tengu skill ...` dispatcher and handlers (Batch 2 of skill-research-2026-04-28)
 // ---------------------------------------------------------------------------
 
-use crate::adapters::skill_lifecycle::{audit, scanner};
+use crate::application::skills::lifecycle::{audit, scanner};
 
 /// Resolve a skill directory for the given tier. `project` -> `<ws>/skills/<name>`,
 /// `workspace` -> `<ws>/.tengu/skills/<name>`, `managed` -> `~/.tengu/skills/<name>`.
@@ -1366,7 +1366,7 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
             let chat_factory =
                 crate::adapters::channel_runtime::build_cli_chat_factory(&config, &workspace)
                     .await?;
-            let args = crate::adapters::skill_lifecycle::evolve::EvolveArgs {
+            let args = crate::adapters::inbound::evolve::EvolveArgs {
                 config: &config,
                 workspace: &workspace,
                 skill: &skill,
@@ -1375,7 +1375,7 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
                 base_branch,
                 chat_factory,
             };
-            crate::adapters::skill_lifecycle::evolve::run_evolve(args).await?;
+            crate::adapters::inbound::evolve::run_evolve(args).await?;
             Ok(())
         }
         SkillAction::Metrics { skill, last } => {
@@ -1395,7 +1395,7 @@ async fn run_skill_command(config: Config, action: SkillAction) -> Result<()> {
 
             // Friendly per-metric summary with variance band when available.
             if let Ok(mj) = serde_json::from_slice::<
-                crate::adapters::skill_lifecycle::storage::MetricsJson,
+                crate::application::skills::lifecycle::storage::MetricsJson,
             >(&raw)
             {
                 println!("\n-- summary --");
@@ -2049,7 +2049,7 @@ async fn skill_install(source: &str, tier: &str, strict: bool, yes: bool) -> Res
 /// `tengu skill seed` — teacher onboarding. Drops a SKILL.md template and
 /// copies a folder of teacher-provided materials into
 /// `<tier>/<name>/resources/`. Atomic via temp-dir + rename, mirroring
-/// `skill_distill` (`src/adapters/plugins/skill_lifecycle/distill.rs:147–204`).
+/// `skill_distill` (`src/adapters/outbound/tools/skill_lifecycle/distill.rs:147–204`).
 async fn skill_seed(
     name: &str,
     resources_dir: Option<&Path>,
@@ -2130,7 +2130,7 @@ async fn skill_seed(
     }
 
     // Atomic write via tempdir + rename — same pattern as
-    // `src/adapters/plugins/skill_lifecycle/distill.rs:148`.
+    // `src/adapters/outbound/tools/skill_lifecycle/distill.rs:148`.
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -2186,9 +2186,9 @@ async fn skill_seed(
 
     // Stub evals/prompts.yaml — schema_version: 1, one placeholder fixture.
     std::fs::create_dir_all(tmp.join("evals"))?;
-    let stub = crate::adapters::skill_lifecycle::fixtures::FixturesFile {
+    let stub = crate::application::skills::lifecycle::fixtures::FixturesFile {
         schema_version: 1,
-        fixtures: vec![crate::adapters::skill_lifecycle::fixtures::Fixture {
+        fixtures: vec![crate::application::skills::lifecycle::fixtures::Fixture {
             id: "f1".to_string(),
             prompt: "<TODO: a typical question a learner would ask>".to_string(),
             expected_tool_calls: Vec::new(),
@@ -2196,7 +2196,7 @@ async fn skill_seed(
             metrics: Vec::new(),
         }],
     };
-    crate::adapters::skill_lifecycle::fixtures::write_fixtures(
+    crate::application::skills::lifecycle::fixtures::write_fixtures(
         &tmp.join("evals").join("prompts.yaml"),
         &stub,
     )?;

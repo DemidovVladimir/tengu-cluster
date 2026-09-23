@@ -175,15 +175,20 @@ pub struct RagPlanner {
     /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
     /// `None` means structured events are silently dropped (the
     /// `tracing::info!` line still fires regardless).
-    bus: Option<crate::adapters::orchestrator::events::EventBus>,
-    /// `Config.mcp_servers` — enumerated (live `tools/list`, fail-soft per
-    /// server) once per planner instance so the registry's TOOLS section
-    /// lists `<server>.<tool>` entries alongside the core tools.
-    mcp_servers: Vec<crate::config::McpServerConfig>,
-    /// Lazily-filled cache of the MCP enumeration above. Filled on the
-    /// first `plan()`/`replan()`; restart `tengu chat` to pick up server
-    /// changes (same rule as `[agents.*]` edits in the sandbox config).
-    mcp_tools: tokio::sync::OnceCell<Vec<crate::domain::message::ToolDef>>,
+    bus: Option<crate::application::orchestrator::events::EventBus>,
+    /// Source of the registry's TOOLS section: the tool catalog plus every
+    /// `[[mcp_servers]]` tool (`<server>__<tool>`, live `tools/list`).
+    tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
+    /// Lazily-filled cache of `tool_directory`. Filled on the first
+    /// `plan()`/`replan()`; restart `tengu chat` to pick up server changes
+    /// (same rule as `[agents.*]` edits in the sandbox config).
+    tool_defs: tokio::sync::OnceCell<Vec<crate::domain::message::ToolDef>>,
+    /// Durable runtime memory for the recall lanes + user-message writes.
+    /// `None` (no `postgres_memory`) = those prompt blocks stay empty.
+    recall: Option<Arc<dyn crate::ports::memory::RecallStore>>,
+    /// Embeds the user message once per turn for `recall`. Only used when
+    /// `recall` is set.
+    embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
 }
 
 impl RagPlanner {
@@ -192,8 +197,10 @@ impl RagPlanner {
         chat: Arc<dyn OrchestratorChatPort>,
         memory_config: crate::config::MemoryConfig,
         agents: Vec<(String, crate::config::AgentConfig)>,
-        mcp_servers: Vec<crate::config::McpServerConfig>,
-        bus: Option<crate::adapters::orchestrator::events::EventBus>,
+        tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
+        recall: Option<Arc<dyn crate::ports::memory::RecallStore>>,
+        embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
+        bus: Option<crate::application::orchestrator::events::EventBus>,
         // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
         // and shared with `SubprocessRunner`, so the parent's recall query
         // and the child's `compress_and_store` write key match. Pre-Fix-B
@@ -218,26 +225,18 @@ impl RagPlanner {
             session_history: tokio::sync::Mutex::new(Vec::new()),
             session_id,
             bus,
-            mcp_servers,
-            mcp_tools: tokio::sync::OnceCell::new(),
+            tool_directory,
+            tool_defs: tokio::sync::OnceCell::new(),
+            recall,
+            embedder,
         }
     }
 
-    #[cfg(feature = "postgres_memory")]
-    fn embedder(&self) -> Option<crate::adapters::outbound::memory::embedder::Embedder> {
-        std::env::var("OPENROUTER_API_KEY").ok().map(|api_key| {
-            crate::adapters::outbound::memory::embedder::Embedder::new(
-                api_key,
-                self.memory_config.embedding_model.clone(),
-            )
-        })
-    }
-
-    #[cfg(feature = "postgres_memory")]
+    /// Embed `text` for the recall lanes. `None` when there is no recall
+    /// store or embedder, or the call fails (lanes fall back to text).
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
-        let Some(embedder) = self.embedder() else {
-            return None;
-        };
+        self.recall.as_ref()?;
+        let embedder = self.embedder.as_ref()?;
         match embedder.embed(text).await {
             Ok(v) => Some(v),
             Err(e) => {
@@ -251,25 +250,18 @@ impl RagPlanner {
     }
 
     async fn load_registry_block(&self) -> (String, Vec<RegistryHit>) {
-        let mcp_tools = self
-            .mcp_tools
+        let tool_defs = self
+            .tool_defs
             .get_or_init(|| async {
-                let tools = crate::adapters::orchestrator::shared_files::enumerate_mcp_tools(
-                    &self.mcp_servers,
-                )
-                .await;
-                tracing::info!(
-                    servers = self.mcp_servers.len(),
-                    tools = tools.len(),
-                    "planner registry: MCP tools enumerated"
-                );
+                let tools = self.tool_directory.all_tool_defs().await;
+                tracing::info!(tools = tools.len(), "planner registry: tools enumerated");
                 tools
             })
             .await;
-        match crate::adapters::orchestrator::shared_files::ensure_planner_registry(
+        match crate::application::orchestrator::shared_files::ensure_planner_registry(
             &self.workspace,
             &self.agents,
-            mcp_tools,
+            tool_defs,
         ) {
             Ok(snapshot) => {
                 let hits = snapshot
@@ -346,23 +338,17 @@ impl RagPlanner {
         if k == 0 {
             return String::new();
         }
-        #[cfg(feature = "postgres_memory")]
-        {
-            let hits =
-                match crate::adapters::outbound::tools::agentic_memory::recall_user_messages_with_vec(
-                    user_message,
-                    embed_vec,
-                    k,
-                    user_message,
-                )
+        if let Some(recall) = &self.recall {
+            let hits = match recall
+                .recall_user_messages(user_message, embed_vec, k, user_message)
                 .await
-                {
-                    Ok(h) => h,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "skip cross_session_recall: agentic_memory unavailable");
-                        Vec::new()
-                    }
-                };
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::debug!(error = %e, "skip cross_session_recall: agentic_memory unavailable");
+                    Vec::new()
+                }
+            };
             if hits.is_empty() {
                 return String::new();
             }
@@ -386,11 +372,7 @@ impl RagPlanner {
             s.push('\n');
             return s;
         }
-        #[cfg(not(feature = "postgres_memory"))]
-        {
-            let _ = (user_message, embed_vec);
-            String::new()
-        }
+        String::new()
     }
 
     /// Fix A (2026-05-09) — within-session output recall.
@@ -415,23 +397,17 @@ impl RagPlanner {
         if k == 0 {
             return String::new();
         }
-        #[cfg(feature = "postgres_memory")]
-        {
-            let hits =
-                match crate::adapters::outbound::tools::agentic_memory::recall_step_outputs_for_session_with_vec(
-                    &self.session_id,
-                    user_message,
-                    embed_vec,
-                    k,
-                )
+        if let Some(recall) = &self.recall {
+            let hits = match recall
+                .recall_step_outputs_for_session(&self.session_id, user_message, embed_vec, k)
                 .await
-                {
-                    Ok(h) => h,
-                    Err(e) => {
-                        tracing::debug!(error = %e, "skip session_output_recall: agentic_memory unavailable");
-                        Vec::new()
-                    }
-                };
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::debug!(error = %e, "skip session_output_recall: agentic_memory unavailable");
+                    Vec::new()
+                }
+            };
             if hits.is_empty() {
                 return String::new();
             }
@@ -455,11 +431,7 @@ impl RagPlanner {
             s.push('\n');
             return s;
         }
-        #[cfg(not(feature = "postgres_memory"))]
-        {
-            let _ = (user_message, embed_vec);
-            String::new()
-        }
+        String::new()
     }
 
     /// Phase 6.4 (full) — durably persist a user message to the configured
@@ -476,14 +448,10 @@ impl RagPlanner {
         if trimmed.is_empty() {
             return;
         }
-        #[cfg(feature = "postgres_memory")]
-        {
-            match crate::adapters::outbound::tools::agentic_memory::write_user_message_with_embedding(
-                &self.session_id,
-                trimmed,
-                embed_vec,
-            )
-            .await
+        if let Some(recall) = &self.recall {
+            match recall
+                .write_user_message(&self.session_id, trimmed, embed_vec)
+                .await
             {
                 Ok(id) => tracing::debug!(
                     id = %id,
@@ -496,11 +464,6 @@ impl RagPlanner {
                     "persist_user_message to agentic_memory failed; continuing without durable write"
                 ),
             }
-            return;
-        }
-        #[cfg(not(feature = "postgres_memory"))]
-        {
-            let _ = embed_vec;
         }
     }
 }
@@ -556,10 +519,7 @@ impl Planner for RagPlanner {
         // Embed the user message once per turn and reuse the vector across
         // Postgres memory recall/write lanes when `postgres_memory` is on.
         // Planner registry routing itself is file-backed and does not embed.
-        #[cfg(feature = "postgres_memory")]
         let embed_vec: Option<Vec<f32>> = self.embed_text(user_message).await;
-        #[cfg(not(feature = "postgres_memory"))]
-        let embed_vec: Option<Vec<f32>> = None;
         let embed_slice = embed_vec.as_deref();
 
         let (registry_block, hits) = self.load_registry_block().await;
@@ -658,27 +618,22 @@ impl Planner for RagPlanner {
         let recall_query = format!("{} {} {}", user_message, failed_step_id, error);
         let recall_block = if recall_k == 0 {
             String::new()
-        } else {
-            #[cfg(feature = "postgres_memory")]
+        } else if let Some(recall) = &self.recall {
             {
                 let embed_vec = self.embed_text(&recall_query).await;
-                let hits =
-                    match crate::adapters::outbound::tools::agentic_memory::recall_step_outputs_with_vec(
-                        &recall_query,
-                        embed_vec.as_deref(),
-                        recall_k,
-                    )
+                let hits = match recall
+                    .recall_step_outputs(&recall_query, embed_vec.as_deref(), recall_k)
                     .await
-                    {
-                        Ok(h) => h,
-                        Err(e) => {
-                            tracing::debug!(
-                                error = %e,
-                                "skip cross-plan recall: agentic_memory unavailable"
-                            );
-                            Vec::new()
-                        }
-                    };
+                {
+                    Ok(h) => h,
+                    Err(e) => {
+                        tracing::debug!(
+                            error = %e,
+                            "skip cross-plan recall: agentic_memory unavailable"
+                        );
+                        Vec::new()
+                    }
+                };
                 if hits.is_empty() {
                     String::new()
                 } else {
@@ -700,11 +655,8 @@ impl Planner for RagPlanner {
                     s
                 }
             }
-            #[cfg(not(feature = "postgres_memory"))]
-            {
-                let _ = &recall_query;
-                String::new()
-            }
+        } else {
+            String::new()
         };
 
         // Phase 6.4 (lite) — recent dialogue context for replan too.
@@ -856,7 +808,7 @@ fn emit_rag_query(
     phase: &'static str,
     query: &str,
     hits: &[RegistryHit],
-    bus: Option<&crate::adapters::orchestrator::events::EventBus>,
+    bus: Option<&crate::application::orchestrator::events::EventBus>,
 ) {
     // Tracing — same shape as the lite version, kept for `RUST_LOG=tengu=info`.
     if hits.is_empty() {
@@ -879,17 +831,19 @@ fn emit_rag_query(
     // Structured event — only when a bus is wired (the standalone unit
     // tests pass `None`).
     if let Some(bus) = bus {
-        let payload_hits: Vec<crate::adapters::orchestrator::events::RagQueriedHit> = hits
+        let payload_hits: Vec<crate::application::orchestrator::events::RagQueriedHit> = hits
             .iter()
             .take(10)
-            .map(|h| crate::adapters::orchestrator::events::RagQueriedHit {
-                kind: h.kind.as_str().to_string(),
-                name: h.name.clone(),
-                score: h.score,
-            })
+            .map(
+                |h| crate::application::orchestrator::events::RagQueriedHit {
+                    kind: h.kind.as_str().to_string(),
+                    name: h.name.clone(),
+                    score: h.score,
+                },
+            )
             .collect();
         let _ = bus.send(
-            crate::adapters::orchestrator::events::OrchestratorEvent::RagQueried {
+            crate::application::orchestrator::events::OrchestratorEvent::RagQueried {
                 phase,
                 query: query.to_string(),
                 hits: payload_hits,

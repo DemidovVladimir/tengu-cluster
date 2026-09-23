@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/write_file.rs
+// src/adapters/outbound/tools/workspace/write_file.rs
 //! `write_file` tool — write content to a file in the workspace.
 
 use anyhow::{bail, Result};

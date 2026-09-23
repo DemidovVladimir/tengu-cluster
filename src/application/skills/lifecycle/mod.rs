@@ -1,7 +1,7 @@
 //! Skill lifecycle — distillation, metric measurement, and bounded evolution.
 //!
 //! Harness-owned policy. Three entry points: the `skill_distill` LLM tool
-//! (in `plugins/skill_lifecycle/`), `run_eval` (via `tengu eval`), and
+//! (in `outbound/tools/skill_lifecycle/`), `run_eval` (via `tengu eval`), and
 //! `run_evolve` (via `tengu skill evolve`).
 
 pub(crate) mod approval_gate;

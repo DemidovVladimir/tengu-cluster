@@ -6,7 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::domain::memory::{ChunkMetadata, MemoryHit};
+use crate::domain::memory::{ChunkMetadata, MemoryHit, RecallHit};
 
 // Several lifecycle methods on this trait (`is_available`, `initialize`,
 // `system_prompt_block`, `shutdown`) are unused on the v2 RagPlanner /
@@ -117,4 +117,37 @@ pub trait MemoryService: Send + Sync {
     ) -> Result<Vec<MemoryHit>>;
     /// Remove one entry; `true` if it existed.
     async fn delete_entry(&self, id: &str) -> Result<bool>;
+}
+
+/// Durable runtime memory the planner recalls from and writes user messages
+/// to (Open Brain). Impl: `outbound::tools::agentic_memory::AgenticRecallStore`
+/// (feature `postgres_memory`); absent = recall lanes stay empty.
+#[async_trait]
+pub trait RecallStore: Send + Sync {
+    async fn write_user_message(
+        &self,
+        session_id: &str,
+        message: &str,
+        embedding: Option<&[f32]>,
+    ) -> Result<String>;
+    async fn recall_user_messages(
+        &self,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+        exclude_exact: &str,
+    ) -> Result<Vec<RecallHit>>;
+    async fn recall_step_outputs_for_session(
+        &self,
+        session_id: &str,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<RecallHit>>;
+    async fn recall_step_outputs(
+        &self,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<RecallHit>>;
 }

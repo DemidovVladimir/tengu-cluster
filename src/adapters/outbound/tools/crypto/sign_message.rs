@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/sign_message.rs
+// src/adapters/outbound/tools/crypto/sign_message.rs
 //! `sign_message` tool — EIP-191 personal_sign via Privy.
 
 use anyhow::Result;

@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/list_directory.rs
+// src/adapters/outbound/tools/workspace/list_directory.rs
 //! `list_directory` tool — list the entries of a directory in the workspace.
 
 use anyhow::{bail, Result};

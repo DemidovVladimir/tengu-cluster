@@ -1,4 +1,4 @@
-// src/adapters/plugins/mcp/protocol.rs
+// src/adapters/outbound/mcp_client/protocol.rs
 //! JSON-RPC 2.0 wire types plus the MCP-specific `tools/list` response shapes.
 //!
 //! These are the bare minimum needed to drive an outbound MCP client. They are

@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/test_support.rs
+// src/adapters/outbound/tools/workspace/test_support.rs
 //! Shared test harness for workspace tool unit tests.
 
 #![cfg(test)]

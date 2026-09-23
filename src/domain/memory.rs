@@ -49,3 +49,13 @@ pub struct MemoryHit {
     pub score: f32,
     pub metadata: ChunkMetadata,
 }
+
+/// One hit from the durable runtime memory (Open Brain) — planner recall lanes.
+#[derive(Debug, Clone)]
+pub(crate) struct RecallHit {
+    pub id: String,
+    pub kind: String,
+    pub content: String,
+    pub score: f32,
+    pub step_id: Option<String>,
+}

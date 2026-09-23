@@ -11,9 +11,9 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use crate::adapters::memory::injector;
-use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::memory::writer;
+use crate::application::memory::injector;
+use crate::application::memory::manager::MemoryManager;
+use crate::application::memory::writer;
 use crate::ports::orchestration::{ChatServiceFactory, OrchestratorChatPort, TurnTelemetry};
 
 pub struct ChatOrchestratorPortImpl {

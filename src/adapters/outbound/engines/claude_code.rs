@@ -94,7 +94,7 @@ impl ClaudeCodeEngine {
     }
 
     /// Attach the agent's per-tool scope map (see `scopes` field). Call from
-    /// `engine_builder::build_engine` with `agent_config.scopes.clone()`.
+    /// `engines::build_engine` with `agent_config.scopes.clone()`.
     pub fn with_scopes(
         mut self,
         scopes: std::collections::HashMap<String, crate::domain::scope::ToolScope>,

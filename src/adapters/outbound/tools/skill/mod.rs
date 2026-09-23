@@ -1,8 +1,8 @@
-// src/adapters/plugins/skill/mod.rs
+// src/adapters/outbound/tools/skill/mod.rs
 //! Skill plugin — dispatch for shell skills.
 //!
 //! Documentation / API skills render into the system prompt via
-//! `skill_builder::active_context_fragments` — the skill plugin does NOT
+//! `skills::registry::active_context_fragments` — the skill plugin does NOT
 //! touch that path. Only shell skills produce LLM-callable tools, and those
 //! all share the single [`SkillShellTool`] implementation: at construction
 //! time we read the active shell skills out of the [`SkillRegistry`] and
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::adapters::skill_builder::{SkillExecution, SkillRegistry};
+use crate::application::skills::registry::{SkillExecution, SkillRegistry};
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 

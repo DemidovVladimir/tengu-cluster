@@ -10,14 +10,14 @@ use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::chat_builder::{
-    handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
-};
-use crate::adapters::flow_builder::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
-use crate::adapters::skill_builder::{
-    self, FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
+use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
+use crate::application::chat::service::{
+    handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
+};
+use crate::application::skills::registry::{
+    FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
 use crate::config::{Config, RuntimeProfile};
 use crate::domain::message::{ToolCall, ToolDef};
@@ -62,7 +62,7 @@ unsafe impl Send for SendEngine {}
 fn format_rag_debug_line(
     phase: &str,
     query: &str,
-    hits: &[crate::adapters::orchestrator::events::RagQueriedHit],
+    hits: &[crate::application::orchestrator::events::RagQueriedHit],
 ) -> String {
     const MAX_QUERY_LEN: usize = 60;
     const TOP_N: usize = 3;
@@ -149,8 +149,11 @@ pub fn run_tui(
 
     // Build initial system prompt without skill contexts — the engine thread will rebuild
     // with actual skills on the first turn (tools_dirty = true).
-    let system_prompt =
-        skill_builder::build_system_prompt(&agent_config, advertise_workspace_tools, &[]);
+    let system_prompt = crate::application::skills::registry::build_system_prompt(
+        &agent_config,
+        advertise_workspace_tools,
+        &[],
+    );
 
     // Channel: UI → Engine thread
     let (request_tx, request_rx) = mpsc::channel::<ChatRequest>();
@@ -186,11 +189,11 @@ pub fn run_tui(
     // The engine thread runs `rt.block_on(orchestrator.handle(...))` and the
     // orchestrator spawns step tasks that call our factory closure, which
     // reads inputs back from the same map.
-    let _memory_manager: Arc<crate::adapters::memory::manager::MemoryManager> =
-        Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+    let _memory_manager: Arc<crate::application::memory::manager::MemoryManager> =
+        Arc::new(crate::application::memory::manager::MemoryManager::new());
     let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
         Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
-    let orchestrator: Option<Arc<crate::adapters::orchestrator::Orchestrator>> = {
+    let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
         let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
         let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
             Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
@@ -235,7 +238,7 @@ pub fn run_tui(
         let mut metrics_state = crate::domain::metrics::AggregatorState::default();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                use crate::adapters::orchestrator::OrchestratorEvent;
+                use crate::application::orchestrator::OrchestratorEvent;
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
@@ -353,7 +356,7 @@ pub fn run_tui(
 
         // Build memory subsystem if enabled. Backed by a shared
         // `Embedder` + `VectorStore` pair via `MemoryManager`.
-        let memory_manager_handle: Option<Arc<crate::adapters::memory::manager::MemoryManager>> = {
+        let memory_manager_handle: Option<Arc<crate::application::memory::manager::MemoryManager>> = {
             let mgr =
                 channel_runtime::build_memory_manager(&memory_config, &rt, workspace.as_deref());
             let vector_ready =

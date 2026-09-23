@@ -1,4 +1,4 @@
-// src/adapters/plugins/cache/shared_cache.rs
+// src/adapters/outbound/tools/cache/shared_cache.rs
 //! `shared_cache` tool — SQLite-backed workspace cache for agent data exchange.
 //!
 //! Operations: `get`, `put`, `delete`, `list`. All operations are namespaced to

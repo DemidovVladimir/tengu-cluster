@@ -1,4 +1,4 @@
-// src/adapters/plugins/memory/ingest.rs
+// src/adapters/outbound/tools/memory/ingest.rs
 //! `memory_ingest` tool — ingest a document or fact into vector memory.
 //!
 //! Talks to `MemoryManager` directly — the harness-owned `Embedder` +

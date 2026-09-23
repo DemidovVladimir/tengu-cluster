@@ -72,11 +72,21 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Non-comment lines before the first `#[cfg(test)]`.
+/// Non-comment lines before the first `#[cfg(test)]` test *module* (a
+/// `#[cfg(test)]` on a single item mid-file does not end the scan).
 fn code_lines(src: &str) -> impl Iterator<Item = (usize, &str)> {
-    src.lines()
+    let lines: Vec<&str> = src.lines().collect();
+    let end = lines
+        .windows(2)
+        .position(|w| {
+            let next = w[1].trim_start();
+            w[0].trim() == "#[cfg(test)]" && (next.starts_with("mod ") || next.contains(" mod "))
+        })
+        .unwrap_or(lines.len());
+    lines
+        .into_iter()
         .enumerate()
-        .take_while(|(_, l)| l.trim() != "#[cfg(test)]")
+        .take(end)
         .filter(|(_, l)| !l.trim_start().starts_with("//"))
         .map(|(i, l)| (i + 1, l))
 }

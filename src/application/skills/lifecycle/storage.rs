@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use crate::adapters::skill_lifecycle::metrics::{MetricOutcome, MetricSpec};
+use crate::application::skills::lifecycle::metrics::{MetricOutcome, MetricSpec};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct MetricsJson {

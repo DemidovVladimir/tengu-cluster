@@ -325,7 +325,9 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             sandbox_config: self.sandbox_name.clone(),
             // Per-session plan registered by `replan::drive` under the same
             // session_id this runner carries (see `build_orchestrator`).
-            plan_state: crate::adapters::orchestrator::shared_files::active_plan(&self.session_id),
+            plan_state: crate::application::orchestrator::shared_files::active_plan(
+                &self.session_id,
+            ),
         };
 
         match self.run_with_timeout(input, step_timeout_secs).await? {

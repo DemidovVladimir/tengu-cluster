@@ -17,9 +17,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
-use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
+use crate::application::memory::manager::MemoryManager;
 use crate::config::Config;
 use crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
 use crate::ports::engine::ToolExecutor;

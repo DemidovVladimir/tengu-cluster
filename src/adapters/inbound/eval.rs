@@ -299,7 +299,7 @@ pub struct StubSpec {
 
 /// Build a judge engine for eval + evolve scoring.
 ///
-/// Called from both `eval_builder::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
+/// Called from both `inbound::eval::run` and `skill_lifecycle::evolve::run_eval_and_read_metrics`.
 /// Default model: `anthropic/claude-opus-4-7`, 64 k context window.
 pub fn build_judge(model: Option<String>) -> Result<Arc<dyn crate::ports::engine::Engine>> {
     let judge_model = model.unwrap_or_else(|| "anthropic/claude-opus-4-7".to_string());
@@ -553,7 +553,7 @@ use crate::config::Config;
 // Skill metrics frontmatter — load + validate on skill discovery
 // ---------------------------------------------------------------------------
 
-use crate::adapters::skill_lifecycle::metrics::{validate_metrics, MetricSpec};
+use crate::application::skills::lifecycle::metrics::{validate_metrics, MetricSpec};
 
 #[derive(Debug, serde::Deserialize)]
 struct SkillFrontmatter {
@@ -868,8 +868,8 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 
 use crate::adapters::channel_runtime;
-use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
 use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
+use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::tool_activity::ToolActivityPort;
@@ -921,7 +921,7 @@ pub struct RowResult {
 // EvalJudgeClient — adapts the eval judge engine to the JudgeClient trait
 // ---------------------------------------------------------------------------
 
-use crate::adapters::skill_lifecycle::metrics::JudgeClient;
+use crate::application::skills::lifecycle::metrics::JudgeClient;
 
 struct EvalJudgeClient {
     engine: Arc<dyn Engine>,
@@ -1225,7 +1225,7 @@ pub async fn run_skill(
 
     // Write metrics.json + history.jsonl if the skill declares any metrics.
     if !skill_metrics.is_empty() {
-        use crate::adapters::skill_lifecycle::storage::{finalize_run, RunSample};
+        use crate::application::skills::lifecycle::storage::{finalize_run, RunSample};
         let ts = skill_started_ts.format("%Y-%m-%dT%H-%M-%SZ").to_string();
         let samples: Vec<RunSample> = row_results
             .iter()
@@ -1234,7 +1234,7 @@ pub async fn run_skill(
                 for mo in &r.metric_outcomes {
                     outcomes.insert(
                         mo.metric.clone(),
-                        crate::adapters::skill_lifecycle::metrics::MetricOutcome {
+                        crate::application::skills::lifecycle::metrics::MetricOutcome {
                             pass: mo.pass,
                             score: mo.score,
                             notes: mo.notes.clone(),
@@ -1524,11 +1524,11 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     // 10. Score against per-skill metric kinds (if any declared in SKILL.md frontmatter).
     let mut metric_outcomes: Vec<MetricOutcomeJson> = Vec::new();
     if !ctx.skill_metrics.is_empty() {
-        use crate::adapters::skill_lifecycle::metric_kinds::{
+        use crate::application::skills::lifecycle::metric_kinds::{
             DescriptionTriggerKind, DialogReplayKind, LlmJudgeKind, ScriptKind, ShellCheckKind,
             ToolAssertionKind,
         };
-        use crate::adapters::skill_lifecycle::metrics::{
+        use crate::application::skills::lifecycle::metrics::{
             FixtureContext, MetricKind, MetricOutcome, MetricRunCtx,
         };
 
@@ -1830,7 +1830,7 @@ async fn run_row_via_orchestrator(
 
     // Evals run without a live memory backend — register an empty
     // MemoryManager so the orchestrator doesn't choke on missing deps.
-    let memory_manager = Arc::new(crate::adapters::memory::manager::MemoryManager::new());
+    let memory_manager = Arc::new(crate::application::memory::manager::MemoryManager::new());
 
     let orchestrator = channel_runtime::build_orchestrator(
         &cfg_arc,
@@ -1853,7 +1853,7 @@ async fn run_row_via_orchestrator(
     let event_seq = Arc::clone(&accum.seq);
     let mut event_rx = orchestrator.subscribe();
     let event_task = tokio::spawn(async move {
-        use crate::adapters::orchestrator::OrchestratorEvent;
+        use crate::application::orchestrator::OrchestratorEvent;
         while let Ok(ev) = event_rx.recv().await {
             let (name, detail) = match ev {
                 OrchestratorEvent::PlanCreated { plan } => {

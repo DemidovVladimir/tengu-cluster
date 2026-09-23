@@ -1,7 +1,7 @@
 //! Skill subsystem — types, parsing, registry, filesystem discovery,
 //! command routing, context fragments, and system prompt building.
 //!
-//! Shell-skill tool dispatch was moved to `plugins/skill/` in task A8.
+//! Shell-skill tool dispatch was moved to `outbound/tools/skill/` in task A8.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 
-use crate::adapters::prompt_budget::truncate_to_token_budget;
+use crate::application::chat::prompt_budget::truncate_to_token_budget;
 use crate::config::AgentConfig;
 use crate::domain::message::ToolDef;
 use crate::domain::token::estimate_tokens_approx_min1;
@@ -649,7 +649,7 @@ fn skill_to_tool_def(skill: &SkillDefinition) -> ToolDef {
 }
 
 // ===========================================================================
-// Command rendering — moved to `plugins/skill/shell_tool.rs` in A8.
+// Command rendering — moved to `outbound/tools/skill/shell_tool.rs` in A8.
 // ===========================================================================
 
 // ===========================================================================
@@ -1073,7 +1073,7 @@ impl SkillSourcePort for FileSystemSkillSource {
 }
 
 // ===========================================================================
-// Tool execution — moved to `plugins/skill/` (A8). Shell-skill dispatch lives
+// Tool execution — moved to `outbound/tools/skill/` (A8). Shell-skill dispatch lives
 // in `SkillShellTool` + `SkillPlugin`; this module only owns parsing,
 // registry state, context fragments, and system-prompt building now.
 // ===========================================================================

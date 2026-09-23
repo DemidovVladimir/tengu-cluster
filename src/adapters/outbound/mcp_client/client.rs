@@ -1,4 +1,4 @@
-// src/adapters/plugins/mcp/client.rs
+// src/adapters/outbound/mcp_client/client.rs
 //! Outbound MCP client — stdio and http transports over JSON-RPC 2.0.
 //!
 //! The `McpCaller` trait is the narrow interface the proxy tool depends on:

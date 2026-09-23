@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::adapters::memory::fencing::sanitize_context;
 use crate::adapters::outbound::memory::embedder::Embedder;
+use crate::application::memory::fencing::sanitize_context;
 use crate::domain::memory::ChunkMetadata;
 use crate::ports::memory::MemoryProvider;
 use crate::ports::memory::VectorStore;

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::adapters::skill_lifecycle::metrics::{
+use crate::application::skills::lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
 };
 
@@ -114,7 +114,7 @@ fn extract_json_object(s: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::skill_lifecycle::metrics::JudgeClient;
+    use crate::application::skills::lifecycle::metrics::JudgeClient;
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::TempDir;

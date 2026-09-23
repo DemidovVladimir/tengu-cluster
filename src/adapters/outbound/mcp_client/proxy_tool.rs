@@ -1,4 +1,4 @@
-// src/adapters/plugins/mcp/proxy_tool.rs
+// src/adapters/outbound/mcp_client/proxy_tool.rs
 //! `McpProxyTool` — forwards an `execute` call to a remote MCP server.
 //!
 //! One instance exists per advertised remote tool. The tool name is always

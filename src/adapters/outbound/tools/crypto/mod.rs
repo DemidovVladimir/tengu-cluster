@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/mod.rs
+// src/adapters/outbound/tools/crypto/mod.rs
 //! Crypto plugin — EVM transaction signing, message signing, and ABI helpers.
 //!
 //! Provides:

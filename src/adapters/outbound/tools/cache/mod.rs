@@ -1,4 +1,4 @@
-// src/adapters/plugins/cache/mod.rs
+// src/adapters/outbound/tools/cache/mod.rs
 //! Cache plugin — SQLite-backed shared workspace cache for agent coordination.
 //!
 //! Provides: `shared_cache`. Opt-in per agent via `AgentConfig.workspace_tools`

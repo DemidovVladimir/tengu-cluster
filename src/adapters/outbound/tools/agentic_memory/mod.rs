@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::adapters::outbound::tools::args::require_str;
-use crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
+use crate::domain::memory::{RecallHit, DEFAULT_EMBEDDING_MODEL};
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
@@ -98,7 +98,7 @@ pub(crate) async fn recall_user_messages_with_vec(
     embedding: Option<&[f32]>,
     top_k: usize,
     exclude_exact: &str,
-) -> Result<Vec<AgenticMemoryHit>> {
+) -> Result<Vec<RecallHit>> {
     let store = PostgresMemoryStore::connect_from_env().await?;
     store.ensure_schema().await?;
     let hits = store
@@ -116,7 +116,7 @@ pub(crate) async fn recall_step_outputs_for_session_with_vec(
     query: &str,
     embedding: Option<&[f32]>,
     top_k: usize,
-) -> Result<Vec<AgenticMemoryHit>> {
+) -> Result<Vec<RecallHit>> {
     let store = PostgresMemoryStore::connect_from_env().await?;
     store.ensure_schema().await?;
     store
@@ -134,7 +134,7 @@ pub(crate) async fn recall_step_outputs_with_vec(
     query: &str,
     embedding: Option<&[f32]>,
     top_k: usize,
-) -> Result<Vec<AgenticMemoryHit>> {
+) -> Result<Vec<RecallHit>> {
     let store = PostgresMemoryStore::connect_from_env().await?;
     store.ensure_schema().await?;
     store
@@ -142,12 +142,46 @@ pub(crate) async fn recall_step_outputs_with_vec(
         .await
 }
 
-pub(crate) struct AgenticMemoryHit {
-    pub id: String,
-    pub kind: String,
-    pub content: String,
-    pub score: f32,
-    pub step_id: Option<String>,
+/// `ports::memory::RecallStore` over Postgres `agentic_memory` — each call
+/// connects from `TENGU_MEMORY_DATABASE_URL` (fail-soft at the caller).
+pub(crate) struct AgenticRecallStore;
+
+#[async_trait]
+impl crate::ports::memory::RecallStore for AgenticRecallStore {
+    async fn write_user_message(
+        &self,
+        session_id: &str,
+        message: &str,
+        embedding: Option<&[f32]>,
+    ) -> Result<String> {
+        write_user_message_with_embedding(session_id, message, embedding).await
+    }
+    async fn recall_user_messages(
+        &self,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+        exclude_exact: &str,
+    ) -> Result<Vec<RecallHit>> {
+        recall_user_messages_with_vec(query, embedding, top_k, exclude_exact).await
+    }
+    async fn recall_step_outputs_for_session(
+        &self,
+        session_id: &str,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<RecallHit>> {
+        recall_step_outputs_for_session_with_vec(session_id, query, embedding, top_k).await
+    }
+    async fn recall_step_outputs(
+        &self,
+        query: &str,
+        embedding: Option<&[f32]>,
+        top_k: usize,
+    ) -> Result<Vec<RecallHit>> {
+        recall_step_outputs_with_vec(query, embedding, top_k).await
+    }
 }
 
 pub(crate) struct AgenticMemoryPlugin;
@@ -798,7 +832,7 @@ impl PostgresMemoryStore {
         kind: Option<&str>,
         session_id: Option<&str>,
         top_k: i64,
-    ) -> Result<Vec<AgenticMemoryHit>> {
+    ) -> Result<Vec<RecallHit>> {
         let rows = self
             .client
             .query(
@@ -821,7 +855,7 @@ impl PostgresMemoryStore {
 
         Ok(rows
             .into_iter()
-            .map(|row| AgenticMemoryHit {
+            .map(|row| RecallHit {
                 id: row.get(0),
                 kind: row.get(1),
                 content: row.get(2),
@@ -838,7 +872,7 @@ impl PostgresMemoryStore {
         kind: Option<&str>,
         session_id: Option<&str>,
         top_k: i64,
-    ) -> Result<Vec<AgenticMemoryHit>> {
+    ) -> Result<Vec<RecallHit>> {
         // Fail-soft: a rejected embedding (wrong dimension / non-finite)
         // degrades to FTS-only recall, mirroring `recall`.
         let literal = embedding.and_then(|e| match pgvector_literal(e) {
@@ -874,7 +908,7 @@ impl PostgresMemoryStore {
 
             let hits = rows
                 .into_iter()
-                .map(|row| AgenticMemoryHit {
+                .map(|row| RecallHit {
                     id: row.get(0),
                     kind: row.get(1),
                     content: row.get(2),

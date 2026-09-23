@@ -1,4 +1,4 @@
-// src/adapters/plugins/memory/persistent_store.rs
+// src/adapters/outbound/tools/memory/persistent_store.rs
 //! `persistent_store` tool — chunked file storage with vector semantic search.
 //!
 //! Migrated from `persistent_store_executor.rs` during Phase A / task A5. The
@@ -585,7 +585,7 @@ impl Tool for PersistentStoreTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::manager::MemoryManager;
+    use crate::application::memory::manager::MemoryManager;
 
     #[test]
     fn test_chunk_text_basic() {

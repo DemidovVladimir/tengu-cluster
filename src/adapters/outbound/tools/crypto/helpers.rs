@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/helpers.rs
+// src/adapters/outbound/tools/crypto/helpers.rs
 //! Shared Privy + ABI helpers used by the crypto plugin tools.
 //!
 //! Lift-and-shift from `crypto_tool_executor.rs` — behaviour preserved exactly.

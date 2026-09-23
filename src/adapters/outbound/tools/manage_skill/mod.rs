@@ -25,11 +25,11 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::adapters::skill_lifecycle::audit;
-use crate::adapters::skill_lifecycle::evolve::{
+use crate::application::skills::lifecycle::audit;
+use crate::application::skills::lifecycle::evolve::{
     apply_proposal_to_skill_md, is_editable_by_learner, nanos, validate_resource_path, ProposalBody,
 };
-use crate::adapters::skill_lifecycle::metrics::MetricSpec;
+use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{PluginCtx, Tool, ToolCtx, ToolOutput, ToolPlugin};
 
@@ -970,7 +970,7 @@ fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
 }
 
 /// Three-tier walk: managed → workspace → project, first match wins. Mirrors
-/// `apply_improver_proposal::locate_skill_dir` and `skill_builder.rs::skill_directories`.
+/// `apply_improver_proposal::locate_skill_dir` and `application/skills/registry.rs::skill_directories`.
 fn locate_skill_dir(name: &str, workspace: &Path) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
     if let Some(home) = dirs_next::home_dir() {

@@ -3,9 +3,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orchestrator::executor::{DagExecutor, ExecResult};
-use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
+use crate::application::orchestrator::executor::{DagExecutor, ExecResult};
+use crate::application::orchestrator::retry::RetryPolicy;
 use crate::domain::plan::Plan;
 use crate::ports::orchestration::WorkerHandle;
 use crate::ports::orchestration::{Planner, PlannerVerdict};
@@ -135,7 +135,7 @@ impl ActivePlanGuard {
     /// Render `plan`, register it for this session (when the planner has
     /// one), and mirror it into `TENGU_PLAN.md` for humans.
     fn register(&mut self, plan: &Plan) {
-        use crate::adapters::orchestrator::shared_files;
+        use crate::application::orchestrator::shared_files;
         let rendered = match &self.session_id {
             Some(sid) => shared_files::set_active_plan(sid, "active", plan),
             None => shared_files::render_plan_state("active", plan),
@@ -159,7 +159,7 @@ impl ActivePlanGuard {
 impl Drop for ActivePlanGuard {
     fn drop(&mut self) {
         if let (Some(sid), Some(rendered)) = (&self.session_id, &self.rendered) {
-            crate::adapters::orchestrator::shared_files::clear_active_plan(sid, rendered);
+            crate::application::orchestrator::shared_files::clear_active_plan(sid, rendered);
         }
     }
 }
@@ -167,7 +167,7 @@ impl Drop for ActivePlanGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orchestrator::events::new_bus;
+    use crate::application::orchestrator::events::new_bus;
     use crate::domain::plan::{Step, StepId};
     use async_trait::async_trait;
     use std::sync::Mutex;

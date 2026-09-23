@@ -1,6 +1,6 @@
 //! Tool port — the per-tool trait, plugin grouping, and the borrowed contexts
 //! passed to them. Implementations live in `adapters/outbound/tools/`
-//! (currently `adapters/plugins/`); dispatch lives in
+//! (currently `outbound/tools/`); dispatch lives in
 //! `application/tools/registry.rs`.
 
 #![allow(dead_code)]
@@ -113,4 +113,12 @@ pub(crate) struct PluginCtx<'a> {
     pub shell: Arc<dyn ShellExecutionPort>,
     pub memory_manager: Option<Arc<dyn MemoryService>>,
     pub secret_registry: Arc<SecretRegistry>,
+}
+
+/// Every tool definition the planner's registry lists: the built-in catalog
+/// plus the tools of each `[[mcp_servers]]` entry. Impl:
+/// `outbound::tools::CatalogDirectory`.
+#[async_trait]
+pub(crate) trait ToolDirectory: Send + Sync {
+    async fn all_tool_defs(&self) -> Vec<ToolDef>;
 }

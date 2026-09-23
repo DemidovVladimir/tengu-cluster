@@ -5,7 +5,7 @@
 //! step output writes go through the run-agent step-summary capture → Postgres `agentic_memory`
 //! instead.
 
-use crate::adapters::memory::manager::MemoryManager;
+use crate::application::memory::manager::MemoryManager;
 use std::sync::Arc;
 
 pub fn sync_turn(mgr: Arc<MemoryManager>, agent: String, user: String, assistant: String) {

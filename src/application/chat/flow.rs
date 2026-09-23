@@ -112,7 +112,7 @@ pub(crate) fn resolve_flow_compaction_policy(
         .map(|v| v.max(1) as usize)
         .unwrap_or_else(|| default_compaction_keep_turns_for_scope(&flow.scope));
 
-    let max_input_budget = crate::adapters::prompt_budget::compute_total_input_budget(
+    let max_input_budget = crate::application::chat::prompt_budget::compute_total_input_budget(
         context_window,
         output_token_cap,
         max_tokens_per_flow,
@@ -191,11 +191,11 @@ pub(crate) async fn maybe_compact_flow(
         return Ok(CompactionOutcome::default());
     }
     let compaction_source = build_compaction_source(compacted_slice);
-    let raw_summary = crate::adapters::prompt_budget::truncate_to_token_budget(
+    let raw_summary = crate::application::chat::prompt_budget::truncate_to_token_budget(
         &compaction_source,
         policy.summary_max_tokens as usize,
     );
-    let summary = crate::adapters::prompt_budget::truncate_to_token_budget(
+    let summary = crate::application::chat::prompt_budget::truncate_to_token_budget(
         raw_summary.trim(),
         policy.summary_max_tokens as usize,
     );

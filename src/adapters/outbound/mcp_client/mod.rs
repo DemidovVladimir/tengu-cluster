@@ -1,4 +1,4 @@
-// src/adapters/plugins/mcp/mod.rs
+// src/adapters/outbound/mcp_client/mod.rs
 //! MCP plugin — inbound MCP client.
 //!
 //! Task A10 of Phase A. Complements `mcp_bridge.rs` (OUTBOUND server), which
@@ -90,6 +90,54 @@ impl ToolPlugin for McpPlugin {
         }
         Ok(out)
     }
+}
+
+/// Enumerate tools from every configured external MCP server for the planner registry.
+///
+/// For each `McpServerConfig`: dial the server (stdio or HTTP), call
+/// `tools/list`, and flatten each remote tool into a `ToolDef` named
+/// `{server}__{tool}` — the same qualifier the runtime `McpProxyTool` uses,
+/// so the registry name and the tool-call name stay in lockstep.
+///
+/// Requires a live connection (`McpServerConfig` carries no static tool
+/// list). Fail-soft per server: an unreachable server logs a warning and is
+/// skipped. Returns an empty `Vec` when `servers` is empty.
+pub(crate) async fn enumerate_tools(servers: &[McpServerConfig]) -> Vec<ToolDef> {
+    use client::McpCaller;
+
+    let mut out: Vec<ToolDef> = Vec::new();
+    for cfg in servers {
+        let client = match McpClient::connect(cfg).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    server = %cfg.name,
+                    error = %e,
+                    "planner registry: MCP server connect failed; skipping (other servers continue)"
+                );
+                continue;
+            }
+        };
+        let manifest = match client.list_tools().await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    server = %cfg.name,
+                    error = %e,
+                    "planner registry: MCP tools/list failed; skipping (other servers continue)"
+                );
+                continue;
+            }
+        };
+        for remote in manifest {
+            out.push(ToolDef {
+                name: qualified_tool_name(&cfg.name, &remote.name),
+                description: remote.description,
+                parameters: remote.input_schema,
+            });
+        }
+    }
+    out
 }
 
 /// Separator between server and tool name. Provider function names allow only

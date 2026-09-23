@@ -8,8 +8,8 @@
 //! NOT call this. Don't add new callers without thinking about whether
 //! per-turn memory injection is actually what you want.
 
-use crate::adapters::memory::fencing::build_memory_context_block;
-use crate::adapters::memory::manager::MemoryManager;
+use crate::application::memory::fencing::build_memory_context_block;
+use crate::application::memory::manager::MemoryManager;
 use crate::domain::memory::PinnedMemoryBlock;
 
 /// Build a `PinnedMemoryBlock` for an agent's upcoming turn.

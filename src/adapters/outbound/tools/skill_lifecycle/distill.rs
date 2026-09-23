@@ -8,10 +8,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-use crate::adapters::skill_lifecycle::fixtures::{
+use crate::application::skills::lifecycle::fixtures::{
     extract_fixtures, write_fixtures, ExtractOpts, Fixture, FixturesFile,
 };
-use crate::adapters::skill_lifecycle::metrics::MetricSpec;
+use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
@@ -373,7 +373,7 @@ fn title_case_kebab(s: &str) -> String {
 }
 
 fn count_fixtures(skill_dir: &Path) -> usize {
-    crate::adapters::skill_lifecycle::fixtures::read_fixtures(
+    crate::application::skills::lifecycle::fixtures::read_fixtures(
         &skill_dir.join("evals").join("prompts.yaml"),
     )
     .map(|f| f.fixtures.len())

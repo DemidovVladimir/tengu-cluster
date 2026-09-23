@@ -57,11 +57,11 @@ use sha2::Sha256;
 use tracing::{error, info, warn};
 
 use crate::adapters::channel_runtime;
-use crate::adapters::memory::manager::MemoryManager;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
-use crate::adapters::skill_builder::{FileSystemSkillSource, SkillRegistry};
 use crate::application::chat::tool_loop::collect_engine_response;
+use crate::application::memory::manager::MemoryManager;
+use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role};
 use crate::domain::secrets::SecretRegistry;
@@ -248,7 +248,7 @@ async fn dispatch_webhook(
 async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_message: String) {
     // Per-request orchestrator construction. Uses `WebhookChatServiceFactory`
     // — a per-turn rebuild-from-config pattern modelled on `EvalChatServiceFactory`
-    // in `eval_builder.rs`. Avoids the `OrchestratorSnapshots` map that
+    // in `adapters/inbound/eval.rs`. Avoids the `OrchestratorSnapshots` map that
     // chat / telegram use (those surfaces pre-build per-agent state at
     // startup and refresh it before each turn; webhooks are stateless
     // one-shots, so each call just looks up the agent in `Config.agents`
@@ -476,7 +476,7 @@ fn decode_nibble(b: u8) -> Result<u8, String> {
 
 /// Per-turn `ChatServiceFactory` impl that rebuilds the engine + tools +
 /// system prompt from `Config.agents` for each `agent_name` it's asked to
-/// run. Mirrors `EvalChatServiceFactory` in `eval_builder.rs`. Used by the
+/// run. Mirrors `EvalChatServiceFactory` in `adapters/inbound/eval.rs`. Used by the
 /// webhook listener because webhook turns are stateless one-shots — there's
 /// no pre-built per-agent state to read from (unlike chat/telegram, which
 /// keep `OrchestratorSnapshots`).
@@ -621,7 +621,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
     }
 }
 
-// `NoopActivity` + `NoopRuntimeToolExecutor` are shared with `eval_builder`
+// `NoopActivity` + `NoopRuntimeToolExecutor` are shared with `inbound::eval`
 // via `adapters::noop`. Webhooks and evals both rebuild per-turn services
 // from config and need identical fallback impls.
 

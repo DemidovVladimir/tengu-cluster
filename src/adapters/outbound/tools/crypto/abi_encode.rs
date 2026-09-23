@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/abi_encode.rs
+// src/adapters/outbound/tools/crypto/abi_encode.rs
 //! `abi_encode` tool — pure-compute Solidity ABI encoder.
 
 use anyhow::{anyhow, Result};

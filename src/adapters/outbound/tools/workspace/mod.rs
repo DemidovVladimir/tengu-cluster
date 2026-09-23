@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/mod.rs
+// src/adapters/outbound/tools/workspace/mod.rs
 //! Workspace plugin — filesystem and shell primitives scoped to a workspace.
 //!
 //! Provides: `read_file`, `list_directory`, `write_file`, `run_command`.

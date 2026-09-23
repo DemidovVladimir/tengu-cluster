@@ -1,4 +1,4 @@
-// src/adapters/plugins/skill/shell_tool.rs
+// src/adapters/outbound/tools/skill/shell_tool.rs
 //! Reusable `SkillShellTool` — executes a shell skill template.
 //!
 //! One struct, one `Tool` impl, one shared implementation for every active
@@ -59,7 +59,7 @@ impl Tool for SkillShellTool {
 }
 
 // ---------------------------------------------------------------------------
-// Template rendering — moved verbatim from `skill_builder::render_command`.
+// Template rendering — moved verbatim from `skills::registry::render_command`.
 // ---------------------------------------------------------------------------
 
 /// Substitute `{{param}}` placeholders with shell-escaped argument values.

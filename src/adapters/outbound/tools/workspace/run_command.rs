@@ -1,4 +1,4 @@
-// src/adapters/plugins/workspace/run_command.rs
+// src/adapters/outbound/tools/workspace/run_command.rs
 //! `run_command` tool — execute a shell command in the workspace.
 
 use anyhow::Result;

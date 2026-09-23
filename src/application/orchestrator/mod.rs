@@ -25,8 +25,8 @@ pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::adapters::memory::manager::MemoryManager;
-use crate::adapters::orchestrator::retry::RetryPolicy;
+use crate::application::memory::manager::MemoryManager;
+use crate::application::orchestrator::retry::RetryPolicy;
 use crate::ports::orchestration::Planner;
 use crate::ports::orchestration::WorkerHandle;
 
@@ -113,9 +113,9 @@ mod e2e_tests {
 
     use async_trait::async_trait;
 
-    use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::replan;
-    use crate::adapters::orchestrator::retry::RetryPolicy;
+    use crate::application::orchestrator::events::new_bus;
+    use crate::application::orchestrator::replan;
+    use crate::application::orchestrator::retry::RetryPolicy;
     use crate::domain::plan::{Plan, Step, StepId};
     use crate::ports::orchestration::WorkerHandle;
     use crate::ports::orchestration::{Planner, PlannerVerdict};

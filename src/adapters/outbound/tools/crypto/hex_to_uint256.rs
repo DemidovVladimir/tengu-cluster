@@ -1,4 +1,4 @@
-// src/adapters/plugins/crypto/hex_to_uint256.rs
+// src/adapters/outbound/tools/crypto/hex_to_uint256.rs
 //! `hex_to_uint256` tool — pure-compute hex → decimal uint256 converter.
 
 use alloy::primitives::U256;

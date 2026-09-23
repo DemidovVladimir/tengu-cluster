@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::config::{AgentConfig, McpServerConfig};
+use crate::config::AgentConfig;
 use crate::domain::message::ToolDef;
 use crate::domain::plan::Plan;
 
@@ -80,9 +80,9 @@ pub(crate) struct PlannerRegistrySnapshot {
 pub(crate) fn ensure_planner_registry(
     workspace: &Path,
     agents: &[(String, AgentConfig)],
-    mcp_tools: &[ToolDef],
+    tools: &[ToolDef],
 ) -> Result<PlannerRegistrySnapshot> {
-    let content = render_registry(workspace, agents, mcp_tools)?;
+    let content = render_registry(workspace, agents, tools)?;
     let path = workspace.join(PLANNER_REGISTRY_FILE);
     if let Err(e) = std::fs::write(&path, &content) {
         tracing::warn!(
@@ -180,13 +180,12 @@ pub(crate) fn routable_agents(
 fn render_registry(
     workspace: &Path,
     agents: &[(String, AgentConfig)],
-    mcp_tools: &[ToolDef],
+    tools: &[ToolDef],
 ) -> Result<String> {
     let skills = scan_skill_summaries(workspace);
-    let tools = registry_tools(mcp_tools);
 
     let mut out = String::from("# Tengu Planner Registry\n\n");
-    out.push_str("This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`<server>.<tool>`). The planner loads it into every planner turn.\n\n");
+    out.push_str("This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`<server>__<tool>`). The planner loads it into every planner turn.\n\n");
 
     out.push_str("## Agents\n\n");
     if agents.is_empty() {
@@ -238,68 +237,6 @@ fn render_registry(
         ));
     }
     Ok(out)
-}
-
-/// Core tool defs (every workspace-tool opt-in included) followed by the
-/// MCP tool defs the planner enumerated for this session.
-fn registry_tools(mcp_tools: &[ToolDef]) -> Vec<ToolDef> {
-    let workspace_tools = crate::domain::tools::WORKSPACE_TOOLS
-        .iter()
-        .map(|s| s.to_string())
-        .collect::<Vec<_>>();
-    let mut tools =
-        crate::adapters::channel_runtime::compute_base_tools(true, true, &workspace_tools);
-    tools.extend(mcp_tools.iter().cloned());
-    tools
-}
-
-/// Enumerate tools from every configured external MCP server (ported from
-/// the Phase 6.6 `rag::indexer::enumerate_mcp_tools`).
-///
-/// For each `McpServerConfig`: dial the server (stdio or HTTP), call
-/// `tools/list`, and flatten each remote tool into a `ToolDef` named
-/// `{server}.{tool}` — the same qualifier the runtime `McpProxyTool` uses,
-/// so the registry name and the tool-call name stay in lockstep.
-///
-/// Requires a live connection (`McpServerConfig` carries no static tool
-/// list). Fail-soft per server: an unreachable server logs a warning and is
-/// skipped. Returns an empty `Vec` when `servers` is empty.
-pub(crate) async fn enumerate_mcp_tools(servers: &[McpServerConfig]) -> Vec<ToolDef> {
-    use crate::adapters::outbound::mcp_client::client::{McpCaller, McpClient};
-
-    let mut out: Vec<ToolDef> = Vec::new();
-    for cfg in servers {
-        let client = match McpClient::connect(cfg).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    server = %cfg.name,
-                    error = %e,
-                    "planner registry: MCP server connect failed; skipping (other servers continue)"
-                );
-                continue;
-            }
-        };
-        let manifest = match client.list_tools().await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(
-                    server = %cfg.name,
-                    error = %e,
-                    "planner registry: MCP tools/list failed; skipping (other servers continue)"
-                );
-                continue;
-            }
-        };
-        for remote in manifest {
-            out.push(ToolDef {
-                name: format!("{}.{}", cfg.name, remote.name),
-                description: remote.description,
-                parameters: remote.input_schema,
-            });
-        }
-    }
-    out
 }
 
 fn registry_entries_from_content(content: &str) -> Vec<PlannerRegistryEntry> {
@@ -484,19 +421,27 @@ mod tests {
     #[test]
     fn registry_lists_core_and_mcp_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let mcp = vec![ToolDef {
-            name: "beach.search_posts".into(),
-            description: "Search Beach.science posts.\nSecond line ignored.".into(),
-            parameters: serde_json::json!({"type": "object"}),
-        }];
-        let snapshot = ensure_planner_registry(dir.path(), &[], &mcp).unwrap();
+        // Full list as `ToolDirectory` returns it: catalog + MCP tools.
+        let tools = vec![
+            ToolDef::new(
+                "http_request",
+                "Make an HTTP request.",
+                serde_json::json!({}),
+            ),
+            ToolDef {
+                name: "beach__search_posts".into(),
+                description: "Search Beach.science posts.\nSecond line ignored.".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            },
+        ];
+        let snapshot = ensure_planner_registry(dir.path(), &[], &tools).unwrap();
         assert!(snapshot
             .prompt_block
-            .contains("- `beach.search_posts`: Search Beach.science posts."));
+            .contains("- `beach__search_posts`: Search Beach.science posts."));
         assert!(snapshot
             .entries
             .iter()
-            .any(|e| e.kind == "tool" && e.name == "beach.search_posts"));
+            .any(|e| e.kind == "tool" && e.name == "beach__search_posts"));
         assert!(snapshot
             .entries
             .iter()
@@ -545,7 +490,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let not_a_dir = dir.path().join("file");
         std::fs::write(&not_a_dir, "x").unwrap();
-        let snapshot = ensure_planner_registry(&not_a_dir, &[], &[]).unwrap();
+        let tools = [ToolDef::new("http_request", "d", serde_json::json!({}))];
+        let snapshot = ensure_planner_registry(&not_a_dir, &[], &tools).unwrap();
         assert!(snapshot.prompt_block.contains("## Tools"));
         assert!(!snapshot.entries.is_empty());
     }

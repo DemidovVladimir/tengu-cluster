@@ -1,4 +1,4 @@
-// src/adapters/plugins/memory/mod.rs
+// src/adapters/outbound/tools/memory/mod.rs
 //! Memory plugin — vector-memory-backed tools.
 //!
 //! Provides:
@@ -226,9 +226,9 @@ impl ToolPlugin for MemoryPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::memory::manager::MemoryManager;
     use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
     use crate::adapters::outbound::memory::embedder::Embedder;
+    use crate::application::memory::manager::MemoryManager;
     use crate::config::Config;
     use crate::ports::memory::VectorStore;
     use tempfile::TempDir;

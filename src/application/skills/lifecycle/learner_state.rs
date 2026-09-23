@@ -6,7 +6,7 @@
 //! returns the default zero-state — fail-soft, per the doctrine.
 //!
 //! Atomic writes via temp-then-rename mirror the pattern in
-//! `adapters/plugins/skill_lifecycle/distill.rs:148`. JSON parse errors at load time
+//! `outbound/tools/skill_lifecycle/distill.rs:148`. JSON parse errors at load time
 //! are hard errors: a corrupt state file is a plan-shape failure, not a soft miss.
 //!
 //! Module is landed but not yet wired into the harness. The "adjust yourself"

@@ -10,8 +10,8 @@ use std::sync::Arc;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tracing::info;
 
-use crate::adapters::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::adapters::orchestrator::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
+use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
+use crate::application::orchestrator::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
 use crate::domain::plan::{Plan, StepId};
 
 pub enum ExecResult {
@@ -140,8 +140,8 @@ fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::orchestrator::events::new_bus;
-    use crate::adapters::orchestrator::retry::RetryPolicy;
+    use crate::application::orchestrator::events::new_bus;
+    use crate::application::orchestrator::retry::RetryPolicy;
     use crate::domain::plan::{Plan, Step, StepId};
     use async_trait::async_trait;
     use std::sync::Arc;

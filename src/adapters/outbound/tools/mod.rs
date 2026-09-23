@@ -198,6 +198,28 @@ pub(crate) async fn register_catalog(
     }
 }
 
+/// `ports::tool::ToolDirectory`: every catalog tool (all opt-ins included)
+/// plus a live `tools/list` of each `[[mcp_servers]]` entry (fail-soft per
+/// server).
+pub(crate) struct CatalogDirectory {
+    pub mcp_servers: Vec<crate::config::McpServerConfig>,
+}
+
+#[async_trait::async_trait]
+impl crate::ports::tool::ToolDirectory for CatalogDirectory {
+    async fn all_tool_defs(&self) -> Vec<ToolDef> {
+        let opt_ins: Vec<String> = names::WORKSPACE_TOOLS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut defs = advertised_defs(true, &opt_ins);
+        defs.extend(
+            crate::adapters::outbound::mcp_client::enumerate_tools(&self.mcp_servers).await,
+        );
+        defs
+    }
+}
+
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
@@ -256,5 +278,24 @@ mod catalog_tests {
         assert!(full.contains(&names::SHARED_CACHE.to_string()));
         assert!(full.contains(&names::MANAGE_SKILL.to_string()));
         assert!(!full.contains(&names::SKILL_DISTILL.to_string()));
+    }
+
+    #[tokio::test]
+    async fn directory_lists_catalog_and_mcp_tools() {
+        use crate::ports::tool::ToolDirectory;
+        let dir = CatalogDirectory {
+            mcp_servers: vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+                "fake",
+            )],
+        };
+        let names: Vec<String> = dir
+            .all_tool_defs()
+            .await
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(names.contains(&"http_request".to_string()));
+        assert!(names.contains(&names::MANAGE_SKILL.to_string()));
+        assert!(names.contains(&"fake__echo".to_string()), "{names:?}");
     }
 }

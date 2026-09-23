@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::adapters::skill_lifecycle::metrics::{
+use crate::application::skills::lifecycle::metrics::{
     FixtureContext, MetricKind, MetricOutcome, MetricRunCtx, MetricSpec,
 };
 

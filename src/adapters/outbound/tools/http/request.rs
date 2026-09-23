@@ -1,4 +1,4 @@
-// src/adapters/plugins/http/request.rs
+// src/adapters/outbound/tools/http/request.rs
 //! `http_request` tool — generic HTTP client for skill-driven API calls.
 //!
 //! Migrated from `http_tool_executor.rs` during Phase A / task A2.
