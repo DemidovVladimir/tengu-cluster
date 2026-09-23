@@ -24,6 +24,22 @@ auth_mode = "token"
 [hub.reload]
 mode = "hybrid"
 
+# --- Local model (Unsloth / Ollama / llama.cpp / vLLM) ---
+# engine = "local" talks to any OpenAI-compatible server on this machine.
+# Loopback never goes through Tor. Set limits.context_window to the model's
+# real window (default 1_000_000). Details: docs/engine-backends.md § Local.
+#
+# [agents.local]
+# engine = "local"
+# model = "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL"   # `unsloth run --model <same>`
+# description = "Private/offline work on the local model."
+# [agents.local.limits]
+# context_window = 32000
+# request_timeout_secs = 900
+# [agents.local.local]
+# base_url = "http://127.0.0.1:8888"   # Unsloth default; Ollama :11434, llama-server :8080
+# api_key_env = "UNSLOTH_API_KEY"      # empty/unset env = no auth header
+
 # --- Default Agent ---
 # OpenRouter is recommended: one API key for all providers, one bill.
 # Set OPENROUTER_API_KEY in your environment.

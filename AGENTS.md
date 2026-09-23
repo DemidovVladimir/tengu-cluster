@@ -364,11 +364,20 @@ These are not preferences. They're load-bearing.
   (this session)` block from Postgres `agentic_memory` filtered by the shared
   `session_id`. Recommended `3–5`.
 - **`[agents.<name>].engine` selects the subagent engine (Phase 7.3)** —
-  `"openrouter"` or `"claude_code"` (required field, no default); the same
-  block serves in-process chat and `run-agent` steps.
+  `"openrouter"`, `"local"` or `"claude_code"` (required field, no default);
+  the same block serves in-process chat and `run-agent` steps.
   `model` slug format depends on engine: OpenRouter wants
-  `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`.
-  Building with `--features claude_code` is required.
+  `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`
+  (building with `--features claude_code` is required); `local` sends the
+  server's own id verbatim.
+- **`engine = "local"` = any OpenAI-compatible server on this host
+  (2026-09-23)** — Unsloth (`unsloth run`, default `http://127.0.0.1:8888`,
+  key in `$UNSLOTH_API_KEY`), Ollama, llama.cpp, vLLM. Optional
+  `[agents.<n>.local] base_url` / `api_key_env`. Own engine
+  `engines/local.rs` (`LocalEngine`); direct connection, never via the
+  `[egress]` proxy. Set
+  `limits.context_window` — the 1_000_000 default is wrong for local models.
+  Guide: `docs/engine-backends.md` § Local.
 - **`sandboxes/aura` is `network = "open"`** — Molecule / Privy / Beach block
   Tor exits. Every other sandbox and the base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI

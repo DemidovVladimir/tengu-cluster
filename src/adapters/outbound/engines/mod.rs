@@ -3,12 +3,14 @@
 
 #[cfg(feature = "claude_code")]
 pub(crate) mod claude_code;
+pub(crate) mod local;
 pub(crate) mod openrouter;
 
 use anyhow::Result;
 
 use crate::ports::engine::Engine;
 
+use local::LocalEngine;
 use openrouter::OpenRouterEngine;
 
 // ---------------------------------------------------------------------------
@@ -46,6 +48,16 @@ pub(crate) fn build_planner_engine(
                 let _ = (model, claude_code_config);
                 anyhow::bail!("claude_code engine requires --features claude_code")
             }
+        }
+        "local" => {
+            let defaults = crate::config::LimitsConfig::default();
+            Ok(Box::new(LocalEngine::new(
+                &crate::config::AgentLocalConfig::default(),
+                model,
+                defaults.context_window as usize,
+                defaults.request_timeout_secs,
+                None,
+            )?))
         }
         _ => {
             let defaults = crate::config::LimitsConfig::default();
@@ -100,6 +112,13 @@ pub(crate) fn build_engine(
                 anyhow::bail!("claude_code engine requires --features claude_code")
             }
         }
+        "local" => Ok(Box::new(LocalEngine::new(
+            &agent_config.local.clone().unwrap_or_default(),
+            &agent_config.model,
+            agent_config.limits.context_window.max(1) as usize,
+            agent_config.limits.request_timeout_secs,
+            agent_config.limits.max_output_tokens_per_turn,
+        )?)),
         _ => {
             let context_window = agent_config.limits.context_window.max(1) as usize;
             build_openrouter_engine_with_limits(

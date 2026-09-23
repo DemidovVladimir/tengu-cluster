@@ -1,6 +1,6 @@
 # Engine Backends
 
-Tengu supports two engine backends. Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress-2026-09-16.md`): Tor by default, `network = "open"` for direct.
+Tengu supports three engine backends (`openrouter`, `local`, `claude_code`). Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress-2026-09-16.md`): Tor by default, `network = "open"` for direct.
 
 ## OpenRouter (`engine = "openrouter"`)
 
@@ -24,6 +24,40 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 - Timeouts from `[agents.<id>.limits]`: `request_timeout_secs`, `stream_event_timeout_secs`, `max_output_tokens_per_turn`
 - Pay-per-token pricing
 - Browse models at [openrouter.ai/models](https://openrouter.ai/models)
+
+## Local (`engine = "local"`)
+
+**Transport:** HTTP JSON to a locally hosted OpenAI-compatible server (`POST /v1/chat/completions`, OpenAI `tools`)
+**Feature flag:** none (always built)
+**File:** `src/adapters/outbound/engines/local.rs` (`LocalEngine`)
+
+| Server | Start | `base_url` | Key |
+|---|---|---|---|
+| Unsloth (default) | `unsloth run --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL` | `http://127.0.0.1:8888` | `sk-unsloth-…` in `$UNSLOTH_API_KEY` (Settings → API) |
+| Ollama | `ollama serve` | `http://127.0.0.1:11434` | none (`api_key_env = ""`) |
+| llama.cpp | `llama-server -m model.gguf --jinja` | `http://127.0.0.1:8080` | none |
+| vLLM / LM Studio | `vllm serve …` / LM Studio server | `:8000` / `:1234` | none |
+
+```toml
+[agents.local]
+engine = "local"
+model = "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL"   # verbatim; Unsloth: GET /v1/models
+description = "Private/offline work on the local model."
+[agents.local.limits]
+context_window = 32000          # REQUIRED in practice — default is 1_000_000
+request_timeout_secs = 900      # local generation is slow
+[agents.local.local]            # optional; defaults shown
+base_url = "http://127.0.0.1:8888"
+api_key_env = "UNSLOTH_API_KEY" # unset/empty env → no Authorization header
+```
+
+| Property | Value |
+|---|---|
+| Network | Direct connection (`no_proxy`), not part of `[egress]` — works with Tor on or down. Keep `base_url` on this host / LAN |
+| Tool calling | model/server dependent — needs a tool-capable chat template (llama.cpp: `--jinja`) |
+| Planner role | OK (plain chat completions, tools stripped like OpenRouter) — small models may emit bad plan JSON (3 retries) |
+| `unsloth start <agent>` | Not used — that launches *external* agent CLIs (Claude Code, Codex, Hermes…) against Unsloth. Tengu talks to the server directly |
+| Verified | 2026-09-23: `run-agent` step on Ollama `gemma4:latest`, Tor-default policy with Tor down → `compress_and_store` called, `status=ok` |
 
 ## Claude Code (`engine = "claude_code"`)
 

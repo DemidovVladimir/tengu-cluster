@@ -346,6 +346,10 @@ pub struct AgentConfig {
     /// Per-agent Claude Code configuration (only used when engine = "claude_code").
     #[serde(default)]
     pub claude_code: Option<AgentClaudeCodeConfig>,
+    /// Local OpenAI-compatible server (only used when engine = "local").
+    /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
+    #[serde(default)]
+    pub local: Option<AgentLocalConfig>,
 }
 
 fn default_lens() -> String {
@@ -705,6 +709,39 @@ impl Default for AgentClaudeCodeConfig {
     }
 }
 
+/// Per-agent local inference server (`engine = "local"`). Any server with
+/// `POST /v1/chat/completions` + OpenAI `tools`: Unsloth (`unsloth run`,
+/// port 8888), llama.cpp `llama-server` (8080), Ollama (11434), vLLM (8000),
+/// LM Studio (1234). `model` is sent verbatim (Unsloth: `GET /v1/models`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentLocalConfig {
+    /// Server root, without `/v1`. Loopback bypasses the Tor proxy.
+    #[serde(default = "default_local_base_url")]
+    pub base_url: String,
+    /// Env var holding the bearer key (Unsloth: `sk-unsloth-…`). Unset or
+    /// empty env = no `Authorization` header (llama.cpp, Ollama).
+    #[serde(default = "default_local_api_key_env")]
+    pub api_key_env: String,
+}
+
+impl Default for AgentLocalConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_local_base_url(),
+            api_key_env: default_local_api_key_env(),
+        }
+    }
+}
+
+fn default_local_base_url() -> String {
+    "http://127.0.0.1:8888".to_string()
+}
+
+fn default_local_api_key_env() -> String {
+    "UNSLOTH_API_KEY".to_string()
+}
+
 fn default_builtin_tools_profile() -> String {
     "editor_shell".to_string()
 }
@@ -1037,7 +1074,7 @@ impl Config {
         errors.require_one_of(
             &format!("agents.{agent_id}.engine"),
             &agent.engine,
-            &["openrouter", "claude_code"],
+            &["openrouter", "claude_code", "local"],
         );
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
         if agent.engine == "claude_code" {
@@ -1243,6 +1280,7 @@ impl Default for Config {
                 workspace_tools: vec![],
                 scopes: HashMap::new(),
                 claude_code: None,
+                local: None,
             },
         );
 
@@ -1438,6 +1476,40 @@ ttl_days = 7
             builtin_tools_profile: "editor_shell".to_string(),
         });
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn local_engine_parses_with_and_without_block() {
+        let bare: Config = toml::from_str(
+            r#"
+            [agents.main]
+            default = true
+            engine = "local"
+            model = "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL"
+            "#,
+        )
+        .unwrap();
+        assert!(bare.validate().is_ok());
+        assert!(bare.agents["main"].local.is_none());
+
+        let custom: Config = toml::from_str(
+            r#"
+            [agents.main]
+            default = true
+            engine = "local"
+            model = "qwen3"
+            [agents.main.local]
+            base_url = "http://127.0.0.1:11434"
+            api_key_env = ""
+            "#,
+        )
+        .unwrap();
+        let local = custom.agents["main"].local.as_ref().unwrap();
+        assert_eq!(local.base_url, "http://127.0.0.1:11434");
+        assert!(toml::from_str::<Config>(
+            "[agents.main]\nengine = \"local\"\nmodel = \"m\"\n[agents.main.local]\nport = 1\n"
+        )
+        .is_err());
     }
 
     #[test]

@@ -49,7 +49,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Tool dispatch | `src/application/tools/registry.rs` (`ToolRegistry`, `PluginToolExecutor`) |
 | Executor wiring (catalog + skills + MCP + scopes) | `src/bootstrap/tools.rs` |
 | Engine trait | `src/ports/engine.rs` (`Engine`, `EngineContext`, `ToolExecutor`) |
-| Engines + factory | `src/adapters/outbound/engines/{mod,openrouter,claude_code}.rs` (`build_engine`) |
+| Engines + factory | `src/adapters/outbound/engines/{mod,openrouter,claude_code}.rs` (`build_engine`) + `local.rs` |
 | Inner tool loop | `src/application/chat/tool_loop.rs` (`collect_engine_response`, `run_single_engine_turn`) |
 | One chat turn | `src/application/chat/service.rs` (`ChatRuntimeService::process_user_text`) |
 | Planner / plan / DAG / replan | `src/application/orchestrator/{planner,executor,replan,retry}.rs`, `src/domain/plan.rs` |
@@ -119,7 +119,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | 1. `impl Engine` — `id`, `context_window`, `supports_tool_use`, `manages_own_workspace`, `available_models`, `run` → stream of `StreamEvent` (`TextDelta`, `ToolCallStart/Delta/End`, `Usage`, `Done`/`Error`). The engine only streams tool calls; `application/chat/tool_loop.rs` executes them | `src/adapters/outbound/engines/<name>.rs` |
 | 2. HTTP only through `egress::policy().llm_api_client(..)` (Tor / allowlist / audit); a subprocess engine follows `claude_code.rs` (`claude_cli_env`) | `src/adapters/outbound/egress.rs` |
 | 3. `pub(crate) mod <name>;` + a match arm in `build_engine` (and `build_planner_engine` if it may plan). Unknown names currently fall through to OpenRouter — validation is what rejects them | `src/adapters/outbound/engines/mod.rs` |
-| 4. Allow the name: `require_one_of("agents.<id>.engine", …, &["openrouter", "claude_code", …])` in `validate_agent` | `src/config/mod.rs` |
+| 4. Allow the name: `require_one_of("agents.<id>.engine", …, &["openrouter", "claude_code", "local", …])` in `validate_agent` | `src/config/mod.rs` |
 | 5. Heavy deps → a cargo feature + `#[cfg(feature = …)]` on the module and match arm | `Cargo.toml` `[features]` |
 | 6. Tests: mock HTTP server like `openrouter.rs` tests; `tengu status` shows `diagnostics()` | engine file |
 | 7. Docs | `docs/engine-backends.md`, `config.example.toml` |
@@ -128,7 +128,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 
 | Knob | Where | Default |
 |---|---|---|
-| Backend / model | `[agents.<a>] engine`, `model` (OpenRouter slug `anthropic/claude-sonnet-4-6`; Claude Code bare `claude-sonnet-4-6`) | `openrouter` |
+| Backend / model | `[agents.<a>] engine` (`openrouter` \| `local` \| `claude_code`), `model` (OpenRouter slug `anthropic/claude-sonnet-4-6`; Claude Code bare `claude-sonnet-4-6`; local = server's id) | `openrouter` |
+| Local model server | `[agents.<a>.local] base_url`, `api_key_env` | `http://127.0.0.1:8888` (Unsloth), `UNSLOTH_API_KEY` |
 | OpenAI-compatible endpoint | env `OPENROUTER_BASE_URL` (+ `OPENROUTER_API_KEY`) | `https://openrouter.ai/api` |
 | Context / output / timeouts | `[agents.<a>.limits] context_window`, `max_output_tokens_per_turn`, `request_timeout_secs`, `stream_event_timeout_secs` | 1_000_000 / derived / 600 / 120 |
 | Tool loop | `limits.max_tool_rounds`, `max_tool_result_chars`, `compact_result_limit`, `max_mcp_result_chars` | 70 / 300_000 / 200 / 50_000 |
@@ -309,6 +310,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic. |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
 | `src/adapters/outbound/engines/mod.rs` | 144 | Engine adapters — implementations of `ports::engine::Engine` and the |
+| `src/adapters/outbound/engines/local.rs` | 448 | Local engine — Unsloth / Ollama / llama.cpp via OpenAI-compatible `/v1/chat/completions`, direct (no proxy) |
 | `src/adapters/outbound/engines/openrouter.rs` | 535 | OpenRouter engine — OpenAI-compatible chat completions with streaming |
 | `src/adapters/outbound/mcp_client/client.rs` | 418 | Outbound MCP client — stdio and http transports over JSON-RPC 2.0. |
 | `src/adapters/outbound/mcp_client/mod.rs` | 339 | MCP client — tengu connects to the `[[mcp_servers]]` in the sandbox |
