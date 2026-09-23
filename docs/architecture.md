@@ -39,8 +39,8 @@ Two mechanisms coexist. They answer different questions:
 
 | Question | Mechanism | Where |
 |----------|-----------|-------|
-| Does this tool exist at all for this agent? | Allow-list derived from the `tools` slice passed to `build_tool_executor` (coarse, binary) | `src/adapters/channel_runtime.rs` |
-| When the tool runs, what can it touch? | `ToolScope` (fine, default-deny) | `src/adapters/ports.rs` |
+| Does this tool exist at all for this agent? | Allow-list derived from the `tools` slice passed to `build_tool_executor` (coarse, binary) | `src/bootstrap/` |
+| When the tool runs, what can it touch? | `ToolScope` (fine, default-deny) | `src/domain/scope.rs` |
 
 Order of checks:
 1. Tool not in allow-list → plugin registration skips it; tool is not callable. Done.
@@ -78,7 +78,7 @@ See [[engine-backends]] for detailed comparison.
 
 ## Key Abstractions
 
-### Engine trait (`src/adapters/types.rs`)
+### Engine trait (`src/domain/message.rs`)
 ```rust
 trait Engine: Send + Sync {
     fn id(&self) -> &str;
@@ -93,34 +93,34 @@ The `manages_own_workspace()` flag is the key discriminator:
 - `false` (OpenRouter): Tengu builds tools, runs the outer tool loop, manages workspace operations
 - `true` (Claude Code): Engine handles workspace ops natively; Tengu tools are bridged via [[mcp-bridge]]
 
-### EngineContext (`src/adapters/types.rs`)
+### EngineContext (`src/domain/message.rs`)
 Passed to every `engine.run()` call:
 - `workspace` — filesystem path for the agent
 - `system_prompt` — Tengu-composed prompt with identity, skills, memory
 - `bridge_tools` — tool definitions for the [[mcp-bridge]] (Claude Code only)
 
-### Tool Assembly (`src/adapters/channel_runtime.rs`)
+### Tool Assembly (`src/bootstrap/`)
 - `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache, and skill-lifecycle plugins for the outer loop (`skill_distill`, `shared_cache`, `persistent_store` are opt-in per agent via `workspace_tools`)
-- `compute_bridge_tools()` — tool defs for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers the core plugins through `register_core_plugins` (agentic_memory, workspace, memory, cache, http, crypto, skill-lifecycle) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `advertised_defs()` — tool defs for the MCP bridge when `manages_own_workspace = true`
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers the core plugins through `register_catalog` (agentic_memory, workspace, memory, cache, http, crypto, skill-lifecycle) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
 
-### Skill Lifecycle (`src/adapters/skill_lifecycle/`, `src/adapters/plugins/skill_lifecycle/`)
+### Skill Lifecycle (`src/application/skills/lifecycle/`, `src/adapters/outbound/tools/skill_lifecycle/`)
 A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
 
 - `skill_distill` (LLM-callable tool, opt-in via `workspace_tools`) — an agent authors a new skill from the current conversation. Writes `skills/<name>/{SKILL.md, evals/prompts.yaml, metrics/<scaffolds>}` atomically. Cache discipline: the new skill does NOT load into the current conversation.
-- `tengu eval <skill>` (integrated into `eval_builder.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
+- `tengu eval <skill>` (integrated into `adapters/inbound/eval.rs`) — replays `evals/prompts.yaml`, scores each row via the LLM judge AND each declared `metrics:` kind (`shell_check`, `llm_judge`, `tool_assertion`, `script`), writes rolling `metrics.json` + append-only `metrics/history.jsonl`.
 - `tengu skill evolve <skill>` — bounded rewrite→rescore loop. Baseline, scratch git worktree, N cycles via the `skill-improver` agent, best-cycle selection (no regression > 0.05 on other gated metrics), user approval gate, apply-or-discard.
 
 All three honour harness-owned doctrine: cycle counts, regression tolerance, best-cycle selection, and approval are Rust policy; LLMs only propose content. See [[skills#Metrics & Evolution]] and `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`.
 
-### Plugin Architecture (`src/adapters/plugins/`, `src/adapters/tool_plugin.rs`)
+### Plugin Architecture (`src/adapters/outbound/tools/`, `src/application/tools/registry.rs`)
 
 Every tool is a small struct implementing the async `Tool` trait. Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, and activity port.
 
 - **Static plugins** (tool defs known at compile time): `workspace`, `http`, `crypto`, `cache`, `memory`, `skill`, `skill_lifecycle`, `agentic_memory` (feature `postgres_memory`)
 - **Dynamic plugin** (tool defs discovered at boot): `mcp` — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}.{tool_name}`
 
-Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and add one registration line in `channel_runtime::register_core_plugins` (the in-process executor and the MCP bridge both call it). No changes to the engine loop, no new executor plumbing.
+Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and add one registration line in `adapters::outbound::tools::register_catalog` (the in-process executor and the MCP bridge both call it). No changes to the engine loop, no new executor plumbing.
 
 ## Module Map
 
@@ -134,16 +134,16 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 ### Engines
 | Module | Purpose |
 |--------|---------|
-| `engine_builder.rs` | Engine factory + OpenRouter implementation |
-| `claude_code_engine.rs` | Claude Code engine (feature-gated) |
+| `adapters/outbound/engines/mod.rs` | Engine factory + OpenRouter implementation |
+| `adapters/outbound/engines/claude_code.rs` | Claude Code engine (feature-gated) |
 | `mcp_bridge.rs` | Stdio MCP server for tool bridging |
 
 ### Runtime
 | Module | Purpose |
 |--------|---------|
-| `chat_builder.rs` | ChatRuntimeService — per-turn orchestration |
-| `channel_runtime.rs` | Shared logic for all channel adapters (tool assembly, session registry) |
-| `flow_builder.rs` | Flow/session management |
+| `application/chat/service.rs` | ChatRuntimeService — per-turn orchestration |
+| `bootstrap/` | Shared logic for all channel adapters (tool assembly, session registry) |
+| `application/chat/flow.rs` | Flow/session management |
 | `prompt_budget.rs` | Token budget calculation |
 | `token.rs` | Token counting utilities |
 | `usage.rs` | Usage/cost tracking |
@@ -151,32 +151,32 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 ### Tools
 | Module | Purpose |
 |--------|---------|
-| `tool_plugin.rs` | `Tool` / `ToolPlugin` traits, `ToolRegistry`, `PluginToolExecutor`, `ToolCtx`, `PluginCtx` |
-| `plugins/workspace/` | `read_file`, `list_directory`, `write_file`, `run_command` |
-| `plugins/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
-| `plugins/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
-| `plugins/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
-| `plugins/memory/` | `memory_ingest`, `memory_search` + `persistent_store` (chunked file store, opt-in via `workspace_tools`) |
-| `plugins/skill/` | `SkillShellTool` — one struct reused per active shell skill |
-| `plugins/mcp/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}.{tool}` |
-| `plugins/skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (opt-in via `workspace_tools`); `compress_and_store` definition (appended implicitly to every `run-agent` subagent) |
+| `application/tools/registry.rs` | `Tool` / `ToolPlugin` traits, `ToolRegistry`, `PluginToolExecutor`, `ToolCtx`, `PluginCtx` |
+| `outbound/tools/workspace/` | `read_file`, `list_directory`, `write_file`, `run_command` |
+| `outbound/tools/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
+| `outbound/tools/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
+| `outbound/tools/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
+| `outbound/tools/memory/` | `memory_ingest`, `memory_search` + `persistent_store` (chunked file store, opt-in via `workspace_tools`) |
+| `outbound/tools/skill/` | `SkillShellTool` — one struct reused per active shell skill |
+| `outbound/mcp_client/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}__{tool}` |
+| `outbound/tools/skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (opt-in via `workspace_tools`); `compress_and_store` definition (appended implicitly to every `run-agent` subagent) |
 | `skill_lifecycle/` | Metric types + 4 kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
-| `tool_builder.rs` | Path validation + tool-activity UI helpers (no executors) |
-| `shell_executor.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
-| `skill_builder.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `plugins/skill/`) |
+| `adapters/inbound/activity.rs` | Path validation + tool-activity UI helpers (no executors) |
+| `adapters/outbound/shell.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
+| `application/skills/registry.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `outbound/tools/skill/`) |
 | `mcp_bridge.rs` | Outbound stdio MCP server (exposes Tengu tools to external Claude Code) |
 
 ### Memory
 | Module | Purpose |
 |--------|---------|
 | `memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `vector/disk.rs` (bincode store), `vector/embedder.rs` (OpenRouter `text-embedding-3-small`) |
-| `plugins/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
+| `outbound/tools/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
 
 ### Channel Adapters
 | Module | Purpose |
 |--------|---------|
 | `tui/mod.rs` | Terminal UI adapter (cursive) |
-| `telegram_builder.rs` | Telegram bot adapter |
+| `adapters/inbound/telegram.rs` | Telegram bot adapter |
 
 ### Orchestration
 | Module | Purpose |
@@ -187,7 +187,7 @@ Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` di
 ### Infrastructure
 | Module | Purpose |
 |--------|---------|
-| `secret_builder.rs` | Encrypted secrets vault (AES-256-GCM) |
+| `adapters/outbound/secrets.rs` | Encrypted secrets vault (AES-256-GCM) |
 | `scaffold.rs` | Workspace directory scaffolding |
 | `prune.rs` | State/cache cleanup |
 

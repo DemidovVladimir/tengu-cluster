@@ -1,6 +1,6 @@
 # Configuration
 
-One TOML file — channel settings, `[egress]`, the planner and **every agent** (in-process and subagent alike). Resolution: `--sandbox <name>` loads `sandboxes/<name>/config.toml` and replaces the base config wholesale; without it, `-c/--config <path>` > `TENGU_CONFIG=<path>` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`). The `run-agent` child gets the same file (`--sandbox` over IPC; otherwise `TENGU_CONFIG`, which the parent pins to its resolved path) and takes `[agents.<name>]` from it. Commented reference: `config.example.toml`.
+One TOML file — channel settings, `[egress]`, the planner and **every agent** (in-process and subagent alike). Resolution: `--sandbox <name>` loads `sandboxes/<name>/config.toml` and replaces the base config wholesale; without it, `-c/--config <path>` > `TENGU_CONFIG=<path>` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`). The `run-agent` child gets the same file (`--sandbox` over IPC; otherwise `TENGU_CONFIG`, which the parent pins to its resolved path) and takes `[agents.<name>]` from it. Commented reference: `config.example.toml`. Code side (schema structs, defaults, validation, who reads each section, how to add a field): `docs/code-map.md` §3–§4.
 
 ## Initial setup
 
@@ -52,7 +52,7 @@ tools = ["http_request", "read_file"]   # allow-list for `tengu run-agent` steps
 | Field | Notes |
 |---|---|
 | `engine` | `openrouter` needs `OPENROUTER_API_KEY`; `claude_code` needs the `claude` CLI + `--features claude_code`. See [[engine-backends]]. |
-| `workspace_tools` | Allow-list: `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill` (`config.rs::valid_workspace_tools`). |
+| `workspace_tools` | Allow-list: `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill` (`domain/tools.rs::WORKSPACE_TOOLS`). |
 | `description` | Present ⇒ rendered into `TENGU_PLANNER_REGISTRY.md`; the planner may dispatch plan steps to this agent as a `tengu run-agent` subprocess. Absent ⇒ in-process only (planner role, `@role:` chat). |
 | `tools` | Subprocess tool allow-list. Names from the workspace-tools allow-list listed here are opted in like `workspace_tools`. `compress_and_store` is appended implicitly — never list it. |
 | Unknown keys | `AgentConfig` is not strict — a typo is silently ignored. Check `tengu status`. |
@@ -103,7 +103,7 @@ Don't put a `claude_code` agent in the planner role unless you accept that the C
 
 ## Orchestrator
 
-Schema: `src/adapters/config.rs::OrchestratorConfig`.
+Schema: `src/config/mod.rs::OrchestratorConfig`.
 
 ```toml
 [orchestrator]
@@ -116,9 +116,9 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 
 | Fact | Where |
 |---|---|
-| `engine` defaults to `"rag"`; any other value fails validation | `config.rs::OrchestratorConfig`, `validation_errors` |
+| `engine` defaults to `"rag"`; any other value fails validation | `config/mod.rs::OrchestratorConfig`, `validation_errors` |
 | Subagents are the `[agents.*]` blocks with a `description`; registry regenerated into `TENGU_PLANNER_REGISTRY.md` each planner turn | `orchestrator/shared_files.rs::routable_agents` |
-| The child re-loads the same config (sandbox name over IPC) and takes `[agents.<step.agent>]`; unknown names fail before any spawn | `runner.rs::run_step`, `main.rs::run_agent_subprocess` |
+| The child re-loads the same config (sandbox name over IPC) and takes `[agents.<step.agent>]`; unknown names fail before any spawn | `runner.rs::run_step`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` |
 | Accepted plan reaches the child as IPC `plan_state`; `TENGU_PLAN.md` is a debug mirror | `orchestrator/replan.rs`, `shared_files.rs` |
 
 ## Memory
@@ -190,30 +190,30 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 
 | Var | Read by | Default | Purpose |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | `engine_builder.rs`, `orchestrator/planner.rs`, `mcp_bridge.rs`, `main.rs` | — (required) | OpenRouter chat + embeddings |
-| `OPENROUTER_BASE_URL` | `engine_builder.rs`, `plugins/agentic_memory/mod.rs` | `https://openrouter.ai/api` | Override API base |
-| `OPENROUTER_REFERER` | `engine_builder.rs` | unset | `HTTP-Referer` header |
-| `OPENROUTER_TITLE` | `engine_builder.rs` | unset | `X-Title` header |
-| `TELEGRAM_BOT_TOKEN` | `telegram_builder.rs` | — (required for `telegram`) | Bot token |
-| `TENGU_TELEGRAM_ALLOWED_USERS` | `telegram_builder.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users` |
-| `TENGU_HOME` | `main.rs::resolve_tengu_home` | `~/.tengu` | State root (config, vault, logs, memory) |
+| `OPENROUTER_API_KEY` | `adapters/outbound/engines/mod.rs`, `orchestrator/planner.rs`, `mcp_bridge.rs`, `main.rs` | — (required) | OpenRouter chat + embeddings |
+| `OPENROUTER_BASE_URL` | `adapters/outbound/engines/mod.rs`, `outbound/tools/agentic_memory/mod.rs` | `https://openrouter.ai/api` | Override API base |
+| `OPENROUTER_REFERER` | `adapters/outbound/engines/mod.rs` | unset | `HTTP-Referer` header |
+| `OPENROUTER_TITLE` | `adapters/outbound/engines/mod.rs` | unset | `X-Title` header |
+| `TELEGRAM_BOT_TOKEN` | `adapters/inbound/telegram.rs` | — (required for `telegram`) | Bot token |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `adapters/inbound/telegram.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users` |
+| `TENGU_HOME` | `config/paths.rs::resolve_tengu_home` | `~/.tengu` | State root (config, vault, logs, memory) |
 | `TENGU_CONFIG` | `main.rs` (config resolution) | `~/.tengu/config.toml` | Path to config.toml (`-c/--config` wins) |
-| `TENGU_MASTER_PASSWORD` | `main.rs`, `secret_builder.rs` | unset (prompt) | Vault password |
-| `TENGU_SESSION_ID` | `channel_runtime.rs::build_orchestrator`, `claude_code_engine.rs`, `plugins/agentic_memory/mod.rs`, `memory/vector/embedder.rs` | fresh UUID | Pin the session id shared by planner + runner |
-| `TENGU_MEMORY_DATABASE_URL` | `plugins/agentic_memory/mod.rs` | — (required for `postgres_memory`) | Postgres + pgvector DSN |
-| `TENGU_WIKI_COMPILER_MODEL` | `plugins/agentic_memory/mod.rs::wiki_compiler_model` | `anthropic/claude-sonnet-4-6` | `compile_wiki` model |
+| `TENGU_MASTER_PASSWORD` | `main.rs`, `adapters/outbound/secrets.rs` | unset (prompt) | Vault password |
+| `TENGU_SESSION_ID` | `bootstrap/orchestrator.rs::build_orchestrator`, `adapters/outbound/engines/claude_code.rs`, `outbound/tools/agentic_memory/mod.rs`, `memory/vector/embedder.rs` | fresh UUID | Pin the session id shared by planner + runner |
+| `TENGU_MEMORY_DATABASE_URL` | `outbound/tools/agentic_memory/mod.rs` | — (required for `postgres_memory`) | Postgres + pgvector DSN |
+| `TENGU_WIKI_COMPILER_MODEL` | `outbound/tools/agentic_memory/mod.rs::wiki_compiler_model` | `anthropic/claude-sonnet-4-6` | `compile_wiki` model |
 | `TENGU_TUI_METRICS` | `tui/mod.rs` | off | Token/latency status line in the TUI |
 | `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | Planner recall hits as a System bubble |
-| `TENGU_GPU_HINT` | `config.rs::detect_gpu` | auto-detect | `none|cpu|off|false` or `gpu|cuda|metal|mps|on|true` for `runtime_profile = "auto"` |
-| `TENGU_PERSISTENT_STORE_CHUNK_SIZE` | `claude_code_engine.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_size` | Chunk size for `persistent_store` |
-| `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | `claude_code_engine.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_overlap` | Chunk overlap for `persistent_store` |
-| `CHAIN_ID` | `plugins/crypto/helpers.rs::resolve_default_chain_id` | `DEFAULT_CHAIN_ID` | Chain id when a tool call omits it |
-| `PRIVY_APP_ID` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
-| `PRIVY_APP_SECRET` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
-| `PRIVY_WALLET_ID` | `plugins/crypto/helpers.rs` | — | Privy agentic wallet |
-| `EVM_RPC_URL` | `plugins/crypto/helpers.rs` | `https://ethereum-rpc.publicnode.com` | JSON-RPC endpoint |
-| `TENGU_EGRESS` | `egress.rs::install` | unset | Parent → child resolved `[egress]` hand-off (JSON), set by `runner.rs` / `claude_code_engine.rs`; wins over the child's config |
-| `TENGU_TOR_PROXY` | `egress.rs::EgressConfig::resolved` | `socks5h://127.0.0.1:9050` | Tor proxy under `network = "tor"` when `[egress].proxy` is unset (`docker-compose.tor.yml` sets `socks5h://tor:9050`) |
+| `TENGU_GPU_HINT` | `config/mod.rs::detect_gpu` | auto-detect | `none|cpu|off|false` or `gpu|cuda|metal|mps|on|true` for `runtime_profile = "auto"` |
+| `TENGU_PERSISTENT_STORE_CHUNK_SIZE` | `adapters/outbound/engines/claude_code.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_size` | Chunk size for `persistent_store` |
+| `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | `adapters/outbound/engines/claude_code.rs` (forwarded to the MCP bridge child) | `[memory].persistent_store_chunk_overlap` | Chunk overlap for `persistent_store` |
+| `CHAIN_ID` | `outbound/tools/crypto/helpers.rs::resolve_default_chain_id` | `DEFAULT_CHAIN_ID` | Chain id when a tool call omits it |
+| `PRIVY_APP_ID` | `outbound/tools/crypto/helpers.rs` | — | Privy agentic wallet |
+| `PRIVY_APP_SECRET` | `outbound/tools/crypto/helpers.rs` | — | Privy agentic wallet |
+| `PRIVY_WALLET_ID` | `outbound/tools/crypto/helpers.rs` | — | Privy agentic wallet |
+| `EVM_RPC_URL` | `outbound/tools/crypto/helpers.rs` | `https://ethereum-rpc.publicnode.com` | JSON-RPC endpoint |
+| `TENGU_EGRESS` | `adapters/outbound/egress.rs::install` | unset | Parent → child resolved `[egress]` hand-off (JSON), set by `runner.rs` / `adapters/outbound/engines/claude_code.rs`; wins over the child's config |
+| `TENGU_TOR_PROXY` | `config/egress.rs::EgressConfig::resolved` | `socks5h://127.0.0.1:9050` | Tor proxy under `network = "tor"` when `[egress].proxy` is unset (`docker-compose.tor.yml` sets `socks5h://tor:9050`) |
 | `LYREBIRD_RS_DIR` | `Makefile` (exported to compose as `LYREBIRD_RS_SRC`, absolute) | `../lyrebird-rs` | Where the Tor image builds lyrebird-rs from (dir or git URL) |
 | `RUST_LOG` | `main.rs` (`tracing_subscriber::EnvFilter`) | `info` | Log filter; `tengu=info` prints one `metrics` line per LLM call |
 

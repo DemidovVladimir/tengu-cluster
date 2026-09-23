@@ -64,7 +64,7 @@
     <text x="10" y="18" class="h3">1. User input</text>
     <text x="10" y="34" class="body">TUI / Telegram / CLI</text>
     <text x="10" y="48" class="file">tui/mod.rs</text>
-    <text x="10" y="60" class="file">telegram_builder.rs</text>
+    <text x="10" y="60" class="file">adapters/inbound/telegram.rs</text>
   </g>
   <path d="M 195 164 L 235 164" class="arrow" marker-end="url(#ah)" />
 
@@ -72,7 +72,7 @@
     <rect width="200" height="64" rx="6" class="lane-orch" />
     <text x="10" y="18" class="h3">2. Channel runtime</text>
     <text x="10" y="34" class="body">build_orchestrator + factory</text>
-    <text x="10" y="48" class="file">channel_runtime.rs</text>
+    <text x="10" y="48" class="file">bootstrap/</text>
     <text x="10" y="60" class="file">  ChatOrchestratorPortImpl</text>
   </g>
   <path d="M 445 164 L 485 164" class="arrow" marker-end="url(#ah)" />
@@ -100,7 +100,7 @@
     <rect width="420" height="74" rx="6" class="lane-sub" />
     <text x="10" y="18" class="h3">5. SubprocessRunner - spawn tengu run-agent</text>
     <text x="10" y="34" class="body">child process, IPC over stdin/stdout JSON</text>
-    <text x="10" y="48" class="file">runner.rs (parent) - main.rs::run_agent_subprocess (child)</text>
+    <text x="10" y="48" class="file">outbound/subprocess_runner.rs (parent) - inbound/cli/run_agent.rs (child)</text>
     <text x="10" y="62" class="small">session_id · step_id · sandbox_config · plan_state · compose · TENGU_EGRESS env</text>
   </g>
   <path d="M 770 312 L 770 342" class="arrow" marker-end="url(#ah)" />
@@ -109,10 +109,10 @@
     <rect width="420" height="94" rx="6" class="lane-tool" />
     <text x="10" y="18" class="h3">6. Subagent tool loop (LLM and tools)</text>
     <text x="10" y="34" class="body">load [agents.&lt;name&gt;] from sandbox config, build PluginToolExecutor</text>
-    <text x="10" y="48" class="file">channel_runtime::build_subprocess_tool_executor</text>
-    <text x="10" y="62" class="file">plugins/{http,workspace,memory,crypto,mcp,...}</text>
+    <text x="10" y="48" class="file">bootstrap::tools::build_subprocess_tool_executor</text>
+    <text x="10" y="62" class="file">outbound/tools/ catalog + outbound/mcp_client/</text>
     <text x="10" y="76" class="small">runs until model calls compress_and_store OR max_turns hit</text>
-    <text x="10" y="90" class="file">egress.rs - Tor proxy, host allowlist, shell sandbox, audit</text>
+    <text x="10" y="90" class="file">outbound/egress.rs - Tor proxy, host allowlist, shell sandbox, audit</text>
   </g>
   <path d="M 770 444 L 770 474" class="arrow" marker-end="url(#ah)" />
 
@@ -120,7 +120,7 @@
     <rect width="420" height="60" rx="6" class="lane-mem" />
     <text x="10" y="18" class="h3">7. compress_and_store - durable summary</text>
     <text x="10" y="34" class="body">Open Brain Postgres with postgres_memory</text>
-    <text x="10" y="48" class="file">main.rs::try_persist_agentic_step_summary (def: compress_and_store.rs)</text>
+    <text x="10" y="48" class="file">adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary (def: compress_and_store.rs)</text>
   </g>
 
   <path d="M 555 508 L 480 508 L 480 196 L 870 196" class="arrow-dash" marker-end="url(#ah-dash)" />
@@ -139,7 +139,7 @@
     <text x="10" y="150" class="small">if memory.cross_session_msg_top_k more than 0, semantic search over</text>
     <text x="10" y="164" class="small">Open Brain memory, inject "Cross-session message recall" block</text>
     <text x="10" y="194" class="body" font-weight="600">At step 7 (compress_and_store):</text>
-    <text x="10" y="210" class="file">main.rs::try_persist_agentic_step_summary</text>
+    <text x="10" y="210" class="file">adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary</text>
     <text x="10" y="224" class="small">captures the LLM-summarised step output</text>
     <text x="10" y="238" class="small">writes step summary to Open Brain Postgres tagged with step_id</text>
     <text x="10" y="268" class="body" font-weight="600">At step 5 startup (parent to child IPC):</text>
@@ -152,23 +152,23 @@
   <g transform="translate(20, 586)">
     <rect width="186" height="318" rx="6" class="panel" />
     <rect x="0" y="0" width="186" height="22" rx="6" class="pill-mem" />
-    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">memory/  -  low-level</text>
-    <text x="10" y="40" class="file">vector.rs</text>
-    <text x="10" y="52" class="small">VectorStore trait (write/search/delete</text>
-    <text x="10" y="64" class="small">/clear_all/entry_count/storage_bytes)</text>
-    <text x="10" y="96" class="file">vector/disk.rs</text>
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">memory  -  across layers</text>
+    <text x="10" y="40" class="file">ports/memory.rs</text>
+    <text x="10" y="52" class="small">VectorStore, MemoryProvider, Embedding,</text>
+    <text x="10" y="64" class="small">MemoryService, RecallStore traits</text>
+    <text x="10" y="96" class="file">outbound: disk_vector.rs</text>
     <text x="10" y="108" class="small">DiskVectorStore - the only impl</text>
-    <text x="10" y="128" class="file">vector/embedder.rs</text>
+    <text x="10" y="128" class="file">domain/memory.rs</text>
     <text x="10" y="140" class="small">DEFAULT_EMBEDDING_MODEL const</text>
-    <text x="10" y="160" class="file">vector/embedder.rs</text>
+    <text x="10" y="160" class="file">outbound: embedder.rs</text>
     <text x="10" y="172" class="small">OpenAI text-embedding-3-small client</text>
-    <text x="10" y="192" class="file">manager.rs</text>
+    <text x="10" y="192" class="file">application: manager.rs</text>
     <text x="10" y="204" class="small">MemoryManager - provider holder</text>
-    <text x="10" y="224" class="file">provider.rs</text>
-    <text x="10" y="236" class="small">MemoryProvider trait</text>
-    <text x="10" y="256" class="file">builtin.rs</text>
+    <text x="10" y="224" class="file">bootstrap/memory.rs</text>
+    <text x="10" y="236" class="small">builds the MemoryManager</text>
+    <text x="10" y="256" class="file">outbound: builtin.rs</text>
     <text x="10" y="268" class="small">BuiltinMemoryProvider (MEMORY.md)</text>
-    <text x="10" y="288" class="file">injector.rs - writer.rs - fencing.rs</text>
+    <text x="10" y="288" class="file">app: injector/writer/fencing</text>
     <text x="10" y="300" class="small">planner-LLM pre/post turn glue</text>
     <text x="10" y="312" class="small">(only ChatOrchPortImpl uses these)</text>
   </g>
@@ -176,7 +176,7 @@
   <g transform="translate(216, 586)">
     <rect width="186" height="318" rx="6" class="panel" />
     <rect x="0" y="0" width="186" height="22" rx="6" class="pill-rag" />
-    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">plugins/agentic_memory/</text>
+    <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">outbound/tools/agentic_memory/</text>
     <text x="10" y="40" class="file">mod.rs  (postgres_memory feature)</text>
     <text x="10" y="52" class="small">PostgresMemoryStore + agentic_memory</text>
     <text x="10" y="64" class="small">tool: capture / recall / ingest_source</text>
@@ -201,14 +201,14 @@
     <rect width="186" height="318" rx="6" class="panel" />
     <rect x="0" y="0" width="186" height="22" rx="6" class="pill-agt" />
     <text x="10" y="15" font-size="11" font-weight="700" fill="#fff">[agents.*]  -  subagents</text>
-    <text x="10" y="40" class="file">config.rs::AgentConfig</text>
+    <text x="10" y="40" class="file">config/mod.rs::AgentConfig</text>
     <text x="10" y="52" class="small">one struct for in-process agents</text>
     <text x="10" y="64" class="small">and subagents (no agents/ dir)</text>
     <text x="10" y="84" class="file">sandboxes/&lt;name&gt;/config.toml</text>
     <text x="10" y="96" class="small">[agents.&lt;name&gt;] + description</text>
     <text x="10" y="116" class="file">shared_files::routable_agents</text>
     <text x="10" y="128" class="small">description set = planner-routable</text>
-    <text x="10" y="148" class="file">main.rs::run_agent_subprocess</text>
+    <text x="10" y="148" class="file">adapters/inbound/cli/run_agent.rs::run_agent_subprocess</text>
     <text x="10" y="160" class="small">loads config, then agents.get(name)</text>
     <text x="10" y="184" class="h3">Each block has:</text>
     <text x="10" y="200" class="small">engine, model, description</text>
@@ -237,7 +237,7 @@
     <text x="10" y="190" class="small">prompt (Phase 4c)</text>
     <text x="10" y="210" class="file">skills/orchestrator/plan_schema.json</text>
     <text x="10" y="222" class="small">JSON schema for the plan output</text>
-    <text x="10" y="244" class="file">main.rs::load_skill_body_three_tier</text>
+    <text x="10" y="244" class="file">adapters/inbound/cli/run_agent.rs::load_skill_body_three_tier</text>
     <text x="10" y="256" class="small">used by run_agent_subprocess to build</text>
     <text x="10" y="268" class="small">the subagent's system prompt</text>
     <text x="10" y="290" class="small" font-style="italic">SKILL.md frontmatter has</text>
@@ -315,7 +315,7 @@
     <text x="10" y="46" class="body">stores compressed step output summaries</text>
     <text x="10" y="60" class="small">default store for cross-plan recall on replan</text>
     <text x="10" y="84" class="h3">written by:</text>
-    <text x="10" y="100" class="file">main.rs::try_persist_agentic_step_summary</text>
+    <text x="10" y="100" class="file">adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary</text>
     <text x="10" y="114" class="small">  compress_and_store is IMPLICIT on every subagent</text>
     <text x="10" y="128" class="small">  child writes when the LLM calls it (or at exit)</text>
     <text x="10" y="148" class="h3">read by:</text>
@@ -336,13 +336,13 @@
     <text x="10" y="50" class="small">SKILL.md as its system prompt; tools/memory/grounding stripped on this call.</text>
     <text x="10" y="64" class="small">Subagents do the actual work in their own subprocess. The boundary is</text>
     <text x="10" y="78" class="small">strict: planner reasons over a roster, subagent executes a plan step.</text>
-    <text x="10" y="98" class="file">channel_runtime::run_turn_with_system  (planner-side strip)</text>
+    <text x="10" y="98" class="file">bootstrap::orchestrator::run_turn_with_system  (planner-side strip)</text>
   </g>
 
   <g transform="translate(510, 1252)">
     <rect width="470" height="115" rx="6" class="panel" />
     <text x="10" y="18" class="h3">B. One shared session_id (Fix B, 2026-05-09)</text>
-    <text x="10" y="36" class="small">channel_runtime::build_orchestrator resolves the id once (TENGU_SESSION_ID</text>
+    <text x="10" y="36" class="small">bootstrap::orchestrator::build_orchestrator resolves the id once (TENGU_SESSION_ID</text>
     <text x="10" y="50" class="small">env override or fresh UUID) and hands the same string to RagPlanner AND</text>
     <text x="10" y="64" class="small">SubprocessRunner, so planner messages and subagent step summaries share</text>
     <text x="10" y="78" class="small">one key; run-agent exports it as TENGU_SESSION_ID for memory writes.</text>
@@ -366,7 +366,7 @@
     <text x="10" y="50" class="small">appends it to every subagent automatically. Used to mark "I am done with</text>
     <text x="10" y="64" class="small">this step." The middle-ground protocol: only fail when no text emitted</text>
     <text x="10" y="78" class="small">AND no compress_and_store called. Otherwise OK with a tracing warn.</text>
-    <text x="10" y="98" class="file">main.rs::run_agent_subprocess  -  Phase 5c</text>
+    <text x="10" y="98" class="file">adapters/inbound/cli/run_agent.rs::run_agent_subprocess  -  Phase 5c</text>
   </g>
 
   <g transform="translate(20, 1502)">
@@ -396,14 +396,14 @@
     <text x="10" y="50" class="small">latency, prompt chars/bytes, and (for Planner) per-context-layer breakdown (system / roster / cross_session / history /</text>
     <text x="10" y="64" class="small">recall / failure / user_message). Three surfaces: tracing baseline (RUST_LOG=tengu=info, always on), in-process broadcast bus</text>
     <text x="10" y="78" class="small">(OrchestratorEvent::MetricsRecorded, re-broadcast from the global sink), TUI bottom bubble (TENGU_TUI_METRICS=1, opt-in).</text>
-    <text x="10" y="92" class="file">src/adapters/metrics.rs  -  emit_planner_metrics  -  AgentIpcOutput.metrics  -  embedder reads usage.total_tokens</text>
+    <text x="10" y="92" class="file">src/domain/metrics.rs  -  emit_planner_metrics  -  AgentIpcOutput.metrics  -  embedder reads usage.total_tokens</text>
   </g>
 
   <g transform="translate(20, 1760)">
     <rect width="960" height="80" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything. Pick `cargo run --release --features postgres_memory,claude_code -- chat --sandbox aura`,</text>
-    <text x="10" y="54" class="small">type "what is the BTC price?", and follow it: tui/mod.rs - channel_runtime::build_orchestrator - RagPlanner::plan -</text>
-    <text x="10" y="68" class="small">SubprocessRunner::run_step - main.rs::run_agent_subprocess - http plugin - compress_and_store. That is the whole story.</text>
+    <text x="10" y="54" class="small">type "what is the BTC price?", and follow it: tui/mod.rs - bootstrap::orchestrator::build_orchestrator - RagPlanner::plan -</text>
+    <text x="10" y="68" class="small">SubprocessRunner::run_step - adapters/inbound/cli/run_agent.rs::run_agent_subprocess - http plugin - compress_and_store. That is the whole story.</text>
   </g>
 </svg>

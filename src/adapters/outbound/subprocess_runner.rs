@@ -1,4 +1,4 @@
-//! Subprocess runner — Phase 3 of the redesign.
+//! Subprocess runner — the `WorkerHandle` that runs each plan step.
 //!
 //! Spawns `tengu run-agent` as a child process, pipes the IPC JSON in and
 //! the result JSON out, and returns the `AgentIpcOutput`. `SubprocessRunner`

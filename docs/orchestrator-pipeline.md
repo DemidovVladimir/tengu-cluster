@@ -43,13 +43,13 @@ gitGraph
 ```mermaid
 flowchart TB
     subgraph Channel["Channel layer"]
-        TG["Telegram<br/><code>telegram_builder.rs</code>"]
+        TG["Telegram<br/><code>adapters/inbound/telegram.rs</code>"]
         TUI["TUI<br/><code>tui/mod.rs</code>"]
-        WH["Webhooks<br/><code>webhook_builder.rs</code>"]
-        Eval["Eval runner<br/><code>eval_builder.rs</code>"]
+        WH["Webhooks<br/><code>adapters/inbound/webhooks.rs</code>"]
+        Eval["Eval runner<br/><code>adapters/inbound/eval.rs</code>"]
     end
 
-    subgraph Orchestration["Orchestrator subsystem<br/><code>src/adapters/orchestrator/</code>"]
+    subgraph Orchestration["Orchestrator subsystem<br/><code>src/application/orchestrator/</code>"]
         Handle["Orchestrator::handle<br/><code>mod.rs:93</code>"]
         Replan["replan::drive<br/><code>replan.rs:12</code>"]
         Planner["RagPlanner<br/><code>planner.rs:234</code><br/>TENGU_PLANNER_REGISTRY.md"]
@@ -61,15 +61,15 @@ flowchart TB
     subgraph PlannerTurn["Planner-side LLM turn (tools=[])"]
         Port["ChatOrchestratorPortImpl<br/><code>wiring.rs:91</code>"]
         Write["MemoryWriter<br/><code>memory/writer.rs</code>"]
-        Factory["RuntimeChatServiceFactory<br/><code>channel_runtime.rs:1007</code>"]
-        ChatRT["ChatRuntimeService<br/><code>chat_builder.rs</code>"]
-        EngineCall["collect_engine_response<br/><code>engine_builder.rs:640</code>"]
+        Factory["RuntimeChatServiceFactory<br/><code>bootstrap/:1007</code>"]
+        ChatRT["ChatRuntimeService<br/><code>application/chat/service.rs</code>"]
+        EngineCall["collect_engine_response<br/><code>adapters/outbound/engines/mod.rs:640</code>"]
     end
 
     subgraph Workers["Worker step dispatch (subprocess)"]
         Runner["SubprocessRunner::run_step<br/><code>runner.rs:261</code>"]
-        Child["tengu run-agent<br/><code>main.rs::run_agent_subprocess</code><br/>own LLM + tools loop"]
-        AM["Postgres agentic_memory<br/><code>plugins/agentic_memory/</code><br/>compress_and_store"]
+        Child["tengu run-agent<br/><code>adapters/inbound/cli/run_agent.rs::run_agent_subprocess</code><br/>own LLM + tools loop"]
+        AM["Postgres agentic_memory<br/><code>outbound/tools/agentic_memory/</code><br/>compress_and_store"]
     end
 
     TG -->|per-message snapshot| Handle
@@ -191,9 +191,9 @@ sequenceDiagram
 
 | Step in diagram | File | Line |
 |---|---|---|
-| Channel builds snapshots | `telegram_builder.rs::execute_orchestrator_turn` | 1420 (loop 1451, publish 1538, handle 1551) |
+| Channel builds snapshots | `adapters/inbound/telegram.rs::execute_orchestrator_turn` | 1420 (loop 1451, publish 1538, handle 1551) |
 |  | `tui/mod.rs` | ~189 (construct), 798 (snapshot write), 804 (handle) |
-|  | `webhook_builder.rs` | 257 |
+|  | `adapters/inbound/webhooks.rs` | 257 |
 | `Orchestrator::handle` | `orchestrator/mod.rs` | 93 |
 | `replan::drive` | `orchestrator/replan.rs` | 12 |
 | `RagPlanner::plan` / `parse_verdict` | `orchestrator/planner.rs` | 638 / 109 |
@@ -208,7 +208,7 @@ sequenceDiagram
 | `ChatOrchestratorPortImpl` (planner LLM turn) | `orchestrator/wiring.rs` | 91 |
 | `ChatServiceFactory` trait | `orchestrator/wiring.rs` | 49 |
 | `MemoryWriter::sync_turn` (planner turn only) | `memory/writer.rs` | 11 |
-| `collect_engine_response` | `engine_builder.rs` | 640 |
+| `collect_engine_response` | `adapters/outbound/engines/mod.rs` | 640 |
 
 ---
 
@@ -508,7 +508,7 @@ flowchart TB
     BuildService --> Loop["collect_engine_response + tool loop"]
 ```
 
-**Code:** `telegram_builder.rs:1420` — `execute_orchestrator_turn`. Snapshot loop at lines 1451–1536. Publish at 1538. Handle at 1551.
+**Code:** `adapters/inbound/telegram.rs:1420` — `execute_orchestrator_turn`. Snapshot loop at lines 1451–1536. Publish at 1538. Handle at 1551.
 
 ### 8.2 TUI (per-turn snapshot)
 
@@ -520,11 +520,11 @@ Same shape; the engine thread's `ChatRequest::UserMessage` branch (`tui/mod.rs:7
 
 The eval runner doesn't need snapshots — it rebuilds the per-agent ChatRuntimeService inside each `run_turn` call, using the `EvalRowAccum` to thread the row's stubs + observation tap across every worker step.
 
-**Code:** `eval_builder.rs::run_row_via_orchestrator` (`:1796`), `EvalChatServiceFactory` (`:1632`) — search for the comment "Shared state threaded through every worker step" (`:1803`). Row stubs apply to the planner turn; worker steps run as real `tengu run-agent` children and their metrics cross the IPC boundary (`AgentIpcOutput.metrics`).
+**Code:** `adapters/inbound/eval.rs::run_row_via_orchestrator` (`:1796`), `EvalChatServiceFactory` (`:1632`) — search for the comment "Shared state threaded through every worker step" (`:1803`). Row stubs apply to the planner turn; worker steps run as real `tengu run-agent` children and their metrics cross the IPC boundary (`AgentIpcOutput.metrics`).
 
 ### 8.4 Webhooks (one-shot turn per POST)
 
-`webhook_builder.rs:257` — `build_orchestrator` per request, `session_id = webhook-<name>-<uuid>`. Canonical doc: `docs/webhooks-2026-05-11.md`.
+`adapters/inbound/webhooks.rs:257` — `build_orchestrator` per request, `session_id = webhook-<name>-<uuid>`. Canonical doc: `docs/webhooks-2026-05-11.md`.
 
 ---
 
@@ -558,8 +558,8 @@ flowchart TB
 
 | Artifact | Retention knob | Default | Location |
 |---|---|---|---|
-| `evals/runs/<ts>/` | `--keep-runs N` | 10 | `eval_builder.rs::prune_old_run_dirs` |
-| `skills/<name>/metrics/runs/<ts>/` | `--max-runs N` | 10 | `eval_builder.rs::finalize_run` (passed via `RunSkillOptions.max_per_run_reports`) |
+| `evals/runs/<ts>/` | `--keep-runs N` | 10 | `adapters/inbound/eval.rs::prune_old_run_dirs` |
+| `skills/<name>/metrics/runs/<ts>/` | `--max-runs N` | 10 | `adapters/inbound/eval.rs::finalize_run` (passed via `RunSkillOptions.max_per_run_reports`) |
 | `metrics.json` | always kept (rolling) | — | — |
 | `history.jsonl` | always appended | — | — |
 
@@ -637,34 +637,34 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 
 | Concept | File | Key functions/types |
 |---|---|---|
-| **Orchestrator public API** | `src/adapters/orchestrator/mod.rs` | `Orchestrator::new`, `::handle`, `::subscribe`, `::cancel` |
-| **Replan loop** | `src/adapters/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events, cancel)` |
-| **Planner** | `src/adapters/orchestrator/planner.rs` | `Planner` trait, `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` |
-| **Planner registry + plan state** | `src/adapters/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry`, `set_active_plan`, `write_plan_state`, `enumerate_mcp_tools` |
-| **DAG executor** | `src/adapters/orchestrator/executor.rs` | `DagExecutor::run`, `WorkerHandle` trait, `ExecResult`, `render_step_inputs` |
-| **Worker (subprocess)** | `src/adapters/runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput` |
+| **Orchestrator public API** | `src/application/orchestrator/mod.rs` | `Orchestrator::new`, `::handle`, `::subscribe`, `::cancel` |
+| **Replan loop** | `src/application/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events, cancel)` |
+| **Planner** | `src/application/orchestrator/planner.rs` | `Planner` trait, `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` |
+| **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry`, `set_active_plan`, `write_plan_state`, `enumerate_mcp_tools` |
+| **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `WorkerHandle` trait, `ExecResult`, `render_step_inputs` |
+| **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput` |
 | **Subagent child** | `src/main.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`) |
-| **Retry** | `src/adapters/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`, backoff `{1s, 3s, 9s}` |
-| **Plan types + topology** | `src/adapters/orchestrator/plan.rs` | `Step`, `StepId`, `Plan::ready_steps`, `Plan::validate`, `Plan::single_leaf` |
-| **Events** | `src/adapters/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
-| **ChatServiceFactory wiring** | `src/adapters/orchestrator/wiring.rs` | `ChatServiceFactory` trait, `ChatOrchestratorPortImpl` (planner turn; `ChatWorker` removed) |
-| **Telegram channel dispatch** | `src/adapters/telegram_builder.rs` | `execute_orchestrator_turn` (line 1420), orchestrator_snapshots field (line 514) |
-| **TUI channel dispatch** | `src/adapters/tui/mod.rs` | orchestrator branch in engine thread (~line 798) |
-| **Webhook channel dispatch** | `src/adapters/webhook_builder.rs` | `build_orchestrator` per POST (line 257) |
-| **Eval channel dispatch** | `src/adapters/eval_builder.rs` | `run_row_via_orchestrator`, `EvalChatServiceFactory` |
-| **Eval retention** | `src/adapters/eval_builder.rs` | `prune_old_run_dirs`, `EvalArgs::keep_runs` / `no_persist` / `max_per_run_reports` |
-| **Memory provider** | `src/adapters/memory/provider.rs` | `MemoryProvider` trait |
-| **Memory manager** | `src/adapters/memory/manager.rs` | `MemoryManager::{add_provider, prefetch_all, sync_all, ingest_one, ingest_batch, search, delete_entry, clear_all, stats}` |
-| **Pre-turn injection** | `src/adapters/memory/injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock` |
-| **Post-turn write** | `src/adapters/memory/writer.rs` | `sync_turn(mgr, agent, user, asst)` — spawned |
-| **Fenced block** | `src/adapters/memory/fencing.rs` | `build_memory_context_block`, `sanitize_context` |
-| **Builtin provider** | `src/adapters/memory/builtin.rs` | `BuiltinMemoryProvider` |
-| **Vector store trait** | `src/adapters/memory/vector.rs` | `VectorStore` trait: `write`, `search`, `delete`, `clear_all`, `entry_count`, `storage_bytes` |
-| **Disk store** | `src/adapters/memory/vector/disk.rs` | `DiskVectorStore`, bincode-backed |
-| **Agentic memory (Postgres)** | `src/adapters/plugins/agentic_memory/mod.rs` | `AgenticMemoryPlugin` (`postgres_memory` feature) — step summaries, planner recall lanes |
-| **Embedder** | `src/adapters/memory/vector/embedder.rs` | `Embedder::embed`, `::embed_batch` (single HTTP call for N inputs) |
-| **Channel runtime helpers** | `src/adapters/channel_runtime.rs` | `build_orchestrator`, `build_memory_manager`, `RuntimeChatServiceFactory`, `OrchestratorSnapshots`, `snapshots_inputs_fn`, `subagent_config`, `build_subprocess_tool_executor` |
-| **Config schema** | `src/adapters/config.rs` | `OrchestratorConfig` (agent, max_attempts_per_step, max_replans, route_explicit_agents, engine=`"rag"`); `AgentConfig.description` (routable subagent), `LimitsConfig.{max_tool_rounds,step_timeout_secs}` |
+| **Retry** | `src/application/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`, backoff `{1s, 3s, 9s}` |
+| **Plan types + topology** | `src/domain/plan.rs` | `Step`, `StepId`, `Plan::ready_steps`, `Plan::validate`, `Plan::single_leaf` |
+| **Events** | `src/application/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
+| **ChatServiceFactory wiring** | `src/application/orchestrator/wiring.rs` | `ChatServiceFactory` trait, `ChatOrchestratorPortImpl` (planner turn; `ChatWorker` removed) |
+| **Telegram channel dispatch** | `src/adapters/inbound/telegram.rs` | `execute_orchestrator_turn` (line 1420), orchestrator_snapshots field (line 514) |
+| **TUI channel dispatch** | `src/adapters/inbound/tui/mod.rs` | orchestrator branch in engine thread (~line 798) |
+| **Webhook channel dispatch** | `src/adapters/inbound/webhooks.rs` | `build_orchestrator` per POST (line 257) |
+| **Eval channel dispatch** | `src/adapters/inbound/eval.rs` | `run_row_via_orchestrator`, `EvalChatServiceFactory` |
+| **Eval retention** | `src/adapters/inbound/eval.rs` | `prune_old_run_dirs`, `EvalArgs::keep_runs` / `no_persist` / `max_per_run_reports` |
+| **Memory provider** | `src/ports/memory.rs` | `MemoryProvider` trait |
+| **Memory manager** | `src/application/memory/manager.rs` | `MemoryManager::{add_provider, prefetch_all, sync_all, ingest_one, ingest_batch, search, delete_entry, clear_all, stats}` |
+| **Pre-turn injection** | `src/application/memory/injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock` |
+| **Post-turn write** | `src/application/memory/writer.rs` | `sync_turn(mgr, agent, user, asst)` — spawned |
+| **Fenced block** | `src/application/memory/fencing.rs` | `build_memory_context_block`, `sanitize_context` |
+| **Builtin provider** | `src/adapters/outbound/memory/builtin.rs` | `BuiltinMemoryProvider` |
+| **Vector store trait** | `src/ports/memory.rs` | `VectorStore` trait: `write`, `search`, `delete`, `clear_all`, `entry_count`, `storage_bytes` |
+| **Disk store** | `src/adapters/outbound/memory/disk_vector.rs` | `DiskVectorStore`, bincode-backed |
+| **Agentic memory (Postgres)** | `src/adapters/outbound/tools/agentic_memory/mod.rs` | `AgenticMemoryPlugin` (`postgres_memory` feature) — step summaries, planner recall lanes |
+| **Embedder** | `src/adapters/outbound/memory/embedder.rs` | `Embedder::embed`, `::embed_batch` (single HTTP call for N inputs) |
+| **Channel runtime helpers** | `src/bootstrap/` | `build_orchestrator`, `build_memory_manager`, `RuntimeChatServiceFactory`, `OrchestratorSnapshots`, `snapshots_inputs_fn`, `subagent_config`, `build_subprocess_tool_executor` |
+| **Config schema** | `src/config/mod.rs` | `OrchestratorConfig` (agent, max_attempts_per_step, max_replans, route_explicit_agents, engine=`"rag"`); `AgentConfig.description` (routable subagent), `LimitsConfig.{max_tool_rounds,step_timeout_secs}` |
 
 ---
 

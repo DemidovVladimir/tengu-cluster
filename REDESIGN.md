@@ -135,7 +135,7 @@ User message arrives (TUI / Telegram)
   └── If Plan → DagExecutor:
         for each ready step (dependencies satisfied), tokio::spawn:
           │
-          └── Runner (src/adapters/runner.rs):
+          └── Runner (src/adapters/outbound/subprocess_runner.rs):
                 stdin JSON:
                   { goal, agent_name, model, tools: [...], skills: [...],
                     max_turns, sandbox? }
@@ -259,7 +259,7 @@ No file watcher. No daemon. Runs at startup + when user provides new files via c
 
 ## 6. Agent Spec Format
 
-`[agents.<name>]` block in `sandboxes/<name>/config.toml` (`AgentConfig`, `src/adapters/config.rs`) — `agents/*.toml` removed 2026-09-18; a `description` makes the block planner-routable.
+`[agents.<name>]` block in `sandboxes/<name>/config.toml` (`AgentConfig`, `src/config/mod.rs`) — `agents/*.toml` removed 2026-09-18; a `description` makes the block planner-routable.
 
 ```toml
 [agents.researcher]
@@ -288,7 +288,7 @@ search: what tasks the agent handles, what it is NOT good for. More specific = b
 ### Subprocess spawn
 
 ```rust
-// src/adapters/runner.rs
+// src/adapters/outbound/subprocess_runner.rs
 let child = Command::new(current_exe())
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
@@ -575,11 +575,11 @@ Remove these. Their functionality is replaced or deferred.
 
 | Delete | Reason |
 |--------|--------|
-| `src/adapters/orchestrator/roster.rs` | Replaced by Open Brain / Karpathy LLM Wiki |
-| `src/adapters/orchestrator/wiring.rs` | Replaced by Open Brain / Karpathy LLM Wiki + runner.rs |
+| `src/application/orchestrator/roster.rs` | Replaced by Open Brain / Karpathy LLM Wiki |
+| `src/application/orchestrator/wiring.rs` | Replaced by Open Brain / Karpathy LLM Wiki + runner.rs |
 | `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 — **reversed 2026-09-18**: `agents/*.toml` removed, the sandbox config is the single agent source |
-| `src/adapters/eval_builder.rs` | Deferred → kept in-tree (`tengu eval`); ideas live in `docs/ideas/` |
-| `src/adapters/skill_lifecycle/evolve.rs` | Deferred → kept in-tree (`tengu skill evolve`); ideas live in `docs/ideas/` |
+| `src/adapters/inbound/eval.rs` | Deferred → kept in-tree (`tengu eval`); ideas live in `docs/ideas/` |
+| `src/application/skills/lifecycle/evolve.rs` | Deferred → kept in-tree (`tengu skill evolve`); ideas live in `docs/ideas/` |
 
 > **Reconciled with repo, 2026-04-24 (revised):** verified against the actual
 > checkout. `sandboxes/` DOES exist (contains `aura/` and `storage-test/`) — those
@@ -597,26 +597,26 @@ violation.
 
 | Keep | Why |
 |------|-----|
-| `src/adapters/orchestrator/events.rs` | Progress streaming (TUI/Telegram); add `RagQueried` variant |
-| `src/adapters/orchestrator/executor.rs` | DagExecutor — parallel DAG, retry, cancel |
-| `src/adapters/orchestrator/planner.rs` | Planner trait — CHANGE the implementation, not the trait |
-| `src/adapters/orchestrator/replan.rs` | drive() loop — already correct |
-| `src/adapters/orchestrator/retry.rs` | Retry policy |
-| `src/adapters/plugins/` (all) | Compiled-in tools unchanged |
-| `src/adapters/plugins/skill_lifecycle/distill.rs` | skill_distill tool — keep, working |
-| `src/adapters/plugins/skill_lifecycle/metrics.rs` | Keep for skill evals |
-| `src/adapters/memory/` | Elevated to central Open Brain / Karpathy LLM Wiki authority |
-| `src/adapters/tui/` | Unchanged |
-| `src/adapters/telegram_builder.rs` | Unchanged |
+| `src/application/orchestrator/events.rs` | Progress streaming (TUI/Telegram); add `RagQueried` variant |
+| `src/application/orchestrator/executor.rs` | DagExecutor — parallel DAG, retry, cancel |
+| `src/application/orchestrator/planner.rs` | Planner trait — CHANGE the implementation, not the trait |
+| `src/application/orchestrator/replan.rs` | drive() loop — already correct |
+| `src/application/orchestrator/retry.rs` | Retry policy |
+| `src/adapters/outbound/tools/` (all) | Compiled-in tools unchanged |
+| `src/adapters/outbound/tools/skill_lifecycle/distill.rs` | skill_distill tool — keep, working |
+| `src/adapters/outbound/tools/skill_lifecycle/metrics.rs` | Keep for skill evals |
+| `src/application/memory/` | Elevated to central Open Brain / Karpathy LLM Wiki authority |
+| `src/adapters/inbound/tui/` | Unchanged |
+| `src/adapters/inbound/telegram.rs` | Unchanged |
 | `src/adapters/mcp/` | Unchanged |
 | `src/types.rs`, `src/ports.rs`, `src/config.rs` | Extended only (Phase 0 scaffold) |
-| `src/adapters/skill_builder.rs` | Unchanged |
-| `src/adapters/shell_executor.rs` | Unchanged |
+| `src/application/skills/registry.rs` | Unchanged |
+| `src/adapters/outbound/shell.rs` | Unchanged |
 
 ### DagExecutor contract (critical — do not break)
 
 ```rust
-// src/adapters/orchestrator/executor.rs
+// src/application/orchestrator/executor.rs
 // Keep WorkerHandle trait exactly as-is:
 #[async_trait]
 pub trait WorkerHandle: Send + Sync {
@@ -635,7 +635,7 @@ Add `RagQueried` so the TUI and logs can show what the planner saw. Everything e
 stays as-is.
 
 ```rust
-// src/adapters/orchestrator/events.rs
+// src/application/orchestrator/events.rs
 pub enum OrchestratorEvent {
     PlanCreated     { plan: Plan },
     StepStarted     { step_id: StepId, agent: String },
@@ -660,7 +660,7 @@ pub type EventBus = broadcast::Sender<OrchestratorEvent>;
 
 ## 14. New Modules to Build
 
-> **Framing note, 2026-04-24:** `src/adapters/memory/` already contains a working
+> **Framing note, 2026-04-24:** `src/application/memory/` already contains a working
 > `QdrantVectorStore` plus a full memory manager/provider. The "Open Brain / Karpathy LLM Wiki layer" below is
 > best built as a thin facade on top of that, not as a parallel stack. Think
 > "promote memory to central Open Brain / Karpathy LLM Wiki" rather than "write Open Brain / Karpathy LLM Wiki from scratch."
@@ -710,7 +710,7 @@ Thin wrapper over legacy vector DB search. Deserializes payload into `RagResult`
 
 TTL purge. Runs at startup before indexing. No-op when `ttl_days == 0`.
 
-### `src/adapters/runner.rs`
+### `src/adapters/outbound/subprocess_runner.rs`
 
 Implements `WorkerHandle` trait by spawning a subprocess. The child loads
 `[agents.<name>]` from the parent's config. Assembles system prompt. Writes stdin JSON. Reads stdout JSON.
@@ -750,7 +750,7 @@ pub struct AgentSpec {
 }
 ```
 
-### Changes to `src/adapters/orchestrator/planner.rs`
+### Changes to `src/application/orchestrator/planner.rs`
 
 The `Planner` trait stays unchanged. Change `OrchestratorAgentPlanner`:
 - Branch on `config.orchestrator.engine` ("static" or "rag") — see IMPLEMENTATION_PLAN.md Phase 4.
@@ -882,7 +882,7 @@ scope manageable:
 - **Skill evolution loop** (auto-improving skills, Karpathy-style eval loop)
   → Files: `docs/ideas/auto-improving-agent-skills.md`; `skill_lifecycle/evolve.rs` (`tengu skill evolve`) is in-tree
 - **Eval harness** (skill performance benchmarking)
-  → In-tree: `eval_builder.rs` (`tengu eval <skill>`)
+  → In-tree: `adapters/inbound/eval.rs` (`tengu eval <skill>`)
 - **File watcher** (re-index on SKILL.md / agent spec change without restart)
   → Startup re-index is sufficient for now
 - **Sandbox persistence for composed agents** (C→B result saved as permanent spec)
@@ -944,13 +944,13 @@ If no answer, proceed with the §17 defaults: legacy vector DB at `localhost:633
 
 ```bash
 # Understand what exists and what to keep:
-cat src/adapters/orchestrator/executor.rs    # DagExecutor — keep as-is
-cat src/adapters/orchestrator/events.rs      # OrchestratorEvent — extend (RagQueried)
-cat src/adapters/orchestrator/planner.rs     # Planner trait — change implementation
-cat src/adapters/orchestrator/replan.rs      # drive() — keep as-is
-cat src/adapters/memory/mod.rs               # Existing memory layer — extend for Open Brain / Karpathy LLM Wiki
-cat src/adapters/plugins/skill_lifecycle/distill.rs  # compress_and_store predecessor — keep
-cat src/adapters/config.rs                   # Config struct — understand MemoryConfig extensions
+cat src/application/orchestrator/executor.rs    # DagExecutor — keep as-is
+cat src/application/orchestrator/events.rs      # OrchestratorEvent — extend (RagQueried)
+cat src/application/orchestrator/planner.rs     # Planner trait — change implementation
+cat src/application/orchestrator/replan.rs      # drive() — keep as-is
+cat src/application/memory/mod.rs               # Existing memory layer — extend for Open Brain / Karpathy LLM Wiki
+cat src/adapters/outbound/tools/skill_lifecycle/distill.rs  # compress_and_store predecessor — keep
+cat src/config/mod.rs                   # Config struct — understand MemoryConfig extensions
 cat src/main.rs                              # Entry point — add run-agent subcommand here
 ```
 

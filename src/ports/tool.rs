@@ -1,7 +1,6 @@
 //! Tool port — the per-tool trait, plugin grouping, and the borrowed contexts
-//! passed to them. Implementations live in `adapters/outbound/tools/`
-//! (currently `outbound/tools/`); dispatch lives in
-//! `application/tools/registry.rs`.
+//! passed to them. Implementations live in `adapters/outbound/tools/` (listed
+//! in its `catalog()`); dispatch lives in `application/tools/registry.rs`.
 
 #![allow(dead_code)]
 

@@ -22,11 +22,11 @@ on; the other two are mechanical helpers.
 
 ## 1. `compress_and_store` — the step-completion protocol *(the important one)*
 
-**File:** `src/adapters/plugins/skill_lifecycle/compress_and_store.rs`
+**File:** `src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs`
 
 This is the harness-enforced "step is done" signal. Every subagent has the
 tool implicitly appended to its tool list (in
-`channel_runtime::build_subprocess_tool_executor`; only the tool *definition* —
+`bootstrap::tools::build_subprocess_tool_executor`; only the tool *definition* —
 there is no plugin handler). The model is told in its system prompt that its FINAL action MUST
 be calling `compress_and_store(summary)`.
 
@@ -40,10 +40,10 @@ persists across plan/replan cycles.
 
 | Path | When | Where it runs |
 |---|---|---|
-| **A — Out-of-band** | OpenRouter subagents | `main.rs::run_agent_subprocess` (L971) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks loop. |
+| **A — Out-of-band** | OpenRouter subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` (L971) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks loop. |
 | **B — Backstop** | Claude Code subagents | No bridge handler (`CompressAndStoreTool` removed in Phase 6) — the model usually just stops; `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
 
-With `postgres_memory`, `main.rs::run_agent_subprocess` writes the final
+With `postgres_memory`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` writes the final
 summary into Open Brain-style Postgres `agentic_memory`, with embeddings when
 available and text-only fallback otherwise
 (`agentic_memory::write_step_summary_with_embedding`). Without the feature the
@@ -72,7 +72,7 @@ Postgres `agentic_memory` via pgvector first and FTS fallback when
 
 ## 2. `persistent_store` — file chunking with overlap
 
-**File:** `src/adapters/plugins/memory/persistent_store.rs::chunk_text`
+**File:** `src/adapters/outbound/tools/memory/persistent_store.rs::chunk_text`
 
 A char-window splitter with overlap. Defaults from `MemoryConfig`:
 
@@ -84,7 +84,7 @@ persistent_store_chunk_overlap = 200
 When an agent calls `persistent_store` to save a file:
 1. Extract text (PDF / DOCX / XLSX / UTF-8 fallback).
 2. Run `chunk_text` to split into overlapping windows.
-3. Embed each chunk, upsert into the disk bincode store (`memory/vector/disk.rs`) with a manifest.
+3. Embed each chunk, upsert into the disk bincode store (`outbound/memory/disk_vector.rs`) with a manifest.
 
 This is **mechanical chunking** — no LLM in the loop, no summarisation. It
 exists so vector search can hit sub-document granularity. Different layer
@@ -94,7 +94,7 @@ entirely from `compress_and_store`; they coexist without overlap.
 
 ## 3. Prompt-budget truncation
 
-**File:** `src/adapters/prompt_budget.rs`
+**File:** `src/application/chat/prompt_budget.rs`
 
 Three helpers used by the runtime when assembling a turn:
 
@@ -119,7 +119,7 @@ no summarisation pass — oldest turns simply drop off the end.
   per-turn flow.
 - `TENGU_PLANNER_REGISTRY.md` — root file-backed planner roster generated from
   agents, skills, and tools.
-- `src/adapters/plugins/agentic_memory/mod.rs` — Open Brain Postgres memory
+- `src/adapters/outbound/tools/agentic_memory/mod.rs` — Open Brain Postgres memory
   (`postgres_memory`) that receives the step summaries.
 - `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol.
 

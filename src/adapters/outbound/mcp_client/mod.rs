@@ -1,15 +1,15 @@
 // src/adapters/outbound/mcp_client/mod.rs
-//! MCP plugin — inbound MCP client.
+//! MCP client — tengu connects to the `[[mcp_servers]]` in the sandbox
+//! config, calls `tools/list`, and exposes every remote tool as
+//! `{server_name}__{tool_name}` so an LLM can call it like any other tool.
 //!
-//! Task A10 of Phase A. Complements `mcp_bridge.rs` (OUTBOUND server), which
-//! exposes tengu's own tools to external Claude Code clients. This plugin is
-//! the opposite direction: tengu CONNECTS to external MCP servers, calls
-//! `tools/list`, and surfaces every remote tool as `{server_name}__{tool_name}`
-//! so an LLM can call it like any other platform tool.
+//! The opposite direction — exposing tengu's own tools to Claude Code — is
+//! the MCP bridge server (`adapters/inbound/mcp_bridge.rs`), which also
+//! registers this plugin for servers the Claude Code engine hands it.
 //!
-//! Only wired in by `crate::bootstrap::tools::build_tool_executor` when the root
-//! `Config.mcp_servers` list is non-empty — zero cost for users who have not
-//! configured any MCP integrations.
+//! Wired in by `crate::bootstrap::tools::build_tool_executor` when
+//! `Config.mcp_servers` is non-empty; `enumerate_tools` feeds the planner
+//! registry and the in-process Claude Code bridge list.
 //!
 //! Failure semantics: a bad MCP server config (unreachable, broken handshake,
 //! non-JSON output) logs a warning and is skipped. We never let a misbehaving

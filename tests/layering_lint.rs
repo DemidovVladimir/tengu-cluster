@@ -79,23 +79,37 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Non-comment lines before the first `#[cfg(test)]` test *module* (a
-/// `#[cfg(test)]` on a single item mid-file does not end the scan).
-fn code_lines(src: &str) -> impl Iterator<Item = (usize, &str)> {
+/// Line numbers + text of non-comment code, skipping `#[cfg(test)] mod … { … }`
+/// blocks wherever they sit in the file (brace-matched).
+fn code_lines(src: &str) -> Vec<(usize, &str)> {
     let lines: Vec<&str> = src.lines().collect();
-    let end = lines
-        .windows(2)
-        .position(|w| {
-            let next = w[1].trim_start();
-            w[0].trim() == "#[cfg(test)]" && (next.starts_with("mod ") || next.contains(" mod "))
-        })
-        .unwrap_or(lines.len());
-    lines
-        .into_iter()
-        .enumerate()
-        .take(end)
-        .filter(|(_, l)| !l.trim_start().starts_with("//"))
-        .map(|(i, l)| (i + 1, l))
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let next = lines.get(i + 1).map(|l| l.trim_start()).unwrap_or("");
+        if lines[i].trim() == "#[cfg(test)]" && (next.starts_with("mod ") || next.contains(" mod "))
+        {
+            let mut depth = 0i32;
+            let mut j = i + 1;
+            while j < lines.len() {
+                depth += lines[j].matches('{').count() as i32;
+                depth -= lines[j].matches('}').count() as i32;
+                j += 1;
+                if depth <= 0
+                    && (lines[j - 1].contains('}') || lines[j - 1].trim_end().ends_with(';'))
+                {
+                    break;
+                }
+            }
+            i = j;
+            continue;
+        }
+        if !lines[i].trim_start().starts_with("//") {
+            out.push((i + 1, lines[i]));
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Every `crate::<layer>...` path in `line`, as the full path text.
@@ -201,6 +215,7 @@ fn exceptions_are_still_needed() {
         .filter(|(file, prefix)| {
             let text = fs::read_to_string(src.join(file)).unwrap_or_default();
             let used = code_lines(&text)
+                .into_iter()
                 .any(|(_, l)| crate_paths(l).iter().any(|p| p.starts_with(prefix)));
             !used
         })

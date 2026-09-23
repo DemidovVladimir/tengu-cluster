@@ -564,7 +564,7 @@
           <span class="tag done">Implemented</span>
         </div>
         <div class="mem-tier-body">
-          <code>agentic_memory</code> tool (<code>src/adapters/plugins/agentic_memory/</code>): <code>capture</code> / <code>recall</code> (pgvector → FTS hybrid) / <code>ingest_source</code> / <code>promote</code> / <code>compile_wiki</code> / <code>lint</code>. Planner recall lanes: cross-session, within-session, cross-plan. Subagent summaries captured on every step. The earlier <code>PermanentDiskStore</code> design (<code>docs/ideas/permanent-memory-in-tengu.md</code>) was superseded by <code>promote</code> → LLM Wiki.
+          <code>agentic_memory</code> tool (<code>src/adapters/outbound/tools/agentic_memory/</code>): <code>capture</code> / <code>recall</code> (pgvector → FTS hybrid) / <code>ingest_source</code> / <code>promote</code> / <code>compile_wiki</code> / <code>lint</code>. Planner recall lanes: cross-session, within-session, cross-plan. Subagent summaries captured on every step. The earlier <code>PermanentDiskStore</code> design (<code>docs/ideas/permanent-memory-in-tengu.md</code>) was superseded by <code>promote</code> → LLM Wiki.
         </div>
       </div>
 
@@ -577,7 +577,7 @@
           <code>DiskVectorMemoryStore</code> — brute-force cosine similarity, bincode-serialized; the only built-in <code>VectorStore</code> (Qdrant removed 2026-05-14).<br>
           <code>Embedder</code> — OpenRouter <code>text-embedding-3-small</code> (1536-dim, pinned).<br>
           <strong>Tools:</strong> <code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code> (opt-in).<br>
-          <strong>Recall:</strong> <code>MemoryManager::search</code> at turn start in <code>chat_builder.rs</code>.
+          <strong>Recall:</strong> <code>MemoryManager::search</code> at turn start in <code>application/chat/service.rs</code>.
         </div>
       </div>
 
@@ -752,7 +752,7 @@
       <div class="gap-icon">🟡</div>
       <div>
         <div class="gap-title">Memory Context Fencing <span class="tag done">Done</span></div>
-        <div class="gap-desc"><code>memory/fencing.rs</code> provides the <code>&lt;memory-context&gt;</code> block helpers (<code>sanitize_context</code>, used by <code>memory/builtin.rs</code>); <code>chat_builder.rs</code> adds a system note telling the model not to trust recalled summaries for "latest" questions.</div>
+        <div class="gap-desc"><code>memory/fencing.rs</code> provides the <code>&lt;memory-context&gt;</code> block helpers (<code>sanitize_context</code>, used by <code>memory/builtin.rs</code>); <code>application/chat/service.rs</code> adds a system note telling the model not to trust recalled summaries for "latest" questions.</div>
         <div class="gap-fix">→ Verify every recall lane (planner blocks included) goes through the fence</div>
       </div>
     </div>
@@ -838,7 +838,7 @@ Full procedural instructions here...</pre>
       </div>
 
       <div class="mt-16">
-        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Metric kinds (implemented in <code>src/adapters/skill_lifecycle/</code>, run by <code>eval_builder.rs</code>):</div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Metric kinds (implemented in <code>src/application/skills/lifecycle/</code>, run by <code>adapters/inbound/eval.rs</code>):</div>
         <div class="plugin-grid">
           <div class="plugin-box tengu-plugin">
             <div class="picon">⚖️</div>
@@ -1107,7 +1107,7 @@ Full procedural instructions here...</pre>
     <div class="gap-icon">🟡</div>
     <div>
       <div class="gap-title">Context Compression / Sliding Window <span class="tag done">Done</span></div>
-      <div class="gap-desc"><code>flow_builder.rs</code> compaction (<code>[agents.*.flow] compaction_threshold_ratio</code> / <code>compaction_keep_turns</code> / <code>compaction_summary_max_tokens</code>), 2-phase tool-result pruning in <code>engine_builder.rs</code>. Reference: <code>docs/context-management-2026-04-27.md</code>. Hermes: <code>context_compressor.py</code> + <code>/compress</code>.</div>
+      <div class="gap-desc"><code>application/chat/flow.rs</code> compaction (<code>[agents.*.flow] compaction_threshold_ratio</code> / <code>compaction_keep_turns</code> / <code>compaction_summary_max_tokens</code>), 2-phase tool-result pruning in <code>adapters/outbound/engines/mod.rs</code>. Reference: <code>docs/context-management-2026-04-27.md</code>. Hermes: <code>context_compressor.py</code> + <code>/compress</code>.</div>
       <div class="gap-fix">→ No manual <code>/compress</code> command yet.</div>
     </div>
   </div>
@@ -1126,7 +1126,7 @@ Full procedural instructions here...</pre>
     <div>
       <div class="gap-title">Messaging Platform Breadth</div>
       <div class="gap-desc">Tengu supports Telegram + an inbound webhooks listener (<code>tengu webhooks</code>, HMAC-verified). Hermes supports 6 platforms (Telegram, Discord, Slack, WhatsApp, Signal). Each additional platform multiplies reach significantly.</div>
-      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>telegram_builder.rs</code> / <code>webhook_builder.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
+      <div class="gap-fix">→ Add Discord adapter via REST API. Slack via Events API. Each is ~300 lines of Rust following <code>adapters/inbound/telegram.rs</code> / <code>adapters/inbound/webhooks.rs</code> (both dispatch through <code>ChatRuntimeService::process_user_text</code>).</div>
     </div>
   </div>
 
@@ -1315,21 +1315,21 @@ Full procedural instructions here...</pre>
           <td><strong>Permanent Memory Tier</strong> <span class="tag done">Superseded</span></td>
           <td>Covered by Postgres <code>agentic_memory</code> <code>promote</code> + <code>compile_wiki</code></td>
           <td>—</td>
-          <td><code>plugins/agentic_memory/mod.rs</code></td>
+          <td><code>outbound/tools/agentic_memory/mod.rs</code></td>
         </tr>
         <tr>
           <td>2</td>
           <td><strong>Pre-turn Memory Prefetch</strong> <span class="tag partial">Partial</span></td>
           <td>Planner recall lanes + chat-turn <code>MemoryManager::search</code> live; injector path dead</td>
           <td>1–2 days</td>
-          <td><code>orchestrator/planner.rs</code>, <code>chat_builder.rs</code>, <code>memory/injector.rs</code></td>
+          <td><code>orchestrator/planner.rs</code>, <code>application/chat/service.rs</code>, <code>memory/injector.rs</code></td>
         </tr>
         <tr>
           <td>3</td>
           <td><strong>Context Compression</strong> <span class="tag done">Done</span></td>
           <td>Flow compaction + 2-phase tool-result pruning shipped</td>
           <td>—</td>
-          <td><code>flow_builder.rs</code>, <code>engine_builder.rs</code>, <code>prompt_budget.rs</code></td>
+          <td><code>application/chat/flow.rs</code>, <code>adapters/outbound/engines/mod.rs</code>, <code>prompt_budget.rs</code></td>
         </tr>
         <tr>
           <td>4</td>
@@ -1350,7 +1350,7 @@ Full procedural instructions here...</pre>
           <td><strong>Session FTS Search</strong> <span class="tag partial">Partial</span></td>
           <td>Postgres FTS + hybrid recall shipped; LLM summarisation of old sessions open</td>
           <td>3–4 days</td>
-          <td><code>plugins/agentic_memory/mod.rs</code></td>
+          <td><code>outbound/tools/agentic_memory/mod.rs</code></td>
         </tr>
       </tbody>
     </table>

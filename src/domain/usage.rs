@@ -1,3 +1,6 @@
+//! Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn
+//! snapshots folded into session totals.
+
 use tracing::debug;
 
 pub(crate) fn absorb_turn_usage_snapshot(

@@ -45,14 +45,14 @@
   <text x="40" y="68" class="sub">Five distinct mechanisms. None of them is LLM-driven — no auto-summarise pass exists. Old context just falls off or gets first-line-clipped.</text>
 
   <!-- ===================================================================== -->
-  <!-- PHASE A — TURN ASSEMBLY (chat_builder)                                  -->
+  <!-- PHASE A — TURN ASSEMBLY (chat/service.rs)                                  -->
   <!-- ===================================================================== -->
   <text x="40" y="115" class="title teal">A. Turn assembly  —  before the engine call</text>
 
   <g transform="translate(40,135)">
     <rect class="panel" width="1420" height="280"/>
     <rect class="panelH" x="14" y="14" width="380" height="22"/>
-    <text x="22" y="30" class="tag">chat_builder.rs::process_user_text  (per chat turn, planner-side)</text>
+    <text x="22" y="30" class="tag">application/chat/service.rs::process_user_text  (per chat turn, planner-side)</text>
 
     <!-- system + memory + history flow -->
     <g transform="translate(40,55)">
@@ -110,10 +110,10 @@
   </g>
 
   <!-- ===================================================================== -->
-  <!-- PHASE B — ENGINE LOOP (engine_builder::collect_engine_response)         -->
+  <!-- PHASE B — ENGINE LOOP (application::chat::tool_loop::collect_engine_response)         -->
   <!-- ===================================================================== -->
   <text x="40" y="465" class="title pink">B. Tool-calling loop  —  where the in-turn compaction happens</text>
-  <text x="40" y="487" class="sub mono">engine_builder.rs::collect_engine_response   for round in 0..max_tool_rounds (default 70) { ... }</text>
+  <text x="40" y="487" class="sub mono">application/chat/tool_loop.rs::collect_engine_response   for round in 0..max_tool_rounds (default 70) { ... }</text>
 
   <g transform="translate(40,505)">
     <rect class="panel" width="1420" height="780"/>
@@ -149,7 +149,7 @@
       <text x="14" y="68" class="small">env <tspan class="mono">TENGU_BRIDGE_MAX_RESULT_CHARS</tspan></text>
       <text x="14" y="84" class="small">enforced inside Claude Code engine —</text>
       <text x="14" y="100" class="small">Claude CLI has no in-loop compaction</text>
-      <text x="14" y="114" class="small muted">claude_code_engine.rs:551</text>
+      <text x="14" y="114" class="small muted">adapters/outbound/engines/claude_code.rs:551</text>
     </g>
 
     <g transform="translate(940,165)">
@@ -161,7 +161,7 @@
       <text x="14" y="66" class="small mono">"[OUTPUT_TRUNCATED]"</text>
       <text x="14" y="84" class="small">→ inject "Your output was truncated.</text>
       <text x="14" y="100" class="small">Continue from where you left off."</text>
-      <text x="14" y="116" class="small muted">engine_builder.rs:706 — extends, doesn't cut</text>
+      <text x="14" y="116" class="small muted">adapters/outbound/engines/mod.rs:706 — extends, doesn't cut</text>
     </g>
 
     <!-- Round 1 -->
@@ -213,9 +213,9 @@
 
   <g transform="translate(40,1350)">
     <rect class="panel" width="1420" height="120"/>
-    <text x="20" y="32" class="small mono">skill_builder.rs:1129  — truncate_to_token_budget(instructions, max_file_tokens)</text>
-    <text x="20" y="52" class="small mono">skill_builder.rs:1141  — truncate_to_token_budget(content, max_file_tokens)         (referenced files)</text>
-    <text x="20" y="72" class="small mono">skill_builder.rs:1159  — truncate_to_token_budget(ctx, max_skill_context_tokens)   (skill recall context)</text>
+    <text x="20" y="32" class="small mono">application/skills/registry.rs:1129  — truncate_to_token_budget(instructions, max_file_tokens)</text>
+    <text x="20" y="52" class="small mono">application/skills/registry.rs:1141  — truncate_to_token_budget(content, max_file_tokens)         (referenced files)</text>
+    <text x="20" y="72" class="small mono">application/skills/registry.rs:1159  — truncate_to_token_budget(ctx, max_skill_context_tokens)   (skill recall context)</text>
     <text x="20" y="98" class="small">Char-cap with the shared "~4 chars/token" heuristic. Appends "<tspan class="mono">\n\n[truncated]</tspan>". Runs once at prompt-build time, not per turn.</text>
   </g>
 

@@ -78,7 +78,7 @@
 
 ## Feature flags introduced across the plan
 
-Extend the EXISTING `[memory]` block (see `src/adapters/config.rs::MemoryConfig`
+Extend the EXISTING `[memory]` block (see `src/config/mod.rs::MemoryConfig`
 — already has enabled, embedding_model, backend, qdrant_url, qdrant_collection,
 vector_size, persistent_store_chunk_*, etc.). Phase 0 adds three fields. Do
 not create a parallel block.
@@ -124,7 +124,7 @@ Establish a reproducible manual smoke test for both channels so every subsequent
 ### Tasks
 1. Audit `cargo build`, `cargo test`, `cargo clippy` on main. Fix any existing warnings that would noise up later diffs.
 2. Create `docs/manual-test-checklist.md` — a copy-pasteable script for the TUI and Telegram smoke tests.
-3. Extend `[memory]` and `[orchestrator]` structs in `src/adapters/config.rs` with the new fields (inert). Add new `RagConfig` struct + `Config.rag` field. Mirror in `config.example.toml` as commented examples.
+3. Extend `[memory]` and `[orchestrator]` structs in `src/config/mod.rs` with the new fields (inert). Add new `RagConfig` struct + `Config.rag` field. Mirror in `config.example.toml` as commented examples.
 4. Run the manual smoke test on `main` and record the expected output so later phases can diff against it.
 5. ~~Confirm legacy vector DB is reachable~~ (Qdrant removed in Phase 6 — skip; the codebase default was port **6334**, not 6333):
    ```bash
@@ -135,7 +135,7 @@ Establish a reproducible manual smoke test for both channels so every subsequent
 
 ### Files touched
 - `config.example.toml`
-- `src/adapters/config.rs`
+- `src/config/mod.rs`
 - `docs/manual-test-checklist.md` (new)
 - `scripts/phase-0-checks.sh` (retired 2026-09 — probed Qdrant, which was removed in Phase 6)
 
@@ -190,7 +190,7 @@ None needed — no behaviour change.
 - NEW: `src/adapters/rag/{mod,indexer,query,cleanup}.rs`
 - `src/adapters/mod.rs` (register module)
 - `src/main.rs` (startup hook + two CLI subcommands)
-- `src/adapters/memory/` (expose what the facade needs — no behaviour change)
+- `src/application/memory/` (expose what the facade needs — no behaviour change)
 
 ### Manual test
 ```
@@ -291,11 +291,11 @@ A runner subprocess exists, has a JSON IPC contract, and can be driven manually 
    - Refuses to run unless `TENGU_AGENT_IPC=1` is set (re-entry guard).
    - Reads stdin JSON, writes stdout JSON per REDESIGN §7.
    - `stderr` forwarded via a framed `StepProgress`-style protocol line prefix (e.g. `@@progress: ...`). The parent runner parses these lines; anything unprefixed is logged verbatim.
-2. Implement `compress_and_store` compiled-in tool (`src/adapters/plugins/skill_lifecycle/compress_and_store.rs`):
+2. Implement `compress_and_store` compiled-in tool (`src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs`):
    - Writes `{summary, session_id, step_id, created_at}` to `agentic_memory step outputs`.
    - Sets an internal flag in the runner context.
 3. Implement three-tier skill loader in a shared helper so the `run-agent` mode uses it. Hard-fail on missing skill.
-4. Implement `src/adapters/runner.rs`:
+4. Implement `src/adapters/outbound/subprocess_runner.rs`:
    - `SubprocessRunner` impl of `WorkerHandle`.
    - Child loads `[agents.<name>]` from the parent's config (was `agents/<name>.toml`).
    - Computes `effective_tools = spec.tools ∩ ipc.tools ∪ {compress_and_store}`.
@@ -308,8 +308,8 @@ A runner subprocess exists, has a JSON IPC contract, and can be driven manually 
 
 ### Files touched
 - `src/main.rs` (new subcommand + env guard)
-- NEW: `src/adapters/runner.rs`
-- NEW: `src/adapters/plugins/skill_lifecycle/compress_and_store.rs`
+- NEW: `src/adapters/outbound/subprocess_runner.rs`
+- NEW: `src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs`
 - NEW: `tests/run_agent_ipc.rs` (was `scripts/test-runner.sh`)
 - `src/adapters/rag/` (write path for outputs)
 
@@ -364,11 +364,11 @@ Flip `[orchestrator] engine = "rag"` and the full flow works end-to-end via the 
 7. Add an E2E smoke test: `tests/e2e_rag_flow.rs` (use `cargo test --ignored`) that boots the harness with a stub embedding model + stub legacy vector DB (or a legacy vector DB test container), sends a message, and asserts the final response arrives via the event bus.
 
 ### Files touched
-- `src/adapters/orchestrator/planner.rs`
-- `src/adapters/orchestrator/replan.rs`
-- `src/adapters/orchestrator/events.rs` (add `RagQueried`)
-- `src/adapters/orchestrator/wiring.rs` — keep, now only used in static mode
-- `src/adapters/tui/` and `src/adapters/telegram_builder.rs` — user-message write-through to `agentic_memory user events`
+- `src/application/orchestrator/planner.rs`
+- `src/application/orchestrator/replan.rs`
+- `src/application/orchestrator/events.rs` (add `RagQueried`)
+- `src/application/orchestrator/wiring.rs` — keep, now only used in static mode
+- `src/adapters/inbound/tui/` and `src/adapters/inbound/telegram.rs` — user-message write-through to `agentic_memory user events`
 - `src/main.rs` (the `--engine` flag)
 - NEW: `tests/e2e_rag_flow.rs`
 
@@ -431,10 +431,10 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
 1. Change `config.toml` default to `engine = "rag"`.
 2. Run the full manual checklist on both channels one more time.
 3. Delete the legacy files confirmed present by reconnaissance (REDESIGN §12 after corrections):
-   - `src/adapters/orchestrator/roster.rs`
-   - `src/adapters/orchestrator/wiring.rs`
-   - `src/adapters/eval_builder.rs` (kept in-tree — `tengu eval`; ideas moved to `docs/ideas/`)
-   - `src/adapters/skill_lifecycle/evolve.rs` (kept in-tree — `tengu skill evolve`; `docs/ideas/auto-improving-agent-skills.md`)
+   - `src/application/orchestrator/roster.rs`
+   - `src/application/orchestrator/wiring.rs`
+   - `src/adapters/inbound/eval.rs` (kept in-tree — `tengu eval`; ideas moved to `docs/ideas/`)
+   - `src/application/skills/lifecycle/evolve.rs` (kept in-tree — `tengu skill evolve`; `docs/ideas/auto-improving-agent-skills.md`)
    - `sandboxes/aura/`, `sandboxes/storage-test/` (NOT deleted — reversed 2026-09-18: sandboxes are the single config; `agents/` was removed instead)
 4. Remove the `engine` flag — Open Brain / Karpathy LLM Wiki is the only path. Remove the `static` branch from `planner.rs` and `main.rs`.
 5. Update `README.md` with the new architecture summary + link to REDESIGN.md.
@@ -442,7 +442,7 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
 
 ### Files touched
 - Delete the files/dirs above.
-- `src/adapters/orchestrator/planner.rs` (drop static branch)
+- `src/application/orchestrator/planner.rs` (drop static branch)
 - `src/main.rs` (drop `--engine` flag)
 - `config.toml`
 - `README.md`

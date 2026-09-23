@@ -63,7 +63,7 @@ src/
 | 3 ✅ | outbound adapters + tool catalog | engines, tools, memory stores, mcp client, egress, secrets, shell, runner; metrics record → `domain/metrics.rs`, sink → outbound | catalog replaces the 3-place registration |
 | 4 ✅ | application | chat, flow, prompt_budget, orchestrator, memory manager, skills, eval | new ports: `Embedding`, `MemoryService`, `RecallStore` (memory), `ToolDirectory` (tool); `SecretRegistry` → `domain/secrets.rs`; `eval` + evolve driver → `adapters/inbound/` (they compose runtimes); lint EXCEPTIONS empty |
 | 5 ✅ | inbound + bootstrap | `main.rs` (2.6k lines) → `inbound/cli/*`; `channel_runtime.rs` → `bootstrap/`; telegram/webhooks/tui/mcp_bridge | `channel_runtime.rs` split: wiring → `bootstrap/{tools,memory,orchestrator}.rs`, channel helpers → `inbound/channel.rs`; `main.rs` → `inbound/cli/{mod,run_agent,skill,doctor}.rs` + `bootstrap/sandbox.rs`; engine↔bridge env names → `outbound/bridge_env.rs`; lint: `bootstrap` must not use `adapters::inbound` |
-| 6 | zero exceptions + docs | empty the lint exception list; update every doc in CLAUDE.md's "REQUIRED updates" table (arch md/svg/html, context-management, SESSION_HANDOFF, CLAUDE.md + AGENTS.md) + `docs/tools.md` | doc volume (html inline FILE_MAP arrays) |
+| 6 ✅ | zero exceptions + docs | empty the lint exception list; update every doc in CLAUDE.md's "REQUIRED updates" table (arch md/svg/html, context-management, SESSION_HANDOFF, CLAUDE.md + AGENTS.md) + `docs/tools.md` | doc volume (html inline FILE_MAP arrays) |
 
 ## Not changing
 
@@ -87,3 +87,4 @@ src/
 |---|---|
 | `tests/layering_lint.rs` | dependency rule + `EXCEPTIONS` (must shrink; stale entries fail) |
 | path rewrite | a mapping `{modules: {old: new}, symbols: {mod: {Sym: new_mod}}}` applied to `src/**/*.rs`; splits grouped `use crate::m::{A, B}` by destination. No re-export shims left behind. |
+| `tests/code_map.rs` | `docs/code-map.md` lists every source file; the graph block in `docs/code-map.html` equals the one generated from `src/` (regen `TENGU_REGEN_CODE_MAP=1 cargo test --test code_map`) |

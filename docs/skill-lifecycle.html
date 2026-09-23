@@ -620,7 +620,7 @@
       <span class="step-num">3</span>
       <div class="step-title">Tool dispatched</div>
       <div class="step-desc">scope.check_fs_write → validate_name → collision check across 3 tiers.</div>
-      <span class="step-file">plugins/skill_lifecycle/distill.rs</span>
+      <span class="step-file">outbound/tools/skill_lifecycle/distill.rs</span>
     </div>
     <div class="step">
       <span class="step-num">4</span>
@@ -1030,13 +1030,13 @@ Rationale:
   <div class="code-refs">
     <div class="code-ref">
       <div class="code-ref-title">skill_distill tool</div>
-      <div class="code-ref-path">plugins/skill_lifecycle/distill.rs</div>
+      <div class="code-ref-path">outbound/tools/skill_lifecycle/distill.rs</div>
       <div class="code-ref-fn">fn SkillDistillTool::execute</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Plugin registration</div>
-      <div class="code-ref-path">channel_runtime.rs</div>
-      <div class="code-ref-fn">fn register_core_plugins — want_distill || want_apply_improver; ManageSkillPlugin · ViewSkillPlugin · WORKSPACE_TOOLS_ALLOWLIST</div>
+      <div class="code-ref-path">bootstrap/</div>
+      <div class="code-ref-fn">fn register_catalog — want_distill || want_apply_improver; ManageSkillPlugin · ViewSkillPlugin · WORKSPACE_TOOLS</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Config parsing</div>
@@ -1085,12 +1085,12 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">In-chat write API</div>
-      <div class="code-ref-path">plugins/manage_skill/mod.rs</div>
+      <div class="code-ref-path">outbound/tools/manage_skill/mod.rs</div>
       <div class="code-ref-fn">manage_skill — create · edit_body · patch · add_resource · remove_resource · delete</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">In-chat read API</div>
-      <div class="code-ref-path">plugins/view_skill/mod.rs</div>
+      <div class="code-ref-path">outbound/tools/view_skill/mod.rs</div>
       <div class="code-ref-fn">view_skill — list · read · read_resource</div>
     </div>
     <div class="code-ref">
@@ -1110,12 +1110,12 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Eval runner</div>
-      <div class="code-ref-path">eval_builder.rs</div>
+      <div class="code-ref-path">adapters/inbound/eval.rs</div>
       <div class="code-ref-fn">fn run · fn run_skill · fn run_row · fn load_skill_metrics</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Judge adapter</div>
-      <div class="code-ref-path">eval_builder.rs</div>
+      <div class="code-ref-path">adapters/inbound/eval.rs</div>
       <div class="code-ref-fn">struct EvalJudgeClient · impl JudgeClient</div>
     </div>
     <div class="code-ref">
@@ -1140,7 +1140,7 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">CLI chat factory</div>
-      <div class="code-ref-path">channel_runtime.rs</div>
+      <div class="code-ref-path">bootstrap/</div>
       <div class="code-ref-fn">fn build_cli_chat_factory</div>
     </div>
     <div class="code-ref">

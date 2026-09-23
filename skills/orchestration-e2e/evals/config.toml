@@ -1,7 +1,7 @@
 # End-to-end eval config for the harness-owned orchestration system.
 #
 # Consumed by `tengu eval orchestration-e2e`.
-# Runner: src/adapters/eval_builder.rs (discover_skills walks skills/<name>/evals/).
+# Runner: src/adapters/inbound/eval.rs (discover_skills walks skills/<name>/evals/).
 #
 # Purpose: exercise the orchestrator agent (planner → DAG executor → workers)
 # through a 5-row prompt suite covering direct response, sequential DAG,

@@ -353,7 +353,7 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/eval_builder.rs::run_row` branches to `run_row_via_orchestrator` (`:1796`) → `channel_runtime::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:1796`) → `bootstrap::orchestrator::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 

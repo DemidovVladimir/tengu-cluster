@@ -32,19 +32,19 @@ If fail: something in the current tree doesn't compile — stop, diagnose.
 ### 1.1 Memory subsystem files exist
 
 ```bash
-ls src/adapters/memory/
-ls src/adapters/memory/vector/
+ls src/application/memory/
+ls src/application/memory/vector/
 ```
 
-**Expect:** `builtin.rs`, `context_block.rs`, `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `provider.rs`, `vector.rs`, `writer.rs` + `vector/{disk.rs,embedder.rs}`. No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/plugins/agentic_memory/`).
+**Expect:** `builtin.rs`, `context_block.rs`, `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `provider.rs`, `vector.rs`, `writer.rs` + `vector/{disk.rs,embedder.rs}`. No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/outbound/tools/agentic_memory/`).
 
 ### 1.2 Orchestrator subsystem files exist
 
 ```bash
-ls src/adapters/orchestrator/
+ls src/application/orchestrator/
 ```
 
-**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `plan.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs`. No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/runner.rs` (`SubprocessRunner`).
+**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `plan.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs`. No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/outbound/subprocess_runner.rs` (`SubprocessRunner`).
 
 ### 1.3 Legacy files are gone
 
@@ -53,8 +53,8 @@ ls -d src/adapters/agent_builder.rs src/adapters/event_orchestrator.rs \
    src/adapters/task_builder.rs src/adapters/orchestrator.rs \
    src/adapters/memory_builder.rs src/adapters/qdrant_memory_store.rs \
    src/adapters/embedding.rs src/adapters/rag src/adapters/agents \
-   src/adapters/orchestrator/roster.rs src/adapters/orchestrator/telemetry.rs \
-   src/adapters/orchestrator/config.rs src/adapters/memory/vector/qdrant.rs \
+   src/application/orchestrator/roster.rs src/application/orchestrator/telemetry.rs \
+   src/application/orchestrator/config.rs src/application/memory/vector/qdrant.rs \
    agents 2>&1 | rg -v "No such"
 ```
 
@@ -63,7 +63,7 @@ ls -d src/adapters/agent_builder.rs src/adapters/event_orchestrator.rs \
 ### 1.4 Subagents plugin deleted
 
 ```bash
-ls src/adapters/plugins/subagents 2>&1
+ls src/adapters/outbound/tools/subagents 2>&1
 ```
 
 **Expect:** `No such file or directory`.
@@ -71,7 +71,7 @@ ls src/adapters/plugins/subagents 2>&1
 ### 1.5 Memory plugin shape
 
 ```bash
-ls src/adapters/plugins/memory/
+ls src/adapters/outbound/tools/memory/
 ```
 
 **Expect:** `ingest.rs`, `mod.rs`, `persistent_store.rs`, `search.rs`. No `remember.rs`.
@@ -82,7 +82,7 @@ ls src/adapters/plugins/memory/
 rg -n 'LLM = heart' CLAUDE.md docs/architecture-2026-04-27.md
 ```
 
-**Expect:** hits. The doctrine is "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — enforced in `channel_runtime::run_turn_with_system` (planner turn strips tools/memory/grounding).
+**Expect:** hits. The doctrine is "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — enforced in `bootstrap::orchestrator::run_turn_with_system` (planner turn strips tools/memory/grounding).
 
 ### 1.7 No legacy types leak into production code
 
@@ -99,20 +99,20 @@ rg -n 'MemoryServiceHandle|EmbeddingPort|MemoryStorePort|DiskVectorMemoryStore|O
 Per project rule: never run full `cargo test` blindly. Use these filters:
 
 ```bash
-cargo test --bin tengu adapters::memory 2>&1 | tail -3
-cargo test --bin tengu adapters::orchestrator 2>&1 | tail -3
-cargo test --bin tengu adapters::plugins::memory 2>&1 | tail -3
-cargo test --bin tengu adapters::config 2>&1 | tail -3
+cargo test --bin tengu application::memory 2>&1 | tail -3
+cargo test --bin tengu application::orchestrator 2>&1 | tail -3
+cargo test --bin tengu adapters::outbound::tools::memory 2>&1 | tail -3
+cargo test --bin tengu config 2>&1 | tail -3
 cargo test --test scope_lint 2>&1 | tail -3
 cargo test --test run_agent_ipc 2>&1 | tail -3
 ```
 
 | Filter | Expected (2026-09-18) |
 |---|---|
-| `adapters::memory` | 21 passed, 0 failed |
-| `adapters::orchestrator` | 30 passed, 0 failed |
-| `adapters::plugins::memory` | 17 passed, 0 failed |
-| `adapters::config` | 20 passed, 0 failed |
+| `application::memory` | 21 passed, 0 failed |
+| `application::orchestrator` | 30 passed, 0 failed |
+| `adapters::outbound::tools::memory` | 17 passed, 0 failed |
+| `config` | 20 passed, 0 failed |
 | `scope_lint` | 2 passed, 0 failed |
 | `run_agent_ipc` | 4 passed, 0 failed |
 
@@ -344,7 +344,7 @@ If anything fails:
 - §1 or §2 fail → code regression. Don't proceed.
 - §3 fails < 9/9 → prompt calibration or LLM-level issue. Paste failing row transcript.
 - §4 fails → retention bug. Easy fix.
-- §5 fails → channel wiring bug in `telegram_builder.rs` or `tui/mod.rs`. Harder, needs a targeted PR.
+- §5 fails → channel wiring bug in `adapters/inbound/telegram.rs` or `tui/mod.rs`. Harder, needs a targeted PR.
 
 ---
 
