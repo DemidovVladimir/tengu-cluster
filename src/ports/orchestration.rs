@@ -121,7 +121,7 @@ pub struct TurnTelemetry {
 /// construct the agent-scoped `ChatRuntimeService<'a>` per call with a fresh
 /// `ChatLoopState::default()` and extract the final assistant text.
 ///
-/// Implementation lives in `channel_runtime.rs` where all the borrowed
+/// Implementation lives in `bootstrap/` where all the borrowed
 /// dependencies (engine, agent_config, tools, ...) are rooted. Trait lives
 /// here so `ChatOrchestratorPortImpl` (the planner-side LLM turn) can take
 /// `Arc<dyn ChatServiceFactory>` without dragging `ChatRuntimeService`'s

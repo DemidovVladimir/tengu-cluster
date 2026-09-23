@@ -3,7 +3,7 @@
 //! Spawns `tengu run-agent` as a child process, pipes the IPC JSON in and
 //! the result JSON out, and returns the `AgentIpcOutput`. `SubprocessRunner`
 //! implements `WorkerHandle` so the DagExecutor drives it; the child runs the
-//! real LLM mini-loop (`main.rs::run_agent_subprocess`). The accepted plan
+//! real LLM mini-loop (`inbound/cli/run_agent.rs::run_agent_subprocess`). The accepted plan
 //! reaches the child as `AgentIpcInput.plan_state` (per session), not via
 //! the global `TENGU_PLAN.md`.
 //!

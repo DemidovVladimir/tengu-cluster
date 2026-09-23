@@ -866,8 +866,6 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 // Per-row driver
 // ---------------------------------------------------------------------------
-
-use crate::adapters::channel_runtime;
 use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
@@ -1007,7 +1005,7 @@ pub struct RowCtx<'a> {
 }
 
 // `NoopActivity` and `NoopRuntimeToolExecutor` live in `adapters::noop`
-// (shared with `webhook_builder`). Local re-exports keep call sites in
+// (shared with `inbound/webhooks.rs`). Local re-exports keep call sites in
 // this file readable without the longer path.
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 
@@ -1337,7 +1335,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     // `workspace = "~/foo"`. Without expand_tilde the literal `~` is
     // joined into the cache plugin's `<workspace>/.tengu/cache.db` path
     // and pollutes the repo with a `~` directory. Matches the
-    // telegram_builder / webhook_builder convention.
+    // inbound/telegram.rs / inbound/webhooks.rs convention.
     let workspace_path: PathBuf = agent
         .workspace
         .as_ref()
@@ -1347,7 +1345,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let secret_registry = Arc::new(SecretRegistry::new());
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
-    let base_tools = channel_runtime::compute_base_tools(
+    let base_tools = crate::bootstrap::tools::compute_base_tools(
         true,
         false, // no memory in v1 eval runs
         &agent.workspace_tools,
@@ -1359,13 +1357,17 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
     skill_registry.reload(&skill_source);
 
-    let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-    let system_prompt =
-        channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
+    let current_tools = crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry);
+    let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
+        agent,
+        true,
+        &skill_registry,
+        &current_tools,
+    );
 
     let mut tool_defs = current_tools.clone();
     let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
-        match channel_runtime::build_tool_executor(
+        match crate::bootstrap::tools::build_tool_executor(
             &workspace_path,
             &current_tools,
             &skill_registry,
@@ -1691,7 +1693,7 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
         let base_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            channel_runtime::compute_base_tools(
+            crate::bootstrap::tools::compute_base_tools(
                 true,
                 false, // memory off in v1 eval runs
                 &agent.workspace_tools,
@@ -1707,14 +1709,18 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
         let current_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            channel_runtime::rebuild_tools(&base_tools, &skill_registry)
+            crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
         };
-        let system_prompt =
-            channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
+        let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
+            agent,
+            true,
+            &skill_registry,
+            &current_tools,
+        );
 
         let mut tool_defs = current_tools.clone();
         let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
-            match channel_runtime::build_tool_executor(
+            match crate::bootstrap::tools::build_tool_executor(
                 &workspace_path,
                 &current_tools,
                 &skill_registry,
@@ -1832,11 +1838,11 @@ async fn run_row_via_orchestrator(
     // MemoryManager so the orchestrator doesn't choke on missing deps.
     let memory_manager = Arc::new(crate::application::memory::manager::MemoryManager::new());
 
-    let orchestrator = channel_runtime::build_orchestrator(
+    let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
         &cfg_arc,
         Arc::clone(&factory),
         Arc::clone(&memory_manager),
-        channel_runtime::resolve_session_id(),
+        crate::bootstrap::orchestrator::resolve_session_id(),
     )
     .ok_or_else(|| {
         anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")

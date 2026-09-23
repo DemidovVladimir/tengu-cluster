@@ -1,6 +1,6 @@
 //! `compress_and_store` — the harness-enforced "step is done" signal.
 //!
-//! The model's "I'm done" tool. `main.rs::run_agent_subprocess` intercepts
+//! The model's "I'm done" tool. `inbound/cli/run_agent.rs::run_agent_subprocess` intercepts
 //! `tool_calls` named `compress_and_store` out-of-band (OpenRouter path),
 //! sets `compress_called = true`, and captures the summary; Claude Code
 //! subagents often just stop instead, in which case the runner's graceful-

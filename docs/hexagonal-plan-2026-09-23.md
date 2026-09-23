@@ -12,7 +12,7 @@ Supersedes the 2026-09-12 "flat `src/adapters/`" rule. One branch `refactor/hexa
 | `application/` | `domain`, `ports`, `config` | `adapters`, `bootstrap` (IO through std is allowed: skill files, git worktrees) |
 | `adapters/outbound/` | `domain`, `ports`, `config`, `application` (types only) | `adapters/inbound`, `bootstrap` |
 | `adapters/inbound/` | all of the above + `bootstrap` (to obtain wired services) | — |
-| `bootstrap/` (composition root) | everything | — |
+| `bootstrap/` (composition root) | everything but inbound | `adapters/inbound` |
 | `main.rs` | `adapters/inbound/cli`, `bootstrap` | — |
 
 Lint starts with an explicit exception list; the list must be empty before the PR is merged.
@@ -21,7 +21,7 @@ Lint starts with an explicit exception list; the list must be empty before the P
 
 ```
 src/
-  main.rs                    thin: clap parse → adapters::inbound::cli::dispatch
+  main.rs                    mod decls + `main` → adapters::inbound::cli::run
   domain/                    message.rs (Role, Message, ToolCall, ToolDef, StreamEvent, Lens, Inbound*) · session.rs (ChatLoopState, PromptAssemblyReport …) · memory.rs (MemoryHit, ChunkMetadata) · plan.rs · scope.rs (ToolScope) · token.rs · usage.rs · metrics.rs (MetricsRecord/Kind/Layer, AggregatorState) · tools.rs (opt-in tool names) · secrets.rs (SecretRegistry)
   ports/                     engine.rs (Engine, EngineContext, ToolExecutor) · tool.rs (Tool, ToolPlugin, ToolCtx, PluginCtx, ToolOutput, ToolDirectory) · memory.rs (MemoryProvider, VectorStore, Embedding, MemoryService, RecallStore) · shell.rs · skill_source.rs · tool_activity.rs · orchestration.rs (Planner, PlannerVerdict, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry) · judge.rs (JudgeClient, MetricKind)
   config/                    mod.rs (Config, AgentConfig, LimitsConfig, McpServerConfig …) · egress.rs (EgressConfig + validation) · skill_lifecycle.rs · paths.rs (TENGU_HOME, default config path, expand_tilde)
@@ -33,14 +33,14 @@ src/
     tools/                   registry.rs (ToolRegistry, PluginToolExecutor)
     metrics.rs               global metrics bus (record / install_global_sink)
   adapters/
-    inbound/                 activity.rs (tool activity lines) · eval.rs (`tengu eval`) · evolve.rs (`tengu skill evolve` driver) · cli/ (one file per subcommand, out of main.rs) · tui/ · telegram.rs · webhooks.rs · mcp_bridge.rs · run_agent.rs (IPC child)
+    inbound/                 cli/ (mod = clap + dispatch · run_agent · skill · doctor) · tui/ · telegram.rs · webhooks.rs · mcp_bridge.rs · channel.rs (channel helpers) · activity.rs · eval.rs (`tengu eval`) · evolve.rs (`tengu skill evolve` driver)
     outbound/
       engines/               mod.rs (build_engine factory) · openrouter.rs · claude_code.rs
       tools/                 ONE DIR PER TOOL + mod.rs = the tool catalog (see below)
       memory/                builtin.rs · disk_vector.rs · embedder.rs   (Postgres agentic_memory = tools/agentic_memory/)
       mcp_client/            client.rs · protocol.rs · proxy_tool.rs
       tools/args.rs (arg + path helpers) · subprocess_runner.rs · egress.rs · secrets.rs (+ SanitizedToolExecutor) · shell.rs · noop.rs · scaffold.rs · prune.rs
-  bootstrap/                 runtime.rs (build_orchestrator, build_tool_executor — was channel_runtime) · wiring.rs
+  bootstrap/                 tools.rs (build_tool_executor, subprocess executor, scopes) · memory.rs · orchestrator.rs (build_orchestrator, chat factory) · sandbox.rs (load_sandbox_or)
 ```
 
 ## Tools: fix "where do they live / how do I add one"
@@ -62,7 +62,7 @@ src/
 | 2 ✅ | config | `config.rs` → `config/`; `EgressConfig` → `config/egress.rs`, `SkillLifecycleConfig` → `config/skill_lifecycle.rs`, path helpers → `config/paths.rs`, `DEFAULT_EMBEDDING_MODEL` → `domain/memory.rs` | `load_sandbox_or` installs egress → stays in `main.rs` until `bootstrap/` (5) |
 | 3 ✅ | outbound adapters + tool catalog | engines, tools, memory stores, mcp client, egress, secrets, shell, runner; metrics record → `domain/metrics.rs`, sink → outbound | catalog replaces the 3-place registration |
 | 4 ✅ | application | chat, flow, prompt_budget, orchestrator, memory manager, skills, eval | new ports: `Embedding`, `MemoryService`, `RecallStore` (memory), `ToolDirectory` (tool); `SecretRegistry` → `domain/secrets.rs`; `eval` + evolve driver → `adapters/inbound/` (they compose runtimes); lint EXCEPTIONS empty |
-| 5 | inbound + bootstrap | `main.rs` (2.6k lines) → `inbound/cli/*`; `channel_runtime.rs` → `bootstrap/`; telegram/webhooks/tui/mcp_bridge | inbound adapters constructing runtime themselves |
+| 5 ✅ | inbound + bootstrap | `main.rs` (2.6k lines) → `inbound/cli/*`; `channel_runtime.rs` → `bootstrap/`; telegram/webhooks/tui/mcp_bridge | `channel_runtime.rs` split: wiring → `bootstrap/{tools,memory,orchestrator}.rs`, channel helpers → `inbound/channel.rs`; `main.rs` → `inbound/cli/{mod,run_agent,skill,doctor}.rs` + `bootstrap/sandbox.rs`; engine↔bridge env names → `outbound/bridge_env.rs`; lint: `bootstrap` must not use `adapters::inbound` |
 | 6 | zero exceptions + docs | empty the lint exception list; update every doc in CLAUDE.md's "REQUIRED updates" table (arch md/svg/html, context-management, SESSION_HANDOFF, CLAUDE.md + AGENTS.md) + `docs/tools.md` | doc volume (html inline FILE_MAP arrays) |
 
 ## Not changing

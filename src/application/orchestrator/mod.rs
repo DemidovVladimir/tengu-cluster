@@ -16,7 +16,7 @@ pub mod replan;
 pub mod retry;
 pub mod shared_files;
 // Phase 7.1 (partial) — `pub mod roster` removed; the only runtime caller
-// (channel_runtime::build_orchestrator) now uses an inlined helper.
+// (crate::bootstrap::orchestrator::build_orchestrator) now uses an inlined helper.
 pub mod wiring;
 
 // Public API re-exports

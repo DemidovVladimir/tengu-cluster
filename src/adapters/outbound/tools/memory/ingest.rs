@@ -3,7 +3,7 @@
 //!
 //! Talks to `MemoryManager` directly — the harness-owned `Embedder` +
 //! `VectorStore` pair registered once per session by
-//! `channel_runtime::build_memory_manager`. The pre-migration path went
+//! `crate::bootstrap::memory::build_memory_manager`. The pre-migration path went
 //! through a `MemoryServiceHandle` (`EmbeddingPort` / `MemoryStorePort`
 //! shim); this version bypasses that indirection entirely.
 //!

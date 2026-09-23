@@ -1,6 +1,6 @@
 //! Wiring: `OrchestratorChatPort` backed by a pluggable `ChatServiceFactory`
 //! (per-agent, per-call `ChatRuntimeService` construction owned by the impl,
-//! which lives in `channel_runtime.rs`).
+//! which lives in `bootstrap/`).
 //!
 //! Phase 7.1 (full) — `ChatWorker` is gone. `SubprocessRunner` is the only
 //! `WorkerHandle` impl now that `engine = "rag"` is the only orchestrator
@@ -106,7 +106,7 @@ mod threading_tests {
     /// hard error that surfaces as a step failure (replan trigger).
     #[tokio::test]
     async fn snapshots_inputs_fn_missing_agent_errors() {
-        use crate::adapters::channel_runtime::{snapshots_inputs_fn, OrchestratorSnapshots};
+        use crate::bootstrap::orchestrator::{snapshots_inputs_fn, OrchestratorSnapshots};
         use std::collections::HashMap;
         let map: OrchestratorSnapshots = Arc::new(std::sync::RwLock::new(HashMap::new()));
         let inputs_fn = snapshots_inputs_fn(map);

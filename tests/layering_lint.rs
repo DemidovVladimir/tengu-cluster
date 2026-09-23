@@ -10,6 +10,8 @@
 //! | `config` | `domain` |
 //! | `application` | `domain`, `ports`, `config`, `application` |
 //! | `adapters/outbound` | all but `adapters::inbound`, `bootstrap` (`FORBIDDEN`) |
+//! | `bootstrap` | all but `adapters::inbound` (`FORBIDDEN`) |
+//! | `adapters/inbound`, `main.rs` | everything |
 //!
 //! `EXCEPTIONS` lists known violations still being unwound. It may only
 //! shrink; the rewrite is done when it is empty.
@@ -36,10 +38,15 @@ const RULES: &[(&str, &[&str])] = &[
 
 /// (layer dir under `src/`, path prefixes it must not reference) — for
 /// layers that may use most of the crate.
-const FORBIDDEN: &[(&str, &[&str])] = &[(
-    "adapters/outbound",
-    &["crate::adapters::inbound", "crate::bootstrap"],
-)];
+const FORBIDDEN: &[(&str, &[&str])] = &[
+    (
+        "adapters/outbound",
+        &["crate::adapters::inbound", "crate::bootstrap"],
+    ),
+    // The composition root builds adapters; inbound adapters call it, never
+    // the other way round.
+    ("bootstrap", &["crate::adapters::inbound"]),
+];
 
 /// Crates that do IO; `domain` must not name them.
 const DOMAIN_IO_CRATES: &[&str] = &[

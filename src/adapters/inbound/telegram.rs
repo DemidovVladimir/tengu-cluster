@@ -17,14 +17,6 @@
 //! - **Multi-agent routing** — `@role: message` targeting, automatic classification,
 //!   `/team` orchestration via event-bus.
 
-use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
-
-use crate::adapters::channel_runtime;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
@@ -44,6 +36,12 @@ use crate::domain::session::ChatLoopState;
 use crate::ports::engine::Engine;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::tool_activity::ToolActivityPort;
+use anyhow::{Context, Result};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug, error, info, warn};
 
 // ===========================================================================
 // Constants
@@ -475,8 +473,10 @@ impl TelegramAgentState {
     /// Rebuild bridge tools from bridge_base_tools + skill registry.
     fn rebuild_bridge_tools(&mut self) {
         if !self.bridge_base_tools.is_empty() {
-            self.current_bridge_tools =
-                channel_runtime::rebuild_tools(&self.bridge_base_tools, &self.skill_registry);
+            self.current_bridge_tools = crate::bootstrap::tools::rebuild_tools(
+                &self.bridge_base_tools,
+                &self.skill_registry,
+            );
         }
     }
 }
@@ -520,7 +520,7 @@ struct TelegramSession {
     // `_memory_manager` is held so it stays alive for the lifetime of the
     // orchestrator (which holds an `Arc<MemoryManager>` internally).
     orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>>,
-    orchestrator_snapshots: channel_runtime::OrchestratorSnapshots,
+    orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots,
     _memory_manager: Arc<crate::application::memory::manager::MemoryManager>,
 
     // Per-user mutable state
@@ -531,7 +531,7 @@ struct TelegramSession {
 
     // Routing
     skill_command_router: SkillCommandRouter,
-    activity_log: Vec<channel_runtime::ActivityEntry>,
+    activity_log: Vec<crate::adapters::inbound::channel::ActivityEntry>,
 }
 
 impl TelegramSession {
@@ -566,8 +566,11 @@ impl TelegramSession {
         // `MemoryManager`. The manager is always constructed (so the
         // orchestrator has a valid handle), but `has_memory` gates tool
         // registration on whether the vector backend actually installed.
-        let memory_manager_early =
-            channel_runtime::build_memory_manager(&memory_config, rt, first_workspace.as_deref());
+        let memory_manager_early = crate::bootstrap::memory::build_memory_manager(
+            &memory_config,
+            rt,
+            first_workspace.as_deref(),
+        );
         let has_memory = rt.block_on(async { memory_manager_early.has_vector_backend().await });
 
         crate::adapters::outbound::scaffold::maybe_apply_scaffold(&config);
@@ -601,13 +604,13 @@ impl TelegramSession {
                 engine.supports_tool_use() && !engine.manages_own_workspace();
             let manages_workspace = engine.manages_own_workspace();
             let uses_tools = advertise_workspace_tools && workspace.is_some();
-            let base_tools = channel_runtime::compute_base_tools(
+            let base_tools = crate::bootstrap::tools::compute_base_tools(
                 uses_tools,
                 has_memory,
                 &agent_config.workspace_tools,
             );
             let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
-                rt.block_on(channel_runtime::with_mcp_bridge_tools(
+                rt.block_on(crate::bootstrap::tools::with_mcp_bridge_tools(
                     crate::adapters::outbound::tools::advertised_defs(
                         has_memory,
                         &agent_config.workspace_tools,
@@ -629,13 +632,14 @@ impl TelegramSession {
                 skill_registry.reload(src);
             }
 
-            let current_tools = channel_runtime::rebuild_tools(&base_tools, &skill_registry);
+            let current_tools =
+                crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry);
             let current_bridge_tools: Vec<ToolDef> = if manages_workspace {
-                channel_runtime::rebuild_tools(&bridge_base_tools, &skill_registry)
+                crate::bootstrap::tools::rebuild_tools(&bridge_base_tools, &skill_registry)
             } else {
                 vec![]
             };
-            let current_system_prompt = channel_runtime::rebuild_system_prompt(
+            let current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                 agent_config,
                 advertise_workspace_tools,
                 &skill_registry,
@@ -773,18 +777,19 @@ impl TelegramSession {
         // injection/writes through the same provider the LLM-callable tools
         // use.
         let memory_manager = memory_manager_early;
-        let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
+        let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
             Arc::new(std::sync::RwLock::new(HashMap::new()));
         let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
-            let inputs_fn =
-                channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
+            let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
+                &orchestrator_snapshots,
+            ));
             let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-                Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
-            channel_runtime::build_orchestrator(
+                Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn));
+            crate::bootstrap::orchestrator::build_orchestrator(
                 &config,
                 factory,
                 Arc::clone(&memory_manager),
-                channel_runtime::resolve_session_id(),
+                crate::bootstrap::orchestrator::resolve_session_id(),
             )
             .map(Arc::new)
         };
@@ -1022,10 +1027,9 @@ impl TelegramSession {
             None => return,
         };
         let skill_cmds = self.skill_command_router.list();
-        let state = self
-            .user_states
-            .entry(state_key)
-            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+        let state = self.user_states.entry(state_key).or_insert_with(|| {
+            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
+        });
         let cmd_result = handle_chat_command(
             &msg.content,
             state,
@@ -1061,8 +1065,10 @@ impl TelegramSession {
     // -------------------------------------------------------------------
 
     async fn route_and_chat(&mut self, msg: InboundMessage, sender_id: &str) {
-        let (routed_role, user_text) =
-            channel_runtime::parse_agent_routing(&msg.content, Some(&self.role_to_agent));
+        let (routed_role, user_text) = crate::adapters::inbound::channel::parse_agent_routing(
+            &msg.content,
+            Some(&self.role_to_agent),
+        );
 
         // Resolve target agent.
         let target_agent_id = if let Some(ref role_key) = routed_role {
@@ -1122,10 +1128,12 @@ impl TelegramSession {
         // Hot-reload skills.
         if let Some(ref src) = agent.skill_source {
             if agent.skill_registry.reload(src) {
-                agent.current_tools =
-                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.current_tools = crate::bootstrap::tools::rebuild_tools(
+                    &agent.base_tools,
+                    &agent.skill_registry,
+                );
                 agent.rebuild_bridge_tools();
-                agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                     &agent.agent_config,
                     agent.advertise_workspace_tools,
                     &agent.skill_registry,
@@ -1210,7 +1218,7 @@ impl TelegramSession {
                 .unwrap_or_else(|| agent.agent_id.clone()),
         );
         let current_executor = agent.workspace.as_ref().and_then(|ws| {
-            channel_runtime::build_tool_executor(
+            crate::bootstrap::tools::build_tool_executor(
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
@@ -1247,7 +1255,7 @@ impl TelegramSession {
             .unwrap_or_else(|| agent.agent_id.clone());
         let turn_tool_log_ref = Arc::clone(&turn_tool_log);
         let tool_result_observer = move |call: &ToolCall, result: &str| {
-            if let Some(entry) = channel_runtime::format_tool_for_activity(call) {
+            if let Some(entry) = crate::adapters::inbound::channel::format_tool_for_activity(call) {
                 turn_tool_log_ref.lock().unwrap().push(entry);
             }
             let redacted = observer_secrets.redact(result);
@@ -1273,10 +1281,9 @@ impl TelegramSession {
         let state_key = format!("{}:{}", sender_id, target_agent_id);
         self.user_state_last_active
             .insert(state_key.clone(), std::time::Instant::now());
-        let state = self
-            .user_states
-            .entry(state_key)
-            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+        let state = self.user_states.entry(state_key).or_insert_with(|| {
+            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
+        });
 
         if self.is_multi_agent {
             let agent_label = agent
@@ -1293,8 +1300,10 @@ impl TelegramSession {
 
         let mut turn_system_prompt = agent.current_system_prompt.clone();
         if self.is_multi_agent && !needs_fresh_history_grounding(&user_content) {
-            let activity_ctx =
-                channel_runtime::build_activity_context(&self.activity_log, target_agent_id);
+            let activity_ctx = crate::adapters::inbound::channel::build_activity_context(
+                &self.activity_log,
+                target_agent_id,
+            );
             if !activity_ctx.is_empty() {
                 turn_system_prompt.push_str(&activity_ctx);
             }
@@ -1360,7 +1369,9 @@ impl TelegramSession {
                 }
                 if let Some(ref text) = result.assistant_text {
                     let reply = self.secret_registry.redact(text);
-                    for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                    for chunk in
+                        crate::adapters::inbound::channel::chunk_message(&reply, TELEGRAM_MAX_LEN)
+                    {
                         if let Err(e) = self
                             .pipe
                             .send_text(sender, chunk, &self.delivery_opts)
@@ -1393,23 +1404,27 @@ impl TelegramSession {
                         .assistant_text
                         .as_deref()
                         .map(|t| {
-                            channel_runtime::truncate_summary(
+                            crate::adapters::inbound::channel::truncate_summary(
                                 t,
-                                channel_runtime::MAX_ACTIVITY_SUMMARY_CHARS,
+                                crate::adapters::inbound::channel::MAX_ACTIVITY_SUMMARY_CHARS,
                             )
                         })
                         .unwrap_or_default();
                     if !tools_used.is_empty() || !response_summary.is_empty() {
-                        self.activity_log.push(channel_runtime::ActivityEntry {
-                            agent_label: agent_label_for_activity,
-                            agent_id: target_agent_id_owned,
-                            tools_used,
-                            response_summary,
-                            tool_outcomes: result.tool_outcomes,
-                        });
-                        if self.activity_log.len() > channel_runtime::MAX_ACTIVITY_ENTRIES {
+                        self.activity_log
+                            .push(crate::adapters::inbound::channel::ActivityEntry {
+                                agent_label: agent_label_for_activity,
+                                agent_id: target_agent_id_owned,
+                                tools_used,
+                                response_summary,
+                                tool_outcomes: result.tool_outcomes,
+                            });
+                        if self.activity_log.len()
+                            > crate::adapters::inbound::channel::MAX_ACTIVITY_ENTRIES
+                        {
                             self.activity_log.drain(
-                                ..self.activity_log.len() - channel_runtime::MAX_ACTIVITY_ENTRIES,
+                                ..self.activity_log.len()
+                                    - crate::adapters::inbound::channel::MAX_ACTIVITY_ENTRIES,
                             );
                         }
                     }
@@ -1444,10 +1459,12 @@ impl TelegramSession {
         for agent in self.agent_states.values_mut() {
             if let Some(ref src) = agent.skill_source {
                 if agent.skill_registry.reload(src) {
-                    agent.current_tools =
-                        channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                    agent.current_tools = crate::bootstrap::tools::rebuild_tools(
+                        &agent.base_tools,
+                        &agent.skill_registry,
+                    );
                     agent.rebuild_bridge_tools();
-                    agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                    agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                         &agent.agent_config,
                         agent.advertise_workspace_tools,
                         &agent.skill_registry,
@@ -1463,7 +1480,8 @@ impl TelegramSession {
         // factory closure returns — so once the map is populated, the
         // orchestrator's DAG executor can spawn tasks that look up any agent
         // by name without borrowing from `self`.
-        let mut snapshot_map: HashMap<String, channel_runtime::ChatTurnInputs> = HashMap::new();
+        let mut snapshot_map: HashMap<String, crate::bootstrap::orchestrator::ChatTurnInputs> =
+            HashMap::new();
         for (agent_id, agent) in &self.agent_states {
             let activity_adapter = make_tool_activity_adapter(
                 agent
@@ -1475,7 +1493,7 @@ impl TelegramSession {
             );
             let current_executor: Option<Arc<dyn ToolExecutor>> =
                 agent.workspace.as_ref().and_then(|ws| {
-                    channel_runtime::build_tool_executor(
+                    crate::bootstrap::tools::build_tool_executor(
                         ws,
                         &agent.current_tools,
                         &agent.skill_registry,
@@ -1508,14 +1526,16 @@ impl TelegramSession {
             // filters out the target agent's own entries).
             let mut snapshot_system_prompt = agent.current_system_prompt.clone();
             if self.is_multi_agent {
-                let activity_ctx =
-                    channel_runtime::build_activity_context(&self.activity_log, agent_id);
+                let activity_ctx = crate::adapters::inbound::channel::build_activity_context(
+                    &self.activity_log,
+                    agent_id,
+                );
                 if !activity_ctx.is_empty() {
                     snapshot_system_prompt.push_str(&activity_ctx);
                 }
             }
 
-            let inputs = channel_runtime::ChatTurnInputs {
+            let inputs = crate::bootstrap::orchestrator::ChatTurnInputs {
                 engine: Arc::clone(&agent.engine),
                 agent_id: agent.agent_id.clone(),
                 agent_config: Arc::new(agent.agent_config.clone()),
@@ -1580,7 +1600,7 @@ impl TelegramSession {
                 .await;
             return;
         }
-        for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+        for chunk in crate::adapters::inbound::channel::chunk_message(&reply, TELEGRAM_MAX_LEN) {
             if let Err(e) = self
                 .pipe
                 .send_text(sender, chunk, &self.delivery_opts)
@@ -1671,8 +1691,10 @@ impl TelegramSession {
                 if let Some(ref src) = agent.skill_source {
                     agent.skill_registry.reload(src);
                 }
-                agent.current_tools =
-                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.current_tools = crate::bootstrap::tools::rebuild_tools(
+                    &agent.base_tools,
+                    &agent.skill_registry,
+                );
                 agent.rebuild_bridge_tools();
                 created = true;
             }
@@ -1832,9 +1854,9 @@ impl TelegramSession {
             lines.push("No workspace — skills unavailable.".to_string());
         }
         agent.current_tools =
-            channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+            crate::bootstrap::tools::rebuild_tools(&agent.base_tools, &agent.skill_registry);
         agent.rebuild_bridge_tools();
-        agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+        agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
             &agent.agent_config,
             agent.advertise_workspace_tools,
             &agent.skill_registry,
@@ -1875,10 +1897,12 @@ impl TelegramSession {
 
         if let Some(ref src) = agent.skill_source {
             if agent.skill_registry.reload(src) {
-                agent.current_tools =
-                    channel_runtime::rebuild_tools(&agent.base_tools, &agent.skill_registry);
+                agent.current_tools = crate::bootstrap::tools::rebuild_tools(
+                    &agent.base_tools,
+                    &agent.skill_registry,
+                );
                 agent.rebuild_bridge_tools();
-                agent.current_system_prompt = channel_runtime::rebuild_system_prompt(
+                agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                     &agent.agent_config,
                     agent.advertise_workspace_tools,
                     &agent.skill_registry,
@@ -1899,7 +1923,7 @@ impl TelegramSession {
             .unwrap_or_else(|| agent.agent_id.clone());
         let activity_adapter = make_tool_activity_adapter(agent_label);
         let current_executor = agent.workspace.as_ref().and_then(|ws| {
-            channel_runtime::build_tool_executor(
+            crate::bootstrap::tools::build_tool_executor(
                 ws,
                 &agent.current_tools,
                 &agent.skill_registry,
@@ -1928,10 +1952,9 @@ impl TelegramSession {
         let state_key = format!("{}:{}", sender_id, active_aid);
         self.user_state_last_active
             .insert(state_key.clone(), std::time::Instant::now());
-        let state = self
-            .user_states
-            .entry(state_key)
-            .or_insert_with(|| channel_runtime::create_chat_loop_state(&agent.agent_config));
+        let state = self.user_states.entry(state_key).or_insert_with(|| {
+            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
+        });
 
         let _ = self.pipe.send_chat_action(sender).await;
         let t_pipe = Arc::clone(&self.pipe);
@@ -1980,7 +2003,9 @@ impl TelegramSession {
                 }
                 if let Some(ref text) = res.assistant_text {
                     let reply = self.secret_registry.redact(text);
-                    for chunk in channel_runtime::chunk_message(&reply, TELEGRAM_MAX_LEN) {
+                    for chunk in
+                        crate::adapters::inbound::channel::chunk_message(&reply, TELEGRAM_MAX_LEN)
+                    {
                         let _ = self
                             .pipe
                             .send_text(sender, chunk, &self.delivery_opts)

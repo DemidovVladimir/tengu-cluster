@@ -7,7 +7,7 @@
 //! `tools/list`, and surfaces every remote tool as `{server_name}__{tool_name}`
 //! so an LLM can call it like any other platform tool.
 //!
-//! Only wired in by `channel_runtime::build_tool_executor` when the root
+//! Only wired in by `crate::bootstrap::tools::build_tool_executor` when the root
 //! `Config.mcp_servers` list is non-empty — zero cost for users who have not
 //! configured any MCP integrations.
 //!

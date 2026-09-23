@@ -148,7 +148,7 @@ impl ClaudeCodeEngine {
             "TENGU_BRIDGE_TOOLS": tools_json,
             "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
         });
-        env[crate::adapters::mcp_bridge::TENGU_BRIDGE_SCOPES_ENV] =
+        env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SCOPES_ENV] =
             serde_json::Value::String(scopes_json);
         // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
         // `bridge_tools`: the bridge reconnects to them and proxies the calls
@@ -164,7 +164,7 @@ impl ClaudeCodeEngine {
             })
             .collect();
         if !servers.is_empty() {
-            env[crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV] =
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV] =
                 serde_json::Value::String(
                     serde_json::to_string(&servers).unwrap_or_else(|_| "[]".into()),
                 );
@@ -773,7 +773,7 @@ mod tests {
         );
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
         let passed: Vec<crate::config::McpServerConfig> = serde_json::from_str(
-            env[crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV]
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV]
                 .as_str()
                 .unwrap(),
         )
@@ -794,7 +794,7 @@ mod tests {
             &servers,
         );
         assert!(none["mcpServers"]["tengu-tools"]["env"]
-            .get(crate::adapters::mcp_bridge::TENGU_BRIDGE_MCP_SERVERS_ENV)
+            .get(crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV)
             .is_none());
     }
 }

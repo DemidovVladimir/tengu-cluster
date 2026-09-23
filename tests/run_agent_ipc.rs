@@ -5,7 +5,7 @@
 //! stdin, cwd = repo root — but only through
 //! the pre-LLM failure paths so no network / API key is needed.
 //!
-//! | Case | Trigger | Expected (from `src/main.rs::run_agent_subprocess`) |
+//! | Case | Trigger | Expected (from `src/inbound/cli/run_agent.rs::run_agent_subprocess`) |
 //! |---|---|---|
 //! | guard | no `TENGU_AGENT_IPC` | exit != 0, stderr: "subprocess mode not meant for direct invocation" |
 //! | bad json | `TENGU_AGENT_IPC=1`, stdin = `not json` | exit != 0, stderr: "parse IPC input JSON", stdout empty |
@@ -13,7 +13,7 @@
 //!
 //! None of these paths emit an `AgentIpcOutput` — every failure before the
 //! tool loop propagates as `anyhow::Error` out of `main`, and the parent
-//! (`src/adapters/runner.rs`, non-zero-status check) turns that into a step
+//! (`src/adapters/outbound/subprocess_runner.rs`, non-zero-status check) turns that into a step
 //! failure without parsing stdout. The tests assert exactly that contract.
 
 use std::io::{Read, Write};

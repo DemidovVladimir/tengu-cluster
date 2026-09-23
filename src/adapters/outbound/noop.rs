@@ -2,7 +2,7 @@
 //!
 //! These are used by surfaces that drive `collect_engine_response` outside
 //! the chat / telegram loop and don't need activity logging or fallback
-//! tool execution. Today: `inbound::eval` (eval runs) and `webhook_builder`
+//! tool execution. Today: `inbound::eval` (eval runs) and `inbound/webhooks.rs`
 //! (webhook one-shots). Previously each surface re-defined identical
 //! `NoopActivity` and `NoopRuntimeToolExecutor` types — moved here so the
 //! duplication doesn't drift if the trait signatures change.

@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
+use crate::adapters::outbound::bridge_env::{
+    TENGU_BRIDGE_MCP_SERVERS_ENV, TENGU_BRIDGE_SCOPES_ENV,
+};
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
 use crate::application::memory::manager::MemoryManager;
@@ -372,19 +375,10 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Tool executor construction — mirrors `channel_runtime::build_tool_executor`
+// Tool executor construction — mirrors `crate::bootstrap::tools::build_tool_executor`
 // but is tailored for the bridge (no skill registry, no cancel flag, no
 // channel-specific activity port).
 // ---------------------------------------------------------------------------
-
-/// Env var carrying the calling agent's per-tool scope map into the bridge
-/// subprocess. Written by `ClaudeCodeEngine::build_mcp_config_json`.
-pub(crate) const TENGU_BRIDGE_SCOPES_ENV: &str = "TENGU_BRIDGE_SCOPES";
-
-/// `[[mcp_servers]]` entries (JSON array of `McpServerConfig`) whose tools
-/// appear in `TENGU_BRIDGE_TOOLS` as `{server}__{tool}`. Set by the Claude
-/// Code engine; absent for a standalone bridge.
-pub(crate) const TENGU_BRIDGE_MCP_SERVERS_ENV: &str = "TENGU_BRIDGE_MCP_SERVERS";
 
 /// Parse `TENGU_BRIDGE_SCOPES`. Unset → empty map (every tool permissive).
 /// Unparsable → warn + empty map, so a malformed export never bricks the
@@ -436,7 +430,7 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
         .get("main")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("default config missing 'main' agent"))?;
-    // Phase 7.7 refactor #5 — same allowlist `channel_runtime::subagent_config` uses.
+    // Phase 7.7 refactor #5 — same allowlist `crate::bootstrap::tools::subagent_config` uses.
     agent_config.workspace_tools = crate::domain::tools::WORKSPACE_TOOLS
         .iter()
         .filter(|t| allowed_names.contains(**t))
@@ -537,14 +531,11 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     // Per-tool scopes — ENFORCED. The parent's `ClaudeCodeEngine` exports the
     // agent's scope map as `TENGU_BRIDGE_SCOPES` (serde_json of
     // `HashMap<String, ToolScope>`); tools without an entry fall back to
-    // `permissive_scope`, exactly like `channel_runtime::build_tool_executor`.
+    // `permissive_scope`, exactly like `crate::bootstrap::tools::build_tool_executor`.
     // A missing or unparsable env var degrades to all-permissive with a warn.
     let configured = bridge_scopes_from_env();
-    let scopes = crate::adapters::channel_runtime::resolve_tool_scopes(
-        workspace,
-        &configured,
-        registry.tool_names(),
-    );
+    let scopes =
+        crate::bootstrap::tools::resolve_tool_scopes(workspace, &configured, registry.tool_names());
 
     Ok(PluginToolExecutor {
         registry,

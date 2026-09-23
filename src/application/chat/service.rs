@@ -264,6 +264,20 @@ pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
+/// Create a new `ChatLoopState` with defaults from agent config.
+pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopState {
+    ChatLoopState {
+        messages: Vec::new(),
+        active_flow_key: None,
+        manual_session_id: None,
+        flow_token_usage: 0,
+        active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        last_prompt_report: None,
+    }
+}
+
 impl<'a> ChatRuntimeService<'a> {
     pub(crate) async fn process_user_text(
         &self,

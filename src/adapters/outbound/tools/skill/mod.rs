@@ -12,7 +12,7 @@
 //! Because `SkillRegistry` lives outside `PluginCtx`, the plugin captures
 //! the required definitions when it is built (mirroring how
 //! `CryptoPlugin::new(cancel)` and `MemoryPlugin::new(...)` capture their
-//! construction inputs). `channel_runtime::build_tool_executor` is the sole
+//! construction inputs). `crate::bootstrap::tools::build_tool_executor` is the sole
 //! caller today.
 
 use std::collections::HashMap;

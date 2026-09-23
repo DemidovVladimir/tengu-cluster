@@ -41,6 +41,18 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
+use crate::application::chat::tool_loop::collect_engine_response;
+use crate::application::memory::manager::MemoryManager;
+use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
+use crate::config::{Config, WebhookEndpointConfig};
+use crate::domain::message::{Message, Role};
+use crate::domain::secrets::SecretRegistry;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::engine::{Engine, EngineContext};
+use crate::ports::orchestration::ChatServiceFactory;
+use crate::ports::tool_activity::ToolActivityPort;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use axum::{
@@ -55,20 +67,6 @@ use hmac::{Hmac, Mac};
 use serde_json::json;
 use sha2::Sha256;
 use tracing::{error, info, warn};
-
-use crate::adapters::channel_runtime;
-use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
-use crate::application::chat::tool_loop::collect_engine_response;
-use crate::application::memory::manager::MemoryManager;
-use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
-use crate::config::{Config, WebhookEndpointConfig};
-use crate::domain::message::{Message, Role};
-use crate::domain::secrets::SecretRegistry;
-use crate::ports::engine::ToolExecutor;
-use crate::ports::engine::{Engine, EngineContext};
-use crate::ports::orchestration::ChatServiceFactory;
-use crate::ports::tool_activity::ToolActivityPort;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -257,7 +255,7 @@ async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_messag
         cfg: Arc::new(state.config.clone()),
     });
 
-    let Some(orchestrator) = channel_runtime::build_orchestrator(
+    let Some(orchestrator) = crate::bootstrap::orchestrator::build_orchestrator(
         &state.config,
         factory,
         Arc::clone(&state.memory_manager),
@@ -508,7 +506,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         // like `workspace = "~/aura-workspace"`. Without `expand_tilde`
         // the literal `~` is joined into runtime paths (e.g. by the cache
         // plugin's `<workspace>/.tengu/cache.db`), creating a `~` directory
-        // at CWD that pollutes the repo. Mirrors `telegram_builder`'s
+        // at CWD that pollutes the repo. Mirrors `inbound/telegram.rs`'s
         // pattern at the `let workspace: Option<PathBuf>` site.
         let workspace_path: PathBuf = agent
             .workspace
@@ -533,7 +531,7 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let base_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            channel_runtime::compute_base_tools(
+            crate::bootstrap::tools::compute_base_tools(
                 true,
                 false, // memory tools off for webhook one-shots
                 &agent.workspace_tools,
@@ -549,33 +547,38 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let current_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            channel_runtime::rebuild_tools(&base_tools, &skill_registry)
+            crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
         };
-        let system_prompt =
-            channel_runtime::rebuild_system_prompt(agent, true, &skill_registry, &current_tools);
+        let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
+            agent,
+            true,
+            &skill_registry,
+            &current_tools,
+        );
 
         let mut tool_defs = current_tools.clone();
-        let inner_executor: Arc<dyn ToolExecutor> = match channel_runtime::build_tool_executor(
-            &workspace_path,
-            &current_tools,
-            &skill_registry,
-            &None,
-            &secret_registry,
-            log_activity,
-            None,
-            Some(&self.cfg.memory),
-            agent,
-            &self.cfg.mcp_servers,
-        ) {
-            Some(executor) => {
-                let extra = executor.additional_tool_defs(&tool_defs);
-                if !extra.is_empty() {
-                    tool_defs.extend(extra);
+        let inner_executor: Arc<dyn ToolExecutor> =
+            match crate::bootstrap::tools::build_tool_executor(
+                &workspace_path,
+                &current_tools,
+                &skill_registry,
+                &None,
+                &secret_registry,
+                log_activity,
+                None,
+                Some(&self.cfg.memory),
+                agent,
+                &self.cfg.mcp_servers,
+            ) {
+                Some(executor) => {
+                    let extra = executor.additional_tool_defs(&tool_defs);
+                    if !extra.is_empty() {
+                        tool_defs.extend(extra);
+                    }
+                    Arc::new(executor) as Arc<dyn ToolExecutor>
                 }
-                Arc::new(executor) as Arc<dyn ToolExecutor>
-            }
-            None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
-        };
+                None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
+            };
 
         let messages = vec![
             Message {

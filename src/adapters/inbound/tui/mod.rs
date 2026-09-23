@@ -3,13 +3,6 @@
 pub mod app;
 pub mod view;
 
-use anyhow::Result;
-use cursive::backends::crossterm::crossterm::{event::DisableMouseCapture, execute};
-use cursive::Cursive;
-use std::path::PathBuf;
-use std::sync::{mpsc, Arc};
-
-use crate::adapters::channel_runtime;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
@@ -24,7 +17,12 @@ use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::tool_activity::ToolActivityPort;
+use anyhow::Result;
 use app::{BubbleRole, ChatRequest, SkillCommand};
+use cursive::backends::crossterm::crossterm::{event::DisableMouseCapture, execute};
+use cursive::Cursive;
+use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
 fn disable_terminal_mouse_capture() -> Result<()> {
     #[cfg(unix)]
     {
@@ -191,17 +189,19 @@ pub fn run_tui(
     // reads inputs back from the same map.
     let _memory_manager: Arc<crate::application::memory::manager::MemoryManager> =
         Arc::new(crate::application::memory::manager::MemoryManager::new());
-    let orchestrator_snapshots: channel_runtime::OrchestratorSnapshots =
+    let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
         Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
     let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
-        let inputs_fn = channel_runtime::snapshots_inputs_fn(Arc::clone(&orchestrator_snapshots));
+        let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
+            &orchestrator_snapshots,
+        ));
         let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-            Arc::new(channel_runtime::RuntimeChatServiceFactory::new(inputs_fn));
-        channel_runtime::build_orchestrator(
+            Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn));
+        crate::bootstrap::orchestrator::build_orchestrator(
             &config,
             factory,
             Arc::clone(&_memory_manager),
-            channel_runtime::resolve_session_id(),
+            crate::bootstrap::orchestrator::resolve_session_id(),
         )
         .map(Arc::new)
     };
@@ -357,8 +357,11 @@ pub fn run_tui(
         // Build memory subsystem if enabled. Backed by a shared
         // `Embedder` + `VectorStore` pair via `MemoryManager`.
         let memory_manager_handle: Option<Arc<crate::application::memory::manager::MemoryManager>> = {
-            let mgr =
-                channel_runtime::build_memory_manager(&memory_config, &rt, workspace.as_deref());
+            let mgr = crate::bootstrap::memory::build_memory_manager(
+                &memory_config,
+                &rt,
+                workspace.as_deref(),
+            );
             let vector_ready =
                 futures::executor::block_on(async { mgr.has_vector_backend().await });
             if vector_ready {
@@ -373,7 +376,7 @@ pub fn run_tui(
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_manager_handle.is_some();
         let manages_workspace = engine.manages_own_workspace();
-        let mut base_tools = channel_runtime::compute_base_tools(
+        let mut base_tools = crate::bootstrap::tools::compute_base_tools(
             uses_tools,
             has_memory,
             &engine_agent_config.workspace_tools,
@@ -382,7 +385,7 @@ pub fn run_tui(
         // tools so Tengu-native tools are still accessible via MCP bridge.
         let bridge_base_tools: Vec<crate::domain::message::ToolDef> =
             if manages_workspace && workspace.is_some() {
-                rt.block_on(channel_runtime::with_mcp_bridge_tools(
+                rt.block_on(crate::bootstrap::tools::with_mcp_bridge_tools(
                     crate::adapters::outbound::tools::advertised_defs(
                         has_memory,
                         &engine_agent_config.workspace_tools,
@@ -421,7 +424,8 @@ pub fn run_tui(
         > = None;
         let mut current_system_prompt = system_prompt;
 
-        let mut runtime_state = channel_runtime::create_chat_loop_state(&engine_agent_config);
+        let mut runtime_state =
+            crate::application::chat::service::create_chat_loop_state(&engine_agent_config);
 
         // Memory recall during chat turns goes through the
         // `MemoryManager` directly (ChatRuntimeService::memory_manager).
@@ -433,7 +437,9 @@ pub fn run_tui(
                     response_tx,
                 } => {
                     let response = match command {
-                        SkillCommand::List => channel_runtime::format_skill_list(&skill_registry),
+                        SkillCommand::List => {
+                            crate::adapters::inbound::channel::format_skill_list(&skill_registry)
+                        }
                         SkillCommand::Enable(ref name) => match skill_registry.enable(name) {
                             Ok(true) => {
                                 tools_dirty = true;
@@ -481,7 +487,7 @@ pub fn run_tui(
                         let mut lines = Vec::new();
 
                         // Re-read env vars and rebuild base tool set.
-                        let new_base = channel_runtime::compute_base_tools(
+                        let new_base = crate::bootstrap::tools::compute_base_tools(
                             uses_tools,
                             has_memory,
                             &engine_agent_config.workspace_tools,
@@ -507,9 +513,11 @@ pub fn run_tui(
 
                         // Always force a full rebuild to pick up env + skill changes.
                         if let Some(ref ws) = workspace {
-                            current_tools =
-                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-                            current_executor = channel_runtime::build_tool_executor(
+                            current_tools = crate::bootstrap::tools::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                            );
+                            current_executor = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -528,7 +536,7 @@ pub fn run_tui(
                                     current_tools.extend(extra);
                                 }
                             }
-                            current_system_prompt = channel_runtime::rebuild_system_prompt(
+                            current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
                                 advertise_workspace_tools,
                                 &skill_registry,
@@ -585,9 +593,11 @@ pub fn run_tui(
                         }
                         if tools_dirty {
                             if let Some(ref ws) = workspace {
-                                current_tools =
-                                    channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-                                current_executor = channel_runtime::build_tool_executor(
+                                current_tools = crate::bootstrap::tools::rebuild_tools(
+                                    &base_tools,
+                                    &skill_registry,
+                                );
+                                current_executor = crate::bootstrap::tools::build_tool_executor(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
@@ -606,14 +616,15 @@ pub fn run_tui(
                                         current_tools.extend(extra);
                                     }
                                 }
-                                current_system_prompt = channel_runtime::rebuild_system_prompt(
-                                    &engine_agent_config,
-                                    advertise_workspace_tools,
-                                    &skill_registry,
-                                    &current_tools,
-                                );
+                                current_system_prompt =
+                                    crate::bootstrap::tools::rebuild_system_prompt(
+                                        &engine_agent_config,
+                                        advertise_workspace_tools,
+                                        &skill_registry,
+                                        &current_tools,
+                                    );
                                 if manages_workspace {
-                                    current_bridge_tools = channel_runtime::rebuild_tools(
+                                    current_bridge_tools = crate::bootstrap::tools::rebuild_tools(
                                         &bridge_base_tools,
                                         &skill_registry,
                                     );
@@ -727,9 +738,11 @@ pub fn run_tui(
                     // Rebuild tools/executor/prompt when dirty.
                     if tools_dirty {
                         if let Some(ref ws) = workspace {
-                            current_tools =
-                                channel_runtime::rebuild_tools(&base_tools, &skill_registry);
-                            current_executor = channel_runtime::build_tool_executor(
+                            current_tools = crate::bootstrap::tools::rebuild_tools(
+                                &base_tools,
+                                &skill_registry,
+                            );
+                            current_executor = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -748,7 +761,7 @@ pub fn run_tui(
                                     current_tools.extend(extra);
                                 }
                             }
-                            current_system_prompt = channel_runtime::rebuild_system_prompt(
+                            current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
                                 advertise_workspace_tools,
                                 &skill_registry,
@@ -791,7 +804,7 @@ pub fn run_tui(
                             Some(current_bridge_tools.clone())
                         };
 
-                        let snapshot = channel_runtime::ChatTurnInputs {
+                        let snapshot = crate::bootstrap::orchestrator::ChatTurnInputs {
                             engine: Arc::clone(&engine),
                             agent_id: engine_agent_id.clone(),
                             agent_config: Arc::new(engine_agent_config.clone()),

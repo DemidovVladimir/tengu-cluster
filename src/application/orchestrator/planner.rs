@@ -168,7 +168,7 @@ pub struct RagPlanner {
     /// message is also written to Postgres `agentic_memory`.
     session_history: tokio::sync::Mutex<Vec<String>>,
     /// id stamped on every durable memory write. Resolved once by
-    /// `channel_runtime::build_orchestrator` and shared with
+    /// `crate::bootstrap::orchestrator::build_orchestrator` and shared with
     /// `SubprocessRunner` so planner and subagent writes line up.
     session_id: String,
     /// Phase 6.1 (full) — optional event bus for emitting
