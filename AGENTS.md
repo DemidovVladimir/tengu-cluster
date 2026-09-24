@@ -450,6 +450,17 @@ These are not preferences. They're load-bearing.
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
   that say "check that tool X is in your tool list" should look for both
   forms or just attempt the call and read the error.
+- **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
+  (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
+  via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
+  the next action + its argument slots; existing tools execute it through the
+  loop agent's executor (same scopes/egress as a `run-agent` child).
+  Jev returns typed choices, never text or tool-call JSON — it cannot be an
+  `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
+  the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
+  `auth_header_env`, not HMAC) or `tengu decide`. History is in-process;
+  audit in `<TENGU_HOME>/logs/decisions.jsonl`. Plan:
+  `docs/decision-loop-plan-2026-09-24.md`.
 
 ---
 

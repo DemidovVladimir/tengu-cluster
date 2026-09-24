@@ -131,6 +131,29 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # agent = "main"
 # secret_env = "TENGU_TEST_WEBHOOK_SECRET"
 # goal_template = "Webhook arrived. Summarise the payload."
+#
+# Helius (static Authorization header) → decision loop instead of the planner:
+# [webhooks.endpoints.helius]
+# loop = "watch"
+# auth_header_env = "HELIUS_WEBHOOK_AUTH"
+
+# --- Decision loops (Jev picks, tools execute) ---
+# Test one event: tengu decide --sandbox <name> --loop watch [--event e.json]
+# Full example: sandboxes/lping/config.toml. Doc: docs/decision-loop-plan-2026-09-24.md.
+# [decision_loops.watch]
+# goal = "Keep the position in range; max 2 SOL"
+# agent = "main"              # tools + scopes + workspace come from this agent
+# dry_run = true              # write actions logged, not run (default true)
+# act_at = 0.8                # min confidence to act; below → escalate to planner
+# [decision_loops.watch.actions.hold]
+# description = "Nothing to do"           # no `tool` = terminal
+# [decision_loops.watch.actions.fetch]
+# description = "Fetch pools"
+# tool = "http_request"
+# read_only = true
+# args = { method = "GET", url = "https://example.com/pools?pair={pair}", return_body = true }
+# slots = { pair = ["SOL-USDC"] }
+# reduce = { pools = "/data/*/{address,tvl}" }
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`

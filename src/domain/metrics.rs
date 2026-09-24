@@ -96,6 +96,10 @@ pub enum MetricsKind {
     /// OpenRouter chat call from the `agentic_memory` LLM Wiki compiler
     /// (`compile_wiki`). Occasional + explicit, not per-turn.
     WikiCompiler,
+    /// Decisions-endpoint call (TypeSafe Jev) from a decision loop
+    /// (`application::decision_loop`). One per loop step; completion tokens
+    /// are the typed answers, not text.
+    Decision,
 }
 
 impl MetricsKind {
@@ -105,6 +109,7 @@ impl MetricsKind {
             MetricsKind::Subagent => "subagent",
             MetricsKind::Embedding => "embedding",
             MetricsKind::WikiCompiler => "wiki_compiler",
+            MetricsKind::Decision => "decision",
         }
     }
 }

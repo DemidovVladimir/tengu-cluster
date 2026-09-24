@@ -44,11 +44,13 @@ use std::sync::Arc;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::application::chat::tool_loop::collect_engine_response;
+use crate::application::decision_loop::DecisionLoop;
 use crate::application::memory::manager::MemoryManager;
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role, ToolDef};
 use crate::domain::secrets::SecretRegistry;
+use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::engine::{Engine, EngineContext};
 use crate::ports::orchestration::ChatServiceFactory;
@@ -88,12 +90,17 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
             "[webhooks] no endpoints defined — add at least one `[webhooks.endpoints.<name>]` block"
         ));
     }
-    if config.orchestrator.is_none() {
+    let has_planner_endpoint = config
+        .webhooks
+        .endpoints
+        .values()
+        .any(|ep| ep.decision_loop.is_none());
+    if has_planner_endpoint && config.orchestrator.is_none() {
         return Err(anyhow!(
-            "[webhooks] requires `[orchestrator]` to be configured — webhooks dispatch through the orchestrator"
+            "[webhooks] requires `[orchestrator]` to be configured — endpoints without `loop` dispatch through the orchestrator"
         ));
     }
-    validate_endpoints(&config.webhooks.endpoints)?;
+    validate_endpoints(&config.webhooks.endpoints, &config.decision_loops)?;
 
     let bind = config.webhooks.bind.clone();
     let port = config.webhooks.port;
@@ -104,9 +111,32 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
     // Memory manager is shared across all requests — opening it per
     // request would be wasteful (store open + embedder per webhook).
     let memory_manager = Arc::new(MemoryManager::new());
+
+    // One `DecisionLoop` per loop referenced by an endpoint — built once so
+    // its action history survives across events. Escalation reuses the
+    // one-shot orchestrator path when `[orchestrator]` is configured.
+    let mut loops = HashMap::new();
+    for ep in config.webhooks.endpoints.values() {
+        let Some(name) = &ep.decision_loop else {
+            continue;
+        };
+        if loops.contains_key(name) {
+            continue;
+        }
+        let escalator: Option<Arc<dyn Escalator>> = config.orchestrator.as_ref().map(|_| {
+            Arc::new(OrchestratorEscalator {
+                config: config.clone(),
+                memory_manager: Arc::clone(&memory_manager),
+            }) as Arc<dyn Escalator>
+        });
+        let dl = crate::bootstrap::decision::build_decision_loop(&config, name, escalator)?;
+        loops.insert(name.clone(), dl);
+    }
+
     let state = Arc::new(WebhookAppState {
         config,
         memory_manager,
+        loops,
         _secret_registry: secret_registry,
     });
 
@@ -148,6 +178,8 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
 struct WebhookAppState {
     config: Config,
     memory_manager: Arc<MemoryManager>,
+    /// Decision loops by name, for endpoints with `loop = "<name>"`.
+    loops: HashMap<String, Arc<DecisionLoop>>,
     /// Held for redaction parity with telegram (unused in v1 — webhook
     /// responses are 202s with no agent text). Kept for the inevitable
     /// future "sync mode" that mirrors telegram's `secret_registry.redact`.
@@ -175,7 +207,7 @@ async fn dispatch_webhook(
 
     // 2. Resolve the shared secret. `secret_env` (preferred) reads at
     //    request time so a key rotation doesn't require restart.
-    let secret = match resolve_endpoint_secret(endpoint) {
+    let auth = match resolve_endpoint_auth(endpoint) {
         Ok(s) => s,
         Err(e) => {
             error!(name = %name, error = %e, "secret resolve failed");
@@ -187,9 +219,14 @@ async fn dispatch_webhook(
         }
     };
 
-    // 3. Verify HMAC. 401 on missing-header / bad-format / mismatch.
-    if let Err(e) = verify_signature(&headers, &body, secret.as_bytes()) {
-        warn!(name = %name, error = %e, "HMAC verify failed");
+    // 3. Verify HMAC (or the static `Authorization` header). 401 on
+    //    missing-header / bad-format / mismatch.
+    let verified = match &auth {
+        EndpointAuth::Hmac(secret) => verify_signature(&headers, &body, secret.as_bytes()),
+        EndpointAuth::Header(expected) => verify_auth_header(&headers, expected),
+    };
+    if let Err(e) = verified {
+        warn!(name = %name, error = %e, "webhook auth failed");
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"error": e.to_string()})),
@@ -200,6 +237,44 @@ async fn dispatch_webhook(
     // 4. Mint per-request session_id — uuid keeps it unique even when
     //    the same endpoint fires twice in the same second.
     let session_id = format!("webhook-{}-{}", name, uuid::Uuid::new_v4());
+
+    // 5a. Decision-loop endpoint: the body is the event (Helius sends a
+    //     JSON array of transactions). Non-JSON bodies become a string.
+    if let Some(loop_name) = &endpoint.decision_loop {
+        let Some(dl) = state.loops.get(loop_name).cloned() else {
+            error!(name = %name, decision_loop = %loop_name, "decision loop not built");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("decision loop '{}' not available", loop_name)})),
+            )
+                .into_response();
+        };
+        let event: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&body).into()));
+        let sid = session_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dl.handle_event(&event, &sid).await {
+                warn!(session_id = %sid, error = %format!("{e:#}"), "decision loop event failed");
+            }
+        });
+        info!(
+            endpoint = %name,
+            decision_loop = %loop_name,
+            session_id = %session_id,
+            body_bytes = body.len(),
+            "webhook accepted; dispatching to decision loop"
+        );
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "status": "accepted",
+                "session_id": session_id,
+                "endpoint": name,
+                "loop": loop_name,
+            })),
+        )
+            .into_response();
+    }
 
     // 5. Synthesize the user message: goal_template + body. Body bytes
     //    aren't required to be UTF-8 (binary webhooks exist) — fall
@@ -216,7 +291,13 @@ async fn dispatch_webhook(
     let session_id_for_handle = session_id.clone();
     let state_for_handle = Arc::clone(&state);
     tokio::spawn(async move {
-        run_one_shot(state_for_handle, &session_id_for_handle, user_message).await;
+        run_one_shot(
+            &state_for_handle.config,
+            &state_for_handle.memory_manager,
+            &session_id_for_handle,
+            user_message,
+        )
+        .await;
     });
 
     info!(
@@ -243,7 +324,12 @@ async fn dispatch_webhook(
 /// Final agent text is written to the tracing log; durable side-effects
 /// (`agentic_memory` step summaries, metrics records) flow through the standard
 /// pipeline. Errors are logged and discarded — the listener stays up.
-async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_message: String) {
+async fn run_one_shot(
+    config: &Config,
+    memory_manager: &Arc<MemoryManager>,
+    session_id: &str,
+    user_message: String,
+) {
     // Per-request orchestrator construction. Uses `WebhookChatServiceFactory`
     // — a per-turn rebuild-from-config pattern modelled on `EvalChatServiceFactory`
     // in `adapters/inbound/eval.rs`. Avoids the `OrchestratorSnapshots` map that
@@ -252,13 +338,13 @@ async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_messag
     // one-shots, so each call just looks up the agent in `Config.agents`
     // and constructs the engine + tools fresh).
     let factory: Arc<dyn ChatServiceFactory> = Arc::new(WebhookChatServiceFactory {
-        cfg: Arc::new(state.config.clone()),
+        cfg: Arc::new(config.clone()),
     });
 
     let Some(orchestrator) = crate::bootstrap::orchestrator::build_orchestrator(
-        &state.config,
+        config,
         factory,
-        Arc::clone(&state.memory_manager),
+        Arc::clone(memory_manager),
         session_id.to_string(),
     ) else {
         warn!(
@@ -293,7 +379,7 @@ async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_messag
     // subagent dispatched, so no `compress_and_store` and no backstop) leave
     // nothing recallable. Coexists with subagent step summaries on the same
     // session_id; different step_ids keep them distinct.
-    persist_webhook_output(&state, session_id, &final_text).await;
+    persist_webhook_output(config, session_id, &final_text).await;
 }
 
 /// Fire-and-forget persist of the webhook turn's final text into Open Brain
@@ -301,12 +387,12 @@ async fn run_one_shot(state: Arc<WebhookAppState>, session_id: &str, user_messag
 /// propagates. Embedding is best-effort: no `OPENROUTER_API_KEY` (or an embed
 /// error) stores a text-only memory.
 #[cfg(feature = "postgres_memory")]
-async fn persist_webhook_output(state: &Arc<WebhookAppState>, session_id: &str, final_text: &str) {
+async fn persist_webhook_output(config: &Config, session_id: &str, final_text: &str) {
     let embedding = match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
             let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
-                state.config.memory.embedding_model.clone(),
+                config.memory.embedding_model.clone(),
             );
             match embedder.embed(final_text).await {
                 Ok(v) => Some(v),
@@ -348,15 +434,39 @@ async fn persist_webhook_output(state: &Arc<WebhookAppState>, session_id: &str, 
 /// turn still completes and its output is in the tracing log, just not
 /// recallable.
 #[cfg(not(feature = "postgres_memory"))]
-async fn persist_webhook_output(
-    _state: &Arc<WebhookAppState>,
-    session_id: &str,
-    _final_text: &str,
-) {
+async fn persist_webhook_output(_config: &Config, session_id: &str, _final_text: &str) {
     warn!(
         session_id = %session_id,
         "webhook output not persisted — built without the `postgres_memory` feature"
     );
+}
+
+/// How an endpoint authenticates senders.
+enum EndpointAuth {
+    /// HMAC-SHA256 of the body in `X-Tengu-Signature`.
+    Hmac(String),
+    /// Exact `Authorization` header value (Helius `authHeader`).
+    Header(String),
+}
+
+/// Resolve the endpoint's auth: `auth_header_env` → header compare,
+/// otherwise the HMAC secret (`resolve_endpoint_secret`).
+fn resolve_endpoint_auth(ep: &WebhookEndpointConfig) -> Result<EndpointAuth> {
+    let Some(env_name) = &ep.auth_header_env else {
+        return resolve_endpoint_secret(ep).map(EndpointAuth::Hmac);
+    };
+    if ep.secret_env.is_some() || ep.secret.is_some() {
+        return Err(anyhow!(
+            "endpoint config has `auth_header_env` and an HMAC secret — use exactly one"
+        ));
+    }
+    match std::env::var(env_name) {
+        Ok(v) if !v.is_empty() => Ok(EndpointAuth::Header(v)),
+        _ => Err(anyhow!(
+            "auth_header_env points at `{}` but that env var is unset or empty in the listener's process",
+            env_name
+        )),
+    }
 }
 
 /// Resolve the shared secret from `secret_env` (preferred) or `secret`
@@ -387,8 +497,42 @@ fn resolve_endpoint_secret(ep: &WebhookEndpointConfig) -> Result<String> {
 /// fails loudly *before* the listener accepts traffic. Catches the
 /// "neither set / both set / empty inline" cases that
 /// `resolve_endpoint_secret` would catch per-request.
-fn validate_endpoints(endpoints: &HashMap<String, WebhookEndpointConfig>) -> Result<()> {
+fn validate_endpoints(
+    endpoints: &HashMap<String, WebhookEndpointConfig>,
+    loops: &HashMap<String, crate::config::decision_loop::DecisionLoopConfig>,
+) -> Result<()> {
     for (name, ep) in endpoints {
+        if ep.auth_header_env.is_some() {
+            if ep.secret_env.is_some() || ep.secret.is_some() {
+                return Err(anyhow!(
+                    "[webhooks.endpoints.{}] has `auth_header_env` and an HMAC secret — use exactly one",
+                    name
+                ));
+            }
+        } else {
+            validate_hmac_secret(name, ep)?;
+        }
+        match &ep.decision_loop {
+            Some(l) if !loops.contains_key(l) => {
+                return Err(anyhow!(
+                    "[webhooks.endpoints.{}] `loop = \"{}\"` has no [decision_loops.{}] block",
+                    name,
+                    l,
+                    l
+                ));
+            }
+            Some(_) => {}
+            None if ep.agent.is_empty() => {
+                return Err(anyhow!("[webhooks.endpoints.{}] `agent` is required", name));
+            }
+            None => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_hmac_secret(name: &str, ep: &WebhookEndpointConfig) -> Result<()> {
+    {
         match (&ep.secret_env, &ep.secret) {
             (Some(_), Some(_)) => {
                 return Err(anyhow!(
@@ -410,9 +554,6 @@ fn validate_endpoints(endpoints: &HashMap<String, WebhookEndpointConfig>) -> Res
             }
             _ => {}
         }
-        if ep.agent.is_empty() {
-            return Err(anyhow!("[webhooks.endpoints.{}] `agent` is required", name));
-        }
     }
     Ok(())
 }
@@ -429,6 +570,24 @@ fn verify_signature(headers: &HeaderMap, body: &[u8], secret: &[u8]) -> Result<(
         .to_str()
         .map_err(|_| anyhow!("`X-Tengu-Signature` header is not valid UTF-8"))?;
     verify_hmac(header_value, body, secret)
+}
+
+/// Compare the `Authorization` header to the expected value in constant time.
+fn verify_auth_header(headers: &HeaderMap, expected: &str) -> Result<()> {
+    let got = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .ok_or_else(|| anyhow!("missing `Authorization` header"))?
+        .as_bytes();
+    if ct_eq(got, expected.as_bytes()) {
+        Ok(())
+    } else {
+        Err(anyhow!("Authorization header mismatch"))
+    }
+}
+
+/// Constant-time byte comparison (length leak only).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Pure HMAC verify — extracted so unit tests don't need an `HeaderMap`.
@@ -469,6 +628,25 @@ fn decode_nibble(b: u8) -> Result<u8, String> {
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
         other => Err(format!("non-hex byte 0x{:02x}", other)),
+    }
+}
+
+/// `Escalator` for decision loops: a low-confidence step becomes a one-shot
+/// orchestrator turn on the loop's session id (planner → subagents), exactly
+/// like a planner-bound webhook. Fire-and-forget.
+struct OrchestratorEscalator {
+    config: Config,
+    memory_manager: Arc<MemoryManager>,
+}
+
+#[async_trait]
+impl Escalator for OrchestratorEscalator {
+    async fn escalate(&self, session_id: String, message: String) {
+        let config = self.config.clone();
+        let memory_manager = Arc::clone(&self.memory_manager);
+        tokio::spawn(async move {
+            run_one_shot(&config, &memory_manager, &session_id, message).await;
+        });
     }
 }
 
@@ -717,9 +895,11 @@ mod tests {
                 secret_env: None,
                 secret: None,
                 goal_template: "x".to_string(),
+                decision_loop: None,
+                auth_header_env: None,
             },
         );
-        let err = validate_endpoints(&endpoints).unwrap_err();
+        let err = validate_endpoints(&endpoints, &HashMap::new()).unwrap_err();
         assert!(err.to_string().contains("neither"));
     }
 
@@ -733,9 +913,11 @@ mod tests {
                 secret_env: Some("X".to_string()),
                 secret: Some("y".to_string()),
                 goal_template: "x".to_string(),
+                decision_loop: None,
+                auth_header_env: None,
             },
         );
-        let err = validate_endpoints(&endpoints).unwrap_err();
+        let err = validate_endpoints(&endpoints, &HashMap::new()).unwrap_err();
         assert!(err.to_string().contains("both"));
     }
 
@@ -749,10 +931,58 @@ mod tests {
                 secret_env: Some("X".to_string()),
                 secret: None,
                 goal_template: "x".to_string(),
+                decision_loop: None,
+                auth_header_env: None,
             },
         );
-        let err = validate_endpoints(&endpoints).unwrap_err();
+        let err = validate_endpoints(&endpoints, &HashMap::new()).unwrap_err();
         assert!(err.to_string().contains("agent"));
+    }
+
+    fn loop_endpoint(
+        auth_header_env: Option<&str>,
+        secret_env: Option<&str>,
+    ) -> WebhookEndpointConfig {
+        WebhookEndpointConfig {
+            agent: String::new(),
+            secret_env: secret_env.map(str::to_string),
+            secret: None,
+            goal_template: "x".to_string(),
+            decision_loop: Some("watch".to_string()),
+            auth_header_env: auth_header_env.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn validate_endpoints_loop_endpoint_needs_no_agent_but_a_known_loop() {
+        let endpoints = HashMap::from([("h".to_string(), loop_endpoint(Some("H"), None))]);
+        let err = validate_endpoints(&endpoints, &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("decision_loops.watch"), "{err}");
+        let loops = HashMap::from([(
+            "watch".to_string(),
+            toml::from_str("goal=\"g\"\nagent=\"a\"\n[actions.hold]\ndescription=\"n\"").unwrap(),
+        )]);
+        validate_endpoints(&endpoints, &loops).unwrap();
+    }
+
+    #[test]
+    fn validate_endpoints_rejects_header_plus_hmac() {
+        let endpoints = HashMap::from([("h".to_string(), loop_endpoint(Some("H"), Some("S")))]);
+        let err = validate_endpoints(&endpoints, &HashMap::new()).unwrap_err();
+        assert!(err.to_string().contains("exactly one"), "{err}");
+    }
+
+    #[test]
+    fn auth_header_compare() {
+        let mut h = HeaderMap::new();
+        assert!(verify_auth_header(&h, "Bearer abc").is_err());
+        h.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer abc".parse().unwrap(),
+        );
+        assert!(verify_auth_header(&h, "Bearer abc").is_ok());
+        assert!(verify_auth_header(&h, "Bearer abd").is_err());
+        assert!(verify_auth_header(&h, "Bearer abcd").is_err());
     }
 
     #[test]

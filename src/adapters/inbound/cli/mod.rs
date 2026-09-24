@@ -1,6 +1,7 @@
 //! `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls
 //! [`run`]. Subcommands with real bodies live beside this file.
 
+mod decide;
 mod doctor;
 mod run_agent;
 mod skill;
@@ -66,6 +67,20 @@ enum Commands {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
         sandbox: Option<String>,
+    },
+    /// Run one event through a `[decision_loops.<name>]` loop (Jev picks,
+    /// tools execute) and print the step outcomes. No escalation — use
+    /// `tengu webhooks` with an endpoint `loop = "<name>"` for that.
+    Decide {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Loop name (`[decision_loops.<name>]`).
+        #[arg(long = "loop")]
+        loop_name: String,
+        /// Event JSON file (`-` = stdin). Omitted = `{}`.
+        #[arg(long)]
+        event: Option<PathBuf>,
     },
     /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
     Eval {
@@ -457,6 +472,14 @@ pub(crate) async fn run() -> Result<()> {
         #[cfg(not(feature = "webhooks"))]
         Commands::Webhooks { .. } => {
             anyhow::bail!("webhook listener requires: cargo build --features webhooks")
+        }
+        Commands::Decide {
+            sandbox,
+            loop_name,
+            event,
+        } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            decide::run_decide(&config, &loop_name, event.as_deref()).await
         }
         Commands::Eval {
             skills,

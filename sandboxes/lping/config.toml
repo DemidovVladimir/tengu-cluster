@@ -1,0 +1,142 @@
+# Tengu Cluster — "lping" sandbox (placeholder, 2026-09-24)
+# Crypto research today; Solana LP (Meteora / Raydium), hedging and on-chain
+# streaming later. Run with: tengu chat --sandbox lping
+#
+# Roadmap (not wired yet — see docs/lping-2026-09-24.md):
+#   1. research      — market / token / pool research over http_request   (now)
+#   2. data feed     — Helius (or other) Solana RPC + webhooks / gRPC      (next)
+#   3. lp + hedging  — Meteora DLMM / Raydium CLMM position tools          (later)
+
+runtime_profile = "auto"
+
+# --- Network -----------------------------------------------------------------
+# Open: paid RPC providers + market-data APIs (and OpenRouter) commonly block
+# Tor exits, and streaming feeds are latency-sensitive. Flip to "tor" to test.
+[egress]
+network = "open"
+
+[memory]
+enabled = true          # disk vector store; add --features postgres_memory for Open Brain
+
+[scaffold]
+root = "~/lping-workspace"
+directories = ["research", "pools", "positions", "events"]
+
+# --- Webhook listener (placeholder) -------------------------------------------
+# `tengu webhooks --sandbox lping` (build with --features webhooks).
+# `solana_events` → planner (HMAC `X-Tengu-Signature`); `helius` → decision
+# loop (static `Authorization` header, as Helius sends it).
+[webhooks]
+enabled = true
+bind = "127.0.0.1"
+port = 7081
+
+# Helius webhook → decision loop. In the Helius dashboard set the webhook's
+# auth header to the same value as $HELIUS_WEBHOOK_AUTH; account addresses =
+# the pools / wallet to watch; type = enhanced.
+[webhooks.endpoints.helius]
+loop = "lp_watch"
+auth_header_env = "HELIUS_WEBHOOK_AUTH"
+
+[webhooks.endpoints.solana_events]
+agent = "lping"
+secret_env = "TENGU_LPING_WEBHOOK_SECRET"
+goal_template = "A Solana on-chain event arrived. Summarise what happened (pool, tokens, amounts, signer) and flag anything relevant to our LP positions."
+
+# --- Tool scopes ---------------------------------------------------------------
+[default_scopes.http_request]
+net_hosts = ["*"]
+env_reads = ["*"]       # tighten to e.g. ["HELIUS_API_KEY"] once the feed is wired
+fs_roots = ["~/lping-workspace"]
+
+[orchestrator]
+agent = "lping"
+engine = "rag"
+max_attempts_per_step = 3
+max_replans = 2
+
+# Planner + in-process chat agent. OpenRouter per doctrine (never claude_code
+# in the planner role).
+[agents.lping]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+role = "lping"
+workspace = "~/lping-workspace"
+tools = ["http_request", "read_file", "list_directory"]
+
+[agents.lping.identity]
+name = "LPing"
+instructions = """You coordinate crypto research and (later) Solana liquidity
+provisioning. Delegate research to the `crypto_researcher` agent. Never sign or
+send transactions — no signing tools are wired in this sandbox yet. Always show
+token mints, pool addresses and tx signatures in full, never shortened."""
+
+# Routable subagent (has a `description`) — runs as `tengu run-agent`.
+[agents.crypto_researcher]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+role = "researcher"
+workspace = "~/lping-workspace"
+tools = ["http_request", "read_file", "list_directory"]
+description = """
+Researches crypto assets and Solana DeFi: token prices, market caps, volume, \
+DEX pools (Meteora DLMM/DAMM, Raydium CLMM/CPMM), pool TVL, fees and APR, \
+and on-chain account data via public HTTP APIs and Solana JSON-RPC. \
+Best for: "what's the best SOL/USDC pool", "compare Meteora vs Raydium fees", \
+"research this token mint". NOT for: signing, sending transactions, or \
+opening/closing LP positions (not wired yet).
+"""
+example_queries = [
+    "what is the SOL price and 24h volume?",
+    "find the highest-fee SOL/USDC pools on Meteora and Raydium",
+    "research this token mint and its top liquidity pools",
+    "compare DLMM bin step options for a volatile pair",
+]
+
+[agents.crypto_researcher.identity]
+name = "Crypto Researcher"
+instructions = """You research crypto markets and Solana DeFi using http_request.
+Prefer primary sources: Solana JSON-RPC (RPC URL from $SOLANA_RPC_URL when set,
+else https://api.mainnet-beta.solana.com), DEX APIs (Meteora, Raydium),
+DexScreener, CoinGecko. Cite the endpoint for every number. Show every address,
+mint and signature in full. Save longer findings under research/."""
+
+[agents.crypto_researcher.limits]
+max_tool_rounds = 40
+step_timeout_secs = 600
+max_tool_result_chars = 50_000
+
+# --- Decision loop (Jev picks, tools execute) --------------------------------
+# Design: docs/decision-loop-plan-2026-09-24.md. Test one event:
+#   tengu decide --sandbox lping --loop lp_watch [--event helius.json]
+# Live trigger: [webhooks.endpoints.helius] below (`tengu webhooks --sandbox lping`).
+[decision_loops.lp_watch]
+goal = """Watch Meteora DLMM SOL/USDC pools. Make sure pool data is fresh for \
+this event, then choose the pool with the best fee yield relative to TVL \
+(TVL above $100k only) for a new position of at most 2 SOL. No position is \
+open yet."""
+agent = "crypto_researcher"          # tools + scopes + workspace
+dry_run = true                       # open_position is logged, never run
+act_at = 0.8
+history = 8
+max_steps = 4
+# Helius enhanced webhook body = JSON array of parsed transactions.
+event_reduce = { txs = "/*/{signature,type,source,description,timestamp}" }
+
+[decision_loops.lp_watch.actions.hold]
+description = "Nothing useful left to do for this event"
+
+[decision_loops.lp_watch.actions.fetch_pools]
+description = "Fetch current Meteora DLMM pools for the pair (TVL, APR, price, bin step)"
+tool = "http_request"
+read_only = true
+args = { method = "GET", url = "https://dlmm.datapi.meteora.ag/pools?page=1&page_size=10&query={pair}", return_body = true }
+slots = { pair = ["SOL-USDC"] }
+reduce = { pools = "/data/*/{address,name,tvl,apr,current_price,pool_config}" }
+
+[decision_loops.lp_watch.actions.open_position]
+description = "Open a DLMM LP position in one of the fetched pools"
+tool = "meteora_open_position"       # phase 6 — not built; dry_run only
+slots = { pool = { from = "fetch_pools", items = "/pools/*", value = "address", top = 5 }, size_sol = [0.5, 1, 2, 3] }
+caps = { size_sol = 2.0 }

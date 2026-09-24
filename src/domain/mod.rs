@@ -2,6 +2,7 @@
 //! crate except `domain` itself, and no IO crates (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod decision;
 pub(crate) mod memory;
 pub(crate) mod message;
 pub(crate) mod metrics;

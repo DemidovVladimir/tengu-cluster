@@ -2,6 +2,7 @@
 //! validation, and path resolution. Imports only `domain` (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod paths;
 pub(crate) mod skill_lifecycle;
@@ -144,6 +145,12 @@ pub struct Config {
     /// with a shared HMAC secret. See `WebhookConfig` for field docs.
     #[serde(default)]
     pub webhooks: WebhookConfig,
+
+    /// `[decision_loops.<name>]` — System One (Jev) control loops over
+    /// existing tools; triggered by webhook endpoints with `loop = "<name>"`
+    /// or `tengu decide`. See `config/decision_loop.rs`.
+    #[serde(default)]
+    pub decision_loops: HashMap<String, decision_loop::DecisionLoopConfig>,
 
     #[serde(default)]
     pub scaffold: Option<ScaffoldConfig>,
@@ -607,7 +614,17 @@ impl Default for WebhookConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookEndpointConfig {
     /// Agent name to dispatch to (an `[agents.<name>]` block with a `description`).
+    /// Informational — the planner routes. Required unless `loop` is set.
+    #[serde(default)]
     pub agent: String,
+    /// Feed the payload to `[decision_loops.<loop>]` instead of the planner.
+    #[serde(default, rename = "loop")]
+    pub decision_loop: Option<String>,
+    /// Name of the env var holding the exact `Authorization` header value the
+    /// sender attaches (Helius webhooks' `authHeader`). Constant-time compare,
+    /// no body signature. Mutually exclusive with `secret_env` / `secret`.
+    #[serde(default)]
+    pub auth_header_env: Option<String>,
     /// Name of the environment variable holding the HMAC shared secret.
     /// At verify time the listener reads `std::env::var(secret_env)`;
     /// missing env var → 500 Internal Error (the listener cannot verify
@@ -1065,6 +1082,34 @@ impl Config {
             errors.push(issue);
         }
 
+        for (name, dl) in &self.decision_loops {
+            for issue in dl.validation_errors(name) {
+                errors.push(issue);
+            }
+            match self.agents.get(&dl.agent) {
+                None => errors.push(format!(
+                    "decision_loops.{name}.agent: no [agents.{}] block",
+                    dl.agent
+                )),
+                Some(agent) if !agent.tools.is_empty() => {
+                    for (an, action) in &dl.actions {
+                        // A dry-run loop may name write tools that are not
+                        // built yet — they are logged, never invoked.
+                        let never_runs = dl.dry_run && !action.read_only;
+                        if let Some(tool) = action.tool.as_ref().filter(|_| !never_runs) {
+                            if !agent.tools.contains(tool) {
+                                errors.push(format!(
+                                    "decision_loops.{name}.actions.{an}.tool: `{tool}` is not in [agents.{}].tools",
+                                    dl.agent
+                                ));
+                            }
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+
         errors.into_vec()
     }
 
@@ -1292,6 +1337,7 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             webhooks: WebhookConfig::default(),
+            decision_loops: HashMap::new(),
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
