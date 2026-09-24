@@ -1,14 +1,16 @@
 //! Argument slots: turn a `SlotConfig` into labelled candidates the decision
 //! model can choose from, and render the chosen values into tool arguments.
 //!
-//! History-sourced candidates get short labels (`pool_1`, `pool_2`) so the
-//! model never has to reproduce an address; the full value stays in code.
+//! History- and observation-sourced candidates get short labels (`pool_1`,
+//! `pool_2`) so the model never has to reproduce an address; the full value
+//! stays in code.
 
 use std::collections::{BTreeMap, VecDeque};
 
 use serde_json::Value;
 
 use super::reduce::select;
+use super::world::World;
 use crate::config::decision_loop::SlotConfig;
 use crate::domain::decision::HistoryEntry;
 
@@ -23,17 +25,35 @@ pub(crate) struct Candidate {
 }
 
 /// Candidates for one slot, capped by `cap` when set. Empty = the action is
-/// not legal right now (e.g. the `from` action has not succeeded yet).
+/// not legal right now (e.g. the `from` action has not succeeded yet, or the
+/// `observation` world entry is not fresh).
 pub(crate) fn candidates(
     slot_name: &str,
     slot: &SlotConfig,
     cap: Option<f64>,
     history: &VecDeque<HistoryEntry>,
+    world: &World,
 ) -> Vec<Candidate> {
     let within_cap = |v: &Value| match (cap, as_f64(v)) {
         (Some(c), Some(x)) => x <= c,
         (Some(_), None) => false,
         (None, _) => true,
+    };
+    let from_items = |root: &Value, items: &str, value: &str, top: usize| -> Vec<Candidate> {
+        let Value::Array(list) = select(root, items) else {
+            return Vec::new();
+        };
+        list.iter()
+            .filter_map(|item| item.get(value).cloned().map(|v| (item, v)))
+            .filter(|(_, v)| within_cap(v))
+            .take(top)
+            .enumerate()
+            .map(|(i, (item, v))| Candidate {
+                label: format!("{slot_name}_{}", i + 1),
+                value: v,
+                description: truncate(&item.to_string()),
+            })
+            .collect()
     };
     match slot {
         SlotConfig::Static(values) => values
@@ -61,21 +81,17 @@ pub(crate) fn candidates(
             else {
                 return Vec::new();
             };
-            let Value::Array(list) = select(&entry.result, items) else {
-                return Vec::new();
-            };
-            list.iter()
-                .filter_map(|item| item.get(value).cloned().map(|v| (item, v)))
-                .filter(|(_, v)| within_cap(v))
-                .take(*top)
-                .enumerate()
-                .map(|(i, (item, v))| Candidate {
-                    label: format!("{slot_name}_{}", i + 1),
-                    value: v,
-                    description: truncate(&item.to_string()),
-                })
-                .collect()
+            from_items(&entry.result, items, value, *top)
         }
+        SlotConfig::FromObservation {
+            observation,
+            items,
+            value,
+            top,
+        } => match world.fresh_root(observation) {
+            Some(root) => from_items(&root, items, value, *top),
+            None => Vec::new(),
+        },
     }
 }
 
@@ -138,13 +154,14 @@ mod tests {
             args: Value::Null,
             ok: Some(ok),
             result,
+            obs: None,
         }
     }
 
     #[test]
     fn static_candidates_respect_cap() {
         let slot = SlotConfig::Static(vec![json!(0.5), json!(1), json!(2), json!(3)]);
-        let c = candidates("size", &slot, Some(2.0), &VecDeque::new());
+        let c = candidates("size", &slot, Some(2.0), &VecDeque::new(), &World::empty());
         let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["0.5", "1", "2"]);
     }
@@ -165,7 +182,7 @@ mod tests {
             json!({"pools":[{"address":"A1","fees":5},{"address":"B2"},{"address":"C3"}]}),
         ));
         h.push_back(entry("fetch", false, json!("HTTP 500")));
-        let c = candidates("pool", &slot, None, &h);
+        let c = candidates("pool", &slot, None, &h, &World::empty());
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].label, "pool_1");
         assert_eq!(c[0].value, json!("A1"));
@@ -180,7 +197,18 @@ mod tests {
             value: "address".into(),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, &VecDeque::new()).is_empty());
+        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
+    }
+
+    #[test]
+    fn observation_slot_empty_without_a_fresh_world_entry() {
+        let slot = SlotConfig::FromObservation {
+            observation: "pools".into(),
+            items: "/data/pools/*".into(),
+            value: "address".into(),
+            top: 5,
+        };
+        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
     }
 
     #[test]

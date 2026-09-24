@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::domain::observation::ObsMeta;
+
 /// One question in a decisions request. Serialises to the exact wire shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -108,6 +110,10 @@ pub(crate) struct HistoryEntry {
     /// Reduced result (see `application::decision_loop::reduce`).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub result: Value,
+    /// Key / status / source / age / slot of a typed tool result; `None`
+    /// for text-only tools, dry runs and terminal actions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obs: Option<ObsMeta>,
 }
 
 /// What the loop did with one decision.

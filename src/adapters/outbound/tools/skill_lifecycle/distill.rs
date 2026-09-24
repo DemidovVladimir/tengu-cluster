@@ -217,6 +217,7 @@ impl Tool for SkillDistillTool {
                 "loaded_in_current_conversation": false,
             })
             .to_string(),
+            observation: None,
         })
     }
 }
@@ -294,6 +295,7 @@ fn indent(s: &str, spaces: usize) -> String {
 fn err_payload(kind: &str, details: Value) -> ToolOutput {
     ToolOutput {
         text: json!({ "error": kind, "details": details }).to_string(),
+        observation: None,
     }
 }
 

@@ -5,17 +5,22 @@
 //!
 //! Per incoming event, up to `max_steps` times:
 //!
-//! 1. Legal actions = terminal actions + actions whose every slot has
-//!    candidates (`slots::candidates`, caps applied).
+//! 1. Read `world` (alias → observation key) from the `ObservationStore`
+//!    (`world::World`; never fetched). Legal actions = terminal actions +
+//!    actions whose every slot has candidates (`slots::candidates`, caps
+//!    applied) and whose every `requires` alias is fresh.
 //! 2. One decisions call: `next_action` (choice over legal actions) + one
 //!    `choice` per multi-candidate slot (`<action>__<slot>`), against
-//!    `state = {goal, event, history, step}`.
+//!    `state = {goal, event, world (omitted when empty), history, step}`.
 //! 3. Gate: min(confidence of action, its slots) < `act_at` → escalate
 //!    (orchestrator turn via `Escalator`) and stop.
 //! 4. Terminal → stop. Write action under `dry_run` → log and stop.
 //!    Otherwise render args, re-check caps, run the tool through the
-//!    `ToolExecutor` port (same scopes / egress as an agent), reduce the
-//!    result into `history`, continue.
+//!    `ToolExecutor` port (`execute_typed`; same scopes / egress as an
+//!    agent) and append to `history`: a typed result contributes its
+//!    `decision_value` (or the reducer over `decision_root`), `ok = status
+//!    != error` and `obs` meta; a text result goes through
+//!    `reduce::parse_tool_output`. Continue.
 //!
 //! Every call emits a `MetricsKind::Decision` record and one JSONL audit line.
 //! History is in-process (lost on restart); events for one loop are
@@ -23,6 +28,7 @@
 
 pub(crate) mod reduce;
 pub(crate) mod slots;
+pub(crate) mod world;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
@@ -39,9 +45,12 @@ use crate::config::decision_loop::DecisionLoopConfig;
 use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome};
 use crate::domain::message::ToolCall;
 use crate::domain::metrics::{now_unix, MetricsKind, MetricsRecord};
+use crate::domain::observation::now_ms;
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
+use crate::ports::observation::ObservationStore;
 use slots::Candidate;
+use world::World;
 
 const NEXT_ACTION: &str = "next_action";
 
@@ -50,6 +59,8 @@ pub(crate) struct DecisionLoop {
     cfg: DecisionLoopConfig,
     engine: Arc<dyn DecisionEngine>,
     tools: Arc<dyn ToolExecutor>,
+    /// Source of `state.world`; `None` = every world entry reads as an error.
+    observations: Option<Arc<dyn ObservationStore>>,
     escalator: Option<Arc<dyn Escalator>>,
     audit_path: Option<PathBuf>,
     state: Mutex<LoopState>,
@@ -67,6 +78,7 @@ impl DecisionLoop {
         cfg: DecisionLoopConfig,
         engine: Arc<dyn DecisionEngine>,
         tools: Arc<dyn ToolExecutor>,
+        observations: Option<Arc<dyn ObservationStore>>,
         escalator: Option<Arc<dyn Escalator>>,
         audit_path: Option<PathBuf>,
     ) -> Self {
@@ -75,6 +87,7 @@ impl DecisionLoop {
             cfg,
             engine,
             tools,
+            observations,
             escalator,
             audit_path,
             state: Mutex::new(LoopState::default()),
@@ -108,12 +121,17 @@ impl DecisionLoop {
         step: u32,
         session_id: &str,
     ) -> Result<StepOutcome> {
-        // 1. Legal actions + their slot candidates.
+        // 1. World, legal actions + their slot candidates.
+        let world = World::read(self.observations.as_deref(), &self.cfg, now_ms()).await;
         let mut legal: BTreeMap<&str, BTreeMap<&str, Vec<Candidate>>> = BTreeMap::new();
         for (an, action) in &self.cfg.actions {
+            if !world.satisfies(&action.requires) {
+                continue;
+            }
             let mut slots = BTreeMap::new();
             for (sn, slot) in &action.slots {
-                let c = slots::candidates(sn, slot, action.caps.get(sn).copied(), &st.history);
+                let c =
+                    slots::candidates(sn, slot, action.caps.get(sn).copied(), &st.history, &world);
                 if c.is_empty() {
                     break;
                 }
@@ -155,12 +173,15 @@ impl DecisionLoop {
                 );
             }
         }
-        let state = json!({
+        let mut state = json!({
             "goal": self.cfg.goal,
             "event": event,
             "history": st.history,
             "step": step,
         });
+        if let (Some(w), Value::Object(o)) = (world.to_state(), &mut state) {
+            o.insert("world".into(), w);
+        }
 
         // 3. Decide.
         let started = Instant::now();
@@ -265,6 +286,7 @@ impl DecisionLoop {
                     args: Value::Null,
                     ok: None,
                     result: Value::Null,
+                    obs: None,
                 },
             );
             return StepOutcome::Stopped {
@@ -281,6 +303,7 @@ impl DecisionLoop {
                     args,
                     ok: None,
                     result: json!("dry_run"),
+                    obs: None,
                 },
             );
             return StepOutcome::DryRun {
@@ -293,12 +316,26 @@ impl DecisionLoop {
             name: tool.clone(),
             arguments: args.clone(),
         };
-        let (ok, result) = match self.tools.execute(&call, &[]).await {
-            Ok(text) => {
-                let (ok, raw) = reduce::parse_tool_output(&text);
-                (ok, reduce::reduce(&raw, &action.reduce))
-            }
-            Err(e) => (false, json!(format!("{e:#}"))),
+        let now = now_ms();
+        let (ok, result, obs) = match self.tools.execute_typed(&call, &[]).await {
+            // Typed: features (or the reducer over `{.., features, data}`);
+            // a status-`error` observation is a failure.
+            Ok(out) => match out.observation {
+                Some(o) => {
+                    let result = if action.reduce.is_empty() {
+                        o.decision_value(now)
+                    } else {
+                        reduce::reduce(&o.decision_root(now), &action.reduce)
+                    };
+                    (o.status.usable(), result, Some(o.meta(now)))
+                }
+                // Legacy text tool.
+                None => {
+                    let (ok, raw) = reduce::parse_tool_output(&out.text);
+                    (ok, reduce::reduce(&raw, &action.reduce), None)
+                }
+            },
+            Err(e) => (false, json!(format!("{e:#}")), None),
         };
         self.push(
             st,
@@ -308,6 +345,7 @@ impl DecisionLoop {
                 args,
                 ok: Some(ok),
                 result,
+                obs,
             },
         );
         StepOutcome::Executed {
@@ -426,10 +464,22 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::Mutex as StdMutex;
 
-    /// Scripted decision engine: returns queued decisions, records questions.
+    /// Scripted decision engine: returns queued decisions, records questions
+    /// and states.
     struct Scripted {
         queue: StdMutex<VecDeque<Decision>>,
         seen: StdMutex<Vec<BTreeMap<String, Question>>>,
+        states: StdMutex<Vec<Value>>,
+    }
+
+    impl Scripted {
+        fn new(script: Vec<Decision>) -> Self {
+            Self {
+                queue: StdMutex::new(script.into()),
+                seen: StdMutex::new(vec![]),
+                states: StdMutex::new(vec![]),
+            }
+        }
     }
 
     #[async_trait]
@@ -437,8 +487,9 @@ mod tests {
         fn model(&self) -> &str {
             "test"
         }
-        async fn decide(&self, _s: &Value, q: &BTreeMap<String, Question>) -> Result<Decision> {
+        async fn decide(&self, s: &Value, q: &BTreeMap<String, Question>) -> Result<Decision> {
             self.seen.lock().unwrap().push(q.clone());
+            self.states.lock().unwrap().push(s.clone());
             Ok(self
                 .queue
                 .lock()
@@ -521,10 +572,7 @@ caps = {{ size = 2.0 }}
         Arc<FakeTools>,
         Arc<FakeEscalator>,
     ) {
-        let engine = Arc::new(Scripted {
-            queue: StdMutex::new(script.into()),
-            seen: StdMutex::new(vec![]),
-        });
+        let engine = Arc::new(Scripted::new(script));
         let tools = Arc::new(FakeTools(StdMutex::new(vec![])));
         let esc = Arc::new(FakeEscalator(StdMutex::new(vec![])));
         let l = DecisionLoop::new(
@@ -532,10 +580,246 @@ caps = {{ size = 2.0 }}
             cfg(dry_run),
             engine.clone(),
             tools.clone(),
+            None,
             Some(esc.clone()),
             None,
         );
         (l, engine, tools, esc)
+    }
+
+    // ── typed tools, world, requires, FromObservation ─────────────────
+
+    use crate::application::observe::tests::MemStore;
+    use crate::domain::observation::{ErrorClass, ObsSource, ObsStatus, Observation, ReadError};
+    use crate::ports::tool::ToolOutput;
+
+    const MINT: &str = "So11111111111111111111111111111111111111112";
+    const POOL_A: &str = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
+    const POOL_B: &str = "BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y";
+    const POOLS_KEY: &str = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000";
+
+    fn price_obs(observed_at_ms: i64, status: ObsStatus) -> Observation {
+        Observation {
+            key: format!("price_oracle/1:{MINT}"),
+            schema: "price_oracle/1".into(),
+            tool: "sol_price".into(),
+            observed_at_ms,
+            slot: None,
+            ttl_ms: 10_000,
+            source: ObsSource::Live,
+            status,
+            errors: if status == ObsStatus::Error {
+                vec![ReadError::new(
+                    "usd",
+                    ErrorClass::Timeout,
+                    "no source answered",
+                )]
+            } else {
+                vec![]
+            },
+            headline: format!("sol_price {MINT} usd=150.25"),
+            features: [("usd".to_string(), json!(150.25))].into(),
+            data: json!({"mint": MINT, "usd": 150.25}),
+        }
+    }
+
+    fn pools_obs(observed_at_ms: i64) -> Observation {
+        Observation {
+            key: POOLS_KEY.into(),
+            schema: "dlmm_pools/1".into(),
+            tool: "dlmm_pools".into(),
+            observed_at_ms,
+            slot: None,
+            ttl_ms: 60_000,
+            source: ObsSource::Live,
+            status: ObsStatus::Ok,
+            errors: vec![],
+            headline: "dlmm_pools SOL-USDC n=2".into(),
+            features: [("n_pools".to_string(), json!(2))].into(),
+            data: json!({"pools": [{"address": POOL_A, "tvl_usd": 7.0e6}, {"address": POOL_B, "tvl_usd": 1.0e6}]}),
+        }
+    }
+
+    /// Typed executor: every call returns a price observation with `status`.
+    struct TypedTools {
+        calls: StdMutex<Vec<ToolCall>>,
+        status: ObsStatus,
+    }
+
+    #[async_trait]
+    impl ToolExecutor for TypedTools {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            self.calls.lock().unwrap().push(call.clone());
+            let now = now_ms();
+            Ok(ToolOutput::observed(price_obs(now, self.status), now))
+        }
+    }
+
+    fn typed_cfg() -> DecisionLoopConfig {
+        toml::from_str(&format!(
+            r#"
+goal = "keep the LP safe"
+agent = "a"
+dry_run = false
+world = {{ price = "price_oracle/1:{MINT}", pools = "{POOLS_KEY}" }}
+[actions.hold]
+description = "nothing"
+[actions.refresh]
+description = "refresh price"
+tool = "sol_price"
+read_only = true
+args = {{ mint = "{MINT}" }}
+[actions.refresh_reduced]
+description = "refresh price, reduced"
+tool = "sol_price"
+read_only = true
+reduce = {{ usd = "/features/usd", mint = "/data/mint" }}
+[actions.open]
+description = "open position"
+tool = "dlmm_open_position"
+requires = {{ price = 30 }}
+args = {{ pool = "{{pool}}" }}
+slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "address" }} }}
+"#
+        ))
+        .unwrap()
+    }
+
+    fn build_typed(
+        script: Vec<Decision>,
+        status: ObsStatus,
+        store: Option<Arc<MemStore>>,
+    ) -> (DecisionLoop, Arc<Scripted>, Arc<TypedTools>) {
+        let engine = Arc::new(Scripted::new(script));
+        let tools = Arc::new(TypedTools {
+            calls: StdMutex::new(vec![]),
+            status,
+        });
+        let store = store.map(|s| s as Arc<dyn ObservationStore>);
+        let l = DecisionLoop::new(
+            "t",
+            typed_cfg(),
+            engine.clone(),
+            tools.clone(),
+            store,
+            None,
+            None,
+        );
+        (l, engine, tools)
+    }
+
+    fn legal_actions(engine: &Scripted, step: usize) -> Vec<String> {
+        let seen = engine.seen.lock().unwrap();
+        let Question::Choice { criteria, .. } = &seen[step][NEXT_ACTION] else {
+            panic!()
+        };
+        criteria.keys().cloned().collect()
+    }
+
+    #[tokio::test]
+    async fn typed_result_lands_in_history_with_obs_meta() {
+        let (l, _, tools) = build_typed(
+            vec![
+                pick(&[("next_action", "refresh", 0.95)]),
+                pick(&[("next_action", "refresh_reduced", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+            ObsStatus::Ok,
+            None,
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(
+            tools.calls.lock().unwrap()[0].arguments,
+            json!({"mint": MINT})
+        );
+        let st = l.state.lock().await;
+        let h = &st.history[0];
+        assert_eq!(h.ok, Some(true));
+        assert_eq!(h.result["features"]["usd"], json!(150.25));
+        assert_eq!(h.result["status"], json!("ok"));
+        assert!(h.result.get("data").is_none(), "unreduced = features only");
+        let meta = h.obs.as_ref().expect("typed result carries obs meta");
+        assert_eq!(meta.key, format!("price_oracle/1:{MINT}"));
+        assert_eq!(meta.source, ObsSource::Live);
+        // The reducer addresses `{.., features, data}`.
+        let r = &st.history[1];
+        assert_eq!(r.result, json!({"usd": 150.25, "mint": MINT}));
+        assert!(st.history[2].obs.is_none(), "terminal action has no obs");
+    }
+
+    #[tokio::test]
+    async fn typed_error_observation_is_not_ok() {
+        let (l, _, _) = build_typed(
+            vec![
+                pick(&[("next_action", "refresh", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+            ObsStatus::Error,
+            None,
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        let st = l.state.lock().await;
+        assert_eq!(st.history[0].ok, Some(false));
+        assert_eq!(st.history[0].obs.as_ref().unwrap().status, ObsStatus::Error);
+        assert_eq!(st.history[0].result["errors"][0]["class"], json!("timeout"));
+    }
+
+    #[tokio::test]
+    async fn requires_hides_action_while_world_is_stale() {
+        let store = Arc::new(MemStore::default());
+        store
+            .put(&price_obs(now_ms() - 60_000, ObsStatus::Ok))
+            .await
+            .unwrap();
+        store.put(&pools_obs(now_ms())).await.unwrap();
+        let (l, engine, _) = build_typed(
+            vec![pick(&[("next_action", "hold", 0.99)])],
+            ObsStatus::Ok,
+            Some(store),
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert!(!legal_actions(&engine, 0).contains(&"open".to_string()));
+        let states = engine.states.lock().unwrap();
+        let world = &states[0]["world"];
+        assert_eq!(world["price"]["status"], json!("stale"));
+        assert!(
+            !world["price"].to_string().contains("150.25"),
+            "stale entry carries no numbers: {world}"
+        );
+        assert_eq!(world["pools"]["features"]["n_pools"], json!(2));
+    }
+
+    #[tokio::test]
+    async fn observation_slot_offers_fresh_world_items() {
+        let store = Arc::new(MemStore::default());
+        store
+            .put(&price_obs(now_ms(), ObsStatus::Ok))
+            .await
+            .unwrap();
+        store.put(&pools_obs(now_ms())).await.unwrap();
+        let (l, engine, tools) = build_typed(
+            vec![
+                pick(&[("next_action", "open", 0.95), ("open__pool", "pool_2", 0.9)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+            ObsStatus::Ok,
+            Some(store),
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert!(legal_actions(&engine, 0).contains(&"open".to_string()));
+        let calls = tools.calls.lock().unwrap();
+        assert_eq!(calls[0].name, "dlmm_open_position");
+        assert_eq!(calls[0].arguments, json!({"pool": POOL_B}), "full address");
+    }
+
+    #[tokio::test]
+    async fn world_is_omitted_without_aliases() {
+        let (l, engine, _, _) = build(false, vec![pick(&[("next_action", "hold", 0.99)])]);
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert!(engine.states.lock().unwrap()[0].get("world").is_none());
     }
 
     #[tokio::test]

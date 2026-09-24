@@ -382,4 +382,78 @@ impl ToolExecutor for SanitizedToolExecutor {
         let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
     }
+
+    /// Redacts the text and the observation (headline, error messages,
+    /// string features, `data`).
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> Result<crate::ports::tool::ToolOutput> {
+        let mut out = self.inner.execute_typed(call, messages).await?;
+        out.text = self.registry.redact(&out.text);
+        if let Some(obs) = out.observation.as_mut() {
+            self.registry.redact_observation(obs);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::message::Message;
+    use crate::domain::observation::{ObsSource, ObsStatus, Observation};
+    use crate::domain::secrets::SecretRegistry;
+    use crate::ports::tool::ToolOutput;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    const KEY: &str = "api-key-0123456789abcdef";
+
+    struct Leaky;
+
+    #[async_trait]
+    impl ToolExecutor for Leaky {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, _call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let obs = Observation {
+                key: "leak/1:s".into(),
+                schema: "leak/1".into(),
+                tool: "leak".into(),
+                observed_at_ms: 0,
+                slot: None,
+                ttl_ms: 1_000,
+                source: ObsSource::Live,
+                status: ObsStatus::Ok,
+                errors: vec![],
+                headline: format!("rpc {KEY}"),
+                features: Default::default(),
+                data: json!({"rpc_url": format!("https://rpc.example/?api-key={KEY}"), "n": 1}),
+            };
+            Ok(ToolOutput::observed(obs, 0))
+        }
+    }
+
+    #[tokio::test]
+    async fn sanitized_executor_redacts_observation_data() {
+        let mut reg = SecretRegistry::new();
+        reg.register(KEY.to_string());
+        let exec = SanitizedToolExecutor::new(Arc::new(Leaky), Arc::new(reg));
+        let call = ToolCall {
+            id: "1".into(),
+            name: "leak".into(),
+            arguments: json!({}),
+        };
+        let out = exec.execute_typed(&call, &[]).await.unwrap();
+        assert!(!out.text.contains(KEY), "{}", out.text);
+        let obs = out.observation.unwrap();
+        assert_eq!(
+            obs.data,
+            json!({"rpc_url": "https://rpc.example/?api-key=[REDACTED]", "n": 1})
+        );
+        assert_eq!(obs.headline, "rpc [REDACTED]");
+    }
 }

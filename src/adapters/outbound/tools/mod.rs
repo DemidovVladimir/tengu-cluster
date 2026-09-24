@@ -31,6 +31,7 @@ pub(crate) mod memory;
 pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod skill_resource;
+pub(crate) mod solana;
 pub(crate) mod view_skill;
 pub(crate) mod workspace;
 
@@ -150,6 +151,68 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: view_skill::tool_defs,
             plugin: |_| Box::new(view_skill::ViewSkillPlugin),
+        },
+        // Solana LP family: one opt-in row per tool, all sharing the
+        // `solana` plugin (interfaces in `solana/defs.rs`).
+        ToolEntry {
+            opt_in: Some(names::SOL_PRICE),
+            needs_memory: false,
+            defs: || solana::defs_named(names::SOL_PRICE),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::DLMM_POOLS),
+            needs_memory: false,
+            defs: || solana::defs_named(names::DLMM_POOLS),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::DLMM_POOL),
+            needs_memory: false,
+            defs: || solana::defs_named(names::DLMM_POOL),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::DLMM_POSITIONS),
+            needs_memory: false,
+            defs: || solana::defs_named(names::DLMM_POSITIONS),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::JUP_PERPS),
+            needs_memory: false,
+            defs: || solana::defs_named(names::JUP_PERPS),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::SOLANA_WALLET),
+            needs_memory: false,
+            defs: || solana::defs_named(names::SOLANA_WALLET),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::SOLANA_TX),
+            needs_memory: false,
+            defs: || solana::defs_named(names::SOLANA_TX),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::LP_SNAPSHOT),
+            needs_memory: false,
+            defs: || solana::defs_named(names::LP_SNAPSHOT),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::HEDGE_DECIDE),
+            needs_memory: false,
+            defs: || solana::defs_named(names::HEDGE_DECIDE),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::LP_DECIDE),
+            needs_memory: false,
+            defs: || solana::defs_named(names::LP_DECIDE),
+            plugin: |_| Box::new(solana::SolanaPlugin),
         },
     ]);
     rows

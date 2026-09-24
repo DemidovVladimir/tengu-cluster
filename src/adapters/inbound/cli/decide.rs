@@ -4,16 +4,19 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::config::Config;
+use crate::domain::secrets::SecretRegistry;
 
 pub(super) async fn run_decide(
     config: &Config,
     loop_name: &str,
     event: Option<&Path>,
+    secret_registry: Arc<SecretRegistry>,
 ) -> Result<()> {
     let event: Value = match event {
         None => Value::Object(Default::default()),
@@ -30,7 +33,8 @@ pub(super) async fn run_decide(
             serde_json::from_str(&raw).with_context(|| format!("{} is not JSON", p.display()))?
         }
     };
-    let dl = crate::bootstrap::decision::build_decision_loop(config, loop_name, None)?;
+    let dl =
+        crate::bootstrap::decision::build_decision_loop(config, loop_name, None, secret_registry)?;
     let session_id = format!("decide-{loop_name}-{}", uuid::Uuid::new_v4());
     let outcomes = dl.handle_event(&event, &session_id).await?;
     println!(

@@ -138,6 +138,14 @@ impl ToolExecutor for PluginToolExecutor {
         call: &ToolCall,
         messages: &[crate::domain::message::Message],
     ) -> Result<String> {
+        Ok(self.execute_typed(call, messages).await?.text)
+    }
+
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> Result<ToolOutput> {
         self.activity.publish_tool_activity(call);
 
         if self.registry.get(&call.name).is_none() {
@@ -157,11 +165,9 @@ impl ToolExecutor for PluginToolExecutor {
             agent_config: self.agent_config.as_ref(),
         };
 
-        let output = self
-            .registry
+        self.registry
             .invoke(&call.name, &call.arguments, &ctx)
-            .await?;
-        Ok(output.text)
+            .await
     }
 }
 
@@ -225,6 +231,53 @@ mod tests {
 
         assert_eq!(extras.len(), 1, "expected exactly one extra tool");
         assert_eq!(extras[0].name, "github__create_issue");
+    }
+
+    struct TypedTool {
+        def: ToolDef,
+    }
+
+    #[async_trait]
+    impl Tool for TypedTool {
+        fn definition(&self) -> &ToolDef {
+            &self.def
+        }
+        async fn execute(&self, _args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+            use crate::domain::observation::{ObsSource, ObsStatus, Observation};
+            let obs = Observation {
+                key: "typed/1:s".into(),
+                schema: "typed/1".into(),
+                tool: "typed".into(),
+                observed_at_ms: 0,
+                slot: Some(7),
+                ttl_ms: 1_000,
+                source: ObsSource::Live,
+                status: ObsStatus::Ok,
+                errors: vec![],
+                headline: "typed s".into(),
+                features: Default::default(),
+                data: serde_json::json!({"x": 1}),
+            };
+            Ok(ToolOutput::observed(obs, 0))
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_typed_passes_the_observation_through() {
+        let mut exec = make_executor(vec![]);
+        exec.registry.register_tool(Arc::new(TypedTool {
+            def: ToolDef::new("typed", "desc", serde_json::json!({})),
+        }));
+        let call = ToolCall {
+            id: "1".into(),
+            name: "typed".into(),
+            arguments: serde_json::json!({}),
+        };
+        let out = exec.execute_typed(&call, &[]).await.unwrap();
+        let obs = out.observation.expect("observation carried");
+        assert_eq!(obs.key, "typed/1:s");
+        assert!(out.text.starts_with("typed s | ok 0s slot=7 live"));
+        assert_eq!(exec.execute(&call, &[]).await.unwrap(), out.text);
     }
 
     #[test]

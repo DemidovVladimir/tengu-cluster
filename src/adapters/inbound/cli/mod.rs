@@ -479,7 +479,7 @@ pub(crate) async fn run() -> Result<()> {
             event,
         } => {
             let config = load_sandbox_or(sandbox, config)?;
-            decide::run_decide(&config, &loop_name, event.as_deref()).await
+            decide::run_decide(&config, &loop_name, event.as_deref(), secret_registry).await
         }
         Commands::Eval {
             skills,

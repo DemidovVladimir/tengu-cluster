@@ -129,7 +129,12 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
                 memory_manager: Arc::clone(&memory_manager),
             }) as Arc<dyn Escalator>
         });
-        let dl = crate::bootstrap::decision::build_decision_loop(&config, name, escalator)?;
+        let dl = crate::bootstrap::decision::build_decision_loop(
+            &config,
+            name,
+            escalator,
+            Arc::clone(&secret_registry),
+        )?;
         loops.insert(name.clone(), dl);
     }
 
