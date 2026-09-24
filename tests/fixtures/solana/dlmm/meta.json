@@ -1,0 +1,50 @@
+{
+  "captured_at": "2026-09-24T17:53:27.149Z",
+  "rpc": "api.mainnet-beta.solana.com",
+  "slot": 450102095,
+  "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+  "owner": "JBggt27MzM4eohjumT9Tuec7MBoWAgDM4BJjkoisDUcs",
+  "extended_owner": "D5HPLvKdJHwKGaAkn99aFDj4BJSAbXyexKececgRQWss",
+  "keys": [
+    "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+    "So11111111111111111111111111111111111111112",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "EYj9xKw6ZszwpyNibHY7JD5o3QgTVrSdcBp1fMJhrR9o",
+    "CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz",
+    "Ui6V49xptXnsgay1h75MVch6zh2B3ahP2yb7iRTwX6x",
+    "vpyRvdCUxaWRqRnguXzzqHyvg3Hejq7zXwBzceUEwdq",
+    "H9fmcxgheDvVSn9iUeRSvZPAgTY5WXqvroNpkZ2HCVRW",
+    "14JU64KbNMLmFiS8qHuZ9ZF1swmzmiBYCRZidM24rH1m",
+    "2E855k5fegqhZppWQms1XrYyQQSVFNFipHg3igabX1Y3",
+    "HP15ZCgcgunsV9ypHKpDJSURFn4dn7i63uCNB4k7K5MV",
+    "Vc6P6kjaRUgnQCwycL4QzTG3tiNR4CgC3gqWHvvMMJh",
+    "Ehkf9XQLVnY8HV6jbbDU25fTxF1qQ3NuScWfawSb79pu",
+    "SysvarC1ock11111111111111111111111111111111"
+  ],
+  "roles": {
+    "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+    "mint_x": "So11111111111111111111111111111111111111112",
+    "mint_y": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "reserve_x": "EYj9xKw6ZszwpyNibHY7JD5o3QgTVrSdcBp1fMJhrR9o",
+    "reserve_y": "CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz",
+    "positions": [
+      "Ui6V49xptXnsgay1h75MVch6zh2B3ahP2yb7iRTwX6x",
+      "vpyRvdCUxaWRqRnguXzzqHyvg3Hejq7zXwBzceUEwdq",
+      "H9fmcxgheDvVSn9iUeRSvZPAgTY5WXqvroNpkZ2HCVRW",
+      "14JU64KbNMLmFiS8qHuZ9ZF1swmzmiBYCRZidM24rH1m"
+    ],
+    "bin_array_indexes": [
+      -79,
+      -78,
+      -77,
+      -76
+    ],
+    "bin_arrays": [
+      "2E855k5fegqhZppWQms1XrYyQQSVFNFipHg3igabX1Y3",
+      "HP15ZCgcgunsV9ypHKpDJSURFn4dn7i63uCNB4k7K5MV",
+      "Vc6P6kjaRUgnQCwycL4QzTG3tiNR4CgC3gqWHvvMMJh",
+      "Ehkf9XQLVnY8HV6jbbDU25fTxF1qQ3NuScWfawSb79pu"
+    ],
+    "clock": "SysvarC1ock11111111111111111111111111111111"
+  }
+}
