@@ -1,0 +1,45 @@
+{
+  "about": "Jupiter perps fixtures for src/domain/lp/perps.rs. gma.json = ONE live getMultipleAccounts (base64, confirmed) against https://api.mainnet-beta.solana.com; requests_gma.json = a second GMA of 4 live PositionRequest (trigger) accounts. Golden values below were computed independently by scripts/golden/perps_decode.py (IDL offsets + integer port of jupiterPerps.ts) and cross-checked field-by-field against Anchor 0.29's BorshAccountsCoder (scripts/golden/perps_anchor_decode.cjs); PDAs by scripts/golden/perps_pdas.cjs (@solana/web3.js findProgramAddressSync).",
+  "gma": {
+    "file": "gma.json",
+    "slot": 450101361,
+    "captured_unix_s": 1790272211,
+    "sol_usd_at_capture": {
+      "file": "jup_price.json",
+      "usdPrice": 116.6589164559586,
+      "blockId": 450101349
+    },
+    "keys": [
+      { "pubkey": "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz", "role": "custody SOL", "len": 2000 },
+      { "pubkey": "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa", "role": "custody USDC", "len": 2000 },
+      { "pubkey": "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq", "role": "JLP pool", "len": 2000 },
+      { "pubkey": "FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY", "role": "long PDA of F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", "len": null },
+      { "pubkey": "6HFhuYzQGcqdj4NGwC6vfVETRvMA3pXaVeZnHgWSKsJK", "role": "short PDA of F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S (exists, sizeUsd 0 = flat)", "len": 216 },
+      { "pubkey": "BQsUMD2C4sfy1fwih6pDueBUfqYQccCCaGQoWU8a4wqi", "role": "long PDA of 49cFRy8ptMTqE3VZLxWvXjtugfzy5r6npfmwtCPoQCxt", "len": null },
+      { "pubkey": "8dETVxeDTXi3xRiQvsvyDETVtwu1wYkEk8JF7HfiPhR5", "role": "short PDA of 49cFRy8ptMTqE3VZLxWvXjtugfzy5r6npfmwtCPoQCxt (open)", "len": 216 },
+      { "pubkey": "2DNqvKcgnx5Huk6VkjeoZbjhna6hZd7GRuG8RCH2dPEV", "role": "long PDA of 2xxyBSRyi1KVxwuZcFkU74c8HvhjBdV8YJ6F4gkdKk3i (open)", "len": 216 },
+      { "pubkey": "HCZsYUEGtiGVvFJJYcuqhrq1L2MQ7GwWXmQRQSxFNWWX", "role": "short PDA of 2xxyBSRyi1KVxwuZcFkU74c8HvhjBdV8YJ6F4gkdKk3i (open, both sides)", "len": 216 }
+    ],
+    "golden": {
+      "sol_custody": { "util_raw": 111826820, "hourly_rate_raw": 15410, "borrow_apr_pct": 13.49916, "cumulative_interest_rate": "1062791438", "owned": 3975600834194526, "locked": 444578802491130, "debt_tokens": 0 },
+      "usdc_custody": { "util_raw": 604818849, "hourly_rate_raw": 6529, "borrow_apr_pct": 5.719404, "cumulative_interest_rate": "243952888", "owned": 128681915422339, "locked": 21567112837268, "debt": "142370570863218524822804", "borrow_lend_interests_accured": "77852240528750896", "debt_tokens": 142370493010978 },
+      "pool": { "name": "Pool", "custodies": 6, "aum_usd_raw": "931403341015904", "max_request_execution_sec": 45, "max_request_execution_sec_offset": 364 },
+      "positions": {
+        "8dETVxeDTXi3xRiQvsvyDETVtwu1wYkEk8JF7HfiPhR5": { "side": "short", "price_raw": 113130153, "size_usd_raw": 992903150, "collateral_usd_raw": 99293700, "liq_usd": 124.032209, "accrued_borrow_fee_raw": 929383 },
+        "2DNqvKcgnx5Huk6VkjeoZbjhna6hZd7GRuG8RCH2dPEV": { "side": "long", "price_raw": 117515445, "size_usd_raw": 1183738004, "collateral_usd_raw": 43133504, "liq_usd": 113.552539, "accrued_borrow_fee_raw": 18884 },
+        "HCZsYUEGtiGVvFJJYcuqhrq1L2MQ7GwWXmQRQSxFNWWX": { "side": "short", "price_raw": 116018022, "size_usd_raw": 7412757896, "collateral_usd_raw": 272733845, "liq_usd": 119.972827, "accrued_borrow_fee_raw": 34410 }
+      },
+      "plausibility": "liq prices bracket entry on the losing side (short liq > entry, long liq < entry); locked_amount 10073041975 lamports (10.073 SOL) x entry 117.515445 = 1183.74 = sizeUsd for the long; SOL at capture 116.66 sits between the long liq 113.55 and the short liqs 119.97 / 124.03"
+    }
+  },
+  "requests_gma": {
+    "file": "requests_gma.json",
+    "slot": 450102114,
+    "keys": [
+      { "pubkey": "11q9teW5JiHhWeY8ak79i72C4qpDtppzVgH1ZeEUWp3", "position": "AiNQmodGxKNsyrpZaGuaa8q4YAA6kSd7DaZ9k8sZBM1g", "open_time": 1790246110, "executed": false, "counter": 473577047, "request_change": "increase", "request_type": "trigger", "entire_position": null },
+      { "pubkey": "1Bznn6qQP7rCHN6BtAU6wQup1w9VndYbn5w76ja1fvy", "position": "5ME6fJuEdZ1P35zGVzDGMhhP5zaZVSiEdNhaa3Rumi7o", "open_time": 1789568042, "executed": false, "counter": 885351660, "request_change": "decrease", "request_type": "trigger", "entire_position": false },
+      { "pubkey": "1DiMSNe9NEfcJRpWV8aiaBMkmeaD9bD9QCu5TMHQ5zA", "position": "HmUk4wAZmn1vzkFGFM9TDVkjK976tquUNNjFxahLZaZJ", "open_time": 1759980530, "executed": false, "counter": 441965771, "request_change": "decrease", "request_type": "trigger", "entire_position": false },
+      { "pubkey": "12TABYmiRsb3W1Uovby5cKbWq3dikc787eaXBqGAb1Wo", "position": "7wsPBDWChpciSDeCAqCG6jaVcPp6piqjUhK2J4S8Dbyz", "open_time": 1790249761, "executed": false, "counter": 754498806, "request_change": "increase", "request_type": "trigger", "entire_position": null }
+    ]
+  }
+}
