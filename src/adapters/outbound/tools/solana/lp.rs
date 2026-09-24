@@ -1583,4 +1583,123 @@ mod tests {
             "{e}"
         );
     }
+
+    // ── live (public mainnet; `cargo test --bin tengu live_lp_ -- --ignored --test-threads 1`) ──
+
+    use super::super::price::tests::Live;
+
+    fn live_tool(live: &Live, name: &str) -> Arc<dyn Tool> {
+        tools(&live.shared)
+            .into_iter()
+            .find(|t| t.definition().name == name)
+            .unwrap()
+    }
+
+    /// `lp_snapshot` twice (the second from the store); the first result.
+    async fn live_snapshot(live: &Live, wallet: &str) -> (Observation, LpSnapshot) {
+        let tool = live_tool(live, names::LP_SNAPSHOT);
+        let args = json!({"wallet": wallet, "pool": POOL});
+        let out = tool.execute(&args, &live.harness.ctx()).await.unwrap();
+        eprintln!(
+            "{}",
+            out.text.lines().take(3).collect::<Vec<_>>().join("\n")
+        );
+        let o = out.observation.unwrap();
+        assert!(o.status.usable(), "{}", out.text);
+        assert_line1(&o, &[wallet, POOL]);
+        let again = tool.execute(&args, &live.harness.ctx()).await.unwrap();
+        assert_eq!(again.observation.unwrap().source, ObsSource::Cache);
+        let s = o.typed().unwrap();
+        (o, s)
+    }
+
+    /// A decide tool with the production knobs of the TOML (commit false).
+    async fn live_decide(live: &Live, action: &str, tool: &str, wallet: &str) -> Observation {
+        let mut args = toml_args(action);
+        args["wallet"] = json!(wallet);
+        args["commit"] = json!(false);
+        let out = live_tool(live, tool)
+            .execute(&args, &live.harness.ctx())
+            .await
+            .unwrap();
+        eprintln!(
+            "{}",
+            out.text.lines().take(2).collect::<Vec<_>>().join("\n")
+        );
+        out.observation.unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_lp_snapshot_operator_wallet() {
+        let live = Live::new();
+        let (o, s) = live_snapshot(&live, BOT_WALLET).await;
+        assert_eq!(o.status, ObsStatus::Ok, "{:?}", o.errors);
+        // No LP and no perps on chain today (bot HANDOVER Session 42).
+        assert!(
+            matches!(s.discovery, Discovery::Empty { .. }),
+            "{:?}",
+            s.discovery
+        );
+        assert!(s.positions.is_empty(), "{:?}", s.positions);
+        assert!(s.hedge.applicable);
+        assert_eq!(
+            (&s.hedge.long, &s.hedge.short),
+            (&Field::Absent, &Field::Absent),
+            "perps flat"
+        );
+        assert!(s.oracle.usd.unwrap() > 1.0, "{:?}", s.oracle);
+        assert!(s.wallet_balances.native_sol.value().is_some());
+        let store = live.shared.store.as_deref().unwrap();
+        let price = store
+            .get(&format!("price_oracle/1:{}", ids::WSOL))
+            .await
+            .unwrap();
+        assert!(price.is_some(), "the inline oracle row is stored");
+
+        let h = live_decide(&live, "decide_hedge", names::HEDGE_DECIDE, BOT_WALLET).await;
+        let d: HedgeDecision = h.typed().unwrap();
+        assert!(d.snapshot.is_some());
+        assert_ne!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        let l = live_decide(&live, "decide_lp", names::LP_DECIDE, BOT_WALLET).await;
+        let d: LpDecision = l.typed().unwrap();
+        assert!(d.snapshot.is_some());
+        assert!(d.invalid_fields.is_empty(), "{:?}", d.invalid_fields);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_lp_snapshot_fixture_owner() {
+        let live = Live::new();
+        let (_, s) = live_snapshot(&live, OWNER).await;
+        eprintln!(
+            "positions={} anomalies={:?}",
+            s.positions.len(),
+            s.anomalies
+        );
+        // 3 positions at the fixture capture (slot 450102095).
+        assert!(!s.positions.is_empty(), "{:?}", s.discovery);
+        assert!(s.hedge.applicable);
+        let h = live_decide(&live, "decide_hedge", names::HEDGE_DECIDE, OWNER).await;
+        let d: HedgeDecision = h.typed().unwrap();
+        assert!(
+            [
+                "none",
+                "blocked",
+                "increase_long",
+                "increase_short",
+                "decrease_long",
+                "decrease_short"
+            ]
+            .contains(&d.action.name()),
+            "{:?}",
+            d.action
+        );
+        assert_ne!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        assert!(d.view.is_some(), "the controller saw the snapshot");
+        let l = live_decide(&live, "decide_lp", names::LP_DECIDE, OWNER).await;
+        let d: LpDecision = l.typed().unwrap();
+        assert_eq!(d.health.len(), s.positions.len());
+        eprintln!("lp verdict {}", d.verdict.name());
+    }
 }
