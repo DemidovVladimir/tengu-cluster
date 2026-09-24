@@ -797,4 +797,38 @@ mod pda_tests {
         let (pda, _) = try_find_program_address(&fifteen, &prog).unwrap();
         assert!(!is_on_curve(&pda.0));
     }
+
+    /// `acct/1` rows (`AccountRead`) honour the observation contract: full
+    /// ids in line 1 (≤ 200 chars), scalar features only.
+    #[test]
+    fn account_read_observation_contract() {
+        use crate::domain::observation::{
+            assert_features_ok, ObsSource, Observation, MAX_LINE1_CHARS,
+        };
+        let key = k("FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY");
+        let owner = ids::key(ids::TOKEN_2022);
+        for read in [
+            AccountRead::from_bytes(key, 450_104_084, owner, u64::MAX, &[7u8; 165]),
+            AccountRead {
+                pubkey: key,
+                slot: u64::MAX,
+                state: AccountState::Absent,
+            },
+        ] {
+            assert_features_ok(&read.features());
+            let obs = Observation::of("solana_accounts", &read, 0, 60_000, ObsSource::Live);
+            assert_eq!(
+                obs.key,
+                "acct/1:FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY"
+            );
+            let text = obs.render_text(i64::MAX / 2);
+            let line1 = text.lines().next().unwrap();
+            assert!(line1.chars().count() <= MAX_LINE1_CHARS, "{line1}");
+            assert!(line1.contains("FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY"));
+            if read.exists() {
+                assert!(line1.contains(ids::TOKEN_2022), "{line1}");
+            }
+            assert_eq!(obs.typed::<AccountRead>().unwrap(), read);
+        }
+    }
 }
