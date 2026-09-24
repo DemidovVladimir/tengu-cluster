@@ -220,8 +220,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
 | `src/domain/lp/dlmm.rs` | 1 | Meteora DLMM — LbPair / PositionV2 / BinArray decoders, pool + position typed outputs, share and fee math. |
-| `src/domain/lp/gates.rs` | 1 | LP gates — reentry, storm hysteresis, trend confirm, composition / imbalance, wallet 50/50, range and bin math. |
-| `src/domain/lp/hedge.rs` | 1 | Hedge controller — port of the delta-neutral bot's simulator hedge decision (regimes, band, caps). |
+| `src/domain/lp/gates.rs` | 1508 | LP gates: reentry, storm hysteresis, trend + regime confirm, composition/imbalance, wallet 50/50, bin math, 70-bin centered range, DLMM fee rate, swap oracle gate. |
+| `src/domain/lp/hedge.rs` | 1247 | Hedge controller port (`decide`, LP clamp regimes, auto notional cap, `auto_band_sol`, `js_to_fixed`); replays 1027 production vectors (`tests/fixtures/hedge-vectors.jsonl`). |
 | `src/domain/lp/market.rs` | 1 | Market typed outputs — `sol_price` oracle price and `dlmm_pools` pool list. |
 | `src/domain/lp/mod.rs` | 12 | Solana LP policy + typed outputs — pure, no IO; one file per family. |
 | `src/domain/lp/perps.rs` | 1 | Jupiter perps — Position / Custody / JLP pool decoders, borrow APR, accrued fee, liquidation price. |
