@@ -52,7 +52,9 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
-# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill
+# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill,
+#   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
+#   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -154,6 +156,19 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # args = { method = "GET", url = "https://example.com/pools?pair={pair}", return_body = true }
 # slots = { pair = ["SOL-USDC"] }
 # reduce = { pools = "/data/*/{address,tvl}" }
+#
+# Typed tools (results carry an Observation; docs/typed-observations-2026-09-24.md):
+# world = { price = "price_oracle/1:So11111111111111111111111111111111111111112", pools = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000" }  # alias → observation key, read (never fetched) each step
+# world_max_age_secs = 30                 # older world entries render as stale, no numbers (default 30)
+# [decision_loops.watch.actions.price]
+# description = "Refresh the SOL/USD price"
+# tool = "sol_price"                      # opt-in tool: list it in the loop agent's `tools`
+# read_only = true
+# [decision_loops.watch.actions.open]
+# description = "Open a position"
+# tool = "dlmm_open_position"             # not built yet — allowed only while dry_run
+# requires = { price = 30 }               # offered only while `price` is usable and <= 30 s old
+# slots = { pool = { observation = "pools", items = "/data/pools/*", value = "address", top = 5 } }  # from a fresh world entry (written by a dlmm_pools call with the same args)
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
@@ -287,7 +302,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
 # # `workspace_tools` allow-list: agentic_memory / shared_cache / persistent_store /
-# # skill_distill / apply_improver_proposal / manage_skill. Regular tools like
+# # skill_distill / apply_improver_proposal / manage_skill (+ the Solana LP tools,
+# # docs/tools.md). Regular tools like
 # # read_file / list_directory go in `tools`.
 # tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #
