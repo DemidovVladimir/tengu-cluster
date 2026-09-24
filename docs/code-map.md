@@ -211,15 +211,18 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (12 files)
+### domain — data + pure policy (15 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/decision.rs` | 178 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry`, `StepOutcome`. |
+| `src/domain/lp/mod.rs` | 5 | Solana LP policy — pure decision cores ported from `delta_neutral_bot` (hedge controller, LP gates, DLMM bin/fee math). |
+| `src/domain/lp/hedge.rs` | 1247 | Hedge controller port (`decide`, LP clamp regimes, auto notional cap, `auto_band_sol`, `js_to_fixed`); replays 1027 production vectors (`tests/fixtures/hedge-vectors.jsonl`). |
+| `src/domain/lp/gates.rs` | 1508 | LP gates: reentry, storm hysteresis, trend + regime confirm, composition/imbalance, wallet 50/50, bin math, 70-bin centered range, DLMM fee rate, swap oracle gate. |
 | `src/domain/message.rs` | 209 | Messages, tool calls/definitions, stream events, and the precision `Lens` |
 | `src/domain/metrics.rs` | 298 | Metrics — context/token consumption telemetry. |
-| `src/domain/mod.rs` | 14 | Domain — plain data and pure policy. Imports nothing from the rest of the |
+| `src/domain/mod.rs` | 16 | Domain — plain data and pure policy. Imports nothing from the rest of the |
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
 | `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; |
 | `src/domain/secrets.rs` | 46 | `SecretRegistry` — secret values to redact from tool output, transcripts |

@@ -3,6 +3,7 @@
 //! `tests/layering_lint.rs`).
 
 pub(crate) mod decision;
+pub(crate) mod lp;
 pub(crate) mod memory;
 pub(crate) mod message;
 pub(crate) mod metrics;
