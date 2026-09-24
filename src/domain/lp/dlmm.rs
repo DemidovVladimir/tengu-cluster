@@ -1058,7 +1058,9 @@ pub(crate) fn build_dlmm_pool(
 
 /// `dlmm_positions/1`: the wallet's PositionV2 accounts for `pool` found in
 /// the set (owner DLMM + discriminator + `lb_pair` + `owner` fields), valued
-/// with the pool's bin arrays in the set. `discovery` comes from the glue.
+/// with the pool's bin arrays in the set. `discovery` comes from the glue;
+/// with `DiscoverySource::Args` a requested position owned by another
+/// wallet is reported (`NotApplicable`), otherwise others are ignored.
 ///
 /// `Err` when the LbPair or a mint is unreadable. Status: `Error` when
 /// discovery failed with no fallback positions, `Partial` when a position is
@@ -1091,13 +1093,24 @@ pub(crate) fn build_positions(
 
     let mut positions = Vec::new();
     let mut anomalies = Vec::new();
+    let explicit = matches!(
+        discovery,
+        Discovery::Found {
+            source: DiscoverySource::Args,
+            ..
+        }
+    );
     for (key, pos) in &all_positions {
         if pos.owner != *wallet {
-            errors.push(ReadError::new(
-                "positions",
-                ErrorClass::NotApplicable,
-                format!("position {key} is owned by {}, not {wallet}", pos.owner),
-            ));
+            // Other wallets' positions in a shared set are ignored; an
+            // explicitly requested one is a caller mistake worth reporting.
+            if explicit {
+                errors.push(ReadError::new(
+                    "positions",
+                    ErrorClass::NotApplicable,
+                    format!("position {key} is owned by {}, not {wallet}", pos.owner),
+                ));
+            }
             continue;
         }
         watch.insert(key.to_string());
@@ -1113,7 +1126,7 @@ pub(crate) fn build_positions(
                 ErrorClass::Fatal,
                 format!(
                     "position {key}: bin arrays {:?} holding its shares are not in the read set",
-                    t.missing_bin_arrays
+                    t.missing_bin_arrays.iter().collect::<Vec<_>>()
                 ),
             ));
         }
@@ -1463,5 +1476,862 @@ impl Observed for DlmmPositions {
 
     fn errors(&self) -> Vec<ReadError> {
         self.errors.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::observation::{assert_features_ok, ObsSource, Observation, MAX_LINE1_CHARS};
+    use crate::domain::solana::AccountRead;
+
+    // Mainnet fixture, slot 450102095 (scripts/golden/dlmm_capture.js):
+    // one getMultipleAccounts + expectations computed by @meteora-ag/dlmm
+    // 1.9.7 from the same bytes.
+    const GMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/dlmm/gma.json"
+    ));
+    const META: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/dlmm/meta.json"
+    ));
+    const GOLDEN: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/dlmm/golden.json"
+    ));
+    const POOL: &str = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
+    const OWNER: &str = "JBggt27MzM4eohjumT9Tuec7MBoWAgDM4BJjkoisDUcs";
+    const EXT_OWNER: &str = "D5HPLvKdJHwKGaAkn99aFDj4BJSAbXyexKececgRQWss";
+    const EXT_POSITION: &str = "14JU64KbNMLmFiS8qHuZ9ZF1swmzmiBYCRZidM24rH1m";
+    const WALLET_44: &str = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S";
+    const KEY_44: &str = "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa";
+
+    fn k(s: &str) -> Pubkey {
+        s.parse().unwrap()
+    }
+
+    fn golden() -> Value {
+        serde_json::from_str(GOLDEN).unwrap()
+    }
+
+    fn meta() -> Value {
+        serde_json::from_str(META).unwrap()
+    }
+
+    fn fixture_set() -> AccountSet {
+        let gma: Value = serde_json::from_str(GMA).unwrap();
+        let meta = meta();
+        let slot = gma["result"]["context"]["slot"].as_u64().unwrap();
+        let mut set = AccountSet::default();
+        let keys = meta["keys"].as_array().unwrap();
+        let values = gma["result"]["value"].as_array().unwrap();
+        assert_eq!(keys.len(), values.len());
+        for (key, v) in keys.iter().zip(values) {
+            let pubkey = k(key.as_str().unwrap());
+            let state = if v.is_null() {
+                AccountState::Absent
+            } else {
+                AccountState::Ok {
+                    owner: k(v["owner"].as_str().unwrap()),
+                    lamports: v["lamports"].as_u64().unwrap(),
+                    data_b64: v["data"][0].as_str().unwrap().to_string(),
+                    executable: v["executable"].as_bool().unwrap(),
+                }
+            };
+            set.insert(AccountRead {
+                pubkey,
+                slot,
+                state,
+            });
+        }
+        set
+    }
+
+    fn array_keys() -> Vec<(i64, Pubkey)> {
+        let m = meta();
+        m["roles"]["bin_array_indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(m["roles"]["bin_arrays"].as_array().unwrap())
+            .map(|(i, key)| (i.as_i64().unwrap(), k(key.as_str().unwrap())))
+            .collect()
+    }
+
+    fn now_ms() -> i64 {
+        golden()["clock_unix_timestamp"].as_i64().unwrap() * 1000
+    }
+
+    fn assert_rel(actual: f64, expected: f64, tol: f64, what: &str) {
+        let scale = expected.abs().max(1e-300);
+        assert!(
+            ((actual - expected) / scale).abs() <= tol,
+            "{what}: {actual} vs {expected} (rel tol {tol})"
+        );
+    }
+
+    fn found(count: u32) -> Discovery {
+        Discovery::Found {
+            count,
+            source: DiscoverySource::Gpa,
+            at_ms: 1,
+        }
+    }
+
+    fn replace_data(set: &mut AccountSet, key: &Pubkey, f: impl FnOnce(&mut Vec<u8>)) {
+        let read = set.get(key).unwrap().clone();
+        let mut data = read.data().unwrap();
+        f(&mut data);
+        let owner = *read.owner().unwrap();
+        set.insert(AccountRead::from_bytes(
+            *key,
+            read.slot,
+            owner,
+            read.lamports().unwrap(),
+            &data,
+        ));
+    }
+
+    fn check_observed<T: Observed>(v: &T) {
+        assert_features_ok(&v.features());
+        let o = Observation::of("test", v, 0, 5_000, ObsSource::Live);
+        let text = o.render_text(1_000);
+        let line1 = text.lines().next().unwrap();
+        assert!(
+            line1.chars().count() <= MAX_LINE1_CHARS,
+            "{} chars: {line1}",
+            line1.chars().count()
+        );
+        assert!(
+            v.headline().chars().count() <= 165,
+            "headline {} chars: {}",
+            v.headline().chars().count(),
+            v.headline()
+        );
+    }
+
+    // ── decoders ───────────────────────────────────────────────────────
+
+    #[test]
+    fn lb_pair_decodes_like_the_sdk() {
+        let g = golden();
+        let pair = lb_pair_from_set(&fixture_set(), &k(POOL)).unwrap();
+        let num = |f: &str| g[f].as_i64().unwrap();
+        assert_eq!(i64::from(pair.active_id), num("active_id"));
+        assert_eq!(i64::from(pair.bin_step), num("bin_step"));
+        assert_eq!(i64::from(pair.status), num("status"));
+        assert_eq!(i64::from(pair.pair_type), num("pair_type"));
+        assert_eq!(i64::from(pair.base_factor), num("base_factor"));
+        assert_eq!(
+            i64::from(pair.base_fee_power_factor),
+            num("base_fee_power_factor")
+        );
+        assert_eq!(
+            i64::from(pair.variable_fee_control),
+            num("variable_fee_control")
+        );
+        assert_eq!(i64::from(pair.protocol_share), num("protocol_share"));
+        assert_eq!(i64::from(pair.filter_period), num("filter_period"));
+        assert_eq!(i64::from(pair.decay_period), num("decay_period"));
+        assert_eq!(i64::from(pair.reduction_factor), num("reduction_factor"));
+        assert_eq!(
+            i64::from(pair.max_volatility_accumulator),
+            num("max_volatility_accumulator")
+        );
+        assert_eq!(
+            i64::from(pair.volatility_accumulator),
+            num("volatility_accumulator")
+        );
+        assert_eq!(
+            i64::from(pair.volatility_reference),
+            num("volatility_reference")
+        );
+        assert_eq!(i64::from(pair.index_reference), num("index_reference"));
+        assert_eq!(
+            pair.last_update_timestamp.to_string(),
+            g["v_last_update_ts"].as_str().unwrap()
+        );
+        assert_eq!(
+            pair.activation_point.to_string(),
+            g["activation_point"].as_str().unwrap()
+        );
+        assert_eq!(pair.token_x_mint.to_string(), g["token_x_mint"]);
+        assert_eq!(pair.token_y_mint.to_string(), g["token_y_mint"]);
+        assert_eq!(pair.reserve_x.to_string(), g["reserve_x"]);
+        assert_eq!(pair.reserve_y.to_string(), g["reserve_y"]);
+        assert_eq!(
+            (
+                pair.token_mint_x_program_flag,
+                pair.token_mint_y_program_flag
+            ),
+            (0, 0)
+        );
+    }
+
+    #[test]
+    fn decoders_reject_bad_bytes() {
+        let set = fixture_set();
+        let d = set.get(&k(POOL)).unwrap().data().unwrap();
+        assert!(decode_lb_pair(&d[..903]).unwrap_err().contains("< 904"));
+        let mut bad = d.clone();
+        bad[0] ^= 1;
+        assert!(decode_lb_pair(&bad).unwrap_err().contains("discriminator"));
+
+        let ext = set.get(&k(EXT_POSITION)).unwrap().data().unwrap();
+        assert_eq!(ext.len(), 18648);
+        let p = decode_position_v2(&ext).unwrap();
+        assert_eq!((p.width(), p.is_extended()), (164, true));
+        // 164 bins need 8120 + 94 × 112 = 18648 bytes.
+        assert!(decode_position_v2(&ext[..18647])
+            .unwrap_err()
+            .contains("needs 18648 bytes"));
+        let mut wide = ext.clone();
+        wide[7916..7920].copy_from_slice(&(p.lower_bin_id + 1400).to_le_bytes());
+        assert!(decode_position_v2(&wide).unwrap_err().contains("1..=1400"));
+        assert!(decode_position_v2(&ext[..8119]).is_err());
+
+        let arr = set
+            .get(&k("2E855k5fegqhZppWQms1XrYyQQSVFNFipHg3igabX1Y3"))
+            .unwrap()
+            .data()
+            .unwrap();
+        let a = decode_bin_array(&arr).unwrap();
+        assert_eq!((a.index, a.lb_pair, a.bins.len()), (-79, k(POOL), 70));
+        assert!(decode_bin_array(&arr[..10135]).is_err());
+        assert!(decode_bin_array(&d).is_err(), "LbPair is not a BinArray");
+    }
+
+    #[test]
+    fn pool_account_errors_are_classified() {
+        let pool = k(POOL);
+        let mut set = fixture_set();
+        set.accounts.remove(&pool);
+        assert_eq!(
+            lb_pair_from_set(&set, &pool).unwrap_err().class,
+            ErrorClass::Fatal,
+            "not read"
+        );
+        set.insert(AccountRead {
+            pubkey: pool,
+            slot: 1,
+            state: AccountState::Absent,
+        });
+        let e = build_dlmm_pool(&set, &pool, &[], 0).unwrap_err();
+        assert_eq!(e.class, ErrorClass::NotApplicable, "{e:?}");
+
+        let mut set = fixture_set();
+        let data = set.get(&pool).unwrap().data().unwrap();
+        set.insert(AccountRead::from_bytes(
+            pool,
+            1,
+            ids::key(ids::TOKEN),
+            1,
+            &data,
+        ));
+        let e = lb_pair_from_set(&set, &pool).unwrap_err();
+        assert_eq!(e.class, ErrorClass::Decode);
+        assert!(e.message.contains(ids::DLMM), "{e:?}");
+
+        let mut set = fixture_set();
+        replace_data(&mut set, &pool, |d| d.truncate(900));
+        assert_eq!(
+            lb_pair_from_set(&set, &pool).unwrap_err().class,
+            ErrorClass::Decode
+        );
+
+        // A mint that is not an SPL mint → the pool is unreadable (Err).
+        let mut set = fixture_set();
+        replace_data(&mut set, &k(ids::USDC), |d| d.truncate(40));
+        let e = build_dlmm_pool(&set, &pool, &[], 0).unwrap_err();
+        assert_eq!(
+            (e.field.as_str(), e.class),
+            ("quote_mint", ErrorClass::Decode)
+        );
+    }
+
+    // ── pool ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn pool_state_matches_sdk_golden() {
+        let g = golden();
+        let s = build_dlmm_pool(&fixture_set(), &k(POOL), &array_keys(), now_ms()).unwrap();
+        assert_eq!(s.slot, 450_102_095);
+        assert_eq!(s.pool, POOL);
+        assert_eq!((s.active_id, s.bin_step), (-5373, 4));
+        assert!(s.enabled);
+        assert_rel(
+            s.active_price,
+            g["active_price"].as_f64().unwrap(),
+            1e-12,
+            "active price",
+        );
+        // Pair roles (pairConfig.ts).
+        assert_eq!(s.pair.base_mint, ids::WSOL);
+        assert_eq!(s.pair.quote_mint, ids::USDC);
+        assert_eq!((s.pair.base_decimals, s.pair.quote_decimals), (9, 6));
+        assert_eq!(s.pair.base_token_program, ids::TOKEN);
+        assert_eq!(s.pair.quote_token_program, ids::TOKEN);
+        assert!(s.pair.base_is_native_sol && s.pair.quote_is_usd);
+        assert!(!s.pair.quote_is_native_sol);
+        // Fees: static + projected at the clock sysvar time.
+        let gf = |f: &str| g[f].as_f64().unwrap();
+        assert_rel(s.fee.base_fee_pct, gf("base_fee_pct"), 1e-12, "base fee");
+        assert_rel(s.fee.max_fee_pct, gf("max_fee_pct"), 1e-12, "max fee");
+        assert_rel(
+            s.fee.protocol_share_pct,
+            gf("protocol_share_pct"),
+            1e-12,
+            "protocol share",
+        );
+        assert_eq!(
+            i64::from(s.fee.volatility_accumulator_now),
+            g["now_volatility_accumulator"].as_i64().unwrap()
+        );
+        assert_eq!(s.fee.volatility_accumulator, 20_039);
+        let rate = |f: &str| g[f].as_str().unwrap().parse::<f64>().unwrap() / 1e9 * 100.0;
+        assert_rel(
+            s.fee.total_fee_pct,
+            rate("now_total_rate"),
+            1e-12,
+            "total fee",
+        );
+        assert_rel(
+            s.fee.variable_fee_pct,
+            rate("now_variable_rate"),
+            1e-12,
+            "variable fee",
+        );
+        assert_rel(
+            s.fee.total_fee_pct,
+            gf("now_total_fee_pct"),
+            1e-12,
+            "total fee pct",
+        );
+        // Reserves + TVL.
+        let rb = s.reserve_base.value().unwrap();
+        let rq = s.reserve_quote.value().unwrap();
+        assert_eq!(rb.raw, g["reserve_x_amount_raw"].as_str().unwrap());
+        assert_eq!(rq.raw, g["reserve_y_amount_raw"].as_str().unwrap());
+        assert_eq!((rb.mint.as_str(), rq.mint.as_str()), (ids::WSOL, ids::USDC));
+        assert_rel(
+            s.tvl_quote_onchain.unwrap(),
+            gf("tvl_quote_onchain"),
+            1e-12,
+            "tvl",
+        );
+        // Depth bands vs independent sums over SDK-decoded bins.
+        let d = s.depth.value().unwrap();
+        assert_eq!(d.bin_arrays, vec![-78, -77]);
+        assert!(d.missing_bin_arrays.is_empty());
+        for (band, want) in d.bands.iter().zip(g["depth"].as_array().unwrap()) {
+            assert_eq!(
+                u64::from(band.half_width_bins),
+                want["half_width_bins"].as_u64().unwrap()
+            );
+            assert!(band.complete);
+            let raw = |f: &str| want[f].as_str().unwrap().parse::<f64>().unwrap();
+            assert_rel(band.base, raw("base_raw") / 1e9, 1e-15, "depth base");
+            assert_rel(band.quote, raw("quote_raw") / 1e6, 1e-15, "depth quote");
+            assert_rel(
+                band.value_quote,
+                want["value_quote"].as_f64().unwrap(),
+                1e-12,
+                "depth value",
+            );
+        }
+        assert_eq!(s.status(), ObsStatus::Ok);
+        assert!(s.errors().is_empty());
+        check_observed(&s);
+        let f = s.features();
+        assert_eq!(f.len(), 15, "{f:?}");
+        assert_eq!(f["active_id"], json!(-5373));
+        assert_eq!(f["quote_is_usd"], json!(true));
+        assert!(
+            s.headline().starts_with(&format!(
+                "dlmm_pool {POOL} SOL/USDC active_id=-5373 price=116.6275"
+            )),
+            "{}",
+            s.headline()
+        );
+        let o = Observation::of("dlmm_pool", &s, 0, 5_000, ObsSource::Live);
+        assert_eq!(o.key, format!("dlmm_pool/1:{POOL}"));
+        assert_eq!(o.typed::<DlmmPoolState>().unwrap(), s);
+    }
+
+    #[test]
+    fn depth_distinguishes_absent_arrays_from_unread_ones() {
+        let pool = k(POOL);
+        let arr_78 = k("HP15ZCgcgunsV9ypHKpDJSURFn4dn7i63uCNB4k7K5MV");
+        let mut set = fixture_set();
+        set.accounts.remove(&arr_78);
+        // Not read: bands reaching bin array -78 (±25, ±50) are a floor.
+        let s = build_dlmm_pool(&set, &pool, &array_keys(), now_ms()).unwrap();
+        let d = s.depth.value().unwrap();
+        assert_eq!(d.missing_bin_arrays, vec![-78]);
+        let complete: Vec<bool> = d.bands.iter().map(|b| b.complete).collect();
+        assert_eq!(complete, vec![true, false, false]);
+        assert_eq!(s.status(), ObsStatus::Partial);
+        assert!(s.errors()[0].message.contains("[-78]"), "{:?}", s.errors());
+        assert!(!s.features().contains_key("depth_value_quote_25"));
+        check_observed(&s);
+
+        // Absent on chain (PDA read, no account): empty bins, complete.
+        set.insert(AccountRead {
+            pubkey: arr_78,
+            slot: 450_102_095,
+            state: AccountState::Absent,
+        });
+        let s = build_dlmm_pool(&set, &pool, &array_keys(), now_ms()).unwrap();
+        let d = s.depth.value().unwrap();
+        assert!(d.missing_bin_arrays.is_empty());
+        assert!(d.bands.iter().all(|b| b.complete));
+        assert_eq!(s.status(), ObsStatus::Ok);
+        // Array -78 lies below the active bin: quote only.
+        let g = golden();
+        assert!(d.bands[2].quote < g["depth"][2]["quote"].as_f64().unwrap());
+        assert_eq!(d.bands[2].base, g["depth"][2]["base"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn reserve_problems_give_partial_not_zero() {
+        let pool = k(POOL);
+        let reserve_y = k("CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz");
+        let mut set = fixture_set();
+        // Point the quote reserve at the wrong mint.
+        replace_data(&mut set, &reserve_y, |d| {
+            d[..32].copy_from_slice(&ids::key(ids::WSOL).0)
+        });
+        let s = build_dlmm_pool(&set, &pool, &array_keys(), now_ms()).unwrap();
+        assert!(s.reserve_base.value().is_some());
+        let e = s.reserve_quote.error().unwrap();
+        assert_eq!(
+            (e.field.as_str(), e.class),
+            ("reserve_quote", ErrorClass::Decode)
+        );
+        assert_eq!(s.tvl_quote_onchain, None);
+        assert_eq!(s.status(), ObsStatus::Partial);
+        assert!(!s.features().contains_key("tvl_quote"));
+        check_observed(&s);
+    }
+
+    #[test]
+    fn key_planning() {
+        let set = fixture_set();
+        let pool = k(POOL);
+        let pair = lb_pair_from_set(&set, &pool).unwrap();
+        assert_eq!(bin_array_keys_needed(&pair, &[]), vec![-78, -77]);
+        assert_eq!(
+            bin_array_keys_needed(&pair, &[(-5483, -5320)]),
+            vec![-79, -78, -77, -76]
+        );
+        assert_eq!(
+            plan_position_keys(&set, &k(OWNER), &pool),
+            vec![-79, -78, -77, -76]
+        );
+        assert_eq!(
+            plan_position_keys(&set, &k(EXT_OWNER), &pool),
+            vec![-79, -78, -77, -76]
+        );
+        assert!(plan_position_keys(&set, &k(WALLET_44), &pool).is_empty());
+        assert_eq!(
+            pool_account_keys(&pair),
+            vec![
+                k(ids::WSOL),
+                k(ids::USDC),
+                k("EYj9xKw6ZszwpyNibHY7JD5o3QgTVrSdcBp1fMJhrR9o"),
+                k("CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz"),
+            ]
+        );
+        assert_eq!(
+            position_gpa_filters(&k(OWNER), &pool),
+            vec![
+                json!({"memcmp": {"offset": 0, "bytes": "LgkNAEYaVX3"}}),
+                json!({"memcmp": {"offset": 8, "bytes": POOL}}),
+                json!({"memcmp": {"offset": 40, "bytes": OWNER}}),
+            ]
+        );
+    }
+
+    // ── positions ──────────────────────────────────────────────────────
+
+    fn arrays_map(set: &AccountSet) -> BTreeMap<i64, BinArray> {
+        scan_bin_arrays(set, &k(POOL))
+            .0
+            .into_iter()
+            .map(|(i, (_, a))| (i, a))
+            .collect()
+    }
+
+    /// Raw totals are exact integers: compare with the SDK strings.
+    fn assert_raw_totals(set: &AccountSet, want: &Value) {
+        let key = k(want["position"].as_str().unwrap());
+        let pos = decode_position_v2(&set.get(&key).unwrap().data().unwrap()).unwrap();
+        let t = position_totals(&pos, &arrays_map(set));
+        assert!(t.complete());
+        let s = |f: &str| want[f].as_str().unwrap().to_string();
+        assert_eq!(t.amount_x.to_string(), s("total_x_raw"), "{key} x");
+        assert_eq!(t.amount_y.to_string(), s("total_y_raw"), "{key} y");
+        assert_eq!(t.fee_x.to_string(), s("fee_x_raw"), "{key} fee x");
+        assert_eq!(t.fee_y.to_string(), s("fee_y_raw"), "{key} fee y");
+        assert_eq!(
+            pos.total_claimed_fee_x.to_string(),
+            s("total_claimed_fee_x_raw")
+        );
+        assert_eq!(
+            pos.total_claimed_fee_y.to_string(),
+            s("total_claimed_fee_y_raw")
+        );
+        assert_eq!(pos.last_updated_at.to_string(), s("last_updated_at"));
+        assert_eq!(pos.fee_owner.to_string(), s("fee_owner"));
+        assert_eq!(pos.owner.to_string(), s("owner"));
+        assert_eq!(
+            u64::from(pos.width()),
+            want["width"].as_u64().unwrap(),
+            "{key} width"
+        );
+    }
+
+    fn assert_position(p: &DlmmPosition, want: &Value, price: f64) {
+        let raw = |f: &str| want[f].as_str().unwrap().parse::<f64>().unwrap();
+        assert_eq!(p.owner, want["owner"].as_str().unwrap());
+        assert_eq!(
+            i64::from(p.lower_bin_id),
+            want["lower_bin_id"].as_i64().unwrap()
+        );
+        assert_eq!(
+            i64::from(p.upper_bin_id),
+            want["upper_bin_id"].as_i64().unwrap()
+        );
+        assert_rel(
+            p.amount_base,
+            raw("total_x_raw") / 1e9,
+            1e-15,
+            "amount base",
+        );
+        assert_rel(
+            p.amount_quote,
+            raw("total_y_raw") / 1e6,
+            1e-15,
+            "amount quote",
+        );
+        assert_rel(p.fee_base, raw("fee_x_raw") / 1e9, 1e-15, "fee base");
+        assert_rel(p.fee_quote, raw("fee_y_raw") / 1e6, 1e-15, "fee quote");
+        assert_rel(
+            p.total_claimed_fee_base,
+            raw("total_claimed_fee_x_raw") / 1e9,
+            1e-15,
+            "claimed base",
+        );
+        assert_rel(
+            p.lower_price,
+            want["lower_price"].as_f64().unwrap(),
+            1e-12,
+            "lower price",
+        );
+        assert_rel(
+            p.upper_price,
+            want["upper_price"].as_f64().unwrap(),
+            1e-12,
+            "upper price",
+        );
+        assert_rel(
+            p.value_quote,
+            p.amount_base * price + p.amount_quote,
+            1e-12,
+            "value",
+        );
+        assert_eq!(
+            p.in_range,
+            p.lower_bin_id <= -5373 && -5373 <= p.upper_bin_id
+        );
+        assert_eq!(p.bins_below_active, -5373 - p.lower_bin_id);
+        assert_eq!(p.bins_above_active, p.upper_bin_id + 5373);
+        assert!(p.complete);
+    }
+
+    #[test]
+    fn positions_match_sdk_golden() {
+        let g = golden();
+        let set = fixture_set();
+        let price = g["active_price"].as_f64().unwrap();
+        let want: Vec<&Value> = g["positions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["owner"] == OWNER)
+            .collect();
+        assert_eq!(want.len(), 3);
+        for w in &want {
+            assert_raw_totals(&set, w);
+        }
+
+        let r = build_positions(&set, &k(OWNER), &k(POOL), found(3)).unwrap();
+        assert_eq!(r.positions.len(), 3);
+        assert!(r.errors.is_empty(), "{:?}", r.errors);
+        for w in &want {
+            let p = r
+                .positions
+                .iter()
+                .find(|p| p.position == w["position"].as_str().unwrap())
+                .unwrap();
+            assert_position(p, w, price);
+        }
+        // Sorted by lower bin; exactly one position holds the active bin.
+        let lowers: Vec<i32> = r.positions.iter().map(|p| p.lower_bin_id).collect();
+        assert_eq!(lowers, vec![-5489, -5440, -5372]);
+        let in_range: Vec<bool> = r.positions.iter().map(|p| p.in_range).collect();
+        assert_eq!(in_range, vec![false, true, false]);
+        // Composition: below the active bin = all quote, above = all base.
+        assert_eq!(r.positions[0].base_pct_linear, 0.0);
+        assert_eq!(r.positions[2].base_pct_linear, 100.0);
+        assert_eq!(r.positions[0].base_pct_value, Some(0.0));
+        assert_eq!(r.positions[2].base_pct_value, Some(100.0));
+        assert_eq!(
+            r.anomalies,
+            vec![DlmmAnomaly::MultiplePositions { count: 3 }]
+        );
+        let e = r.exposure.value().unwrap();
+        let sum = |f: fn(&DlmmPosition) -> f64| r.positions.iter().map(f).sum::<f64>();
+        assert_eq!(e.position_count, 3);
+        assert_rel(e.base, sum(|p| p.amount_base), 1e-15, "exposure base");
+        assert_rel(e.quote, sum(|p| p.amount_quote), 1e-15, "exposure quote");
+        assert_rel(
+            e.claimable_base,
+            sum(|p| p.fee_base),
+            1e-15,
+            "claimable base",
+        );
+        assert_rel(
+            e.value_quote,
+            e.base * price + e.quote,
+            1e-12,
+            "exposure value",
+        );
+        assert_rel(
+            e.full_value_base,
+            e.base + e.quote / price,
+            1e-12,
+            "full value",
+        );
+        // Watch = pool, both mints, the 3 positions and the 4 arrays they use.
+        let m = meta();
+        let mut expect: Vec<String> = vec![POOL.into(), ids::WSOL.into(), ids::USDC.into()];
+        for w in &want {
+            expect.push(w["position"].as_str().unwrap().into());
+        }
+        for a in m["roles"]["bin_arrays"].as_array().unwrap() {
+            expect.push(a.as_str().unwrap().into());
+        }
+        expect.sort();
+        assert_eq!(r.watch, expect);
+        assert_eq!(r.status(), ObsStatus::Ok);
+        assert_eq!(r.slot, 450_102_095);
+        check_observed(&r);
+        let f = r.features();
+        assert_eq!(f["position_count"], json!(3));
+        assert_eq!(f["n_in_range"], json!(1));
+        assert_eq!(f["in_range"], json!(false));
+        assert_eq!(f["discovery"], json!("found"));
+        let o = Observation::of("dlmm_positions", &r, 0, 10_000, ObsSource::Live);
+        assert_eq!(o.key, format!("dlmm_positions/1:{OWNER}:{POOL}"));
+        assert_eq!(o.typed::<DlmmPositions>().unwrap(), r);
+    }
+
+    #[test]
+    fn extended_position_matches_sdk_golden() {
+        let g = golden();
+        let set = fixture_set();
+        let price = g["active_price"].as_f64().unwrap();
+        let want = g["positions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["position"] == EXT_POSITION)
+            .unwrap();
+        assert_eq!(want["extended_bins"], json!(94));
+        assert_raw_totals(&set, want);
+        let r = build_positions(&set, &k(EXT_OWNER), &k(POOL), found(1)).unwrap();
+        assert_eq!(r.positions.len(), 1);
+        let p = &r.positions[0];
+        assert_position(p, want, price);
+        assert_eq!(p.width, 164);
+        assert!(p.in_range);
+        assert!(p.base_pct_linear > 0.0 && p.base_pct_linear < 100.0);
+        assert_eq!(
+            r.anomalies,
+            vec![DlmmAnomaly::ExtendedPosition {
+                position: EXT_POSITION.into()
+            }]
+        );
+        assert_eq!(r.status(), ObsStatus::Ok);
+        check_observed(&r);
+    }
+
+    #[test]
+    fn unread_bin_array_marks_positions_incomplete() {
+        let mut set = fixture_set();
+        // Array -77 holds shares of two of OWNER's positions.
+        set.accounts
+            .remove(&k("Vc6P6kjaRUgnQCwycL4QzTG3tiNR4CgC3gqWHvvMMJh"));
+        let r = build_positions(&set, &k(OWNER), &k(POOL), found(3)).unwrap();
+        let complete: Vec<bool> = r.positions.iter().map(|p| p.complete).collect();
+        assert_eq!(complete, vec![true, false, false]);
+        assert_eq!(r.status(), ObsStatus::Partial);
+        assert_eq!(r.errors.len(), 2);
+        assert!(r.errors[0].message.contains("[-77]"), "{:?}", r.errors);
+        // Partial amounts are a floor, never inflated.
+        let full = build_positions(&fixture_set(), &k(OWNER), &k(POOL), found(3)).unwrap();
+        assert!(r.positions[1].amount_base <= full.positions[1].amount_base);
+        assert_eq!(r.features()["complete"], json!(false));
+        check_observed(&r);
+    }
+
+    #[test]
+    fn discovery_states_drive_status() {
+        let set = fixture_set();
+        let err = ReadError::new("gpa", ErrorClass::RateLimited, "429");
+        // Discovery failed, no fallback positions: exposure unknown, not 0.
+        let r = build_positions(
+            &set,
+            &k(WALLET_44),
+            &k(POOL),
+            Discovery::Error {
+                error: err.clone(),
+                fallback_count: 0,
+            },
+        )
+        .unwrap();
+        assert!(r.positions.is_empty());
+        assert_eq!(r.status(), ObsStatus::Error);
+        assert_eq!(r.exposure.error().unwrap().class, ErrorClass::RateLimited);
+        assert_eq!(r.errors[0].field, "discovery");
+        assert!(!r.features().contains_key("lp_value_quote"));
+        check_observed(&r);
+
+        // Discovery failed, fallback positions given: Partial with values.
+        let r = build_positions(
+            &set,
+            &k(OWNER),
+            &k(POOL),
+            Discovery::Error {
+                error: err,
+                fallback_count: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.status(), ObsStatus::Partial);
+        assert_eq!(r.exposure.value().unwrap().position_count, 3);
+
+        // Legitimately none.
+        let r =
+            build_positions(&set, &k(WALLET_44), &k(POOL), Discovery::Empty { at_ms: 5 }).unwrap();
+        assert_eq!(r.status(), ObsStatus::Absent);
+        assert_eq!(r.exposure.value().unwrap().position_count, 0);
+        assert_eq!(r.features()["discovery"], json!("empty"));
+        check_observed(&r);
+    }
+
+    #[test]
+    fn foreign_positions_and_disabled_pool_are_flagged() {
+        let mut set = fixture_set();
+        replace_data(&mut set, &k(POOL), |d| d[82] = 1);
+        // OWNER's positions are in the set but EXT_OWNER asked (explicit args).
+        let r = build_positions(
+            &set,
+            &k(EXT_OWNER),
+            &k(POOL),
+            Discovery::Found {
+                count: 4,
+                source: DiscoverySource::Args,
+                at_ms: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(r.positions.len(), 1);
+        let foreign = r
+            .errors
+            .iter()
+            .filter(|e| e.class == ErrorClass::NotApplicable)
+            .count();
+        assert_eq!(foreign, 3);
+        assert!(r.anomalies.contains(&DlmmAnomaly::PoolDisabled));
+        assert_eq!(r.status(), ObsStatus::Partial);
+        let s = build_dlmm_pool(&set, &k(POOL), &array_keys(), now_ms()).unwrap();
+        assert!(!s.enabled);
+        assert!(s.headline().contains("DISABLED"));
+    }
+
+    #[test]
+    fn render_fits_with_max_length_ids() {
+        let mut r = build_positions(&fixture_set(), &k(OWNER), &k(POOL), found(3)).unwrap();
+        r.wallet = WALLET_44.into();
+        r.pool = KEY_44.into();
+        if let Field::Ok { value } = &mut r.exposure {
+            value.value_quote = 123_456_789_012.345;
+        }
+        let o = Observation::of("dlmm_positions", &r, 0, 10_000, ObsSource::Live);
+        let text = o.render_text(999_999_000);
+        let line1 = text.lines().next().unwrap();
+        assert!(line1.chars().count() <= MAX_LINE1_CHARS, "{line1}");
+        assert!(
+            line1.contains(WALLET_44) && line1.contains(KEY_44),
+            "{line1}"
+        );
+        check_observed(&r);
+
+        let mut s = build_dlmm_pool(&fixture_set(), &k(POOL), &array_keys(), now_ms()).unwrap();
+        s.pool = KEY_44.into();
+        s.enabled = false;
+        s.tvl_quote_onchain = Some(9_876_543_210_987.0);
+        s.active_price = 0.000_000_123_456_7;
+        check_observed(&s);
+    }
+
+    // ── math ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn share_and_fee_math() {
+        assert_eq!(share_amount(1, 10, 3), U256::from(3u8), "floor");
+        assert_eq!(share_amount(5, 10, 0), U256::ZERO, "empty bin");
+        // u128 × u64 overflows u128 but not U256.
+        let big = share_amount(u128::MAX, u64::MAX, u128::MAX);
+        assert_eq!(big, U256::from(u64::MAX));
+        // ((3 << 64) >> 64) × (5 << 64) >> 64 = 15, + pending 4.
+        assert_eq!(
+            claimable_fee(3u128 << 64, 7u128 << 64, 2u128 << 64, 4),
+            Some(U256::from(19u8))
+        );
+        // Shares below 2^64 truncate to 0 before the multiply (SDK shrn).
+        assert_eq!(
+            claimable_fee((1u128 << 64) - 1, u128::MAX, 0, 0),
+            Some(U256::ZERO)
+        );
+        assert_eq!(claimable_fee(0, 0, 5, 9), Some(U256::from(9u8)), "no share");
+        assert_eq!(
+            claimable_fee(1u128 << 64, 1, 2, 0),
+            None,
+            "stored < complete"
+        );
+        assert_eq!(ui_u256(U256::from(1_500_000_000u64), 9), 1.5);
+        assert_eq!(fmt_sig(116.627_489_413, 7), "116.6275");
+        assert_eq!(fmt_sig(0.040_192_8, 4), "0.04019");
+        assert_eq!(fmt_sig(7_067_545.74, 6), "7067546");
+    }
+
+    #[test]
+    fn inconsistent_fee_checkpoint_is_an_error_not_a_negative_fee() {
+        let set = fixture_set();
+        let key = k("H9fmcxgheDvVSn9iUeRSvZPAgTY5WXqvroNpkZ2HCVRW");
+        let mut pos = decode_position_v2(&set.get(&key).unwrap().data().unwrap()).unwrap();
+        let i = pos
+            .bins
+            .iter()
+            .position(|b| b.liquidity_share >= 1u128 << 64)
+            .unwrap();
+        pos.bins[i].fee_x_per_token_complete = u128::MAX;
+        let t = position_totals(&pos, &arrays_map(&set));
+        assert!(!t.complete());
+        assert_eq!(t.inconsistent_bins, vec![pos.lower_bin_id + i as i32]);
     }
 }
