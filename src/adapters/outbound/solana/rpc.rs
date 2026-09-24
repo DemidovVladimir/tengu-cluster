@@ -23,6 +23,9 @@
 //! The transport is a trait ([`RpcTransport`]) so unit tests script replies
 //! (`tests::FakeTransport`); `HttpTransport` is the reqwest implementation.
 
+// Called by the Solana tool family (`tools/solana/*`), wired in the next stage.
+#![allow(dead_code)]
+
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -171,16 +174,52 @@ pub(crate) fn retry_after_ms(headers: &reqwest::header::HeaderMap) -> Option<u64
         .map(|s| s.saturating_mul(1000))
 }
 
-/// Removes every rendering of a secret-bearing URL from error text: the
-/// full URL, its path (tokens like `/<api-key>/`), its query and each query
-/// value, replacing them with the host.
+/// Query parameter names whose values are credentials (never rendered).
+const SECRET_PARAM_HINTS: &[&str] = &["key", "token", "secret", "auth", "sig", "password"];
+
+fn is_secret_param(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    SECRET_PARAM_HINTS.iter().any(|h| n.contains(h))
+}
+
+/// `url` for messages: `scheme://host/path` plus the query with
+/// credential-like parameter values replaced by `<redacted>`. For public
+/// APIs (Jupiter, datapi) — never for an RPC URL (use [`SolanaRpc::host`]).
+pub(crate) fn display_url(url: &Url) -> String {
+    let mut shown = format!(
+        "{}://{}{}",
+        url.scheme(),
+        url.host_str().unwrap_or(""),
+        url.path()
+    );
+    let pairs: Vec<String> = url
+        .query_pairs()
+        .map(|(k, v)| {
+            if is_secret_param(&k) {
+                format!("{k}=<redacted>")
+            } else {
+                format!("{k}={v}")
+            }
+        })
+        .collect();
+    if !pairs.is_empty() {
+        shown.push('?');
+        shown.push_str(&pairs.join("&"));
+    }
+    shown
+}
+
+/// Rewrites every rendering of a secret-bearing URL in error text
+/// (longest needle first, so a full URL goes before its parts).
 pub(crate) struct Scrubber {
-    host: String,
-    needles: Vec<String>,
+    rules: Vec<(String, String)>,
 }
 
 impl Scrubber {
-    pub(crate) fn new(url: &Url) -> Self {
+    /// RPC endpoint: everything but the host may carry a key — the full
+    /// URL, its path (`/<api-key>/` tokens), path segments ≥ 8 chars, the
+    /// query and every query value ≥ 8 chars become the host.
+    pub(crate) fn for_rpc(url: &Url) -> Self {
         let host = url.host_str().unwrap_or("").to_string();
         let mut needles = vec![url.as_str().to_string()];
         let path = url.path();
@@ -200,18 +239,38 @@ impl Scrubber {
                     .filter(|v| v.len() >= 8),
             );
         }
-        // Longest first so a full URL is replaced before its parts.
-        needles.sort_by_key(|n| std::cmp::Reverse(n.len()));
-        needles.dedup();
-        Self { host, needles }
+        Self::from_rules(needles.into_iter().map(|n| (n, host.clone())).collect())
+    }
+
+    /// Public API: the full URL renders as [`display_url`]; only values of
+    /// credential-like query params are secret (→ `<redacted>`). Ids in the
+    /// query (mints, pool pairs) are left intact.
+    pub(crate) fn for_api(url: &Url) -> Self {
+        let mut rules = vec![(url.as_str().to_string(), display_url(url))];
+        if let Some(q) = url.query().filter(|q| !q.is_empty()) {
+            if url.query_pairs().any(|(k, _)| is_secret_param(&k)) {
+                rules.push((q.to_string(), "<query redacted>".to_string()));
+            }
+        }
+        rules.extend(
+            url.query_pairs()
+                .filter(|(k, v)| is_secret_param(k) && !v.is_empty())
+                .map(|(_, v)| (v.into_owned(), "<redacted>".to_string())),
+        );
+        Self::from_rules(rules)
+    }
+
+    fn from_rules(mut rules: Vec<(String, String)>) -> Self {
+        rules.retain(|(n, _)| !n.is_empty());
+        rules.sort_by_key(|(n, _)| std::cmp::Reverse(n.len()));
+        rules.dedup_by(|a, b| a.0 == b.0);
+        Self { rules }
     }
 
     pub(crate) fn scrub(&self, text: &str) -> String {
         let mut out = text.to_string();
-        for n in &self.needles {
-            if !n.is_empty() {
-                out = out.replace(n.as_str(), &self.host);
-            }
+        for (needle, with) in &self.rules {
+            out = out.replace(needle.as_str(), with);
         }
         out
     }
@@ -281,7 +340,7 @@ impl HttpTransport {
         timeout: Duration,
     ) -> Self {
         let host = url.host_str().unwrap_or("").to_string();
-        let scrub = Scrubber::new(&url);
+        let scrub = Scrubber::for_rpc(&url);
         Self {
             http,
             url,
@@ -926,7 +985,7 @@ pub(crate) mod tests {
             "https://mainnet.helius-rpc.com/v1/tok3n-SECRETPATH123/?api-key=SECRETKEY-abcdef12&x=1",
         )
         .unwrap();
-        let s = Scrubber::new(&url);
+        let s = Scrubber::for_rpc(&url);
         let msg = format!(
             "failed for {url} (path {}) key SECRETKEY-abcdef12 seg tok3n-SECRETPATH123",
             url.path()
