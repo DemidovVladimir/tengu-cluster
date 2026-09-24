@@ -32,7 +32,10 @@ use crate::domain::observation::{
     set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsStatus, Observed,
     ReadError, MAX_FEATURE_STR,
 };
-use crate::domain::solana::{ids, AccountSet, Pubkey, Signature};
+use crate::domain::solana::{ids, AccountSet, AccountState, Pubkey, Signature};
+
+/// `solana_wallet` default `mints` (matches `tools/solana/defs.rs`).
+pub const DEFAULT_MINTS: [&str; 2] = [ids::WSOL, ids::USDC];
 
 /// `solana_wallet` TTL.
 pub const WALLET_TTL_MS: u64 = 5_000;
@@ -332,14 +335,28 @@ pub fn fmt_units(raw: u64, decimals: u8) -> String {
 // JSON-RPC helpers
 // ---------------------------------------------------------------------------
 
-/// Unwrap a JSON-RPC envelope: `{"result": X}` ⇒ X; an `{"error": ..}`
-/// response ⇒ Err (message only — never a URL); anything else is taken as
-/// the payload itself.
-fn rpc_result(v: &Value) -> Result<&Value, String> {
+/// Unwrap a JSON-RPC envelope: `{"result": X}` ⇒ X; anything without
+/// `result` / `error` is taken as the payload itself. An `{"error": ..}`
+/// response (normally classified by `outbound/solana/rpc.rs` before it gets
+/// here) ⇒ `QuotaExhausted` for -32429 / "max usage reached", `RateLimited`
+/// for 429, else `Transient`; the message carries code + text only — never
+/// a URL.
+fn rpc_result<'a>(v: &'a Value, field: &str) -> Result<&'a Value, ReadError> {
     if let Some(e) = v.get("error") {
         let code = e.get("code").and_then(Value::as_i64).unwrap_or(0);
         let msg = e.get("message").and_then(Value::as_str).unwrap_or("");
-        return Err(format!("rpc error {code}: {msg}"));
+        let class = if code == -32429 || msg.contains("max usage reached") {
+            ErrorClass::QuotaExhausted
+        } else if code == 429 {
+            ErrorClass::RateLimited
+        } else {
+            ErrorClass::Transient
+        };
+        return Err(ReadError::new(
+            field,
+            class,
+            format!("rpc error {code}: {msg}"),
+        ));
     }
     Ok(v.get("result").unwrap_or(v))
 }
@@ -442,7 +459,7 @@ pub fn parse_token_accounts_by_owner(
     program: &Pubkey,
 ) -> Result<Vec<TokenAccountRow>, ReadError> {
     let field = "token_accounts";
-    let payload = rpc_result(v).map_err(|m| decode_err(field, m))?;
+    let payload = rpc_result(v, field)?;
     let (_, value) = context_value(payload);
     let items = value.as_array().ok_or_else(|| {
         decode_err(
@@ -487,7 +504,10 @@ pub fn lamports_from_set(set: &AccountSet, wallet: &Pubkey) -> Field<u64> {
             ErrorClass::Fatal,
             format!("wallet {wallet} not in the read set"),
         )),
-        Some(read) => Field::ok(read.lamports().unwrap_or(0)),
+        Some(read) => match &read.state {
+            AccountState::Ok { lamports, .. } => Field::ok(*lamports),
+            AccountState::Absent => Field::ok(0),
+        },
     }
 }
 
@@ -975,9 +995,9 @@ pub fn parse_tx_status(
     statuses: &Value,
     tx: Option<Result<&Value, ReadError>>,
 ) -> TxStatus {
-    let payload = match rpc_result(statuses) {
+    let payload = match rpc_result(statuses, "status") {
         Ok(p) => p,
-        Err(m) => return TxStatus::failed(signature, context_slot, decode_err("status", m)),
+        Err(e) => return TxStatus::failed(signature, context_slot, e),
     };
     let (ctx_slot, value) = context_value(payload);
     let context_slot = context_slot.or(ctx_slot);
@@ -1035,7 +1055,7 @@ pub fn parse_tx_status(
                 }
                 (m.fee, m.compute_units, m.block_time)
             }
-            Err(m) => tx_fields_error(decode_err("tx", m)),
+            Err(e) => tx_fields_error(e),
         },
     };
     st.fee_lamports = fee;
@@ -1053,11 +1073,17 @@ struct TxMeta {
 }
 
 /// `Ok(None)` for a null result (tx not available).
-fn parse_tx_meta(signature: &Signature, v: &Value) -> Result<Option<TxMeta>, String> {
-    let tx = rpc_result(v)?;
+fn parse_tx_meta(signature: &Signature, v: &Value) -> Result<Option<TxMeta>, ReadError> {
+    let tx = rpc_result(v, "tx")?;
     if tx.is_null() {
         return Ok(None);
     }
+    parse_tx_body(signature, tx)
+        .map(Some)
+        .map_err(|m| decode_err("tx", m))
+}
+
+fn parse_tx_body(signature: &Signature, tx: &Value) -> Result<TxMeta, String> {
     let sig0 = tx
         .pointer("/transaction/signatures/0")
         .and_then(Value::as_str)
@@ -1097,13 +1123,13 @@ fn parse_tx_meta(signature: &Signature, v: &Value) -> Result<Option<TxMeta>, Str
             (fee, cu, m.get("err").filter(|e| !e.is_null()).cloned())
         }
     };
-    Ok(Some(TxMeta {
+    Ok(TxMeta {
         slot,
         err,
         fee,
         compute_units,
         block_time,
-    }))
+    })
 }
 
 impl Observed for TxStatus {
@@ -1524,6 +1550,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.message.contains("-32429"), "{}", e.message);
+        assert_eq!(e.class, ErrorClass::QuotaExhausted);
+        assert_eq!(e.field, "token_accounts");
         assert!(
             parse_token_accounts_by_owner(&json!({"result": {"value": {}}}), &token()).is_err()
         );
@@ -1890,14 +1918,32 @@ mod tests {
             .message
             .contains(SIG_FAILED));
         // Undecodable / error statuses ⇒ Error, never "not found".
-        for bad in [
-            json!({"jsonrpc": "2.0", "error": {"code": 429, "message": "Too many requests for a specific RPC call"}, "id": 1}),
-            json!({"result": {"context": {"slot": 1}, "value": []}}),
-            json!({"result": {"context": {"slot": 1}, "value": [{"confirmationStatus": "finalized"}]}}),
-            json!({"result": {"context": {"slot": 1}, "value": [{"slot": 5, "confirmationStatus": "rooted?"}]}}),
+        for (bad, class) in [
+            // Live getTransaction answer captured 2026-09-24 (public RPC).
+            (
+                json!({"jsonrpc": "2.0", "error": {"code": 429, "message": "Too many requests for a specific RPC call"}, "id": 1}),
+                ErrorClass::RateLimited,
+            ),
+            (
+                json!({"jsonrpc": "2.0", "error": {"code": -32429, "message": "max usage reached"}, "id": 1}),
+                ErrorClass::QuotaExhausted,
+            ),
+            (
+                json!({"result": {"context": {"slot": 1}, "value": []}}),
+                ErrorClass::Decode,
+            ),
+            (
+                json!({"result": {"context": {"slot": 1}, "value": [{"confirmationStatus": "finalized"}]}}),
+                ErrorClass::Decode,
+            ),
+            (
+                json!({"result": {"context": {"slot": 1}, "value": [{"slot": 5, "confirmationStatus": "rooted?"}]}}),
+                ErrorClass::Decode,
+            ),
         ] {
             let st = parse_tx_status(sig(SIG_OK), None, &bad, None);
             assert_eq!(st.status(), ObsStatus::Error, "{bad}");
+            assert_eq!(st.error.as_ref().unwrap().class, class, "{bad}");
             assert!(!st.found);
             let obs = Observation::of("solana_tx", &st, 0, st.ttl_ms(), ObsSource::Live);
             assert_eq!(obs.errors.len(), 1);
