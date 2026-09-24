@@ -185,10 +185,11 @@ max_tool_result_chars = 50_000
 # Typed tools cache their observations in ~/lping-workspace/.tengu/observations.db;
 # `world` reads that store every step (never fetches).
 [decision_loops.lp_watch]
-goal = """Watch Meteora DLMM SOL/USDC pools. Make sure pool data and the SOL \
-price are fresh for this event, then choose the pool with the best fee yield \
-relative to TVL (TVL above $100k only) for a new position of at most 2 SOL. \
-No position is open yet."""
+goal = """Pick the Meteora DLMM SOL/USDC pool for a new position of at most 2 SOL. \
+Every event, in this order: refresh_price, then fetch_pools (both are cached \
+reads, cheap to repeat), then open_position in the pool with the best 24h \
+fee/TVL among pools with TVL above $100k (dry run: it is only logged), then \
+hold. No position is open yet."""
 agent = "crypto_researcher"          # tools + scopes + workspace
 dry_run = true                       # open_position is logged, never run
 act_at = 0.8
@@ -220,7 +221,8 @@ reduce = { pools = "/data/pools/*/{address,name,tvl_usd,fee_tvl_24h_pct,bin_step
 description = "Open a DLMM LP position in one of the fetched pools"
 tool = "dlmm_open_position"          # phase 6 — not built; dry_run only
 requires = { price = 30 }            # offered only while the SOL price is ≤ 30 s old
-slots = { pool = { from = "fetch_pools", items = "/pools/*", value = "address", top = 5 }, size_sol = [0.5, 1, 2, 3] }
+args = { pool = "{pool}", size_sol = "{size_sol}" }   # the dry-run log records the full pool address
+slots ={ pool = { from = "fetch_pools", items = "/pools/*", value = "address", top = 5 }, size_sol = [0.5, 1, 2, 3] }
 caps = { size_sol = 2.0 }
 
 # --- hedge_watch: the operator wallet's LP + Jupiter perps hedge (read-only) ---
@@ -233,9 +235,10 @@ caps = { size_sol = 2.0 }
 # controller state row lp_state/1:<wallet>:<pool> — nothing is ever traded.
 [decision_loops.hedge_watch]
 goal = """Keep the operator wallet's SOL/USDC DLMM LP and its Jupiter perps \
-hedge under watch. Refresh the snapshot when it is missing or stale, then run \
-decide_hedge and decide_lp on it once each; hold when both ran on the current \
-snapshot. Read-only: nothing is ever signed or sent."""
+hedge under watch. Every event runs exactly this sequence: 1) snapshot — \
+always first, even when world.snap is fresh (it is then served from the \
+cache), 2) decide_hedge, 3) decide_lp, 4) hold. Read-only: the decisions are \
+logged, nothing is ever signed or sent."""
 agent = "crypto_researcher"
 dry_run = true
 act_at = 0.8
