@@ -1094,25 +1094,35 @@ fn load_pool(set: &AccountSet) -> Result<JlpPool, ReadError> {
     decode_pool(&data).map_err(|e| decode_err(field, format!("pool {key}: {e}")))
 }
 
+/// Linear mechanism ⇒ `NotApplicable`; degenerate jump curve ⇒ `Decode`.
+fn custody_rates(
+    key: &Pubkey,
+    c: &JupCustody,
+    field: &str,
+    now_s: i64,
+) -> Result<CustodyRates, ReadError> {
+    CustodyRates::from_custody(key, c, now_s).map_err(|e| {
+        let class = match rate_mechanism(c) {
+            RateMechanism::Jump => ErrorClass::Decode,
+            RateMechanism::LinearUnsupported => ErrorClass::NotApplicable,
+        };
+        ReadError::new(field, class, e)
+    })
+}
+
 fn rates_field(
     key: &Pubkey,
     c: &Result<JupCustody, ReadError>,
     field: &str,
     now_s: i64,
 ) -> Field<CustodyRates> {
-    match c {
-        Ok(c) => match CustodyRates::from_custody(key, c, now_s) {
-            Ok(r) => Field::ok(r),
-            Err(e) => {
-                let class = if rate_mechanism(c) == RateMechanism::Jump {
-                    ErrorClass::Decode
-                } else {
-                    ErrorClass::NotApplicable
-                };
-                Field::err(ReadError::new(field, class, e))
-            }
-        },
-        Err(e) => Field::err(e.clone()),
+    match c
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|c| custody_rates(key, c, field, now_s))
+    {
+        Ok(r) => Field::ok(r),
+        Err(e) => Field::err(e),
     }
 }
 
@@ -1178,16 +1188,9 @@ fn build_side(
             ))
         }
     };
-    let carry = match CustodyRates::from_custody(&collateral_custody, collateral, now_s) {
+    let carry = match custody_rates(&collateral_custody, collateral, field, now_s) {
         Ok(r) => r.borrow_apr_pct * 100.0,
-        Err(e) => {
-            let class = if rate_mechanism(collateral) == RateMechanism::Jump {
-                ErrorClass::Decode
-            } else {
-                ErrorClass::NotApplicable
-            };
-            return Field::err(ReadError::new(field, class, e));
-        }
+        Err(e) => return Field::err(e),
     };
     let accrued = match accrued_borrow_fee_raw(&p, collateral) {
         Ok(a) => a as f64 / USD_PRECISION,
