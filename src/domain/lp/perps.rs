@@ -1357,3 +1357,913 @@ pub fn request_status(
         expired: !r.executed && max_request_execution_sec.is_some_and(|m| age > m),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    //! Golden values: `tests/fixtures/solana/perps/meta.json` — computed by
+    //! `scripts/golden/perps_decode.py` (independent of this file) and
+    //! cross-checked with Anchor's coder (`perps_anchor_decode.cjs`).
+
+    use super::*;
+    use crate::domain::observation::{
+        assert_features_ok, ObsSource, Observation, MAX_FEATURES, MAX_LINE1_CHARS,
+    };
+    use crate::domain::solana::{AccountRead, AccountState};
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
+
+    const GMA: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/perps/gma.json"
+    ));
+    const REQUESTS: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/perps/requests_gma.json"
+    ));
+    const META: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/solana/perps/meta.json"
+    ));
+
+    const SLOT: u64 = 450_101_361;
+    /// Wall clock at capture; the custodies' funding `lastUpdate` is 1790272200.
+    const NOW_S: i64 = 1_790_272_211;
+    /// Jupiter lite v3 SOL price at capture (`jup_price.json`, blockId 450101349).
+    const SOL_USD: f64 = 116.658_916_455_958_6;
+
+    const WALLET_FLAT: &str = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S";
+    const FLAT_LONG: &str = "FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY";
+    const FLAT_SHORT: &str = "6HFhuYzQGcqdj4NGwC6vfVETRvMA3pXaVeZnHgWSKsJK";
+    const WALLET_SHORT: &str = "49cFRy8ptMTqE3VZLxWvXjtugfzy5r6npfmwtCPoQCxt";
+    const SHORT_ONLY_LONG: &str = "BQsUMD2C4sfy1fwih6pDueBUfqYQccCCaGQoWU8a4wqi";
+    const SHORT_ONLY_SHORT: &str = "8dETVxeDTXi3xRiQvsvyDETVtwu1wYkEk8JF7HfiPhR5";
+    const WALLET_BOTH: &str = "2xxyBSRyi1KVxwuZcFkU74c8HvhjBdV8YJ6F4gkdKk3i";
+    const BOTH_LONG: &str = "2DNqvKcgnx5Huk6VkjeoZbjhna6hZd7GRuG8RCH2dPEV";
+    const BOTH_SHORT: &str = "HCZsYUEGtiGVvFJJYcuqhrq1L2MQ7GwWXmQRQSxFNWWX";
+
+    fn pk(s: &str) -> Pubkey {
+        s.parse().unwrap()
+    }
+
+    /// `AccountSet` from a raw GMA response + the key order in meta.json.
+    fn fixture(gma: &str, section: &str) -> AccountSet {
+        let meta: Value = serde_json::from_str(META).unwrap();
+        let keys = meta[section]["keys"].as_array().unwrap();
+        let v: Value = serde_json::from_str(gma).unwrap();
+        let slot = v["result"]["context"]["slot"].as_u64().unwrap();
+        let values = v["result"]["value"].as_array().unwrap();
+        assert_eq!(keys.len(), values.len());
+        let mut set = AccountSet::default();
+        for (k, acc) in keys.iter().zip(values) {
+            let state = if acc.is_null() {
+                AccountState::Absent
+            } else {
+                AccountState::Ok {
+                    owner: pk(acc["owner"].as_str().unwrap()),
+                    lamports: acc["lamports"].as_u64().unwrap(),
+                    data_b64: acc["data"][0].as_str().unwrap().to_string(),
+                    executable: acc["executable"].as_bool().unwrap(),
+                }
+            };
+            set.insert(AccountRead {
+                pubkey: pk(k["pubkey"].as_str().unwrap()),
+                slot,
+                state,
+            });
+        }
+        set
+    }
+
+    fn market() -> AccountSet {
+        fixture(GMA, "gma")
+    }
+
+    fn bytes(set: &AccountSet, key: &str) -> Vec<u8> {
+        set.get(&pk(key)).unwrap().data().unwrap()
+    }
+
+    fn sol_custody() -> JupCustody {
+        decode_custody(&bytes(&market(), ids::JUP_CUSTODY_SOL)).unwrap()
+    }
+
+    fn usdc_custody() -> JupCustody {
+        decode_custody(&bytes(&market(), ids::JUP_CUSTODY_USDC)).unwrap()
+    }
+
+    fn position(key: &str) -> JupPosition {
+        decode_position(&bytes(&market(), key)).unwrap()
+    }
+
+    fn put(set: &mut AccountSet, key: &str, owner: &str, data: &[u8]) {
+        set.insert(AccountRead::from_bytes(pk(key), SLOT, pk(owner), 1, data));
+    }
+
+    fn close(a: f64, b: f64, tol: f64) -> bool {
+        (a - b).abs() <= tol * b.abs().max(1.0)
+    }
+
+    fn build(set: &AccountSet, wallet: &str, long: &str, short: &str) -> PerpsState {
+        build_perps(
+            set,
+            &pk(wallet),
+            &pk(long),
+            &pk(short),
+            Some(SOL_USD),
+            NOW_S,
+        )
+    }
+
+    // ── layout ─────────────────────────────────────────────────────
+
+    #[test]
+    fn discriminators_are_anchor_account_hashes() {
+        for (name, disc) in [
+            ("Position", POSITION_DISC),
+            ("Custody", CUSTODY_DISC),
+            ("Pool", POOL_DISC),
+            ("PositionRequest", POSITION_REQUEST_DISC),
+        ] {
+            let h = Sha256::digest(format!("account:{name}").as_bytes());
+            assert_eq!(h[..8], disc[..], "{name}");
+        }
+    }
+
+    #[test]
+    fn live_sizes_exceed_idl_minimums() {
+        let set = market();
+        for (key, min) in [
+            (ids::JUP_CUSTODY_SOL, CUSTODY_MIN_LEN),
+            (ids::JUP_CUSTODY_USDC, CUSTODY_MIN_LEN),
+            (SHORT_ONLY_SHORT, POSITION_MIN_LEN),
+        ] {
+            let d = bytes(&set, key);
+            assert!(d.len() > min, "{key}: {} bytes", d.len());
+        }
+        assert_eq!(bytes(&set, ids::JUP_CUSTODY_SOL).len(), 2000);
+        let pos = bytes(&set, SHORT_ONLY_SHORT);
+        assert_eq!(pos.len(), 216);
+        assert!(
+            pos[210..].iter().all(|b| *b == 0),
+            "Position tail is zero padding"
+        );
+    }
+
+    #[test]
+    fn sol_custody_fixture_decodes_idl_prefix() {
+        let c = sol_custody();
+        assert_eq!(c.pool, pk(ids::JLP_POOL));
+        assert_eq!(c.mint, pk(ids::WSOL));
+        assert_eq!(
+            c.token_account,
+            pk("BUvduFTd2sWFagCunBPLupG8fBTJqweLw9DuhruNFSCm")
+        );
+        assert_eq!((c.decimals, c.is_stable), (9, false));
+        assert_eq!(
+            c.oracle_account,
+            pk("7UVimffxr9ow1uXYxsr4LHAcV58mLzhmwaeKvJ1pjLiE")
+        );
+        assert_eq!((c.oracle_type, c.max_price_age_sec), (2, 5));
+        assert_eq!(c.trade_impact_fee_scalar, 3_750_000_000_000_000);
+        assert_eq!(c.max_leverage, 5_000_000);
+        assert_eq!(c.max_global_long_sizes, 240_000_000_000_000);
+        assert_eq!(c.max_global_short_sizes, 112_293_947_657_720);
+        assert!(
+            c.allow_increase_position && c.allow_decrease_position && c.allow_collateral_withdrawal
+        );
+        assert_eq!(
+            (c.owned, c.locked),
+            (3_975_600_834_194_526, 444_578_802_491_130)
+        );
+        assert_eq!(c.global_short_sizes, 10_409_974_721_026);
+        assert_eq!(c.cumulative_interest_rate, 1_062_791_438);
+        assert_eq!(
+            (c.funding_last_update, c.hourly_funding_dbps),
+            (1_790_272_200, 0)
+        );
+        assert_eq!((c.increase_position_bps, c.decrease_position_bps), (6, 6));
+        assert_eq!(c.max_position_size_usd, 10_000_000_000_000);
+        assert_eq!(
+            c.doves_oracle,
+            pk("39cWjvHrpHNz2SbXv6ME4NPhqBDBd4KsjUYv5JkHEAJU")
+        );
+        assert_eq!(
+            c.jump,
+            JumpRateState {
+                min_rate_bps: 1000,
+                max_rate_bps: 15000,
+                target_rate_bps: 3500,
+                target_utilization_rate: 800_000_000,
+            }
+        );
+        assert_eq!(
+            c.doves_ag_oracle,
+            pk("FYq2BWQ1V5P1WFBqr3qB2Kb5yHVvSv7upzKodgQE5zXh")
+        );
+        assert_eq!((c.debt, c.borrow_lend_interests_accured), (0, 0));
+    }
+
+    #[test]
+    fn usdc_custody_fixture_decodes_idl_prefix() {
+        let c = usdc_custody();
+        assert_eq!(c.pool, pk(ids::JLP_POOL));
+        assert_eq!(c.mint, pk(ids::USDC));
+        assert_eq!(
+            c.token_account,
+            pk("WzWUoCmtVv7eqAbU3BfKPU3fhLP6CXR8NCJH78UK9VS")
+        );
+        assert_eq!((c.decimals, c.is_stable), (6, true));
+        assert_eq!(
+            c.oracle_account,
+            pk("Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX")
+        );
+        assert_eq!((c.trade_impact_fee_scalar, c.max_leverage), (0, 5_000_000));
+        assert_eq!(
+            (c.owned, c.locked),
+            (128_681_915_422_339, 21_567_112_837_268)
+        );
+        assert_eq!(c.cumulative_interest_rate, 243_952_888);
+        assert_eq!(
+            c.doves_oracle,
+            pk("A28T5pKtscnhDo6C1Sz786Tup88aTjt8uyKewjVvPrGk")
+        );
+        assert_eq!(
+            c.doves_ag_oracle,
+            pk("6Jp2xZUTWdDD2ZyUPRzeMdc6AFQ5K3pFgZxk2EijfjnM")
+        );
+        assert_eq!(
+            c.jump,
+            JumpRateState {
+                min_rate_bps: 0,
+                max_rate_bps: 1500,
+                target_rate_bps: 850,
+                target_utilization_rate: 900_000_000,
+            }
+        );
+        assert_eq!(c.debt, 142_370_570_863_218_524_822_804);
+        assert_eq!(c.borrow_lend_interests_accured, 77_852_240_528_750_896);
+    }
+
+    #[test]
+    fn pool_fixture_decodes_dynamic_borsh() {
+        let p = decode_pool(&bytes(&market(), ids::JLP_POOL)).unwrap();
+        assert_eq!(p.name, "Pool");
+        assert_eq!(p.custodies.len(), 6);
+        assert_eq!(p.custodies[0], pk(ids::JUP_CUSTODY_SOL));
+        assert_eq!(p.custodies[3], pk(ids::JUP_CUSTODY_USDC));
+        assert_eq!(p.aum_usd, 931_403_341_015_904);
+        assert_eq!(p.fee_apr_bps, 850);
+        assert_eq!(p.max_request_execution_sec, 45);
+    }
+
+    #[test]
+    fn position_fixtures_decode() {
+        let s = position(SHORT_ONLY_SHORT);
+        assert_eq!(s.owner, pk(WALLET_SHORT));
+        assert_eq!(s.pool, pk(ids::JLP_POOL));
+        assert_eq!(s.custody, pk(ids::JUP_CUSTODY_SOL));
+        assert_eq!(s.collateral_custody, pk(ids::JUP_CUSTODY_USDC));
+        assert_eq!((s.open_time, s.update_time), (1_789_772_392, 1_789_772_392));
+        assert_eq!(s.side, 2);
+        assert_eq!(
+            (s.price, s.size_usd, s.collateral_usd),
+            (113_130_153, 992_903_150, 99_293_700)
+        );
+        assert_eq!(
+            (s.realised_pnl_usd, s.cumulative_interest_snapshot),
+            (0, 243_016_862)
+        );
+        assert_eq!(s.locked_amount, 993_015_033);
+
+        let l = position(BOTH_LONG);
+        assert_eq!((l.owner, l.side), (pk(WALLET_BOTH), 1));
+        assert_eq!(l.collateral_custody, pk(ids::JUP_CUSTODY_SOL));
+        assert_eq!(
+            (l.price, l.size_usd, l.collateral_usd),
+            (117_515_445, 1_183_738_004, 43_133_504)
+        );
+        assert_eq!(l.cumulative_interest_snapshot, 1_062_775_485);
+        // Plausibility: locked SOL x entry = notional (10.073041975 SOL x $117.515445).
+        let locked_usd = l.locked_amount as f64 / 1e9 * l.price as f64 / 1e6;
+        assert!(
+            close(locked_usd, l.size_usd as f64 / 1e6, 1e-6),
+            "{locked_usd}"
+        );
+
+        let flat = position(FLAT_SHORT);
+        assert_eq!(
+            (flat.owner, flat.side, flat.size_usd),
+            (pk(WALLET_FLAT), 2, 0)
+        );
+        assert_eq!(flat.price, 76_093_217);
+    }
+
+    // ── math (golden: meta.json) ───────────────────────────────────
+
+    #[test]
+    fn borrow_rates_match_golden() {
+        let sol = hourly_borrow_rate(&sol_custody()).unwrap();
+        assert_eq!(
+            (sol.utilization_raw, sol.hourly_rate),
+            (111_826_820, 15_410)
+        );
+        assert!(close(sol.apr_pct(), 13.49916, 1e-12), "{}", sol.apr_pct());
+        assert!(close(sol.utilization(), 0.111_826_82, 1e-12));
+
+        let c = usdc_custody();
+        assert_eq!(debt_tokens(&c), 142_370_493_010_978);
+        let usdc = hourly_borrow_rate(&c).unwrap();
+        assert_eq!(
+            (usdc.utilization_raw, usdc.hourly_rate),
+            (604_818_849, 6_529)
+        );
+        assert!(close(usdc.apr_pct(), 5.719404, 1e-12), "{}", usdc.apr_pct());
+    }
+
+    #[test]
+    fn liquidation_and_accrued_fee_match_golden() {
+        let (sol, usdc) = (sol_custody(), usdc_custody());
+        for (key, collateral, liq, fee_raw) in [
+            (SHORT_ONLY_SHORT, &usdc, 124.032209, 929_383),
+            (BOTH_LONG, &sol, 113.552539, 18_884),
+            (BOTH_SHORT, &usdc, 119.972827, 34_410),
+        ] {
+            let p = position(key);
+            assert_eq!(
+                accrued_borrow_fee_raw(&p, collateral).unwrap(),
+                fee_raw,
+                "{key}"
+            );
+            let got = liquidation_price_usd(&p, &sol, collateral)
+                .unwrap()
+                .unwrap();
+            assert!((got - liq).abs() < 1e-9, "{key}: {got} != {liq}");
+            // Plausibility: liquidation sits on the losing side of entry.
+            let entry = p.price as f64 / 1e6;
+            match Side::from_byte(p.side).unwrap() {
+                Side::Long => assert!(got < entry),
+                Side::Short => assert!(got > entry),
+            }
+        }
+        let flat = position(FLAT_SHORT);
+        assert_eq!(liquidation_price_usd(&flat, &sol, &usdc).unwrap(), None);
+    }
+
+    fn with_jump(
+        owned: u64,
+        locked: u64,
+        min: u64,
+        max: u64,
+        target: u64,
+        target_util: u64,
+    ) -> JupCustody {
+        let mut c = sol_custody();
+        c.owned = owned;
+        c.locked = locked;
+        c.debt = 0;
+        c.borrow_lend_interests_accured = 0;
+        c.jump = JumpRateState {
+            min_rate_bps: min,
+            max_rate_bps: max,
+            target_rate_bps: target,
+            target_utilization_rate: target_util,
+        };
+        c
+    }
+
+    #[test]
+    fn jump_curve_branches() {
+        // At target: ceil(2500 x 8e8 / 8e8) + 1000 = 3500 bps → 350_000_000 / 8760.
+        let r = hourly_borrow_rate(&with_jump(1000, 800, 1000, 15000, 3500, 800_000_000)).unwrap();
+        assert_eq!((r.utilization_raw, r.hourly_rate), (800_000_000, 39_954));
+        // Above target: ceil(11500 x 1e8 / 2e8) + 3500 = 9250 bps.
+        let r = hourly_borrow_rate(&with_jump(1000, 900, 1000, 15000, 3500, 800_000_000)).unwrap();
+        assert_eq!(r.hourly_rate, 925_000_000 / 8760);
+        // Below target, ceil: (2500 x 1e8) / 8e8 = 312.5 → 313 + 1000.
+        let r = hourly_borrow_rate(&with_jump(1000, 100, 1000, 15000, 3500, 800_000_000)).unwrap();
+        assert_eq!(r.hourly_rate, 131_300_000 / 8760);
+        // Empty custody: no rate (TS returns 0).
+        for (o, l) in [(0, 0), (1000, 0), (0, 5)] {
+            let r = hourly_borrow_rate(&with_jump(o, l, 1000, 15000, 3500, 800_000_000)).unwrap();
+            assert_eq!((r.utilization_raw, r.hourly_rate), (0, 0), "{o}/{l}");
+        }
+        // Degenerate curves are errors, not zeros.
+        assert!(hourly_borrow_rate(&with_jump(1000, 100, 4000, 15000, 3500, 800_000_000)).is_err());
+        assert!(hourly_borrow_rate(&with_jump(u64::MAX, 1, 0, 15000, 3500, 0)).is_err());
+        assert!(hourly_borrow_rate(&with_jump(100, 200, 0, 15000, 3500, 1_000_000_000)).is_err());
+    }
+
+    #[test]
+    fn debt_counts_as_owned_and_locked() {
+        let mut c = with_jump(0, 0, 1000, 15000, 3500, 800_000_000);
+        c.debt = 5 * RATE_POWER + 1;
+        assert_eq!(debt_tokens(&c), 6, "ceil");
+        c.borrow_lend_interests_accured = c.debt + 7;
+        assert_eq!(debt_tokens(&c), 0, "saturating");
+    }
+
+    #[test]
+    fn linear_mechanism_is_not_applicable() {
+        let mut c = sol_custody();
+        c.hourly_funding_dbps = 5;
+        assert_eq!(rate_mechanism(&c), RateMechanism::LinearUnsupported);
+        let f = rates_field(&pk(ids::JUP_CUSTODY_SOL), &Ok(c), "sol", NOW_S);
+        assert_eq!(f.error().unwrap().class, ErrorClass::NotApplicable);
+    }
+
+    fn synthetic_position(side: Side, collateral_usd: u64) -> JupPosition {
+        JupPosition {
+            owner: pk(WALLET_FLAT),
+            pool: pk(ids::JLP_POOL),
+            custody: pk(ids::JUP_CUSTODY_SOL),
+            collateral_custody: pk(side.collateral_custody()),
+            open_time: 0,
+            update_time: 0,
+            side: side.byte(),
+            price: 100_000_000,
+            size_usd: 1_000_000_000,
+            collateral_usd,
+            realised_pnl_usd: 0,
+            cumulative_interest_snapshot: 0,
+            locked_amount: 0,
+        }
+    }
+
+    #[test]
+    fn liquidation_formula_by_hand() {
+        let mut m = sol_custody();
+        m.trade_impact_fee_scalar = 0;
+        m.decrease_position_bps = 6;
+        m.max_leverage = 5_000_000;
+        let mut coll = m.clone();
+        coll.cumulative_interest_rate = 0;
+        // $1000 at $100 with $100 margin: close fee $0.6, max loss $2.6,
+        // diff = 97.4 x 100 / 1000 = $9.74.
+        let long = synthetic_position(Side::Long, 100_000_000);
+        assert_eq!(
+            liquidation_price_usd(&long, &m, &coll).unwrap(),
+            Some(90.26)
+        );
+        let short = synthetic_position(Side::Short, 100_000_000);
+        assert_eq!(
+            liquidation_price_usd(&short, &m, &coll).unwrap(),
+            Some(109.74)
+        );
+        // Under-margined branch flips the sign (kept faithful to Jupiter's reference).
+        let long = synthetic_position(Side::Long, 1_000_000);
+        let under = liquidation_price_usd(&long, &m, &coll).unwrap().unwrap();
+        assert!(under > 100.0, "{under}");
+        // Over-collateralised long: negative → 0 like the TS.
+        let long = synthetic_position(Side::Long, 20_000_000_000);
+        assert_eq!(liquidation_price_usd(&long, &m, &coll).unwrap(), Some(0.0));
+        // Degenerate config → None.
+        m.max_leverage = 0;
+        assert_eq!(liquidation_price_usd(&long, &m, &coll).unwrap(), None);
+    }
+
+    #[test]
+    fn side_base_sol_uses_entry_not_spot() {
+        assert_eq!(
+            side_base_sol(1000.0, 100.0, Some(50.0)),
+            Some(10.0),
+            "BUG-025"
+        );
+        assert_eq!(
+            side_base_sol(1000.0, 0.0, Some(50.0)),
+            Some(20.0),
+            "spot fallback"
+        );
+        assert_eq!(side_base_sol(1000.0, 0.0, None), None, "never 0");
+        assert_eq!(side_base_sol(1000.0, 0.0, Some(0.0)), None);
+    }
+
+    // ── builder over the live fixture ──────────────────────────────
+
+    #[test]
+    fn flat_wallet_reads_absent_sides_and_market() {
+        let st = build(&market(), WALLET_FLAT, FLAT_LONG, FLAT_SHORT);
+        assert_eq!(st.long, Field::Absent, "long PDA account does not exist");
+        assert_eq!(st.short, Field::Absent, "short PDA exists with sizeUsd 0");
+        assert!(!st.both_sides_open);
+        assert_eq!(st.collateral_ratio, None, "flat: never Infinity");
+        assert_eq!(st.status(), ObsStatus::Ok);
+        assert!(st.errors().is_empty());
+        assert_eq!(st.slot, SLOT);
+        assert_eq!(st.max_request_execution_sec, Field::ok(45));
+        assert_eq!(st.net_perp_sol(), Some(0.0));
+        let sol = st.sol.value().unwrap();
+        assert_eq!(sol.custody, ids::JUP_CUSTODY_SOL);
+        assert_eq!(sol.mint, ids::WSOL);
+        assert_eq!(sol.rate_mechanism, RateMechanism::Jump);
+        assert_eq!(sol.cumulative_interest_rate, "1062791438");
+        assert_eq!(sol.max_leverage_x, 500.0);
+        assert_eq!(sol.funding_age_secs, 11);
+        assert!(close(
+            sol.short_oi_headroom_usd(),
+            112_293_947.657_72 - 10_409_974.721_026,
+            1e-12
+        ));
+        assert!(close(
+            st.carry_cost_bps(Side::Long).unwrap(),
+            1349.916,
+            1e-12
+        ));
+        assert!(close(
+            st.carry_cost_bps(Side::Short).unwrap(),
+            571.9404,
+            1e-12
+        ));
+        assert_eq!(
+            st.watch,
+            vec![
+                FLAT_LONG,
+                FLAT_SHORT,
+                ids::JUP_CUSTODY_SOL,
+                ids::JUP_CUSTODY_USDC,
+                ids::JLP_POOL
+            ]
+        );
+        let f = st.features();
+        assert_features_ok(&f);
+        assert_eq!(f["long_open"], serde_json::json!(false));
+        assert_eq!(f["perp_short_sol"], serde_json::json!(0.0));
+        assert!(!f.contains_key("collateral_ratio"));
+        assert!(!f.contains_key("liq_distance_min"));
+        assert_eq!(f["n_invalid_fields"], serde_json::json!(0));
+    }
+
+    #[test]
+    fn open_short_matches_golden() {
+        let st = build(&market(), WALLET_SHORT, SHORT_ONLY_LONG, SHORT_ONLY_SHORT);
+        assert_eq!(st.long, Field::Absent);
+        let s = st.short.value().expect("open short");
+        assert_eq!(s.side, Side::Short);
+        assert_eq!(s.position_pda, SHORT_ONLY_SHORT);
+        assert_eq!((s.notional_usd, s.collateral_usd), (992.90315, 99.2937));
+        assert_eq!(s.entry_price_usd, 113.130153);
+        assert!(close(s.base_sol, 992.90315 / 113.130153, 1e-12), "BUG-025");
+        let pnl = 992.90315 * (113.130153 - SOL_USD) / 113.130153;
+        assert!(close(s.unrealized_pnl_usd.unwrap(), pnl, 1e-12));
+        assert!(pnl < 0.0, "SOL rose above the short's entry");
+        assert_eq!(s.accrued_borrow_fee_usd, 0.929383);
+        assert!((s.liquidation_price_usd.unwrap() - 124.032209).abs() < 1e-9);
+        let dist = (124.032209 - SOL_USD) / SOL_USD;
+        assert!(close(s.liq_distance_ratio.unwrap(), dist, 1e-9));
+        assert!(
+            close(s.carry_cost_bps, 571.9404, 1e-12),
+            "USDC collateral custody"
+        );
+        assert_eq!(
+            (s.open_time, s.update_time, s.realised_pnl_usd),
+            (1_789_772_392, 1_789_772_392, 0.0)
+        );
+        assert!(close(
+            st.collateral_ratio.unwrap(),
+            99.2937 / 992.90315,
+            1e-12
+        ));
+        assert_eq!(st.net_perp_sol(), Some(-s.base_sol));
+        assert_eq!(st.status(), ObsStatus::Ok);
+    }
+
+    #[test]
+    fn both_sides_open_is_flagged() {
+        let st = build(&market(), WALLET_BOTH, BOTH_LONG, BOTH_SHORT);
+        assert!(st.both_sides_open);
+        let (l, s) = (st.long.value().unwrap(), st.short.value().unwrap());
+        assert!(close(l.base_sol, 1183.738004 / 117.515445, 1e-12));
+        assert!(close(s.base_sol, 7412.757896 / 116.018022, 1e-12));
+        assert!(
+            close(l.carry_cost_bps, 1349.916, 1e-12),
+            "SOL collateral custody"
+        );
+        assert_eq!(l.accrued_borrow_fee_usd, 0.018884);
+        assert_eq!(s.accrued_borrow_fee_usd, 0.03441);
+        assert!((l.liquidation_price_usd.unwrap() - 113.552539).abs() < 1e-9);
+        assert!((s.liquidation_price_usd.unwrap() - 119.972827).abs() < 1e-9);
+        let ratio = (43.133504 + 272.733845) / (1183.738004 + 7412.757896);
+        assert!(close(st.collateral_ratio.unwrap(), ratio, 1e-12));
+        let f = st.features();
+        assert_features_ok(&f);
+        assert!(f.len() <= MAX_FEATURES, "{} features", f.len());
+        assert_eq!(f["both_sides_open"], serde_json::json!(true));
+        let liq_min = f["liq_distance_min"].as_f64().unwrap();
+        assert!(
+            close(liq_min, (SOL_USD - 113.552539) / SOL_USD, 1e-9),
+            "long is closer"
+        );
+        assert!(close(
+            f["net_perp_sol"].as_f64().unwrap(),
+            l.base_sol - s.base_sol,
+            1e-12
+        ));
+    }
+
+    #[test]
+    fn observation_renders_with_full_ids_and_round_trips() {
+        let now_ms = NOW_S * 1000;
+        for (w, l, s) in [
+            (WALLET_FLAT, FLAT_LONG, FLAT_SHORT),
+            (WALLET_SHORT, SHORT_ONLY_LONG, SHORT_ONLY_SHORT),
+            (WALLET_BOTH, BOTH_LONG, BOTH_SHORT),
+        ] {
+            let st = build(&market(), w, l, s);
+            let o = Observation::of("jup_perps", &st, now_ms, 5_000, ObsSource::Live);
+            assert_eq!(o.key, format!("jup_perps/1:{w}"));
+            assert_eq!(o.slot, Some(SLOT));
+            assert_features_ok(&o.features);
+            let text = o.render_text(now_ms + 2_000);
+            let line1 = text.lines().next().unwrap();
+            assert!(line1.chars().count() <= MAX_LINE1_CHARS, "{line1}");
+            assert!(line1.contains(w), "{line1}");
+            assert!(line1.ends_with("| ok 2s slot=450101361 live"), "{line1}");
+            assert_eq!(o.typed::<PerpsState>().unwrap(), st);
+        }
+    }
+
+    #[test]
+    fn headline_worst_case_fits() {
+        let mut st = build(&market(), WALLET_BOTH, BOTH_LONG, BOTH_SHORT);
+        if let Field::Ok { value } = &mut st.long {
+            value.notional_usd = 123_456_789_012.34;
+            value.entry_price_usd = 1_234_567.89;
+        }
+        st.short = st.long.clone();
+        st.usdc = Field::err(ReadError::new("usdc", ErrorClass::Timeout, "slow"));
+        let h = st.headline();
+        assert!(h.chars().count() <= 165, "{} chars: {h}", h.chars().count());
+        let o = Observation::of("jup_perps", &st, 0, 5_000, ObsSource::Live);
+        let line1 = o.render_text(0).lines().next().unwrap().to_string();
+        assert!(
+            line1.chars().count() <= MAX_LINE1_CHARS && line1.contains(WALLET_BOTH),
+            "{line1}"
+        );
+    }
+
+    // ── failures never become zeros ────────────────────────────────
+
+    #[test]
+    fn missing_custody_is_an_error_not_zero() {
+        let mut set = market();
+        set.accounts.remove(&pk(ids::JUP_CUSTODY_SOL));
+        let st = build(&set, WALLET_BOTH, BOTH_LONG, BOTH_SHORT);
+        assert_eq!(st.sol.error().unwrap().class, ErrorClass::Fatal);
+        // Long needs its (SOL) collateral custody for fee + carry.
+        let e = st.long.error().expect("long is an error");
+        assert_eq!(e.class, ErrorClass::Fatal);
+        assert!(e.message.contains(ids::JUP_CUSTODY_SOL), "{}", e.message);
+        // Short keeps its position data; only the SOL-custody-dependent
+        // liquidation degrades.
+        let s = st.short.value().unwrap();
+        assert_eq!(
+            (s.liquidation_price_usd, s.liq_distance_ratio),
+            (None, None)
+        );
+        assert!(!st.both_sides_open);
+        assert_eq!(st.collateral_ratio, None);
+        assert_eq!(st.status(), ObsStatus::Partial);
+        assert_eq!(st.errors().len(), 2);
+        let f = st.features();
+        assert_features_ok(&f);
+        for k in [
+            "sol_borrow_apr_pct",
+            "carry_long_bps",
+            "perp_long_sol",
+            "net_perp_sol",
+            "perp_notional_usd",
+        ] {
+            assert!(!f.contains_key(k), "{k} must be omitted, not 0");
+        }
+        assert_eq!(f["n_invalid_fields"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn wrong_owner_short_data_and_bad_disc_are_decode_errors() {
+        let mut set = market();
+        let pool = bytes(&set, ids::JLP_POOL);
+        put(&mut set, ids::JLP_POOL, ids::DLMM, &pool);
+        let usdc = bytes(&set, ids::JUP_CUSTODY_USDC);
+        put(
+            &mut set,
+            ids::JUP_CUSTODY_USDC,
+            ids::JUP_PERPS,
+            &usdc[..1000],
+        );
+        // Pool bytes at a position PDA: wrong discriminator.
+        put(&mut set, BOTH_LONG, ids::JUP_PERPS, &pool);
+        let st = build(&set, WALLET_BOTH, BOTH_LONG, BOTH_SHORT);
+        let class = |f: Option<&ReadError>| f.map(|e| e.class);
+        assert_eq!(
+            class(st.max_request_execution_sec.error()),
+            Some(ErrorClass::Decode)
+        );
+        assert!(st
+            .max_request_execution_sec
+            .error()
+            .unwrap()
+            .message
+            .contains(ids::DLMM));
+        assert_eq!(class(st.usdc.error()), Some(ErrorClass::Decode));
+        assert!(st
+            .usdc
+            .error()
+            .unwrap()
+            .message
+            .contains("1000 bytes < min 1060"));
+        assert_eq!(class(st.long.error()), Some(ErrorClass::Decode));
+        assert!(st.long.error().unwrap().message.contains("discriminator"));
+        // Short collateral = USDC custody (broken) → error too; both sides
+        // failed ⇒ the primary answer is unavailable.
+        assert_eq!(class(st.short.error()), Some(ErrorClass::Decode));
+        assert_eq!(st.status(), ObsStatus::Error);
+    }
+
+    #[test]
+    fn position_of_another_wallet_or_mint_mismatch_is_rejected() {
+        let set = market();
+        let st = build(&set, WALLET_FLAT, BOTH_LONG, BOTH_SHORT);
+        for f in [&st.long, &st.short] {
+            let e = f.error().expect("owner mismatch");
+            assert_eq!(e.class, ErrorClass::Decode);
+            assert!(
+                e.message.contains(WALLET_BOTH) && e.message.contains(WALLET_FLAT),
+                "{}",
+                e.message
+            );
+        }
+        // Long PDA passed as the short: side / collateral custody mismatch.
+        let st = build(&set, WALLET_BOTH, BOTH_SHORT, BOTH_LONG);
+        assert!(st.long.is_error() && st.short.is_error());
+        // USDC custody bytes under the SOL custody key: mint mismatch.
+        let mut set = market();
+        let usdc = bytes(&set, ids::JUP_CUSTODY_USDC);
+        put(&mut set, ids::JUP_CUSTODY_SOL, ids::JUP_PERPS, &usdc);
+        let st = build(&set, WALLET_FLAT, FLAT_LONG, FLAT_SHORT);
+        assert!(st.sol.error().unwrap().message.contains("mint"));
+    }
+
+    #[test]
+    fn unread_pda_is_fatal_but_system_dust_is_flat() {
+        let mut set = market();
+        set.accounts.remove(&pk(FLAT_SHORT));
+        let st = build(&set, WALLET_FLAT, FLAT_LONG, FLAT_SHORT);
+        assert_eq!(st.short.error().unwrap().class, ErrorClass::Fatal);
+        // Lamports sent to an unused PDA: System-owned, no data → flat.
+        put(&mut set, FLAT_SHORT, ids::SYSTEM, &[]);
+        let st = build(&set, WALLET_FLAT, FLAT_LONG, FLAT_SHORT);
+        assert_eq!(st.short, Field::Absent);
+    }
+
+    #[test]
+    fn no_oracle_keeps_position_data() {
+        let st = build_perps(
+            &market(),
+            &pk(WALLET_SHORT),
+            &pk(SHORT_ONLY_LONG),
+            &pk(SHORT_ONLY_SHORT),
+            Some(f64::NAN),
+            NOW_S,
+        );
+        assert_eq!(st.oracle_usd, None);
+        let s = st.short.value().unwrap();
+        assert!(
+            close(s.base_sol, 992.90315 / 113.130153, 1e-12),
+            "entry-based"
+        );
+        assert_eq!((s.unrealized_pnl_usd, s.liq_distance_ratio), (None, None));
+        assert!(s.liquidation_price_usd.is_some());
+    }
+
+    #[test]
+    fn decoders_reject_malformed_bytes() {
+        let set = market();
+        let pos = bytes(&set, SHORT_ONLY_SHORT);
+        assert!(decode_position(&pos[..209])
+            .unwrap_err()
+            .contains("min 210"));
+        let mut bad = pos.clone();
+        bad[0] ^= 1;
+        assert!(decode_position(&bad).unwrap_err().contains("discriminator"));
+        let mut c = bytes(&set, ids::JUP_CUSTODY_SOL);
+        c[105] = 2;
+        assert!(decode_custody(&c).unwrap_err().contains("bool at 105"));
+        let mut p = bytes(&set, ids::JLP_POOL);
+        p[8..12].copy_from_slice(&1000u32.to_le_bytes());
+        assert!(decode_pool(&p).unwrap_err().contains("name length"));
+        let p = bytes(&set, ids::JLP_POOL);
+        assert!(
+            decode_pool(&p[..100]).is_err(),
+            "truncated before maxRequestExecutionSec"
+        );
+    }
+
+    #[test]
+    fn perps_keys_order() {
+        let keys = perps_keys(&pk(FLAT_LONG), &pk(FLAT_SHORT));
+        let s: Vec<String> = keys.iter().map(Pubkey::to_string).collect();
+        assert_eq!(
+            s,
+            [
+                FLAT_LONG,
+                FLAT_SHORT,
+                ids::JUP_CUSTODY_SOL,
+                ids::JUP_CUSTODY_USDC,
+                ids::JLP_POOL
+            ]
+        );
+    }
+
+    // ── keeper requests ────────────────────────────────────────────
+
+    const REQ_TRIGGER: &str = "11q9teW5JiHhWeY8ak79i72C4qpDtppzVgH1ZeEUWp3";
+    const REQ_ENTIRE: &str = "1Bznn6qQP7rCHN6BtAU6wQup1w9VndYbn5w76ja1fvy";
+
+    #[test]
+    fn position_request_fixture_decodes() {
+        let set = fixture(REQUESTS, "requests_gma");
+        let r = decode_position_request(&bytes(&set, REQ_TRIGGER)).unwrap();
+        assert_eq!(r.owner, pk("H3AjNpaQDYEQm36cHjNP3s3UEz2d3Grqzk135cr53Hg"));
+        assert_eq!(r.pool, pk(ids::JLP_POOL));
+        assert_eq!(r.custody, pk(ids::JUP_CUSTODY_SOL));
+        assert_eq!(
+            r.position,
+            pk("AiNQmodGxKNsyrpZaGuaa8q4YAA6kSd7DaZ9k8sZBM1g")
+        );
+        assert_eq!(r.mint, pk(ids::USDC));
+        assert_eq!((r.open_time, r.update_time), (1_790_246_110, 1_790_246_110));
+        assert_eq!(
+            (r.size_usd_delta, r.collateral_delta),
+            (252_616_236, 10_000_000)
+        );
+        assert_eq!((r.request_change, r.request_type, r.side), (1, 1, 1));
+        assert_eq!(
+            (r.trigger_price, r.entire_position),
+            (Some(112_500_000), None)
+        );
+        assert_eq!((r.executed, r.counter), (false, 473_577_047));
+
+        let r = decode_position_request(&bytes(&set, REQ_ENTIRE)).unwrap();
+        assert_eq!(
+            r.position,
+            pk("5ME6fJuEdZ1P35zGVzDGMhhP5zaZVSiEdNhaa3Rumi7o")
+        );
+        assert_eq!((r.request_change, r.trigger_price), (2, Some(94_000_000)));
+        assert_eq!(
+            (r.entire_position, r.executed, r.counter),
+            (Some(false), false, 885_351_660)
+        );
+    }
+
+    #[test]
+    fn request_status_ages_and_expires() {
+        let mut set = fixture(REQUESTS, "requests_gma");
+        let key = pk(REQ_TRIGGER);
+        let open = 1_790_246_110;
+        let st = request_status(&set, &key, open + 30, Some(45));
+        let v = st.value().unwrap();
+        assert_eq!(v.position_request, REQ_TRIGGER);
+        assert_eq!(
+            (v.exists, v.executed, v.age_secs, v.expired),
+            (true, false, Some(30), false)
+        );
+        let v = request_status(&set, &key, open + 46, Some(45))
+            .value()
+            .unwrap()
+            .clone();
+        assert!(v.expired);
+        let v = request_status(&set, &key, open + 46, None)
+            .value()
+            .unwrap()
+            .clone();
+        assert!(!v.expired, "unknown limit never expires");
+        // `executed` sits after 6 options: 203 + 1 + 1 + 1 + 9 + 2 + 1 = 218.
+        let mut d = bytes(&set, REQ_TRIGGER);
+        assert_eq!(d[218], 0);
+        d[218] = 1;
+        put(&mut set, REQ_TRIGGER, ids::JUP_PERPS, &d);
+        let v = request_status(&set, &key, open + 999, Some(45))
+            .value()
+            .unwrap()
+            .clone();
+        assert_eq!((v.executed, v.expired), (true, false));
+        // Closed by the keeper.
+        set.insert(AccountRead {
+            pubkey: key,
+            slot: SLOT,
+            state: AccountState::Absent,
+        });
+        let v = request_status(&set, &key, open, Some(45))
+            .value()
+            .unwrap()
+            .clone();
+        assert_eq!((v.exists, v.age_secs), (false, None));
+        // Not read at all → error, never "no request".
+        let missing = pk(FLAT_LONG);
+        assert!(request_status(&set, &missing, open, Some(45)).is_error());
+        // Bad option tag → decode error.
+        let mut d = bytes(&fixture(REQUESTS, "requests_gma"), REQ_TRIGGER);
+        d[203] = 7;
+        put(&mut set, REQ_TRIGGER, ids::JUP_PERPS, &d);
+        let e = request_status(&set, &key, open, Some(45));
+        assert!(e.error().unwrap().message.contains("option tag at 203"));
+    }
+}
