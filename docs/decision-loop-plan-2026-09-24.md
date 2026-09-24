@@ -21,8 +21,8 @@ Deviations from the sketch below: history is in-process (not `shared_cache`); a 
 ```
 trigger (tick | webhook | gRPC)  ──► world = observation-store rows (never fetched)
         ──► DecisionState {goal, world, history[N]}      (application/decision_loop)
-        ──► Jev: next_action + one choice per arg slot   (ports/decision.rs → outbound/decisions/jev.rs)
-        ──► threshold ── ≥ act_at   → ToolRegistry::invoke (existing tools + scopes)
+        ──► Jev: next_action + one choice per arg slot   (ports/decision.rs → outbound/decisions.rs)
+        ──► threshold ── ≥ act_at   → ToolExecutor::execute_typed (existing tools + scopes)
                       ── < act_at   → escalate: orchestrator one-shot (planner → crypto_researcher)
                       ── skip/noop  → log only
         ──► reduce(result) → history (ring buffer) + audit JSONL + MetricsRecord
@@ -79,9 +79,9 @@ caps  = { size_sol = 2.0 }
 
 | # | Deliverable | Files | Verify |
 |---|---|---|---|
-| 1 | Domain types + Jev client | `domain/decision.rs` (State, HistoryEntry, Question, Answer), `ports/decision.rs` (`DecisionEngine`), `outbound/decisions/jev.rs` (via `egress::llm_api_client`) | unit tests on recorded JSON; `#[ignore]` live probe |
-| 2 | Loop use case | `application/decision_loop/{mod,state,slots,reduce}.rs` — state build, ring buffer, slot resolution, threshold, dry-run, execute via `ToolRegistry` | unit tests with a fake `DecisionEngine` + fake tool |
-| 3 | Config + CLI | `DecisionLoopConfig` in `config/mod.rs` (+ validation: tool exists, slots non-empty, 0<act_at≤1); `tengu decide --sandbox <n> [--loop <name>]` in `inbound/cli/`; wiring in `bootstrap/decision.rs` | `tengu decide --sandbox lping` ticks, logs decisions, dry-run |
+| 1 | Domain types + Jev client | `domain/decision.rs` (State, HistoryEntry, Question, Answer), `ports/decision.rs` (`DecisionEngine`), `outbound/decisions.rs` (via `egress::llm_api_client`) | unit tests on recorded JSON; `#[ignore]` live probe |
+| 2 | Loop use case | `application/decision_loop/{mod,slots,reduce,world}.rs` — state build, ring buffer, slot resolution, threshold, dry-run, execute via the `ToolExecutor` port | unit tests with a fake `DecisionEngine` + fake tool |
+| 3 | Config + CLI | `DecisionLoopConfig` in `config/decision_loop.rs` (+ validation: tool exists, slots non-empty, 0<act_at≤1); `tengu decide --sandbox <n> [--loop <name>]` in `inbound/cli/`; wiring in `bootstrap/decision.rs` | `tengu decide --sandbox lping` ticks, logs decisions, dry-run |
 | 4 | Push triggers | webhook `auth_header_env` mode (Helius); endpoint `loop = "<name>"` feeds the loop instead of the planner | signed + header-auth tests |
 | 5 | gRPC feed | Yellowstone client behind `solana_stream` feature (tonic); `egress` gains `grpc_channel` (open network only at first) | subscribe to Meteora DLMM program, events → loop |
 | 6a | Typed read tools ✅ | observation envelope + cache (`domain/observation.rs`, `ports/observation.rs`, `outbound/observations.rs`, `application/observe.rs`), `world.rs`, `tools/solana/*`, `domain/lp/*` | `tengu decide --sandbox lping --loop lp_watch` twice < 60 s → second read `obs.source = cache` |
