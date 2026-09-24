@@ -22,6 +22,7 @@
 | `agentic_memory/` | `agentic_memory` | opt-in, feature `postgres_memory` |
 | `skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (+ implicit `compress_and_store`) | opt-in |
 | `manage_skill/` | `manage_skill` | opt-in |
+| `solana/` | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide` — typed, cached (args / keys / TTLs / hosts: `docs/typed-observations-2026-09-24.md`) | opt-in, one row per name |
 
 The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. That row drives in-process registration, the MCP bridge (Claude Code subagents), and the tool list the model sees.
 
@@ -31,6 +32,17 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
 4. `cargo test --bin tengu catalog && cargo test --test scope_lint`.
+
+## Add a typed (cached) tool
+
+Use when a decision loop or the cache should consume the result (`docs/typed-observations-2026-09-24.md`).
+
+| Step | Where |
+|---|---|
+| Result struct `impl Observed`: `SCHEMA = "<name>/1"`, `subject()` = full ids joined by `:`, `headline()` (full ids, fits the 200-char line 1), `features()` ≤ 32 scalars, `status()` / `errors()` when fields can fail (`Field<T>`, never 0) | `src/domain/...` (pure) |
+| `execute`: `CachePolicy::new(SCHEMA, subject, ttl_ms, args)` → `application::observe::observe(store, name, &policy, now, fetch)` → `Ok(ToolOutput::observed(obs, now))` | the tool |
+| Store: `SqliteObservationStore::open(ctx.workspace)` once in the plugin, `None` on failure (read live) | plugin, like `tools/solana/mod.rs` |
+| Input schema: optional `max_age_secs` (0 = live). Tests: `assert_features_ok`, line 1 ≤ 200 with max-length ids | defs + unit tests |
 
 ## Give it to an agent
 
@@ -55,6 +67,7 @@ net_hosts = ["*"]
 | `tools` | Allow-list for plan-step runs (`tengu run-agent`). Empty = every always-on tool plus configured opt-ins. Opt-in names listed here are switched on. |
 | `workspace_tools` | Older way to switch on opt-in tools; merged with `tools`. |
 | `scopes.<tool>` | `fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`. Per-agent entry replaces `default_scopes` wholesale. |
+| Solana tools | need `fs_roots` = the workspace (observation store), `net_hosts` per tool, `env_reads = ["SOLANA_RPC_URL"]` (else the public RPC is used silently). Working example: `sandboxes/lping/config.toml` |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
 
 ## MCP servers
