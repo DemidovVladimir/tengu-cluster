@@ -126,6 +126,8 @@ pub(crate) struct PoolReadOpts {
 #[derive(Debug, Clone)]
 pub(crate) struct PoolRead {
     pub set: AccountSet,
+    /// Decoded once here; `lp_snapshot` (pair roles, active bin) reads it.
+    #[allow(dead_code)]
     pub pair: LbPair,
     pub bin_arrays: Vec<(i64, Pubkey)>,
 }
@@ -165,13 +167,12 @@ pub(crate) async fn read_pool(
     let mut set = fetch_accounts(rpc, store, &first, max_age_ms, opts.min_slot, now_ms).await?;
     let pair = lb_pair_from_set(&set, pool).map_err(ReadFailure)?;
 
-    let mut indexes = bin_array_keys_needed(&pair, &[]);
+    let mut bin_arrays = bin_array_pdas(pool, &bin_array_keys_needed(&pair, &[]));
     if let Some(wallet) = &opts.positions_of {
-        indexes.extend(plan_position_keys(&set, wallet, pool));
-        indexes.sort_unstable();
-        indexes.dedup();
+        bin_arrays.extend(position_bin_array_keys(&set, wallet, pool));
+        bin_arrays.sort_unstable_by_key(|(i, _)| *i);
+        bin_arrays.dedup_by_key(|(i, _)| *i);
     }
-    let bin_arrays = bin_array_pdas(pool, &indexes);
     let mut second = pool_account_keys(&pair);
     second.extend(bin_arrays.iter().map(|(_, k)| *k));
     let pin = opts.min_slot.unwrap_or(0).max(set.slot_max);
