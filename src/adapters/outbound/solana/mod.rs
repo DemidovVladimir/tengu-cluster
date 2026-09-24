@@ -3,4 +3,5 @@
 pub(crate) mod accounts;
 pub(crate) mod http_json;
 pub(crate) mod layouts;
+pub(crate) mod plan;
 pub(crate) mod rpc;
