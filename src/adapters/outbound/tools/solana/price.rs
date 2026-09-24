@@ -80,20 +80,13 @@ pub(super) fn parse_pubkey_value(v: &Value, tool: &str, what: &str) -> Result<Pu
         .map_err(|e| anyhow!("{tool}: '{what}' is not a valid pubkey ({e}): {s}"))
 }
 
-/// Cache subject of a `sol_price` row: `<mint>` or `<mint>:<pool>`.
+/// Cache subject of a `sol_price` row: `<mint>` or `<mint>:<pool>`; the
+/// store key is `Observation::key_for(OraclePrice::SCHEMA, subject)`.
 pub(crate) fn price_subject(mint: &str, pool: Option<&str>) -> String {
     match pool {
         Some(p) => format!("{mint}:{p}"),
         None => mint.to_string(),
     }
-}
-
-/// Full `price_oracle/1` store key of a `sol_price` call.
-pub(crate) fn price_key(mint: &Pubkey, pool: Option<&Pubkey>) -> String {
-    Observation::key_for(
-        OraclePrice::SCHEMA,
-        &price_subject(&mint.to_string(), pool.map(Pubkey::to_string).as_deref()),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -515,13 +508,10 @@ pub(crate) mod tests {
 
     #[test]
     fn subject_includes_the_pool() {
-        let wsol = ids::key(ids::WSOL);
-        let pool: Pubkey = POOL.parse().unwrap();
-        assert_eq!(price_key(&wsol, None), format!("price_oracle/1:{WSOL}"));
-        assert_eq!(
-            price_key(&wsol, Some(&pool)),
-            format!("price_oracle/1:{WSOL}:{POOL}")
-        );
+        let key = |pool| Observation::key_for(OraclePrice::SCHEMA, &price_subject(WSOL, pool));
+        assert_eq!(key(None), format!("price_oracle/1:{WSOL}"));
+        assert_eq!(key(Some(POOL)), format!("price_oracle/1:{WSOL}:{POOL}"));
+        assert_eq!(req(&json!({})).subject(), WSOL);
         assert_eq!(
             req(&json!({"pool": POOL})).subject(),
             format!("{WSOL}:{POOL}")

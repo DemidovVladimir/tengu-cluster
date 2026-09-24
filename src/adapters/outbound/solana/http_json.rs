@@ -11,9 +11,6 @@
 //! | Audit | one egress record per request (host + path, no query) |
 //! | Retry | none (callers cache; `rpc::read_error` maps the error to a `ReadError`) |
 
-// Called by the Solana tool family (`tools/solana/*`), wired in the next stage.
-#![allow(dead_code)]
-
 use std::time::Instant;
 
 use anyhow::Result;

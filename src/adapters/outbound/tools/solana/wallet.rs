@@ -398,13 +398,16 @@ mod tests {
         serde_json::from_str(s).unwrap()
     }
 
+    type Reply = std::result::Result<Value, RpcError>;
+
     /// Replies by JSON-RPC method (+ optional params substring; replies
     /// persist, so the single retry sees the same answer); anything else
     /// (`getMultipleAccounts`) goes to a [`FakeTransport`] serving the wallet
     /// GMA fixture.
     struct Routed {
         gma: Arc<FakeTransport>,
-        routes: Mutex<Vec<(String, Option<String>, std::result::Result<Value, RpcError>)>>,
+        /// (method, params substring, reply)
+        routes: Mutex<Vec<(String, Option<String>, Reply)>>,
         calls: Mutex<Vec<Value>>,
     }
 
@@ -441,12 +444,7 @@ mod tests {
             t
         }
         /// Prepend a route (it wins over earlier ones).
-        fn route(
-            &self,
-            method: &str,
-            param: Option<&str>,
-            reply: std::result::Result<Value, RpcError>,
-        ) {
+        fn route(&self, method: &str, param: Option<&str>, reply: Reply) {
             self.routes
                 .lock()
                 .unwrap()
