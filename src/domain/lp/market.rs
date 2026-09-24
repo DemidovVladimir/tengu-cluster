@@ -348,9 +348,10 @@ pub(crate) fn parse_pyth(v: &Value, feed_id: &str) -> Field<PythPrice> {
 /// Why `p` may not be selected at `now_ms`; `None` = usable.
 pub(crate) fn pyth_rejection(p: &PythPrice, now_ms: i64) -> Option<PythRejection> {
     let age_s = now_ms.div_euclid(1000) - p.publish_time;
+    let conf_frac = p.conf_usd / p.usd;
     if age_s.abs() > PYTH_MAX_AGE_S {
         Some(PythRejection::Stale)
-    } else if !(p.conf_usd / p.usd <= PYTH_MAX_CONF_FRAC) {
+    } else if !conf_frac.is_finite() || conf_frac > PYTH_MAX_CONF_FRAC {
         Some(PythRejection::WideConf)
     } else {
         None
@@ -358,16 +359,19 @@ pub(crate) fn pyth_rejection(p: &PythPrice, now_ms: i64) -> Option<PythRejection
 }
 
 /// Keep the first (oldest) sample of every `MIN_SAMPLE_SPACING_MS` bucket
-/// plus the newest sample. Input oldest first. The oldest sample — the
-/// storm reference candidate — is always kept.
+/// plus the newest sample; two samples at the same instant keep the later
+/// one. Input oldest first. The oldest sample — the storm reference
+/// candidate — is always kept.
 fn thin_samples(samples: Vec<PriceSample>) -> Vec<PriceSample> {
     let bucket = |s: &PriceSample| s.t_ms.div_euclid(MIN_SAMPLE_SPACING_MS);
     let n = samples.len();
     let mut out: Vec<PriceSample> = Vec::with_capacity(n);
     for (i, s) in samples.into_iter().enumerate() {
         let newest = i + 1 == n;
-        if newest || out.last().is_none_or(|k| bucket(k) != bucket(&s)) {
-            out.push(s);
+        match out.last_mut() {
+            Some(k) if k.t_ms == s.t_ms => *k = s,
+            Some(k) if !newest && bucket(k) == bucket(&s) => {}
+            _ => out.push(s),
         }
     }
     out
@@ -377,6 +381,12 @@ fn thin_samples(samples: Vec<PriceSample>) -> Vec<PriceSample> {
 /// else Jupiter, cross-check against the optional pool price, and advance
 /// the sample ring carried in `prev` (ignored unless `prev.mint == mint`).
 /// `prev.usd` is NEVER used as a price: with no usable source `usd = None`.
+///
+/// Glue contract: transport failures arrive as `Field::Error` with
+/// `ReadError.field` = `"jupiter"` / `"pyth"` / `"pool_price"` (Hermes 401 ⇒
+/// `AuthRequired`); a mint without a Pyth feed ([`pyth_feed_id`] = `None`)
+/// passes `Field::Absent`; `prev` = the stored `price_oracle/1:<mint>` row
+/// at any age (only its samples are used).
 pub(crate) fn combine_price(
     mint: &str,
     jupiter: Field<JupiterPrice>,
@@ -661,6 +671,37 @@ impl DlmmPoolList {
                 .unwrap_or(0.0)
         )
     }
+
+    /// The `Error` row for a failed fetch (HTTP error, timeout, non-JSON
+    /// body): no pools, the error kept. Never cached (`observe` skips
+    /// `Error` rows).
+    pub(crate) fn failed(
+        query: &str,
+        sort: PoolSort,
+        limit: u32,
+        min_tvl_usd: Option<f64>,
+        error: ReadError,
+    ) -> Self {
+        let mut list = Self::empty(query, sort, limit, min_tvl_usd);
+        list.status = ObsStatus::Error;
+        list.errors.push(error);
+        list
+    }
+
+    fn empty(query: &str, sort: PoolSort, limit: u32, min_tvl_usd: Option<f64>) -> Self {
+        DlmmPoolList {
+            query: query.trim().to_string(),
+            sort,
+            limit: clamp_limit(limit),
+            min_tvl_usd: min_tvl_usd.filter(|m| m.is_finite() && *m > 0.0),
+            total: 0,
+            fetched: 0,
+            matched: 0,
+            pools: Vec::new(),
+            status: ObsStatus::Ok,
+            errors: Vec::new(),
+        }
+    }
 }
 
 fn clamp_limit(limit: u32) -> u32 {
@@ -759,29 +800,14 @@ pub(crate) fn parse_datapi_pools(
     limit: u32,
     min_tvl_usd: Option<f64>,
 ) -> DlmmPoolList {
-    let limit = clamp_limit(limit);
-    let min_tvl_usd = min_tvl_usd.filter(|m| m.is_finite() && *m > 0.0);
-    let mut list = DlmmPoolList {
-        query: query.trim().to_string(),
-        sort,
-        limit,
-        min_tvl_usd,
-        total: 0,
-        fetched: 0,
-        matched: 0,
-        pools: Vec::new(),
-        status: ObsStatus::Ok,
-        errors: Vec::new(),
-    };
     let Some(data) = v.get("data").and_then(Value::as_array) else {
         let msg = match service_error(v) {
             Some(e) => format!("datapi pools: error response: {e}"),
             None => "datapi pools: no `data` array".to_string(),
         };
-        list.status = ObsStatus::Error;
-        list.errors.push(decode_err("pools", msg));
-        return list;
+        return DlmmPoolList::failed(query, sort, limit, min_tvl_usd, decode_err("pools", msg));
     };
+    let mut list = DlmmPoolList::empty(query, sort, limit, min_tvl_usd);
     list.fetched = data.len() as u32;
     list.total = v
         .get("total")
@@ -825,7 +851,7 @@ pub(crate) fn parse_datapi_pools(
         ));
     }
 
-    if let Some(min) = min_tvl_usd {
+    if let Some(min) = list.min_tvl_usd {
         rows.retain(|r| r.tvl_usd >= min);
     }
     list.matched = rows.len() as u32;
@@ -839,7 +865,7 @@ pub(crate) fn parse_datapi_pools(
         }
         .then_with(|| a.address.cmp(&b.address))
     });
-    rows.truncate(limit as usize);
+    rows.truncate(list.limit as usize);
     list.pools = rows;
     list.status = if !list.errors.is_empty() {
         ObsStatus::Partial
@@ -1703,6 +1729,62 @@ mod tests {
             .contains("3M9nHQhxRMrK66hxRVTGLEmrvEK6Pimds6C3f3WaaLyt"));
         assert!(!obs.headline.contains(&q));
         line1_ok(&obs, T0_MS);
+    }
+
+    #[test]
+    fn worst_case_headlines_keep_full_ids_within_budget() {
+        // 44-char mint + 44-char pool, large price, large negative spread.
+        let q = PoolQuote {
+            pool: POOL_SOL_USDC.into(),
+            price: Field::ok(12_000.0),
+        };
+        let o = combine_price(
+            ids::USDC,
+            jup(123_456.123_456),
+            auth_err(),
+            Some(q),
+            None,
+            T0_MS,
+        );
+        let obs = Observation::of("sol_price", &o, T0_MS, PRICE_TTL_MS, ObsSource::Live);
+        assert_eq!(ids::USDC.len(), 44);
+        assert!(obs.headline.contains(ids::USDC) && obs.headline.contains(POOL_SOL_USDC));
+        assert!(obs.headline.chars().count() <= 165, "{}", obs.headline);
+        line1_ok(&obs, T0_MS + 9_999);
+
+        let l = DlmmPoolList::failed(
+            "SOL-USDC",
+            PoolSort::Volume24h,
+            50,
+            Some(-1.0),
+            ReadError::new("pools", ErrorClass::Timeout, "datapi timed out after 20 s"),
+        );
+        assert_eq!(
+            (l.status, l.min_tvl_usd, l.limit),
+            (ObsStatus::Error, None, 50)
+        );
+        let obs = Observation::of("dlmm_pools", &l, T0_MS, POOLS_TTL_MS, ObsSource::Live);
+        assert_eq!(obs.status, ObsStatus::Error);
+        assert_eq!(obs.key, "dlmm_pools/1:SOL-USDC|volume_24h|50|0");
+        assert_features_ok(&obs.features);
+        line1_ok(&obs, T0_MS);
+        assert!(obs.render_text(T0_MS).contains("error pools: timeout"));
+    }
+
+    #[test]
+    fn same_instant_samples_collapse() {
+        let a = combine_price(ids::WSOL, jup(100.0), Field::Absent, None, None, T0_MS);
+        let b = combine_price(ids::WSOL, jup(101.0), Field::Absent, None, Some(&a), T0_MS);
+        assert_eq!(
+            b.samples,
+            vec![PriceSample {
+                t_ms: T0_MS,
+                usd: 101.0
+            }]
+        );
+        // Negative / non-finite min TVL is "no filter".
+        let l = parse_datapi_pools(&v(POOLS), "SOL-USDC", PoolSort::Tvl, 50, Some(f64::NAN));
+        assert_eq!((l.min_tvl_usd, l.matched), (None, 20));
     }
 
     #[test]
