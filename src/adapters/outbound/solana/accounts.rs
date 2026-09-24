@@ -13,9 +13,6 @@
 //! | Store failure | warn, read everything live (doctrine #4) |
 //! | RPC failure | `Err` ([`super::rpc::RpcError`] in the chain → `rpc::read_error`) |
 
-// Called by the Solana tool family (`tools/solana/*`), wired in the next stage.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use anyhow::Result;
