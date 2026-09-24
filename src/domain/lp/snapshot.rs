@@ -30,9 +30,6 @@
 //! evaluation that passes the gates advances timers / regimes. The caller
 //! persists the returned state only with `commit = true`.
 
-// Consumed by the lp_snapshot / hedge_decide / lp_decide tools (stage 4).
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -1041,6 +1038,7 @@ pub(crate) struct ReentryWait {
 
 impl ReentryWait {
     /// Arm the wait when a close-only recenter lands (phase-6 write path).
+    #[allow(dead_code)] // phase-6 write path; used by tests today
     pub(crate) fn arm(lower_price: f64, upper_price: f64, price: f64, now_ms: i64) -> Self {
         ReentryWait {
             anchor_price: price,
