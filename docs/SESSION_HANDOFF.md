@@ -6,7 +6,36 @@
 
 ---
 
-## TL;DR — current state (2026-09-23): hexagonal layout
+## TL;DR — current state (2026-09-24): typed observations + Solana LP read tools
+
+Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observations-2026-09-24.md`**. Loop doc: `docs/decision-loop-plan-2026-09-24.md`; sandbox: `docs/lping-2026-09-24.md`.
+
+| Area | Change |
+|---|---|
+| Typed observations | `ToolOutput.observation` + `ToolExecutor::execute_typed` (default wraps `execute`); `domain/observation.rs` envelope (features ≤ 32 scalars, line 1 ≤ 200 with full ids, `Field<T>` / `ObsStatus` — failed reads never 0); `ports/observation.rs` + `outbound/observations.rs` (`<workspace>/.tengu/observations.db`, slot-monotonic, `Error` rows never stored, 7-day purge); `application/observe.rs::observe()` |
+| Decision loop | `world` + `world_max_age_secs`, action `requires`, `FromObservation` slots, typed results + `HistoryEntry.obs`; loop tools wrapped in `SanitizedToolExecutor` (`build_decision_loop(.., secrets)`) |
+| Solana tools | 10 opt-in tools (`tools/solana/`): `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`. Pure: `domain/solana.rs` (hand-rolled base58 + PDA), `domain/lp/{dlmm,perps,wallet,market,gates,hedge,snapshot}.rs`. IO: `outbound/solana/{rpc,accounts,http_json,plan}.rs` |
+| Policy port | `domain/lp/hedge.rs` = bot hedge controller, 1027/1027 production vectors (`cargo test --bin tengu lp::hedge`); `gates.rs` = re-entry, storm, trend/regime confirm, composition, wallet 50/50, 70-bin range cap |
+| Crates | `base64 = "0.22"` direct; `curve25519-dalek ~4.1` dev-dependency only (off-curve cross-check). No bs58 / solana-sdk / anchor / borsh |
+| lping | `lp_watch` on typed tools (`sol_price`, `dlmm_pools`, `requires = { price = 30 }`); new `hedge_watch` (`lp_snapshot` → `hedge_decide` / `lp_decide`, `commit = true`, production knobs cited in TOML); both `dry_run` |
+| Egress | new hosts: `api.mainnet-beta.solana.com` (or `$SOLANA_RPC_URL`'s host), `lite-api.jup.ag`, `dlmm.datapi.meteora.ag`, `hermes.pyth.network`; RPC URL never rendered (host only) — `docs/egress-2026-09-16.md` |
+
+| Open | Detail |
+|---|---|
+| Phase 5 — push feed | Yellowstone gRPC → `acct/1:<pubkey>` rows (slot-monotonic put) + heartbeat row `stream/1:<name>` so unchanged accounts count as fresh; subscription set = union of `lp_snapshot` `data.watch`; trigger via `DecisionLoop::handle_event`; `egress::grpc_channel` |
+| Phase 6b — writes | `dlmm_open/close_position`, `dlmm_claim_fees`, `jup_perps_order`, `jupiter_swap`, `solana_close_token_accounts`: `WriteResult<D>`, wallet `LeaseStore` (signature in the typed-observations doc; no code yet), `mode` default `simulate`, re-run the pure gate before send, `SolanaSigner` port. Keeper cooldown becomes request-aware (`PositionRequest.executed` + JLP `maxRequestExecutionSec`, 45 s live) instead of the blind 600 s `cooldown_ms` |
+| Pyth 401 | Hermes (and the benchmarks mirror) answer 401 → Pyth only with `pyth_feed_id` (`auth_required` error, Partial row); default oracle is Jupiter-only (`degraded = true` unless a pool cross-check is given) |
+| ATA-only balances | `solana_wallet.balances` and `lp_snapshot.wallet_balances` count the mint's ATA only; tokens in other accounts appear only in `token_accounts` rows |
+| Extended positions | > 70 bins decode fully (SDK-verified on a 164-bin position) but raise `ExtendedPosition`; a missing bin array ⇒ `complete = false` (amounts are a floor, row Partial); farming rewards + Token-2022 transfer fees not modelled; new ranges capped at 70 bins |
+| Two-read slot skew | `plan::read_pool` = 2 GMAs (2nd pinned ≥ 1st slot) + reused `acct/1` rows up to their max age → `LpSnapshot.slot` (min) ≠ `slot_max` is possible; a lagging public node answers `-32016` (retried once) |
+| Hedge knobs `trend_confirm_ms` + `no_lp_grace_ms` | landing with the stage-4 `lp.rs` glue: clamp-regime confirm (was fixed `HEDGE_REGIME_CONFIRM_MS = 0`) and bot BUG-011 grace (no LP but a position seen within the grace ⇒ `none` "no-LP grace", hedge kept) via `LpControllerState.last_position_seen_ms`. Verify in `snapshot.rs` after merge |
+| Non-USDC-quote storm | `lp_decide` storm samples come from the USD `price_oracle` row; for a pool whose quote is not USDC they are dropped → `move_5m_pct = None`, storm never fires |
+| Cache | no cross-process single-flight (WAL prevents corruption, not duplicate RPC on a miss); `acct/1` rows hold base64 data (bin array ≈ 13.5 KB), only the 7-day purge bounds growth |
+| `sol_price` keys | pool-aware: `price_oracle/1:<mint>` vs `price_oracle/1:<mint>:<pool>` — a `world` alias must name the key the loop's `sol_price` call writes |
+
+---
+
+## Previous TL;DR (2026-09-23): hexagonal layout
 
 Branch `refactor/hexagonal` (not merged). Plan + per-phase status: `docs/hexagonal-plan-2026-09-23.md`. Start any "where is / how do I" question at **`docs/code-map.md`** (+ interactive `docs/code-map.html`).
 
