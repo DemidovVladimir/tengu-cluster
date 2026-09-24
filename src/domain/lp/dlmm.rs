@@ -420,7 +420,7 @@ fn token_amount_from_set(
                     format!("token account {account} holds mint {held}, expected {mint}"),
                 ));
             }
-            Field::ok(TokenAmount::new(mint, u64_at(&d, 64), decimals))
+            Field::ok(TokenAmount::new(*mint, u64_at(&d, 64), decimals))
         }
     }
 }
@@ -429,26 +429,9 @@ fn token_amount_from_set(
 // Typed outputs
 // ---------------------------------------------------------------------------
 
-/// An SPL amount: exact raw integer + UI value.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct TokenAmount {
-    pub mint: String,
-    /// u64 as a decimal string.
-    pub raw: String,
-    pub decimals: u8,
-    pub ui: f64,
-}
-
-impl TokenAmount {
-    pub fn new(mint: &Pubkey, raw: u64, decimals: u8) -> Self {
-        Self {
-            mint: mint.to_string(),
-            raw: raw.to_string(),
-            decimals,
-            ui: ui_amount(u128::from(raw), decimals),
-        }
-    }
-}
+/// An SPL amount: exact raw integer + UI value (one type for the whole
+/// family; defined with the SPL decoders).
+pub(crate) use super::wallet::TokenAmount;
 
 /// Pair roles: base = token X (volatile side), quote = token Y
 /// (`delta_neutral_bot/src/config/pairConfig.ts:5-16,78-85`).
@@ -1826,7 +1809,10 @@ mod tests {
         let rq = s.reserve_quote.value().unwrap();
         assert_eq!(rb.raw, g["reserve_x_amount_raw"].as_str().unwrap());
         assert_eq!(rq.raw, g["reserve_y_amount_raw"].as_str().unwrap());
-        assert_eq!((rb.mint.as_str(), rq.mint.as_str()), (ids::WSOL, ids::USDC));
+        assert_eq!(
+            (rb.mint.to_string(), rq.mint.to_string()),
+            (ids::WSOL.to_string(), ids::USDC.to_string())
+        );
         assert_rel(
             s.tvl_quote_onchain.unwrap(),
             gf("tvl_quote_onchain"),
