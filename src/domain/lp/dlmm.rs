@@ -1119,6 +1119,19 @@ pub(crate) fn build_positions(
                 watch.insert(k.to_string());
             }
         }
+        let lower_price = price_from_bin(pos.lower_bin_id, ctx.pair.bin_step, dx, dy);
+        let upper_price = price_from_bin(pos.upper_bin_id, ctx.pair.bin_step, dx, dy);
+        // Finite prices always compose (`None` only on non-finite input).
+        let Some(composition) = token_percentages(ctx.price, lower_price, upper_price) else {
+            errors.push(decode_err(
+                "positions",
+                format!(
+                    "position {key}: bin range [{}, {}] has no finite price",
+                    pos.lower_bin_id, pos.upper_bin_id
+                ),
+            ));
+            continue;
+        };
         let t = position_totals(pos, &arrays);
         if !t.missing_bin_arrays.is_empty() {
             errors.push(ReadError::new(
@@ -1144,14 +1157,9 @@ pub(crate) fn build_positions(
                 position: key.to_string(),
             });
         }
-        let lower_price = price_from_bin(pos.lower_bin_id, ctx.pair.bin_step, dx, dy);
-        let upper_price = price_from_bin(pos.upper_bin_id, ctx.pair.bin_step, dx, dy);
         let amount_base = ui_u256(t.amount_x, dx);
         let amount_quote = ui_u256(t.amount_y, dy);
         let value_quote = amount_base * ctx.price + amount_quote;
-        let base_pct_linear = token_percentages(ctx.price, lower_price, upper_price)
-            .map(|c| c.token_x)
-            .unwrap_or(f64::NAN);
         positions.push(DlmmPosition {
             position: key.to_string(),
             owner: pos.owner.to_string(),
@@ -1173,9 +1181,9 @@ pub(crate) fn build_positions(
             total_claimed_fee_quote: ui_amount(u128::from(pos.total_claimed_fee_y), dy),
             base_pct_value: (value_quote > 0.0)
                 .then(|| amount_base * ctx.price / value_quote * 100.0),
-            base_pct_linear,
+            base_pct_linear: composition.token_x,
             last_updated_at: pos.last_updated_at,
-            complete: t.complete() && base_pct_linear.is_finite(),
+            complete: t.complete(),
         });
     }
     positions.sort_by(|a, b| {
@@ -1252,13 +1260,18 @@ fn symbol(mint: &str) -> Option<&'static str> {
     }
 }
 
-/// `x` with `sig` significant digits, plain notation (no exponent).
+/// `x` with `sig` significant digits: plain notation for 1e-9 ≤ |x| < 1e15,
+/// exponent notation outside (keeps headlines short for extreme prices).
 fn fmt_sig(x: f64, sig: i32) -> String {
     if !x.is_finite() || x == 0.0 {
         return format!("{x}");
     }
     let mag = x.abs().log10().floor() as i32;
-    let decimals = (sig - 1 - mag).clamp(0, 12) as usize;
+    if !(-9..15).contains(&mag) {
+        let digits = (sig - 1).max(0) as usize;
+        return format!("{x:.digits$e}");
+    }
+    let decimals = (sig - 1 - mag).max(0) as usize;
     format!("{x:.decimals$}")
 }
 
@@ -2286,6 +2299,11 @@ mod tests {
         s.tvl_quote_onchain = Some(9_876_543_210_987.0);
         s.active_price = 0.000_000_123_456_7;
         check_observed(&s);
+        // Extreme bin / price (max bin id, 1.6e37 quote per base).
+        s.active_id = -443_636;
+        s.active_price = 1.6e37;
+        s.tvl_quote_onchain = Some(3.2e40);
+        check_observed(&s);
     }
 
     // ── math ───────────────────────────────────────────────────────────
@@ -2317,6 +2335,9 @@ mod tests {
         assert_eq!(fmt_sig(116.627_489_413, 7), "116.6275");
         assert_eq!(fmt_sig(0.040_192_8, 4), "0.04019");
         assert_eq!(fmt_sig(7_067_545.74, 6), "7067546");
+        assert_eq!(fmt_sig(1.6e37, 7), "1.600000e37");
+        assert_eq!(fmt_sig(-1.234e-12, 4), "-1.234e-12");
+        assert_eq!(fmt_sig(1.234_567_89e-9, 3), "0.00000000123");
     }
 
     #[test]
