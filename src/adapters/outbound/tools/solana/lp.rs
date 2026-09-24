@@ -98,7 +98,7 @@ fn snapshot_key(wallet: &Pubkey, pool: &Pubkey) -> String {
 enum StateRead {
     /// No row (or no store): a fresh `LpControllerState`.
     Missing,
-    Found(LpControllerState),
+    Found(Box<LpControllerState>),
     /// A row exists but could not be read / decoded: decide on a fresh
     /// state but never overwrite the row.
     Unreadable(String),
@@ -107,7 +107,7 @@ enum StateRead {
 impl StateRead {
     fn state(&self, wallet: &Pubkey, pool: &Pubkey) -> LpControllerState {
         match self {
-            StateRead::Found(s) => s.clone(),
+            StateRead::Found(s) => (**s).clone(),
             _ => LpControllerState::new(&wallet.to_string(), &pool.to_string()),
         }
     }
@@ -125,7 +125,7 @@ async fn read_state(
     match store.get(&key).await {
         Ok(None) => StateRead::Missing,
         Ok(Some(row)) => match row.typed::<LpControllerState>() {
-            Ok(s) => StateRead::Found(s),
+            Ok(s) => StateRead::Found(Box::new(s)),
             Err(e) => {
                 let error = format!("{e:#}");
                 warn!(%key, %error, "lp_state row does not decode");
@@ -618,7 +618,7 @@ async fn snapshot_row(
         return Err(format!("{key} row has status {}", row.status.as_str()));
     }
     match row.typed::<LpSnapshot>() {
-        Ok(snap) => Ok((row, snap)),
+        Ok(snap) => Ok((row.served_from_cache(), snap)),
         Err(e) => Err(format!("{key} row does not decode: {e:#}")),
     }
 }
@@ -1327,8 +1327,16 @@ mod tests {
         // Exactly the domain decision on the stored row.
         let row = store.get(&snapshot_key(&w, &p)).await.unwrap().unwrap();
         let fresh = LpControllerState::new(BOT_WALLET, POOL);
-        let (want, next) = decide_hedge(&snap, &row.meta(at), 2_000, &knobs, &fresh, at);
+        let (want, next) = decide_hedge(
+            &snap,
+            &row.clone().served_from_cache().meta(at),
+            2_000,
+            &knobs,
+            &fresh,
+            at,
+        );
         assert_eq!(d, want);
+        assert_eq!(d.snapshot.as_ref().unwrap().source, ObsSource::Cache);
         assert_eq!(d.snapshot_age_ms, Some(2_000));
         assert_ne!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
 
