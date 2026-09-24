@@ -23,6 +23,7 @@
 //! | `PendingRequest` — keeper request open, age < max exec + 15 s | `Blocked` — snapshot or price row older than `max_snapshot_age_secs` |
 //! | `Divergence` — \|pool vs oracle\| > `max_divergence_bps` | storm → trend confirm → recenter / re-entry wait → open |
 //! | `StaleInput` — snapshot or price row older than `max_snapshot_age_secs` | |
+//! | `None{"no-LP grace…"}` — no LP position, one seen < `no_lp_grace_ms` ago, no re-entry wait (BUG-011) | |
 //! | `hedge::decide`, then `VenuePermission` (custody disallows the action) | |
 //!
 //! A gated evaluation returns the controller state unchanged; only an
@@ -65,11 +66,6 @@ pub(crate) const LP_STATE_TTL_MS: u64 = 7 * 24 * 3_600_000;
 /// Grace on top of the JLP pool's `maxRequestExecutionSec` before an
 /// unexecuted keeper request stops blocking the hedge (design-1 §7.2).
 pub(crate) const PENDING_REQUEST_GRACE_SECS: i64 = 15;
-/// Clamp-regime confirmation window of the hedge. The hedge knob schema
-/// (`tools/solana/defs.rs`) carries no `trend_confirm_ms`, so a computed
-/// regime commits at once (the bot default `TREND_CONFIRM_MS = 0`); the
-/// ADR-025 freeze still applies.
-pub(crate) const HEDGE_REGIME_CONFIRM_MS: i64 = 0;
 /// `isWalletBalancedFor5050` default tolerance (`meteoraUtils.ts:369`).
 pub(crate) const WALLET_5050_TOLERANCE: f64 = 0.10;
 /// Rent of a new DLMM position (`METEORA_POSITION_RENT_SOL`,
@@ -818,6 +814,13 @@ pub(crate) struct HedgeKnobs {
     pub rent_reserve_sol: f64,
     pub max_divergence_bps: f64,
     pub max_snapshot_age_secs: u64,
+    /// `TREND_CONFIRM_MS` (ADR-023), midpoint only: a computed clamp regime
+    /// commits after the candidate persisted this long (storms bypass it).
+    pub trend_confirm_ms: u64,
+    /// BUG-011 grace (`NO_LP_HEDGE_GRACE_CYCLES` × cycle): with no LP
+    /// position but one seen less than this long ago, hold the hedge
+    /// (`None`) instead of trading on the no-LP read; 0 = off.
+    pub no_lp_grace_ms: u64,
 }
 
 /// `lp_decide` knobs — field names = the `knobs` schema in
@@ -1090,6 +1093,11 @@ pub(crate) struct LpControllerState {
     /// `lastRebalanceFailedAt` — lifts the ADR-025 freeze.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_rebalance_failed_at_ms: Option<i64>,
+    /// Observation time of the last snapshot that showed an LP position
+    /// (set by every ungated `hedge_decide` / `lp_decide`); starts the
+    /// BUG-011 no-LP grace (`HedgeKnobs::no_lp_grace_ms`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_position_seen_ms: Option<i64>,
     #[serde(default)]
     pub updated_at_ms: i64,
 }
@@ -1108,7 +1116,17 @@ impl LpControllerState {
             known_positions: Vec::new(),
             last_hedge_action: None,
             last_rebalance_failed_at_ms: None,
+            last_position_seen_ms: None,
             updated_at_ms: 0,
+        }
+    }
+
+    /// Record `snap`'s positions as seen at the snapshot's observation time
+    /// (`now_ms − snap_age_ms`); no-op without a position.
+    fn saw_positions(&mut self, snap: &LpSnapshot, now_ms: i64, snap_age_ms: u64) {
+        if !snap.positions.is_empty() {
+            let at = now_ms.saturating_sub(i64::try_from(snap_age_ms).unwrap_or(i64::MAX));
+            self.last_position_seen_ms = Some(self.last_position_seen_ms.map_or(at, |t| t.max(at)));
         }
     }
 }
@@ -1180,6 +1198,7 @@ impl Observed for LpControllerState {
             "last_rebalance_failed",
             Some(self.last_rebalance_failed_at_ms.is_some()),
         );
+        set_int(&mut f, "last_position_seen_ms", self.last_position_seen_ms);
         set_int(&mut f, "updated_at_ms", Some(self.updated_at_ms));
         f
     }
@@ -1615,7 +1634,7 @@ fn hedge_view(
                 committed: state.committed_regime,
                 computed: c.regime,
                 pending: state.pending_regime,
-                confirm_ms: HEDGE_REGIME_CONFIRM_MS,
+                confirm_ms: i64::try_from(knobs.trend_confirm_ms).unwrap_or(i64::MAX),
                 storm_active: state.storm_active,
                 imbalance_pending: state.imbalance_since_ms.is_some(),
                 last_rebalance_failed: state.last_rebalance_failed_at_ms.is_some(),
@@ -1885,6 +1904,11 @@ pub(crate) fn decide_hedge(
         out.trace = guard_trace(&input, &out.action);
         return (out, state.clone());
     }
+    if let Some(reason) = no_lp_grace_reason(snap, knobs, state, now_ms) {
+        out.action = HedgeAction::None { reason };
+        out.trace = guard_trace(&input, &out.action);
+        return (out, state.clone());
+    }
 
     // Core, unchanged.
     let mut action = HedgeAction::from_core(&hedge::decide(&input));
@@ -1908,8 +1932,37 @@ pub(crate) fn decide_hedge(
     let mut next = state.clone();
     next.committed_regime = view.regime;
     next.pending_regime = view.pending_regime;
+    next.saw_positions(snap, now_ms, snap_age_ms);
     next.updated_at_ms = now_ms;
     (out, next)
+}
+
+/// BUG-011 (`autoTuneOrchestrator.ts:692-716`): a recenter that closed the
+/// old position but failed to open the new one reads as "no LP" while the
+/// LP's SOL sits in the wallet — trading on that read would unwind the
+/// protective hedge mid-move. Hold (`None`) until the no-LP state outlasts
+/// `no_lp_grace_ms` since a position was last seen. A re-entry wait (A15)
+/// is a deliberate no-LP state: the hedge keeps running there.
+fn no_lp_grace_reason(
+    snap: &LpSnapshot,
+    knobs: &HedgeKnobs,
+    state: &LpControllerState,
+    now_ms: i64,
+) -> Option<String> {
+    if knobs.no_lp_grace_ms == 0 || !snap.positions.is_empty() || state.reentry.is_some() {
+        return None;
+    }
+    let seen = state.last_position_seen_ms?;
+    let since = now_ms.saturating_sub(seen);
+    let grace = i64::try_from(knobs.no_lp_grace_ms).unwrap_or(i64::MAX);
+    (since < grace).then(|| {
+        format!(
+            "no-LP grace: no LP position for {} ms since one was seen (< no_lp_grace_ms {}); \
+             the hedge holds while the LP funds may be mid-rebalance (BUG-011)",
+            since.max(0),
+            knobs.no_lp_grace_ms
+        )
+    })
 }
 
 impl Observed for HedgeDecision {
@@ -2457,6 +2510,7 @@ pub(crate) fn decide_lp(
     next.storm_active = out.storm.active;
     next.updated_at_ms = now_ms;
     next.known_positions = snap.positions.iter().map(|p| p.position.clone()).collect();
+    next.saw_positions(snap, now_ms, snap_age_ms);
 
     out.verdict = match (snap.positions.first(), out.health.first()) {
         (Some(p), Some(h)) => {
@@ -2933,6 +2987,8 @@ mod tests {
             rent_reserve_sol: 0.1,
             max_divergence_bps: 50.0,
             max_snapshot_age_secs: 30,
+            trend_confirm_ms: 0,
+            no_lp_grace_ms: 0,
         }
     }
 
@@ -3699,6 +3755,149 @@ mod tests {
         st.storm_active = true;
         let (_, next) = hedge(&s, &k, &st);
         assert_eq!(next.committed_regime, LpRegime::Above);
+    }
+
+    #[test]
+    fn trend_confirm_ms_delays_the_clamp_regime_commit() {
+        // Same Above candidate as above, now with a 5-minute confirmation.
+        let s = composed();
+        let mut k = hedge_knobs();
+        k.lp_input = LpInput::Midpoint;
+        k.trend_confirm_ms = 300_000;
+        let (d, next) = hedge(&s, &k, &fresh_state());
+        let v = d.view.as_ref().unwrap();
+        assert_eq!(v.computed_regime, Some(LpRegime::Above));
+        assert_eq!(v.regime_outcome, Some(RegimeOutcome::Pending));
+        assert_eq!(v.regime, LpRegime::In, "the committed regime is priced");
+        let e = s.exposure.value().unwrap();
+        assert_eq!(
+            v.lp_delta_used,
+            hedge::lp_midpoint_sol(e.base, e.quote, v.price_usd)
+        );
+        assert_eq!(next.committed_regime, LpRegime::In);
+        let pending = next.pending_regime.unwrap();
+        assert_eq!((pending.regime, pending.since_ms), (LpRegime::Above, NOW));
+        // Still inside the window: pending keeps its start.
+        let mut st = next.clone();
+        let (d, next) = decide_hedge(&s, &meta_of(&s, 1_000), 1_000, &k, &st, NOW + 299_999);
+        assert_eq!(
+            d.view.as_ref().unwrap().regime_outcome,
+            Some(RegimeOutcome::Pending)
+        );
+        assert_eq!(next.pending_regime.unwrap().since_ms, NOW);
+        // Window elapsed: commits.
+        let (d, next) = decide_hedge(&s, &meta_of(&s, 1_000), 1_000, &k, &st, NOW + 300_000);
+        assert_eq!(
+            d.view.as_ref().unwrap().regime_outcome,
+            Some(RegimeOutcome::Committed)
+        );
+        assert_eq!(next.committed_regime, LpRegime::Above);
+        assert_eq!(next.pending_regime, None);
+        // A storm bypasses the window.
+        st = fresh_state();
+        st.storm_active = true;
+        let (_, next) = hedge(&s, &k, &st);
+        assert_eq!(next.committed_regime, LpRegime::Above);
+        // lp_input live never runs the clamp.
+        k.lp_input = LpInput::Live;
+        let (d, _) = hedge(&s, &k, &fresh_state());
+        assert_eq!(d.view.as_ref().unwrap().regime_outcome, None);
+    }
+
+    /// Flat hedge, no position, 2.748145289 SOL in the wallet counted as
+    /// idle: the core wants to short ~2.45 SOL.
+    fn grace_knobs(grace_ms: u64) -> HedgeKnobs {
+        let mut k = hedge_knobs();
+        k.include_wallet_sol = true;
+        k.no_lp_grace_ms = grace_ms;
+        k
+    }
+
+    #[test]
+    fn no_lp_grace_holds_the_hedge_after_a_position_vanished() {
+        let s = no_position();
+        let mut st = fresh_state();
+        st.last_position_seen_ms = Some(NOW - 60_000);
+        let (d, next) = hedge(&s, &grace_knobs(300_000), &st);
+        match &d.action {
+            HedgeAction::None { reason } => {
+                assert!(reason.starts_with("no-LP grace"), "{reason}");
+                assert!(reason.contains("60000 ms"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(next, st, "a held evaluation keeps the state");
+        assert!(d.view.is_some() && d.input.is_some(), "view for the log");
+        check_observed(&d);
+        // The core would short the idle wallet SOL.
+        let core = HedgeAction::from_core(&hedge::decide(d.input.as_ref().unwrap()));
+        assert_eq!(core.name(), "increase_short", "{core:?}");
+
+        // Grace elapsed → the core decides.
+        st.last_position_seen_ms = Some(NOW - 300_000);
+        let (d, next) = hedge(&s, &grace_knobs(300_000), &st);
+        assert_eq!(d.action.name(), "increase_short", "{:?}", d.action);
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 300_000));
+        // Off (0), never seen, or a deliberate re-entry wait → no grace.
+        st.last_position_seen_ms = Some(NOW - 1_000);
+        let (d, _) = hedge(&s, &grace_knobs(0), &st);
+        assert_eq!(d.action.name(), "increase_short");
+        let (d, _) = hedge(&s, &grace_knobs(300_000), &fresh_state());
+        assert_eq!(d.action.name(), "increase_short");
+        st.reentry = Some(ReentryWait::arm(110.0, 120.0, 116.0, NOW - 5_000));
+        let (d, _) = hedge(&s, &grace_knobs(300_000), &st);
+        assert_eq!(
+            d.action.name(),
+            "increase_short",
+            "A15: the wallet bag stays hedged"
+        );
+        // Stale input still blocks first.
+        st.reentry = None;
+        let (d, _) = decide_hedge(
+            &s,
+            &meta_of(&s, 31_000),
+            31_000,
+            &grace_knobs(300_000),
+            &st,
+            NOW,
+        );
+        assert_eq!(guard_of(&d), Some(Guard::StaleInput));
+    }
+
+    #[test]
+    fn ungated_decisions_record_when_a_position_was_seen() {
+        let s = composed();
+        let (_, next) = hedge(&s, &hedge_knobs(), &fresh_state());
+        assert_eq!(
+            next.last_position_seen_ms,
+            Some(NOW - 1_000),
+            "snapshot time"
+        );
+        let (_, next) = lp(&s, &lp_knobs(), &fresh_state(), &[]);
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 1_000));
+        // Never moves backwards; a no-position read leaves it.
+        let mut st = fresh_state();
+        st.last_position_seen_ms = Some(NOW + 5);
+        let (_, next) = hedge(&s, &hedge_knobs(), &st);
+        assert_eq!(next.last_position_seen_ms, Some(NOW + 5));
+        st.last_position_seen_ms = Some(NOW - 90_000);
+        let (_, next) = hedge(&no_position(), &hedge_knobs(), &st);
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 90_000));
+        let (_, next) = lp(&no_position(), &lp_knobs(), &st, &[]);
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 90_000));
+        // A gated evaluation records nothing.
+        let mut bad = composed();
+        bad.wallet_balances.native_sol = Field::err(err("wallet.native_sol"));
+        let (_, next) = hedge(&bad, &hedge_knobs(), &fresh_state());
+        assert_eq!(next.last_position_seen_ms, None);
+        // Round trip + a row written before the field existed.
+        let o = Observation::of("t", &st, NOW, LP_STATE_TTL_MS, ObsSource::Live);
+        assert_eq!(o.typed::<LpControllerState>().unwrap(), st);
+        assert_eq!(o.features["last_position_seen_ms"], json!(NOW - 90_000));
+        let mut v = serde_json::to_value(fresh_state()).unwrap();
+        v.as_object_mut().unwrap().remove("last_position_seen_ms");
+        let old: LpControllerState = serde_json::from_value(v).unwrap();
+        assert_eq!(old.last_position_seen_ms, None);
     }
 
     #[test]
