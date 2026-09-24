@@ -135,7 +135,7 @@ fn sol_price() -> ToolDef {
         names::SOL_PRICE,
         "USD oracle price of a token mint (Jupiter price v3), with an optional Meteora DLMM pool's \
          active price as a second source (pool_price, pool_vs_oracle_bps) and a 6-minute sample \
-         ring (move_5m_pct). Typed observation price_oracle/1:<mint>; cached 10 s.",
+         ring (move_5m_pct). Typed observation price_oracle/1:<mint> (price_oracle/1:<mint>:<pool> with a pool); cached 10 s.",
         object(
             json!({
                 "mint": {
@@ -144,6 +144,10 @@ fn sol_price() -> ToolDef {
                     "description": format!("Token mint (base58). Default wSOL {WSOL}."),
                 },
                 "pool": pubkey("Optional DLMM pool (LbPair) whose active price is the second source"),
+                "pyth_feed_id": {
+                    "type": "string",
+                    "description": "Optional Pyth Hermes price feed id (64 hex chars, 0x optional). Pyth is queried only when given.",
+                },
                 "max_age_secs": max_age(10),
             }),
             &[],
