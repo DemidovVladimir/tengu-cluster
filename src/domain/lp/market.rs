@@ -14,7 +14,6 @@
 
 // Consumed by the `sol_price` / `dlmm_pools` tool glue and `lp_snapshot`
 // (stage 3); unused in the binary until then.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +23,9 @@ use crate::domain::observation::{
     set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsStatus, Observed,
     ReadError,
 };
-use crate::domain::solana::{ids, Pubkey};
+#[cfg(test)]
+use crate::domain::solana::ids;
+use crate::domain::solana::Pubkey;
 
 // ---------------------------------------------------------------------------
 // Endpoints, TTLs, source-selection constants
@@ -60,13 +61,17 @@ const APR_CROSS_CHECK_REL_TOL: f64 = 1e-6;
 
 /// Pyth Hermes feed ids (verified 2026-09-24 via
 /// `benchmarks.pyth.network/v1/price_feeds`): `Crypto.SOL/USD`.
+#[cfg(test)]
 pub(crate) const PYTH_FEED_SOL_USD: &str =
     "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
 /// `Crypto.USDC/USD`.
+#[cfg(test)]
 pub(crate) const PYTH_FEED_USDC_USD: &str =
     "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
 
 /// Hermes feed id for a mint; `None` ⇒ the glue passes `Field::Absent`.
+/// (The `sol_price` tool takes an explicit `pyth_feed_id` arg instead.)
+#[cfg(test)]
 pub(crate) fn pyth_feed_id(mint: &str) -> Option<&'static str> {
     match mint {
         ids::WSOL => Some(PYTH_FEED_SOL_USD),

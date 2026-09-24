@@ -81,9 +81,6 @@ pub fn bs58_decode(s: &str) -> Result<Vec<u8>, String> {
 pub struct Pubkey(pub [u8; 32]);
 
 impl Pubkey {
-    pub fn to_bytes(self) -> [u8; 32] {
-        self.0
-    }
     /// Read 32 bytes at `offset` (account layouts). `None` if out of range.
     pub fn read(data: &[u8], offset: usize) -> Option<Pubkey> {
         let s = data.get(offset..offset + 32)?;
@@ -185,7 +182,6 @@ pub mod ids {
     pub const JLP_POOL: &str = "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq";
     pub const JUP_CUSTODY_SOL: &str = "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz";
     pub const JUP_CUSTODY_USDC: &str = "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa";
-    pub const DOVES: &str = "DoVEsk76QybCEHQGzkvYPWLQu9gzNoZZZt3TPiL597e";
 
     /// Parse a constant from this module (they are valid by construction).
     pub fn key(id: &str) -> super::Pubkey {
@@ -249,7 +245,8 @@ impl AccountRead {
     pub fn exists(&self) -> bool {
         matches!(self.state, AccountState::Ok { .. })
     }
-    /// Build an `Ok` read from raw bytes (fixtures, streams).
+    /// Build an `Ok` read from raw bytes (fixtures; phase-5 streams).
+    #[cfg(test)]
     pub fn from_bytes(
         pubkey: Pubkey,
         slot: u64,
@@ -327,6 +324,7 @@ impl AccountSet {
     }
     /// Data bytes of an existing account owned by `owner` with at least
     /// `min_len` bytes; `None` otherwise (absent, wrong owner, short).
+    #[cfg(test)]
     pub fn data_owned_by(&self, key: &Pubkey, owner: &Pubkey, min_len: usize) -> Option<Vec<u8>> {
         let read = self.get(key)?;
         if read.owner() != Some(owner) {
@@ -497,7 +495,6 @@ mod tests {
             ids::JLP_POOL,
             ids::JUP_CUSTODY_SOL,
             ids::JUP_CUSTODY_USDC,
-            ids::DOVES,
         ] {
             let k: Pubkey = id.parse().unwrap();
             assert_eq!(k.to_string(), id);

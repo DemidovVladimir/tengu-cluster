@@ -24,7 +24,6 @@
 //! (`tests::FakeTransport`); `HttpTransport` is the reqwest implementation.
 
 // Called by the Solana tool family (`tools/solana/*`), wired in the next stage.
-#![allow(dead_code)]
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -497,6 +496,7 @@ impl SolanaRpc {
     }
 
     /// Backoff before the single retry (capped at 1 s). Tests use 0.
+    #[cfg(test)]
     pub(crate) fn with_backoff_ms(mut self, ms: u64) -> Self {
         self.backoff_ms = ms.min(MAX_BACKOFF_MS);
         self
@@ -683,6 +683,7 @@ impl SolanaRpc {
     }
 
     /// `getSlot` (confirmed).
+    #[cfg(test)]
     pub(crate) async fn get_slot(&self) -> Result<u64> {
         let result = self
             .call("getSlot", json!([{"commitment": COMMITMENT}]))

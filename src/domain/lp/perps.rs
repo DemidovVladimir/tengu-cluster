@@ -46,7 +46,6 @@
 //! | Collateral ratio when flat | `Infinity` | `None` |
 
 // Consumed by the jup_perps / lp_snapshot / hedge_decide glue (stage 3).
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

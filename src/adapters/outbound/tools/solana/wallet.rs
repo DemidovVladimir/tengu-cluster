@@ -30,10 +30,10 @@ use crate::application::observe::observe;
 use crate::domain::lp::wallet::{
     build_wallet_balances, build_wallet_inventory, is_token_program, parse_token_accounts_by_owner,
     parse_tx_status, TokenAccountRow, TxStatus, WalletInventory, DEFAULT_MINTS, TX_FINAL_TTL_MS,
-    TX_TTL_MS, WALLET_TTL_MS,
+    WALLET_TTL_MS,
 };
 use crate::domain::message::ToolDef;
-use crate::domain::observation::{now_ms, CachePolicy, Field, ObsStatus, Observation, Observed};
+use crate::domain::observation::{now_ms, CachePolicy, Field, Observation, Observed};
 use crate::domain::solana::{ata, ids, AccountSet, Pubkey, Signature};
 use crate::domain::tools as names;
 use crate::ports::observation::ObservationStore;
@@ -320,20 +320,10 @@ async fn tx_observation(
     let policy = CachePolicy::new(TxStatus::SCHEMA, &sig.to_string(), TX_FINAL_TTL_MS, args);
     observe(store, names::SOLANA_TX, &policy, now, || async {
         let st = read_tx(rpc, sig).await;
-        let ttl = tx_ttl_ms(&st);
+        let ttl = st.ttl_ms();
         Ok((st, ttl))
     })
     .await
-}
-
-/// 1 day only once the answer can no longer change: finalized, every field
-/// read, the tx body (fee) present; else 2 s.
-fn tx_ttl_ms(st: &TxStatus) -> u64 {
-    if st.is_final() && st.status() == ObsStatus::Ok && st.fee_lamports.value().is_some() {
-        TX_FINAL_TTL_MS
-    } else {
-        TX_TTL_MS
-    }
 }
 
 async fn read_tx(rpc: &SolanaRpc, sig: Signature) -> TxStatus {
@@ -363,6 +353,8 @@ async fn read_tx(rpc: &SolanaRpc, sig: Signature) -> TxStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::lp::wallet::TX_TTL_MS;
+    use crate::domain::observation::ObsStatus;
     use std::sync::Mutex;
 
     use serde_json::json;

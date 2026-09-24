@@ -26,7 +26,6 @@
 //! deducted (amounts are gross).
 
 // Consumed by the dlmm_pool / dlmm_positions / lp_snapshot tools (stage 3).
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
 

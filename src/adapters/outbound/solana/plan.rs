@@ -126,8 +126,9 @@ pub(crate) struct PoolReadOpts {
 #[derive(Debug, Clone)]
 pub(crate) struct PoolRead {
     pub set: AccountSet,
-    /// Decoded once here; `lp_snapshot` (pair roles, active bin) reads it.
-    #[allow(dead_code)]
+    /// Decoded LbPair of read 1 (tests assert on it; `lp_snapshot` takes
+    /// pair roles from `build_dlmm_pool`).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub pair: LbPair,
     pub bin_arrays: Vec<(i64, Pubkey)>,
 }

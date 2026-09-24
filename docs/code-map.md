@@ -219,14 +219,14 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
-| `src/domain/lp/dlmm.rs` | 2348 | Meteora DLMM — LbPair / PositionV2 / BinArray decoders, pool + position typed outputs, share and fee math. |
+| `src/domain/lp/dlmm.rs` | 2347 | Meteora DLMM — LbPair / PositionV2 / BinArray decoders, pool + position typed outputs, share and fee math. |
 | `src/domain/lp/gates.rs` | 1508 | LP gates: reentry, storm hysteresis, trend + regime confirm, composition/imbalance, wallet 50/50, bin math, 70-bin centered range, DLMM fee rate, swap oracle gate. |
 | `src/domain/lp/hedge.rs` | 1247 | Hedge controller port (`decide`, LP clamp regimes, auto notional cap, `auto_band_sol`, `js_to_fixed`); replays 1027 production vectors (`tests/fixtures/hedge-vectors.jsonl`). |
-| `src/domain/lp/market.rs` | 1798 | Market typed outputs — `sol_price` oracle price and `dlmm_pools` pool list. |
+| `src/domain/lp/market.rs` | 1803 | Market typed outputs — `sol_price` oracle price and `dlmm_pools` pool list. |
 | `src/domain/lp/mod.rs` | 12 | Solana LP policy + typed outputs — pure, no IO; one file per family. |
-| `src/domain/lp/perps.rs` | 2276 | Jupiter perps — Position / Custody / JLP pool decoders, borrow APR, accrued fee, liquidation price. |
-| `src/domain/lp/snapshot.rs` | 4208 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders. |
-| `src/domain/lp/wallet.rs` | 1975 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
+| `src/domain/lp/perps.rs` | 2275 | Jupiter perps — Position / Custody / JLP pool decoders, borrow APR, accrued fee, liquidation price. |
+| `src/domain/lp/snapshot.rs` | 4405 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders. |
+| `src/domain/lp/wallet.rs` | 1977 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
 | `src/domain/message.rs` | 209 | Messages, tool calls/definitions, stream events, and the precision `Lens` |
 | `src/domain/metrics.rs` | 298 | Metrics — context/token consumption telemetry. |
 | `src/domain/mod.rs` | 18 | Domain — plain data and pure policy. Imports nothing from the rest of the |
@@ -235,7 +235,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; |
 | `src/domain/secrets.rs` | 123 | `SecretRegistry` — secret values to redact from tool output, transcripts, typed observations (`redact_value`, `redact_observation`) |
 | `src/domain/session.rs` | 58 | Chat/flow session state — per-session prompt assembly and loop state. |
-| `src/domain/solana.rs` | 834 | Solana primitives — `Pubkey` / `Signature` (hand-rolled base58), PDA derivation, program ids, account reads. |
+| `src/domain/solana.rs` | 831 | Solana primitives — `Pubkey` / `Signature` (hand-rolled base58), PDA derivation, program ids, account reads. |
 | `src/domain/token.rs` | 43 | Shared token-estimation helpers. |
 | `src/domain/tools.rs` | 45 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
@@ -280,7 +280,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 929 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit. |
+| `src/application/decision_loop/mod.rs` | 931 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit. |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 223 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
@@ -357,8 +357,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/solana/http_json.rs` | 256 | `fetch_json` — scoped, egress-checked JSON GET for Jupiter / Meteora datapi. |
 | `src/adapters/outbound/solana/layouts.rs` | 11 | SPL Mint + SPL Token account decoders (owner check + minimum length). |
 | `src/adapters/outbound/solana/mod.rs` | 7 | Solana outbound — JSON-RPC client, cache-through account reads, SPL decoders, JSON HTTP fetch. |
-| `src/adapters/outbound/solana/plan.rs` | 1109 | Read planning for the LP glue — `read_pool` (2 cache-through reads), `discover_positions` (gPA + `dlmm_discovery/1` row 60 s/300 s), `perps_keys`, `oracle_usd`, `failed_observation`. |
-| `src/adapters/outbound/solana/rpc.rs` | 1787 | `SolanaRpc` — JSON-RPC 2.0 over the tool HTTP client, with error classification into `ErrorClass`. |
+| `src/adapters/outbound/solana/plan.rs` | 1110 | Read planning for the LP glue — `read_pool` (2 cache-through reads), `discover_positions` (gPA + `dlmm_discovery/1` row 60 s/300 s), `perps_keys`, `oracle_usd`, `failed_observation`. |
+| `src/adapters/outbound/solana/rpc.rs` | 1788 | `SolanaRpc` — JSON-RPC 2.0 over the tool HTTP client, with error classification into `ErrorClass`. |
 | `src/adapters/outbound/subprocess_runner.rs` | 530 | Subprocess runner — the `WorkerHandle` that runs each plan step. |
 | `src/adapters/outbound/tools/agentic_memory/mod.rs` | 1423 | `agentic_memory` — Postgres-backed Open Brain + LLM Wiki memory surface. |
 | `src/adapters/outbound/tools/args.rs` | 118 | Shared helpers for `Tool::execute`: JSON argument extraction and |
@@ -386,14 +386,14 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` | 740 | `skill_distill` LLM-callable tool — writes a new skill directory from |
 | `src/adapters/outbound/tools/skill_lifecycle/mod.rs` | 48 | Skill-lifecycle plugin — registers the `skill_distill` LLM-callable tool. |
 | `src/adapters/outbound/tools/skill_resource/mod.rs` | 391 | Skill-resource plugin — `skill_resource` tool. |
-| `src/adapters/outbound/tools/solana/defs.rs` | 495 | The Solana LP family's interface — names, descriptions, JSON input schemas of all ten tools. |
+| `src/adapters/outbound/tools/solana/defs.rs` | 499 | The Solana LP family's interface — names, descriptions, JSON input schemas of all ten tools. |
 | `src/adapters/outbound/tools/solana/dlmm.rs` | 905 | `dlmm_pool` + `dlmm_positions` — Meteora DLMM pool and position state from RPC account reads. |
-| `src/adapters/outbound/tools/solana/lp.rs` | 11 | `lp_snapshot` + `hedge_decide` + `lp_decide` — composed snapshot and pure decisions. |
+| `src/adapters/outbound/tools/solana/lp.rs` | 1713 | `lp_snapshot` + `hedge_decide` + `lp_decide` — composed snapshot and pure decisions. |
 | `src/adapters/outbound/tools/solana/mod.rs` | 78 | Solana LP tool family — `SolanaPlugin` (opens the observation store once), `SolanaShared`. |
 | `src/adapters/outbound/tools/solana/perps.rs` | 394 | `jup_perps` — Jupiter perps long / short positions and custody rates. |
 | `src/adapters/outbound/tools/solana/pools.rs` | 343 | `dlmm_pools` — Meteora DLMM pool search (datapi). |
 | `src/adapters/outbound/tools/solana/price.rs` | 893 | `sol_price` — USD oracle price (Jupiter price v3) + optional DLMM pool price. |
-| `src/adapters/outbound/tools/solana/wallet.rs` | 878 | `solana_wallet` + `solana_tx` — wallet inventory and transaction status. |
+| `src/adapters/outbound/tools/solana/wallet.rs` | 870 | `solana_wallet` + `solana_tx` — wallet inventory and transaction status. |
 | `src/adapters/outbound/tools/view_skill/mod.rs` | 887 | View-skill plugin — `view_skill` tool. |
 | `src/adapters/outbound/tools/workspace/list_directory.rs` | 119 | `list_directory` tool — list the entries of a directory in the workspace. |
 | `src/adapters/outbound/tools/workspace/mod.rs` | 56 | Workspace plugin — filesystem and shell primitives scoped to a workspace. |

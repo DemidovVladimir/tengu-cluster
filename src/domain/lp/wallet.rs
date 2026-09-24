@@ -21,7 +21,6 @@
 //! `err_custom`. Missing values are omitted, never 0.
 
 // Consumed by tools/solana/wallet.rs and lp_snapshot (stage 3 glue).
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 
@@ -928,9 +927,12 @@ impl TxStatus {
         self.error.is_none() && self.found && self.confirmation == Some(Confirmation::Finalized)
     }
 
-    /// Cache TTL: 1 day once finalized, else [`TX_TTL_MS`].
+    /// Cache TTL: [`TX_FINAL_TTL_MS`] only once the answer can no longer
+    /// change (finalized, every field read, the tx body's fee present), else
+    /// [`TX_TTL_MS`].
     pub fn ttl_ms(&self) -> u64 {
-        if self.is_final() {
+        if self.is_final() && self.status() == ObsStatus::Ok && self.fee_lamports.value().is_some()
+        {
             TX_FINAL_TTL_MS
         } else {
             TX_TTL_MS
