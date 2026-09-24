@@ -2357,7 +2357,7 @@ fn open_or_blocked(
             ));
         }
     }
-    if !(s.total_value_quote > 0.0) {
+    if s.total_value_quote.is_nan() || s.total_value_quote <= 0.0 {
         return blocked("wallet holds nothing to deposit above reserves".into());
     }
     match range_plan(snap, knobs.bin_count) {
