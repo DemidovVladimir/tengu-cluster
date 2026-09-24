@@ -1677,6 +1677,10 @@ mod tests {
             (604_818_849, 6_529)
         );
         assert!(close(usdc.apr_pct(), 5.719404, 1e-12), "{}", usdc.apr_pct());
+        // Bit-identical to the bot's `borrowAprPct` (same f64 operation order;
+        // scripts/golden/perps_ts_math.cjs prints these exact values).
+        assert_eq!(sol.apr_pct().to_string(), "13.49916");
+        assert_eq!(usdc.apr_pct().to_string(), "5.719403999999999");
     }
 
     #[test]
