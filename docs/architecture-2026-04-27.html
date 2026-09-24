@@ -277,7 +277,7 @@
 
 <!-- ============ SUBSYSTEMS ============ -->
 <div class="panel" id="panel-systems">
-  <h2>The six subsystems</h2>
+  <h2>The subsystems</h2>
   <p>Click any card to expand its file-by-file breakdown.</p>
   <div class="grid-5" id="systems-grid"></div>
 </div>
@@ -592,6 +592,20 @@ const SUBSYSTEMS = [
     ],
     deep: "Three surfaces, one record. Tracing baseline (RUST_LOG=tengu=info — every record() call emits a structured info line) is always-on. Bus broadcast is best-effort — record() is fail-soft. AggregatorState absorbs even when the TUI panel is OFF so flipping it on mid-session shows real numbers. Subagent records cross the IPC boundary in AgentIpcOutput.metrics (default + skip_serializing_if = Vec::is_empty keeps the payload byte-compatible with older child binaries). Per-context-layer attribution is approximate — engine-side framing (Anthropic &lt;thinking&gt; blocks, function-calling wrappers) isn't counted; treat layers as relative attribution, not byte-perfect accounting against prompt_tokens.",
   },
+  {
+    key: "decision", title: "decision loops + typed observations (2026-09-24)",
+    subtitle: "outside the chat turn: a System One model (Jev) picks actions + argument slots; typed tools return Observations that feed the loop and a TTL cache.",
+    files: [
+      ["config/decision_loop.rs", "[decision_loops.<name>] — actions, slots (static / from history / observation), caps, dry_run, world, requires"],
+      ["application/decision_loop/{mod,slots,reduce,world}.rs", "per event: read world → Jev decisions call → act_at gate → ToolExecutor::execute_typed → history with obs meta"],
+      ["bootstrap/decision.rs", "loop agent executor wrapped in SanitizedToolExecutor + observations.db + JevClient (outbound/decisions.rs)"],
+      ["domain/observation.rs + ports/observation.rs", "Observation envelope (Field<T>, ObsStatus, ≤32 features, render_text line 1 ≤ 200 with full ids), ObservationStore port"],
+      ["application/observe.rs + adapters/outbound/observations.rs", "cache-or-fetch helper; SQLite <workspace>/.tengu/observations.db, slot-monotonic upsert, Error rows never stored"],
+      ["adapters/outbound/tools/solana/ + adapters/outbound/solana/", "10 Solana LP tools (sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide); RPC / JSON clients, acct/1 cache-through reads, read planning"],
+      ["domain/solana.rs + domain/lp/", "base58, PDAs, account reads; pure DLMM / Jupiter decoders, hedge controller port (1027/1027 bot vectors), LP gates, snapshot + decisions"],
+    ],
+    deep: "Failed reads never become 0: every read is Field<T> (Ok/Absent/Error) and Error observations are never cached. acct/1:<pubkey> rows are the phase-5 stream seam (a Yellowstone feed writes the same rows). Strategy knobs of hedge_decide / lp_decide are required (no hidden defaults); production values live in sandboxes/lping/config.toml. Docs: docs/decision-loop-plan-2026-09-24.md, docs/typed-observations-2026-09-24.md.",
+  },
 ];
 
 const FILE_MAP = [
@@ -610,6 +624,13 @@ const FILE_MAP = [
   ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor (catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, with_mcp_bridge_tools, permissive_scope"],
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async)"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
+  ["src/bootstrap/decision.rs", "bootstrap", "build_decision_loop — JevClient + loop agent executor (SanitizedToolExecutor) + observation store"],
+  ["src/application/decision_loop/", "decision", "Jev decision loop: world, slots, reducers, act_at gate, typed results, audit + MetricsKind::Decision"],
+  ["src/domain/observation.rs", "decision", "Observation envelope, Field<T>, ObsStatus, features, render_text, CachePolicy"],
+  ["src/adapters/outbound/observations.rs", "decision", "SqliteObservationStore — <workspace>/.tengu/observations.db"],
+  ["src/adapters/outbound/tools/solana/", "tools", "Solana LP tool family (10 tools, defs.rs = interfaces)"],
+  ["src/adapters/outbound/solana/", "tools", "SolanaRpc (error classes), fetch_accounts (acct/1 cache-through), fetch_json, read planning"],
+  ["src/domain/lp/", "domain", "pure DLMM / Jupiter decoders + math, hedge controller port, LP gates, snapshot + decisions"],
   ["src/application/chat/service.rs", "chat", "ChatRuntimeService, handle_chat_command, slash-command routing"],
   ["src/config/mod.rs", "config", "Config, AgentConfig (in-process + subagent: description, example_queries, tools, skill_packages / skills alias), LimitsConfig (max_tool_rounds, step_timeout_secs), MemoryConfig, OrchestratorConfig, McpServerConfig, fold_default_scopes, sandbox_name (Phase 7.2)"],
   ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine factory (match on [agents.*].engine), build_openrouter_engine"],
