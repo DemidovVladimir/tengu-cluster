@@ -1192,13 +1192,17 @@ pub(crate) fn build_positions(
             ..error.clone()
         }),
         _ => {
-            let base: f64 = positions.iter().map(|p| p.amount_base).sum();
-            let quote: f64 = positions.iter().map(|p| p.amount_quote).sum();
+            // fold from +0.0: `Sum for f64` starts at -0.0, which renders
+            // "value_quote=-0" for a wallet with no positions.
+            let total =
+                |f: fn(&DlmmPosition) -> f64| positions.iter().map(f).fold(0.0, |a, b| a + b);
+            let base = total(|p| p.amount_base);
+            let quote = total(|p| p.amount_quote);
             Field::ok(LpExposure {
                 base,
                 quote,
-                claimable_base: positions.iter().map(|p| p.fee_base).sum(),
-                claimable_quote: positions.iter().map(|p| p.fee_quote).sum(),
+                claimable_base: total(|p| p.fee_base),
+                claimable_quote: total(|p| p.fee_quote),
                 value_quote: base * ctx.price + quote,
                 full_value_base: base + quote / ctx.price,
                 position_count: positions.len() as u32,
