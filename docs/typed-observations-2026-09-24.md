@@ -43,7 +43,7 @@ RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta
 
 | Tool | Args (* required) | Key | TTL | Sources | Hosts |
 |---|---|---|---|---|---|
-| `sol_price` | `mint` (wSOL), `pool`, `pyth_feed_id` | `price_oracle/1:<mint>` (`…:<mint>:<pool>` with pool) | 10 s | Jupiter price v3; Pyth only with `pyth_feed_id`; pool active price via RPC | `lite-api.jup.ag` (+ `hermes.pyth.network`, + RPC) |
+| `sol_price` | `mint` (wSOL), `pool`, `pyth_feed_id` | `price_oracle/1:<mint>`; with `pool`: `price_oracle/1:<mint>:<pool>` | 10 s | Jupiter price v3; Pyth only with `pyth_feed_id`; pool active price via RPC | `lite-api.jup.ag` (+ `hermes.pyth.network`, + RPC) |
 | `dlmm_pools` | `query`*, `limit` 1-50 (10), `min_tvl_usd`, `sort` fee_tvl_24h \| tvl \| volume_24h | `dlmm_pools/1:<query>\|<sort>\|<limit>\|<min_tvl>` | 60 s | datapi `/pools` page 100; `apr` = daily fee/TVL % ⇒ `fee_tvl_24h_pct` | `dlmm.datapi.meteora.ag` |
 | `dlmm_pool` | `pool`* | `dlmm_pool/1:<pool>` | 5 s | LbPair, then mints + reserves + bin arrays (active ± 50) | RPC |
 | `dlmm_positions` | `wallet`*, `pool`*, `positions`, `min_context_slot` | `dlmm_positions/1:<wallet>:<pool>` | 10 s (explicit `positions` ⇒ not stored) | discovery + the same two reads + position bin arrays | RPC |
