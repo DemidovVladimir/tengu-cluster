@@ -8,7 +8,7 @@
 //!
 //! | Case | Rule |
 //! |---|---|
-//! | Explicit `positions` | discovery `found (args)`, no gPA; the cached row is not served and the result is not stored (ttl 0), so a caller-chosen subset never answers a later discovery-based call; requested keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors (Partial) |
+//! | Explicit `positions` (non-empty; `[]` = discover) | discovery `found (args)`, no gPA; the cached row is not served and the result is not stored (ttl 0), so a caller-chosen subset never answers a later discovery-based call; requested keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors (Partial) |
 //! | `min_context_slot` | pins every account read; the cached row is not served; a discovery row below it is bypassed |
 //! | `max_age_secs = 0` | live typed row, live `acct/1` rows, live discovery |
 //! | Cached discovery that went stale | a listed key no longer reads as the wallet's position ⇒ one re-discovery (gPA) + re-read |
