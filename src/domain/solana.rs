@@ -9,8 +9,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use alloy::primitives::U256;
 use base64::Engine as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 use crate::domain::observation::{set_int, set_str, Features, Observed};
 
@@ -334,6 +336,149 @@ impl AccountSet {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Program derived addresses (PDA) — hand-rolled, no solana-sdk
+// ---------------------------------------------------------------------------
+
+/// Max seeds per address (`solana_program::pubkey::MAX_SEEDS`).
+pub const MAX_SEEDS: usize = 16;
+/// Max bytes per seed (`solana_program::pubkey::MAX_SEED_LEN`).
+pub const MAX_SEED_LEN: usize = 32;
+const PDA_MARKER: &[u8] = b"ProgramDerivedAddress";
+
+/// p = 2^255 − 19 (little-endian limbs).
+const FIELD_P: U256 = U256::from_limbs([
+    0xffff_ffff_ffff_ffed,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0x7fff_ffff_ffff_ffff,
+]);
+/// Edwards d = −121665 / 121666 mod p (checked in `pda_tests`).
+const EDWARDS_D: U256 = U256::from_limbs([
+    0x75eb_4dca_1359_78a3,
+    0x0070_0a4d_4141_d8ab,
+    0x8cc7_4079_7779_e898,
+    0x5203_6cee_2b6f_fe73,
+]);
+
+/// Whether 32 bytes decode to an ed25519 point — exactly
+/// curve25519-dalek 4.1 `CompressedEdwardsY::decompress().is_some()`, which
+/// Solana's `bytes_are_curve_point` calls: y = the low 255 bits reduced
+/// mod p (a non-canonical y ≥ p is accepted; the sign bit is ignored),
+/// u = y² − 1, v = d·y² + 1, on the curve iff u = 0 or u/v is a square in
+/// GF(p). v ≠ 0 always (−1/d is a non-square), so the Euler criterion on
+/// u·v (= u/v · v²) decides without an inversion. Cross-checked against
+/// dalek in `pda_tests`.
+pub fn is_on_curve(bytes: &[u8; 32]) -> bool {
+    let mut b = *bytes;
+    b[31] &= 0x7f;
+    let one = U256::from(1u8);
+    let y = U256::from_le_bytes(b).reduce_mod(FIELD_P);
+    let yy = y.mul_mod(y, FIELD_P);
+    let u = yy.add_mod(FIELD_P - one, FIELD_P);
+    let v = EDWARDS_D.mul_mod(yy, FIELD_P).add_mod(one, FIELD_P);
+    if u.is_zero() {
+        return true;
+    }
+    if v.is_zero() {
+        return false;
+    }
+    u.mul_mod(v, FIELD_P).pow_mod((FIELD_P - one) >> 1, FIELD_P) == one
+}
+
+fn seeds_valid(seeds: &[&[u8]], max_seeds: usize) -> bool {
+    seeds.len() <= max_seeds && seeds.iter().all(|s| s.len() <= MAX_SEED_LEN)
+}
+
+/// `sha256(seeds ‖ program ‖ "ProgramDerivedAddress")` when that hash is
+/// off the ed25519 curve (`Pubkey::create_program_address`). `None` when it
+/// is on the curve, or when the seeds are invalid (> 16 seeds or a seed
+/// > 32 bytes).
+pub fn create_program_address(seeds: &[&[u8]], program: &Pubkey) -> Option<Pubkey> {
+    if !seeds_valid(seeds, MAX_SEEDS) {
+        return None;
+    }
+    let mut h = Sha256::new();
+    for s in seeds {
+        h.update(s);
+    }
+    h.update(program.0);
+    h.update(PDA_MARKER);
+    let bytes: [u8; 32] = h.finalize().into();
+    (!is_on_curve(&bytes)).then_some(Pubkey(bytes))
+}
+
+/// The canonical PDA: the first bump from 255 down to 1 whose address is
+/// off the curve (`Pubkey::try_find_program_address`; like solana-program
+/// and web3.js, bump 0 is never tried). `None` for invalid seeds (> 15
+/// seeds — the bump is the 16th — or a seed > 32 bytes) or, with
+/// probability ~2^-255, no off-curve bump.
+pub fn try_find_program_address(seeds: &[&[u8]], program: &Pubkey) -> Option<(Pubkey, u8)> {
+    if !seeds_valid(seeds, MAX_SEEDS - 1) {
+        return None;
+    }
+    for bump in (1..=u8::MAX).rev() {
+        let bump_seed = [bump];
+        let mut with_bump: Vec<&[u8]> = Vec::with_capacity(seeds.len() + 1);
+        with_bump.extend_from_slice(seeds);
+        with_bump.push(&bump_seed);
+        if let Some(k) = create_program_address(&with_bump, program) {
+            return Some((k, bump));
+        }
+    }
+    None
+}
+
+/// [`try_find_program_address`] for seeds the caller builds from fixed-size
+/// parts (pubkeys, short literals, integers). Panics on invalid seeds —
+/// a programming error, as in `Pubkey::find_program_address`.
+pub fn find_program_address(seeds: &[&[u8]], program: &Pubkey) -> (Pubkey, u8) {
+    try_find_program_address(seeds, program)
+        .expect("valid seeds (<= 15, each <= 32 bytes) have an off-curve bump")
+}
+
+/// Associated token account of `owner` for `mint` under `token_program`
+/// (Tokenkeg or Token-2022): seeds `[owner, token_program, mint]`, program
+/// `ids::ATA`. Works for off-curve (PDA) owners too.
+pub fn ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+    find_program_address(&[&owner.0, &token_program.0, &mint.0], &ids::key(ids::ATA)).0
+}
+
+/// Meteora DLMM bin array PDA: seeds `["bin_array", lb_pair, index i64 LE]`,
+/// program `ids::DLMM`. `index` = `gates::bin_array_index(bin_id)`
+/// (floor(bin_id / 70)).
+pub fn bin_array_pda(lb_pair: &Pubkey, index: i64) -> Pubkey {
+    find_program_address(
+        &[b"bin_array", &lb_pair.0, &index.to_le_bytes()],
+        &ids::key(ids::DLMM),
+    )
+    .0
+}
+
+/// Jupiter perps SOL position PDA of `wallet` (`jupiterPerps.ts:86-101`):
+/// seeds `["position", wallet, JLP_POOL, JUP_CUSTODY_SOL, collateral
+/// custody, [side]]` — long = SOL collateral custody + side 1, short = USDC
+/// collateral custody + side 2; program `ids::JUP_PERPS`.
+pub fn jup_position_pda(wallet: &Pubkey, side_long: bool) -> Pubkey {
+    let (collateral, side) = if side_long {
+        (ids::key(ids::JUP_CUSTODY_SOL), 1u8)
+    } else {
+        (ids::key(ids::JUP_CUSTODY_USDC), 2u8)
+    };
+    find_program_address(
+        &[
+            b"position",
+            &wallet.0,
+            &ids::key(ids::JLP_POOL).0,
+            &ids::key(ids::JUP_CUSTODY_SOL).0,
+            &collateral.0,
+            &[side],
+        ],
+        &ids::key(ids::JUP_PERPS),
+    )
+    .0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,5 +557,244 @@ mod tests {
                 .is_none(),
             "too short"
         );
+    }
+}
+
+/// PDA vectors below were derived with `@solana/web3.js`
+/// (`scripts/golden/solcore_pda.cjs`) and checked against mainnet on
+/// 2026-09-24 (slot 450101020): the bin arrays and the Jupiter short
+/// position exist with the expected owner / discriminator / index, the long
+/// position and the wSOL ATA are absent (never opened), and the ATAs match
+/// `getTokenAccountsByOwner` (slot 450100789). `live_solcore_*` in
+/// `adapters/outbound/solana/rpc.rs` re-checks them.
+#[cfg(test)]
+mod pda_tests {
+    use super::*;
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+
+    const WALLET: &str = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S";
+    const POOL: &str = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
+
+    fn k(s: &str) -> Pubkey {
+        s.parse().unwrap()
+    }
+
+    fn dalek(b: &[u8; 32]) -> bool {
+        CompressedEdwardsY(*b).decompress().is_some()
+    }
+
+    fn le(x: U256) -> [u8; 32] {
+        x.to_le_bytes()
+    }
+
+    #[test]
+    fn edwards_d_constant() {
+        // d · 121666 ≡ −121665 (mod p)
+        let lhs = EDWARDS_D.mul_mod(U256::from(121_666u32), FIELD_P);
+        let rhs = FIELD_P - U256::from(121_665u32);
+        assert_eq!(lhs, rhs);
+        assert_eq!(FIELD_P, (U256::from(1u8) << 255) - U256::from(19u8));
+    }
+
+    #[test]
+    fn is_on_curve_matches_dalek_on_2048_hashes() {
+        let mut on = 0;
+        for i in 0u32..2048 {
+            let mut b: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
+            assert_eq!(is_on_curve(&b), dalek(&b), "sha256({i})");
+            on += usize::from(dalek(&b));
+            // The sign bit never changes validity.
+            b[31] ^= 0x80;
+            assert_eq!(is_on_curve(&b), dalek(&b), "sha256({i}) sign flipped");
+        }
+        // 4096 checks; about half of all y are valid, so both branches run.
+        assert!((800..1250).contains(&on), "on-curve count {on}");
+    }
+
+    #[test]
+    fn is_on_curve_matches_dalek_on_edge_cases() {
+        let p = FIELD_P;
+        let one = U256::from(1u8);
+        let mut cases: Vec<[u8; 32]> = vec![
+            [0u8; 32],   // y = 0
+            le(one),     // y = 1 (u = 0)
+            le(p - one), // y = −1 (u = 0)
+            le(p),       // non-canonical 0
+            le(p + one), // non-canonical 1
+            le(p + U256::from(2u8)),
+            le((one << 255) - one), // 2^255 − 1 = non-canonical 18
+            [0xff; 32],             // 2^255 − 1 with the sign bit set
+            le(U256::from(2u8)),
+            le(EDWARDS_D),
+            le(p - EDWARDS_D),
+        ];
+        // Every non-canonical encoding p..2^255−1.
+        for extra in 0u8..19 {
+            cases.push(le(p + U256::from(extra)));
+        }
+        for i in 0u64..200 {
+            cases.push(le(U256::from(i)));
+            cases.push(le(p - U256::from(i + 1)));
+        }
+        for ids in [
+            ids::SYSTEM,
+            ids::TOKEN,
+            ids::TOKEN_2022,
+            ids::ATA,
+            ids::WSOL,
+            ids::USDC,
+            ids::DLMM,
+            ids::JUP_PERPS,
+            ids::JLP_POOL,
+            WALLET,
+        ] {
+            cases.push(k(ids).0);
+        }
+        let n = cases.len();
+        for (i, b) in cases.into_iter().enumerate() {
+            assert_eq!(is_on_curve(&b), dalek(&b), "case {i}: {b:?}");
+            let mut s = b;
+            s[31] |= 0x80;
+            assert_eq!(is_on_curve(&s), dalek(&s), "case {i} sign set");
+        }
+        assert!(n > 400);
+        // Known answers: u = 0 is valid, a wallet is on the curve.
+        assert!(is_on_curve(&le(one)) && is_on_curve(&le(p - one)));
+        assert!(is_on_curve(&k(WALLET).0));
+    }
+
+    #[test]
+    fn pda_jupiter_positions_match_web3js() {
+        let w = k(WALLET);
+        let short = jup_position_pda(&w, false);
+        let long = jup_position_pda(&w, true);
+        assert_eq!(
+            short.to_string(),
+            "6HFhuYzQGcqdj4NGwC6vfVETRvMA3pXaVeZnHgWSKsJK"
+        );
+        assert_eq!(
+            long.to_string(),
+            "FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY"
+        );
+        for pda in [short, long] {
+            assert!(!is_on_curve(&pda.0) && !dalek(&pda.0));
+        }
+        // Both need bump 253: 255 and 254 hash onto the curve.
+        let pool = ids::key(ids::JLP_POOL);
+        let sol = ids::key(ids::JUP_CUSTODY_SOL);
+        let usdc = ids::key(ids::JUP_CUSTODY_USDC);
+        let prog = ids::key(ids::JUP_PERPS);
+        let seeds = |bump: u8| -> Option<Pubkey> {
+            create_program_address(
+                &[b"position", &w.0, &pool.0, &sol.0, &usdc.0, &[2], &[bump]],
+                &prog,
+            )
+        };
+        assert_eq!(seeds(255), None);
+        assert_eq!(seeds(254), None);
+        assert_eq!(seeds(253), Some(short));
+        assert_eq!(
+            find_program_address(&[b"position", &w.0, &pool.0, &sol.0, &sol.0, &[1]], &prog),
+            (long, 253)
+        );
+    }
+
+    #[test]
+    fn pda_atas_match_token_accounts_by_owner() {
+        let w = k(WALLET);
+        let token = ids::key(ids::TOKEN);
+        // Live token accounts of the wallet (getTokenAccountsByOwner).
+        assert_eq!(
+            ata(&w, &ids::key(ids::USDC), &token).to_string(),
+            "D9ScKYy15cw1tpkkuwEnDKv62nCyuETwrvRSdP4usGg1"
+        );
+        assert_eq!(
+            ata(
+                &w,
+                &k("98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g"),
+                &token
+            )
+            .to_string(),
+            "DQsXEvePuhSGqJZzsKrg3QTSJcRWFcBvTL6F8THrCiVF"
+        );
+        // Derived only (the account does not exist on chain).
+        assert_eq!(
+            ata(&w, &ids::key(ids::WSOL), &token).to_string(),
+            "E4PCnfEconGJW6vf7GDycEnkFe1VWC7teiNWJzQv3NTA"
+        );
+        // The token program is a seed: Token-2022 gives another address.
+        assert_ne!(
+            ata(&w, &ids::key(ids::USDC), &ids::key(ids::TOKEN_2022)),
+            ata(&w, &ids::key(ids::USDC), &token)
+        );
+    }
+
+    #[test]
+    fn pda_dlmm_bin_arrays_match_web3js() {
+        let pool = k(POOL);
+        for (index, want, bump) in [
+            (
+                -79i64,
+                "2E855k5fegqhZppWQms1XrYyQQSVFNFipHg3igabX1Y3",
+                252u8,
+            ),
+            (-78, "HP15ZCgcgunsV9ypHKpDJSURFn4dn7i63uCNB4k7K5MV", 255),
+            (-77, "Vc6P6kjaRUgnQCwycL4QzTG3tiNR4CgC3gqWHvvMMJh", 254),
+            (-76, "Ehkf9XQLVnY8HV6jbbDU25fTxF1qQ3NuScWfawSb79pu", 255),
+            (-75, "G9QNw5nwv6JMkLSQ8ignWWEXybUfwBoJm4z5goGbU7d", 253),
+            (0, "41J5yxxAQbkoCPFoxcGA9QhsvEEEVnDihmEyQPYPwWzQ", 255),
+            (1, "HKCz5fKmPKxEvsgd68W9EBHpDz8o5FfEjQUyasXUCsnh", 254),
+            (-1, "FaEgvDgeDxdKFDrZnDt7W6qzJTSLQrg4orMLCG35GFxz", 255),
+        ] {
+            assert_eq!(
+                bin_array_pda(&pool, index).to_string(),
+                want,
+                "index {index}"
+            );
+            let (_, b) = find_program_address(
+                &[b"bin_array", &pool.0, &index.to_le_bytes()],
+                &ids::key(ids::DLMM),
+            );
+            assert_eq!(b, bump, "index {index}");
+        }
+        // Active bin -5373 at capture time lies in array -77.
+        assert_eq!(crate::domain::lp::gates::bin_array_index(-5373), -77);
+    }
+
+    #[test]
+    fn pda_single_seed_program_accounts() {
+        let prog = ids::key(ids::JUP_PERPS);
+        assert_eq!(
+            find_program_address(&[b"perpetuals"], &prog),
+            (k("H4ND9aYttUVLFmNypZqLjZ52FYiGvdEB45GmwNoKEjTj"), 255)
+        );
+        assert_eq!(
+            find_program_address(&[b"__event_authority"], &prog),
+            (k("37hJBDnntwqhGbK7L6M1bLyvccj4u55CCUiLPdYkiqBN"), 253)
+        );
+    }
+
+    #[test]
+    fn pda_seed_limits() {
+        let prog = ids::key(ids::DLMM);
+        let s32 = [7u8; 32];
+        let s33 = [7u8; 33];
+        let sixteen: Vec<&[u8]> = vec![&s32[..]; 16];
+        let seventeen: Vec<&[u8]> = vec![&s32[..]; 17];
+        let fifteen: Vec<&[u8]> = vec![&s32[..]; 15];
+        assert!(create_program_address(&[&s33], &prog).is_none());
+        assert!(create_program_address(&seventeen, &prog).is_none());
+        // 16 seeds are allowed for create; find needs room for the bump.
+        let sixteen_ok = (0u8..=255).any(|b| {
+            let last = [b];
+            let mut s = fifteen.clone();
+            s.push(&last);
+            create_program_address(&s, &prog).is_some()
+        });
+        assert!(sixteen_ok, "16 seeds are accepted");
+        assert!(try_find_program_address(&sixteen, &prog).is_none());
+        assert!(try_find_program_address(&[&s33], &prog).is_none());
+        let (pda, _) = try_find_program_address(&fifteen, &prog).unwrap();
+        assert!(!is_on_curve(&pda.0));
     }
 }

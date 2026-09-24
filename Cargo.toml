@@ -58,6 +58,12 @@ dptree = { version = "0.3", optional = true }
 # headers; pairs with the existing `sha2` for SHA-256.
 axum = { version = "0.7", optional = true }
 hmac = { version = "0.12", optional = true }
+
+[dev-dependencies]
+# Test-only oracle for the hand-rolled PDA off-curve check
+# (`domain::solana::is_on_curve`). `~4.1`: 5.x needs rustc 1.85.
+curve25519-dalek = { version = "~4.1", default-features = false }
+
 [features]
 default = ["openrouter", "telegram"]
 telegram = ["teloxide", "dptree", "reqwest011"]
