@@ -428,6 +428,8 @@ impl DecisionLoop {
             "usage": d.usage,
             "result": outcome,
             "args": entry.map(|e| &e.args),
+            // Typed result meta (key / status / source / age / slot).
+            "obs": entry.and_then(|e| e.obs.as_ref()),
         });
         let res = (|| -> std::io::Result<()> {
             if let Some(dir) = path.parent() {

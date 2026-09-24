@@ -306,6 +306,8 @@ fn hedge_knobs() -> Value {
             "rent_reserve_sol": num(Some(0.0), None, "SOL reserved for rent and fees, never counted as idle."),
             "max_divergence_bps": num(Some(0.0), None, "Block when |pool price vs oracle| exceeds this many bps."),
             "max_snapshot_age_secs": int(0, "Block when the lp_snapshot row is older than this many seconds."),
+            "trend_confirm_ms": int(0, "lp_input midpoint: a clamp-regime change (LP left its range below / above) commits only after the new regime persisted this long; storms bypass it; 0 = commit at once."),
+            "no_lp_grace_ms": int(0, "With no LP position but one seen less than this many ms ago (and no re-entry wait), hold the hedge (action none) instead of trading on the no-LP read — a failed re-open mid-move must not unwind the protective hedge; 0 = off."),
         }),
         "Hedge controller knobs. ALL fields are required (no defaults).",
     )
@@ -461,6 +463,8 @@ mod tests {
             "rent_reserve_sol",
             "max_divergence_bps",
             "max_snapshot_age_secs",
+            "trend_confirm_ms",
+            "no_lp_grace_ms",
         ];
         let lp = [
             "imbalance_threshold",
