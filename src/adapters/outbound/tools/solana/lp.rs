@@ -10,16 +10,18 @@
 //!
 //! | Case | Rule |
 //! |---|---|
-//! | Oracle | usable `price_oracle/1:<base mint>` row ≤ 30 s old (any TTL); else Jupiter lite price v3 inline exactly like `sol_price` without `pool` (no Pyth), put back so `world` sees it; only when the pool's quote is USDC or its base is wSOL |
+//! | Oracle | usable `price_oracle/1:<base mint>` row ≤ 10 s old (`SNAPSHOT_ORACLE_MAX_AGE_MS` = `PRICE_TTL_MS`, and ≤ the caller's max age; `max_age_secs = 0` ⇒ live) so snapshot age + price age stays inside the decide tools' `max_snapshot_age_secs`; else Jupiter lite price v3 inline exactly like `sol_price` without `pool` (no Pyth), put back so `world` sees it; only when the pool's quote is USDC or its base is wSOL |
 //! | Wallet keys | wallet + wSOL / USDC Tokenkeg ATAs (+ mints) in read 1; a pair mint outside wSOL / USDC gets its ATA in one extra pinned read |
 //! | Pending keeper request | `lp_state.last_hedge_action.position_request` is read in read 1 → `LpSnapshot::set_pending_request` |
-//! | `min_context_slot` | pins discovery, both pool reads and the extra ATA read; the cached snapshot is not served |
-//! | Explicit `positions` | discovery `found (args)`, no gPA; the cached snapshot is not served, the result IS stored (the decide tools read it); keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors |
+//! | `min_context_slot` | pins discovery, both pool reads and the extra ATA read; the cached snapshot is not served; the result is stored (the canonical read-after-write view the decide tools read) |
+//! | Explicit `positions` | discovery `found (args)`, no gPA; the cached snapshot is not served and the result is NOT stored (ttl 0), so a caller-chosen subset never answers a discovery-based call; the decide tools refuse an `args` row; keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors |
+//! | Discovery | read 1 pinned to ≥ the discovery's slot; a cached "no positions" answer is reused only within the caller's max age (≤ 10 s); a discovered key that does not value ⇒ exposure `Error` (`dlmm::flag_unvalued`), never 0 |
 //! | Cached discovery that went stale | one re-discovery (gPA) + re-read |
 //! | Whole-read failure (RPC, pool / mint unreadable) | `Ok` with an `Error` observation (never cached); bad arguments are `Err` |
 //! | Decide without a usable snapshot row | `Blocked{stale_input}` (hedge) / `Blocked` (lp); an old row → the domain's staleness gate |
 //! | `knobs` | every knob required, unknown knobs rejected; errors name all missing / unknown knobs |
-//! | `commit` | default false: nothing written. An unreadable `lp_state` row is never overwritten |
+//! | Unreadable `lp_state` (store error, row that does not parse / decode) | `Blocked{invalid_read}` (hedge) / `Paused{invalid_read}` (lp), `invalid_fields = ["lp_state"]`; never overwritten |
+//! | `commit` | default false: nothing written. True: compare-and-swap on the row's version as read (`put_if_unchanged`); a row changed since the read ⇒ the decision stands, NOT committed (conflict). `features.commit` = committed \| conflict \| unreadable \| failed |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -36,24 +38,27 @@ use crate::adapters::outbound::solana::accounts::fetch_accounts;
 use crate::adapters::outbound::solana::http_json::fetch_json;
 use crate::adapters::outbound::solana::plan::{
     self, failed_observation, read_failure, DiscoverOpts, Discovered, PerpsKeys, PoolRead,
-    PoolReadOpts, ReadFailure, ORACLE_MAX_AGE_MS,
+    PoolReadOpts, ReadFailure,
 };
 use crate::adapters::outbound::solana::rpc::{read_error, SolanaRpc};
 use crate::application::observe::observe;
-use crate::domain::lp::dlmm::{build_dlmm_pool, build_positions, DlmmPositions};
+use crate::domain::lp::dlmm::{
+    build_dlmm_pool, build_positions, flag_unvalued, Discovery, DiscoverySource,
+};
 use crate::domain::lp::gates::PriceSample;
 use crate::domain::lp::market::{self, OraclePrice, PRICE_TTL_MS};
 use crate::domain::lp::perps::{build_perps, request_status};
 use crate::domain::lp::snapshot::{
-    compose_snapshot, decide_hedge, decide_lp, HedgeDecision, HedgeKnobs, LpControllerState,
-    LpDecision, LpKnobs, LpSnapshot, LP_SNAPSHOT_TTL_MS, LP_STATE_TTL_MS,
+    compose_snapshot, decide_hedge, decide_lp, Guard, HedgeAction, HedgeDecision, HedgeKnobs,
+    LpControllerState, LpDecision, LpKnobs, LpSnapshot, LpVerdict, PauseReason, LP_SNAPSHOT_TTL_MS,
+    LP_STATE_TTL_MS,
 };
 use crate::domain::lp::wallet::{
     build_wallet_balances, build_wallet_inventory, lamports_from_set, wallet_keys,
 };
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
-    now_ms, CachePolicy, ErrorClass, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
+    now_ms, set_str, CachePolicy, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
 use crate::domain::solana::{ata, ids, AccountSet, Pubkey};
 use crate::domain::tools as names;
@@ -89,6 +94,13 @@ fn snapshot_key(wallet: &Pubkey, pool: &Pubkey) -> String {
     Observation::key_for(LpSnapshot::SCHEMA, &subject(wallet, pool))
 }
 
+/// Max age of a `price_oracle/1` row a snapshot reuses (else Jupiter
+/// inline); the caller's max age caps it further. A decision reads a
+/// snapshot row ≤ `LP_SNAPSHOT_TTL_MS` old, so its price is ≤ 20 s old plus
+/// the loop's model latency — inside `max_snapshot_age_secs` (30 in lping),
+/// where the old 30 s reuse sat right on it.
+const SNAPSHOT_ORACLE_MAX_AGE_MS: u64 = PRICE_TTL_MS;
+
 // ---------------------------------------------------------------------------
 // Store rows
 // ---------------------------------------------------------------------------
@@ -98,17 +110,30 @@ fn snapshot_key(wallet: &Pubkey, pool: &Pubkey) -> String {
 enum StateRead {
     /// No row (or no store): a fresh `LpControllerState`.
     Missing,
-    Found(Box<LpControllerState>),
-    /// A row exists but could not be read / decoded: decide on a fresh
-    /// state but never overwrite the row.
+    /// The row and its version (`observed_at_ms`) for the conditional commit.
+    Found {
+        state: Box<LpControllerState>,
+        observed_at_ms: i64,
+    },
+    /// The store failed or the row does not decode: the decide tools block
+    /// (`invalid_read`) and never overwrite it.
     Unreadable(String),
 }
 
 impl StateRead {
-    fn state(&self, wallet: &Pubkey, pool: &Pubkey) -> LpControllerState {
+    /// The state to decide on; `Err(why)` when the row is unreadable.
+    fn state(
+        &self,
+        wallet: &Pubkey,
+        pool: &Pubkey,
+    ) -> std::result::Result<LpControllerState, &str> {
         match self {
-            StateRead::Found(s) => (**s).clone(),
-            _ => LpControllerState::new(&wallet.to_string(), &pool.to_string()),
+            StateRead::Found { state, .. } => Ok((**state).clone()),
+            StateRead::Missing => Ok(LpControllerState::new(
+                &wallet.to_string(),
+                &pool.to_string(),
+            )),
+            StateRead::Unreadable(e) => Err(e),
         }
     }
 }
@@ -125,7 +150,10 @@ async fn read_state(
     match store.get(&key).await {
         Ok(None) => StateRead::Missing,
         Ok(Some(row)) => match row.typed::<LpControllerState>() {
-            Ok(s) => StateRead::Found(Box::new(s)),
+            Ok(s) => StateRead::Found {
+                state: Box::new(s),
+                observed_at_ms: row.observed_at_ms,
+            },
             Err(e) => {
                 let error = format!("{e:#}");
                 warn!(%key, %error, "lp_state row does not decode");
@@ -252,9 +280,12 @@ where
         args,
     );
     let acct_max_age = base.max_age_ms;
+    let explicit = !req.positions.is_empty();
     // A caller-chosen key list or a read-after-write request is never
-    // answered from the cache; the fresh result is stored either way.
-    let policy = if !req.positions.is_empty() || req.min_context_slot.is_some() {
+    // answered from the cache. A read-after-write result is the canonical
+    // view (stored); a caller-chosen subset is never stored, so it answers
+    // neither a later discovery-based call nor the decide tools.
+    let policy = if explicit || req.min_context_slot.is_some() {
         CachePolicy {
             max_age_ms: 0,
             ..base
@@ -262,10 +293,11 @@ where
     } else {
         base
     };
+    let ttl = if explicit { 0 } else { LP_SNAPSHOT_TTL_MS };
     let get_json = &get_json;
     let fetched = observe(store, names::LP_SNAPSHOT, &policy, now_ms, || async {
         let snap = build_snapshot(rpc, store, req, acct_max_age, get_json, now_ms).await?;
-        Ok((snap, LP_SNAPSHOT_TTL_MS))
+        Ok((snap, ttl))
     })
     .await;
     fetched.unwrap_or_else(|e| snapshot_failed(req, read_failure("accounts", &e), now_ms))
@@ -306,7 +338,7 @@ async fn read_snapshot_accounts(
     let opts = PoolReadOpts {
         extra,
         positions_of: Some(req.wallet),
-        min_slot: req.min_context_slot,
+        min_slot: found.pin(req.min_context_slot),
     };
     plan::read_pool(rpc, store, &req.pool, &opts, max_age_ms, now_ms).await
 }
@@ -326,7 +358,7 @@ where
 {
     let (wallet, pool) = (&req.wallet, &req.pool);
     let request: Option<Pubkey> = match read_state(store, wallet, pool).await {
-        StateRead::Found(s) => s
+        StateRead::Found { state: s, .. } => s
             .last_hedge_action
             .and_then(|a| a.position_request)
             .and_then(|r| match r.parse::<Pubkey>() {
@@ -345,6 +377,7 @@ where
         explicit: req.positions.clone(),
         min_slot: req.min_context_slot,
         force: max_age_ms == 0,
+        max_age_ms,
     };
     let mut found = plan::discover_positions(rpc, store, wallet, pool, &opts, now_ms).await;
     let mut read =
@@ -359,8 +392,8 @@ where
     let pool_state = build_dlmm_pool(&set, pool, &read.bin_arrays, now_ms).map_err(ReadFailure)?;
     let mut positions =
         build_positions(&set, wallet, pool, found.discovery).map_err(ReadFailure)?;
-    if !req.positions.is_empty() {
-        flag_unmatched(&mut positions, &req.positions);
+    if let Some(source) = found.source {
+        flag_unvalued(&mut positions, &found.positions, source);
     }
 
     // Wallet balances: base, quote, wSOL ATAs under the pair's programs.
@@ -403,14 +436,23 @@ where
 
     // Oracle row (base mint), then perps priced with SOL.
     let needed = pair.quote_is_usd || pair.base_mint == ids::WSOL;
-    let oracle = oracle_row(store, &pair.base_mint, needed, get_json, now_ms).await;
+    let oracle_max_age = max_age_ms.min(SNAPSHOT_ORACLE_MAX_AGE_MS);
+    let oracle = oracle_row(
+        store,
+        &pair.base_mint,
+        needed,
+        oracle_max_age,
+        get_json,
+        now_ms,
+    )
+    .await;
     let sol_usd = if pair.base_mint == ids::WSOL {
         oracle
             .as_ref()
             .and_then(|o| o.typed::<OraclePrice>().ok())
             .and_then(|p| p.usd)
     } else {
-        plan::cached_usd(store, ids::WSOL, ORACLE_MAX_AGE_MS, now_ms).await
+        plan::cached_usd(store, ids::WSOL, oracle_max_age, now_ms).await
     };
     let now_s = now_ms.div_euclid(1000);
     let perps_state = build_perps(&set, wallet, &perps.long, &perps.short, sol_usd, now_s);
@@ -443,33 +485,14 @@ fn add_to_watch(snap: &mut LpSnapshot, set: &AccountSet, triples: &[(Pubkey, Pub
     snap.watch = watch.into_iter().collect();
 }
 
-/// Requested keys that did not decode as the wallet's PositionV2 in the
-/// pool (and are not already reported) become `NotApplicable` errors.
-fn flag_unmatched(out: &mut DlmmPositions, requested: &[Pubkey]) {
-    for key in requested {
-        let k = key.to_string();
-        let valued = out.positions.iter().any(|p| p.position == k);
-        let reported = out.errors.iter().any(|e| e.message.contains(&k));
-        if !valued && !reported {
-            out.errors.push(ReadError::new(
-                "positions",
-                ErrorClass::NotApplicable,
-                format!(
-                    "position {k} is not a PositionV2 of pool {} owned by {}",
-                    out.pool, out.wallet
-                ),
-            ));
-        }
-    }
-}
-
-/// `price_oracle/1:<mint>`: a usable row ≤ 30 s old as is; else (when
-/// `fetch`) Jupiter inline, exactly like `sol_price` without `pool` (no
-/// Pyth, samples carried from the previous row), put back when usable.
+/// `price_oracle/1:<mint>`: a usable row ≤ `max_age_ms` old as is; else
+/// (when `fetch`) Jupiter inline, exactly like `sol_price` without `pool`
+/// (no Pyth, samples carried from the previous row), put back when usable.
 async fn oracle_row<J, JF>(
     store: Option<&dyn ObservationStore>,
     mint: &str,
     fetch: bool,
+    max_age_ms: u64,
     get_json: &J,
     now_ms: i64,
 ) -> Option<Observation>
@@ -484,7 +507,7 @@ where
     };
     let prev_price = prev.as_ref().and_then(|r| r.typed::<OraclePrice>().ok());
     if let (Some(row), Some(_)) = (&prev, &prev_price) {
-        if row.status.usable() && row.age_ms(now_ms) <= ORACLE_MAX_AGE_MS {
+        if row.status.usable() && row.age_ms(now_ms) <= max_age_ms {
             return prev;
         }
     }
@@ -617,13 +640,42 @@ async fn snapshot_row(
     if !row.status.usable() {
         return Err(format!("{key} row has status {}", row.status.as_str()));
     }
-    match row.typed::<LpSnapshot>() {
-        Ok(snap) => Ok((row.served_from_cache(), snap)),
-        Err(e) => Err(format!("{key} row does not decode: {e:#}")),
+    let snap = match row.typed::<LpSnapshot>() {
+        Ok(snap) => snap,
+        Err(e) => return Err(format!("{key} row does not decode: {e:#}")),
+    };
+    // Never stored since explicit snapshots got ttl 0; a row an older
+    // binary wrote is still a caller-chosen subset, not the wallet's set.
+    if matches!(
+        snap.discovery,
+        Discovery::Found {
+            source: DiscoverySource::Args,
+            ..
+        }
+    ) {
+        return Err(format!(
+            "{key} row covers caller-chosen positions only (discovery args); call lp_snapshot without positions"
+        ));
     }
+    Ok((row.served_from_cache(), snap))
 }
 
-/// Persist `next` when asked and the stored state was not unreadable.
+/// Outcome of a `commit = true` decision: `(features.commit, note)`.
+type CommitNote = (&'static str, String);
+
+fn unreadable_note(commit: bool, why: &str) -> Option<CommitNote> {
+    commit.then(|| {
+        (
+            "unreadable",
+            format!("lp_state NOT committed: the stored row is unreadable ({why})"),
+        )
+    })
+}
+
+/// Persist `next` when asked: a compare-and-swap on the row's version as
+/// read (`None` = no row), so a concurrent writer's update is never lost —
+/// the loser keeps its decision but reports NOT committed (conflict). An
+/// unreadable row is never overwritten.
 async fn commit_state(
     store: Option<&dyn ObservationStore>,
     tool: &str,
@@ -631,23 +683,53 @@ async fn commit_state(
     read: &StateRead,
     next: &LpControllerState,
     now_ms: i64,
-) -> Option<String> {
+) -> Option<CommitNote> {
     if !commit {
         return None;
     }
-    if let StateRead::Unreadable(e) = read {
-        return Some(format!(
-            "lp_state NOT committed: the stored row is unreadable ({e})"
-        ));
+    let expected = match read {
+        StateRead::Unreadable(e) => return unreadable_note(commit, e),
+        StateRead::Missing => None,
+        StateRead::Found { observed_at_ms, .. } => Some(*observed_at_ms),
+    };
+    // Strictly newer than the version read, so every commit moves it.
+    let at = expected.map_or(now_ms, |v| now_ms.max(v.saturating_add(1)));
+    let obs = Observation::of(tool, next, at, LP_STATE_TTL_MS, ObsSource::Live);
+    let failed = || {
+        (
+            "failed",
+            format!("lp_state NOT committed: store write failed for {}", obs.key),
+        )
+    };
+    let Some(s) = store else {
+        return Some(failed());
+    };
+    match s.put_if_unchanged(&obs, expected).await {
+        Ok(true) => Some(("committed", format!("lp_state committed: {}", obs.key))),
+        Ok(false) => Some((
+            "conflict",
+            format!(
+                "lp_state NOT committed (conflict): {} changed since it was read; the decision stands, re-run to decide on the new state",
+                obs.key
+            ),
+        )),
+        Err(e) => {
+            let error = format!("{e:#}");
+            warn!(key = %obs.key, %error, "observation store write failed");
+            Some(failed())
+        }
     }
-    let obs = Observation::of(tool, next, now_ms, LP_STATE_TTL_MS, ObsSource::Live);
-    if put_row(store, &obs).await {
-        Some(format!("lp_state committed: {}", obs.key))
-    } else {
-        Some(format!(
-            "lp_state NOT committed: store write failed for {}",
-            obs.key
-        ))
+}
+
+/// The decision observation (`features.commit` = committed | conflict |
+/// unreadable | failed when a commit was asked) and the commit note.
+fn with_commit(mut obs: Observation, commit: Option<CommitNote>) -> (Observation, Option<String>) {
+    match commit {
+        Some((outcome, note)) => {
+            set_str(&mut obs.features, "commit", Some(outcome));
+            (obs, Some(note))
+        }
+        None => (obs, None),
     }
 }
 
@@ -660,7 +742,14 @@ fn decided(obs: Observation, note: Option<String>, now_ms: i64) -> ToolOutput {
     out
 }
 
+fn unreadable_reason(why: &str) -> String {
+    format!(
+        "lp_state row unreadable ({why}): regime, timers, cooldown and the pending request are unknown"
+    )
+}
+
 /// `hedge_decide` over the store rows: `(decision observation, commit note)`.
+/// An unreadable `lp_state` row blocks (`invalid_read`).
 pub(crate) async fn hedge_decide_obs(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
@@ -670,33 +759,39 @@ pub(crate) async fn hedge_decide_obs(
     now_ms: i64,
 ) -> (Observation, Option<String>) {
     let tool = names::HEDGE_DECIDE;
+    let (w, p) = (wallet.to_string(), pool.to_string());
     let (row, snap) = match snapshot_row(store, wallet, pool).await {
         Ok(v) => v,
         Err(why) => {
-            let d = HedgeDecision::without_snapshot(
-                &wallet.to_string(),
-                &pool.to_string(),
-                knobs,
-                &why,
-            );
+            let d = HedgeDecision::without_snapshot(&w, &p, knobs, &why);
             return (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), None);
         }
     };
+    let (meta, age) = (row.meta(now_ms), row.age_ms(now_ms));
     let read = read_state(store, wallet, pool).await;
-    let state = read.state(wallet, pool);
-    let (d, next) = decide_hedge(
-        &snap,
-        &row.meta(now_ms),
-        row.age_ms(now_ms),
-        knobs,
-        &state,
-        now_ms,
-    );
+    let state = match read.state(wallet, pool) {
+        Ok(state) => state,
+        Err(why) => {
+            let reason = unreadable_reason(why);
+            let mut d = HedgeDecision::without_snapshot(&w, &p, knobs, &reason);
+            d.snapshot = Some(meta);
+            d.snapshot_age_ms = Some(age);
+            d.action = HedgeAction::Blocked {
+                reason,
+                guard: Guard::InvalidRead,
+            };
+            d.trace.invalid_fields = vec!["lp_state".into()];
+            let obs = Observation::of(tool, &d, now_ms, 0, ObsSource::Live);
+            return with_commit(obs, unreadable_note(commit, why));
+        }
+    };
+    let (d, next) = decide_hedge(&snap, &meta, age, knobs, &state, now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
-    (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
+    with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
 
 /// `lp_decide` over the store rows (+ the price row's 5-minute samples).
+/// An unreadable `lp_state` row pauses (`invalid_read`).
 pub(crate) async fn lp_decide_obs(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
@@ -706,12 +801,28 @@ pub(crate) async fn lp_decide_obs(
     now_ms: i64,
 ) -> (Observation, Option<String>) {
     let tool = names::LP_DECIDE;
+    let (w, p) = (wallet.to_string(), pool.to_string());
     let (row, snap) = match snapshot_row(store, wallet, pool).await {
         Ok(v) => v,
         Err(why) => {
-            let d =
-                LpDecision::without_snapshot(&wallet.to_string(), &pool.to_string(), knobs, &why);
+            let d = LpDecision::without_snapshot(&w, &p, knobs, &why);
             return (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), None);
+        }
+    };
+    let (meta, age) = (row.meta(now_ms), row.age_ms(now_ms));
+    let read = read_state(store, wallet, pool).await;
+    let state = match read.state(wallet, pool) {
+        Ok(state) => state,
+        Err(why) => {
+            let mut d = LpDecision::without_snapshot(&w, &p, knobs, &unreadable_reason(why));
+            d.snapshot = Some(meta);
+            d.snapshot_age_ms = Some(age);
+            d.invalid_fields = vec!["lp_state".into()];
+            d.verdict = LpVerdict::Paused {
+                reason: PauseReason::InvalidRead,
+            };
+            let obs = Observation::of(tool, &d, now_ms, 0, ObsSource::Live);
+            return with_commit(obs, unreadable_note(commit, why));
         }
     };
     let samples: Vec<PriceSample> = match store {
@@ -722,19 +833,9 @@ pub(crate) async fn lp_decide_obs(
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let read = read_state(store, wallet, pool).await;
-    let state = read.state(wallet, pool);
-    let (d, next) = decide_lp(
-        &snap,
-        &row.meta(now_ms),
-        row.age_ms(now_ms),
-        knobs,
-        &state,
-        &samples,
-        now_ms,
-    );
+    let (d, next) = decide_lp(&snap, &meta, age, knobs, &state, &samples, now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
-    (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
+    with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
 
 struct HedgeDecideTool {
@@ -790,6 +891,7 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::adapters::outbound::observations::SqliteObservationStore;
     use crate::adapters::outbound::solana::plan::tests::{
         dlmm_now_ms, dlmm_transport, fixture_reads, gpa_reply, k, methods, owner_positions,
         BOT_WALLET, DLMM_GMA, DLMM_SLOT, JUP_PRICE, OWNER, PERPS_GMA, PERPS_META, POOL,
@@ -798,9 +900,11 @@ mod tests {
     use crate::adapters::outbound::solana::rpc::RpcError;
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
     use crate::application::observe::tests::MemStore;
-    use crate::domain::lp::dlmm::{Discovery, DiscoverySource};
-    use crate::domain::lp::snapshot::{Guard, HedgeAction, HedgeActionRecord, LpVerdict};
-    use crate::domain::observation::{assert_features_ok, MAX_FEATURES, MAX_LINE1_CHARS};
+
+    use crate::domain::lp::snapshot::HedgeActionRecord;
+    use crate::domain::observation::{
+        assert_features_ok, ErrorClass, MAX_FEATURES, MAX_LINE1_CHARS,
+    };
     use crate::domain::solana::AccountRead;
 
     /// Fixture position (bins -5440..-5371, active -5373), re-owned by
@@ -918,7 +1022,7 @@ mod tests {
 
     async fn snapshot(
         t: &Arc<FakeTransport>,
-        store: &MemStore,
+        store: &dyn ObservationStore,
         req: &SnapshotReq,
         args: Value,
         jup: &Jup,
@@ -1007,7 +1111,11 @@ mod tests {
         ] {
             assert!(first.contains(&key.to_string()), "read 1 lacks {key}");
         }
-        assert!(t.gma_params()[0][1].get("minContextSlot").is_none());
+        assert_eq!(
+            t.gma_params()[0][1]["minContextSlot"],
+            DLMM_SLOT,
+            "read 1 pinned to the gPA slot"
+        );
         assert_eq!(t.gma_params()[1][1]["minContextSlot"], DLMM_SLOT);
 
         // Oracle fetched inline once and stored where `world` reads it.
@@ -1060,40 +1168,72 @@ mod tests {
         assert_eq!((t.requests().len(), jup.calls()), (n, 1));
     }
 
+    /// Regression (review #10): a price row up to 30 s old was reused, so a
+    /// decision on that snapshot seconds later blocked `stale_input` (price
+    /// age + snapshot age > max_snapshot_age_secs 30) with a fresh price one
+    /// call away.
     #[tokio::test]
-    async fn a_price_row_up_to_30_s_old_is_reused_else_refetched() {
+    async fn a_price_row_is_reused_only_within_the_snapshot_max_age() {
         let store = MemStore::default();
         let now = dlmm_now_ms();
         let jup = Jup::ok();
-        // Seed a price row 25 s old (past its 10 s TTL).
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now - 25_000).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let price_key = format!("price_oracle/1:{}", ids::WSOL);
+        // Seed a price row 26 s old.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now - 26_000).await;
         assert_eq!(jup.calls(), 1);
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        let args = json!({"max_age_secs": 0});
-        let o = snapshot(&t, &store, &req(BOT_WALLET), args.clone(), &jup, now).await;
-        assert_eq!(jup.calls(), 1, "the 25 s old row is reused");
-        let s: LpSnapshot = o.typed().unwrap();
-        assert_eq!(s.oracle.age_ms, Some(25_000));
-        assert!(s.positions.is_empty());
-        assert!(matches!(s.discovery, Discovery::Empty { .. }));
-        // 31 s: fetched again, the row replaced (samples carried).
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        let o = snapshot(&t, &store, &req(BOT_WALLET), args, &jup, now + 6_001).await;
+        // 26 s later (discovery row still cached): the price is fetched
+        // again (was reused), samples carried.
+        let o = snapshot(
+            &transport(true),
+            &store,
+            &req(BOT_WALLET),
+            json!({}),
+            &jup,
+            now,
+        )
+        .await;
+        assert_eq!(o.status, ObsStatus::Ok, "{:?}", o.errors);
         assert_eq!(jup.calls(), 2);
         let s: LpSnapshot = o.typed().unwrap();
         assert_eq!(s.oracle.age_ms, Some(0));
-        let row = store
-            .get(&format!("price_oracle/1:{}", ids::WSOL))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.observed_at_ms, now + 6_001);
-        let p: OraclePrice = row.typed().unwrap();
-        assert_eq!(p.samples.len(), 2, "{:?}", p.samples);
+        let row = store.get(&price_key).await.unwrap().unwrap();
+        assert_eq!(row.observed_at_ms, now);
+        let price: OraclePrice = row.typed().unwrap();
+        assert_eq!(price.samples.len(), 2, "{:?}", price.samples);
+        // A decision on the snapshot row 9 s later is not stale.
+        let (d, _) =
+            hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), false, now + 9_000).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert_ne!(d.action.guard(), Some(Guard::StaleInput), "{:?}", d.action);
+        // A new build within 10 s reuses the row as is ...
+        let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [POSITION]});
+        let r = SnapshotReq::parse(&args).unwrap();
+        let o = snapshot(&transport(true), &store, &r, args, &jup, now + 9_000).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!((jup.calls(), s.oracle.age_ms), (2, Some(9_000)));
+        // ... unless the caller's max age is tighter (0 = live).
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let args = json!({"max_age_secs": 0});
+        let o = snapshot(&t, &store, &req(BOT_WALLET), args, &jup, now + 9_000).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!((jup.calls(), s.oracle.age_ms), (3, Some(0)));
+    }
+
+    /// The oracle bound keeps a decision on a cached snapshot inside the
+    /// production staleness budget with room for the loop's model calls.
+    #[test]
+    fn snapshot_age_plus_oracle_reuse_fits_the_decision_budget() {
+        let worst = LP_SNAPSHOT_TTL_MS + SNAPSHOT_ORACLE_MAX_AGE_MS;
+        for secs in [
+            hedge_knobs().max_snapshot_age_secs,
+            lp_knobs().max_snapshot_age_secs,
+        ] {
+            assert!(worst + 5_000 <= secs * 1000, "{worst} ms vs {secs} s");
+        }
     }
 
     #[tokio::test]
@@ -1185,7 +1325,8 @@ mod tests {
             ],
             "cached discovery and account rows bypassed"
         );
-        assert_eq!(t.gma_params()[0][1]["minContextSlot"], min);
+        // Read 1 pinned to max(min_context_slot, the gPA's slot).
+        assert_eq!(t.gma_params()[0][1]["minContextSlot"], DLMM_SLOT + 5);
         assert_eq!(t.gma_params()[1][1]["minContextSlot"], DLMM_SLOT + 5);
         assert_eq!(o.slot, Some(DLMM_SLOT + 5));
         assert_eq!(
@@ -1194,14 +1335,20 @@ mod tests {
             "stored for the decide tools"
         );
 
-        // Explicit positions: no gPA, found (args); a foreign key is flagged.
+        // Explicit positions: no gPA, found (args); a foreign key is flagged;
+        // never stored (the canonical row above is kept).
         let t = transport(true);
         t.slot.store(DLMM_SLOT + 5, Ordering::SeqCst);
         let foreign = owner_positions()[0].to_string();
         let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [POSITION, foreign]});
         let r = SnapshotReq::parse(&args).unwrap();
         let o = snapshot(&t, &store, &r, args, &jup, now + 2_000).await;
-        assert_eq!(o.source, ObsSource::Live);
+        assert_eq!((o.source, o.ttl_ms), (ObsSource::Live, 0));
+        assert_eq!(
+            store.get(&o.key).await.unwrap().unwrap().observed_at_ms,
+            now + 1_000,
+            "the explicit subset is not stored"
+        );
         assert!(!methods(&t).contains(&"getProgramAccounts".to_string()));
         let s: LpSnapshot = o.typed().unwrap();
         assert!(matches!(
@@ -1218,6 +1365,93 @@ mod tests {
             "{:?}",
             s.errors
         );
+    }
+
+    /// Regression (review #4/#9/#13): an explicit-positions snapshot (a
+    /// subset, or a foreign key ⇒ exposure 0) was stored under the
+    /// canonical key and answered the loop's snapshot step and the decide
+    /// tools for 10 s.
+    #[tokio::test]
+    async fn an_explicit_positions_snapshot_never_answers_discovery_or_decisions() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let jup = Jup::ok();
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let foreign = owner_positions()[0].to_string();
+        let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [foreign]});
+        let r = SnapshotReq::parse(&args).unwrap();
+        let o = snapshot(&transport(true), &store, &r, args, &jup, now).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert!(s.positions.is_empty());
+        assert_eq!(o.ttl_ms, 0);
+        assert!(store.get(&o.key).await.unwrap().is_none(), "never stored");
+        // The decide tools find no row to decide on.
+        let (d, _) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), false, now).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert!(d.view.is_none(), "{:?}", d.action);
+        // The loop's snapshot step (no positions) within 10 s: live gPA.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let o = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now + 1_000).await;
+        assert_eq!(o.source, ObsSource::Live);
+        assert_eq!(methods(&t)[0], "getProgramAccounts");
+        // A subset row an older binary stored is refused by both decide tools.
+        let mut legacy: LpSnapshot = o.typed().unwrap();
+        legacy.discovery = Discovery::Found {
+            count: 1,
+            source: DiscoverySource::Args,
+            at_ms: now + 1_000,
+        };
+        let row = Observation::of(
+            names::LP_SNAPSHOT,
+            &legacy,
+            now + 1_000,
+            LP_SNAPSHOT_TTL_MS,
+            ObsSource::Live,
+        );
+        store.put(&row).await.unwrap();
+        let (d, _) =
+            hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now + 2_000).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert!(
+            matches!(&d.action, HedgeAction::Blocked { reason, .. } if reason.contains("caller-chosen")),
+            "{:?}",
+            d.action
+        );
+        let (d, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now + 2_000).await;
+        let d: LpDecision = d.typed().unwrap();
+        assert!(
+            matches!(&d.verdict, LpVerdict::Blocked { reason } if reason.contains("caller-chosen")),
+            "{:?}",
+            d.verdict
+        );
+        assert_eq!(note, None);
+        assert!(store.get(&state_key(&w, &p)).await.unwrap().is_none());
+    }
+
+    /// Regression (review #1/#2/#5): a cached "no positions" discovery was
+    /// reused for 300 s, so a position another process opened read as LP 0.
+    #[tokio::test]
+    async fn a_position_opened_after_an_empty_discovery_shows_up_next_snapshot() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let jup = Jup::ok();
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
+        let s: LpSnapshot = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now)
+            .await
+            .typed()
+            .unwrap();
+        assert!(matches!(s.discovery, Discovery::Empty { .. }));
+        // The snapshot row expired (10 s): the empty answer is as old, so
+        // discovery runs again and sees the new position.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let o = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now + 11_000).await;
+        assert_eq!(methods(&t)[0], "getProgramAccounts");
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!(s.positions.len(), 1, "{:?}", s.discovery);
+        assert!(s.exposure.value().unwrap().base > 0.0);
     }
 
     #[tokio::test]
@@ -1375,9 +1609,104 @@ mod tests {
         );
         bad.data = json!({"committed_regime": 7});
         store.put(&bad).await.unwrap();
-        let (_, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        // Regression (review #8): the decision ran on a fresh state (regime
+        // `in`, no grace, no cooldown) as if nothing were wrong; it blocks.
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
         assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        assert_eq!(o.features["commit"], json!("unreadable"));
+        let d: HedgeDecision = o.typed().unwrap();
+        assert_eq!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        assert_eq!(d.trace.invalid_fields, vec!["lp_state".to_string()]);
+        assert!(d.snapshot.is_some() && d.view.is_none());
+        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        let d: LpDecision = o.typed().unwrap();
+        assert_eq!(
+            d.verdict,
+            LpVerdict::Paused {
+                reason: PauseReason::InvalidRead
+            }
+        );
+        assert_eq!(d.invalid_fields, vec!["lp_state".to_string()]);
         assert_eq!(store.get(&state_key(&w, &p)).await.unwrap().unwrap(), bad);
+        assert_line1(&o, &[BOT_WALLET, POOL]);
+    }
+
+    /// Regression (review #8, path 2): a body that no longer parses as an
+    /// observation read as "no row" and `commit = true` overwrote it.
+    #[tokio::test]
+    async fn an_unparseable_state_body_blocks_and_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteObservationStore::open(dir.path()).unwrap();
+        let now = now_ms();
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &Jup::ok(), now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let key = state_key(&w, &p);
+        let db = dir.path().join(".tengu/observations.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+             VALUES (?1, 'lp_state/1', ?2, NULL, 1000, 'ok', '{\"key\": 1')",
+            rusqlite::params![key, now],
+        )
+        .unwrap();
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        let d: HedgeDecision = o.typed().unwrap();
+        assert_eq!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        let body: String = conn
+            .query_row(
+                "SELECT body FROM observations WHERE key = ?1",
+                rusqlite::params![key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(body, "{\"key\": 1", "never overwritten");
+    }
+
+    /// Regression (review #11 #15): commits were blind whole-row replaces;
+    /// a writer that read the state before another's commit wiped it.
+    #[tokio::test]
+    async fn a_commit_on_a_state_changed_since_the_read_is_a_conflict() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        seeded(&store, now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        // First commit: no row yet (expected none).
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        assert_eq!(o.features["commit"], json!("committed"), "{note:?}");
+        // Writer A reads the state ...
+        let read = read_state(Some(&store), &w, &p).await;
+        let StateRead::Found { observed_at_ms, .. } = &read else {
+            panic!("{read:?}")
+        };
+        let v1 = *observed_at_ms;
+        // ... writer B commits in between (same ms: the version still moves).
+        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        assert_eq!(o.features["commit"], json!("committed"));
+        let b = store.get(&state_key(&w, &p)).await.unwrap().unwrap();
+        assert!(b.observed_at_ms > v1);
+        // ... A's commit on its stale read: conflict, B's row kept.
+        let mut next = read.state(&w, &p).unwrap();
+        next.storm_active = !next.storm_active;
+        let (outcome, text) = commit_state(
+            Some(&store),
+            names::HEDGE_DECIDE,
+            true,
+            &read,
+            &next,
+            now + 1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, "conflict");
+        assert!(text.contains("NOT committed (conflict)") && text.contains(BOT_WALLET));
+        assert_eq!(store.get(&state_key(&w, &p)).await.unwrap().unwrap(), b);
+        // A fresh read commits.
+        let (o, _) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now + 2).await;
+        assert_eq!(o.features["commit"], json!("committed"));
     }
 
     #[tokio::test]

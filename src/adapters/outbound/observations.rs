@@ -2,7 +2,9 @@
 //! `<workspace>/.tengu/observations.db` (one `observations` table; WAL +
 //! busy_timeout so run-agent children, the MCP bridge and decision loops can
 //! share it). Slot-monotonic upsert, `Error` rows never stored, rows older
-//! than 7 days purged on open. Every call runs on `spawn_blocking`.
+//! than 7 days purged on open. `get` errors on a row that does not parse
+//! (`get_many` skips it); `put_if_unchanged` is one conditional statement
+//! (atomic across processes). Every call runs on `spawn_blocking`.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -32,6 +34,19 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT(key) DO UPDATE SET schema = excluded.schema, observed_at_ms = excluded.observed_at_ms,
   slot = excluded.slot, ttl_ms = excluded.ttl_ms, status = excluded.status, body = excluded.body
 WHERE observations.slot IS NULL OR excluded.slot IS NULL OR excluded.slot >= observations.slot";
+
+/// `put_if_unchanged` with an expected version: replace only that version.
+const UPDATE_IF_SQL: &str = "
+UPDATE observations SET schema = ?2, observed_at_ms = ?3, slot = ?4, ttl_ms = ?5, status = ?6,
+  body = ?7
+WHERE key = ?1 AND observed_at_ms = ?8
+  AND (slot IS NULL OR ?4 IS NULL OR ?4 >= slot)";
+
+/// `put_if_unchanged` expecting no row.
+const INSERT_IF_ABSENT_SQL: &str = "
+INSERT INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(key) DO NOTHING";
 
 #[derive(Clone)]
 pub(crate) struct SqliteObservationStore {
@@ -74,59 +89,111 @@ impl SqliteObservationStore {
     }
 }
 
-fn read_row(conn: &Connection, key: &str) -> Result<Option<Observation>> {
-    let body: Option<String> = conn
+/// The stored body at `key`.
+fn read_body(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn
         .query_row(
             "SELECT body FROM observations WHERE key = ?1",
             params![key],
             |r| r.get(0),
         )
-        .optional()?;
-    Ok(
-        body.and_then(|b| match serde_json::from_str::<Observation>(&b) {
-            Ok(o) => Some(o),
-            Err(e) => {
-                warn!(key, error = %e, "observation row does not parse; ignoring it");
-                None
-            }
-        }),
-    )
+        .optional()?)
+}
+
+fn parse_row(key: &str, body: &str) -> Result<Observation> {
+    serde_json::from_str(body).with_context(|| format!("observation row {key} does not parse"))
+}
+
+/// Column values of `obs` for the write statements.
+struct RowValues {
+    key: String,
+    schema: String,
+    at: i64,
+    slot: Option<i64>,
+    ttl: i64,
+    status: String,
+    body: String,
+}
+
+impl RowValues {
+    fn of(obs: &Observation) -> Result<Self> {
+        Ok(Self {
+            key: obs.key.clone(),
+            schema: obs.schema.clone(),
+            at: obs.observed_at_ms,
+            slot: obs.slot.map(|s| s as i64),
+            ttl: obs.ttl_ms as i64,
+            status: serde_json::to_value(obs.status)?
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            body: serde_json::to_string(obs)?,
+        })
+    }
 }
 
 #[async_trait]
 impl ObservationStore for SqliteObservationStore {
     async fn get(&self, key: &str) -> Result<Option<Observation>> {
         let key = key.to_string();
-        self.with_conn(move |c| read_row(c, &key)).await
+        self.with_conn(move |c| read_body(c, &key)?.map(|b| parse_row(&key, &b)).transpose())
+            .await
     }
 
     async fn get_many(&self, keys: &[String]) -> Result<Vec<Option<Observation>>> {
         let keys = keys.to_vec();
-        self.with_conn(move |c| keys.iter().map(|k| read_row(c, k)).collect())
-            .await
+        self.with_conn(move |c| {
+            let mut out = Vec::with_capacity(keys.len());
+            for k in &keys {
+                out.push(read_body(c, k)?.and_then(|b| match parse_row(k, &b) {
+                    Ok(o) => Some(o),
+                    Err(e) => {
+                        let error = format!("{e:#}");
+                        warn!(key = %k, %error, "observation row does not parse; ignoring it");
+                        None
+                    }
+                }));
+            }
+            Ok(out)
+        })
+        .await
     }
 
     async fn put(&self, obs: &Observation) -> Result<bool> {
         if obs.status == ObsStatus::Error {
             return Ok(false);
         }
-        let body = serde_json::to_string(obs)?;
-        let status = serde_json::to_value(obs.status)?
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        let (key, schema, at, slot, ttl) = (
-            obs.key.clone(),
-            obs.schema.clone(),
-            obs.observed_at_ms,
-            obs.slot.map(|s| s as i64),
-            obs.ttl_ms as i64,
-        );
+        let v = RowValues::of(obs)?;
         self.with_conn(move |c| {
             let n = c.execute(
                 UPSERT_SQL,
-                params![key, schema, at, slot, ttl, status, body],
+                params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
             )?;
+            Ok(n > 0)
+        })
+        .await
+    }
+
+    async fn put_if_unchanged(
+        &self,
+        obs: &Observation,
+        expected_observed_at_ms: Option<i64>,
+    ) -> Result<bool> {
+        if obs.status == ObsStatus::Error {
+            return Ok(false);
+        }
+        let v = RowValues::of(obs)?;
+        self.with_conn(move |c| {
+            let n = match expected_observed_at_ms {
+                Some(expected) => c.execute(
+                    UPDATE_IF_SQL,
+                    params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body, expected],
+                )?,
+                None => c.execute(
+                    INSERT_IF_ABSENT_SQL,
+                    params![v.key, v.schema, v.at, v.slot, v.ttl, v.status, v.body],
+                )?,
+            };
             Ok(n > 0)
         })
         .await
@@ -202,6 +269,65 @@ mod tests {
         assert_eq!(many.len(), 2);
         assert_eq!(many[0].as_ref().unwrap().key, key);
         assert!(many[1].is_none());
+    }
+
+    /// Regression (review #8): a body that no longer parses read as "no
+    /// row", so `lp_state` callers overwrote it; `get` now errors (the
+    /// caller decides), `get_many` still skips it.
+    #[tokio::test]
+    async fn an_unparseable_row_is_an_error_for_get_and_skipped_by_get_many() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteObservationStore::open(dir.path()).unwrap();
+        let good = obs(None, ObsStatus::Ok, 1);
+        assert!(store.put(&good).await.unwrap());
+        let bad_key = format!("lp_state/1:{POOL}");
+        let conn = Connection::open(dir.path().join(".tengu/observations.db")).unwrap();
+        conn.execute(
+            "INSERT INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+             VALUES (?1, 'lp_state/1', 1, NULL, 1000, 'ok', '{not json')",
+            params![bad_key],
+        )
+        .unwrap();
+        let e = store.get(&bad_key).await.unwrap_err();
+        assert!(format!("{e:#}").contains(&bad_key), "{e:#}");
+        let many = store
+            .get_many(&[bad_key.clone(), good.key.clone()])
+            .await
+            .unwrap();
+        assert!(many[0].is_none());
+        assert_eq!(many[1].as_ref().unwrap().key, good.key);
+    }
+
+    /// Regression (review #11 #15): `lp_state` commits were blind whole-row
+    /// replaces, so two writers lost each other's updates.
+    #[tokio::test]
+    async fn put_if_unchanged_is_a_compare_and_swap_on_observed_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteObservationStore::open(dir.path()).unwrap();
+        let mut a = obs(None, ObsStatus::Ok, 1);
+        a.observed_at_ms = 1_000;
+        // No row expected: inserted once, then a conflict.
+        assert!(store.put_if_unchanged(&a, None).await.unwrap());
+        assert!(!store.put_if_unchanged(&a, None).await.unwrap());
+        // Two writers read version 1_000; the first wins, the second conflicts.
+        let mut b = obs(None, ObsStatus::Ok, 2);
+        b.observed_at_ms = 2_000;
+        let mut c = obs(None, ObsStatus::Ok, 3);
+        c.observed_at_ms = 2_001;
+        assert!(store.put_if_unchanged(&b, Some(1_000)).await.unwrap());
+        assert!(!store.put_if_unchanged(&c, Some(1_000)).await.unwrap());
+        let got = store.get(&a.key).await.unwrap().unwrap();
+        assert_eq!(got.data["marker"], json!(2));
+        // Re-read, then write on the current version.
+        assert!(store.put_if_unchanged(&c, Some(2_000)).await.unwrap());
+        assert_eq!(
+            store.get(&a.key).await.unwrap().unwrap().data["marker"],
+            json!(3)
+        );
+        // Error rows are never written.
+        let mut e = obs(None, ObsStatus::Error, 4);
+        e.observed_at_ms = 3_000;
+        assert!(!store.put_if_unchanged(&e, Some(2_001)).await.unwrap());
     }
 
     #[tokio::test]

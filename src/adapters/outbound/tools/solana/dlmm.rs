@@ -11,6 +11,7 @@
 //! | Explicit `positions` (non-empty; `[]` = discover) | discovery `found (args)`, no gPA; the cached row is not served and the result is not stored (ttl 0), so a caller-chosen subset never answers a later discovery-based call; requested keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors (Partial) |
 //! | `min_context_slot` | pins every account read; the cached row is not served; a discovery row below it is bypassed |
 //! | `max_age_secs = 0` | live typed row, live `acct/1` rows, live discovery |
+//! | Discovery | the account reads are pinned to ≥ the discovery's slot (`Discovered::pin`); a cached "no positions" row is reused only within the caller's max age; a discovered key that does not value ⇒ exposure `Error` (`dlmm::flag_unvalued`), status `Error`, never 0 |
 //! | Cached discovery that went stale | a listed key no longer reads as the wallet's position ⇒ one re-discovery (gPA) + re-read |
 //! | Whole-read failure (RPC error, pool or mint unreadable) | `Ok` with an `Error` observation (never cached), not `Err`; bad arguments are `Err` |
 
@@ -28,11 +29,11 @@ use crate::adapters::outbound::solana::plan::{
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
 use crate::adapters::outbound::tools::args::require_str;
 use crate::application::observe::observe;
-use crate::domain::lp::dlmm::{build_dlmm_pool, build_positions, DlmmPoolState, DlmmPositions};
-use crate::domain::message::ToolDef;
-use crate::domain::observation::{
-    now_ms, CachePolicy, ErrorClass, Observation, Observed, ReadError,
+use crate::domain::lp::dlmm::{
+    build_dlmm_pool, build_positions, flag_unvalued, DlmmPoolState, DlmmPositions,
 };
+use crate::domain::message::ToolDef;
+use crate::domain::observation::{now_ms, CachePolicy, Observation, Observed, ReadError};
 use crate::domain::solana::Pubkey;
 use crate::domain::tools as names;
 use crate::ports::observation::ObservationStore;
@@ -253,7 +254,7 @@ async fn read_positions(
     let opts = PoolReadOpts {
         extra: found.positions.clone(),
         positions_of: Some(req.wallet),
-        min_slot: req.min_context_slot,
+        min_slot: found.pin(req.min_context_slot),
     };
     plan::read_pool(rpc, store, &req.pool, &opts, max_age_ms, now_ms).await
 }
@@ -290,6 +291,7 @@ pub(crate) async fn dlmm_positions_obs(
             explicit: req.positions.clone(),
             min_slot: req.min_context_slot,
             force: acct_max_age == 0,
+            max_age_ms: acct_max_age,
         };
         let mut found =
             plan::discover_positions(rpc, store, &req.wallet, &req.pool, &opts, now_ms).await;
@@ -304,33 +306,13 @@ pub(crate) async fn dlmm_positions_obs(
         }
         let mut out = build_positions(&read.set, &req.wallet, &req.pool, found.discovery)
             .map_err(ReadFailure)?;
-        if explicit {
-            flag_unmatched(&mut out, &req.positions);
+        if let Some(source) = found.source {
+            flag_unvalued(&mut out, &found.positions, source);
         }
         Ok((out, ttl))
     })
     .await;
     fetched.unwrap_or_else(|e| positions_failed(req, read_failure("accounts", &e), now_ms))
-}
-
-/// Requested keys that did not decode as the wallet's PositionV2 in the
-/// pool (and are not already reported) become `NotApplicable` errors.
-fn flag_unmatched(out: &mut DlmmPositions, requested: &[Pubkey]) {
-    for key in requested {
-        let k = key.to_string();
-        let valued = out.positions.iter().any(|p| p.position == k);
-        let reported = out.errors.iter().any(|e| e.message.contains(&k));
-        if !valued && !reported {
-            out.errors.push(ReadError::new(
-                "positions",
-                ErrorClass::NotApplicable,
-                format!(
-                    "position {k} is not a PositionV2 of pool {} owned by {}",
-                    out.pool, out.wallet
-                ),
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -350,7 +332,7 @@ mod tests {
     use crate::application::observe::tests::MemStore;
     use crate::domain::lp::dlmm::{Discovery, DiscoverySource};
     use crate::domain::observation::{
-        assert_features_ok, ObsSource, ObsStatus, MAX_FEATURES, MAX_LINE1_CHARS,
+        assert_features_ok, ErrorClass, ObsSource, ObsStatus, MAX_FEATURES, MAX_LINE1_CHARS,
     };
     use crate::domain::scope::ToolScope;
 
@@ -659,6 +641,45 @@ mod tests {
         assert!(store.get(&o.key).await.unwrap().is_none());
     }
 
+    /// Regression (review #7): gPA found a position on one node, the account
+    /// read went unpinned to a node behind it and returned `null`: the
+    /// position was dropped and the exposure read Ok(0).
+    #[tokio::test]
+    async fn a_discovered_position_the_read_misses_is_never_exposure_zero() {
+        let t = dlmm_transport();
+        let rpc = fake_rpc(&t);
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let req = PositionsReq {
+            wallet: k(BOT_WALLET),
+            pool: k(POOL),
+            positions: Vec::new(),
+            min_context_slot: None,
+        };
+        // Not in the fake's accounts: the lagging node answers null.
+        let opened = k("G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa");
+        t.push(Ok(gpa_reply(DLMM_SLOT + 2, &[opened])));
+        let o = dlmm_positions_obs(&rpc, Some(&store), &req, &json!({}), now).await;
+        // Read 1 is pinned to the gPA slot: the node behind it errors.
+        assert_eq!(t.gma_params()[0][1]["minContextSlot"], DLMM_SLOT + 2);
+        assert_eq!(o.status, ObsStatus::Error, "{:?}", o.errors);
+        assert_eq!(o.errors[0].class, ErrorClass::Transient);
+        assert!(!o.features.contains_key("lp_base"), "no exposure numbers");
+        // The node caught up but the account is missing at the gPA's slot
+        // (closed in between): exposure Error, never 0.
+        t.slot
+            .store(DLMM_SLOT + 2, std::sync::atomic::Ordering::SeqCst);
+        t.push(Ok(gpa_reply(DLMM_SLOT + 2, &[opened])));
+        let live = json!({"max_age_secs": 0});
+        let o = dlmm_positions_obs(&rpc, Some(&store), &req, &live, now + 1_000).await;
+        assert_eq!(methods(&t).last().unwrap(), "getMultipleAccounts");
+        assert_eq!(o.status, ObsStatus::Error, "{:?}", o.errors);
+        let p: DlmmPositions = o.typed().unwrap();
+        let e = p.exposure.error().expect("exposure is an error");
+        assert!(e.message.contains(&opened.to_string()), "{e:?}");
+        assert!(!o.features.contains_key("lp_base"));
+    }
+
     #[tokio::test]
     async fn stale_cached_discovery_is_rediscovered() {
         let t = dlmm_transport();
@@ -677,7 +698,9 @@ mod tests {
         listed.push(gone);
         t.push(Ok(gpa_reply(DLMM_SLOT, &listed)));
         let first = dlmm_positions_obs(&rpc, Some(&store), &req, &json!({}), now).await;
-        assert_eq!(first.status, ObsStatus::Ok, "{:?}", first.errors);
+        // A discovered key that does not read as a position: exposure unknown.
+        assert_eq!(first.status, ObsStatus::Error, "{:?}", first.errors);
+        assert!(first.errors.iter().any(|e| e.message.contains(BOT_WALLET)));
         let before = t.requests().len();
         // min_context_slot skips the typed row; discovery + acct rows at the
         // floor are reused, so the only RPC is the re-discovery gPA.

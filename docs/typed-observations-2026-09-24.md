@@ -18,14 +18,14 @@ Typed tool results that one envelope serves to the LLM (text), decision loops (`
 
 | Piece | Rule |
 |---|---|
-| Port | `ports/observation.rs::ObservationStore` — `get`, `get_many`, `put -> bool` |
+| Port | `ports/observation.rs::ObservationStore` — `get` (`Err` on a row that does not parse), `get_many` (skips it), `put -> bool`, `put_if_unchanged(obs, expected_observed_at_ms) -> bool` (compare-and-swap; default impl never writes) |
 | Store | `outbound/observations.rs::SqliteObservationStore` → `<workspace>/.tengu/observations.db`, table `observations`, WAL + `busy_timeout` 5000, rows > 7 days purged on open |
-| `put` | `Error` rows ignored; slot-monotonic (an older slot never overwrites; rows without a slot always replace) |
+| `put` | `Error` rows ignored; slot-monotonic (an older slot never overwrites; rows without a slot always replace). `put_if_unchanged`: one conditional statement, atomic across processes |
 | `application/observe.rs::observe()` | fresh row (`status != error`, age ≤ min(ttl, `max_age_secs`)) ⇒ served with `source = cache`; else fetch, store if usable and ttl > 0. Store failure ⇒ warn + live read (doctrine #4) |
 | `max_age_secs` | optional arg on every typed tool; `0` forces a live read |
 | `acct/1:<pubkey>` | raw account rows (`outbound/solana/accounts.rs::fetch_accounts`, 60 s): reused when fresh, one `getMultipleAccounts` for the rest. **Phase-5 seam**: a stream writing these rows makes builders RPC-free |
-| `dlmm_discovery/1:<wallet>:<pool>` | position discovery (gPA): 60 s found / 300 s empty / errors never stored (`outbound/solana/plan.rs`) |
-| `lp_state/1:<wallet>:<pool>` | controller state (regime, timers, re-entry anchor, last hedge action); 7 days; written only with `commit = true` |
+| `dlmm_discovery/1:<wallet>:<pool>` | position discovery (gPA): 60 s found / 10 s empty, and an empty row is reused only within the caller's max age (the bot's 300 s is safe only for the process that opens the positions) / errors never stored. Position reads pinned ≥ the discovery's slot; a discovered key that does not value ⇒ exposure `Error`, never 0 (`outbound/solana/plan.rs`, `dlmm::flag_unvalued`) |
+| `lp_state/1:<wallet>:<pool>` | controller state (regime, timers, re-entry anchor, last hedge action); 7 days; written only with `commit = true`, compare-and-swap on the version read (changed since ⇒ NOT committed, `features.commit = conflict`); unreadable ⇒ the decide tools block `invalid_read`, never overwrite |
 
 ## Decision-loop use (`config/decision_loop.rs`, `application/decision_loop/`)
 
@@ -50,9 +50,9 @@ RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta
 | `jup_perps` | `wallet`* | `jup_perps/1:<wallet>` | 5 s | long/short PDAs, SOL + USDC custody, JLP pool; oracle = price row ≤ 30 s else Jupiter inline | RPC, `lite-api.jup.ag` |
 | `solana_wallet` | `wallet`*, `mints` (wSOL + USDC, ≤ 32) | `solana_wallet/1:<wallet>` | 5 s | `getBalance`, `getTokenAccountsByOwner` × 2 programs, mints + ATAs | RPC |
 | `solana_tx` | `signature`* | `solana_tx/1:<signature>` | 2 s; 1 day once finalized | `getSignatureStatuses` (history), `getTransaction` | RPC |
-| `lp_snapshot` | `wallet`*, `pool`*, `positions`, `min_context_slot` | `lp_snapshot/1:<wallet>:<pool>` | 10 s | ONE planned read (`plan::read_pool`: pool + positions + perps + wallet keys) + `price_oracle/1:<base mint>` row (≤ 30 s, else Jupiter inline + row written) + pending keeper request from `lp_state` | RPC, `lite-api.jup.ag` |
-| `hedge_decide` | `wallet`*, `pool`*, `knobs`*, `commit` (false) | `hedge_decide/1:<wallet>:<pool>` | never cached | store only: `lp_snapshot` + `lp_state`; missing / stale snapshot ⇒ action `blocked`, guard `stale_input` | none |
-| `lp_decide` | same | `lp_decide/1:<wallet>:<pool>` | never cached | store only: + `price_oracle` samples; missing / stale snapshot ⇒ verdict `blocked` | none |
+| `lp_snapshot` | `wallet`*, `pool`*, `positions`, `min_context_slot` | `lp_snapshot/1:<wallet>:<pool>` | 10 s (explicit `positions` ⇒ not stored) | ONE planned read (`plan::read_pool`: pool + positions + perps + wallet keys) + `price_oracle/1:<base mint>` row (≤ 10 s and ≤ the caller's max age, so snapshot + price age fits `max_snapshot_age_secs`; else Jupiter inline + row written) + pending keeper request from `lp_state` | RPC, `lite-api.jup.ag` |
+| `hedge_decide` | `wallet`*, `pool`*, `knobs`*, `commit` (false) | `hedge_decide/1:<wallet>:<pool>` | never cached | store only: `lp_snapshot` + `lp_state`; missing / stale / explicit-`positions` (`args`) snapshot ⇒ action `blocked`, guard `stale_input`; unreadable `lp_state` ⇒ guard `invalid_read` | none |
+| `lp_decide` | same | `lp_decide/1:<wallet>:<pool>` | never cached | store only: + `price_oracle` samples; missing / stale / `args` snapshot ⇒ verdict `blocked`; unreadable `lp_state` ⇒ `paused` `invalid_read` | none |
 
 Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the store), so its scope needs `fs_roots` = the workspace; `net_hosts` as above; `env_reads = ["SOLANA_RPC_URL"]` or the public RPC is used silently. Working scopes: `sandboxes/lping/config.toml`.
 
