@@ -17,18 +17,20 @@
 //!
 //! | `hedge_decide` | `lp_decide` |
 //! |---|---|
-//! | `InvalidRead` — a critical field is `Error` / missing | `Paused{InvalidRead}` |
+//! | `InvalidRead` — a critical field is `Error` / missing, or the position read is not whole ([`position_invalid_fields`]) | `Paused{InvalidRead}` (same position rule) |
 //! | `WalletSolZero` — `include_wallet_sol` and native SOL exactly 0 | `Paused{MultiplePositions}` |
 //! | `NotApplicable` — base is not native SOL or quote is not USDC | `Paused{Divergence}` — \|pool vs oracle\| > `max_divergence_bps` |
 //! | `PendingRequest` — keeper request open, age < max exec + 15 s | `Blocked` — snapshot or price row older than `max_snapshot_age_secs` |
 //! | `Divergence` — \|pool vs oracle\| > `max_divergence_bps` | storm → trend confirm → recenter / re-entry wait → open |
 //! | `StaleInput` — snapshot or price row older than `max_snapshot_age_secs` | |
-//! | `None{"no-LP grace…"}` — no LP position, one seen < `no_lp_grace_ms` ago, no re-entry wait (BUG-011) | |
+//! | `None{"no-LP grace…"}` — no LP position for < `no_lp_grace_ms` since the first no-LP read, no re-entry wait (BUG-011) | |
 //! | `hedge::decide`, then `VenuePermission` (custody disallows the action) | |
 //!
-//! A gated evaluation returns the controller state unchanged; only an
-//! evaluation that passes the gates advances timers / regimes. The caller
-//! persists the returned state only with `commit = true`.
+//! A gated evaluation returns the controller state unchanged except the
+//! position observation (`last_position_seen_ms` / `no_lp_since_ms`,
+//! recorded whenever the position read is whole — an observation, not a
+//! decision); only an evaluation that passes the gates advances timers /
+//! regimes. The caller persists the returned state only with `commit = true`.
 
 use std::collections::BTreeSet;
 
@@ -1092,10 +1094,17 @@ pub(crate) struct LpControllerState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_rebalance_failed_at_ms: Option<i64>,
     /// Observation time of the last snapshot that showed an LP position
-    /// (set by every ungated `hedge_decide` / `lp_decide`); starts the
-    /// BUG-011 no-LP grace (`HedgeKnobs::no_lp_grace_ms`).
+    /// (recorded by every `hedge_decide` / `lp_decide` whose position read
+    /// is whole, gated or not).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_position_seen_ms: Option<i64>,
+    /// Observation time of the first no-LP read since a position was last
+    /// seen (cleared when one is seen): the BUG-011 grace clock
+    /// (`HedgeKnobs::no_lp_grace_ms`) — the bot's `consecutiveNoLpCycles`,
+    /// counted from 0 at start-up and reset whenever an LP exists
+    /// (`autoTuneOrchestrator.ts:345-346`, `:701-725`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_lp_since_ms: Option<i64>,
     #[serde(default)]
     pub updated_at_ms: i64,
 }
@@ -1115,17 +1124,46 @@ impl LpControllerState {
             last_hedge_action: None,
             last_rebalance_failed_at_ms: None,
             last_position_seen_ms: None,
+            no_lp_since_ms: None,
             updated_at_ms: 0,
         }
     }
 
-    /// Record `snap`'s positions as seen at the snapshot's observation time
-    /// (`now_ms − snap_age_ms`); no-op without a position.
-    fn saw_positions(&mut self, snap: &LpSnapshot, now_ms: i64, snap_age_ms: u64) {
-        if !snap.positions.is_empty() {
-            let at = now_ms.saturating_sub(i64::try_from(snap_age_ms).unwrap_or(i64::MAX));
-            self.last_position_seen_ms = Some(self.last_position_seen_ms.map_or(at, |t| t.max(at)));
+    /// Record what `snap`'s (whole) position read showed at its observation
+    /// time (`now_ms − snap_age_ms`): a position → `last_position_seen_ms`
+    /// and the no-LP clock stops; none → the clock starts at the first such
+    /// read. A read older than the last seen position changes nothing.
+    /// Returns whether the state changed.
+    fn observe_positions(&mut self, snap: &LpSnapshot, now_ms: i64, snap_age_ms: u64) -> bool {
+        let at = now_ms.saturating_sub(i64::try_from(snap_age_ms).unwrap_or(i64::MAX));
+        let before = (self.last_position_seen_ms, self.no_lp_since_ms);
+        let newer = self.last_position_seen_ms.map_or(true, |t| at > t);
+        if snap.positions.is_empty() {
+            if newer && self.no_lp_since_ms.is_none() {
+                self.no_lp_since_ms = Some(at);
+            }
+        } else {
+            if newer {
+                self.last_position_seen_ms = Some(at);
+            }
+            if self.no_lp_since_ms.is_some_and(|t| at >= t) {
+                self.no_lp_since_ms = None;
+            }
         }
+        (self.last_position_seen_ms, self.no_lp_since_ms) != before
+    }
+
+    /// `self` with `snap`'s position observation recorded when the position
+    /// read is whole (`updated_at_ms` = `now_ms` if that changed anything) —
+    /// the state every evaluation returns, gated or not.
+    fn observed(&self, snap: &LpSnapshot, now_ms: i64, snap_age_ms: u64) -> Self {
+        let mut next = self.clone();
+        if position_invalid_fields(snap).is_empty()
+            && next.observe_positions(snap, now_ms, snap_age_ms)
+        {
+            next.updated_at_ms = now_ms;
+        }
+        next
     }
 }
 
@@ -1197,6 +1235,7 @@ impl Observed for LpControllerState {
             Some(self.last_rebalance_failed_at_ms.is_some()),
         );
         set_int(&mut f, "last_position_seen_ms", self.last_position_seen_ms);
+        set_int(&mut f, "no_lp_since_ms", self.no_lp_since_ms);
         set_int(&mut f, "updated_at_ms", Some(self.updated_at_ms));
         f
     }
@@ -1445,6 +1484,9 @@ pub(crate) struct HedgeView {
     pub pending_regime: Option<PendingRegime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regime_outcome: Option<RegimeOutcome>,
+    /// The LP signals the clamp confirm read (midpoint only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regime_signals: Option<RegimeSignals>,
     pub idle_wallet_sol: f64,
     pub perp_long_sol: f64,
     pub perp_short_sol: f64,
@@ -1522,10 +1564,20 @@ impl HedgeDecision {
     }
 }
 
-/// Critical fields for the hedge; a non-empty list blocks `InvalidRead`.
-fn hedge_invalid_fields(s: &LpSnapshot) -> Vec<String> {
+/// Why the position read is not whole — both decisions gate on it (BUG-023:
+/// a position that failed to read never becomes "no position" / exposure
+/// 0): discovery failed, exposure unread, a position's bins incomplete, a
+/// position-level read error (a discovered or requested key that did not
+/// decode, is not the wallet's PositionV2 in the pool, or lacks bin
+/// arrays), or discovery's count ≠ the positions valued.
+fn position_invalid_fields(s: &LpSnapshot) -> Vec<&'static str> {
     let mut v = Vec::new();
-    if matches!(s.discovery, Discovery::Error { .. }) {
+    let discovered = match &s.discovery {
+        Discovery::Found { count, .. } => Some(*count as usize),
+        Discovery::Empty { .. } => Some(0),
+        Discovery::Error { .. } => None,
+    };
+    if discovered.is_none() || s.errors.iter().any(|e| e.field == "discovery") {
         v.push("discovery");
     }
     if s.exposure.value().is_none() {
@@ -1534,6 +1586,18 @@ fn hedge_invalid_fields(s: &LpSnapshot) -> Vec<String> {
     if s.positions.iter().any(|p| !p.complete) {
         v.push("positions.complete");
     }
+    if s.errors.iter().any(|e| e.field == "positions") {
+        v.push("positions");
+    }
+    if discovered.is_some_and(|n| n != s.positions.len()) {
+        v.push("discovery.count");
+    }
+    v
+}
+
+/// Critical fields for the hedge; a non-empty list blocks `InvalidRead`.
+fn hedge_invalid_fields(s: &LpSnapshot) -> Vec<String> {
+    let mut v = position_invalid_fields(s);
     if s.wallet_balances.native_sol.value().is_none() {
         v.push("wallet.native_sol");
     }
@@ -1603,6 +1667,99 @@ fn divergence_reason(snap: &LpSnapshot, max_bps: f64) -> Option<String> {
         .then(|| format!("pool price vs oracle {bps:+.1} bps exceeds max_divergence_bps {max_bps}"))
 }
 
+/// One LP cycle's inputs to its storm latch and imbalance timer — the
+/// bot updates both before the hedge in the same cycle
+/// (`recordPriceSample` `autoTuneOrchestrator.ts:515`, `imbalanceSince`
+/// `:771-786`, then `maybeRebalanceHedge` `:928`). `lp_decide`'s knob
+/// values; `price_samples` = the `price_oracle` row's samples.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LpCycle<'a> {
+    /// `LpKnobs::storm_pct_5m` (`LP_VOL_PAUSE_PCT_5M`).
+    pub storm_pct_5m: f64,
+    /// `LpKnobs::imbalance_threshold` (`AUTO_TUNE_IMBALANCE_THRESHOLD`).
+    pub imbalance_threshold: f64,
+    pub price_samples: &'a [PriceSample],
+}
+
+impl<'a> LpCycle<'a> {
+    pub(crate) fn new(knobs: &LpKnobs, price_samples: &'a [PriceSample]) -> Self {
+        LpCycle {
+            storm_pct_5m: knobs.storm_pct_5m,
+            imbalance_threshold: knobs.imbalance_threshold,
+            price_samples,
+        }
+    }
+
+    /// Storm latch on the cycle price (`prev_active` = the latch from the
+    /// previous cycle). The samples are SOL/USD: ignored for a pool whose
+    /// quote is not USDC (its cycle price is the pool's own).
+    fn storm(&self, snap: &LpSnapshot, prev_active: bool, now_ms: i64) -> StormState {
+        let out = gates::storm_update(&StormInput {
+            now_ms,
+            price: snap.cycle_price().unwrap_or(f64::NAN),
+            samples: if snap.oracle.needed {
+                self.price_samples.to_vec()
+            } else {
+                Vec::new()
+            },
+            threshold_pct: self.storm_pct_5m,
+            active: prev_active,
+        });
+        StormState {
+            move_5m_pct: out.move_5m_pct,
+            active: out.active,
+            threshold_pct: self.storm_pct_5m,
+        }
+    }
+
+    /// The imbalance timer runs after this read: the one position is out of
+    /// its composition threshold. No position resets it; with several,
+    /// `lp_decide` pauses, so no recenter owns the signal.
+    fn imbalance_running(&self, snap: &LpSnapshot) -> bool {
+        match snap.positions.as_slice() {
+            [p] => {
+                position_health(p, snap.active_id, snap.pool_price, self.imbalance_threshold)
+                    .is_imbalanced
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The LP signals the midpoint clamp confirm reads (ADR-023 storm bypass,
+/// ADR-025 freeze).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RegimeSignals {
+    pub storm_active: bool,
+    pub imbalance_pending: bool,
+    /// `true` = computed from this snapshot + price samples ([`LpCycle`]);
+    /// `false` = `lp_state`'s flags, as the last ungated `lp_decide` left
+    /// them (possibly an earlier event).
+    pub this_cycle: bool,
+}
+
+impl RegimeSignals {
+    fn of(
+        cycle: Option<&LpCycle<'_>>,
+        snap: &LpSnapshot,
+        state: &LpControllerState,
+        now_ms: i64,
+    ) -> Self {
+        match cycle {
+            Some(c) => RegimeSignals {
+                storm_active: c.storm(snap, state.storm_active, now_ms).active,
+                imbalance_pending: c.imbalance_running(snap),
+                this_cycle: true,
+            },
+            None => RegimeSignals {
+                storm_active: state.storm_active,
+                imbalance_pending: state.imbalance_since_ms.is_some(),
+                this_cycle: false,
+            },
+        }
+    }
+}
+
 /// View + exact core input (`jupiterPerpsEngine.ts:840-913`,
 /// `autoTuneOrchestrator.ts:1104-1180`). Callers guarantee the critical
 /// fields are readable (`hedge_invalid_fields` is empty).
@@ -1610,6 +1767,7 @@ fn hedge_view(
     snap: &LpSnapshot,
     knobs: &HedgeKnobs,
     state: &LpControllerState,
+    signals: RegimeSignals,
     price: f64,
     now_ms: i64,
 ) -> (HedgeView, HedgeInput) {
@@ -1617,12 +1775,13 @@ fn hedge_view(
         .exposure
         .value()
         .map_or((0.0, 0.0), |e| (e.base, e.quote));
-    let (used, regime, computed, pending, outcome) = match knobs.lp_input {
+    let (used, regime, computed, pending, outcome, regime_signals) = match knobs.lp_input {
         LpInput::Live => (
             live,
             state.committed_regime,
             None,
             state.pending_regime,
+            None,
             None,
         ),
         LpInput::Midpoint => {
@@ -1633,8 +1792,8 @@ fn hedge_view(
                 computed: c.regime,
                 pending: state.pending_regime,
                 confirm_ms: i64::try_from(knobs.trend_confirm_ms).unwrap_or(i64::MAX),
-                storm_active: state.storm_active,
-                imbalance_pending: state.imbalance_since_ms.is_some(),
+                storm_active: signals.storm_active,
+                imbalance_pending: signals.imbalance_pending,
                 last_rebalance_failed: state.last_rebalance_failed_at_ms.is_some(),
             });
             let used = hedge::lp_delta_for_regime(rc.committed, live, quote, price);
@@ -1644,6 +1803,7 @@ fn hedge_view(
                 Some(c.regime),
                 rc.pending,
                 Some(rc.outcome),
+                Some(signals),
             )
         }
     };
@@ -1745,6 +1905,7 @@ fn hedge_view(
         computed_regime: computed,
         pending_regime: pending,
         regime_outcome: outcome,
+        regime_signals,
         idle_wallet_sol: idle,
         perp_long_sol: long_sol,
         perp_short_sol: short_sol,
@@ -1808,16 +1969,35 @@ fn guard_trace(input: &HedgeInput, action: &HedgeAction) -> GuardTrace {
     t
 }
 
-/// `hedge_decide`: tengu validity gates, then the verbatim
-/// [`hedge::decide`], then the venue-permission check. Returns the decision
-/// and the next controller state (unchanged when a gate fired before the
-/// core; the caller persists it only with `commit = true`).
+/// [`decide_hedge_in_cycle`] without an [`LpCycle`]: the midpoint clamp
+/// confirm reads `lp_state`'s storm / imbalance flags — the last ungated
+/// `lp_decide`'s, possibly an earlier event (`view.regime_signals.this_cycle
+/// = false`). Prefer the cycle form.
 pub(crate) fn decide_hedge(
     snap: &LpSnapshot,
     snap_meta: &ObsMeta,
     snap_age_ms: u64,
     knobs: &HedgeKnobs,
     state: &LpControllerState,
+    now_ms: i64,
+) -> (HedgeDecision, LpControllerState) {
+    decide_hedge_in_cycle(snap, snap_meta, snap_age_ms, knobs, state, None, now_ms)
+}
+
+/// `hedge_decide`: tengu validity gates, then the verbatim
+/// [`hedge::decide`], then the venue-permission check. With `cycle`, the
+/// midpoint clamp confirm sees this snapshot's storm latch and imbalance
+/// timer, as the bot's hedge does (`hedge_decide` then needs no earlier
+/// `lp_decide`). Returns the decision and the next controller state (only
+/// the position observation when a gate fired before the core; the caller
+/// persists it only with `commit = true`).
+pub(crate) fn decide_hedge_in_cycle(
+    snap: &LpSnapshot,
+    snap_meta: &ObsMeta,
+    snap_age_ms: u64,
+    knobs: &HedgeKnobs,
+    state: &LpControllerState,
+    cycle: Option<&LpCycle<'_>>,
     now_ms: i64,
 ) -> (HedgeDecision, LpControllerState) {
     let mut out = HedgeDecision {
@@ -1834,6 +2014,9 @@ pub(crate) fn decide_hedge(
         trace: GuardTrace::default(),
     };
     let blocked = |guard: Guard, reason: String| HedgeAction::Blocked { reason, guard };
+    // Seeing (or not seeing) a position is an observation: recorded before
+    // any gate, whenever the position read is whole.
+    let observed = state.observed(snap, now_ms, snap_age_ms);
 
     // 1-3: gates that need no view.
     let invalid = hedge_invalid_fields(snap);
@@ -1843,14 +2026,14 @@ pub(crate) fn decide_hedge(
             format!("critical reads failed: {}", invalid.join(", ")),
         );
         out.trace.invalid_fields = invalid;
-        return (out, state.clone());
+        return (out, observed);
     }
     if knobs.include_wallet_sol && snap.wallet_balances.native_sol.value() == Some(&0.0) {
         out.action = blocked(
             Guard::WalletSolZero,
             "wallet native SOL reads exactly 0 with include_wallet_sol (BUG-023: never hedge a read that may have failed)".into(),
         );
-        return (out, state.clone());
+        return (out, observed);
     }
     if !snap.hedge.applicable {
         out.action = blocked(
@@ -1860,11 +2043,12 @@ pub(crate) fn decide_hedge(
                 snap.pair.base_mint, snap.pair.quote_mint
             ),
         );
-        return (out, state.clone());
+        return (out, observed);
     }
 
     let price = snap.oracle.usd.unwrap_or(f64::NAN);
-    let (view, input) = hedge_view(snap, knobs, state, price, now_ms);
+    let signals = RegimeSignals::of(cycle, snap, state, now_ms);
+    let (view, input) = hedge_view(snap, knobs, &observed, signals, price, now_ms);
     out.view = Some(view.clone());
     out.input = Some(input.clone());
 
@@ -1900,12 +2084,12 @@ pub(crate) fn decide_hedge(
     if let Some((guard, reason)) = pre {
         out.action = blocked(guard, reason);
         out.trace = guard_trace(&input, &out.action);
-        return (out, state.clone());
+        return (out, observed);
     }
-    if let Some(reason) = no_lp_grace_reason(snap, knobs, state, now_ms) {
+    if let Some(reason) = no_lp_grace_reason(snap, knobs, &observed, now_ms) {
         out.action = HedgeAction::None { reason };
         out.trace = guard_trace(&input, &out.action);
-        return (out, state.clone());
+        return (out, observed);
     }
 
     // Core, unchanged.
@@ -1927,10 +2111,9 @@ pub(crate) fn decide_hedge(
     out.trace = guard_trace(&input, &action);
     out.action = action;
 
-    let mut next = state.clone();
+    let mut next = observed;
     next.committed_regime = view.regime;
     next.pending_regime = view.pending_regime;
-    next.saw_positions(snap, now_ms, snap_age_ms);
     next.updated_at_ms = now_ms;
     (out, next)
 }
@@ -1938,26 +2121,30 @@ pub(crate) fn decide_hedge(
 /// BUG-011 (`autoTuneOrchestrator.ts:692-716`): a recenter that closed the
 /// old position but failed to open the new one reads as "no LP" while the
 /// LP's SOL sits in the wallet — trading on that read would unwind the
-/// protective hedge mid-move. Hold (`None`) until the no-LP state outlasts
-/// `no_lp_grace_ms` since a position was last seen. A re-entry wait (A15)
-/// is a deliberate no-LP state: the hedge keeps running there.
+/// protective hedge mid-move. Hold (`None`) until the no-LP state has
+/// lasted `no_lp_grace_ms` since the first no-LP read (`state` = after this
+/// read's observation: the clock starts at a fresh state's first no-LP
+/// read, like the bot's counter from 0 — fail-closed). A re-entry wait
+/// (A15) is a deliberate no-LP state: the hedge keeps running there.
 fn no_lp_grace_reason(
     snap: &LpSnapshot,
     knobs: &HedgeKnobs,
-    state: &LpControllerState,
+    observed: &LpControllerState,
     now_ms: i64,
 ) -> Option<String> {
-    if knobs.no_lp_grace_ms == 0 || !snap.positions.is_empty() || state.reentry.is_some() {
+    if knobs.no_lp_grace_ms == 0 || !snap.positions.is_empty() || observed.reentry.is_some() {
         return None;
     }
-    let seen = state.last_position_seen_ms?;
-    let since = now_ms.saturating_sub(seen);
+    // `None` only when this read predates the last seen position: no no-LP
+    // run has been observed yet — hold.
+    let since = observed.no_lp_since_ms.unwrap_or(now_ms);
+    let lasted = now_ms.saturating_sub(since);
     let grace = i64::try_from(knobs.no_lp_grace_ms).unwrap_or(i64::MAX);
-    (since < grace).then(|| {
+    (lasted < grace).then(|| {
         format!(
-            "no-LP grace: no LP position for {} ms since one was seen (< no_lp_grace_ms {}); \
+            "no-LP grace: no LP position for {} ms since the first no-LP read (< no_lp_grace_ms {}); \
              the hedge holds while the LP funds may be mid-rebalance (BUG-011)",
-            since.max(0),
+            lasted.max(0),
             knobs.no_lp_grace_ms
         )
     })
@@ -2280,13 +2467,7 @@ impl LpDecision {
 
 /// Critical fields for the LP verdict.
 fn lp_invalid_fields(s: &LpSnapshot) -> Vec<String> {
-    let mut v = Vec::new();
-    if matches!(s.discovery, Discovery::Error { .. }) {
-        v.push("discovery");
-    }
-    if s.exposure.value().is_none() {
-        v.push("exposure");
-    }
+    let mut v = position_invalid_fields(s);
     if s.cycle_price().is_none() {
         v.push("oracle.usd");
     }
@@ -2434,22 +2615,7 @@ pub(crate) fn decide_lp(
     now_ms: i64,
 ) -> (LpDecision, LpControllerState) {
     let cycle_price = snap.cycle_price();
-    let storm_out = gates::storm_update(&StormInput {
-        now_ms,
-        price: cycle_price.unwrap_or(f64::NAN),
-        samples: if snap.oracle.needed {
-            price_samples.to_vec()
-        } else {
-            Vec::new()
-        },
-        threshold_pct: knobs.storm_pct_5m,
-        active: state.storm_active,
-    });
-    let storm = StormState {
-        move_5m_pct: storm_out.move_5m_pct,
-        active: storm_out.active,
-        threshold_pct: knobs.storm_pct_5m,
-    };
+    let storm = LpCycle::new(knobs, price_samples).storm(snap, state.storm_active, now_ms);
     let health: Vec<PositionHealth> = snap
         .positions
         .iter()
@@ -2481,7 +2647,8 @@ pub(crate) fn decide_lp(
         },
     };
 
-    // Validity gates: state unchanged.
+    // Validity gates: state unchanged but for the position observation.
+    let observed = state.observed(snap, now_ms, snap_age_ms);
     let gate = if !invalid.is_empty() {
         Some(LpVerdict::Paused {
             reason: PauseReason::InvalidRead,
@@ -2500,15 +2667,14 @@ pub(crate) fn decide_lp(
     };
     if let Some(v) = gate {
         out.verdict = v;
-        return (out, state.clone());
+        return (out, observed);
     }
 
     let price = cycle_price.unwrap_or(f64::NAN);
-    let mut next = state.clone();
+    let mut next = observed;
     next.storm_active = out.storm.active;
     next.updated_at_ms = now_ms;
     next.known_positions = snap.positions.iter().map(|p| p.position.clone()).collect();
-    next.saw_positions(snap, now_ms, snap_age_ms);
 
     out.verdict = match (snap.positions.first(), out.health.first()) {
         (Some(p), Some(h)) => {
@@ -3034,6 +3200,16 @@ mod tests {
         d.action.guard()
     }
 
+    /// `next` is `st` but for the position observation
+    /// (`last_position_seen_ms`, `no_lp_since_ms`, `updated_at_ms`).
+    fn only_observed(next: &LpControllerState, st: &LpControllerState) -> bool {
+        let mut n = next.clone();
+        n.last_position_seen_ms = st.last_position_seen_ms;
+        n.no_lp_since_ms = st.no_lp_since_ms;
+        n.updated_at_ms = st.updated_at_ms;
+        n == *st
+    }
+
     fn check_observed<T: Observed>(v: &T) {
         let f = v.features();
         assert_features_ok(&f);
@@ -3544,7 +3720,21 @@ mod tests {
                 d.trace.invalid_fields
             );
             assert!(d.view.is_none() && d.input.is_none(), "{field}");
-            assert_eq!(next, state, "{field}: state unchanged");
+            if field.starts_with("discovery")
+                || field.starts_with("positions")
+                || field == "exposure"
+            {
+                assert_eq!(
+                    next, state,
+                    "{field}: no whole position read, nothing recorded"
+                );
+            } else {
+                assert!(
+                    only_observed(&next, &state),
+                    "{field}: only the observation"
+                );
+                assert_eq!(next.last_position_seen_ms, Some(NOW - 99_000), "{field}");
+            }
             check_observed(&d);
         }
         // Pending request unreadable, or its expiry unknown.
@@ -3605,7 +3795,7 @@ mod tests {
             d.trace.invalid_fields.is_empty(),
             "perps/oracle not critical"
         );
-        assert_eq!(next, fresh_state());
+        assert!(only_observed(&next, &fresh_state()));
     }
 
     #[test]
@@ -3626,7 +3816,7 @@ mod tests {
                 Some(g) => {
                     assert_eq!(guard_of(&d), Some(g), "{r:?}");
                     assert!(d.view.is_some() && d.input.is_some(), "view computed");
-                    assert_eq!(next, fresh_state());
+                    assert!(only_observed(&next, &fresh_state()));
                 }
                 None => assert_eq!(d.action.name(), "increase_short", "{r:?}"),
             }
@@ -3812,35 +4002,54 @@ mod tests {
     }
 
     #[test]
-    fn no_lp_grace_holds_the_hedge_after_a_position_vanished() {
+    fn no_lp_grace_holds_the_hedge_from_the_first_no_lp_read() {
         let s = no_position();
+        let k = grace_knobs(300_000);
+        // Last sighting 10 min ago (e.g. the evaluations in between were
+        // gated): the clock starts at the first no-LP read, like the bot's
+        // no-LP cycle counter — not at the last sighting.
         let mut st = fresh_state();
-        st.last_position_seen_ms = Some(NOW - 60_000);
-        let (d, next) = hedge(&s, &grace_knobs(300_000), &st);
+        st.last_position_seen_ms = Some(NOW - 600_000);
+        let (d, next) = hedge(&s, &k, &st);
         match &d.action {
             HedgeAction::None { reason } => {
                 assert!(reason.starts_with("no-LP grace"), "{reason}");
-                assert!(reason.contains("60000 ms"), "{reason}");
+                assert!(reason.contains("1000 ms"), "{reason}");
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(next, st, "a held evaluation keeps the state");
+        assert_eq!(next.no_lp_since_ms, Some(NOW - 1_000), "the snapshot time");
+        assert!(
+            only_observed(&next, &st),
+            "a held evaluation records only that"
+        );
         assert!(d.view.is_some() && d.input.is_some(), "view for the log");
         check_observed(&d);
         // The core would short the idle wallet SOL.
         let core = HedgeAction::from_core(&hedge::decide(d.input.as_ref().unwrap()));
         assert_eq!(core.name(), "increase_short", "{core:?}");
+        // No state row at all (first run, purged or unreadable row): the
+        // bot's counter starts at 0 on start-up — hold too.
+        let (d, fresh_next) = hedge(&s, &k, &fresh_state());
+        assert_eq!(d.action.name(), "none", "{:?}", d.action);
+        assert_eq!(fresh_next.no_lp_since_ms, Some(NOW - 1_000));
 
-        // Grace elapsed → the core decides.
-        st.last_position_seen_ms = Some(NOW - 300_000);
-        let (d, next) = hedge(&s, &grace_knobs(300_000), &st);
+        // Still no LP 4 min later: the clock keeps its start.
+        let at = |now: i64| decide_hedge(&s, &meta_of(&s, 1_000), 1_000, &k, &next, now);
+        let (d, later) = at(NOW + 240_000);
+        assert_eq!(d.action.name(), "none", "{:?}", d.action);
+        assert_eq!(later.no_lp_since_ms, Some(NOW - 1_000));
+        // Grace elapsed since the first no-LP read → the core decides.
+        let (d, _) = at(NOW + 299_000);
         assert_eq!(d.action.name(), "increase_short", "{:?}", d.action);
-        assert_eq!(next.last_position_seen_ms, Some(NOW - 300_000));
-        // Off (0), never seen, or a deliberate re-entry wait → no grace.
-        st.last_position_seen_ms = Some(NOW - 1_000);
+        // A position seen again stops the clock.
+        let (_, seen) = hedge(&composed(), &k, &next);
+        assert_eq!(
+            (seen.last_position_seen_ms, seen.no_lp_since_ms),
+            (Some(NOW - 1_000), None)
+        );
+        // Off (0), or a deliberate re-entry wait → no grace.
         let (d, _) = hedge(&s, &grace_knobs(0), &st);
-        assert_eq!(d.action.name(), "increase_short");
-        let (d, _) = hedge(&s, &grace_knobs(300_000), &fresh_state());
         assert_eq!(d.action.name(), "increase_short");
         st.reentry = Some(ReentryWait::arm(110.0, 120.0, 116.0, NOW - 5_000));
         let (d, _) = hedge(&s, &grace_knobs(300_000), &st);
@@ -3863,7 +4072,7 @@ mod tests {
     }
 
     #[test]
-    fn ungated_decisions_record_when_a_position_was_seen() {
+    fn position_observations_are_recorded_gated_or_not() {
         let s = composed();
         let (_, next) = hedge(&s, &hedge_knobs(), &fresh_state());
         assert_eq!(
@@ -3873,29 +4082,246 @@ mod tests {
         );
         let (_, next) = lp(&s, &lp_knobs(), &fresh_state(), &[]);
         assert_eq!(next.last_position_seen_ms, Some(NOW - 1_000));
-        // Never moves backwards; a no-position read leaves it.
+        // Gated evaluations observe too (a pool lagging the oracle gates
+        // both decisions for minutes in a fast move).
+        let mut div = composed();
+        div.pool_vs_oracle_bps = Some(80.0);
+        let (d, next) = hedge(&div, &hedge_knobs(), &fresh_state());
+        assert_eq!(guard_of(&d), Some(Guard::Divergence));
+        assert_eq!(
+            (next.last_position_seen_ms, next.updated_at_ms),
+            (Some(NOW - 1_000), NOW)
+        );
+        assert!(only_observed(&next, &fresh_state()));
+        let (d, next) = lp(&div, &lp_knobs(), &fresh_state(), &[]);
+        assert_eq!(d.verdict.name(), "paused");
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 1_000));
+        assert!(only_observed(&next, &fresh_state()));
+        let mut bad = composed();
+        bad.wallet_balances.native_sol = Field::err(err("wallet.native_sol"));
+        let (d, next) = hedge(&bad, &hedge_knobs(), &fresh_state());
+        assert_eq!(guard_of(&d), Some(Guard::InvalidRead));
+        assert_eq!(next.last_position_seen_ms, Some(NOW - 1_000));
+        // A position read that is not whole records nothing.
+        let mut bad = no_position();
+        bad.discovery = Discovery::Error {
+            error: err("discovery"),
+            fallback_count: 0,
+        };
+        let (_, next) = hedge(&bad, &hedge_knobs(), &fresh_state());
+        assert_eq!(next, fresh_state());
+        let (_, next) = lp(&bad, &lp_knobs(), &fresh_state(), &[]);
+        assert_eq!(next, fresh_state());
+        // Never moves backwards; a no-LP read older than the last sighting
+        // starts no clock.
         let mut st = fresh_state();
         st.last_position_seen_ms = Some(NOW + 5);
         let (_, next) = hedge(&s, &hedge_knobs(), &st);
         assert_eq!(next.last_position_seen_ms, Some(NOW + 5));
-        st.last_position_seen_ms = Some(NOW - 90_000);
         let (_, next) = hedge(&no_position(), &hedge_knobs(), &st);
-        assert_eq!(next.last_position_seen_ms, Some(NOW - 90_000));
+        assert_eq!(
+            (next.last_position_seen_ms, next.no_lp_since_ms),
+            (Some(NOW + 5), None)
+        );
+        // A no-LP read starts the clock once (either decision).
+        st.last_position_seen_ms = Some(NOW - 90_000);
         let (_, next) = lp(&no_position(), &lp_knobs(), &st, &[]);
-        assert_eq!(next.last_position_seen_ms, Some(NOW - 90_000));
-        // A gated evaluation records nothing.
-        let mut bad = composed();
-        bad.wallet_balances.native_sol = Field::err(err("wallet.native_sol"));
-        let (_, next) = hedge(&bad, &hedge_knobs(), &fresh_state());
-        assert_eq!(next.last_position_seen_ms, None);
-        // Round trip + a row written before the field existed.
-        let o = Observation::of("t", &st, NOW, LP_STATE_TTL_MS, ObsSource::Live);
-        assert_eq!(o.typed::<LpControllerState>().unwrap(), st);
+        assert_eq!(
+            (next.last_position_seen_ms, next.no_lp_since_ms),
+            (Some(NOW - 90_000), Some(NOW - 1_000))
+        );
+        let (_, again) = hedge(&no_position(), &hedge_knobs(), &next);
+        assert_eq!(again.no_lp_since_ms, Some(NOW - 1_000));
+        // Round trip + a row written before the fields existed.
+        let o = Observation::of("t", &next, NOW, LP_STATE_TTL_MS, ObsSource::Live);
+        assert_eq!(o.typed::<LpControllerState>().unwrap(), next);
         assert_eq!(o.features["last_position_seen_ms"], json!(NOW - 90_000));
+        assert_eq!(o.features["no_lp_since_ms"], json!(NOW - 1_000));
         let mut v = serde_json::to_value(fresh_state()).unwrap();
         v.as_object_mut().unwrap().remove("last_position_seen_ms");
+        v.as_object_mut().unwrap().remove("no_lp_since_ms");
         let old: LpControllerState = serde_json::from_value(v).unwrap();
-        assert_eq!(old.last_position_seen_ms, None);
+        assert_eq!(
+            (old.last_position_seen_ms, old.no_lp_since_ms),
+            (None, None)
+        );
+    }
+
+    /// Finding #3 (BUG-023): a position that failed to read is never "no
+    /// position" / exposure 0 — built through the real builders.
+    #[test]
+    fn position_read_errors_block_both_decisions() {
+        let compose = |set: &AccountSet, positions: &DlmmPositions| {
+            compose_snapshot(
+                &pk(WALLET),
+                &pool_state(set),
+                positions,
+                Some(&perps_flat()),
+                &wallet_inv(),
+                Some(&oracle_obs(NOW - 2_000)),
+                NOW,
+            )
+        };
+        // (a) The wallet's position carries the PositionV2 discriminator
+        // (pool + owner intact) but does not decode.
+        let mut set = owned_dlmm_set();
+        let read = set.get(&pk(POSITION)).unwrap().clone();
+        let data = read.data().unwrap();
+        set.insert(AccountRead::from_bytes(
+            pk(POSITION),
+            read.slot,
+            *read.owner().unwrap(),
+            read.lamports().unwrap(),
+            &data[..100],
+        ));
+        let undecodable = compose(&set, &positions_of(&set, WALLET));
+        assert!(undecodable.positions.is_empty());
+        assert_eq!(
+            undecodable.exposure.value().map(|e| e.base),
+            Some(0.0),
+            "the builder sums the positions it valued"
+        );
+        // (b) An explicitly requested key that is another wallet's position.
+        let set = dlmm_set();
+        let args = dlmm::build_positions(
+            &set,
+            &pk(WALLET),
+            &pk(POOL),
+            Discovery::Found {
+                count: 1,
+                source: DiscoverySource::Args,
+                at_ms: NOW,
+            },
+        )
+        .unwrap();
+        let foreign = compose(&set, &args);
+        assert!(foreign.positions.is_empty());
+        // (c) Discovery found 2 keys, 1 valued, no error at all.
+        let mut short = composed();
+        short.discovery = Discovery::Found {
+            count: 2,
+            source: DiscoverySource::Gpa,
+            at_ms: NOW,
+        };
+        let cases: [(&str, &LpSnapshot, &[&str]); 3] = [
+            (
+                "undecodable",
+                &undecodable,
+                &["positions", "discovery.count"],
+            ),
+            ("foreign", &foreign, &["positions", "discovery.count"]),
+            ("short", &short, &["discovery.count"]),
+        ];
+        for (name, s, want) in cases {
+            let (d, next) = hedge(s, &hedge_knobs(), &fresh_state());
+            assert_eq!(
+                guard_of(&d),
+                Some(Guard::InvalidRead),
+                "{name}: {:?}",
+                d.action
+            );
+            for f in want {
+                assert!(
+                    d.trace.invalid_fields.contains(&f.to_string()),
+                    "{name}: {f} in {:?}",
+                    d.trace.invalid_fields
+                );
+            }
+            assert_eq!(next, fresh_state(), "{name}: nothing observed");
+            let (l, next) = lp(s, &lp_knobs(), &fresh_state(), &[]);
+            assert_eq!(
+                l.verdict,
+                LpVerdict::Paused {
+                    reason: PauseReason::InvalidRead
+                },
+                "{name}"
+            );
+            for f in want {
+                assert!(l.invalid_fields.contains(&f.to_string()), "{name}: {f}");
+            }
+            assert_eq!(next, fresh_state(), "{name}");
+        }
+    }
+
+    /// Finding #14: `hedge_decide`'s clamp confirm sees THIS read's storm
+    /// latch and imbalance timer (the bot updates both before the hedge in
+    /// the same cycle), not the ones an earlier `lp_decide` left.
+    #[test]
+    fn hedge_in_cycle_prices_the_clamp_with_this_reads_storm_and_imbalance() {
+        // Composed: computed clamp regime Above (committed In); the position
+        // is ~97 % quote (imbalanced at 0.9).
+        let s = composed();
+        let price = s.oracle.usd.unwrap();
+        let mut k = hedge_knobs();
+        k.lp_input = LpInput::Midpoint;
+        k.trend_confirm_ms = 300_000;
+        let mut lk = lp_knobs();
+        lk.storm_pct_5m = 1.0;
+        let in_cycle =
+            |k: &HedgeKnobs, lk: &LpKnobs, st: &LpControllerState, ps: &[PriceSample]| {
+                let c = LpCycle::new(lk, ps);
+                decide_hedge_in_cycle(&s, &meta_of(&s, 1_000), 1_000, k, st, Some(&c), NOW)
+            };
+        let outcome = |d: &HedgeDecision| d.view.as_ref().unwrap().regime_outcome;
+
+        // Storm onset this cycle (5 % in 5 min): ADR-023 bypass commits now.
+        let storm = [PriceSample {
+            t_ms: NOW - 300_000,
+            usd: price / 1.05,
+        }];
+        let (d, next) = in_cycle(&k, &lk, &fresh_state(), &storm);
+        assert_eq!(
+            d.view.as_ref().unwrap().regime_signals,
+            Some(RegimeSignals {
+                storm_active: true,
+                imbalance_pending: true,
+                this_cycle: true
+            })
+        );
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Committed));
+        assert_eq!(next.committed_regime, LpRegime::Above);
+        assert!(!next.storm_active, "the latch stays lp_decide's to write");
+        let (l, _) = lp(&s, &lk, &fresh_state(), &storm);
+        assert!(l.storm.active, "lp_decide sees the same storm");
+        // On lp_state's flags (no storm recorded yet): still pending.
+        let (d, _) = hedge(&s, &k, &fresh_state());
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Pending));
+        assert!(!d.view.as_ref().unwrap().regime_signals.unwrap().this_cycle);
+
+        // ADR-025 freeze on this read's imbalance.
+        k.trend_confirm_ms = 0;
+        lk.storm_pct_5m = 0.0;
+        let (d, next) = in_cycle(&k, &lk, &fresh_state(), &[]);
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Frozen), "imbalanced now");
+        assert_eq!(next.committed_regime, LpRegime::In);
+        let (d, _) = hedge(&s, &k, &fresh_state());
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Committed), "flags: none");
+        // Balanced at 0.99 while lp_state keeps an hour-old timer.
+        lk.imbalance_threshold = 0.99;
+        let mut st = fresh_state();
+        st.imbalance_since_ms = Some(NOW - 3_600_000);
+        let (d, next) = in_cycle(&k, &lk, &st, &[]);
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Committed), "balanced now");
+        assert_eq!(next.committed_regime, LpRegime::Above);
+        let (d, _) = hedge(&s, &k, &st);
+        assert_eq!(outcome(&d), Some(RegimeOutcome::Frozen), "stale flag");
+        // Several positions: lp_decide pauses, so no recenter owns the
+        // imbalance and nothing freezes the clamp.
+        lk.imbalance_threshold = 0.9;
+        let mut two = composed();
+        let mut second = two.positions[0].clone();
+        second.position = "Ui6V49xptXnsgay1h75MVch6zh2B3ahP2yb7iRTwX6x".into();
+        two.positions.push(second);
+        two.discovery = Discovery::Found {
+            count: 2,
+            source: DiscoverySource::Gpa,
+            at_ms: NOW,
+        };
+        let c = LpCycle::new(&lk, &[]);
+        let (d, _) =
+            decide_hedge_in_cycle(&two, &meta_of(&two, 1_000), 1_000, &k, &st, Some(&c), NOW);
+        let signals = d.view.as_ref().unwrap().regime_signals.unwrap();
+        assert!(!signals.imbalance_pending && signals.this_cycle);
     }
 
     #[test]
@@ -4049,7 +4475,7 @@ mod tests {
     }
 
     #[test]
-    fn lp_validity_gates_pause_or_block_and_keep_state() {
+    fn lp_validity_gates_pause_or_block_and_record_only_the_observation() {
         let k = lp_knobs();
         let state = fresh_state();
         let mut s = composed();
@@ -4062,7 +4488,7 @@ mod tests {
             }
         );
         assert!(d.invalid_fields.contains(&"oracle.usd".to_string()));
-        assert_eq!(next, state);
+        assert!(only_observed(&next, &state));
 
         let mut s = composed();
         s.discovery = Discovery::Error {
@@ -4086,6 +4512,11 @@ mod tests {
         let mut second = s.positions[0].clone();
         second.position = "Ui6V49xptXnsgay1h75MVch6zh2B3ahP2yb7iRTwX6x".into();
         s.positions.push(second);
+        s.discovery = Discovery::Found {
+            count: 2,
+            source: DiscoverySource::Gpa,
+            at_ms: NOW,
+        };
         let (d, next) = lp(&s, &k, &state, &[]);
         assert_eq!(
             d.verdict,
@@ -4093,7 +4524,7 @@ mod tests {
                 reason: PauseReason::MultiplePositions
             }
         );
-        assert_eq!(next, state);
+        assert!(only_observed(&next, &state));
         check_observed(&d);
 
         let mut s = balanced();
@@ -4105,12 +4536,12 @@ mod tests {
                 reason: PauseReason::Divergence
             }
         );
-        assert_eq!(next, state);
+        assert!(only_observed(&next, &state));
 
         let s = balanced();
         let (d, next) = decide_lp(&s, &meta_of(&s, 31_000), 31_000, &k, &state, &[], NOW);
         assert_eq!(d.verdict.name(), "blocked");
-        assert_eq!(next, state);
+        assert!(only_observed(&next, &state));
     }
 
     #[test]
