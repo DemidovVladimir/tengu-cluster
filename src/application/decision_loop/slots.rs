@@ -5,7 +5,7 @@
 //! `pool_2`) so the model never has to reproduce an address; the full value
 //! stays in code.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
@@ -15,6 +15,7 @@ use crate::config::decision_loop::SlotConfig;
 use crate::domain::decision::HistoryEntry;
 
 /// Max chars of an item shown to the model as a candidate description.
+/// Longer items drop whole fields (`describe`); a value is never cut.
 const MAX_DESC_CHARS: usize = 300;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,13 +26,15 @@ pub(crate) struct Candidate {
 }
 
 /// Candidates for one slot, capped by `cap` when set. Empty = the action is
-/// not legal right now (e.g. the `from` action has not succeeded yet, or the
-/// `observation` world entry is not fresh).
-pub(crate) fn candidates(
+/// not legal right now (e.g. the `from` action has not succeeded yet in this
+/// event, or the `observation` world entry is not fresh). `history` = the
+/// current event's entries, oldest first: the loop never offers items from
+/// an earlier event's result (its data may be hours old).
+pub(crate) fn candidates<'h>(
     slot_name: &str,
     slot: &SlotConfig,
     cap: Option<f64>,
-    history: &VecDeque<HistoryEntry>,
+    history: impl DoubleEndedIterator<Item = &'h HistoryEntry>,
     world: &World,
 ) -> Vec<Candidate> {
     let within_cap = |v: &Value| match (cap, as_f64(v)) {
@@ -51,7 +54,7 @@ pub(crate) fn candidates(
             .map(|(i, (item, v))| Candidate {
                 label: format!("{slot_name}_{}", i + 1),
                 value: v,
-                description: truncate(&item.to_string()),
+                description: describe(item, value),
             })
             .collect()
     };
@@ -75,7 +78,6 @@ pub(crate) fn candidates(
             top,
         } => {
             let Some(entry) = history
-                .iter()
                 .rev()
                 .find(|h| h.action == *from && h.ok == Some(true))
             else {
@@ -135,11 +137,37 @@ fn plain(v: &Value) -> String {
     }
 }
 
-fn truncate(s: &str) -> String {
-    if s.chars().count() <= MAX_DESC_CHARS {
-        return s.to_string();
+/// Candidate description: the item's JSON when it fits `MAX_DESC_CHARS`.
+/// Otherwise whole `"key":value` fields in key order while they fit — the
+/// `value` field always (it is what the label stands for) — and a trailing
+/// `,…` marks the omission. Never cuts inside a value, so an address or
+/// mint is shown whole or not at all.
+fn describe(item: &Value, value: &str) -> String {
+    let full = item.to_string();
+    let Value::Object(o) = item else {
+        return full;
+    };
+    if full.chars().count() <= MAX_DESC_CHARS {
+        return full;
     }
-    s.chars().take(MAX_DESC_CHARS).collect::<String>() + "…"
+    let field = |k: &String, v: &Value| format!("{}:{v}", Value::String(k.clone()));
+    // `{` + the kept fields, each followed by `,` + `…}`.
+    let mut used = "{…}".chars().count()
+        + o.get_key_value(value)
+            .map_or(0, |(k, v)| field(k, v).chars().count() + 1);
+    let mut kept = String::from("{");
+    for (k, v) in o {
+        let f = field(k, v);
+        let n = f.chars().count() + 1;
+        if k == value || used + n <= MAX_DESC_CHARS {
+            if k != value {
+                used += n;
+            }
+            kept.push_str(&f);
+            kept.push(',');
+        }
+    }
+    kept + "…}"
 }
 
 #[cfg(test)]
@@ -161,7 +189,13 @@ mod tests {
     #[test]
     fn static_candidates_respect_cap() {
         let slot = SlotConfig::Static(vec![json!(0.5), json!(1), json!(2), json!(3)]);
-        let c = candidates("size", &slot, Some(2.0), &VecDeque::new(), &World::empty());
+        let c = candidates(
+            "size",
+            &slot,
+            Some(2.0),
+            std::iter::empty(),
+            &World::empty(),
+        );
         let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["0.5", "1", "2"]);
     }
@@ -174,19 +208,76 @@ mod tests {
             value: "address".into(),
             top: 2,
         };
-        let mut h = VecDeque::new();
-        h.push_back(entry("fetch", true, json!({"pools":[{"address":"OLD"}]})));
-        h.push_back(entry(
+        let mut h = Vec::new();
+        h.push(entry("fetch", true, json!({"pools":[{"address":"OLD"}]})));
+        h.push(entry(
             "fetch",
             true,
             json!({"pools":[{"address":"A1","fees":5},{"address":"B2"},{"address":"C3"}]}),
         ));
-        h.push_back(entry("fetch", false, json!("HTTP 500")));
-        let c = candidates("pool", &slot, None, &h, &World::empty());
+        h.push(entry("fetch", false, json!("HTTP 500")));
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].label, "pool_1");
         assert_eq!(c[0].value, json!("A1"));
         assert!(c[0].description.contains("fees"));
+    }
+
+    #[test]
+    fn long_descriptions_drop_whole_fields_never_cut_a_value() {
+        // A full `dlmm_pools` row (keys serialise alphabetically): > 300 chars.
+        let row = json!({
+            "address": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+            "apr_pct": 41.234567, "base_fee_pct": 0.04, "bin_step": 4,
+            "current_price": 116.6084160651512, "dynamic_fee_pct": 0.001234,
+            "fee_tvl_24h_pct": 0.112968, "fees_24h_usd": 7985.123456,
+            "is_blacklisted": false,
+            "mint_x": "So11111111111111111111111111111111111111112",
+            "mint_y": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "name": "SOL-USDC", "tvl_usd": 7067545.74, "volume_24h_usd": 19963421.12
+        });
+        assert!(row.to_string().chars().count() > MAX_DESC_CHARS);
+        // `value = "name"` sorts late: it must still show.
+        let slot = SlotConfig::FromHistory {
+            from: "fetch".into(),
+            items: "/pools/*".into(),
+            value: "name".into(),
+            top: 1,
+        };
+        let h = vec![entry("fetch", true, json!({ "pools": [row.clone()] }))];
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
+        let d = &c[0].description;
+        assert!(d.chars().count() <= MAX_DESC_CHARS, "{d}");
+        assert!(d.contains(r#""name":"SOL-USDC""#), "{d}");
+        assert!(d.contains(r#""address":"5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6""#));
+        assert!(d.ends_with(",…}"), "omission marked: {d}");
+        for (k, v) in row.as_object().unwrap() {
+            let key = format!("{}:", json!(k));
+            assert!(
+                d.contains(&format!("{key}{v}")) || !d.contains(&key),
+                "field `{k}` cut: {d}"
+            );
+        }
+        // Short items are rendered whole, unchanged.
+        let short = json!({"address": "A1", "fees": 5});
+        let h = vec![entry("fetch", true, json!({ "pools": [short.clone()] }))];
+        let c = candidates(
+            "pool",
+            &slot_value("address"),
+            None,
+            h.iter(),
+            &World::empty(),
+        );
+        assert_eq!(c[0].description, short.to_string());
+    }
+
+    fn slot_value(value: &str) -> SlotConfig {
+        SlotConfig::FromHistory {
+            from: "fetch".into(),
+            items: "/pools/*".into(),
+            value: value.into(),
+            top: 5,
+        }
     }
 
     #[test]
@@ -197,7 +288,7 @@ mod tests {
             value: "address".into(),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
+        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
     }
 
     #[test]
@@ -208,7 +299,7 @@ mod tests {
             value: "address".into(),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
+        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
     }
 
     #[test]

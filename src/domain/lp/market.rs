@@ -127,6 +127,22 @@ fn positive(v: Option<f64>) -> Option<f64> {
     v.filter(|x| x.is_finite() && *x > 0.0)
 }
 
+/// `x` with `sig` significant digits: plain notation for 1e-9 ≤ |x| < 1e15,
+/// exponent notation outside — a read sub-micro price never renders as 0.
+/// Same rule as the private copies in `dlmm.rs` / `snapshot.rs`.
+pub(crate) fn fmt_sig(x: f64, sig: i32) -> String {
+    if !x.is_finite() || x == 0.0 {
+        return format!("{x}");
+    }
+    let mag = x.abs().log10().floor() as i32;
+    if !(-9..15).contains(&mag) {
+        let digits = (sig - 1).max(0) as usize;
+        return format!("{x:.digits$e}");
+    }
+    let decimals = (sig - 1 - mag).max(0) as usize;
+    format!("{x:.decimals$}")
+}
+
 /// A short service error text from a JSON error body (`error` / `message` /
 /// `detail`), whole or not at all (never cut).
 fn service_error(v: &Value) -> Option<String> {
@@ -493,7 +509,7 @@ impl Observed for OraclePrice {
     fn headline(&self) -> String {
         let mut h = format!("price {}", self.mint);
         match (self.usd, self.source) {
-            (Some(u), Some(s)) => h.push_str(&format!(" usd={u:.6} via {}", s.as_str())),
+            (Some(u), Some(s)) => h.push_str(&format!(" usd={} via {}", fmt_sig(u, 7), s.as_str())),
             _ => h.push_str(" usd=unavailable"),
         }
         if let Some(q) = &self.pool {
@@ -1315,6 +1331,22 @@ mod tests {
         );
         assert_eq!((o.usd, o.status()), (None, ObsStatus::Absent));
         assert!(o.errors().is_empty());
+    }
+
+    #[test]
+    fn headline_price_keeps_significant_digits() {
+        let headline = |usd: f64| {
+            let o = combine_price(UNKNOWN_MINT, jup(usd), Field::Absent, None, None, T0_MS);
+            assert_eq!(o.usd, Some(usd));
+            Observation::of("sol_price", &o, T0_MS, PRICE_TTL_MS, ObsSource::Live).headline
+        };
+        // A read, non-zero sub-micro price never renders as 0.000000.
+        let h = headline(3.2e-9);
+        assert!(h.contains(" usd=0.000000003200000 via jupiter"), "{h}");
+        let h = headline(1.5e-12);
+        assert!(h.contains(" usd=1.500000e-12 via jupiter"), "{h}");
+        let h = headline(116.6084160651512);
+        assert!(h.contains(" usd=116.6084 via jupiter"), "{h}");
     }
 
     #[test]

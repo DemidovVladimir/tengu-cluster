@@ -8,7 +8,8 @@
 //! 1. Read `world` (alias → observation key) from the `ObservationStore`
 //!    (`world::World`; never fetched). Legal actions = terminal actions +
 //!    actions whose every slot has candidates (`slots::candidates`, caps
-//!    applied) and whose every `requires` alias is fresh.
+//!    applied; `FromHistory` reads only this event's entries) and whose
+//!    every `requires` alias is fresh.
 //! 2. One decisions call: `next_action` (choice over legal actions) + one
 //!    `choice` per multi-candidate slot (`<action>__<slot>`), against
 //!    `state = {goal, event, world (omitted when empty), history, step}`.
@@ -69,6 +70,11 @@ pub(crate) struct DecisionLoop {
 #[derive(Default)]
 struct LoopState {
     t: u64,
+    /// `t` when the current event began: entries with a larger `t` are this
+    /// event's. `FromHistory` slots read only those — `history` outlives
+    /// events (webhook listener), and an earlier event's result may be
+    /// hours old.
+    event_start: u64,
     history: VecDeque<HistoryEntry>,
 }
 
@@ -101,6 +107,7 @@ impl DecisionLoop {
         session_id: &str,
     ) -> Result<Vec<StepOutcome>> {
         let mut st = self.state.lock().await;
+        st.event_start = st.t;
         let event = reduce::reduce(event, &self.cfg.event_reduce);
         let mut outcomes = Vec::new();
         for step in 0..self.cfg.max_steps {
@@ -130,8 +137,9 @@ impl DecisionLoop {
             }
             let mut slots = BTreeMap::new();
             for (sn, slot) in &action.slots {
+                let this_event = st.history.iter().filter(|h| h.t > st.event_start);
                 let c =
-                    slots::candidates(sn, slot, action.caps.get(sn).copied(), &st.history, &world);
+                    slots::candidates(sn, slot, action.caps.get(sn).copied(), this_event, &world);
                 if c.is_empty() {
                     break;
                 }
@@ -867,6 +875,36 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
         let calls = tools.0.lock().unwrap();
         assert_eq!(calls[1].name, "open_position");
         assert_eq!(calls[1].arguments, json!({"pool": "A1", "size": 2}));
+    }
+
+    #[tokio::test]
+    async fn history_slots_never_reuse_an_earlier_events_result() {
+        let (l, engine, tools, _) = build(
+            false,
+            vec![
+                // Event 1: fetch succeeds, then hold.
+                pick(&[("next_action", "fetch", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+                // Event 2: no fetch yet — the event-1 pools must not feed `open`.
+                pick(&[
+                    ("next_action", "open", 0.99),
+                    ("open__pool", "pool_1", 0.99),
+                    ("open__size", "1", 0.99),
+                ]),
+            ],
+        );
+        l.handle_event(&json!({"n": 1}), "s").await.unwrap();
+        assert!(legal_actions(&engine, 1).contains(&"open".to_string()));
+        let out = l.handle_event(&json!({"n": 2}), "s").await.unwrap();
+        assert!(!legal_actions(&engine, 2).contains(&"open".to_string()));
+        assert!(
+            matches!(&out[0], StepOutcome::Rejected { action, .. } if action == "open"),
+            "{out:?}"
+        );
+        assert_eq!(tools.0.lock().unwrap().len(), 1, "only event 1's fetch ran");
+        // The earlier event's entries stay in `state.history` as context.
+        let states = engine.states.lock().unwrap();
+        assert_eq!(states[2]["history"][0]["action"], json!("fetch"));
     }
 
     #[tokio::test]

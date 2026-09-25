@@ -90,10 +90,28 @@ impl Pubkey {
     }
 }
 
+/// Longest base58 rendering of 32 bytes. `bs58_decode` is O(n²), so longer
+/// (untrusted) input is refused before decoding.
+const PUBKEY_MAX_B58: usize = 44;
+/// Longest base58 rendering of 64 bytes (see [`PUBKEY_MAX_B58`]).
+const SIGNATURE_MAX_B58: usize = 88;
+
+/// `s` trimmed, or an error (full input kept) when it is longer than `max`.
+fn bounded<'a>(s: &'a str, what: &str, max: usize) -> Result<&'a str, String> {
+    let t = s.trim();
+    if t.len() > max {
+        return Err(format!(
+            "{what} must be at most {max} base58 chars, got {}: {s}",
+            t.len()
+        ));
+    }
+    Ok(t)
+}
+
 impl FromStr for Pubkey {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let v = bs58_decode(s.trim())?;
+        let v = bs58_decode(bounded(s, "pubkey", PUBKEY_MAX_B58)?)?;
         let b: [u8; 32] = v
             .try_into()
             .map_err(|v: Vec<u8>| format!("pubkey must be 32 bytes, got {}: {s}", v.len()))?;
@@ -133,7 +151,7 @@ pub struct Signature(pub [u8; 64]);
 impl FromStr for Signature {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let v = bs58_decode(s.trim())?;
+        let v = bs58_decode(bounded(s, "signature", SIGNATURE_MAX_B58)?)?;
         let b: [u8; 64] = v
             .try_into()
             .map_err(|v: Vec<u8>| format!("signature must be 64 bytes, got {}: {s}", v.len()))?;
@@ -510,6 +528,33 @@ mod tests {
         assert_eq!(bs58_encode(&[0xff; 4]), "7YXq9G");
         assert!(bs58_decode("0OIl").is_err());
         assert!("abc".parse::<Pubkey>().is_err(), "wrong length rejected");
+    }
+
+    #[test]
+    fn over_long_ids_are_refused_before_decoding() {
+        // Valid base58 that would decode to more bytes: refused on length,
+        // the full input echoed.
+        let long_pk = "z".repeat(PUBKEY_MAX_B58 + 1);
+        let e = long_pk.parse::<Pubkey>().unwrap_err();
+        assert!(e.contains("at most 44 base58 chars, got 45"), "{e}");
+        assert!(e.contains(&long_pk), "full input kept: {e}");
+        let e = "z"
+            .repeat(SIGNATURE_MAX_B58 + 1)
+            .parse::<Signature>()
+            .unwrap_err();
+        assert!(e.contains("at most 88 base58 chars, got 89"), "{e}");
+        // The longest valid ids still parse; surrounding whitespace is free.
+        let max_pk = bs58_encode(&[0xff; 32]);
+        assert_eq!(max_pk.len(), PUBKEY_MAX_B58);
+        let k: Pubkey = format!("  {max_pk}\n").parse().unwrap();
+        assert_eq!(k.0, [0xff; 32]);
+        let sig = Signature([0xff; 64]);
+        assert_eq!(sig.to_string().len(), SIGNATURE_MAX_B58);
+        assert_eq!(sig.to_string().parse::<Signature>().unwrap(), sig);
+        // A megabyte of base58 fails fast (was a quadratic decode: minutes).
+        let started = std::time::Instant::now();
+        assert!("z".repeat(1 << 20).parse::<Pubkey>().is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]

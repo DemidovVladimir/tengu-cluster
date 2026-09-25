@@ -6,7 +6,7 @@
 //! | URL | `$SOLANA_RPC_URL` when `ctx.scope.check_env_read` allows it and it is set, else `DEFAULT_RPC_URL` |
 //! | Egress | every request: `egress::policy().check_url` + `ctx.scope.check_net_host(host)` + one audit record (host only) on `ctx.http` |
 //! | Commitment | `confirmed` (the bot's) |
-//! | Errors | [`RpcError`]: class + message; the message never contains the URL (RPC URLs embed api keys) — [`SolanaRpc::host`] is the only rendering |
+//! | Errors | [`RpcError`]: class + message; the message never contains the URL (RPC URLs embed api keys) — [`SolanaRpc::host`] is the only rendering; transport errors, non-2xx bodies and JSON-RPC `error.message` (any HTTP status) all pass the endpoint [`Scrubber`] |
 //! | Retry | at most one, only `Transient` / `RateLimited`, backoff ≤ 1 s (`Retry-After` honoured up to 1 s) |
 //! | GMA | chunks of [`GMA_CHUNK`]; chunks after the first are pinned with `minContextSlot` = the first chunk's slot |
 //!
@@ -372,6 +372,18 @@ impl HttpTransport {
         }
         egress::policy().audit(event);
     }
+
+    /// A 2xx envelope's JSON-RPC `error.message` can echo the request path
+    /// or key like a non-2xx body does — scrub it before `parse_envelope`
+    /// turns it into an [`RpcError`] message. `result` is never touched.
+    fn scrub_rpc_error(&self, mut envelope: Value) -> Value {
+        if let Some(m) = envelope.pointer_mut("/error/message") {
+            if let Some(text) = m.as_str() {
+                *m = Value::String(self.scrub.scrub(text));
+            }
+        }
+        envelope
+    }
 }
 
 #[async_trait]
@@ -409,7 +421,7 @@ impl RpcTransport for HttpTransport {
                         &self.scrub,
                     )),
                     Ok(text) => serde_json::from_str::<Value>(&text)
-                        .map(|v| (status, v))
+                        .map(|v| (status, self.scrub_rpc_error(v)))
                         .map_err(|e| {
                             RpcError::new(
                                 ErrorClass::Decode,
@@ -1517,6 +1529,27 @@ pub(crate) mod tests {
         assert!(format!("{e}").contains("net_hosts"), "{e}");
         assert_no_secret(&e);
         assert_eq!(seen.lock().unwrap().len(), before);
+    }
+
+    #[tokio::test]
+    async fn json_rpc_error_on_http_200_is_scrubbed() {
+        // The provider answers 200 with a JSON-RPC error quoting the
+        // request path and the bare key.
+        let echo = json!({"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32602,
+            "message": format!("bad request {SECRET_PATH}{SECRET_QUERY} key SECRETKEY9876543"),
+        }});
+        let (base, _) = serve(vec![canned(200, echo.to_string())]).await;
+        let path = format!("{SECRET_PATH}{SECRET_QUERY}");
+        let rpc = http_rpc(&base, &path, local_scope(), 2_000);
+        let e = rpc.get_slot().await.unwrap_err();
+        assert_eq!(class_of(&e), ErrorClass::Fatal);
+        assert_no_secret(&e);
+        assert!(
+            format!("{e:#}").contains("JSON-RPC error -32602: bad request 127.0.0.1"),
+            "{e:#}"
+        );
+        assert!(!read_error("slot", &e).message.contains("SECRET"));
     }
 
     #[test]
