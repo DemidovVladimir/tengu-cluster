@@ -128,7 +128,10 @@ pub(crate) struct ActionConfig {
 pub(crate) enum SlotConfig {
     /// Fixed candidate values.
     Static(Vec<Value>),
-    /// Items from the latest successful `from` action's reduced result.
+    /// Items from the latest successful `from` action's reduced result in
+    /// the CURRENT event. An earlier event's result is never offered (its
+    /// data may be hours old): until `from` succeeds in this event the
+    /// slot has no candidates and the action is not legal.
     FromHistory {
         /// Action name whose result to read.
         from: String,

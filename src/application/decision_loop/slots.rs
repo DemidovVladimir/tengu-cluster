@@ -5,7 +5,7 @@
 //! `pool_2`) so the model never has to reproduce an address; the full value
 //! stays in code.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 
@@ -26,13 +26,15 @@ pub(crate) struct Candidate {
 }
 
 /// Candidates for one slot, capped by `cap` when set. Empty = the action is
-/// not legal right now (e.g. the `from` action has not succeeded yet, or the
-/// `observation` world entry is not fresh).
-pub(crate) fn candidates(
+/// not legal right now (e.g. the `from` action has not succeeded yet in this
+/// event, or the `observation` world entry is not fresh). `history` = the
+/// current event's entries, oldest first: the loop never offers items from
+/// an earlier event's result (its data may be hours old).
+pub(crate) fn candidates<'h>(
     slot_name: &str,
     slot: &SlotConfig,
     cap: Option<f64>,
-    history: &VecDeque<HistoryEntry>,
+    history: impl DoubleEndedIterator<Item = &'h HistoryEntry>,
     world: &World,
 ) -> Vec<Candidate> {
     let within_cap = |v: &Value| match (cap, as_f64(v)) {
@@ -76,7 +78,6 @@ pub(crate) fn candidates(
             top,
         } => {
             let Some(entry) = history
-                .iter()
                 .rev()
                 .find(|h| h.action == *from && h.ok == Some(true))
             else {
@@ -188,7 +189,13 @@ mod tests {
     #[test]
     fn static_candidates_respect_cap() {
         let slot = SlotConfig::Static(vec![json!(0.5), json!(1), json!(2), json!(3)]);
-        let c = candidates("size", &slot, Some(2.0), &VecDeque::new(), &World::empty());
+        let c = candidates(
+            "size",
+            &slot,
+            Some(2.0),
+            std::iter::empty(),
+            &World::empty(),
+        );
         let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["0.5", "1", "2"]);
     }
@@ -201,15 +208,15 @@ mod tests {
             value: "address".into(),
             top: 2,
         };
-        let mut h = VecDeque::new();
-        h.push_back(entry("fetch", true, json!({"pools":[{"address":"OLD"}]})));
-        h.push_back(entry(
+        let mut h = Vec::new();
+        h.push(entry("fetch", true, json!({"pools":[{"address":"OLD"}]})));
+        h.push(entry(
             "fetch",
             true,
             json!({"pools":[{"address":"A1","fees":5},{"address":"B2"},{"address":"C3"}]}),
         ));
-        h.push_back(entry("fetch", false, json!("HTTP 500")));
-        let c = candidates("pool", &slot, None, &h, &World::empty());
+        h.push(entry("fetch", false, json!("HTTP 500")));
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].label, "pool_1");
         assert_eq!(c[0].value, json!("A1"));
@@ -237,8 +244,8 @@ mod tests {
             value: "name".into(),
             top: 1,
         };
-        let h = VecDeque::from([entry("fetch", true, json!({ "pools": [row.clone()] }))]);
-        let c = candidates("pool", &slot, None, &h, &World::empty());
+        let h = vec![entry("fetch", true, json!({ "pools": [row.clone()] }))];
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
         let d = &c[0].description;
         assert!(d.chars().count() <= MAX_DESC_CHARS, "{d}");
         assert!(d.contains(r#""name":"SOL-USDC""#), "{d}");
@@ -253,8 +260,14 @@ mod tests {
         }
         // Short items are rendered whole, unchanged.
         let short = json!({"address": "A1", "fees": 5});
-        let h = VecDeque::from([entry("fetch", true, json!({ "pools": [short.clone()] }))]);
-        let c = candidates("pool", &slot_value("address"), None, &h, &World::empty());
+        let h = vec![entry("fetch", true, json!({ "pools": [short.clone()] }))];
+        let c = candidates(
+            "pool",
+            &slot_value("address"),
+            None,
+            h.iter(),
+            &World::empty(),
+        );
         assert_eq!(c[0].description, short.to_string());
     }
 
@@ -275,7 +288,7 @@ mod tests {
             value: "address".into(),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
+        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
     }
 
     #[test]
@@ -286,7 +299,7 @@ mod tests {
             value: "address".into(),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, &VecDeque::new(), &World::empty()).is_empty());
+        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
     }
 
     #[test]
