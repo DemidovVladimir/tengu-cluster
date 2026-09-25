@@ -313,6 +313,19 @@ fn hedge_knobs() -> Value {
     )
 }
 
+/// Optional on `hedge_decide`: the same object `lp_decide` takes. When given,
+/// the hedge computes the storm latch (ADR-023 bypass) and the imbalance
+/// freeze (ADR-025) from this snapshot's price samples itself instead of
+/// relying on an earlier `lp_decide` commit.
+fn lp_knobs_for_hedge() -> Value {
+    let mut v = lp_knobs();
+    v["description"] = json!(
+        "Optional: lp_decide's knobs (all fields when present). Lets hedge_decide compute the \
+         storm latch and imbalance freeze from this cycle's price samples."
+    );
+    v
+}
+
 fn lp_knobs() -> Value {
     knobs(
         json!({
@@ -343,6 +356,7 @@ fn hedge_decide() -> ToolDef {
                 "wallet": pubkey("LP + hedge wallet"),
                 "pool": pubkey("DLMM pool (LbPair) account"),
                 "knobs": hedge_knobs(),
+                "lp_knobs": lp_knobs_for_hedge(),
                 "commit": commit(),
                 "max_age_secs": max_age(0),
             }),

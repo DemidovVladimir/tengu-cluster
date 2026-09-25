@@ -287,6 +287,20 @@ max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requ
 trend_confirm_ms = 600000        # TREND_CONFIRM_MS: prod 600000 since 2026-07-10 (BACKLOG.md:188-197 §A11; HANDOVER.md:165 «confirm 10m»); bot CLAUDE.md:107 "production 300000" is the pre-§A11 value; code default 0
 no_lp_grace_ms = 300000          # BUG-011: NO_LP_HEDGE_GRACE_CYCLES 20 × 15 s cycles (autoTuneOrchestrator.ts:346; bugs.md BUG-011 "5-minute grace")
 
+# Same LP knobs as decide_lp: hedge_decide computes the storm latch (ADR-023 bypass) and the
+# imbalance freeze (ADR-025) from THIS snapshot + price samples, not from an older lp_decide commit.
+[decision_loops.hedge_watch.actions.decide_hedge.args.lp_knobs]
+imbalance_threshold = 0.92       # AUTO_TUNE_IMBALANCE_THRESHOLD: prod 0.92 (progress.md:1707; HANDOVER.md:769); code default 0.9
+bin_count = 28                   # AUTO_TUNE_BIN_COUNT: entry config bins 28 (BACKLOG.md:826; HANDOVER.md:125,164-170); code default 20
+storm_pct_5m = 2.0               # LP_VOL_PAUSE_PCT_5M: prod 2 (ADR-021 decisions.md:1727; progress.md:1605); code default 0
+trend_confirm_ms = 600000        # TREND_CONFIRM_MS: prod 600000 since 2026-07-10 (BACKLOG.md:188-197 §A11); code default 0
+reentry_confirm_ms = 7200000     # REENTRY_CONFIRM_MS: prod 7200000 (CLAUDE.md:108, ADR-026; BACKLOG.md:373); code default 0
+reentry_tol_frac = 0.20          # REENTRY_TOL_FRAC: prod 0.20 since 2026-07-15 (BACKLOG.md:320-336 §A15.1); bot CLAUDE.md:108 0.15 is the pre-§A15.1 value; code default 0.15
+max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE_GATE_BPS default 50 (env.ts:366)
+max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
+min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2
+rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
+
 [decision_loops.hedge_watch.actions.decide_lp]
 description = "LP decision on the fresh snapshot (pure): hold, recenter, wait for the trend, paused, re-entry wait, or open a range"
 tool = "lp_decide"

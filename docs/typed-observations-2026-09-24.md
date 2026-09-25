@@ -51,8 +51,8 @@ RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta
 | `solana_wallet` | `wallet`*, `mints` (wSOL + USDC, ≤ 32) | `solana_wallet/1:<wallet>` | 5 s | `getBalance`, `getTokenAccountsByOwner` × 2 programs, mints + ATAs | RPC |
 | `solana_tx` | `signature`* | `solana_tx/1:<signature>` | 2 s; 1 day once finalized | `getSignatureStatuses` (history), `getTransaction` | RPC |
 | `lp_snapshot` | `wallet`*, `pool`*, `positions`, `min_context_slot` | `lp_snapshot/1:<wallet>:<pool>` | 10 s (explicit `positions` ⇒ not stored) | ONE planned read (`plan::read_pool`: pool + positions + perps + wallet keys) + `price_oracle/1:<base mint>` row (≤ 10 s and ≤ the caller's max age, so snapshot + price age fits `max_snapshot_age_secs`; else Jupiter inline + row written) + pending keeper request from `lp_state` | RPC, `lite-api.jup.ag` |
-| `hedge_decide` | `wallet`*, `pool`*, `knobs`*, `commit` (false) | `hedge_decide/1:<wallet>:<pool>` | never cached | store only: `lp_snapshot` + `lp_state`; missing / stale / explicit-`positions` (`args`) snapshot ⇒ action `blocked`, guard `stale_input`; unreadable `lp_state` ⇒ guard `invalid_read` | none |
-| `lp_decide` | same | `lp_decide/1:<wallet>:<pool>` | never cached | store only: + `price_oracle` samples; missing / stale / `args` snapshot ⇒ verdict `blocked`; unreadable `lp_state` ⇒ `paused` `invalid_read` | none |
+| `hedge_decide` | `wallet`*, `pool`*, `knobs`*, `lp_knobs` (optional, = `lp_decide`'s knobs), `commit` (false) | `hedge_decide/1:<wallet>:<pool>` | never cached | store only: `lp_snapshot` + `lp_state` (+ price samples when `lp_knobs` given: storm latch / imbalance freeze computed this cycle); missing / stale / explicit-`positions` (`args`) snapshot ⇒ action `blocked`, guard `stale_input`; unreadable `lp_state`, any `positions` / `discovery` read error, or discovery count ≠ valued positions ⇒ guard `invalid_read` | none |
+| `lp_decide` | `wallet`*, `pool`*, `knobs`*, `commit` (false) | `lp_decide/1:<wallet>:<pool>` | never cached | store only: + `price_oracle` samples; missing / stale / `args` snapshot ⇒ verdict `blocked`; unreadable `lp_state` or position / discovery read errors ⇒ `paused` `invalid_read` | none |
 
 Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the store), so its scope needs `fs_roots` = the workspace; `net_hosts` as above; `env_reads = ["SOLANA_RPC_URL"]` or the public RPC is used silently. Working scopes: `sandboxes/lping/config.toml`.
 
@@ -75,3 +75,10 @@ Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the st
 ## Phase 6 seam (spec only)
 
 `LeaseStore { acquire(resource, holder, ttl_ms, now_ms) -> Lease; release(resource, holder) }`, `Lease { resource, holder, acquired_at_ms, expires_at_ms, granted, current_holder }` — single writer per wallet (`wallet:<address>`), SQLite `leases` table beside `observations`. Write tools return `WriteResult<D>` (mode plan \| simulate \| send, default simulate) and re-run the pure gate before sending.
+
+| Rule (review fixes 2026-09-25) | Behaviour |
+|---|---|
+| No-LP grace (bot BUG-011) | clock starts at the first no-LP read (`lp_state.no_lp_since_ms`); a fresh/missing state holds for `no_lp_grace_ms`; position observations are recorded before any gate and persisted with `commit = true` even on gated evaluations |
+| Decision-loop `FromHistory` slots | read only the CURRENT event's history entries; `state.history` still shows earlier events as context |
+| Slot candidate descriptions | never cut inside a value: whole trailing fields are dropped to fit 300 chars; the slot's `value` field is always kept |
+

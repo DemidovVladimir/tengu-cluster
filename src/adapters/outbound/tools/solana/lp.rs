@@ -49,9 +49,9 @@ use crate::domain::lp::gates::PriceSample;
 use crate::domain::lp::market::{self, OraclePrice, PRICE_TTL_MS};
 use crate::domain::lp::perps::{build_perps, request_status};
 use crate::domain::lp::snapshot::{
-    compose_snapshot, decide_hedge, decide_lp, Guard, HedgeAction, HedgeDecision, HedgeKnobs,
-    LpControllerState, LpDecision, LpKnobs, LpSnapshot, LpVerdict, PauseReason, LP_SNAPSHOT_TTL_MS,
-    LP_STATE_TTL_MS,
+    compose_snapshot, decide_hedge_in_cycle, decide_lp, Guard, HedgeAction, HedgeDecision,
+    HedgeKnobs, LpControllerState, LpCycle, LpDecision, LpKnobs, LpSnapshot, LpVerdict,
+    PauseReason, LP_SNAPSHOT_TTL_MS, LP_STATE_TTL_MS,
 };
 use crate::domain::lp::wallet::{
     build_wallet_balances, build_wallet_inventory, lamports_from_set, wallet_keys,
@@ -552,6 +552,8 @@ struct DecideArgs {
     wallet: Pubkey,
     pool: Pubkey,
     knobs: Value,
+    /// `hedge_decide` only: optional `lp_decide` knobs (storm / freeze).
+    lp_knobs: Option<Value>,
     commit: bool,
 }
 
@@ -567,10 +569,19 @@ impl DecideArgs {
         };
         let knobs = args.get("knobs").cloned().unwrap_or(Value::Null);
         check_knob_names(tool, &knobs)?;
+        let lp_knobs = match args.get("lp_knobs") {
+            None | Some(Value::Null) => None,
+            Some(v) => {
+                check_knob_names(names::LP_DECIDE, v)
+                    .map_err(|e| anyhow!("{tool}: lp_knobs: {e}"))?;
+                Some(v.clone())
+            }
+        };
         Ok(Self {
             wallet,
             pool,
             knobs,
+            lp_knobs,
             commit,
         })
     }
@@ -748,13 +759,45 @@ fn unreadable_reason(why: &str) -> String {
     )
 }
 
+/// The price row's 5-minute samples for the snapshot's oracle key (empty when
+/// there is no store or row).
+async fn price_samples(
+    store: Option<&dyn ObservationStore>,
+    snap: &LpSnapshot,
+) -> Vec<PriceSample> {
+    match store {
+        Some(s) => row_at(s, &snap.oracle.key)
+            .await
+            .and_then(|r| r.typed::<OraclePrice>().ok())
+            .map(|p| p.samples)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
 /// `hedge_decide` over the store rows: `(decision observation, commit note)`.
 /// An unreadable `lp_state` row blocks (`invalid_read`).
+#[cfg(test)]
 pub(crate) async fn hedge_decide_obs(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
     pool: &Pubkey,
     knobs: &HedgeKnobs,
+    commit: bool,
+    now_ms: i64,
+) -> (Observation, Option<String>) {
+    hedge_decide_obs_in_cycle(store, wallet, pool, knobs, None, commit, now_ms).await
+}
+
+/// `hedge_decide` with optional `lp_decide` knobs: when given, the storm latch
+/// and imbalance freeze come from this snapshot + price samples
+/// (`decide_hedge_in_cycle`), not from an earlier `lp_decide` commit.
+pub(crate) async fn hedge_decide_obs_in_cycle(
+    store: Option<&dyn ObservationStore>,
+    wallet: &Pubkey,
+    pool: &Pubkey,
+    knobs: &HedgeKnobs,
+    lp_knobs: Option<&LpKnobs>,
     commit: bool,
     now_ms: i64,
 ) -> (Observation, Option<String>) {
@@ -785,7 +828,12 @@ pub(crate) async fn hedge_decide_obs(
             return with_commit(obs, unreadable_note(commit, why));
         }
     };
-    let (d, next) = decide_hedge(&snap, &meta, age, knobs, &state, now_ms);
+    let samples = match lp_knobs {
+        Some(_) => price_samples(store, &snap).await,
+        None => Vec::new(),
+    };
+    let cycle = lp_knobs.map(|k| LpCycle::new(k, &samples));
+    let (d, next) = decide_hedge_in_cycle(&snap, &meta, age, knobs, &state, cycle.as_ref(), now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
     with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
@@ -825,14 +873,7 @@ pub(crate) async fn lp_decide_obs(
             return with_commit(obs, unreadable_note(commit, why));
         }
     };
-    let samples: Vec<PriceSample> = match store {
-        Some(s) => row_at(s, &snap.oracle.key)
-            .await
-            .and_then(|r| r.typed::<OraclePrice>().ok())
-            .map(|p| p.samples)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
+    let samples = price_samples(store, &snap).await;
     let (d, next) = decide_lp(&snap, &meta, age, knobs, &state, &samples, now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
     with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
@@ -854,9 +895,22 @@ impl Tool for HedgeDecideTool {
         let tool = names::HEDGE_DECIDE;
         let a = DecideArgs::parse(args, tool)?;
         let knobs = HedgeKnobs::parse(&a.knobs).map_err(|e| anyhow!("{tool}: {e}"))?;
+        let lp_knobs = match &a.lp_knobs {
+            Some(v) => Some(LpKnobs::parse(v).map_err(|e| anyhow!("{tool}: lp_knobs: {e}"))?),
+            None => None,
+        };
         let now = now_ms();
         let store = self.shared.store.as_deref();
-        let (obs, note) = hedge_decide_obs(store, &a.wallet, &a.pool, &knobs, a.commit, now).await;
+        let (obs, note) = hedge_decide_obs_in_cycle(
+            store,
+            &a.wallet,
+            &a.pool,
+            &knobs,
+            lp_knobs.as_ref(),
+            a.commit,
+            now,
+        )
+        .await;
         Ok(decided(obs, note, now))
     }
 }
@@ -900,6 +954,7 @@ mod tests {
     use crate::adapters::outbound::solana::rpc::RpcError;
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
     use crate::application::observe::tests::MemStore;
+    use crate::domain::lp::snapshot::decide_hedge;
 
     use crate::domain::lp::snapshot::HedgeActionRecord;
     use crate::domain::observation::{
@@ -1533,6 +1588,51 @@ mod tests {
             d.verdict
         );
         assert_line1(&o, &[BOT_WALLET, POOL]);
+    }
+
+    #[tokio::test]
+    async fn hedge_decide_with_lp_knobs_is_the_in_cycle_decision() {
+        // Finding #14: with lp_knobs the hedge computes storm / imbalance from
+        // this snapshot + the price row's samples instead of lp_state flags.
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let snap = seeded(&store, now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let (knobs, lpk) = (hedge_knobs(), lp_knobs());
+        let at = now + 2_000;
+        let (o, _) =
+            hedge_decide_obs_in_cycle(Some(&store), &w, &p, &knobs, Some(&lpk), false, at).await;
+        let d: HedgeDecision = o.typed().unwrap();
+        let row = store.get(&snapshot_key(&w, &p)).await.unwrap().unwrap();
+        let samples = price_samples(Some(&store), &snap).await;
+        let cycle = LpCycle::new(&lpk, &samples);
+        let fresh = LpControllerState::new(BOT_WALLET, POOL);
+        let (want, _) = decide_hedge_in_cycle(
+            &snap,
+            &row.clone().served_from_cache().meta(at),
+            2_000,
+            &knobs,
+            &fresh,
+            Some(&cycle),
+            at,
+        );
+        assert_eq!(d, want);
+    }
+
+    #[test]
+    fn hedge_decide_lp_knobs_are_validated_by_name() {
+        let hk = serde_json::to_value(hedge_knobs()).unwrap();
+        let args = json!({"wallet": BOT_WALLET, "pool": POOL, "knobs": hk, "lp_knobs": {"storm_pct_5m": 2}});
+        let e = DecideArgs::parse(&args, names::HEDGE_DECIDE)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("lp_knobs") && e.contains("missing"), "{e}");
+        let lk = serde_json::to_value(lp_knobs()).unwrap();
+        let ok = json!({"wallet": BOT_WALLET, "pool": POOL, "knobs": hk, "lp_knobs": lk});
+        assert!(DecideArgs::parse(&ok, names::HEDGE_DECIDE)
+            .unwrap()
+            .lp_knobs
+            .is_some());
     }
 
     #[tokio::test]

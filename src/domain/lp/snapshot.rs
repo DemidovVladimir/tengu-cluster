@@ -1973,6 +1973,7 @@ fn guard_trace(input: &HedgeInput, action: &HedgeAction) -> GuardTrace {
 /// confirm reads `lp_state`'s storm / imbalance flags — the last ungated
 /// `lp_decide`'s, possibly an earlier event (`view.regime_signals.this_cycle
 /// = false`). Prefer the cycle form.
+#[cfg(test)]
 pub(crate) fn decide_hedge(
     snap: &LpSnapshot,
     snap_meta: &ObsMeta,
