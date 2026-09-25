@@ -20,7 +20,8 @@
 //! | Whole-read failure (RPC, pool / mint unreadable) | `Ok` with an `Error` observation (never cached); bad arguments are `Err` |
 //! | Decide without a usable snapshot row | `Blocked{stale_input}` (hedge) / `Blocked` (lp); an old row → the domain's staleness gate |
 //! | `knobs` | every knob required, unknown knobs rejected; errors name all missing / unknown knobs |
-//! | `commit` | default false: nothing written. An unreadable `lp_state` row is never overwritten |
+//! | Unreadable `lp_state` (store error, row that does not parse / decode) | `Blocked{invalid_read}` (hedge) / `Paused{invalid_read}` (lp), `invalid_fields = ["lp_state"]`; never overwritten |
+//! | `commit` | default false: nothing written. True: compare-and-swap on the row's version as read (`put_if_unchanged`); a row changed since the read ⇒ the decision stands, NOT committed (conflict). `features.commit` = committed \| conflict \| unreadable \| failed |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -48,15 +49,16 @@ use crate::domain::lp::gates::PriceSample;
 use crate::domain::lp::market::{self, OraclePrice, PRICE_TTL_MS};
 use crate::domain::lp::perps::{build_perps, request_status};
 use crate::domain::lp::snapshot::{
-    compose_snapshot, decide_hedge, decide_lp, HedgeDecision, HedgeKnobs, LpControllerState,
-    LpDecision, LpKnobs, LpSnapshot, LP_SNAPSHOT_TTL_MS, LP_STATE_TTL_MS,
+    compose_snapshot, decide_hedge, decide_lp, Guard, HedgeAction, HedgeDecision, HedgeKnobs,
+    LpControllerState, LpDecision, LpKnobs, LpSnapshot, LpVerdict, PauseReason, LP_SNAPSHOT_TTL_MS,
+    LP_STATE_TTL_MS,
 };
 use crate::domain::lp::wallet::{
     build_wallet_balances, build_wallet_inventory, lamports_from_set, wallet_keys,
 };
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
-    now_ms, CachePolicy, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
+    now_ms, set_str, CachePolicy, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
 use crate::domain::solana::{ata, ids, AccountSet, Pubkey};
 use crate::domain::tools as names;
@@ -108,17 +110,30 @@ const SNAPSHOT_ORACLE_MAX_AGE_MS: u64 = PRICE_TTL_MS;
 enum StateRead {
     /// No row (or no store): a fresh `LpControllerState`.
     Missing,
-    Found(Box<LpControllerState>),
-    /// A row exists but could not be read / decoded: decide on a fresh
-    /// state but never overwrite the row.
+    /// The row and its version (`observed_at_ms`) for the conditional commit.
+    Found {
+        state: Box<LpControllerState>,
+        observed_at_ms: i64,
+    },
+    /// The store failed or the row does not decode: the decide tools block
+    /// (`invalid_read`) and never overwrite it.
     Unreadable(String),
 }
 
 impl StateRead {
-    fn state(&self, wallet: &Pubkey, pool: &Pubkey) -> LpControllerState {
+    /// The state to decide on; `Err(why)` when the row is unreadable.
+    fn state(
+        &self,
+        wallet: &Pubkey,
+        pool: &Pubkey,
+    ) -> std::result::Result<LpControllerState, &str> {
         match self {
-            StateRead::Found(s) => (**s).clone(),
-            _ => LpControllerState::new(&wallet.to_string(), &pool.to_string()),
+            StateRead::Found { state, .. } => Ok((**state).clone()),
+            StateRead::Missing => Ok(LpControllerState::new(
+                &wallet.to_string(),
+                &pool.to_string(),
+            )),
+            StateRead::Unreadable(e) => Err(e),
         }
     }
 }
@@ -135,7 +150,10 @@ async fn read_state(
     match store.get(&key).await {
         Ok(None) => StateRead::Missing,
         Ok(Some(row)) => match row.typed::<LpControllerState>() {
-            Ok(s) => StateRead::Found(Box::new(s)),
+            Ok(s) => StateRead::Found {
+                state: Box::new(s),
+                observed_at_ms: row.observed_at_ms,
+            },
             Err(e) => {
                 let error = format!("{e:#}");
                 warn!(%key, %error, "lp_state row does not decode");
@@ -340,7 +358,7 @@ where
 {
     let (wallet, pool) = (&req.wallet, &req.pool);
     let request: Option<Pubkey> = match read_state(store, wallet, pool).await {
-        StateRead::Found(s) => s
+        StateRead::Found { state: s, .. } => s
             .last_hedge_action
             .and_then(|a| a.position_request)
             .and_then(|r| match r.parse::<Pubkey>() {
@@ -642,7 +660,22 @@ async fn snapshot_row(
     Ok((row.served_from_cache(), snap))
 }
 
-/// Persist `next` when asked and the stored state was not unreadable.
+/// Outcome of a `commit = true` decision: `(features.commit, note)`.
+type CommitNote = (&'static str, String);
+
+fn unreadable_note(commit: bool, why: &str) -> Option<CommitNote> {
+    commit.then(|| {
+        (
+            "unreadable",
+            format!("lp_state NOT committed: the stored row is unreadable ({why})"),
+        )
+    })
+}
+
+/// Persist `next` when asked: a compare-and-swap on the row's version as
+/// read (`None` = no row), so a concurrent writer's update is never lost —
+/// the loser keeps its decision but reports NOT committed (conflict). An
+/// unreadable row is never overwritten.
 async fn commit_state(
     store: Option<&dyn ObservationStore>,
     tool: &str,
@@ -650,23 +683,53 @@ async fn commit_state(
     read: &StateRead,
     next: &LpControllerState,
     now_ms: i64,
-) -> Option<String> {
+) -> Option<CommitNote> {
     if !commit {
         return None;
     }
-    if let StateRead::Unreadable(e) = read {
-        return Some(format!(
-            "lp_state NOT committed: the stored row is unreadable ({e})"
-        ));
+    let expected = match read {
+        StateRead::Unreadable(e) => return unreadable_note(commit, e),
+        StateRead::Missing => None,
+        StateRead::Found { observed_at_ms, .. } => Some(*observed_at_ms),
+    };
+    // Strictly newer than the version read, so every commit moves it.
+    let at = expected.map_or(now_ms, |v| now_ms.max(v.saturating_add(1)));
+    let obs = Observation::of(tool, next, at, LP_STATE_TTL_MS, ObsSource::Live);
+    let failed = || {
+        (
+            "failed",
+            format!("lp_state NOT committed: store write failed for {}", obs.key),
+        )
+    };
+    let Some(s) = store else {
+        return Some(failed());
+    };
+    match s.put_if_unchanged(&obs, expected).await {
+        Ok(true) => Some(("committed", format!("lp_state committed: {}", obs.key))),
+        Ok(false) => Some((
+            "conflict",
+            format!(
+                "lp_state NOT committed (conflict): {} changed since it was read; the decision stands, re-run to decide on the new state",
+                obs.key
+            ),
+        )),
+        Err(e) => {
+            let error = format!("{e:#}");
+            warn!(key = %obs.key, %error, "observation store write failed");
+            Some(failed())
+        }
     }
-    let obs = Observation::of(tool, next, now_ms, LP_STATE_TTL_MS, ObsSource::Live);
-    if put_row(store, &obs).await {
-        Some(format!("lp_state committed: {}", obs.key))
-    } else {
-        Some(format!(
-            "lp_state NOT committed: store write failed for {}",
-            obs.key
-        ))
+}
+
+/// The decision observation (`features.commit` = committed | conflict |
+/// unreadable | failed when a commit was asked) and the commit note.
+fn with_commit(mut obs: Observation, commit: Option<CommitNote>) -> (Observation, Option<String>) {
+    match commit {
+        Some((outcome, note)) => {
+            set_str(&mut obs.features, "commit", Some(outcome));
+            (obs, Some(note))
+        }
+        None => (obs, None),
     }
 }
 
@@ -679,7 +742,14 @@ fn decided(obs: Observation, note: Option<String>, now_ms: i64) -> ToolOutput {
     out
 }
 
+fn unreadable_reason(why: &str) -> String {
+    format!(
+        "lp_state row unreadable ({why}): regime, timers, cooldown and the pending request are unknown"
+    )
+}
+
 /// `hedge_decide` over the store rows: `(decision observation, commit note)`.
+/// An unreadable `lp_state` row blocks (`invalid_read`).
 pub(crate) async fn hedge_decide_obs(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
@@ -689,33 +759,39 @@ pub(crate) async fn hedge_decide_obs(
     now_ms: i64,
 ) -> (Observation, Option<String>) {
     let tool = names::HEDGE_DECIDE;
+    let (w, p) = (wallet.to_string(), pool.to_string());
     let (row, snap) = match snapshot_row(store, wallet, pool).await {
         Ok(v) => v,
         Err(why) => {
-            let d = HedgeDecision::without_snapshot(
-                &wallet.to_string(),
-                &pool.to_string(),
-                knobs,
-                &why,
-            );
+            let d = HedgeDecision::without_snapshot(&w, &p, knobs, &why);
             return (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), None);
         }
     };
+    let (meta, age) = (row.meta(now_ms), row.age_ms(now_ms));
     let read = read_state(store, wallet, pool).await;
-    let state = read.state(wallet, pool);
-    let (d, next) = decide_hedge(
-        &snap,
-        &row.meta(now_ms),
-        row.age_ms(now_ms),
-        knobs,
-        &state,
-        now_ms,
-    );
+    let state = match read.state(wallet, pool) {
+        Ok(state) => state,
+        Err(why) => {
+            let reason = unreadable_reason(why);
+            let mut d = HedgeDecision::without_snapshot(&w, &p, knobs, &reason);
+            d.snapshot = Some(meta);
+            d.snapshot_age_ms = Some(age);
+            d.action = HedgeAction::Blocked {
+                reason,
+                guard: Guard::InvalidRead,
+            };
+            d.trace.invalid_fields = vec!["lp_state".into()];
+            let obs = Observation::of(tool, &d, now_ms, 0, ObsSource::Live);
+            return with_commit(obs, unreadable_note(commit, why));
+        }
+    };
+    let (d, next) = decide_hedge(&snap, &meta, age, knobs, &state, now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
-    (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
+    with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
 
 /// `lp_decide` over the store rows (+ the price row's 5-minute samples).
+/// An unreadable `lp_state` row pauses (`invalid_read`).
 pub(crate) async fn lp_decide_obs(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
@@ -725,12 +801,28 @@ pub(crate) async fn lp_decide_obs(
     now_ms: i64,
 ) -> (Observation, Option<String>) {
     let tool = names::LP_DECIDE;
+    let (w, p) = (wallet.to_string(), pool.to_string());
     let (row, snap) = match snapshot_row(store, wallet, pool).await {
         Ok(v) => v,
         Err(why) => {
-            let d =
-                LpDecision::without_snapshot(&wallet.to_string(), &pool.to_string(), knobs, &why);
+            let d = LpDecision::without_snapshot(&w, &p, knobs, &why);
             return (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), None);
+        }
+    };
+    let (meta, age) = (row.meta(now_ms), row.age_ms(now_ms));
+    let read = read_state(store, wallet, pool).await;
+    let state = match read.state(wallet, pool) {
+        Ok(state) => state,
+        Err(why) => {
+            let mut d = LpDecision::without_snapshot(&w, &p, knobs, &unreadable_reason(why));
+            d.snapshot = Some(meta);
+            d.snapshot_age_ms = Some(age);
+            d.invalid_fields = vec!["lp_state".into()];
+            d.verdict = LpVerdict::Paused {
+                reason: PauseReason::InvalidRead,
+            };
+            let obs = Observation::of(tool, &d, now_ms, 0, ObsSource::Live);
+            return with_commit(obs, unreadable_note(commit, why));
         }
     };
     let samples: Vec<PriceSample> = match store {
@@ -741,19 +833,9 @@ pub(crate) async fn lp_decide_obs(
             .unwrap_or_default(),
         None => Vec::new(),
     };
-    let read = read_state(store, wallet, pool).await;
-    let state = read.state(wallet, pool);
-    let (d, next) = decide_lp(
-        &snap,
-        &row.meta(now_ms),
-        row.age_ms(now_ms),
-        knobs,
-        &state,
-        &samples,
-        now_ms,
-    );
+    let (d, next) = decide_lp(&snap, &meta, age, knobs, &state, &samples, now_ms);
     let note = commit_state(store, tool, commit, &read, &next, now_ms).await;
-    (Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
+    with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
 
 struct HedgeDecideTool {
@@ -809,6 +891,7 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::adapters::outbound::observations::SqliteObservationStore;
     use crate::adapters::outbound::solana::plan::tests::{
         dlmm_now_ms, dlmm_transport, fixture_reads, gpa_reply, k, methods, owner_positions,
         BOT_WALLET, DLMM_GMA, DLMM_SLOT, JUP_PRICE, OWNER, PERPS_GMA, PERPS_META, POOL,
@@ -818,7 +901,7 @@ mod tests {
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
     use crate::application::observe::tests::MemStore;
 
-    use crate::domain::lp::snapshot::{Guard, HedgeAction, HedgeActionRecord, LpVerdict};
+    use crate::domain::lp::snapshot::HedgeActionRecord;
     use crate::domain::observation::{
         assert_features_ok, ErrorClass, MAX_FEATURES, MAX_LINE1_CHARS,
     };
@@ -939,7 +1022,7 @@ mod tests {
 
     async fn snapshot(
         t: &Arc<FakeTransport>,
-        store: &MemStore,
+        store: &dyn ObservationStore,
         req: &SnapshotReq,
         args: Value,
         jup: &Jup,
@@ -1526,9 +1609,104 @@ mod tests {
         );
         bad.data = json!({"committed_regime": 7});
         store.put(&bad).await.unwrap();
-        let (_, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        // Regression (review #8): the decision ran on a fresh state (regime
+        // `in`, no grace, no cooldown) as if nothing were wrong; it blocks.
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
         assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        assert_eq!(o.features["commit"], json!("unreadable"));
+        let d: HedgeDecision = o.typed().unwrap();
+        assert_eq!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        assert_eq!(d.trace.invalid_fields, vec!["lp_state".to_string()]);
+        assert!(d.snapshot.is_some() && d.view.is_none());
+        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        let d: LpDecision = o.typed().unwrap();
+        assert_eq!(
+            d.verdict,
+            LpVerdict::Paused {
+                reason: PauseReason::InvalidRead
+            }
+        );
+        assert_eq!(d.invalid_fields, vec!["lp_state".to_string()]);
         assert_eq!(store.get(&state_key(&w, &p)).await.unwrap().unwrap(), bad);
+        assert_line1(&o, &[BOT_WALLET, POOL]);
+    }
+
+    /// Regression (review #8, path 2): a body that no longer parses as an
+    /// observation read as "no row" and `commit = true` overwrote it.
+    #[tokio::test]
+    async fn an_unparseable_state_body_blocks_and_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteObservationStore::open(dir.path()).unwrap();
+        let now = now_ms();
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &Jup::ok(), now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let key = state_key(&w, &p);
+        let db = dir.path().join(".tengu/observations.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "INSERT INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+             VALUES (?1, 'lp_state/1', ?2, NULL, 1000, 'ok', '{\"key\": 1')",
+            rusqlite::params![key, now],
+        )
+        .unwrap();
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        let d: HedgeDecision = o.typed().unwrap();
+        assert_eq!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
+        assert!(note.unwrap().starts_with("lp_state NOT committed"));
+        let body: String = conn
+            .query_row(
+                "SELECT body FROM observations WHERE key = ?1",
+                rusqlite::params![key],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(body, "{\"key\": 1", "never overwritten");
+    }
+
+    /// Regression (review #11 #15): commits were blind whole-row replaces;
+    /// a writer that read the state before another's commit wiped it.
+    #[tokio::test]
+    async fn a_commit_on_a_state_changed_since_the_read_is_a_conflict() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        seeded(&store, now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        // First commit: no row yet (expected none).
+        let (o, note) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now).await;
+        assert_eq!(o.features["commit"], json!("committed"), "{note:?}");
+        // Writer A reads the state ...
+        let read = read_state(Some(&store), &w, &p).await;
+        let StateRead::Found { observed_at_ms, .. } = &read else {
+            panic!("{read:?}")
+        };
+        let v1 = *observed_at_ms;
+        // ... writer B commits in between (same ms: the version still moves).
+        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        assert_eq!(o.features["commit"], json!("committed"));
+        let b = store.get(&state_key(&w, &p)).await.unwrap().unwrap();
+        assert!(b.observed_at_ms > v1);
+        // ... A's commit on its stale read: conflict, B's row kept.
+        let mut next = read.state(&w, &p).unwrap();
+        next.storm_active = !next.storm_active;
+        let (outcome, text) = commit_state(
+            Some(&store),
+            names::HEDGE_DECIDE,
+            true,
+            &read,
+            &next,
+            now + 1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, "conflict");
+        assert!(text.contains("NOT committed (conflict)") && text.contains(BOT_WALLET));
+        assert_eq!(store.get(&state_key(&w, &p)).await.unwrap().unwrap(), b);
+        // A fresh read commits.
+        let (o, _) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now + 2).await;
+        assert_eq!(o.features["commit"], json!("committed"));
     }
 
     #[tokio::test]

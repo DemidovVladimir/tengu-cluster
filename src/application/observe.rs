@@ -78,6 +78,18 @@ pub(crate) mod tests {
             self.0.lock().unwrap().insert(obs.key.clone(), obs.clone());
             Ok(true)
         }
+        async fn put_if_unchanged(
+            &self,
+            obs: &Observation,
+            expected_observed_at_ms: Option<i64>,
+        ) -> anyhow::Result<bool> {
+            let mut m = self.0.lock().unwrap();
+            if m.get(&obs.key).map(|o| o.observed_at_ms) != expected_observed_at_ms {
+                return Ok(false);
+            }
+            m.insert(obs.key.clone(), obs.clone());
+            Ok(true)
+        }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
