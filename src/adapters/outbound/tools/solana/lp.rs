@@ -13,8 +13,9 @@
 //! | Oracle | usable `price_oracle/1:<base mint>` row ≤ 30 s old (any TTL); else Jupiter lite price v3 inline exactly like `sol_price` without `pool` (no Pyth), put back so `world` sees it; only when the pool's quote is USDC or its base is wSOL |
 //! | Wallet keys | wallet + wSOL / USDC Tokenkeg ATAs (+ mints) in read 1; a pair mint outside wSOL / USDC gets its ATA in one extra pinned read |
 //! | Pending keeper request | `lp_state.last_hedge_action.position_request` is read in read 1 → `LpSnapshot::set_pending_request` |
-//! | `min_context_slot` | pins discovery, both pool reads and the extra ATA read; the cached snapshot is not served |
-//! | Explicit `positions` | discovery `found (args)`, no gPA; the cached snapshot is not served, the result IS stored (the decide tools read it); keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors |
+//! | `min_context_slot` | pins discovery, both pool reads and the extra ATA read; the cached snapshot is not served; the result is stored (the canonical read-after-write view the decide tools read) |
+//! | Explicit `positions` | discovery `found (args)`, no gPA; the cached snapshot is not served and the result is NOT stored (ttl 0), so a caller-chosen subset never answers a discovery-based call; the decide tools refuse an `args` row; keys that are not the wallet's PositionV2 in the pool are `NotApplicable` errors |
+//! | Discovery | read 1 pinned to ≥ the discovery's slot; a cached "no positions" answer is reused only within the caller's max age (≤ 10 s); a discovered key that does not value ⇒ exposure `Error` (`dlmm::flag_unvalued`), never 0 |
 //! | Cached discovery that went stale | one re-discovery (gPA) + re-read |
 //! | Whole-read failure (RPC, pool / mint unreadable) | `Ok` with an `Error` observation (never cached); bad arguments are `Err` |
 //! | Decide without a usable snapshot row | `Blocked{stale_input}` (hedge) / `Blocked` (lp); an old row → the domain's staleness gate |
@@ -40,7 +41,9 @@ use crate::adapters::outbound::solana::plan::{
 };
 use crate::adapters::outbound::solana::rpc::{read_error, SolanaRpc};
 use crate::application::observe::observe;
-use crate::domain::lp::dlmm::{build_dlmm_pool, build_positions, DlmmPositions};
+use crate::domain::lp::dlmm::{
+    build_dlmm_pool, build_positions, flag_unvalued, Discovery, DiscoverySource,
+};
 use crate::domain::lp::gates::PriceSample;
 use crate::domain::lp::market::{self, OraclePrice, PRICE_TTL_MS};
 use crate::domain::lp::perps::{build_perps, request_status};
@@ -53,7 +56,7 @@ use crate::domain::lp::wallet::{
 };
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
-    now_ms, CachePolicy, ErrorClass, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
+    now_ms, CachePolicy, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
 use crate::domain::solana::{ata, ids, AccountSet, Pubkey};
 use crate::domain::tools as names;
@@ -252,9 +255,12 @@ where
         args,
     );
     let acct_max_age = base.max_age_ms;
+    let explicit = !req.positions.is_empty();
     // A caller-chosen key list or a read-after-write request is never
-    // answered from the cache; the fresh result is stored either way.
-    let policy = if !req.positions.is_empty() || req.min_context_slot.is_some() {
+    // answered from the cache. A read-after-write result is the canonical
+    // view (stored); a caller-chosen subset is never stored, so it answers
+    // neither a later discovery-based call nor the decide tools.
+    let policy = if explicit || req.min_context_slot.is_some() {
         CachePolicy {
             max_age_ms: 0,
             ..base
@@ -262,10 +268,11 @@ where
     } else {
         base
     };
+    let ttl = if explicit { 0 } else { LP_SNAPSHOT_TTL_MS };
     let get_json = &get_json;
     let fetched = observe(store, names::LP_SNAPSHOT, &policy, now_ms, || async {
         let snap = build_snapshot(rpc, store, req, acct_max_age, get_json, now_ms).await?;
-        Ok((snap, LP_SNAPSHOT_TTL_MS))
+        Ok((snap, ttl))
     })
     .await;
     fetched.unwrap_or_else(|e| snapshot_failed(req, read_failure("accounts", &e), now_ms))
@@ -306,7 +313,7 @@ async fn read_snapshot_accounts(
     let opts = PoolReadOpts {
         extra,
         positions_of: Some(req.wallet),
-        min_slot: req.min_context_slot,
+        min_slot: found.pin(req.min_context_slot),
     };
     plan::read_pool(rpc, store, &req.pool, &opts, max_age_ms, now_ms).await
 }
@@ -345,6 +352,7 @@ where
         explicit: req.positions.clone(),
         min_slot: req.min_context_slot,
         force: max_age_ms == 0,
+        max_age_ms,
     };
     let mut found = plan::discover_positions(rpc, store, wallet, pool, &opts, now_ms).await;
     let mut read =
@@ -359,8 +367,8 @@ where
     let pool_state = build_dlmm_pool(&set, pool, &read.bin_arrays, now_ms).map_err(ReadFailure)?;
     let mut positions =
         build_positions(&set, wallet, pool, found.discovery).map_err(ReadFailure)?;
-    if !req.positions.is_empty() {
-        flag_unmatched(&mut positions, &req.positions);
+    if let Some(source) = found.source {
+        flag_unvalued(&mut positions, &found.positions, source);
     }
 
     // Wallet balances: base, quote, wSOL ATAs under the pair's programs.
@@ -441,26 +449,6 @@ fn add_to_watch(snap: &mut LpSnapshot, set: &AccountSet, triples: &[(Pubkey, Pub
         }
     }
     snap.watch = watch.into_iter().collect();
-}
-
-/// Requested keys that did not decode as the wallet's PositionV2 in the
-/// pool (and are not already reported) become `NotApplicable` errors.
-fn flag_unmatched(out: &mut DlmmPositions, requested: &[Pubkey]) {
-    for key in requested {
-        let k = key.to_string();
-        let valued = out.positions.iter().any(|p| p.position == k);
-        let reported = out.errors.iter().any(|e| e.message.contains(&k));
-        if !valued && !reported {
-            out.errors.push(ReadError::new(
-                "positions",
-                ErrorClass::NotApplicable,
-                format!(
-                    "position {k} is not a PositionV2 of pool {} owned by {}",
-                    out.pool, out.wallet
-                ),
-            ));
-        }
-    }
 }
 
 /// `price_oracle/1:<mint>`: a usable row ≤ 30 s old as is; else (when
@@ -617,10 +605,24 @@ async fn snapshot_row(
     if !row.status.usable() {
         return Err(format!("{key} row has status {}", row.status.as_str()));
     }
-    match row.typed::<LpSnapshot>() {
-        Ok(snap) => Ok((row.served_from_cache(), snap)),
-        Err(e) => Err(format!("{key} row does not decode: {e:#}")),
+    let snap = match row.typed::<LpSnapshot>() {
+        Ok(snap) => snap,
+        Err(e) => return Err(format!("{key} row does not decode: {e:#}")),
+    };
+    // Never stored since explicit snapshots got ttl 0; a row an older
+    // binary wrote is still a caller-chosen subset, not the wallet's set.
+    if matches!(
+        snap.discovery,
+        Discovery::Found {
+            source: DiscoverySource::Args,
+            ..
+        }
+    ) {
+        return Err(format!(
+            "{key} row covers caller-chosen positions only (discovery args); call lp_snapshot without positions"
+        ));
     }
+    Ok((row.served_from_cache(), snap))
 }
 
 /// Persist `next` when asked and the stored state was not unreadable.
@@ -798,9 +800,11 @@ mod tests {
     use crate::adapters::outbound::solana::rpc::RpcError;
     use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
     use crate::application::observe::tests::MemStore;
-    use crate::domain::lp::dlmm::{Discovery, DiscoverySource};
+
     use crate::domain::lp::snapshot::{Guard, HedgeAction, HedgeActionRecord, LpVerdict};
-    use crate::domain::observation::{assert_features_ok, MAX_FEATURES, MAX_LINE1_CHARS};
+    use crate::domain::observation::{
+        assert_features_ok, ErrorClass, MAX_FEATURES, MAX_LINE1_CHARS,
+    };
     use crate::domain::solana::AccountRead;
 
     /// Fixture position (bins -5440..-5371, active -5373), re-owned by
@@ -1007,7 +1011,11 @@ mod tests {
         ] {
             assert!(first.contains(&key.to_string()), "read 1 lacks {key}");
         }
-        assert!(t.gma_params()[0][1].get("minContextSlot").is_none());
+        assert_eq!(
+            t.gma_params()[0][1]["minContextSlot"],
+            DLMM_SLOT,
+            "read 1 pinned to the gPA slot"
+        );
         assert_eq!(t.gma_params()[1][1]["minContextSlot"], DLMM_SLOT);
 
         // Oracle fetched inline once and stored where `world` reads it.
@@ -1185,7 +1193,8 @@ mod tests {
             ],
             "cached discovery and account rows bypassed"
         );
-        assert_eq!(t.gma_params()[0][1]["minContextSlot"], min);
+        // Read 1 pinned to max(min_context_slot, the gPA's slot).
+        assert_eq!(t.gma_params()[0][1]["minContextSlot"], DLMM_SLOT + 5);
         assert_eq!(t.gma_params()[1][1]["minContextSlot"], DLMM_SLOT + 5);
         assert_eq!(o.slot, Some(DLMM_SLOT + 5));
         assert_eq!(
@@ -1194,14 +1203,20 @@ mod tests {
             "stored for the decide tools"
         );
 
-        // Explicit positions: no gPA, found (args); a foreign key is flagged.
+        // Explicit positions: no gPA, found (args); a foreign key is flagged;
+        // never stored (the canonical row above is kept).
         let t = transport(true);
         t.slot.store(DLMM_SLOT + 5, Ordering::SeqCst);
         let foreign = owner_positions()[0].to_string();
         let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [POSITION, foreign]});
         let r = SnapshotReq::parse(&args).unwrap();
         let o = snapshot(&t, &store, &r, args, &jup, now + 2_000).await;
-        assert_eq!(o.source, ObsSource::Live);
+        assert_eq!((o.source, o.ttl_ms), (ObsSource::Live, 0));
+        assert_eq!(
+            store.get(&o.key).await.unwrap().unwrap().observed_at_ms,
+            now + 1_000,
+            "the explicit subset is not stored"
+        );
         assert!(!methods(&t).contains(&"getProgramAccounts".to_string()));
         let s: LpSnapshot = o.typed().unwrap();
         assert!(matches!(
@@ -1218,6 +1233,93 @@ mod tests {
             "{:?}",
             s.errors
         );
+    }
+
+    /// Regression (review #4/#9/#13): an explicit-positions snapshot (a
+    /// subset, or a foreign key ⇒ exposure 0) was stored under the
+    /// canonical key and answered the loop's snapshot step and the decide
+    /// tools for 10 s.
+    #[tokio::test]
+    async fn an_explicit_positions_snapshot_never_answers_discovery_or_decisions() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let jup = Jup::ok();
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let foreign = owner_positions()[0].to_string();
+        let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [foreign]});
+        let r = SnapshotReq::parse(&args).unwrap();
+        let o = snapshot(&transport(true), &store, &r, args, &jup, now).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert!(s.positions.is_empty());
+        assert_eq!(o.ttl_ms, 0);
+        assert!(store.get(&o.key).await.unwrap().is_none(), "never stored");
+        // The decide tools find no row to decide on.
+        let (d, _) = hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), false, now).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert!(d.view.is_none(), "{:?}", d.action);
+        // The loop's snapshot step (no positions) within 10 s: live gPA.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let o = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now + 1_000).await;
+        assert_eq!(o.source, ObsSource::Live);
+        assert_eq!(methods(&t)[0], "getProgramAccounts");
+        // A subset row an older binary stored is refused by both decide tools.
+        let mut legacy: LpSnapshot = o.typed().unwrap();
+        legacy.discovery = Discovery::Found {
+            count: 1,
+            source: DiscoverySource::Args,
+            at_ms: now + 1_000,
+        };
+        let row = Observation::of(
+            names::LP_SNAPSHOT,
+            &legacy,
+            now + 1_000,
+            LP_SNAPSHOT_TTL_MS,
+            ObsSource::Live,
+        );
+        store.put(&row).await.unwrap();
+        let (d, _) =
+            hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), true, now + 2_000).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert!(
+            matches!(&d.action, HedgeAction::Blocked { reason, .. } if reason.contains("caller-chosen")),
+            "{:?}",
+            d.action
+        );
+        let (d, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now + 2_000).await;
+        let d: LpDecision = d.typed().unwrap();
+        assert!(
+            matches!(&d.verdict, LpVerdict::Blocked { reason } if reason.contains("caller-chosen")),
+            "{:?}",
+            d.verdict
+        );
+        assert_eq!(note, None);
+        assert!(store.get(&state_key(&w, &p)).await.unwrap().is_none());
+    }
+
+    /// Regression (review #1/#2/#5): a cached "no positions" discovery was
+    /// reused for 300 s, so a position another process opened read as LP 0.
+    #[tokio::test]
+    async fn a_position_opened_after_an_empty_discovery_shows_up_next_snapshot() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        let jup = Jup::ok();
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
+        let s: LpSnapshot = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now)
+            .await
+            .typed()
+            .unwrap();
+        assert!(matches!(s.discovery, Discovery::Empty { .. }));
+        // The snapshot row expired (10 s): the empty answer is as old, so
+        // discovery runs again and sees the new position.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let o = snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now + 11_000).await;
+        assert_eq!(methods(&t)[0], "getProgramAccounts");
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!(s.positions.len(), 1, "{:?}", s.discovery);
+        assert!(s.exposure.value().unwrap().base > 0.0);
     }
 
     #[tokio::test]

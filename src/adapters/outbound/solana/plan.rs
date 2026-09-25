@@ -7,10 +7,11 @@
 //! |---|---|
 //! | [`read_pool`] | read 1 = LbPair + caller extras (positions, perps, wallet keys); read 2 (`minContextSlot` ≥ read 1's newest slot) = mints + reserves + bin arrays for the depth bands (active ± 50) ∪ the wallet's position ranges |
 //! | [`discover_positions`] | explicit keys ⇒ `Found{args}` (no gPA); a fresh `dlmm_discovery/1:<wallet>:<pool>` row ⇒ `Found/Empty{cached}`; else gPA DLMM with memcmp disc@0 (`LgkNAEYaVX3`), lb_pair@8, owner@40 and NO `dataSize` (extended positions are longer) |
-//! | Discovery row TTL | found 60 s, empty 300 s, error never stored (bot `meteoraAdapter.ts:88,253`) |
+//! | Discovery row TTL | found 60 s (bot `meteoraAdapter.ts:88`); empty 10 s AND at most the caller's max age (`DiscoverOpts::max_age_ms` = the tool's TTL or less) — the bot's 300 s empty throttle (`:253`) is safe only because the bot opens its own positions and clears it, while tengu watches a wallet another process trades; errors never stored |
 //! | Discovery bypass | `force` (caller `max_age_secs = 0`) or a row older than `min_context_slot`; a gPA answered below `min_context_slot` is a `Transient` error |
+//! | Read pin | [`Discovered::pin`]: the positions' account reads are pinned to ≥ the discovery's context slot (gPA or cached row), so a node behind the gPA node errors (`Transient`) instead of answering `null` |
 //! | Discovery failure | `Discovery::Error` + the last known (expired) row's keys as the fallback set |
-//! | Stale cached discovery | [`discovery_stale`]: a cached key that no longer reads as the wallet's PositionV2 in the pool ⇒ the caller re-discovers |
+//! | Stale cached discovery | [`discovery_stale`]: a cached key (found or empty row) that no longer reads as the wallet's PositionV2 in the pool ⇒ the caller re-discovers; a discovered key that still does not value ⇒ `dlmm::flag_unvalued` (exposure `Error`, never 0) |
 //! | [`perps_keys`] | long + short SOL position PDAs (`solana::jup_position_pda`) + SOL / USDC custody + JLP pool |
 //! | [`oracle_usd`] | usable `price_oracle/1:<mint>` row ≤ 30 s old, else Jupiter lite price v3 inline, else `None` |
 //! | Whole-read failure | [`ReadFailure`] carries a domain `ReadError` through `anyhow`; [`read_failure`] recovers it (or classifies an RPC / HTTP error); [`failed_observation`] = the never-cached `Error` observation tools return instead of `Err` |
@@ -40,8 +41,11 @@ use crate::ports::tool::ToolCtx;
 
 /// Discovery row TTL when positions were found (`meteoraAdapter.ts:88`).
 pub(crate) const DISCOVERY_FOUND_TTL_MS: u64 = 60_000;
-/// Discovery row TTL when the wallet has no position (`meteoraAdapter.ts:253`).
-pub(crate) const DISCOVERY_EMPTY_TTL_MS: u64 = 300_000;
+/// Discovery row TTL when the wallet has no position: a snapshot TTL, not the
+/// bot's 300 s (`meteoraAdapter.ts:253`, safe there only because the bot
+/// opens the positions itself and clears the throttle). Reuse is further
+/// bounded by the caller's max age ([`DiscoverOpts::max_age_ms`]).
+pub(crate) const DISCOVERY_EMPTY_TTL_MS: u64 = 10_000;
 /// `Observation::tool` of discovery rows.
 pub(crate) const DISCOVERY_TOOL: &str = "dlmm_discovery";
 /// Max age of a cached `price_oracle/1` row used as the perps oracle.
@@ -193,7 +197,7 @@ pub(crate) async fn read_pool(
 // ---------------------------------------------------------------------------
 
 /// `dlmm_discovery/1:<wallet>:<pool>` — the PositionV2 keys one gPA found.
-/// Stored with TTL 60 s (found) / 300 s (empty); failures are never rows.
+/// Stored with TTL 60 s (found) / 10 s (empty); failures are never rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DiscoveryRow {
     pub wallet: String,
@@ -268,6 +272,10 @@ pub(crate) struct DiscoverOpts {
     pub min_slot: Option<u64>,
     /// Skip the cached row (caller asked for a live read).
     pub force: bool,
+    /// The caller's max age (its tool TTL, or less): a cached EMPTY row is
+    /// reused only while at most this old (0 ⇒ never). A found row lives its
+    /// own TTL and is re-checked by [`discovery_stale`].
+    pub max_age_ms: u64,
 }
 
 /// Discovery outcome + the PositionV2 keys to read (the fallback set when
@@ -276,19 +284,35 @@ pub(crate) struct DiscoverOpts {
 pub(crate) struct Discovered {
     pub discovery: Discovery,
     pub positions: Vec<Pubkey>,
+    /// Where `positions` came from; `None` = discovery failed.
+    pub source: Option<DiscoverySource>,
+    /// Context slot of the gPA behind the answer (a cached row keeps its
+    /// gPA's slot); `None` for explicit keys and failures.
+    pub slot: Option<u64>,
 }
 
 impl Discovered {
+    /// Served from a `dlmm_discovery/1` row (found OR empty).
     pub(crate) fn is_cached(&self) -> bool {
-        match &self.discovery {
-            Discovery::Found { source, .. } => *source == DiscoverySource::Cached,
-            Discovery::Empty { .. } => false,
-            Discovery::Error { .. } => false,
+        self.source == Some(DiscoverySource::Cached)
+    }
+
+    /// `minContextSlot` for reading the positions: the caller's floor or
+    /// the discovery's context slot, whichever is higher.
+    pub(crate) fn pin(&self, min_slot: Option<u64>) -> Option<u64> {
+        match (min_slot, self.slot) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
         }
     }
 }
 
-fn found_or_empty(keys: Vec<Pubkey>, source: DiscoverySource, at_ms: i64) -> Discovered {
+fn found_or_empty(
+    keys: Vec<Pubkey>,
+    source: DiscoverySource,
+    at_ms: i64,
+    slot: Option<u64>,
+) -> Discovered {
     let discovery = if keys.is_empty() {
         Discovery::Empty { at_ms }
     } else {
@@ -301,6 +325,8 @@ fn found_or_empty(keys: Vec<Pubkey>, source: DiscoverySource, at_ms: i64) -> Dis
     Discovered {
         discovery,
         positions: keys,
+        source: Some(source),
+        slot,
     }
 }
 
@@ -318,7 +344,7 @@ pub(crate) async fn discover_positions(
         let mut keys = opts.explicit.clone();
         keys.sort_unstable();
         keys.dedup();
-        return found_or_empty(keys, DiscoverySource::Args, now_ms);
+        return found_or_empty(keys, DiscoverySource::Args, now_ms, None);
     }
 
     let key = discovery_key(wallet, pool);
@@ -339,10 +365,23 @@ pub(crate) async fn discover_positions(
         Some((obs, row, keys))
     });
     if let Some((obs, row, keys)) = &last {
-        let fresh = obs.is_fresh(now_ms, u64::MAX);
+        // "No positions" is trusted only as long as the caller's own answer
+        // may be old: a position another process opens must show up within
+        // one snapshot TTL.
+        let max_age = if keys.is_empty() {
+            opts.max_age_ms
+        } else {
+            u64::MAX
+        };
+        let fresh = obs.is_fresh(now_ms, max_age);
         let recent_enough = opts.min_slot.map_or(true, |m| row.slot >= m);
         if !opts.force && fresh && recent_enough {
-            return found_or_empty(keys.clone(), DiscoverySource::Cached, obs.observed_at_ms);
+            return found_or_empty(
+                keys.clone(),
+                DiscoverySource::Cached,
+                obs.observed_at_ms,
+                Some(row.slot),
+            );
         }
     }
 
@@ -362,7 +401,7 @@ pub(crate) async fn discover_positions(
                     warn!(key = %obs.key, %error, "observation store write failed");
                 }
             }
-            found_or_empty(keys, DiscoverySource::Gpa, now_ms)
+            found_or_empty(keys, DiscoverySource::Gpa, now_ms, Some(slot))
         }
         Err(e) => {
             let fallback = last.map(|(_, _, keys)| keys).unwrap_or_default();
@@ -372,6 +411,8 @@ pub(crate) async fn discover_positions(
                     fallback_count: fallback.len() as u32,
                 },
                 positions: fallback,
+                source: None,
+                slot: None,
             }
         }
     }
@@ -744,6 +785,7 @@ pub(crate) mod tests {
                 at_ms: 1_000
             }
         ));
+        assert_eq!(d.slot, Some(DLMM_SLOT), "the gPA context slot");
         let req = &t.requests()[0];
         assert_eq!(req["method"], "getProgramAccounts");
         assert_eq!(req["params"][0], ids::DLMM);
@@ -834,23 +876,22 @@ pub(crate) mod tests {
         assert_eq!(t.requests().len(), 4);
     }
 
+    /// Regression (review #1/#2/#5): an empty answer was reused for 300 s,
+    /// so a position another process opened read as exposure 0 for minutes.
     #[tokio::test]
-    async fn empty_discovery_is_cached_five_minutes() {
+    async fn empty_discovery_is_reused_only_within_the_callers_max_age() {
         let t = Arc::new(FakeTransport::at_slot(9));
         let rpc = fake_rpc(&t);
         let store = MemStore::default();
         let (wallet, pool) = (k(BOT_WALLET), k(POOL));
+        let opts = |max_age_ms| DiscoverOpts {
+            max_age_ms,
+            ..Default::default()
+        };
         t.push(Ok(gpa_reply(9, &[])));
-        let d = discover_positions(
-            &rpc,
-            Some(&store),
-            &wallet,
-            &pool,
-            &DiscoverOpts::default(),
-            0,
-        )
-        .await;
+        let d = discover_positions(&rpc, Some(&store), &wallet, &pool, &opts(10_000), 0).await;
         assert_eq!(d.discovery, Discovery::Empty { at_ms: 0 });
+        assert_eq!((d.is_cached(), d.slot), (false, Some(9)));
         let row = store
             .get(&discovery_key(&wallet, &pool))
             .await
@@ -860,17 +901,29 @@ pub(crate) mod tests {
             (row.ttl_ms, row.status),
             (DISCOVERY_EMPTY_TTL_MS, ObsStatus::Absent)
         );
-        let d = discover_positions(
-            &rpc,
-            Some(&store),
-            &wallet,
-            &pool,
-            &DiscoverOpts::default(),
-            299_000,
-        )
-        .await;
+        assert_eq!(DISCOVERY_EMPTY_TTL_MS, 10_000);
+        // Within the caller's max age: cached (and marked so), no request.
+        let d = discover_positions(&rpc, Some(&store), &wallet, &pool, &opts(10_000), 5_000).await;
         assert_eq!(d.discovery, Discovery::Empty { at_ms: 0 });
+        assert!(d.is_cached());
+        assert_eq!(d.slot, Some(9), "the cached row keeps its gPA slot");
         assert_eq!(t.requests().len(), 1);
+        // A tighter caller max age, then the old 299 s reuse: both re-run gPA.
+        t.push(Ok(gpa_reply(9, &[])));
+        let d = discover_positions(&rpc, Some(&store), &wallet, &pool, &opts(3_000), 5_000).await;
+        assert!(!d.is_cached());
+        let opened = k(OWNER);
+        t.push(Ok(gpa_reply(12, &[opened])));
+        let d =
+            discover_positions(&rpc, Some(&store), &wallet, &pool, &opts(10_000), 299_000).await;
+        assert_eq!(d.positions, vec![opened], "the new position is seen");
+        assert_eq!(t.requests().len(), 3);
+        // A found row keeps its 60 s TTL whatever the caller's max age.
+        let d = discover_positions(&rpc, Some(&store), &wallet, &pool, &opts(1_000), 330_000).await;
+        assert!(d.is_cached());
+        assert_eq!(d.pin(Some(5)), Some(12));
+        assert_eq!(d.pin(Some(20)), Some(20));
+        assert_eq!(t.requests().len(), 3);
     }
 
     #[tokio::test]

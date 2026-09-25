@@ -21,9 +21,12 @@
 //! `((share >> 64) × (stored − complete)) >> 64 + pending` (Q64.64, floor).
 //! Deliberate deviations (failed reads never become 0): a bin array missing
 //! for bins that hold shares marks the position `complete = false` (the SDK
-//! silently treats it as empty); `stored < complete` (inconsistent read)
-//! is an error, not a negative fee; Token-2022 transfer fees are not
-//! deducted (amounts are gross).
+//! silently treats it as empty); `stored < complete` and `share >
+//! liquidity_supply` (position and bin array read at different slots) are
+//! inconsistent reads — errors + `complete = false`, never a negative fee or
+//! other LPs' tokens; a discovered key that does not value
+//! ([`flag_unvalued`]) makes the exposure `Error`, never 0; Token-2022
+//! transfer fees are not deducted (amounts are gross).
 
 // Consumed by the dlmm_pool / dlmm_positions / lp_snapshot tools (stage 3).
 
@@ -663,7 +666,10 @@ pub(crate) fn claimable_fee(
 
 /// Raw position totals (smallest units). `missing_bin_arrays` = indexes of
 /// bins holding shares whose array was not read; `inconsistent_bins` = bins
-/// with `stored < complete`.
+/// with `stored < complete`; `share_above_supply_bins` = bins where the
+/// position's share exceeds the bin's `liquidity_supply` (the position and
+/// the bin array were read at different slots — the bin is skipped, never
+/// valued above its own amounts).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct PositionTotals {
     pub amount_x: U256,
@@ -672,11 +678,14 @@ pub(crate) struct PositionTotals {
     pub fee_y: U256,
     pub missing_bin_arrays: BTreeSet<i64>,
     pub inconsistent_bins: Vec<i32>,
+    pub share_above_supply_bins: Vec<i32>,
 }
 
 impl PositionTotals {
     pub fn complete(&self) -> bool {
-        self.missing_bin_arrays.is_empty() && self.inconsistent_bins.is_empty()
+        self.missing_bin_arrays.is_empty()
+            && self.inconsistent_bins.is_empty()
+            && self.share_above_supply_bins.is_empty()
     }
 }
 
@@ -700,6 +709,12 @@ pub(crate) fn position_totals(
             }
             continue;
         };
+        if pb.liquidity_share > bin.liquidity_supply {
+            // Supply = Σ shares: a larger share (or any share of an empty
+            // bin) is an inconsistent read, not a claim on other LPs' tokens.
+            t.share_above_supply_bins.push(bin_id as i32);
+            continue;
+        }
         t.amount_x += share_amount(pb.liquidity_share, bin.amount_x, bin.liquidity_supply);
         t.amount_y += share_amount(pb.liquidity_share, bin.amount_y, bin.liquidity_supply);
         let fx = claimable_fee(
@@ -1134,6 +1149,16 @@ pub(crate) fn build_positions(
                 ),
             ));
         }
+        if !t.share_above_supply_bins.is_empty() {
+            errors.push(ReadError::new(
+                "positions",
+                ErrorClass::Transient,
+                format!(
+                    "position {key}: liquidity share above the bin's liquidity supply in bins {:?} (position and bin arrays read at different slots)",
+                    t.share_above_supply_bins
+                ),
+            ));
+        }
         if pos.is_extended() {
             anomalies.push(DlmmAnomaly::ExtendedPosition {
                 position: key.to_string(),
@@ -1232,6 +1257,50 @@ pub(crate) fn build_positions(
         watch: watch.into_iter().collect(),
         errors,
     })
+}
+
+/// Keys [`build_positions`] was given that did not come out valued as the
+/// wallet's PositionV2 in the pool. `source` = where the keys came from:
+/// - `Args` (caller-chosen): each unreported key is a `NotApplicable` error;
+///   the exposure stays (a caller mistake, not a failed read).
+/// - `Gpa` / `Cached` (discovered): the account read disagrees with the
+///   discovery (a node behind the gPA node, a close in between) — each
+///   unreported key is a `Transient` error and the exposure becomes
+///   `Error`, never a silent 0.
+pub(crate) fn flag_unvalued(out: &mut DlmmPositions, keys: &[Pubkey], source: DiscoverySource) {
+    let mut unvalued = Vec::new();
+    for key in keys {
+        let k = key.to_string();
+        if out.positions.iter().any(|p| p.position == k) {
+            continue;
+        }
+        if !out.errors.iter().any(|e| e.message.contains(&k)) {
+            let (class, why) = match source {
+                DiscoverySource::Args => (ErrorClass::NotApplicable, "is not"),
+                _ => (ErrorClass::Transient, "was discovered but does not read as"),
+            };
+            out.errors.push(ReadError::new(
+                "positions",
+                class,
+                format!(
+                    "position {k} {why} a PositionV2 of pool {} owned by {}",
+                    out.pool, out.wallet
+                ),
+            ));
+        }
+        unvalued.push(k);
+    }
+    if source != DiscoverySource::Args && !unvalued.is_empty() {
+        out.exposure = Field::err(ReadError::new(
+            "exposure",
+            ErrorClass::Transient,
+            format!(
+                "{} discovered position(s) not valued: {}",
+                unvalued.len(),
+                unvalued.join(", ")
+            ),
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2343,5 +2412,95 @@ mod tests {
         let t = position_totals(&pos, &arrays_map(&set));
         assert!(!t.complete());
         assert_eq!(t.inconsistent_bins, vec![pos.lower_bin_id + i as i32]);
+    }
+
+    /// Regression (review #6): a PositionV2 read at an older slot than its
+    /// bin array claimed a share above the bin's supply and was valued at
+    /// other LPs' tokens; that bin is now an inconsistent read.
+    #[test]
+    fn share_above_bin_supply_is_an_inconsistent_read_not_a_value() {
+        let set = fixture_set();
+        let key = k("H9fmcxgheDvVSn9iUeRSvZPAgTY5WXqvroNpkZ2HCVRW");
+        let pos = decode_position_v2(&set.get(&key).unwrap().data().unwrap()).unwrap();
+        let full = position_totals(&pos, &arrays_map(&set));
+        assert!(full.complete());
+        let i = pos.bins.iter().position(|b| b.liquidity_share > 1).unwrap();
+        let bin_id = i64::from(pos.lower_bin_id) + i as i64;
+        let idx = bin_id.div_euclid(MAX_BIN_PER_ARRAY);
+        let slot = (bin_id - idx * MAX_BIN_PER_ARRAY) as usize;
+        let supply = pos.bins[i].liquidity_share - 1;
+        let mut arrays = arrays_map(&set);
+        arrays.get_mut(&idx).unwrap().bins[slot].liquidity_supply = supply;
+        let t = position_totals(&pos, &arrays);
+        assert!(!t.complete());
+        assert_eq!(t.share_above_supply_bins, vec![bin_id as i32]);
+        assert!(t.amount_x <= full.amount_x && t.amount_y <= full.amount_y);
+
+        // Through build_positions: incomplete + a Transient error, Partial.
+        let mut set = set;
+        let array_key = scan_bin_arrays(&set, &k(POOL)).0[&idx].0;
+        replace_data(&mut set, &array_key, |d| {
+            let o = BINS_OFFSET + BIN_SIZE * slot + 32;
+            d[o..o + 16].copy_from_slice(&supply.to_le_bytes());
+        });
+        let r = build_positions(&set, &k(OWNER), &k(POOL), found(3)).unwrap();
+        let p = r.positions.iter().find(|p| p.position == key.to_string());
+        assert!(!p.unwrap().complete);
+        assert!(
+            r.errors.iter().any(|e| e.class == ErrorClass::Transient
+                && e.message.contains(&key.to_string())
+                && e.message.contains("above the bin's liquidity supply")),
+            "{:?}",
+            r.errors
+        );
+        assert_eq!(r.status(), ObsStatus::Partial);
+    }
+
+    /// Regression (review #7): a discovered key the account read returns as
+    /// absent (a node behind the gPA node) was dropped silently and the
+    /// exposure read Ok(0).
+    #[test]
+    fn a_discovered_key_that_does_not_value_makes_the_exposure_an_error() {
+        let set = fixture_set();
+        let absent = k(WALLET_44);
+        let mut keys = vec![absent];
+        keys.extend(
+            build_positions(&set, &k(OWNER), &k(POOL), found(3))
+                .unwrap()
+                .positions
+                .iter()
+                .map(|p| k(&p.position)),
+        );
+        for source in [DiscoverySource::Gpa, DiscoverySource::Cached] {
+            let mut r = build_positions(&set, &k(OWNER), &k(POOL), found(4)).unwrap();
+            assert!(r.exposure.value().is_some());
+            flag_unvalued(&mut r, &keys, source);
+            let e = r.exposure.error().expect("exposure error, never 0");
+            assert!(e.message.contains(WALLET_44), "{e:?}");
+            assert_eq!(r.status(), ObsStatus::Error);
+            assert!(r
+                .errors
+                .iter()
+                .any(|e| e.class == ErrorClass::Transient && e.message.contains(WALLET_44)));
+            assert_eq!(r.positions.len(), 3, "valued positions kept");
+        }
+        // Discovered + all valued: untouched.
+        let mut r = build_positions(&set, &k(OWNER), &k(POOL), found(3)).unwrap();
+        flag_unvalued(&mut r, &keys[1..], DiscoverySource::Gpa);
+        assert_eq!(r.status(), ObsStatus::Ok);
+        // Empty discovered + nothing to value: Absent, exposure 0 (legit).
+        let mut r =
+            build_positions(&set, &absent, &k(POOL), Discovery::Empty { at_ms: 1 }).unwrap();
+        flag_unvalued(&mut r, &[], DiscoverySource::Gpa);
+        assert_eq!(r.status(), ObsStatus::Absent);
+        // Caller-chosen keys: NotApplicable, the exposure stays.
+        let mut r = build_positions(&set, &k(OWNER), &k(POOL), found(4)).unwrap();
+        flag_unvalued(&mut r, &keys, DiscoverySource::Args);
+        assert!(r.exposure.value().is_some());
+        assert_eq!(r.status(), ObsStatus::Partial);
+        assert!(r
+            .errors
+            .iter()
+            .any(|e| e.class == ErrorClass::NotApplicable && e.message.contains(WALLET_44)));
     }
 }
