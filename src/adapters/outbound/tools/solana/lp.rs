@@ -10,7 +10,7 @@
 //!
 //! | Case | Rule |
 //! |---|---|
-//! | Oracle | usable `price_oracle/1:<base mint>` row ≤ 30 s old (any TTL); else Jupiter lite price v3 inline exactly like `sol_price` without `pool` (no Pyth), put back so `world` sees it; only when the pool's quote is USDC or its base is wSOL |
+//! | Oracle | usable `price_oracle/1:<base mint>` row ≤ 10 s old (`SNAPSHOT_ORACLE_MAX_AGE_MS` = `PRICE_TTL_MS`, and ≤ the caller's max age; `max_age_secs = 0` ⇒ live) so snapshot age + price age stays inside the decide tools' `max_snapshot_age_secs`; else Jupiter lite price v3 inline exactly like `sol_price` without `pool` (no Pyth), put back so `world` sees it; only when the pool's quote is USDC or its base is wSOL |
 //! | Wallet keys | wallet + wSOL / USDC Tokenkeg ATAs (+ mints) in read 1; a pair mint outside wSOL / USDC gets its ATA in one extra pinned read |
 //! | Pending keeper request | `lp_state.last_hedge_action.position_request` is read in read 1 → `LpSnapshot::set_pending_request` |
 //! | `min_context_slot` | pins discovery, both pool reads and the extra ATA read; the cached snapshot is not served; the result is stored (the canonical read-after-write view the decide tools read) |
@@ -37,7 +37,7 @@ use crate::adapters::outbound::solana::accounts::fetch_accounts;
 use crate::adapters::outbound::solana::http_json::fetch_json;
 use crate::adapters::outbound::solana::plan::{
     self, failed_observation, read_failure, DiscoverOpts, Discovered, PerpsKeys, PoolRead,
-    PoolReadOpts, ReadFailure, ORACLE_MAX_AGE_MS,
+    PoolReadOpts, ReadFailure,
 };
 use crate::adapters::outbound::solana::rpc::{read_error, SolanaRpc};
 use crate::application::observe::observe;
@@ -91,6 +91,13 @@ fn state_key(wallet: &Pubkey, pool: &Pubkey) -> String {
 fn snapshot_key(wallet: &Pubkey, pool: &Pubkey) -> String {
     Observation::key_for(LpSnapshot::SCHEMA, &subject(wallet, pool))
 }
+
+/// Max age of a `price_oracle/1` row a snapshot reuses (else Jupiter
+/// inline); the caller's max age caps it further. A decision reads a
+/// snapshot row ≤ `LP_SNAPSHOT_TTL_MS` old, so its price is ≤ 20 s old plus
+/// the loop's model latency — inside `max_snapshot_age_secs` (30 in lping),
+/// where the old 30 s reuse sat right on it.
+const SNAPSHOT_ORACLE_MAX_AGE_MS: u64 = PRICE_TTL_MS;
 
 // ---------------------------------------------------------------------------
 // Store rows
@@ -411,14 +418,23 @@ where
 
     // Oracle row (base mint), then perps priced with SOL.
     let needed = pair.quote_is_usd || pair.base_mint == ids::WSOL;
-    let oracle = oracle_row(store, &pair.base_mint, needed, get_json, now_ms).await;
+    let oracle_max_age = max_age_ms.min(SNAPSHOT_ORACLE_MAX_AGE_MS);
+    let oracle = oracle_row(
+        store,
+        &pair.base_mint,
+        needed,
+        oracle_max_age,
+        get_json,
+        now_ms,
+    )
+    .await;
     let sol_usd = if pair.base_mint == ids::WSOL {
         oracle
             .as_ref()
             .and_then(|o| o.typed::<OraclePrice>().ok())
             .and_then(|p| p.usd)
     } else {
-        plan::cached_usd(store, ids::WSOL, ORACLE_MAX_AGE_MS, now_ms).await
+        plan::cached_usd(store, ids::WSOL, oracle_max_age, now_ms).await
     };
     let now_s = now_ms.div_euclid(1000);
     let perps_state = build_perps(&set, wallet, &perps.long, &perps.short, sol_usd, now_s);
@@ -451,13 +467,14 @@ fn add_to_watch(snap: &mut LpSnapshot, set: &AccountSet, triples: &[(Pubkey, Pub
     snap.watch = watch.into_iter().collect();
 }
 
-/// `price_oracle/1:<mint>`: a usable row ≤ 30 s old as is; else (when
-/// `fetch`) Jupiter inline, exactly like `sol_price` without `pool` (no
-/// Pyth, samples carried from the previous row), put back when usable.
+/// `price_oracle/1:<mint>`: a usable row ≤ `max_age_ms` old as is; else
+/// (when `fetch`) Jupiter inline, exactly like `sol_price` without `pool`
+/// (no Pyth, samples carried from the previous row), put back when usable.
 async fn oracle_row<J, JF>(
     store: Option<&dyn ObservationStore>,
     mint: &str,
     fetch: bool,
+    max_age_ms: u64,
     get_json: &J,
     now_ms: i64,
 ) -> Option<Observation>
@@ -472,7 +489,7 @@ where
     };
     let prev_price = prev.as_ref().and_then(|r| r.typed::<OraclePrice>().ok());
     if let (Some(row), Some(_)) = (&prev, &prev_price) {
-        if row.status.usable() && row.age_ms(now_ms) <= ORACLE_MAX_AGE_MS {
+        if row.status.usable() && row.age_ms(now_ms) <= max_age_ms {
             return prev;
         }
     }
@@ -1068,40 +1085,72 @@ mod tests {
         assert_eq!((t.requests().len(), jup.calls()), (n, 1));
     }
 
+    /// Regression (review #10): a price row up to 30 s old was reused, so a
+    /// decision on that snapshot seconds later blocked `stale_input` (price
+    /// age + snapshot age > max_snapshot_age_secs 30) with a fresh price one
+    /// call away.
     #[tokio::test]
-    async fn a_price_row_up_to_30_s_old_is_reused_else_refetched() {
+    async fn a_price_row_is_reused_only_within_the_snapshot_max_age() {
         let store = MemStore::default();
         let now = dlmm_now_ms();
         let jup = Jup::ok();
-        // Seed a price row 25 s old (past its 10 s TTL).
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now - 25_000).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let price_key = format!("price_oracle/1:{}", ids::WSOL);
+        // Seed a price row 26 s old.
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        snapshot(&t, &store, &req(BOT_WALLET), json!({}), &jup, now - 26_000).await;
         assert_eq!(jup.calls(), 1);
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        let args = json!({"max_age_secs": 0});
-        let o = snapshot(&t, &store, &req(BOT_WALLET), args.clone(), &jup, now).await;
-        assert_eq!(jup.calls(), 1, "the 25 s old row is reused");
-        let s: LpSnapshot = o.typed().unwrap();
-        assert_eq!(s.oracle.age_ms, Some(25_000));
-        assert!(s.positions.is_empty());
-        assert!(matches!(s.discovery, Discovery::Empty { .. }));
-        // 31 s: fetched again, the row replaced (samples carried).
-        let t = transport(false);
-        t.push(Ok(gpa_reply(DLMM_SLOT, &[])));
-        let o = snapshot(&t, &store, &req(BOT_WALLET), args, &jup, now + 6_001).await;
+        // 26 s later (discovery row still cached): the price is fetched
+        // again (was reused), samples carried.
+        let o = snapshot(
+            &transport(true),
+            &store,
+            &req(BOT_WALLET),
+            json!({}),
+            &jup,
+            now,
+        )
+        .await;
+        assert_eq!(o.status, ObsStatus::Ok, "{:?}", o.errors);
         assert_eq!(jup.calls(), 2);
         let s: LpSnapshot = o.typed().unwrap();
         assert_eq!(s.oracle.age_ms, Some(0));
-        let row = store
-            .get(&format!("price_oracle/1:{}", ids::WSOL))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(row.observed_at_ms, now + 6_001);
-        let p: OraclePrice = row.typed().unwrap();
-        assert_eq!(p.samples.len(), 2, "{:?}", p.samples);
+        let row = store.get(&price_key).await.unwrap().unwrap();
+        assert_eq!(row.observed_at_ms, now);
+        let price: OraclePrice = row.typed().unwrap();
+        assert_eq!(price.samples.len(), 2, "{:?}", price.samples);
+        // A decision on the snapshot row 9 s later is not stale.
+        let (d, _) =
+            hedge_decide_obs(Some(&store), &w, &p, &hedge_knobs(), false, now + 9_000).await;
+        let d: HedgeDecision = d.typed().unwrap();
+        assert_ne!(d.action.guard(), Some(Guard::StaleInput), "{:?}", d.action);
+        // A new build within 10 s reuses the row as is ...
+        let args = json!({"wallet": BOT_WALLET, "pool": POOL, "positions": [POSITION]});
+        let r = SnapshotReq::parse(&args).unwrap();
+        let o = snapshot(&transport(true), &store, &r, args, &jup, now + 9_000).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!((jup.calls(), s.oracle.age_ms), (2, Some(9_000)));
+        // ... unless the caller's max age is tighter (0 = live).
+        let t = transport(true);
+        t.push(Ok(gpa_reply(DLMM_SLOT, &[k(POSITION)])));
+        let args = json!({"max_age_secs": 0});
+        let o = snapshot(&t, &store, &req(BOT_WALLET), args, &jup, now + 9_000).await;
+        let s: LpSnapshot = o.typed().unwrap();
+        assert_eq!((jup.calls(), s.oracle.age_ms), (3, Some(0)));
+    }
+
+    /// The oracle bound keeps a decision on a cached snapshot inside the
+    /// production staleness budget with room for the loop's model calls.
+    #[test]
+    fn snapshot_age_plus_oracle_reuse_fits_the_decision_budget() {
+        let worst = LP_SNAPSHOT_TTL_MS + SNAPSHOT_ORACLE_MAX_AGE_MS;
+        for secs in [
+            hedge_knobs().max_snapshot_age_secs,
+            lp_knobs().max_snapshot_age_secs,
+        ] {
+            assert!(worst + 5_000 <= secs * 1000, "{worst} ms vs {secs} s");
+        }
     }
 
     #[tokio::test]

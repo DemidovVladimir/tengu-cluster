@@ -94,7 +94,7 @@ net_hosts = ["api.mainnet-beta.solana.com"]
 env_reads = ["SOLANA_RPC_URL"]
 fs_roots = ["~/lping-workspace"]
 
-# + Jupiter inline for the oracle when no price_oracle row ≤ 30 s exists.
+# + Jupiter inline for the oracle when no price_oracle row ≤ 10 s exists.
 [default_scopes.lp_snapshot]
 net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
 env_reads = ["SOLANA_RPC_URL"]
