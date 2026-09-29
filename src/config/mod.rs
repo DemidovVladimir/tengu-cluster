@@ -6,6 +6,7 @@ pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod paths;
 pub(crate) mod skill_lifecycle;
+pub(crate) mod solana;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -176,6 +177,12 @@ pub struct Config {
     /// Default is empty: MCP is opt-in per user install.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// `[solana]` — signing key of the Solana write tools (`mode = "send"`)
+    /// and the sandbox rules that keep it private (`config/solana.rs`).
+    /// Absent = the write tools only simulate.
+    #[serde(default)]
+    pub solana: solana::SolanaConfig,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -357,6 +364,12 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
+    /// Runtime (never in TOML): set by `Config::fold_default_scopes` when
+    /// `[solana] signer_key_file` is configured — tools without a configured
+    /// scope then get a fallback that runs no shell
+    /// (`bootstrap::tools::resolve_tool_scopes`).
+    #[serde(skip)]
+    pub no_shell_fallback: bool,
 }
 
 fn default_lens() -> String {
@@ -1003,7 +1016,9 @@ impl Config {
     /// `AgentConfig`, so the fallback has to be materialised here; `run-agent`
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
+        let signing_sandbox = self.solana.signer_key_file.is_some();
         for agent in self.agents.values_mut() {
+            agent.no_shell_fallback = signing_sandbox;
             for (tool, scope) in &self.default_scopes {
                 agent
                     .scopes
@@ -1079,6 +1094,9 @@ impl Config {
         });
 
         for issue in self.egress.validation_errors() {
+            errors.push(issue);
+        }
+        for issue in solana::validation_errors(self) {
             errors.push(issue);
         }
 
@@ -1326,6 +1344,7 @@ impl Default for Config {
                 scopes: HashMap::new(),
                 claude_code: None,
                 local: None,
+                no_shell_fallback: false,
             },
         );
 
@@ -1343,6 +1362,7 @@ impl Default for Config {
             default_scopes: HashMap::new(),
             egress: EgressConfig::default(),
             mcp_servers: Vec::new(),
+            solana: solana::SolanaConfig::default(),
             skill_lifecycle: None,
             sandbox_name: None,
         }

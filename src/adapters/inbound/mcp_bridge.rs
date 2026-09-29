@@ -534,8 +534,14 @@ async fn build_bridge_executor(workspace: &Path, tools: &[ToolDef]) -> Result<Pl
     // `permissive_scope`, exactly like `crate::bootstrap::tools::build_tool_executor`.
     // A missing or unparsable env var degrades to all-permissive with a warn.
     let configured = bridge_scopes_from_env();
-    let scopes =
-        crate::bootstrap::tools::resolve_tool_scopes(workspace, &configured, registry.tool_names());
+    // `no_shell = false`: the bridge serves Claude Code agents only, and a
+    // `[solana]` signing sandbox refuses those at config load.
+    let scopes = crate::bootstrap::tools::resolve_tool_scopes(
+        workspace,
+        &configured,
+        registry.tool_names(),
+        false,
+    );
 
     Ok(PluginToolExecutor {
         registry,

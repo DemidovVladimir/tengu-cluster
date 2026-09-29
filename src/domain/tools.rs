@@ -43,3 +43,23 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     HEDGE_DECIDE,
     LP_DECIDE,
 ];
+
+// Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
+// `mode = "simulate"` (default) needs no key; `mode = "send"` signs with
+// `[solana] signer_key_file`, only for an agent whose scope for the tool
+// lists the wallet (`wallets = ["<full pubkey>"]`). Config rules:
+// `config::solana`.
+pub(crate) const SOLANA_CLOSE_TOKEN_ACCOUNTS: &str = "solana_close_token_accounts";
+pub(crate) const JUPITER_SWAP: &str = "jupiter_swap";
+pub(crate) const DLMM_OPEN_POSITION: &str = "dlmm_open_position";
+pub(crate) const DLMM_CLOSE_POSITION: &str = "dlmm_close_position";
+pub(crate) const JUP_PERPS_ORDER: &str = "jup_perps_order";
+
+/// Every tool that can sign and send a Solana transaction.
+pub(crate) const SOLANA_WRITE_TOOLS: &[&str] = &[
+    SOLANA_CLOSE_TOKEN_ACCOUNTS,
+    JUPITER_SWAP,
+    DLMM_OPEN_POSITION,
+    DLMM_CLOSE_POSITION,
+    JUP_PERPS_ORDER,
+];

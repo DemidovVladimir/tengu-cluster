@@ -170,6 +170,19 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # requires = { price = 30 }               # offered only while `price` is usable and <= 30 s old
 # slots = { pool = { observation = "pools", items = "/data/pools/*", value = "address", top = 5 } }  # from a fresh world entry (written by a dlmm_pools call with the same args)
 
+# --- Solana signing (write tools, phase 6b) ---
+# `mode = "simulate"` (default) needs no key. `mode = "send"` signs with this
+# key, only for an agent whose scope for the tool lists the wallet:
+#   [agents.lp_executor.scopes.dlmm_open_position]
+#   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
+# With a signer the sandbox must have: no claude_code agents, no
+# [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
+# no-shell fallback), and the key outside every fs_roots / workspace. The
+# signing agent has no `description`, is not `default`, and is no webhook
+# endpoint's `agent`. Rules: src/config/solana.rs.
+# [solana]
+# signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in

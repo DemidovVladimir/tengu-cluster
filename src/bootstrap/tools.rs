@@ -184,7 +184,12 @@ pub(crate) fn build_tool_executor(
     // at `Config::load`; `run-agent` children load the same config and go
     // through `subagent_config`). A tool with no configured entry falls
     // back to `permissive_scope`.
-    let scopes = resolve_tool_scopes(workspace, &agent_config.scopes, registry.tool_names());
+    let scopes = resolve_tool_scopes(
+        workspace,
+        &agent_config.scopes,
+        registry.tool_names(),
+        agent_config.no_shell_fallback,
+    );
 
     Some(PluginToolExecutor {
         registry,
@@ -206,14 +211,20 @@ pub(crate) fn build_tool_executor(
 
 /// Resolve the per-tool scope map for an executor: a configured entry in
 /// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
-/// already folded in) wins; any tool without one gets `permissive_scope`.
+/// already folded in) wins; any tool without one gets `permissive_scope` —
+/// minus the shell when `no_shell` (a `[solana]` signing sandbox: a shell
+/// could read the key file, `config/solana.rs`).
 /// Shared by `build_tool_executor` and `mcp_bridge::build_bridge_executor`.
 pub(crate) fn resolve_tool_scopes(
     workspace: &Path,
     configured: &HashMap<String, ToolScope>,
     tool_names: impl IntoIterator<Item = String>,
+    no_shell: bool,
 ) -> HashMap<String, ToolScope> {
-    let fallback = permissive_scope(workspace);
+    let mut fallback = permissive_scope(workspace);
+    if no_shell {
+        fallback.shell_bins.clear();
+    }
     tool_names
         .into_iter()
         .map(|name| {
@@ -428,6 +439,37 @@ mod golden_tests {
         fn publish_tool_activity(&self, _call: &ToolCall) {}
     }
 
+    /// A `[solana]` signing sandbox: the fallback runs no shell (a shell
+    /// could read the key file); everything else stays permissive and a
+    /// configured scope is untouched.
+    #[test]
+    fn signing_sandbox_fallback_runs_no_shell() {
+        let tmp = TempDir::new().unwrap();
+        let configured = HashMap::from([(
+            "run_command".to_string(),
+            ToolScope {
+                shell_bins: vec!["ls".to_string()],
+                ..Default::default()
+            },
+        )]);
+        let names = || vec!["run_command".to_string(), "my_shell_skill".to_string()];
+        let open = resolve_tool_scopes(tmp.path(), &configured, names(), false);
+        assert!(open["my_shell_skill"].check_shell_bin("cat").is_ok());
+        let closed = resolve_tool_scopes(tmp.path(), &configured, names(), true);
+        assert!(closed["my_shell_skill"].check_shell_bin("cat").is_err());
+        assert!(closed["my_shell_skill"]
+            .check_net_host("any.example")
+            .is_ok());
+        assert!(closed["run_command"].check_shell_bin("ls").is_ok());
+
+        let mut cfg = crate::config::Config::default();
+        cfg.fold_default_scopes();
+        assert!(!cfg.agents["main"].no_shell_fallback);
+        cfg.solana.signer_key_file = Some("/keys/signer.json".into());
+        cfg.fold_default_scopes();
+        assert!(cfg.agents["main"].no_shell_fallback);
+    }
+
     /// A configured `[agents.*.scopes.<tool>]` entry is used verbatim; an
     /// unconfigured tool falls back to `permissive_scope`.
     #[test]
@@ -447,6 +489,7 @@ mod golden_tests {
             tmp.path(),
             &configured,
             vec!["http_request".to_string(), "read_file".to_string()],
+            false,
         );
 
         // Configured scope: exact allow-list, no wildcard.
