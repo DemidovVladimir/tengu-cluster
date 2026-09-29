@@ -24,6 +24,8 @@ pub(crate) fn tool_defs() -> Vec<ToolDef> {
         solana_close_token_accounts(),
         jupiter_swap(),
         dlmm_close_position(),
+        dlmm_open_position(),
+        jup_perps_order(),
         sol_price(),
         dlmm_pools(),
         dlmm_pool(),
@@ -174,6 +176,51 @@ fn dlmm_close_position() -> ToolDef {
                 "mode": mode(),
             }),
             &["wallet", "pool", "position", "arm_reentry"],
+        ),
+    )
+}
+
+fn dlmm_open_position() -> ToolDef {
+    ToolDef::new(
+        names::DLMM_OPEN_POSITION,
+        "Open a Meteora DLMM position centred on the active bin (≤ 70 bins) and add liquidity (spot / curve / bidask): initializes missing bin arrays, the position (fresh key), ATAs, wraps SOL, adds, unwraps. Refuses when the wallet already has a position in the pool (unless allow_existing), when SOL does not cover legs + rent + fees + min_wallet_sol, when a token leg exceeds the ATA, or (SOL/USDC) when the pool price diverges from the oracle. Returns write/1.",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (position owner, signer and fee payer)"),
+                "pool": pubkey("DLMM pool (LbPair)"),
+                "amount_x": num(Some(0.0), None, "Token X to deposit, token units (0 allowed; not both 0)"),
+                "amount_y": num(Some(0.0), None, "Token Y to deposit, token units"),
+                "bin_count": int(1, "Bins, centred on the active bin; 1..=70 (bot default 20)"),
+                "strategy": {"type": "string", "enum": ["spot", "curve", "bidask"], "description": "Liquidity shape (the SDK's *ImBalanced variants)"},
+                "max_active_bin_slippage": int(0, "Max bins the active bin may move before the add fails (bot effective 1)"),
+                "min_wallet_sol": num(Some(0.0), None, "SOL that must remain in the wallet after legs, rent and fees"),
+                "max_new_bin_arrays": int(0, "Max bin arrays this open may create (0.0714 SOL rent each, not refunded); 0..=2"),
+                "max_divergence_bps": num(Some(0.0), None, "SOL/USDC pools: max |pool price − oracle| in bps (> 0)"),
+                "allow_existing": boolean("Open even when the wallet already has a position in this pool (default false)"),
+                "mode": mode(),
+            }),
+            &["wallet", "pool", "amount_x", "amount_y", "bin_count", "strategy", "max_active_bin_slippage", "min_wallet_sol", "max_new_bin_arrays", "max_divergence_bps"],
+        ),
+    )
+}
+
+fn jup_perps_order() -> ToolDef {
+    ToolDef::new(
+        names::JUP_PERPS_ORDER,
+        "Jupiter perps SOL market order as a keeper request (TX1; a Jupiter keeper fills it at oracle price bounded by slippage_bps): increase (size_usd + collateral in SOL for long / USDC for short), decrease (size_usd + collateral USD to withdraw) or close (entire position, still bounded). Refuses while the wallet has an open keeper request, without an oracle price, or when the post-order size exceeds max_notional_usd. On a landed request records lp_state.last_hedge_action (request-aware cooldown). Returns write/1.",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (position owner, signer and fee payer)"),
+                "pool": pubkey("The LP pool this hedge belongs to (lp_state/1:<wallet>:<pool>)"),
+                "side": {"type": "string", "enum": ["long", "short"], "description": "SOL position side"},
+                "action": {"type": "string", "enum": ["increase", "decrease", "close"], "description": "Order type"},
+                "size_usd": num(Some(0.0), None, "USD notional to add (increase) or remove (decrease); ignored for close"),
+                "collateral": num(Some(0.0), None, "increase: collateral in the side's token (SOL for long, USDC for short); decrease: USD of collateral to withdraw; ignored for close"),
+                "slippage_bps": num(Some(0.0), Some(10000.0), "Keeper fill bound around the oracle, bps (bot default 50); applies to close too. Required."),
+                "max_notional_usd": num(Some(0.0), None, "Cap on the side's post-order size, USD (> 0). Required."),
+                "mode": mode(),
+            }),
+            &["wallet", "pool", "side", "action", "slippage_bps", "max_notional_usd"],
         ),
     )
 }

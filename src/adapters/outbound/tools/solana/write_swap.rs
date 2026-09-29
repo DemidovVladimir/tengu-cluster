@@ -159,12 +159,11 @@ impl Submitter for UltraSubmitter<'_> {
     async fn submit(&self, signed: &[u8]) -> Submitted {
         let b64 = B64.encode(signed);
         let started = Instant::now();
-        let mut last = String::new();
         loop {
-            match self.api.execute_order(&b64, &self.request_id).await {
+            let last = match self.api.execute_order(&b64, &self.request_id).await {
                 Ok(v) => return classify_execute(&v),
-                Err(e) => last = format!("{e:#}"),
-            }
+                Err(e) => format!("{e:#}"),
+            };
             if started.elapsed() + self.pause >= self.window {
                 return Submitted::Unknown {
                     note: format!(

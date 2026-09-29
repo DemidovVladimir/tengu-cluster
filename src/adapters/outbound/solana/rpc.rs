@@ -813,19 +813,6 @@ impl SolanaRpc {
             .ok_or_else(|| anyhow!("getPriorityFeeEstimate @ {}: no estimate", self.host))
     }
 
-    /// `getMinimumBalanceForRentExemption(len)`.
-    pub(crate) async fn get_minimum_balance_for_rent_exemption(&self, len: usize) -> Result<u64> {
-        let result = self
-            .call("getMinimumBalanceForRentExemption", json!([len]))
-            .await?;
-        result.as_u64().ok_or_else(|| {
-            anyhow!(
-                "getMinimumBalanceForRentExemption @ {}: result is not a u64",
-                self.host
-            )
-        })
-    }
-
     fn decoded<T>(&self, method: &str, r: std::result::Result<T, RpcError>) -> Result<T> {
         r.map_err(|e| e.prefixed(&format!("{method} @ {}", self.host)).into())
     }
@@ -1977,7 +1964,6 @@ pub(crate) mod tests {
             "err": {"InstructionError": [2, {"Custom": 6001}]},
             "logs": ["Program log: a", "Program log: b"], "unitsConsumed": 4242}}))));
         t.push(Ok(ok_envelope(json!({"priorityFeeEstimate": 12345.5}))));
-        t.push(Ok(ok_envelope(json!(2039280))));
         let rpc = fake_rpc(&t);
         let (hash, lvbh) = rpc.get_latest_blockhash().await.unwrap();
         assert_eq!(Pubkey(hash).to_string(), bh);
@@ -1989,12 +1975,6 @@ pub(crate) mod tests {
         assert_eq!(sim.logs, vec!["Program log: a", "Program log: b"]);
         assert_eq!(sim.err.unwrap()["InstructionError"][1]["Custom"], 6001);
         assert_eq!(rpc.get_priority_fee_estimate(&[1]).await.unwrap(), 12345.5);
-        assert_eq!(
-            rpc.get_minimum_balance_for_rent_exemption(165)
-                .await
-                .unwrap(),
-            2039280
-        );
         let reqs = t.requests();
         let sim_cfg = &reqs[2]["params"][1];
         assert_eq!(sim_cfg["sigVerify"], false);
