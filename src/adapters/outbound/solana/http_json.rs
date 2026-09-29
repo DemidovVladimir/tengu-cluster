@@ -1,10 +1,11 @@
-//! `fetch_json` — scoped, egress-checked JSON GET for the HTTP APIs of the
-//! Solana tool family (Jupiter lite price, Pyth Hermes, Meteora datapi).
+//! `fetch_json` / `post_json` — scoped, egress-checked JSON GET / POST for
+//! the HTTP APIs of the Solana tool family (Jupiter lite price + Ultra,
+//! Pyth Hermes, Meteora datapi).
 //!
 //! | Concern | Rule |
 //! |---|---|
 //! | Gate | `egress::policy().check_url` + `ctx.scope.check_net_host(host)` before the request (denial = `Fatal`, nothing sent) |
-//! | Client | `ctx.http` (egress tool client, redirects off), 20 s timeout, `Accept: application/json` |
+//! | Client | `ctx.http` (egress tool client, redirects off), 20 s timeout (POST: the caller's), `Accept: application/json`; POST sends a JSON body |
 //! | 2xx | `Ok((status, json))`; a non-JSON body is `Decode` |
 //! | non-2xx | `Err(RpcError)` classified like RPC: 429 `RateLimited` (+`Retry-After`), 401/403 `AuthRequired`, 5xx `Transient`, quota text `QuotaExhausted`, else `Fatal` |
 //! | Errors | the URL renders as `rpc::display_url`: values of credential-like query params (`key`, `token`, `secret`, `auth`, `sig`, `password`) are `<redacted>` (`rpc::Scrubber::for_api`); ids in the query stay intact |
@@ -23,10 +24,33 @@ use super::rpc::{
 };
 use crate::adapters::outbound::egress;
 use crate::domain::observation::ErrorClass;
+use crate::domain::scope::ToolScope;
 use crate::ports::tool::ToolCtx;
 
 /// GET `url` and parse the JSON body (see the module table).
 pub(crate) async fn fetch_json(ctx: &ToolCtx<'_>, url: &str) -> Result<(u16, Value)> {
+    request_json(&ctx.http, ctx.scope, url, None, REQUEST_TIMEOUT).await
+}
+
+/// POST `body` as JSON to `url` and parse the JSON answer. No retry.
+pub(crate) async fn post_json(
+    http: &reqwest::Client,
+    scope: &ToolScope,
+    url: &str,
+    body: &Value,
+    timeout: std::time::Duration,
+) -> Result<(u16, Value)> {
+    request_json(http, scope, url, Some(body), timeout).await
+}
+
+/// GET (`body = None`) or POST one JSON request through the gate.
+pub(crate) async fn request_json(
+    http: &reqwest::Client,
+    scope: &ToolScope,
+    url: &str,
+    body: Option<&Value>,
+    timeout: std::time::Duration,
+) -> Result<(u16, Value)> {
     let url = Url::parse(url)
         .map_err(|e| RpcError::new(ErrorClass::Fatal, format!("invalid URL: {e}")))?;
     let host = url.host_str().unwrap_or("").to_string();
@@ -34,7 +58,7 @@ pub(crate) async fn fetch_json(ctx: &ToolCtx<'_>, url: &str) -> Result<(u16, Val
     let shown = display_url(&url);
     let audit = |outcome: std::result::Result<u16, &RpcError>, ms: Option<u64>| {
         let mut event = json!({
-            "tool": "fetch_json",
+            "tool": if body.is_some() { "post_json" } else { "fetch_json" },
             "host": host,
             "path": url.path(),
             "ms": ms,
@@ -57,7 +81,7 @@ pub(crate) async fn fetch_json(ctx: &ToolCtx<'_>, url: &str) -> Result<(u16, Val
 
     let gate = egress::policy()
         .check_url(&url)
-        .and_then(|_| ctx.scope.check_net_host(&host));
+        .and_then(|_| scope.check_net_host(&host));
     if let Err(e) = gate {
         let err = RpcError::new(ErrorClass::Fatal, scrub.scrub(&format!("{e:#}")));
         audit(Err(&err), None);
@@ -65,10 +89,12 @@ pub(crate) async fn fetch_json(ctx: &ToolCtx<'_>, url: &str) -> Result<(u16, Val
     }
 
     let started = Instant::now();
-    let sent = ctx
-        .http
-        .get(url.clone())
-        .timeout(REQUEST_TIMEOUT)
+    let request = match body {
+        None => http.get(url.clone()),
+        Some(b) => http.post(url.clone()).json(b),
+    };
+    let sent = request
+        .timeout(timeout)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await;

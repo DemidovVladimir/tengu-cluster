@@ -5,7 +5,7 @@
 //! `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`,
 //! `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`,
 //! and the write tools (`mode = simulate | send`, runner `write_common`):
-//! `solana_close_token_accounts`.
+//! `solana_close_token_accounts`, `jupiter_swap`.
 //! Interfaces (names, descriptions, input schemas) live in [`defs`]; each
 //! family file implements its tools over the shared observation store:
 //!
@@ -18,6 +18,7 @@
 //! | `wallet.rs` | `solana_wallet`, `solana_tx` |
 //! | `lp.rs` | `lp_snapshot`, `hedge_decide`, `lp_decide` |
 //! | `write_tokens.rs` | `solana_close_token_accounts` |
+//! | `write_swap.rs` | `jupiter_swap` (Jupiter Ultra) |
 //!
 //! The plugin opens `<workspace>/.tengu/observations.db` once
 //! (`SqliteObservationStore`); when that fails the tools read live without
@@ -33,6 +34,7 @@ pub(crate) mod pools;
 pub(crate) mod price;
 pub(crate) mod wallet;
 pub(crate) mod write_common;
+pub(crate) mod write_swap;
 pub(crate) mod write_tokens;
 
 use std::path::PathBuf;
@@ -111,6 +113,7 @@ impl ToolPlugin for SolanaPlugin {
         tools.extend(wallet::tools(&shared));
         tools.extend(lp::tools(&shared));
         tools.extend(write_tokens::tools(&shared));
+        tools.extend(write_swap::tools(&shared));
         Ok(tools)
     }
 }

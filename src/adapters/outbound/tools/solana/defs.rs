@@ -22,6 +22,7 @@ const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
     vec![
         solana_close_token_accounts(),
+        jupiter_swap(),
         sol_price(),
         dlmm_pools(),
         dlmm_pool(),
@@ -137,6 +138,24 @@ fn solana_close_token_accounts() -> ToolDef {
                 "mode": mode(),
             }),
             &["wallet"],
+        ),
+    )
+}
+
+fn jupiter_swap() -> ToolDef {
+    ToolDef::new(
+        names::JUPITER_SWAP,
+        "Swap through Jupiter Ultra (order → simulate as-is → sign → Ultra execute). Any pair simulates; send is SOL↔USDC only and needs the order's WORST fill (otherAmountThreshold) within oracle_gate_bps of the SOL/USD oracle, the wallet as fee payer (no gasless), and no open Jupiter perps keeper request. Returns write/1.",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (taker, signer and fee payer)"),
+                "input_mint": pubkey(&format!("Mint sold (wSOL {WSOL} or USDC {USDC} to send)")),
+                "output_mint": pubkey("Mint bought"),
+                "amount": num(Some(0.0), None, "Amount of input_mint to sell, in token units (e.g. 0.5 SOL), floored to base units"),
+                "oracle_gate_bps": num(Some(0.0), None, "Max deviation of the worst-fill implied SOL price from the oracle, bps (bot default 50). Required — no default."),
+                "mode": mode(),
+            }),
+            &["wallet", "input_mint", "output_mint", "amount", "oracle_gate_bps"],
         ),
     )
 }

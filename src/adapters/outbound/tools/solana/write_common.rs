@@ -9,6 +9,11 @@
 //!
 //! A failed check refuses the write (nothing simulated or sent). Reads in
 //! a write tool are always live — never the observation cache.
+//!
+//! Open Jupiter perps keeper requests ([`live_keeper_requests`], review
+//! H5): while one is unexecuted its keeper may still pay into the wallet's
+//! wSOL / USDC account, so DLMM writes leave the wSOL account open and
+//! perps orders and SOL-leg swaps refuse.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,12 +26,53 @@ use super::SolanaShared;
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
 use crate::adapters::outbound::solana::send::{Pipeline, TxPlan};
 use crate::adapters::outbound::solana::signer::load_key_file;
+use crate::domain::lp::perps::{
+    decode_position_request, JupPositionRequest, POSITION_REQUEST_DISC,
+};
 use crate::domain::observation::{now_ms, ObsSource, Observation};
 use crate::domain::scope::ToolScope;
-use crate::domain::solana::Pubkey;
+use crate::domain::solana::{bs58_encode, ids, Pubkey};
 use crate::domain::solana_write::{Check, WriteMode, WriteResult, WriteStatus};
 use crate::ports::solana_signer::SolanaSigner;
 use crate::ports::tool::{ToolCtx, ToolOutput};
+
+/// An unexecuted keeper request older than this is treated as dead: the
+/// keeper fills within the pool's `maxRequestExecutionSec` (45 s live) or
+/// closes it. Younger ones block (conservative).
+pub(crate) const KEEPER_REQUEST_LIVE_SECS: i64 = 300;
+
+/// The wallet's unexecuted Jupiter perps keeper requests opened in the
+/// last [`KEEPER_REQUEST_LIVE_SECS`], read live (gPA disc@0 + owner@8, then
+/// the accounts). `Err` ⇒ the caller refuses (unknown is not "none").
+pub(crate) async fn live_keeper_requests(
+    rpc: &SolanaRpc,
+    wallet: &Pubkey,
+    now_s: i64,
+) -> Result<Vec<(Pubkey, JupPositionRequest)>> {
+    let filters = [
+        serde_json::json!({"memcmp": {"offset": 0, "bytes": bs58_encode(&POSITION_REQUEST_DISC)}}),
+        serde_json::json!({"memcmp": {"offset": 8, "bytes": wallet.to_string()}}),
+    ];
+    let (slot, keys) = rpc
+        .get_program_account_keys(&ids::key(ids::JUP_PERPS), &filters)
+        .await?;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (_, reads) = rpc.get_multiple_accounts(&keys, Some(slot)).await?;
+    let mut open = Vec::new();
+    for read in reads {
+        let Some(data) = read.data() else {
+            continue; // closed since the gPA — nothing pending
+        };
+        let req = decode_position_request(&data)
+            .map_err(|e| anyhow!("keeper request {}: {e}", read.pubkey))?;
+        if !req.executed && now_s.saturating_sub(req.open_time) < KEEPER_REQUEST_LIVE_SECS {
+            open.push((read.pubkey, req));
+        }
+    }
+    Ok(open)
+}
 
 /// What a write tool plans from fresh reads.
 #[derive(Default)]

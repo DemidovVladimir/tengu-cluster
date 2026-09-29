@@ -43,6 +43,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     HEDGE_DECIDE,
     LP_DECIDE,
     SOLANA_CLOSE_TOKEN_ACCOUNTS,
+    JUPITER_SWAP,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

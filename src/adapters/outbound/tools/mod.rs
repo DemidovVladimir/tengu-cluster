@@ -222,6 +222,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || solana::defs_named(names::SOLANA_CLOSE_TOKEN_ACCOUNTS),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::JUPITER_SWAP),
+            needs_memory: false,
+            defs: || solana::defs_named(names::JUPITER_SWAP),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
     ]);
     rows
 }

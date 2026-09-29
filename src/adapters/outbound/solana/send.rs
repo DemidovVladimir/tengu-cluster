@@ -187,6 +187,89 @@ fn failed_sim(mut r: TxReport, note: String) -> TxReport {
     r
 }
 
+fn refused(mut r: TxReport, note: String) -> TxReport {
+    r.status = Some(WriteStatus::Refused);
+    r.note = Some(note);
+    r
+}
+
+/// What handing a signed transaction over produced.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Submitted {
+    /// Handed to the cluster; the outcome comes from polling.
+    Accepted,
+    /// Definitely not forwarded (nothing can land).
+    Rejected {
+        note: String,
+        err: Option<Value>,
+        logs: Vec<String>,
+    },
+    /// May or may not have been forwarded — poll until expiry.
+    Unknown { note: String },
+    /// The submitter saw it land (e.g. Jupiter `/execute` Success).
+    Landed {
+        slot: u64,
+        err: Option<Value>,
+        note: Option<String>,
+    },
+}
+
+/// Hands a signed transaction to whoever lands it.
+#[async_trait::async_trait]
+pub(crate) trait Submitter: Send + Sync {
+    async fn submit(&self, signed: &[u8]) -> Submitted;
+}
+
+/// `sendTransaction` through our RPC: a JSON-RPC error answer = the node
+/// did not forward it; a transport failure is ambiguous ⇒ one resend of
+/// the same bytes (same signature — the cluster dedups).
+pub(crate) struct RpcSubmitter<'a> {
+    pub rpc: &'a SolanaRpc,
+    pub poll: Duration,
+}
+
+#[async_trait::async_trait]
+impl Submitter for RpcSubmitter<'_> {
+    async fn submit(&self, signed: &[u8]) -> Submitted {
+        match self.rpc.send_transaction_once(signed).await {
+            Ok(_) => Submitted::Accepted,
+            Err(e) if e.code.is_some() => {
+                let (err, logs) = match &e.data {
+                    Some(d) => (
+                        d.get("err").filter(|x| !x.is_null()).cloned(),
+                        d["logs"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|l| l.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    ),
+                    None => (None, Vec::new()),
+                };
+                Submitted::Rejected {
+                    note: e.message,
+                    err,
+                    logs,
+                }
+            }
+            Err(first) => {
+                tokio::time::sleep(self.poll).await;
+                match self.rpc.send_transaction_once(signed).await {
+                    Ok(_) => Submitted::Accepted,
+                    Err(second) => Submitted::Unknown {
+                        note: format!(
+                            "send outcome unknown: {}; resend: {}",
+                            first.message, second.message
+                        ),
+                    },
+                }
+            }
+        }
+    }
+}
+
 /// What a signature's status says.
 enum Seen {
     /// Landed at `slot`; `err` = the on-chain error, if any.
@@ -300,25 +383,24 @@ impl SendSession<'_> {
         }
     }
 
-    /// Simulate, sign, record, send and confirm one transaction.
-    pub(crate) async fn send(&mut self, plan: &TxPlan) -> TxReport {
-        let mut r = TxReport::new(&plan.label);
+    /// Renew the lease before a transaction; `Err` = refusal note.
+    async fn renew(&self) -> Result<(), String> {
         match self
             .store
             .acquire(&self.resource, &self.holder, LEASE_TTL_MS, now_ms())
             .await
         {
-            Ok(l) if l.granted => {}
-            Ok(l) => {
-                r.status = Some(WriteStatus::Refused);
-                r.note = Some(format!("lease lost to {}; not sent", l.current_holder));
-                return r;
-            }
-            Err(e) => {
-                r.status = Some(WriteStatus::Refused);
-                r.note = Some(format!("write store unavailable: {e:#}; not sent"));
-                return r;
-            }
+            Ok(l) if l.granted => Ok(()),
+            Ok(l) => Err(format!("lease lost to {}; not sent", l.current_holder)),
+            Err(e) => Err(format!("write store unavailable: {e:#}; not sent")),
+        }
+    }
+
+    /// Simulate, sign, record, send and confirm one transaction.
+    pub(crate) async fn send(&mut self, plan: &TxPlan) -> TxReport {
+        let mut r = TxReport::new(&plan.label);
+        if let Err(note) = self.renew().await {
+            return refused(r, note);
         }
         let sim = self.p.simulate(plan).await;
         if sim.status() != WriteStatus::Simulated {
@@ -335,94 +417,127 @@ impl SendSession<'_> {
 
         let (blockhash, lvbh) = match self.p.rpc.get_latest_blockhash().await {
             Ok(b) => b,
-            Err(e) => {
-                r.status = Some(WriteStatus::Refused);
-                r.note = Some(format!("{e:#}; not sent"));
-                return r;
-            }
+            Err(e) => return refused(r, format!("{e:#}; not sent")),
         };
         let msg = match compile(&self.p.wallet, &plan.ixs, limit, price, blockhash) {
             Ok(m) => m,
-            Err(e) => {
-                r.status = Some(WriteStatus::Refused);
-                r.note = Some(format!("compile: {e}; not sent"));
-                return r;
-            }
+            Err(e) => return refused(r, format!("compile: {e}; not sent")),
         };
         r.tx_size = Some(msg.tx_size());
         if msg.tx_size() > PACKET_DATA_SIZE {
-            r.status = Some(WriteStatus::Refused);
-            r.note = Some(format!(
+            let note = format!(
                 "transaction is {} bytes, over the {PACKET_DATA_SIZE}-byte limit; not sent",
                 msg.tx_size()
-            ));
-            return r;
+            );
+            return refused(r, note);
         }
         let mut tx = Transaction::unsigned(&msg);
         let view = match Transaction::parse(&tx.serialize()) {
             Ok((_, v)) => v,
-            Err(e) => {
-                r.status = Some(WriteStatus::Refused);
-                r.note = Some(format!("re-parse: {e}; not sent"));
-                return r;
-            }
+            Err(e) => return refused(r, format!("re-parse: {e}; not sent")),
         };
         let mut signers: Vec<&dyn SolanaSigner> = vec![self.signer.as_ref()];
         signers.extend(plan.extra_signers.iter().map(|s| s.as_ref()));
         if let Err(e) = sign_transaction(&mut tx, &view, &signers) {
-            r.status = Some(WriteStatus::Refused);
-            r.note = Some(format!("{e:#}; not sent"));
-            return r;
+            return refused(r, format!("{e:#}; not sent"));
         }
-        let sig = Signature(tx.id().expect("a compiled message has a fee payer"));
+        let submitter = RpcSubmitter {
+            rpc: &self.p.rpc,
+            poll: self.p.poll,
+        };
+        self.submit_signed(r, &tx, lvbh, &submitter).await
+    }
+
+    /// Send a transaction built elsewhere (e.g. a Jupiter Ultra order):
+    /// the wallet must be its fee payer (signature slot 0 — the tx id is
+    /// then ours); it is simulated as-is, only our slot is signed, and
+    /// `submitter` hands it over. No ComputeBudget is added.
+    pub(crate) async fn send_prebuilt(
+        &mut self,
+        label: &str,
+        unsigned: &[u8],
+        submitter: &dyn Submitter,
+    ) -> TxReport {
+        let mut r = TxReport::new(label);
+        if let Err(note) = self.renew().await {
+            return refused(r, note);
+        }
+        let (mut tx, view) = match Transaction::parse(unsigned) {
+            Ok(p) => p,
+            Err(e) => return refused(r, format!("transaction does not parse: {e}; not sent")),
+        };
+        r.tx_size = Some(unsigned.len());
+        if view.signer_index(&self.p.wallet) != Some(0) {
+            let note = format!(
+                "{} is not the fee payer (signature slot 0) of this transaction — a gasless / \
+                 foreign-payer transaction is not sent by this tool",
+                self.p.wallet
+            );
+            return refused(r, note);
+        }
+        match self.p.rpc.simulate_transaction(unsigned).await {
+            Ok(sim) => {
+                r.units = sim.units;
+                r.logs_tail = logs_tail(&sim.logs);
+                if sim.err.is_some() {
+                    r.status = Some(WriteStatus::SimFailed);
+                    r.err = sim.err;
+                    return r;
+                }
+            }
+            Err(e) => return failed_sim(r, format!("{e:#}")),
+        }
+        let lvbh = match self.p.rpc.get_latest_blockhash().await {
+            // The order's blockhash is at most this recent, so this
+            // height is a safe (late) expiry bound.
+            Ok((_, h)) => h,
+            Err(e) => return refused(r, format!("{e:#}; not sent")),
+        };
+        if let Err(e) = sign_transaction(&mut tx, &view, &[self.signer.as_ref()]) {
+            return refused(r, format!("{e:#}; not sent"));
+        }
+        self.submit_signed(r, &tx, lvbh, submitter).await
+    }
+
+    /// Record, submit, and confirm a signed transaction.
+    async fn submit_signed(
+        &mut self,
+        mut r: TxReport,
+        tx: &Transaction,
+        lvbh: u64,
+        submitter: &dyn Submitter,
+    ) -> TxReport {
+        let sig = Signature(tx.id().expect("a transaction has a fee payer"));
         let pending = PendingSend {
             wallet: self.wallet(),
             tool: self.p.tool.clone(),
-            label: plan.label.clone(),
+            label: r.label.clone(),
             signature: sig.to_string(),
             last_valid_block_height: lvbh,
             sent_at_ms: now_ms(),
         };
         if let Err(e) = self.store.put_pending(&pending).await {
-            r.status = Some(WriteStatus::Refused);
-            r.note = Some(format!("write store unavailable: {e:#}; not sent"));
-            return r;
+            return refused(r, format!("write store unavailable: {e:#}; not sent"));
         }
         r.signature = Some(sig.to_string());
-        let bytes = tx.serialize();
-
-        match self.p.rpc.send_transaction_once(&bytes).await {
-            Ok(_) => {}
-            Err(e) if e.code.is_some() => {
-                // The node answered with an error: it did not forward it.
+        match submitter.submit(&tx.serialize()).await {
+            Submitted::Accepted => {}
+            Submitted::Unknown { note } => r.note = Some(note),
+            Submitted::Rejected { note, err, logs } => {
                 r.status = Some(WriteStatus::Failed);
-                r.note = Some(format!("not sent: {}", e.message));
-                if let Some(d) = &e.data {
-                    r.err = d.get("err").filter(|x| !x.is_null()).cloned();
-                    if let Some(logs) = d["logs"].as_array() {
-                        let logs: Vec<String> = logs
-                            .iter()
-                            .filter_map(|l| l.as_str().map(str::to_string))
-                            .collect();
-                        r.logs_tail = logs_tail(&logs);
-                    }
-                }
+                r.note = Some(format!("not sent: {note}"));
+                r.err = err;
+                r.logs_tail = logs_tail(&logs);
                 let _ = self
                     .store
                     .clear_pending(&pending.wallet, &pending.signature)
                     .await;
                 return r;
             }
-            Err(first) => {
-                // Ambiguous: it may have been forwarded. Resend the same
-                // bytes once (same signature — the cluster dedups), then poll.
-                tokio::time::sleep(self.p.poll).await;
-                if let Err(second) = self.p.rpc.send_transaction_once(&bytes).await {
-                    r.note = Some(format!(
-                        "send outcome unknown: {}; resend: {}",
-                        first.message, second.message
-                    ));
-                }
+            Submitted::Landed { slot, err, note } => {
+                r.note = note;
+                self.landed(&mut r, &pending, slot, err).await;
+                return r;
             }
         }
         self.confirm(&mut r, &sig, &pending).await;

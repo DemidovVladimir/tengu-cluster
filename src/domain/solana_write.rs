@@ -55,9 +55,17 @@ pub fn clamp_cu_price(estimate: f64) -> u64 {
     (estimate.ceil() as u64).clamp(CU_PRICE_FLOOR, CU_PRICE_CEIL)
 }
 
-/// Last [`LOG_TAIL`] lines, whole (lines are never cut — they hold ids).
+/// Last [`LOG_TAIL`] lines, whole (lines are never cut — they hold ids),
+/// without `Program data:` event payloads (base64 blobs).
 pub fn logs_tail(logs: &[String]) -> Vec<String> {
-    logs[logs.len().saturating_sub(LOG_TAIL)..].to_vec()
+    let kept: Vec<&String> = logs
+        .iter()
+        .filter(|l| !l.starts_with("Program data: "))
+        .collect();
+    kept[kept.len().saturating_sub(LOG_TAIL)..]
+        .iter()
+        .map(|l| l.to_string())
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -483,5 +491,10 @@ mod tests {
         assert_eq!(t.len(), LOG_TAIL);
         assert_eq!(t[0], "line 5");
         assert_eq!(logs_tail(&logs[..3]).len(), 3);
+        let with_data = vec![
+            "Program data: AAAA".to_string(),
+            "Program X success".to_string(),
+        ];
+        assert_eq!(logs_tail(&with_data), vec!["Program X success"]);
     }
 }
