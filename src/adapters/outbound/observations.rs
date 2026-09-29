@@ -198,6 +198,18 @@ impl ObservationStore for SqliteObservationStore {
         })
         .await
     }
+
+    async fn remove(&self, keys: &[String]) -> Result<usize> {
+        let keys = keys.to_vec();
+        self.with_conn(move |c| {
+            let mut n = 0;
+            for k in &keys {
+                n += c.execute("DELETE FROM observations WHERE key = ?1", params![k])?;
+            }
+            Ok(n)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +308,25 @@ mod tests {
             .unwrap();
         assert!(many[0].is_none());
         assert_eq!(many[1].as_ref().unwrap().key, good.key);
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_only_named_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteObservationStore::open(dir.path()).unwrap();
+        let mut a = obs(None, ObsStatus::Ok, 1);
+        a.key = "t/1:a".into();
+        let mut b = a.clone();
+        b.key = "t/1:b".into();
+        store.put(&a).await.unwrap();
+        store.put(&b).await.unwrap();
+        let n = store
+            .remove(&["t/1:a".to_string(), "t/1:missing".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(store.get("t/1:a").await.unwrap().is_none());
+        assert!(store.get("t/1:b").await.unwrap().is_some());
     }
 
     /// Regression (review #11 #15): `lp_state` commits were blind whole-row

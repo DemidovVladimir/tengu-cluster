@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use reqwest::Url;
 use serde_json::{json, Value};
@@ -73,6 +74,9 @@ pub(crate) struct RpcError {
     pub code: Option<i64>,
     /// HTTP status, when the failure was a non-2xx response.
     pub http_status: Option<u16>,
+    /// JSON-RPC `error.data` (a failed `sendTransaction` preflight puts its
+    /// `err` + `logs` here).
+    pub data: Option<Value>,
 }
 
 impl RpcError {
@@ -83,6 +87,7 @@ impl RpcError {
             retry_after_ms: None,
             code: None,
             http_status: None,
+            data: None,
         }
     }
 
@@ -708,6 +713,119 @@ impl SolanaRpc {
         )
     }
 
+    // ── write path (phase 6b) ──────────────────────────────────────
+
+    /// One request, no retry — the send pipeline decides what a failure of
+    /// `sendTransaction` means (only a JSON-RPC error answer proves the
+    /// node did not forward it).
+    async fn call_once(&self, method: &str, params: Value) -> std::result::Result<Value, RpcError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        match self.transport.call(body).await {
+            Ok(envelope) => parse_envelope(envelope),
+            Err(e) => Err(e),
+        }
+        .map_err(|e| e.prefixed(&format!("{method} @ {}", self.host)))
+    }
+
+    /// `getLatestBlockhash` (confirmed) → (blockhash, `lastValidBlockHeight`).
+    pub(crate) async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64)> {
+        let result = self
+            .call("getLatestBlockhash", json!([{"commitment": COMMITMENT}]))
+            .await?;
+        let v = &result["value"];
+        let hash: Pubkey = v["blockhash"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| anyhow!("getLatestBlockhash @ {}: no blockhash", self.host))?;
+        let lvbh = v["lastValidBlockHeight"].as_u64().ok_or_else(|| {
+            anyhow!(
+                "getLatestBlockhash @ {}: no lastValidBlockHeight",
+                self.host
+            )
+        })?;
+        Ok((hash.0, lvbh))
+    }
+
+    /// `getBlockHeight` (confirmed).
+    pub(crate) async fn get_block_height(&self) -> Result<u64> {
+        let result = self
+            .call("getBlockHeight", json!([{"commitment": COMMITMENT}]))
+            .await?;
+        result
+            .as_u64()
+            .ok_or_else(|| anyhow!("getBlockHeight @ {}: result is not a u64", self.host))
+    }
+
+    /// `simulateTransaction` without signature checks and with the
+    /// cluster's blockhash (`replaceRecentBlockhash`) — needs no key.
+    pub(crate) async fn simulate_transaction(&self, tx: &[u8]) -> Result<Simulation> {
+        let result = self
+            .call(
+                "simulateTransaction",
+                json!([
+                    B64.encode(tx),
+                    {"encoding": "base64", "sigVerify": false, "replaceRecentBlockhash": true,
+                     "commitment": COMMITMENT},
+                ]),
+            )
+            .await?;
+        let slot = self.decoded("simulateTransaction", context_slot(&result))?;
+        Ok(parse_simulation(slot, &result["value"]))
+    }
+
+    /// ONE `sendTransaction` attempt (preflight on, `confirmed`, the node
+    /// rebroadcasts up to 3 times). Returns the RPC's error untouched.
+    pub(crate) async fn send_transaction_once(
+        &self,
+        tx: &[u8],
+    ) -> std::result::Result<Signature, RpcError> {
+        let result = self
+            .call_once(
+                "sendTransaction",
+                json!([
+                    B64.encode(tx),
+                    {"encoding": "base64", "skipPreflight": false,
+                     "preflightCommitment": COMMITMENT, "maxRetries": 3},
+                ]),
+            )
+            .await?;
+        result.as_str().and_then(|s| s.parse().ok()).ok_or_else(|| {
+            RpcError::new(
+                ErrorClass::Decode,
+                "sendTransaction: result is not a signature",
+            )
+        })
+    }
+
+    /// Helius `getPriorityFeeEstimate` (recommended level) for `tx`, in
+    /// micro-lamports per CU. Only Helius serves it.
+    pub(crate) async fn get_priority_fee_estimate(&self, tx: &[u8]) -> Result<f64> {
+        let result = self
+            .call(
+                "getPriorityFeeEstimate",
+                json!([{"transaction": B64.encode(tx),
+                        "options": {"recommended": true, "transactionEncoding": "base64"}}]),
+            )
+            .await?;
+        result["priorityFeeEstimate"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("getPriorityFeeEstimate @ {}: no estimate", self.host))
+    }
+
+    /// `getMinimumBalanceForRentExemption(len)`.
+    pub(crate) async fn get_minimum_balance_for_rent_exemption(&self, len: usize) -> Result<u64> {
+        let result = self
+            .call("getMinimumBalanceForRentExemption", json!([len]))
+            .await?;
+        result.as_u64().ok_or_else(|| {
+            anyhow!(
+                "getMinimumBalanceForRentExemption @ {}: result is not a u64",
+                self.host
+            )
+        })
+    }
+
     fn decoded<T>(&self, method: &str, r: std::result::Result<T, RpcError>) -> Result<T> {
         r.map_err(|e| e.prefixed(&format!("{method} @ {}", self.host)).into())
     }
@@ -730,6 +848,7 @@ pub(crate) fn parse_envelope(envelope: Value) -> std::result::Result<Value, RpcE
             format!("JSON-RPC error {code}: {message}"),
         );
         e.code = Some(code);
+        e.data = err.get("data").filter(|d| !d.is_null()).cloned();
         return Err(e);
     }
     match envelope {
@@ -748,6 +867,32 @@ pub(crate) fn context_slot(result: &Value) -> std::result::Result<u64, RpcError>
     result["context"]["slot"]
         .as_u64()
         .ok_or_else(|| RpcError::new(ErrorClass::Decode, "result has no context.slot"))
+}
+
+/// `simulateTransaction` outcome.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Simulation {
+    pub slot: u64,
+    /// `value.err` verbatim; `None` = success.
+    pub err: Option<Value>,
+    pub logs: Vec<String>,
+    pub units: Option<u64>,
+}
+
+pub(crate) fn parse_simulation(slot: u64, value: &Value) -> Simulation {
+    Simulation {
+        slot,
+        err: value.get("err").filter(|e| !e.is_null()).cloned(),
+        logs: value["logs"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|l| l.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        units: value["unitsConsumed"].as_u64(),
+    }
 }
 
 /// Parse a `getMultipleAccounts` `result` for `keys` (same order). A
@@ -1817,5 +1962,79 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
+    }
+
+    // ── write path (phase 6b) ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn write_path_methods_parse_their_results() {
+        let t = Arc::new(FakeTransport::at_slot(10));
+        let bh = "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N";
+        t.push(Ok(ok_envelope(json!({"context": {"slot": 10},
+            "value": {"blockhash": bh, "lastValidBlockHeight": 3090}}))));
+        t.push(Ok(ok_envelope(json!(3000))));
+        t.push(Ok(ok_envelope(json!({"context": {"slot": 11}, "value": {
+            "err": {"InstructionError": [2, {"Custom": 6001}]},
+            "logs": ["Program log: a", "Program log: b"], "unitsConsumed": 4242}}))));
+        t.push(Ok(ok_envelope(json!({"priorityFeeEstimate": 12345.5}))));
+        t.push(Ok(ok_envelope(json!(2039280))));
+        let rpc = fake_rpc(&t);
+        let (hash, lvbh) = rpc.get_latest_blockhash().await.unwrap();
+        assert_eq!(Pubkey(hash).to_string(), bh);
+        assert_eq!(lvbh, 3090);
+        assert_eq!(rpc.get_block_height().await.unwrap(), 3000);
+        let sim = rpc.simulate_transaction(&[1, 2, 3]).await.unwrap();
+        assert_eq!(sim.slot, 11);
+        assert_eq!(sim.units, Some(4242));
+        assert_eq!(sim.logs, vec!["Program log: a", "Program log: b"]);
+        assert_eq!(sim.err.unwrap()["InstructionError"][1]["Custom"], 6001);
+        assert_eq!(rpc.get_priority_fee_estimate(&[1]).await.unwrap(), 12345.5);
+        assert_eq!(
+            rpc.get_minimum_balance_for_rent_exemption(165)
+                .await
+                .unwrap(),
+            2039280
+        );
+        let reqs = t.requests();
+        let sim_cfg = &reqs[2]["params"][1];
+        assert_eq!(sim_cfg["sigVerify"], false);
+        assert_eq!(sim_cfg["replaceRecentBlockhash"], true);
+        assert_eq!(reqs[2]["params"][0], "AQID", "base64 of [1,2,3]");
+        assert_eq!(
+            reqs[3]["params"][0]["options"]["transactionEncoding"],
+            "base64"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_is_one_attempt_and_keeps_preflight_logs() {
+        let t = Arc::new(FakeTransport::at_slot(10));
+        t.push(Ok(json!({"jsonrpc": "2.0", "id": 1, "error": {
+            "code": -32002, "message": "Transaction simulation failed: Error processing Instruction 2",
+            "data": {"err": {"InstructionError": [2, {"Custom": 1}]}, "logs": ["Program log: boom"]}}})));
+        let rpc = fake_rpc(&t);
+        let e = rpc.send_transaction_once(&[9]).await.unwrap_err();
+        assert_eq!(e.code, Some(-32002));
+        assert_eq!(e.data.as_ref().unwrap()["logs"][0], "Program log: boom");
+        assert!(
+            e.message.starts_with("sendTransaction @ fake.rpc"),
+            "{}",
+            e.message
+        );
+        // A transient transport failure is returned, not retried.
+        t.push(Err(RpcError::new(ErrorClass::Timeout, "timed out")));
+        let e = rpc.send_transaction_once(&[9]).await.unwrap_err();
+        assert_eq!(e.class, ErrorClass::Timeout);
+        assert_eq!(e.code, None);
+        assert_eq!(t.requests().len(), 2, "exactly one request per attempt");
+        let cfg = &t.requests()[0]["params"][1];
+        assert_eq!(cfg["preflightCommitment"], "confirmed");
+        assert_eq!(cfg["skipPreflight"], false);
+        let sig = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW";
+        t.push(Ok(ok_envelope(json!(sig))));
+        assert_eq!(
+            rpc.send_transaction_once(&[9]).await.unwrap().to_string(),
+            sig
+        );
     }
 }

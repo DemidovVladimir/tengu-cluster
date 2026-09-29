@@ -29,4 +29,9 @@ pub(crate) trait ObservationStore: Send + Sync {
     ) -> anyhow::Result<bool> {
         anyhow::bail!("observation store does not support conditional writes")
     }
+    /// Delete `keys` (missing keys are fine); returns how many rows went.
+    /// The write tools drop the rows a landed transaction made stale.
+    async fn remove(&self, _keys: &[String]) -> anyhow::Result<usize> {
+        anyhow::bail!("observation store does not support removal")
+    }
 }
