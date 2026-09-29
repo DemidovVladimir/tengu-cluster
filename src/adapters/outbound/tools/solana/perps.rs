@@ -360,6 +360,7 @@ mod tests {
         h.http = egress::policy().tool_client(REQUEST_TIMEOUT).unwrap();
         let tool = JupPerpsTool::new(SolanaShared {
             store: Some(Arc::new(SqliteObservationStore::open(dir.path()).unwrap())),
+            ..Default::default()
         });
         let args = json!({"wallet": BOT_WALLET});
         let o = tool

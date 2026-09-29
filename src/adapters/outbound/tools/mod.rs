@@ -214,6 +214,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || solana::defs_named(names::LP_DECIDE),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
+        // Solana write tools (phase 6b): same plugin; `mode = "send"` also
+        // needs a wallet grant in the agent's scope (`config/solana.rs`).
+        ToolEntry {
+            opt_in: Some(names::SOLANA_CLOSE_TOKEN_ACCOUNTS),
+            needs_memory: false,
+            defs: || solana::defs_named(names::SOLANA_CLOSE_TOKEN_ACCOUNTS),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
     ]);
     rows
 }

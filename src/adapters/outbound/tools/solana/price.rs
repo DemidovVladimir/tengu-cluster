@@ -799,6 +799,7 @@ pub(crate) mod tests {
             let store = SqliteObservationStore::open(tmp.path()).unwrap();
             let shared = SolanaShared {
                 store: Some(Arc::new(store)),
+                ..Default::default()
             };
             Self {
                 _tmp: tmp,

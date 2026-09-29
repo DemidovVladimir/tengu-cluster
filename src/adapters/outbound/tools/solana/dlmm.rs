@@ -820,6 +820,7 @@ mod tests {
         pub(crate) fn shared(dir: &std::path::Path) -> SolanaShared {
             SolanaShared {
                 store: Some(Arc::new(SqliteObservationStore::open(dir).unwrap())),
+                ..Default::default()
             }
         }
 

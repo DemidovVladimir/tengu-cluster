@@ -527,129 +527,14 @@ impl SendSession<'_> {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Mutex;
+    use std::sync::atomic::AtomicU64;
 
-    use async_trait::async_trait;
     use serde_json::json;
 
-    use crate::adapters::outbound::solana::rpc::tests::{err_envelope, ok_envelope};
-    use crate::adapters::outbound::solana::rpc::{RpcError, RpcTransport};
     use crate::adapters::outbound::solana::signer::LocalKeypair;
+    use crate::adapters::outbound::solana::test_chain::{Chain, SendMode};
     use crate::adapters::outbound::solana::writes_store::SqliteWriteStore;
-    use crate::domain::observation::ErrorClass;
     use crate::domain::solana_tx::{spl_sync_native, system_transfer, MessageView};
-
-    /// How the fake cluster answers `sendTransaction`.
-    #[derive(Clone, Copy)]
-    enum SendMode {
-        Accept,
-        Preflight,
-        TimeoutThenAccept,
-    }
-
-    /// A tiny cluster: simulation result, send behaviour, a status that
-    /// appears after `confirm_after` polls, block height rising per call.
-    struct Chain {
-        requests: Mutex<Vec<Value>>,
-        sent: Mutex<Vec<Vec<u8>>>,
-        sim_err: Option<Value>,
-        sim_units: Option<u64>,
-        send: Mutex<VecDeque<SendMode>>,
-        confirm_after: Option<u64>,
-        tx_err: Option<Value>,
-        polls: AtomicU64,
-        height: AtomicU64,
-        height_step: u64,
-        lvbh: u64,
-        fee_estimate: f64,
-    }
-
-    impl Chain {
-        fn new() -> Self {
-            Chain {
-                requests: Mutex::new(Vec::new()),
-                sent: Mutex::new(Vec::new()),
-                sim_err: None,
-                sim_units: Some(50_000),
-                send: Mutex::new(VecDeque::from([SendMode::Accept])),
-                confirm_after: Some(1),
-                tx_err: None,
-                polls: AtomicU64::new(0),
-                height: AtomicU64::new(1_000),
-                height_step: 1,
-                lvbh: 1_150,
-                fee_estimate: 25_000.0,
-            }
-        }
-        fn methods(&self) -> Vec<String> {
-            self.requests
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|b| b["method"].as_str().unwrap().to_string())
-                .collect()
-        }
-    }
-
-    #[async_trait]
-    impl RpcTransport for Chain {
-        async fn call(&self, body: Value) -> Result<Value, RpcError> {
-            self.requests.lock().unwrap().push(body.clone());
-            let ctx = json!({"slot": 500});
-            match body["method"].as_str().unwrap() {
-                "simulateTransaction" => Ok(ok_envelope(json!({"context": ctx, "value": {
-                    "err": self.sim_err, "logs": ["Program log: sim"],
-                    "unitsConsumed": self.sim_units}}))),
-                "getLatestBlockhash" => Ok(ok_envelope(json!({"context": ctx, "value": {
-                    "blockhash": "EkSnNWid2cvwEVnVx9aBqawnmiCNiDgp3gUdkDPTKN1N",
-                    "lastValidBlockHeight": self.lvbh}}))),
-                "getPriorityFeeEstimate" => Ok(ok_envelope(
-                    json!({"priorityFeeEstimate": self.fee_estimate}),
-                )),
-                "sendTransaction" => {
-                    let bytes = B64.decode(body["params"][0].as_str().unwrap()).unwrap();
-                    let mode = self
-                        .send
-                        .lock()
-                        .unwrap()
-                        .pop_front()
-                        .unwrap_or(SendMode::Accept);
-                    match mode {
-                        SendMode::Preflight => Ok(json!({"jsonrpc": "2.0", "id": 1, "error": {
-                            "code": -32002, "message": "Transaction simulation failed",
-                            "data": {"err": {"InstructionError": [2, {"Custom": 1}]},
-                                     "logs": ["Program log: preflight"]}}})),
-                        SendMode::TimeoutThenAccept => {
-                            self.sent.lock().unwrap().push(bytes);
-                            Err(RpcError::new(ErrorClass::Timeout, "timed out"))
-                        }
-                        SendMode::Accept => {
-                            let (tx, _) = Transaction::parse(&bytes).unwrap();
-                            self.sent.lock().unwrap().push(bytes);
-                            Ok(ok_envelope(json!(Signature(tx.id().unwrap()).to_string())))
-                        }
-                    }
-                }
-                "getSignatureStatuses" => {
-                    let n = self.polls.fetch_add(1, Ordering::SeqCst) + 1;
-                    let seen = !self.sent.lock().unwrap().is_empty()
-                        && self.confirm_after.is_some_and(|k| n >= k);
-                    let v = if seen {
-                        json!([{"slot": 777, "confirmations": 0, "err": self.tx_err,
-                                "confirmationStatus": "confirmed"}])
-                    } else {
-                        json!([null])
-                    };
-                    Ok(ok_envelope(json!({"context": ctx, "value": v})))
-                }
-                "getBlockHeight" => Ok(ok_envelope(json!(self
-                    .height
-                    .fetch_add(self.height_step, Ordering::SeqCst)))),
-                m => Ok(err_envelope(-32601, &format!("fake chain: {m}"))),
-            }
-        }
-    }
 
     const WALLET_SEED: [u8; 32] = [1; 32];
 

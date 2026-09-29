@@ -15,6 +15,7 @@
 //! | `unconfirmed` | sent, outcome unknown — do NOT retry; the next send resolves it first | partial |
 //! | `partial` | some transactions of a multi-tx write confirmed, then one did not | partial |
 //! | `confirmed` | every transaction confirmed | ok |
+//! | `noop` | nothing to do (e.g. no empty token account) | ok |
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -96,6 +97,7 @@ pub enum WriteStatus {
     Failed,
     Expired,
     Partial,
+    Noop,
 }
 
 impl WriteStatus {
@@ -109,11 +111,12 @@ impl WriteStatus {
             WriteStatus::Failed => "failed",
             WriteStatus::Expired => "expired",
             WriteStatus::Partial => "partial",
+            WriteStatus::Noop => "noop",
         }
     }
     pub fn obs_status(self) -> ObsStatus {
         match self {
-            WriteStatus::Simulated | WriteStatus::Confirmed => ObsStatus::Ok,
+            WriteStatus::Simulated | WriteStatus::Confirmed | WriteStatus::Noop => ObsStatus::Ok,
             WriteStatus::Unconfirmed | WriteStatus::Partial => ObsStatus::Partial,
             _ => ObsStatus::Error,
         }
@@ -255,8 +258,7 @@ impl WriteResult {
                 WriteMode::Send => WriteStatus::Confirmed,
             };
             if self.txs.is_empty() {
-                self.status = WriteStatus::Refused;
-                self.refused.get_or_insert_with(|| "nothing_to_do".into());
+                self.status = WriteStatus::Noop;
             }
             return;
         };
@@ -439,7 +441,7 @@ mod tests {
         assert_eq!(settle(vec![tx(Confirmed), tx(Unconfirmed)]), Unconfirmed);
         assert_eq!(settle(vec![tx(Expired)]), Expired);
         assert_eq!(settle(vec![tx(SimFailed)]), SimFailed);
-        assert_eq!(settle(vec![]), Refused);
+        assert_eq!(settle(vec![]), Noop);
         let mut s = WriteResult::new("x", "W", WriteMode::Simulate, 1, "h");
         s.txs = vec![tx(Simulated)];
         s.settle();

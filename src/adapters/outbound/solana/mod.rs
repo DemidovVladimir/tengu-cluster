@@ -9,4 +9,6 @@ pub(crate) mod plan;
 pub(crate) mod rpc;
 pub(crate) mod send;
 pub(crate) mod signer;
+#[cfg(test)]
+pub(crate) mod test_chain;
 pub(crate) mod writes_store;

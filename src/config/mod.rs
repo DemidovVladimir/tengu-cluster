@@ -370,6 +370,11 @@ pub struct AgentConfig {
     /// (`bootstrap::tools::resolve_tool_scopes`).
     #[serde(skip)]
     pub no_shell_fallback: bool,
+    /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
+    /// by `Config::fold_default_scopes` so the Solana write tools can load
+    /// the key at send time (`tools/solana/write_common.rs`).
+    #[serde(skip)]
+    pub signer_key_file: Option<PathBuf>,
 }
 
 fn default_lens() -> String {
@@ -1017,8 +1022,10 @@ impl Config {
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
         let signing_sandbox = self.solana.signer_key_file.is_some();
+        let signer_key_file = self.solana.signer_path();
         for agent in self.agents.values_mut() {
             agent.no_shell_fallback = signing_sandbox;
+            agent.signer_key_file = signer_key_file.clone();
             for (tool, scope) in &self.default_scopes {
                 agent
                     .scopes
@@ -1345,6 +1352,7 @@ impl Default for Config {
                 claude_code: None,
                 local: None,
                 no_shell_fallback: false,
+                signer_key_file: None,
             },
         );
 

@@ -1,5 +1,5 @@
 //! The Solana LP family's tool interface — names, descriptions and JSON input
-//! schemas of all ten tools, defined in one place. Family files
+//! schemas of the ten read tools and the write tools, defined in one place. Family files
 //! (`price.rs`, `pools.rs`, `dlmm.rs`, `perps.rs`, `wallet.rs`, `lp.rs`) take
 //! their `ToolDef` from [`def`]; the catalog rows advertise [`defs_named`].
 //!
@@ -18,9 +18,10 @@ const WSOL: &str = "So11111111111111111111111111111111111111112";
 /// USDC mint — `solana_wallet` default (with wSOL).
 const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-/// All ten Solana LP tool definitions, in catalog order.
+/// Every Solana tool definition (reads, then writes), in catalog order.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
     vec![
+        solana_close_token_accounts(),
         sol_price(),
         dlmm_pools(),
         dlmm_pool(),
@@ -111,6 +112,33 @@ fn object(properties: Value, required: &[&str]) -> Value {
         "required": required,
         "additionalProperties": false,
     })
+}
+
+/// `mode` of every write tool.
+fn mode() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["simulate", "send"],
+        "default": "simulate",
+        "description": "simulate (default): build and simulate as the wallet — no key, nothing sent. send: sign with [solana] signer_key_file and send — only for an agent whose scope for this tool lists the wallet.",
+    })
+}
+
+// ── write tools (phase 6b) ───────────────────────────────────────
+
+fn solana_close_token_accounts() -> ToolDef {
+    ToolDef::new(
+        names::SOLANA_CLOSE_TOKEN_ACCOUNTS,
+        "Close the wallet's EMPTY SPL token accounts (Token + Token-2022) and reclaim their rent to the wallet. Never touches wSOL, USDC or keep_mints; skips non-zero, frozen and foreign-authority accounts. 8 accounts per transaction. Returns write/1 (status simulated | confirmed | noop | refused | ...).",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (token-account authority and fee payer)"),
+                "keep_mints": pubkeys("Extra mints never to close (e.g. the open LP pool's mints); wSOL and USDC are always kept"),
+                "mode": mode(),
+            }),
+            &["wallet"],
+        ),
+    )
 }
 
 /// A knobs object: every property is required.
@@ -413,8 +441,14 @@ mod tests {
 
     #[test]
     fn every_name_has_exactly_one_def() {
-        assert_eq!(tool_defs().len(), ALL.len());
-        for n in ALL {
+        let writes = crate::domain::tools::SOLANA_WRITE_TOOLS;
+        let built: Vec<&str> = writes
+            .iter()
+            .copied()
+            .filter(|n| !defs_named(n).is_empty())
+            .collect();
+        assert_eq!(tool_defs().len(), ALL.len() + built.len());
+        for &n in ALL.iter().chain(built.iter()) {
             assert_eq!(defs_named(n).len(), 1, "{n}");
             assert_eq!(def(n).name, n);
             assert!(crate::domain::tools::WORKSPACE_TOOLS.contains(&n), "{n}");
@@ -423,12 +457,37 @@ mod tests {
     }
 
     #[test]
-    fn every_tool_takes_optional_max_age_secs() {
-        for d in tool_defs() {
+    fn every_read_tool_takes_optional_max_age_secs() {
+        for d in tool_defs()
+            .into_iter()
+            .filter(|d| ALL.contains(&d.name.as_str()))
+        {
             let p = &d.parameters["properties"]["max_age_secs"];
             assert_eq!(p["type"], json!("integer"), "{}", d.name);
             assert_eq!(p["minimum"], json!(0), "{}", d.name);
             assert!(!required(&d).contains(&"max_age_secs"), "{}", d.name);
+        }
+    }
+
+    /// Write tools read live (no `max_age_secs`); `mode` is optional and
+    /// defaults to simulate; `wallet` is required.
+    #[test]
+    fn every_write_tool_defaults_to_simulate() {
+        for d in tool_defs()
+            .into_iter()
+            .filter(|d| crate::domain::tools::SOLANA_WRITE_TOOLS.contains(&d.name.as_str()))
+        {
+            let props = &d.parameters["properties"];
+            assert!(props.get("max_age_secs").is_none(), "{}", d.name);
+            assert_eq!(props["mode"]["default"], json!("simulate"), "{}", d.name);
+            assert_eq!(
+                props["mode"]["enum"],
+                json!(["simulate", "send"]),
+                "{}",
+                d.name
+            );
+            assert!(!required(&d).contains(&"mode"), "{}", d.name);
+            assert!(required(&d).contains(&"wallet"), "{}", d.name);
         }
     }
 

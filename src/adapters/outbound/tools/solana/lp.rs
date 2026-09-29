@@ -1969,6 +1969,7 @@ mod tests {
         seeded(&store, now_ms()).await;
         let shared = SolanaShared {
             store: Some(store.clone() as Arc<dyn ObservationStore>),
+            ..Default::default()
         };
         let lp_tools = tools(&shared);
         let by_name = |n: &str| {
