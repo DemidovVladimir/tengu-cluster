@@ -24,6 +24,7 @@ pub(crate) fn tool_defs() -> Vec<ToolDef> {
         solana_close_token_accounts(),
         jupiter_swap(),
         dlmm_close_position(),
+        dlmm_open_position(),
         sol_price(),
         dlmm_pools(),
         dlmm_pool(),
@@ -174,6 +175,30 @@ fn dlmm_close_position() -> ToolDef {
                 "mode": mode(),
             }),
             &["wallet", "pool", "position", "arm_reentry"],
+        ),
+    )
+}
+
+fn dlmm_open_position() -> ToolDef {
+    ToolDef::new(
+        names::DLMM_OPEN_POSITION,
+        "Open a Meteora DLMM position centred on the active bin (≤ 70 bins) and add liquidity (spot / curve / bidask): initializes missing bin arrays, the position (fresh key), ATAs, wraps SOL, adds, unwraps. Refuses when the wallet already has a position in the pool (unless allow_existing), when SOL does not cover legs + rent + fees + min_wallet_sol, when a token leg exceeds the ATA, or (SOL/USDC) when the pool price diverges from the oracle. Returns write/1.",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (position owner, signer and fee payer)"),
+                "pool": pubkey("DLMM pool (LbPair)"),
+                "amount_x": num(Some(0.0), None, "Token X to deposit, token units (0 allowed; not both 0)"),
+                "amount_y": num(Some(0.0), None, "Token Y to deposit, token units"),
+                "bin_count": int(1, "Bins, centred on the active bin; 1..=70 (bot default 20)"),
+                "strategy": {"type": "string", "enum": ["spot", "curve", "bidask"], "description": "Liquidity shape (the SDK's *ImBalanced variants)"},
+                "max_active_bin_slippage": int(0, "Max bins the active bin may move before the add fails (bot effective 1)"),
+                "min_wallet_sol": num(Some(0.0), None, "SOL that must remain in the wallet after legs, rent and fees"),
+                "max_new_bin_arrays": int(0, "Max bin arrays this open may create (0.0714 SOL rent each, not refunded); 0..=2"),
+                "max_divergence_bps": num(Some(0.0), None, "SOL/USDC pools: max |pool price − oracle| in bps (> 0)"),
+                "allow_existing": boolean("Open even when the wallet already has a position in this pool (default false)"),
+                "mode": mode(),
+            }),
+            &["wallet", "pool", "amount_x", "amount_y", "bin_count", "strategy", "max_active_bin_slippage", "min_wallet_sol", "max_new_bin_arrays", "max_divergence_bps"],
         ),
     )
 }
