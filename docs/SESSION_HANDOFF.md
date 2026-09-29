@@ -34,6 +34,22 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 | Cache | no cross-process single-flight (WAL prevents corruption, not duplicate RPC on a miss); `acct/1` rows hold base64 data (bin array ≈ 13.5 KB), only the 7-day purge bounds growth |
 | `sol_price` keys | pool-aware: `price_oracle/1:<mint>` vs `price_oracle/1:<mint>:<pool>` — a `world` alias must name the key the loop's `sol_price` call writes |
 
+### 2026-09-29 — `sandboxes/jev-exec` (Claude architect → Jev executor)
+
+| Change | Detail |
+|---|---|
+| Sandbox | `sandboxes/jev-exec/config.toml`: architect (in-process `claude_code`, subscription) whose only usable tool is `run_command` → `tengu decide --loop executor`; executor = Jev loop over `http_request` / `list_directory`. Verified live end to end — `docs/decision-loop-plan-2026-09-24.md` § Jev as an architect's hands |
+| `tengu decide` | prints `history` (args + reduced result per step) — `DecisionLoop::history()` |
+| TUI fix | direct (no-orchestrator) turns passed `bridge_tools: None` and the normal rebuild never set them → an in-process `claude_code` agent in `tengu chat` had NO tengu tools (only `/skill` commands did). Both paths now pass the bridge tools |
+| Jev decision feed | audit lines gain `ok` + `output`; `tengu chat` on a config with `[decision_loops]` shows each decision of those loops live (`jev executor #1 · crypto_price (1.00) → executed` + slots, args, output). `view::hide_thinking` removed the LAST bubble, not the spinner — any mid-turn System bubble (feed, orchestrator events) was lost; now removes the indicator by index |
+| Vault prompt fix | a `tengu` started by a tool (`run_command` → `tengu decide`) re-prompted `Master password:` on `/dev/tty` while the TUI owned it → "Engine stream timed out — no data for 120s". The first `tengu` to open the vault now sets `TENGU_SECRETS_LOADED` (loaded key names, set even on failure; forwarded to the Claude Code bridge); descendants inherit the secrets, register them for redaction, never prompt |
+
+| Open | Detail |
+|---|---|
+| Plugin MCP leak | `claude -p` also loads the user's global Claude Code plugin MCP servers into every `claude_code` agent (outside tengu scopes/egress). Candidate fix: `--strict-mcp-config` in `engines/claude_code.rs` |
+| Hand-off paths | `--sandbox` is cwd-relative and `TENGU_CONFIG` is not forwarded to the bridge → jev-exec hardcodes `~/development/tengu-cluster`. A `decide` tool or `--sandbox` resolution from `$TENGU_HOME` would remove it |
+| Jev args | slots are enumerated only; a `FromEvent` slot source would let the architect pass values |
+
 ---
 
 ## Previous TL;DR (2026-09-23): hexagonal layout

@@ -121,6 +121,12 @@ impl DecisionLoop {
         Ok(outcomes)
     }
 
+    /// The history ring buffer, oldest first — what each step ran with and
+    /// returned (`tengu decide` prints it).
+    pub(crate) async fn history(&self) -> Vec<HistoryEntry> {
+        self.state.lock().await.history.iter().cloned().collect()
+    }
+
     async fn step(
         &self,
         st: &mut LoopState,
@@ -436,6 +442,9 @@ impl DecisionLoop {
             "usage": d.usage,
             "result": outcome,
             "args": entry.map(|e| &e.args),
+            // What the tool returned, as `history` holds it (reduced, redacted).
+            "ok": entry.and_then(|e| e.ok),
+            "output": entry.map(|e| &e.result),
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
@@ -464,6 +473,57 @@ fn rejected(action: &str, reason: &str) -> StepOutcome {
         action: action.to_string(),
         reason: reason.to_string(),
     }
+}
+
+/// One audit line (see `DecisionLoop::audit`) as a short readable block:
+/// the chosen action + confidence, its slot answers, the args it ran with
+/// and what came back. The TUI decision feed renders it. `None` when the
+/// line has no `next_action` answer. Values are never shortened.
+pub(crate) fn render_audit(v: &Value) -> Option<String> {
+    let next = v.pointer("/answers/next_action")?;
+    let action = next.get("choice")?.as_str()?;
+    let conf = |a: &Value| match a.get("confidence").and_then(Value::as_f64) {
+        Some(c) => format!("{c:.2}"),
+        None => "?".into(),
+    };
+    let outcome = match v.pointer("/result/outcome").and_then(Value::as_str) {
+        Some("escalated") => "escalated (below act_at)".to_string(),
+        Some("rejected") => format!(
+            "rejected: {}",
+            v.pointer("/result/reason")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+        ),
+        Some(o) => o.to_string(),
+        None => "?".to_string(),
+    };
+    let mut out = format!(
+        "jev {} #{} · {action} ({}) → {outcome}",
+        v["loop"].as_str().unwrap_or("?"),
+        v["t"],
+        conf(next),
+    );
+    if let Some(Value::Object(answers)) = v.get("answers") {
+        let prefix = format!("{action}__");
+        for (key, a) in answers {
+            if let Some(slot) = key.strip_prefix(&prefix) {
+                let choice = a["choice"].as_str().unwrap_or("?");
+                out += &format!("\n  {slot} = {choice} ({})", conf(a));
+            }
+        }
+    }
+    if let Some(args) = v.get("args").filter(|a| !a.is_null()) {
+        out += &format!("\n  args   {args}");
+    }
+    if let Some(o) = v.get("output").filter(|o| !o.is_null()) {
+        let label = match v.get("ok").and_then(Value::as_bool) {
+            Some(true) => "ok",
+            Some(false) => "failed",
+            None => "result",
+        };
+        out += &format!("\n  {label:<6} {o}");
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -965,5 +1025,51 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
         let out = l.handle_event(&json!({}), "s").await.unwrap();
         assert!(matches!(&out[0], StepOutcome::Rejected { action, .. } if action == "open"));
         assert!(tools.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_audit_shows_action_slots_args_and_output() {
+        let url = "https://api.coinbase.com/v2/prices/SOL-USD/spot";
+        let line = json!({
+            "loop": "executor", "t": 1,
+            "answers": {
+                "next_action": {"choice": "crypto_price", "confidence": 1.0},
+                "crypto_price__pair": {"choice": "SOL-USD", "confidence": 0.97},
+                "fx_rate__currency": {"choice": "EUR", "confidence": 0.9}
+            },
+            "result": {"action": "crypto_price", "outcome": "executed"},
+            "args": {"method": "GET", "url": url},
+            "ok": true,
+            "output": {"price": {"amount": "118.29"}}
+        });
+        let text = render_audit(&line).unwrap();
+        assert!(text.starts_with("jev executor #1 · crypto_price (1.00) → executed"));
+        assert!(text.contains("pair = SOL-USD (0.97)"));
+        assert!(!text.contains("EUR"), "other actions' slots are hidden");
+        assert!(text.contains(url), "args are shown in full");
+        assert!(text.contains("ok     {\"price\":{\"amount\":\"118.29\"}}"));
+    }
+
+    #[test]
+    fn render_audit_terminal_and_rejected() {
+        let done = json!({
+            "loop": "executor", "t": 2,
+            "answers": {"next_action": {"choice": "done", "confidence": 1.0}},
+            "result": {"action": "done", "outcome": "stopped"},
+            "args": null, "ok": null, "output": null
+        });
+        assert_eq!(
+            render_audit(&done).unwrap(),
+            "jev executor #2 · done (1.00) → stopped"
+        );
+        let rej = json!({
+            "loop": "l", "t": 0,
+            "answers": {"next_action": {"choice": "open", "confidence": 0.99}},
+            "result": {"action": "open", "outcome": "rejected", "reason": "not a legal action this step"}
+        });
+        assert!(render_audit(&rej)
+            .unwrap()
+            .ends_with("rejected: not a legal action this step"));
+        assert!(render_audit(&json!({"loop": "l"})).is_none());
     }
 }

@@ -317,7 +317,15 @@ pub(crate) async fn run() -> Result<()> {
     let tengu_home = resolve_tengu_home();
     let secrets_path = tengu_home.join("secrets.vault");
     let mut secret_registry = SecretRegistry::new();
-    if secrets_path.exists() {
+    if let Ok(keys) = std::env::var(secrets::SECRETS_LOADED_ENV) {
+        // An ancestor `tengu` already opened the vault; its secrets are in
+        // our env. Register them for redaction — never prompt again.
+        for v in keys.split(',').filter_map(|k| std::env::var(k).ok()) {
+            if !v.is_empty() {
+                secret_registry.register(v);
+            }
+        }
+    } else if secrets_path.exists() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -334,15 +342,14 @@ pub(crate) async fn run() -> Result<()> {
                 }
             }
         }
-        match secrets::load_secrets_into_env(&secrets_path) {
-            Ok(secret_values) => {
-                for v in secret_values {
-                    secret_registry.register(v);
-                }
-            }
-            Err(e) => {
-                eprintln!("WARNING: Failed to load secrets vault: {}", e);
-            }
+        let loaded = secrets::load_secrets_into_env(&secrets_path).unwrap_or_else(|e| {
+            eprintln!("WARNING: Failed to load secrets vault: {}", e);
+            Vec::new()
+        });
+        let keys: Vec<&str> = loaded.iter().map(|(k, _)| k.as_str()).collect();
+        std::env::set_var(secrets::SECRETS_LOADED_ENV, keys.join(","));
+        for (_, v) in loaded {
+            secret_registry.register(v);
         }
     }
     // Also register the master password itself if set via env.

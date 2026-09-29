@@ -1,6 +1,8 @@
 //! `tengu decide --sandbox <s> --loop <name> [--event file.json]` — run one
-//! event through a decision loop and print the outcomes. Manual test path for
-//! `[decision_loops.*]`; the long-running trigger is the webhook listener.
+//! event through a decision loop and print the outcomes + history (args and
+//! reduced result per step). Manual test path for `[decision_loops.*]`, and
+//! the architect → executor hand-off in `sandboxes/jev-exec`; the
+//! long-running trigger is the webhook listener.
 
 use std::io::Read;
 use std::path::Path;
@@ -42,6 +44,7 @@ pub(super) async fn run_decide(
         serde_json::to_string_pretty(&serde_json::json!({
             "session_id": session_id,
             "outcomes": outcomes,
+            "history": dl.history().await,
             "audit": crate::bootstrap::decision::audit_path(),
         }))?
     );

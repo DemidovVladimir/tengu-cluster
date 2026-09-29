@@ -1,0 +1,140 @@
+# Tengu Cluster — "jev-exec" sandbox (2026-09-29)
+# Experiment: can Jev be the hands of a Claude architect?
+#
+#   architect (Claude Code, subscription)  — thinks, has NO hands
+#       └─ run_command: tengu decide --loop executor   (the only tool it may use)
+#   executor  (Jev ~typesafe/jev-latest via OpenRouter /alpha/decisions)
+#       └─ picks the next action + its args → existing tools run it
+#
+# Build + run from the repo root (needs `claude` logged in, OPENROUTER_API_KEY in .env):
+#   cargo build --release --features claude_code
+#   target/release/tengu chat --sandbox jev-exec
+# Executor alone (no Claude):
+#   echo '{"task":"What is the BTC price?"}' | target/release/tengu decide --sandbox jev-exec --loop executor --event -
+# Audit of every Jev decision: ~/.tengu/logs/decisions.jsonl
+#
+# Paths below assume the repo at ~/development/tengu-cluster: `tengu decide`
+# runs in the architect's workspace, where `--sandbox` (cwd-relative) and the
+# older `tengu` on PATH would not resolve.
+
+runtime_profile = "auto"
+
+# Open: OpenRouter and the price APIs commonly block Tor exits.
+[egress]
+network = "open"
+
+[memory]
+enabled = false
+
+[scaffold]
+root = "~/jev-exec-workspace"
+directories = ["notes"]
+
+[claude_code]
+cli_path = "claude"
+
+# --- architect ------------------------------------------------------------------
+# In-process chat agent (no [orchestrator] → no planner). An in-process agent is
+# offered every always-on tool over the MCP bridge; the scopes below deny all of
+# them except run_command → `tengu` (a configured scope denies by default per
+# field). Claude's own builtins are off.
+[agents.architect]
+default = true
+engine = "claude_code"
+model = "claude-opus-5-5"             # bare slug for claude_code
+role = "architect"
+workspace = "~/jev-exec-workspace"
+
+[agents.architect.claude_code]
+builtin_tools_profile = "none"
+
+[agents.architect.scopes]
+run_command = { shell_bins = ["tengu"] }   # first-token check only — not a sandbox against `;`
+read_file = {}
+list_directory = {}
+write_file = {}
+http_request = {}
+sign_and_send_transaction = {}
+sign_message = {}
+get_wallet_address = {}
+
+[agents.architect.identity]
+name = "Architect"
+instructions = """You are the architect. You plan; you never touch tools yourself.
+Your only hands are the executor — a fast decision model (Jev) that picks ONE
+action from a fixed menu per step and runs it. It cannot write free text or
+invent arguments: it only chooses from the options below.
+
+Executor menu:
+- crypto_price: spot USD price of BTC, ETH or SOL (Coinbase)
+- fx_rate: today's USD → EUR, GBP or JPY rate (ECB via Frankfurter)
+- list_workspace: list the files in the workspace
+- done: stop
+
+To use it, call run_command with exactly this shape (one task per call, one
+line of JSON, keep the heredoc):
+
+~/development/tengu-cluster/target/release/tengu -c ~/development/tengu-cluster/sandboxes/jev-exec/config.toml decide --loop executor --event - <<'EOF'
+{"task": "<one concrete instruction, e.g. Get the SOL price in USD>"}
+EOF
+
+It prints JSON: `outcomes` (what each step did: executed / stopped /
+escalated with its confidence / rejected) and `history` (each executed
+action's args and result). Break the user's request into tasks, send them one
+by one, read the history, then answer. If the executor escalated or picked the
+wrong action, rephrase the task more concretely once, then report what
+happened. When asked, report which actions the executor chose — this sandbox
+exists to evaluate it."""
+
+# --- executor --------------------------------------------------------------------
+# Tool / scope / workspace owner of the loop below. Nothing chats as `executor`:
+# engine + model are required by the schema but unused (no `description` → not
+# routable, not default). Jev is not a chat engine — the loop calls it.
+[agents.executor]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+role = "executor"
+workspace = "~/jev-exec-workspace"
+tools = ["http_request", "list_directory"]
+
+[agents.executor.scopes]
+http_request = { net_hosts = ["api.coinbase.com", "api.frankfurter.dev"] }
+list_directory = { fs_roots = ["~/jev-exec-workspace"] }
+
+# Jev picks, tools execute. Design: docs/decision-loop-plan-2026-09-24.md.
+[decision_loops.executor]
+model = "~typesafe/jev-latest"
+goal = """Carry out event.task — one instruction from the architect — with the \
+actions offered. Run the single action the task asks for, with the matching \
+argument, then pick done. Pick done straight away if no action fits the task."""
+agent = "executor"
+dry_run = true                        # every action is read_only; a write action would only be logged
+act_at = 0.7                          # below → `escalated` outcome, loop stops (no orchestrator here)
+escalate = false
+history = 8
+max_steps = 4
+
+[decision_loops.executor.actions.done]
+description = "The task is complete, or no action fits it"
+
+[decision_loops.executor.actions.crypto_price]
+description = "Get the current spot price in USD of a crypto asset (Coinbase)"
+tool = "http_request"
+read_only = true
+args = { method = "GET", url = "https://api.coinbase.com/v2/prices/{pair}/spot", return_body = true }
+slots = { pair = ["BTC-USD", "ETH-USD", "SOL-USD"] }
+reduce = { price = "/data" }
+
+[decision_loops.executor.actions.fx_rate]
+description = "Get today's exchange rate from US dollars to a fiat currency (ECB, via Frankfurter)"
+tool = "http_request"
+read_only = true
+args = { method = "GET", url = "https://api.frankfurter.dev/v1/latest?from=USD&to={currency}", return_body = true }
+slots = { currency = ["EUR", "GBP", "JPY"] }
+reduce = { date = "/date", rates = "/rates" }
+
+[decision_loops.executor.actions.list_workspace]
+description = "List the files and folders in the workspace"
+tool = "list_directory"
+read_only = true
+args = { path = "." }

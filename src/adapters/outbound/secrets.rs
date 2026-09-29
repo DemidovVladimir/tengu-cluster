@@ -222,17 +222,25 @@ pub(crate) fn list_secret_keys(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Set by the first `tengu` that opens the vault (even when unlocking
+/// fails): comma-separated names of the env vars it loaded. A `tengu`
+/// spawned below it (e.g. `tengu decide` from an agent's `run_command`)
+/// inherits those vars and never prompts — the prompt would block on a
+/// terminal the parent's TUI owns.
+pub(crate) const SECRETS_LOADED_ENV: &str = "TENGU_SECRETS_LOADED";
+
 /// Decrypt the vault and inject every key=value pair into the process
 /// environment.  Used at startup so that the rest of the application
 /// can read secrets via `std::env::var`.
 ///
-/// Returns the secret **values** (not keys) so they can be registered
-/// in the `SecretRegistry` for output redaction.
-pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
+/// Returns the `(key, value)` pairs it set (non-empty values only) so the
+/// values can be registered in the `SecretRegistry` for output redaction
+/// and the keys published in `SECRETS_LOADED_ENV`.
+pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<(String, String)>> {
     let password = prompt_password()?;
     let lines = decrypt_and_parse(path, &password)?;
 
-    let mut secret_values = Vec::new();
+    let mut loaded = Vec::new();
     for line in &lines {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -243,12 +251,12 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
             if existing.is_empty() {
                 std::env::set_var(k, v);
                 if !v.is_empty() {
-                    secret_values.push(v.to_string());
+                    loaded.push((k.to_string(), v.to_string()));
                 }
             }
         }
     }
-    Ok(secret_values)
+    Ok(loaded)
 }
 
 /// Change the master password on an existing vault.

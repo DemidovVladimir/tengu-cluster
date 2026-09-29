@@ -190,6 +190,12 @@ impl ClaudeCodeEngine {
         if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
             env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
         }
+        // A `tengu` run by a bridge tool (`run_command`) must not re-prompt
+        // for the vault password on the terminal the TUI owns.
+        let loaded = crate::adapters::outbound::secrets::SECRETS_LOADED_ENV;
+        if let Ok(v) = std::env::var(loaded) {
+            env[loaded] = serde_json::Value::String(v);
+        }
         // Forward OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
         // + Embedder) needs it.
         // The MCP config replaces inherited env, so without explicit forwarding

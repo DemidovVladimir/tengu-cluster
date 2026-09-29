@@ -467,7 +467,9 @@ These are not preferences. They're load-bearing.
   `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC) or `tengu decide`. History is in-process;
-  audit in `<TENGU_HOME>/logs/decisions.jsonl`. Plan:
+  audit in `<TENGU_HOME>/logs/decisions.jsonl` (incl. `args`, `ok`, `output`);
+  `tengu chat` on a config with `[decision_loops]` tails it and shows each
+  decision of those loops as a System bubble. Plan:
   `docs/decision-loop-plan-2026-09-24.md`.
 - **Typed observations + cache (2026-09-24)** — a tool may return
   `ToolOutput.observation` (`domain/observation.rs`); `execute_typed` carries

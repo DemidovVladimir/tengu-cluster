@@ -16,6 +16,17 @@ Jev-driven control loop for `sandboxes/lping`. Context + probes: `docs/lping-202
 
 Deviations from the sketch below: history is in-process (not `shared_cache`); a dry-run loop may name write tools not built yet; `tengu decide` never escalates (no orchestrator) — the webhook listener does.
 
+### Jev as an architect's hands — `sandboxes/jev-exec` (2026-09-29, experiment)
+
+| Piece | How |
+|---|---|
+| Architect | in-process `claude_code` agent (subscription, `claude-opus-5-5`), builtins `none`; every tengu tool scope-denied except `run_command` → `tengu` |
+| Hand-off | `run_command`: `tengu -c <sandbox config> decide --loop executor --event - <<'EOF' {"task": "..."} EOF` — one task per call |
+| Executor | `[decision_loops.executor]`: `crypto_price` (Coinbase), `fx_rate` (Frankfurter), `list_workspace`, `done`; `escalate = false`, `act_at = 0.7` |
+| Result back | `tengu decide` now prints `history` (args + reduced result per step) next to `outcomes` |
+| Verified | "1 BTC in EUR?" → architect sent 2 tasks in parallel → Jev `crypto_price(BTC-USD)` / `fx_rate(EUR)` at confidence 1.0, then `done`; ~0.3–0.6 s per decision. Architect's own `http_request` → `host 'api.coinbase.com' not in allowed net_hosts []` |
+| Limits | Jev only chooses — args must be enumerated slots (no free text from the task); `run_command` scope checks the first token only; the Claude CLI also loads the user's global Claude Code plugin MCP servers (not tengu-scoped); stdout carries tracing lines before the JSON |
+
 ## Shape
 
 ```
@@ -94,7 +105,8 @@ Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 | Surface | What |
 |---|---|
 | `MetricsKind::Decision` | new variant; tokens + cost + latency per Jev call |
-| `<TENGU_HOME>/logs/decisions.jsonl` | state hash, questions, answers + probabilities, action taken / skipped / escalated; typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`) |
+| `<TENGU_HOME>/logs/decisions.jsonl` | state hash, questions, answers + probabilities, action taken / skipped / escalated, `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`) |
+| TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit` |
 | `agentic_memory` | executed actions + escalations (durable, recallable by planner) |
 
 ## Docs to update when landing
