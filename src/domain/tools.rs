@@ -46,6 +46,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     JUPITER_SWAP,
     DLMM_CLOSE_POSITION,
     DLMM_OPEN_POSITION,
+    JUP_PERPS_ORDER,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
