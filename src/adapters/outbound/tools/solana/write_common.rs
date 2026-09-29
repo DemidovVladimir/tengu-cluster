@@ -29,10 +29,12 @@ use crate::adapters::outbound::solana::signer::load_key_file;
 use crate::domain::lp::perps::{
     decode_position_request, JupPositionRequest, POSITION_REQUEST_DISC,
 };
-use crate::domain::observation::{now_ms, ObsSource, Observation};
+use crate::domain::lp::snapshot::{LpControllerState, LP_STATE_TTL_MS};
+use crate::domain::observation::{now_ms, ObsSource, Observation, Observed};
 use crate::domain::scope::ToolScope;
 use crate::domain::solana::{bs58_encode, ids, Pubkey};
 use crate::domain::solana_write::{Check, WriteMode, WriteResult, WriteStatus};
+use crate::ports::observation::ObservationStore;
 use crate::ports::solana_signer::SolanaSigner;
 use crate::ports::tool::{ToolCtx, ToolOutput};
 
@@ -74,6 +76,48 @@ pub(crate) async fn live_keeper_requests(
     Ok(open)
 }
 
+/// Apply a write tool's own change to `lp_state/1:<wallet>:<pool>` after a
+/// landed write (review M1): re-read, `apply` to that version (or a fresh
+/// state), compare-and-swap; retried up to 3 times on a conflict, so a
+/// decide tool's concurrent commit is merged, never lost. An unreadable row
+/// is never overwritten. Returns a note for the result.
+pub(crate) async fn merge_lp_state(
+    store: Option<&Arc<dyn ObservationStore>>,
+    tool: &str,
+    wallet: &Pubkey,
+    pool: &Pubkey,
+    apply: impl Fn(&mut LpControllerState),
+) -> String {
+    let Some(store) = store else {
+        return "lp_state NOT updated: no observation store".into();
+    };
+    let key = Observation::key_for(LpControllerState::SCHEMA, &format!("{wallet}:{pool}"));
+    for _ in 0..3 {
+        let (mut state, expected) = match store.get(&key).await {
+            Ok(None) => (
+                LpControllerState::new(&wallet.to_string(), &pool.to_string()),
+                None,
+            ),
+            Ok(Some(row)) => match row.typed::<LpControllerState>() {
+                Ok(s) => (s, Some(row.observed_at_ms)),
+                Err(e) => return format!("lp_state NOT updated: row unreadable ({e:#})"),
+            },
+            Err(e) => return format!("lp_state NOT updated: row unreadable ({e:#})"),
+        };
+        apply(&mut state);
+        let now = now_ms();
+        let at = expected.map_or(now, |v| now.max(v.saturating_add(1)));
+        state.updated_at_ms = at;
+        let obs = Observation::of(tool, &state, at, LP_STATE_TTL_MS, ObsSource::Live);
+        match store.put_if_unchanged(&obs, expected).await {
+            Ok(true) => return format!("lp_state updated: {key}"),
+            Ok(false) => continue,
+            Err(e) => return format!("lp_state NOT updated: store write failed ({e:#})"),
+        }
+    }
+    format!("lp_state NOT updated: {key} kept changing (3 conflicts)")
+}
+
 /// What a write tool plans from fresh reads.
 #[derive(Default)]
 pub(crate) struct Built {
@@ -93,6 +137,13 @@ pub(crate) trait WriteBuilder: Send + Sync {
     /// Live reads → checks + transactions. `fence` = the wallet's last
     /// landed write slot: reads that support it must be at or after it.
     async fn build(&self, rpc: &SolanaRpc, fence: Option<u64>) -> Result<Built>;
+
+    /// After a send where at least one transaction landed (`confirmed` /
+    /// `partial`): controller-state bookkeeping. Returns a note for
+    /// `details.lp_state`.
+    async fn after_send(&self, _result: &WriteResult, _shared: &SolanaShared) -> Option<String> {
+        None
+    }
 }
 
 /// The `mode` argument (`simulate` when absent).
@@ -267,5 +318,12 @@ async fn send(
     session
         .close(shared.store.as_ref(), if sent { &stale } else { &[] })
         .await;
+    if matches!(r.status, WriteStatus::Confirmed | WriteStatus::Partial) {
+        if let Some(note) = builder.after_send(&r, shared).await {
+            if let Some(d) = r.details.as_object_mut() {
+                d.insert("lp_state".into(), Value::String(note));
+            }
+        }
+    }
     r
 }

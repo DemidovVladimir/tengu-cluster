@@ -140,6 +140,18 @@ async function main() {
     .accountsPartial({ position: positionKp.publicKey, sender: wallet.publicKey, rentReceiver: wallet.publicKey })
     .instruction()));
 
+  // LbPair with both reward slots set: the fixture pool's account re-encoded
+  // by the SDK's own Anchor coder (checks the reward_infos offsets).
+  const gma = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'tests', 'fixtures', 'solana', 'dlmm', 'gma.json'), 'utf8'));
+  const pair = program.coder.accounts.decode('lbPair', Buffer.from(gma.result.value[0].data[0], 'base64'));
+  pair.rewardInfos[0].mint = k(60); pair.rewardInfos[0].vault = k(61);
+  pair.rewardInfos[1].mint = k(62); pair.rewardInfos[1].vault = k(63);
+  const encoded = await program.coder.accounts.encode('lbPair', pair);
+  out.lb_pair_with_rewards = {
+    data_b64: Buffer.from(encoded).toString('base64'),
+    rewards: [[0, k(60).toBase58(), k(61).toBase58()], [1, k(62).toBase58(), k(63).toBase58()]],
+  };
+
   // ── Jupiter perps (anchor 0.29 + the bot's IDL) ───────────────────────
   const provider = new jupAnchor.AnchorProvider(new web3.Connection('http://127.0.0.1:1'), new jupAnchor.Wallet(wallet), {});
   const perps = new jupAnchor.Program(perpsIdl, JUP_PERPS, provider);

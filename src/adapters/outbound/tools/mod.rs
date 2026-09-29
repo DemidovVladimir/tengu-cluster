@@ -228,6 +228,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || solana::defs_named(names::JUPITER_SWAP),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::DLMM_CLOSE_POSITION),
+            needs_memory: false,
+            defs: || solana::defs_named(names::DLMM_CLOSE_POSITION),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
     ]);
     rows
 }

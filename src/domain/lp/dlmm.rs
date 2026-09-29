@@ -145,6 +145,20 @@ pub(crate) struct LbPair {
     /// `TokenProgramFlags`: 0 Token, 1 Token-2022.
     pub token_mint_x_program_flag: u8,
     pub token_mint_y_program_flag: u8,
+    /// `reward_infos[i].mint` / `.vault` (offsets 264 / 296 + 144·i); an
+    /// all-zero mint = reward slot not initialized.
+    pub reward_mints: [Pubkey; 2],
+    pub reward_vaults: [Pubkey; 2],
+}
+
+impl LbPair {
+    /// Initialized farming rewards: `(index, mint, vault)`.
+    pub fn rewards(&self) -> Vec<(u64, Pubkey, Pubkey)> {
+        (0..2)
+            .filter(|&i| self.reward_mints[i] != Pubkey::default())
+            .map(|i| (i as u64, self.reward_mints[i], self.reward_vaults[i]))
+            .collect()
+    }
 }
 
 pub(crate) fn decode_lb_pair(d: &[u8]) -> Result<LbPair, String> {
@@ -174,6 +188,8 @@ pub(crate) fn decode_lb_pair(d: &[u8]) -> Result<LbPair, String> {
         activation_point: u64_at(d, 816),
         token_mint_x_program_flag: d[880],
         token_mint_y_program_flag: d[881],
+        reward_mints: [key_at(d, 264), key_at(d, 264 + 144)],
+        reward_vaults: [key_at(d, 296), key_at(d, 296 + 144)],
     };
     if p.bin_step == 0 {
         return Err("LbPair bin_step is 0".into());

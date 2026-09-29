@@ -481,6 +481,30 @@ mod tests {
     }
 
     #[test]
+    fn lb_pair_reward_infos_match_the_sdk_encoding() {
+        use base64::Engine as _;
+        let g = crate::domain::solana_tx::golden::golden();
+        let case = &g["lb_pair_with_rewards"];
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(case["data_b64"].as_str().unwrap())
+            .unwrap();
+        let pair = super::super::dlmm::decode_lb_pair(&data).unwrap();
+        let want: Vec<(u64, Pubkey, Pubkey)> = case["rewards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r[0].as_u64().unwrap(),
+                    r[1].as_str().unwrap().parse().unwrap(),
+                    r[2].as_str().unwrap().parse().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(pair.rewards(), want);
+    }
+
+    #[test]
     fn strategy_names() {
         assert_eq!(Strategy::parse("spot"), Some(Strategy::Spot));
         assert_eq!(Strategy::parse("curve"), Some(Strategy::Curve));

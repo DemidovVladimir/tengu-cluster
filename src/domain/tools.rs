@@ -44,6 +44,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     LP_DECIDE,
     SOLANA_CLOSE_TOKEN_ACCOUNTS,
     JUPITER_SWAP,
+    DLMM_CLOSE_POSITION,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

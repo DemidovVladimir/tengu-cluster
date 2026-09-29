@@ -23,6 +23,7 @@ pub(crate) fn tool_defs() -> Vec<ToolDef> {
     vec![
         solana_close_token_accounts(),
         jupiter_swap(),
+        dlmm_close_position(),
         sol_price(),
         dlmm_pools(),
         dlmm_pool(),
@@ -156,6 +157,23 @@ fn jupiter_swap() -> ToolDef {
                 "mode": mode(),
             }),
             &["wallet", "input_mint", "output_mint", "amount", "oracle_gate_bps"],
+        ),
+    )
+}
+
+fn dlmm_close_position() -> ToolDef {
+    ToolDef::new(
+        names::DLMM_CLOSE_POSITION,
+        "Close a Meteora DLMM position: remove all liquidity, claim fees and rewards, close the position (rent back), unwrap wSOL (kept open while a Jupiter perps keeper request is pending). Positions > 70 bins close in chunks. Owner must be the wallet. Returns write/1.",
+        object(
+            json!({
+                "wallet": pubkey("Wallet (position owner, signer and fee payer)"),
+                "pool": pubkey("DLMM pool (LbPair) of the position"),
+                "position": pubkey("Position account"),
+                "arm_reentry": boolean("On a landed close, arm the lp_state re-entry wait (a close-only recenter). Required — no default."),
+                "mode": mode(),
+            }),
+            &["wallet", "pool", "position", "arm_reentry"],
         ),
     )
 }
