@@ -4,6 +4,10 @@
 
 use std::collections::HashSet;
 
+use serde_json::Value;
+
+use crate::domain::observation::Observation;
+
 /// Registry of secret values that must never appear in tool output,
 /// flow transcripts, or memory storage.
 pub(crate) struct SecretRegistry {
@@ -42,5 +46,78 @@ impl SecretRegistry {
             result = result.replace(secret.as_str(), "[REDACTED]");
         }
         result
+    }
+
+    /// `redact` every string leaf of `v` in place.
+    pub fn redact_value(&self, v: &mut Value) {
+        if self.values.is_empty() {
+            return;
+        }
+        match v {
+            Value::String(s) => {
+                if self.values.iter().any(|x| s.contains(x.as_str())) {
+                    *s = self.redact(s);
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| self.redact_value(x)),
+            Value::Object(o) => o.values_mut().for_each(|x| self.redact_value(x)),
+            _ => {}
+        }
+    }
+
+    /// Redact a typed observation: headline, `errors[].message`, string
+    /// features and the whole `data` payload. The cache key is left alone.
+    pub fn redact_observation(&self, obs: &mut Observation) {
+        if self.values.is_empty() {
+            return;
+        }
+        obs.headline = self.redact(&obs.headline);
+        for e in &mut obs.errors {
+            e.message = self.redact(&e.message);
+        }
+        obs.features.values_mut().for_each(|v| self.redact_value(v));
+        self.redact_value(&mut obs.data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::observation::{ErrorClass, ObsSource, ObsStatus, ReadError};
+    use serde_json::json;
+
+    #[test]
+    fn redact_value_walks_string_leaves() {
+        let mut r = SecretRegistry::new();
+        r.register("sk-secret".into());
+        let mut v = json!({"a": ["x sk-secret y", 1], "b": {"c": "sk-secret"}});
+        r.redact_value(&mut v);
+        assert_eq!(
+            v,
+            json!({"a": ["x [REDACTED] y", 1], "b": {"c": "[REDACTED]"}})
+        );
+    }
+
+    #[test]
+    fn redact_observation_covers_every_text_field() {
+        let mut r = SecretRegistry::new();
+        r.register("sk-secret".into());
+        let mut obs = Observation {
+            key: "k/1:s".into(),
+            schema: "k/1".into(),
+            tool: "t".into(),
+            observed_at_ms: 0,
+            slot: None,
+            ttl_ms: 1,
+            source: ObsSource::Live,
+            status: ObsStatus::Partial,
+            errors: vec![ReadError::new("f", ErrorClass::Fatal, "bad sk-secret")],
+            headline: "h sk-secret".into(),
+            features: [("s".to_string(), json!("sk-secret"))].into(),
+            data: json!({"url": "https://rpc/?api-key=sk-secret"}),
+        };
+        r.redact_observation(&mut obs);
+        let all = serde_json::to_string(&obs).unwrap();
+        assert!(!all.contains("sk-secret"), "{all}");
     }
 }

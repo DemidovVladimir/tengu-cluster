@@ -61,6 +61,9 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Skills registry / lifecycle | `src/application/skills/registry.rs` / `src/application/skills/lifecycle/` |
 | Secrets vault / redaction | `src/adapters/outbound/secrets.rs` / `src/domain/secrets.rs` |
 | Metrics records / bus | `src/domain/metrics.rs` / `src/application/metrics.rs` |
+| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` |
+| Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
+| Solana LP tools (`sol_price` … `lp_decide`; writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
 | Channels | `src/adapters/inbound/{tui/,telegram.rs,webhooks.rs}` + shared `channel.rs` |
 
 ## 3. Config — where it lives, how it resolves
@@ -94,6 +97,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[default_scopes.<tool>]` | `ToolScope` (`domain/scope.rs`) | folded into every agent by `Config::fold_default_scopes` | ignored |
 | `[claude_code]` | `ClaudeCodeConfig` | `outbound/engines/mod.rs` | ignored |
 | `[telegram]` / `[webhooks]` | `TelegramConfig` / `WebhookConfig` | `inbound/telegram.rs` / `inbound/webhooks.rs` | ignored |
+| `[decision_loops.<n>]` | `DecisionLoopConfig` (`config/decision_loop.rs`) | `bootstrap/decision.rs`, `inbound/webhooks.rs` (`loop = "<n>"`), `cli/decide.rs` | **error** |
 | `[scaffold]` | `ScaffoldConfig` | `outbound/scaffold.rs` | ignored |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`config/skill_lifecycle.rs`) | `inbound/evolve.rs`, `inbound/eval.rs` | ignored |
 | `[hub]` | `HubConfig` | validation + `tengu status` display only | ignored |
@@ -167,6 +171,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/config.toml` | you | base config |
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit |
+| `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decision (answers, usage, outcome) |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
 | `<workspace>/.tengu/memory.bin`, `<workspace>/.tengu/cache.db` | memory tools / `shared_cache` | disk vector store / SQLite cache |
 | `TENGU_PLANNER_REGISTRY.md`, `TENGU_PLAN.md` (repo root) | `application/orchestrator/shared_files.rs` | planner registry / debug copy of the plan |
@@ -208,45 +213,66 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (11 files)
+### domain — data + pure policy (22 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
+| `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
+| `src/domain/lp/dlmm.rs` | 2506 | Meteora DLMM — LbPair / PositionV2 / BinArray decoders, pool + position typed outputs, share and fee math. |
+| `src/domain/lp/dlmm_ix.rs` | 490 | Meteora DLMM write instructions — `initialize_position`, `initialize_bin_array`, `add_liquidity_by_strategy2`, `remove_liquidity_by_range2`, `claim_fee2`, `claim_reward2`, `close_position_if_empty` (SDK-golden). |
+| `src/domain/lp/gates.rs` | 1508 | LP gates: reentry, storm hysteresis, trend + regime confirm, composition/imbalance, wallet 50/50, bin math, 70-bin centered range, DLMM fee rate, swap oracle gate. |
+| `src/domain/lp/hedge.rs` | 1247 | Hedge controller port (`decide`, LP clamp regimes, auto notional cap, `auto_band_sol`, `js_to_fixed`); replays 1027 production vectors (`tests/fixtures/hedge-vectors.jsonl`). |
+| `src/domain/lp/market.rs` | 1835 | Market typed outputs — `sol_price` oracle price and `dlmm_pools` pool list. |
+| `src/domain/lp/mod.rs` | 12 | Solana LP policy + typed outputs — pure, no IO; one file per family. |
+| `src/domain/lp/perps.rs` | 2275 | Jupiter perps — Position / Custody / JLP pool decoders, borrow APR, accrued fee, liquidation price. |
+| `src/domain/lp/perps_ix.rs` | 301 | Jupiter perps keeper-request instructions — increase / decrease market requests, request PDA (Anchor-golden). |
+| `src/domain/lp/snapshot.rs` | 4837 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders. |
+| `src/domain/lp/wallet.rs` | 1977 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
 | `src/domain/message.rs` | 209 | Messages, tool calls/definitions, stream events, and the precision `Lens` |
-| `src/domain/metrics.rs` | 293 | Metrics — context/token consumption telemetry. |
-| `src/domain/mod.rs` | 14 | Domain — plain data and pure policy. Imports nothing from the rest of the |
+| `src/domain/metrics.rs` | 298 | Metrics — context/token consumption telemetry. |
+| `src/domain/mod.rs` | 18 | Domain — plain data and pure policy. Imports nothing from the rest of the |
+| `src/domain/observation.rs` | 697 | Typed tool observations — `Observation` envelope (LLM text, decision-loop features, cache row), `Observed`, `Field<T>`, `ObsStatus`, `CachePolicy`. |
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
 | `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; |
-| `src/domain/secrets.rs` | 46 | `SecretRegistry` — secret values to redact from tool output, transcripts |
+| `src/domain/secrets.rs` | 123 | `SecretRegistry` — secret values to redact from tool output, transcripts, typed observations (`redact_value`, `redact_observation`) |
 | `src/domain/session.rs` | 58 | Chat/flow session state — per-session prompt assembly and loop state. |
+| `src/domain/solana.rs` | 876 | Solana primitives — `Pubkey` / `Signature` (hand-rolled base58), PDA derivation, program ids, account reads. |
+| `src/domain/solana_tx.rs` | 735 | Transaction wire format — instructions, legacy compile + serialize, legacy / v0 parse (signer slot), System / SPL / ATA / ComputeBudget ix (web3.js-golden). |
+| `src/domain/solana_write.rs` | 485 | Write results + send policy — `WriteResult` (`write/1`, never cached), `WriteStatus` → obs status, `TxReport`, `Check`, `Lease`, `PendingSend`, CU limit / price rules. |
 | `src/domain/token.rs` | 43 | Shared token-estimation helpers. |
-| `src/domain/tools.rs` | 22 | Names of the opt-in workspace tools — the values `[agents.<name>]` |
+| `src/domain/tools.rs` | 45 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
 
-### ports — traits (8 files)
+### ports — traits (10 files)
 
 | File | Lines | What it is |
 |---|---:|---|
-| `src/ports/engine.rs` | 97 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, |
+| `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
+| `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
-| `src/ports/mod.rs` | 10 | Ports — traits the application layer depends on; adapters implement them. |
+| `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
+| `src/ports/observation.rs` | 32 | `ObservationStore` — the TTL cache typed tools read through and decision loops read `world` from. |
 | `src/ports/orchestration.rs` | 172 | Orchestration ports — what the orchestrator needs from the outside world |
 | `src/ports/shell.rs` | 8 | Port for executing shell commands in a workspace directory. |
 | `src/ports/skill_source.rs` | 7 | Port for discovering skill.md files from the workspace. |
-| `src/ports/tool.rs` | 123 | Tool port — the per-tool trait, plugin grouping, and the borrowed contexts |
+| `src/ports/solana_signer.rs` | 13 | `SolanaSigner` — public key + ed25519 signature over message bytes (the write tools' signer). |
+| `src/ports/solana_writes.rs` | 35 | `SolanaWriteStore` — per-wallet lease, in-flight send record, write fence (shared by every process). |
+| `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (4 files)
+### config — TOML schema (5 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
-| `src/config/mod.rs` | 1674 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
+| `src/config/decision_loop.rs` | 401 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, slots (static / history / observation), caps, reducers, `dry_run`, `world`, `requires`. |
+| `src/config/mod.rs` | 1792 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
+| `src/config/solana.rs` | 373 | `[solana] signer_key_file` + signing-sandbox rules (no Claude Code / MCP / shell, key outside fs roots, wallet grants only on a private agent). |
 
-### application — use cases (41 files)
+### application — use cases (46 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -261,7 +287,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/mod.rs` | 10 | Application — use cases (chat turn, orchestration, memory, skills, tool |
+| `src/application/decision_loop/mod.rs` | 969 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit. |
+| `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
+| `src/application/decision_loop/slots.rs` | 314 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
+| `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
+| `src/application/mod.rs` | 12 | Application — use cases (chat turn, orchestration, memory, skills, tool |
+| `src/application/observe.rs` | 182 | `observe()` — cache-or-fetch for typed tools (fresh rows only, `Error` never cached, store failure → live). |
 | `src/application/orchestrator/events.rs` | 87 | `OrchestratorEvent` + broadcast channel. |
 | `src/application/orchestrator/executor.rs` | 243 | DAG executor: parallel step dispatch with retry escalation. |
 | `src/application/orchestrator/mod.rs` | 197 | Harness-owned orchestration. |
@@ -272,9 +303,9 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/orchestrator/wiring.rs` | 118 | Wiring: `OrchestratorChatPort` backed by a pluggable `ChatServiceFactory` |
 | `src/application/skills/lifecycle/approval_gate.rs` | 158 | Terminal approval gate — prints baseline→best delta + unified diff, |
 | `src/application/skills/lifecycle/audit.rs` | 170 | Append-only audit log for skill lifecycle ops (`install`, `remove`, `export`). |
-| `src/application/skills/lifecycle/evolve.rs` | 573 | EvolveSession — bounded rewrite→rescore loop. |
+| `src/application/skills/lifecycle/evolve.rs` | 572 | EvolveSession — bounded rewrite→rescore loop. |
 | `src/application/skills/lifecycle/fixtures.rs` | 283 | `evals/prompts.yaml` read/write + mechanical transcript→fixture extraction. |
-| `src/application/skills/lifecycle/learner_state.rs` | 302 | Per-learner skill state — sidecar JSON at `skills/<name>/state/<learner_id>.json`. |
+| `src/application/skills/lifecycle/learner_state.rs` | 330 | Per-learner skill state — sidecar JSON at `skills/<name>/state/<learner_id>.json`. |
 | `src/application/skills/lifecycle/metric_kinds/description_trigger.rs` | 669 | `description_trigger` — re-expressed Cowork `run_loop.py` pattern. |
 | `src/application/skills/lifecycle/metric_kinds/dialog_replay.rs` | 444 | `dialog_replay` — score a skill against the *current* conversation slice |
 | `src/application/skills/lifecycle/metric_kinds/llm_judge.rs` | 234 | `llm_judge` — LLM-scored rubric evaluation, prefilled to force JSON. |
@@ -290,26 +321,28 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/skills/mod.rs` | 5 | Skills — registry + system-prompt assembly (`registry`) and the |
 | `src/application/skills/registry.rs` | 1313 | Skill subsystem — types, parsing, registry, filesystem discovery, |
 | `src/application/tools/mod.rs` | 4 | Tool dispatch — `ToolRegistry` + `PluginToolExecutor` (the `ToolExecutor` |
-| `src/application/tools/registry.rs` | 239 | Tool registry + `PluginToolExecutor` — dispatches a model's tool call to |
+| `src/application/tools/registry.rs` | 292 | Tool registry + `PluginToolExecutor` — dispatches a model's tool call to |
 
-### bootstrap — composition root (5 files)
+### bootstrap — composition root (6 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
-| `src/bootstrap/mod.rs` | 9 | Bootstrap — the composition root. Builds concrete adapters and hands them |
+| `src/bootstrap/decision.rs` | 94 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`SanitizedToolExecutor`, caller's `SecretRegistry`) + observation store → `DecisionLoop`; audit path. |
+| `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (53 files)
+### adapters/outbound — driven adapters (70 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/outbound/bridge_env.rs` | 11 | Env contract between the Claude Code engine (writes it into the CLI's |
 | `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic. |
+| `src/adapters/outbound/decisions.rs` | 130 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
-| `src/adapters/outbound/engines/mod.rs` | 144 | Engine adapters — implementations of `ports::engine::Engine` and the |
+| `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |
 | `src/adapters/outbound/engines/local.rs` | 448 | Local engine — Unsloth / Ollama / llama.cpp via OpenAI-compatible `/v1/chat/completions`, direct (no proxy) |
 | `src/adapters/outbound/engines/openrouter.rs` | 535 | OpenRouter engine — OpenAI-compatible chat completions with streaming |
 | `src/adapters/outbound/mcp_client/client.rs` | 418 | Outbound MCP client — stdio and http transports over JSON-RPC 2.0. |
@@ -320,12 +353,23 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/memory/disk_vector.rs` | 372 | Disk-backed `VectorStore` — bincode file at `<workspace>/.tengu/memory.bin`. |
 | `src/adapters/outbound/memory/embedder.rs` | 220 | Text embedding client. |
 | `src/adapters/outbound/memory/mod.rs` | 9 | Memory adapters — `BuiltinMemoryProvider` (MEMORY.md, identity files, |
-| `src/adapters/outbound/mod.rs` | 15 | Outbound (driven) adapters — implementations of `crate::ports` and the |
+| `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
+| `src/adapters/outbound/observations.rs` | 344 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
 | `src/adapters/outbound/scaffold.rs` | 77 | Workspace scaffold — creates directories and seed files before agents start. |
-| `src/adapters/outbound/secrets.rs` | 385 | Secrets management: encrypted vault storage + runtime redaction. |
+| `src/adapters/outbound/secrets.rs` | 459 | Secrets management: encrypted vault storage + runtime redaction (`SanitizedToolExecutor` redacts text and observations). |
 | `src/adapters/outbound/shell.rs` | 81 | Shell execution adapter for running skill commands. |
+| `src/adapters/outbound/solana/accounts.rs` | 374 | `fetch_accounts` — cache-through account reads (`acct/1:<pubkey>` rows + one getMultipleAccounts for the rest). |
+| `src/adapters/outbound/solana/http_json.rs` | 256 | `fetch_json` — scoped, egress-checked JSON GET for Jupiter / Meteora datapi. |
+| `src/adapters/outbound/solana/layouts.rs` | 11 | SPL Mint + SPL Token account decoders (owner check + minimum length). |
+| `src/adapters/outbound/solana/mod.rs` | 7 | Solana outbound — JSON-RPC client, cache-through account reads, SPL decoders, JSON HTTP fetch. |
+| `src/adapters/outbound/solana/plan.rs` | 1163 | Read planning for the LP glue — `read_pool` (2 cache-through reads), `discover_positions` (gPA + `dlmm_discovery/1` row 60 s/300 s), `perps_keys`, `oracle_usd`, `failed_observation`. |
+| `src/adapters/outbound/solana/rpc.rs` | 1821 | `SolanaRpc` — JSON-RPC 2.0 over the tool HTTP client, with error classification into `ErrorClass`. |
+| `src/adapters/outbound/solana/send.rs` | 934 | Send pipeline — keyless `simulate`; `SendSession`: lease → resolve earlier send → simulate → CU → sign → pending record → send once → confirm / expire → fence. |
+| `src/adapters/outbound/solana/signer.rs` | 374 | `LocalKeypair` (ed25519-dalek) — `[solana] signer_key_file` loader (0600, no-echo errors), one-shot position keys, `sign_transaction`. |
+| `src/adapters/outbound/solana/test_chain.rs` | 157 | Test-only fake cluster for the write path (simulate, send modes, statuses, block height, routed / fixed reads). |
+| `src/adapters/outbound/solana/writes_store.rs` | 269 | `SqliteWriteStore` — `<TENGU_HOME>/state/solana-writes.db` (leases, pending_sends, fences); one statement per mutation. |
 | `src/adapters/outbound/subprocess_runner.rs` | 530 | Subprocess runner — the `WorkerHandle` that runs each plan step. |
 | `src/adapters/outbound/tools/agentic_memory/mod.rs` | 1423 | `agentic_memory` — Postgres-backed Open Brain + LLM Wiki memory surface. |
 | `src/adapters/outbound/tools/args.rs` | 118 | Shared helpers for `Tool::execute`: JSON argument extraction and |
@@ -340,19 +384,31 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/crypto/wallet_address.rs` | 67 | `get_wallet_address` tool — return the Privy-managed wallet address. |
 | `src/adapters/outbound/tools/http/mod.rs` | 37 | HTTP plugin — generic outbound HTTP client for skill-driven API calls. |
 | `src/adapters/outbound/tools/http/request.rs` | 818 | `http_request` tool — generic HTTP client for skill-driven API calls. |
-| `src/adapters/outbound/tools/manage_skill/mod.rs` | 1366 | `manage_skill` LLM-callable tool — unified write-side counterpart to |
+| `src/adapters/outbound/tools/manage_skill/mod.rs` | 1367 | `manage_skill` LLM-callable tool — unified write-side counterpart to |
 | `src/adapters/outbound/tools/memory/ingest.rs` | 155 | `memory_ingest` tool — ingest a document or fact into vector memory. |
 | `src/adapters/outbound/tools/memory/mod.rs` | 311 | Memory plugin — vector-memory-backed tools. |
 | `src/adapters/outbound/tools/memory/persistent_store.rs` | 766 | `persistent_store` tool — chunked file storage with vector semantic search. |
 | `src/adapters/outbound/tools/memory/search.rs` | 306 | `memory_search` tool — targeted vector read of the memory store. |
-| `src/adapters/outbound/tools/mod.rs` | 301 | Tools — one directory per tool (or tool group). Each implements |
+| `src/adapters/outbound/tools/mod.rs` | 364 | Tools — one directory per tool (or tool group). Each implements |
 | `src/adapters/outbound/tools/skill/mod.rs` | 96 | Skill plugin — dispatch for shell skills. |
 | `src/adapters/outbound/tools/skill/shell_tool.rs` | 171 | Reusable `SkillShellTool` — executes a shell skill template. |
 | `src/adapters/outbound/tools/skill_lifecycle/apply_improver_proposal.rs` | 262 | `apply_improver_proposal` — LLM-callable tool used by `skill-improver-inline` |
 | `src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs` | 56 | `compress_and_store` — the harness-enforced "step is done" signal. |
-| `src/adapters/outbound/tools/skill_lifecycle/distill.rs` | 739 | `skill_distill` LLM-callable tool — writes a new skill directory from |
+| `src/adapters/outbound/tools/skill_lifecycle/distill.rs` | 740 | `skill_distill` LLM-callable tool — writes a new skill directory from |
 | `src/adapters/outbound/tools/skill_lifecycle/mod.rs` | 48 | Skill-lifecycle plugin — registers the `skill_distill` LLM-callable tool. |
 | `src/adapters/outbound/tools/skill_resource/mod.rs` | 391 | Skill-resource plugin — `skill_resource` tool. |
+| `src/adapters/outbound/tools/solana/defs.rs` | 513 | The Solana LP family's interface — names, descriptions, JSON input schemas of all ten tools. |
+| `src/adapters/outbound/tools/solana/dlmm.rs` | 928 | `dlmm_pool` + `dlmm_positions` — Meteora DLMM pool and position state from RPC account reads. |
+| `src/adapters/outbound/tools/solana/lp.rs` | 2142 | `lp_snapshot` + `hedge_decide` + `lp_decide` — composed snapshot and pure decisions. |
+| `src/adapters/outbound/tools/solana/mod.rs` | 78 | Solana LP tool family — `SolanaPlugin` (opens the observation store once), `SolanaShared`. |
+| `src/adapters/outbound/tools/solana/perps.rs` | 394 | `jup_perps` — Jupiter perps long / short positions and custody rates. |
+| `src/adapters/outbound/tools/solana/pools.rs` | 343 | `dlmm_pools` — Meteora DLMM pool search (datapi). |
+| `src/adapters/outbound/tools/solana/price.rs` | 893 | `sol_price` — USD oracle price (Jupiter price v3) + optional DLMM pool price. |
+| `src/adapters/outbound/tools/solana/wallet.rs` | 870 | `solana_wallet` + `solana_tx` — wallet inventory and transaction status. |
+| `src/adapters/outbound/tools/solana/write_dlmm.rs` | 533 | `dlmm_close_position` — remove + claim fee + claim rewards + close + wSOL unwrap (chunked > 70 bins, split when > 1232 B), optional re-entry arm via `merge_lp_state`. |
+| `src/adapters/outbound/tools/solana/write_common.rs` | 225 | Write-tool runner — `mode` (simulate default / send), per-agent signer gate (`wallets` grant + key file), `WriteBuilder` → checks → simulate or send. |
+| `src/adapters/outbound/tools/solana/write_swap.rs` | 932 | `jupiter_swap` — Jupiter Ultra order → simulate as-is → sign our slot → `/execute` (`UltraSubmitter`); SOL↔USDC send, worst-fill oracle gate, no gasless, no open keeper request. |
+| `src/adapters/outbound/tools/solana/write_tokens.rs` | 550 | `solana_close_token_accounts` — close empty, unprotected, own token accounts (8 per tx, independent batches). |
 | `src/adapters/outbound/tools/view_skill/mod.rs` | 887 | View-skill plugin — `view_skill` tool. |
 | `src/adapters/outbound/tools/workspace/list_directory.rs` | 119 | `list_directory` tool — list the entries of a directory in the workspace. |
 | `src/adapters/outbound/tools/workspace/mod.rs` | 56 | Workspace plugin — filesystem and shell primitives scoped to a workspace. |
@@ -361,16 +417,17 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/test_support.rs` | 79 | Shared test harness for workspace tool unit tests. |
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 135 | `write_file` tool — write content to a file in the workspace. |
 
-### adapters/inbound — driving adapters (15 files)
+### adapters/inbound — driving adapters (16 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/inbound/activity.rs` | 96 | Human-readable tool-activity lines shown by the TUI and Telegram. |
 | `src/adapters/inbound/channel.rs` | 231 | Helpers shared by the chat channels (TUI, Telegram): loop-state factory, |
 | `src/adapters/inbound/cli/doctor.rs` | 199 | `tengu status` / `tengu doctor` (incl. `--tor` exit check). |
-| `src/adapters/inbound/cli/mod.rs` | 601 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
+| `src/adapters/inbound/cli/decide.rs` | 49 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop. |
+| `src/adapters/inbound/cli/mod.rs` | 624 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from |
-| `src/adapters/inbound/cli/skill.rs` | 1131 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
+| `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
 | `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol. |
@@ -379,4 +436,4 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/tui/app.rs` | 40 | TUI application state model — pure data, no widget state. |
 | `src/adapters/inbound/tui/mod.rs` | 943 | Full-screen TUI runtime for interactive chat using cursive. |
 | `src/adapters/inbound/tui/view.rs` | 399 | Cursive view builders and UI update helpers. |
-| `src/adapters/inbound/webhooks.rs` | 746 | Inbound webhook listener — `tengu webhooks --sandbox <name>`. |
+| `src/adapters/inbound/webhooks.rs` | 1027 | Inbound webhook listener — `tengu webhooks --sandbox <name>`. |

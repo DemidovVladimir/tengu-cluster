@@ -6,6 +6,7 @@ use futures::Stream;
 use std::pin::Pin;
 
 use crate::domain::message::{Message, ModelInfo, StreamEvent, ToolCall, ToolDef};
+use crate::ports::tool::ToolOutput;
 
 /// Runtime-discoverable engine capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,4 +95,43 @@ pub trait Engine: Send + Sync {
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, call: &ToolCall, messages: &[Message]) -> anyhow::Result<String>;
+
+    /// Typed path: text + the tool's `Observation` when it has one. The
+    /// default wraps `execute` (no observation), so text-only executors
+    /// need no change; `PluginToolExecutor` and `SanitizedToolExecutor`
+    /// override it to carry the observation through.
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[Message],
+    ) -> anyhow::Result<ToolOutput> {
+        Ok(ToolOutput::from(self.execute(call, messages).await?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    struct TextOnly;
+
+    #[async_trait]
+    impl ToolExecutor for TextOnly {
+        async fn execute(&self, call: &ToolCall, _m: &[Message]) -> anyhow::Result<String> {
+            Ok(format!("ran {}", call.name))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_execute_typed_wraps_text() {
+        let call = ToolCall {
+            id: "1".into(),
+            name: "x".into(),
+            arguments: json!({}),
+        };
+        let out = TextOnly.execute_typed(&call, &[]).await.unwrap();
+        assert_eq!(out.text, "ran x");
+        assert!(out.observation.is_none());
+    }
 }

@@ -32,6 +32,7 @@ dotenvy = "0.15"
 aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 sha2 = "0.10"
+base64 = "0.22"
 rpassword = "7"
 cursive = { version = "0.21", default-features = false, features = ["crossterm-backend"] }
 pdf-extract = "0.10"
@@ -41,6 +42,13 @@ regex = "1"
 once_cell = "1"
 alloy = { version = "1", features = ["full"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+# Solana write tools (phase 6b): ed25519 signing of transactions with the
+# `[solana] signer_key_file` key — signing is not hand-rolled. `getrandom`
+# seeds the one-shot DLMM position keypair. Both already in the lockfile's
+# dependency tree (curve25519-dalek 4.1, getrandom 0.2).
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
+getrandom = "0.2"
+zeroize = "1"
 tokio-stream = "0.1"
 tempfile = "3"
 glob = "0.3"
@@ -57,6 +65,12 @@ dptree = { version = "0.3", optional = true }
 # headers; pairs with the existing `sha2` for SHA-256.
 axum = { version = "0.7", optional = true }
 hmac = { version = "0.12", optional = true }
+
+[dev-dependencies]
+# Test-only oracle for the hand-rolled PDA off-curve check
+# (`domain::solana::is_on_curve`). `~4.1`: 5.x needs rustc 1.85.
+curve25519-dalek = { version = "~4.1", default-features = false }
+
 [features]
 default = ["openrouter", "telegram"]
 telegram = ["teloxide", "dptree", "reqwest011"]

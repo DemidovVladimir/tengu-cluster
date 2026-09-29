@@ -1,0 +1,325 @@
+# Tengu Cluster — "lping" sandbox (2026-09-24)
+# Crypto research + read-only Solana LP / hedge monitoring. Run with:
+#   tengu chat --sandbox lping
+#   tengu decide --sandbox lping --loop lp_watch      (or --loop hedge_watch)
+#
+# Roadmap (see docs/lping-2026-09-24.md):
+#   1. research      — market / token / pool research over http_request      (done)
+#   2. typed reads   — sol_price, dlmm_pools, dlmm_pool, dlmm_positions,
+#                      jup_perps, solana_wallet, solana_tx, lp_snapshot,
+#                      hedge_decide, lp_decide (typed, cached observations)  (done)
+#   3. data feed     — Yellowstone gRPC stream → acct/1 rows                  (phase 5)
+#   4. write tools   — dlmm_open_position & co, simulate by default           (phase 6)
+
+runtime_profile = "auto"
+
+# --- Network -----------------------------------------------------------------
+# Open: paid RPC providers + market-data APIs (and OpenRouter) commonly block
+# Tor exits, and streaming feeds are latency-sensitive. Flip to "tor" to test.
+[egress]
+network = "open"
+
+[memory]
+enabled = true          # disk vector store; add --features postgres_memory for Open Brain
+
+[scaffold]
+root = "~/lping-workspace"
+directories = ["research", "pools", "positions", "events"]
+
+# --- Webhook listener (placeholder) -------------------------------------------
+# `tengu webhooks --sandbox lping` (build with --features webhooks).
+# `solana_events` → planner (HMAC `X-Tengu-Signature`); `helius` → decision
+# loop (static `Authorization` header, as Helius sends it).
+[webhooks]
+enabled = true
+bind = "127.0.0.1"
+port = 7081
+
+# Helius webhook → decision loop. In the Helius dashboard set the webhook's
+# auth header to the same value as $HELIUS_WEBHOOK_AUTH; account addresses =
+# the pools / wallet to watch; type = enhanced.
+[webhooks.endpoints.helius]
+loop = "lp_watch"
+auth_header_env = "HELIUS_WEBHOOK_AUTH"
+
+[webhooks.endpoints.solana_events]
+agent = "lping"
+secret_env = "TENGU_LPING_WEBHOOK_SECRET"
+goal_template = "A Solana on-chain event arrived. Summarise what happened (pool, tokens, amounts, signer) and flag anything relevant to our LP positions."
+
+# --- Tool scopes ---------------------------------------------------------------
+# A configured scope denies by default per field. Every typed Solana tool
+# writes its cache (`<workspace>/.tengu/observations.db`) → fs_roots. RPC tools
+# read $SOLANA_RPC_URL when set (else the public mainnet endpoint): if you set
+# it, add that URL's host to their net_hosts too.
+[default_scopes.http_request]
+net_hosts = ["*"]
+env_reads = ["*"]       # tighten to e.g. ["HELIUS_API_KEY"] once the feed is wired
+fs_roots = ["~/lping-workspace"]
+
+# Jupiter lite price v3; Hermes only with `pyth_feed_id` (401 today); the RPC
+# only with `pool` (the second price source).
+[default_scopes.sol_price]
+net_hosts = ["lite-api.jup.ag", "hermes.pyth.network", "api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.dlmm_pools]
+net_hosts = ["dlmm.datapi.meteora.ag"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.dlmm_pool]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.dlmm_positions]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+# + Jupiter inline for the SOL price when no fresh price_oracle row exists.
+[default_scopes.jup_perps]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.solana_wallet]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.solana_tx]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+# + Jupiter inline for the oracle when no price_oracle row ≤ 10 s exists.
+[default_scopes.lp_snapshot]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+# Pure decisions over cached rows: no network, no env.
+[default_scopes.hedge_decide]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.lp_decide]
+fs_roots = ["~/lping-workspace"]
+
+[orchestrator]
+agent = "lping"
+engine = "rag"
+max_attempts_per_step = 3
+max_replans = 2
+
+# Planner + in-process chat agent. OpenRouter per doctrine (never claude_code
+# in the planner role).
+[agents.lping]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+role = "lping"
+workspace = "~/lping-workspace"
+tools = ["http_request", "read_file", "list_directory"]
+
+[agents.lping.identity]
+name = "LPing"
+instructions = """You coordinate crypto research and (later) Solana liquidity
+provisioning. Delegate research to the `crypto_researcher` agent. Never sign or
+send transactions — no signing tools are wired in this sandbox yet. Always show
+token mints, pool addresses and tx signatures in full, never shortened."""
+
+# Routable subagent (has a `description`) — runs as `tengu run-agent`, and is
+# the tool / scope / workspace owner of both decision loops below. The ten
+# Solana tool names are workspace-tool opt-ins.
+[agents.crypto_researcher]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+role = "researcher"
+workspace = "~/lping-workspace"
+tools = [
+    "http_request", "read_file", "list_directory",
+    "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
+    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+]
+description = """
+Researches crypto assets and Solana DeFi: token prices, market caps, volume, \
+DEX pools (Meteora DLMM/DAMM, Raydium CLMM/CPMM), pool TVL, fees and APR, \
+on-chain account data, a wallet's Meteora DLMM positions and Jupiter perps \
+hedge, and read-only hedge / LP decisions. \
+Best for: "what's the best SOL/USDC pool", "compare Meteora vs Raydium fees", \
+"research this token mint", "is the operator wallet delta-neutral". NOT for: \
+signing, sending transactions, or opening/closing LP positions (not wired yet).
+"""
+example_queries = [
+    "what is the SOL price and 24h volume?",
+    "find the highest-fee SOL/USDC pools on Meteora and Raydium",
+    "research this token mint and its top liquidity pools",
+    "compare DLMM bin step options for a volatile pair",
+    "snapshot the operator wallet's SOL/USDC LP and hedge",
+]
+
+[agents.crypto_researcher.identity]
+name = "Crypto Researcher"
+instructions = """You research crypto markets and Solana DeFi. Prefer the typed
+Solana tools (sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps,
+solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide) — they are
+cached and never report a failed read as 0. Call lp_snapshot before
+hedge_decide / lp_decide; leave `commit` false unless asked. Fall back to
+http_request for other primary sources: Solana JSON-RPC (RPC URL from
+$SOLANA_RPC_URL when set, else https://api.mainnet-beta.solana.com), DEX APIs
+(Meteora, Raydium), DexScreener, CoinGecko. Cite the endpoint for every number.
+Show every address, mint and signature in full. Save longer findings under
+research/."""
+
+[agents.crypto_researcher.limits]
+max_tool_rounds = 40
+step_timeout_secs = 600
+max_tool_result_chars = 50_000
+
+# --- Decision loops (Jev picks, tools execute) --------------------------------
+# Design: docs/decision-loop-plan-2026-09-24.md. Test one event:
+#   tengu decide --sandbox lping --loop lp_watch [--event helius.json]
+# Live trigger: [webhooks.endpoints.helius] above (`tengu webhooks --sandbox lping`).
+# Typed tools cache their observations in ~/lping-workspace/.tengu/observations.db;
+# `world` reads that store every step (never fetches).
+[decision_loops.lp_watch]
+goal = """Pick the Meteora DLMM SOL/USDC pool for a new position of at most 2 SOL. \
+Every event, in this order: refresh_price, then fetch_pools (both are cached \
+reads, cheap to repeat), then open_position in the pool with the best 24h \
+fee/TVL among pools with TVL above $100k (dry run: it is only logged), then \
+hold. No position is open yet."""
+agent = "crypto_researcher"          # tools + scopes + workspace
+dry_run = true                       # open_position is logged, never run
+act_at = 0.8
+history = 8
+max_steps = 4
+# Helius enhanced webhook body = JSON array of parsed transactions.
+event_reduce = { txs = "/*/{signature,type,source,description,timestamp}" }
+world = { price = "price_oracle/1:So11111111111111111111111111111111111111112" }
+world_max_age_secs = 30
+
+[decision_loops.lp_watch.actions.hold]
+description = "Nothing useful left to do for this event"
+
+[decision_loops.lp_watch.actions.refresh_price]
+description = "Refresh the SOL/USD oracle price (Jupiter price v3; cached 10 s)"
+tool = "sol_price"
+read_only = true
+args = { mint = "So11111111111111111111111111111111111111112" }
+
+[decision_loops.lp_watch.actions.fetch_pools]
+description = "Fetch Meteora DLMM pools for the pair (TVL, 24h fee/TVL, bin step; cached 60 s)"
+tool = "dlmm_pools"
+read_only = true
+args = { query = "{pair}", min_tvl_usd = 100000, limit = 10 }
+slots = { pair = ["SOL-USDC"] }
+reduce = { pools = "/data/pools/*/{address,name,tvl_usd,fee_tvl_24h_pct,bin_step}" }
+
+[decision_loops.lp_watch.actions.open_position]
+description = "Open a DLMM LP position in one of the fetched pools"
+tool = "dlmm_open_position"          # phase 6 — not built; dry_run only
+requires = { price = 30 }            # offered only while the SOL price is ≤ 30 s old
+args = { pool = "{pool}", size_sol = "{size_sol}" }   # the dry-run log records the full pool address
+slots ={ pool = { from = "fetch_pools", items = "/pools/*", value = "address", top = 5 }, size_sol = [0.5, 1, 2, 3] }
+caps = { size_sol = 2.0 }
+
+# --- hedge_watch: the operator wallet's LP + Jupiter perps hedge (read-only) ---
+# Wallet F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S (operator; read-only use),
+# pool 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6 (SOL/USDC bin step 4 — the
+# bot's next-entry venue, delta_neutral_bot BACKLOG.md:826-830).
+# Knobs = the bot's PRODUCTION values. Sources (delta_neutral_bot, read-only):
+# code defaults src/config/env.ts:336-440; production overrides cited per knob.
+# The decide tools are pure (no network) and `commit = true` persists the
+# controller state row lp_state/1:<wallet>:<pool> — nothing is ever traded.
+[decision_loops.hedge_watch]
+goal = """Keep the operator wallet's SOL/USDC DLMM LP and its Jupiter perps \
+hedge under watch. Every event runs exactly this sequence: 1) snapshot — \
+always first, even when world.snap is fresh (it is then served from the \
+cache), 2) decide_hedge, 3) decide_lp, 4) hold. Read-only: the decisions are \
+logged, nothing is ever signed or sent."""
+agent = "crypto_researcher"
+dry_run = true
+act_at = 0.8
+history = 8
+max_steps = 4
+world = { snap = "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+world_max_age_secs = 30
+
+[decision_loops.hedge_watch.actions.hold]
+description = "Nothing to do for this event"
+
+[decision_loops.hedge_watch.actions.snapshot]
+description = "Read the wallet x pool snapshot: positions, perps hedge, balances, oracle (cached 10 s)"
+tool = "lp_snapshot"
+read_only = true
+args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+
+[decision_loops.hedge_watch.actions.decide_hedge]
+description = "Hedge decision on the fresh snapshot (pure): none, blocked with a guard, or increase / decrease long / short"
+tool = "hedge_decide"
+read_only = true
+requires = { snap = 30 }             # offered only while the snapshot row is ≤ 30 s old
+
+[decision_loops.hedge_watch.actions.decide_hedge.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+commit = true
+
+[decision_loops.hedge_watch.actions.decide_hedge.args.knobs]
+target_delta_sol = 0.0           # HEDGE_TARGET_DELTA_SOL: default 0 = production (HANDOVER.md Session 38 «цель 0»)
+delta_threshold_sol = 0.25       # DELTA_THRESHOLD_SOL: prod 0.25, the auto-band floor (ADR-018 progress.md:1665; ADR-025 decisions.md:1935-1964); code default 2
+band_bins = 8                    # HEDGE_BAND_BINS: prod 8 since 2026-07-09 (progress.md:1371,1401-1404; HANDOVER.md:581); code default 4
+bin_count = 28                   # AUTO_TUNE_BIN_COUNT: entry config bins 28 (BACKLOG.md:826; HANDOVER.md:125,164-170); code default 20
+cap_mult = 1.25                  # HEDGE_NOTIONAL_CAP_MULT: default 1.25 = prod (ADR-022, progress.md:1585)
+max_notional_usd = 0.0           # MAX_HEDGE_NOTIONAL_USD: removed from prod .env, auto cap only (ADR-022, progress.md:1585)
+min_collateral_ratio = 0.15      # MIN_COLLATERAL_RATIO: default 0.15 = prod hard floor (progress.md:1529)
+target_collateral_ratio = 0.33   # HEDGE_TARGET_COLLATERAL_RATIO: prod 0.33 (CLAUDE.md:104, ADR-025); code default 1.0
+carry_cap_bps = 5000.0           # HEDGE_CARRY_CAP_BPS: default 5000 = prod (progress.md:1810)
+cooldown_ms = 600000             # HEDGE_COOLDOWN_MS: default 600000 = prod (ADR-018, progress.md:1665)
+lp_input = "midpoint"            # HEDGE_LP_INPUT: prod midpoint (CLAUDE.md:102, ADR-019); code default live
+include_wallet_sol = true        # HEDGE_INCLUDE_WALLET_SOL: prod true (ADR-021, decisions.md:1721); code default false
+min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2 (main container; HANDOVER.md Session 38 reserve 0.3 = 0.2 + 0.1)
+rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
+max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE_GATE_BPS default 50 (env.ts:366)
+max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
+trend_confirm_ms = 600000        # TREND_CONFIRM_MS: prod 600000 since 2026-07-10 (BACKLOG.md:188-197 §A11; HANDOVER.md:165 «confirm 10m»); bot CLAUDE.md:107 "production 300000" is the pre-§A11 value; code default 0
+no_lp_grace_ms = 300000          # BUG-011: NO_LP_HEDGE_GRACE_CYCLES 20 × 15 s cycles (autoTuneOrchestrator.ts:346; bugs.md BUG-011 "5-minute grace")
+
+# Same LP knobs as decide_lp: hedge_decide computes the storm latch (ADR-023 bypass) and the
+# imbalance freeze (ADR-025) from THIS snapshot + price samples, not from an older lp_decide commit.
+[decision_loops.hedge_watch.actions.decide_hedge.args.lp_knobs]
+imbalance_threshold = 0.92       # AUTO_TUNE_IMBALANCE_THRESHOLD: prod 0.92 (progress.md:1707; HANDOVER.md:769); code default 0.9
+bin_count = 28                   # AUTO_TUNE_BIN_COUNT: entry config bins 28 (BACKLOG.md:826; HANDOVER.md:125,164-170); code default 20
+storm_pct_5m = 2.0               # LP_VOL_PAUSE_PCT_5M: prod 2 (ADR-021 decisions.md:1727; progress.md:1605); code default 0
+trend_confirm_ms = 600000        # TREND_CONFIRM_MS: prod 600000 since 2026-07-10 (BACKLOG.md:188-197 §A11); code default 0
+reentry_confirm_ms = 7200000     # REENTRY_CONFIRM_MS: prod 7200000 (CLAUDE.md:108, ADR-026; BACKLOG.md:373); code default 0
+reentry_tol_frac = 0.20          # REENTRY_TOL_FRAC: prod 0.20 since 2026-07-15 (BACKLOG.md:320-336 §A15.1); bot CLAUDE.md:108 0.15 is the pre-§A15.1 value; code default 0.15
+max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE_GATE_BPS default 50 (env.ts:366)
+max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
+min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2
+rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
+
+[decision_loops.hedge_watch.actions.decide_lp]
+description = "LP decision on the fresh snapshot (pure): hold, recenter, wait for the trend, paused, re-entry wait, or open a range"
+tool = "lp_decide"
+read_only = true
+requires = { snap = 30 }
+
+[decision_loops.hedge_watch.actions.decide_lp.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+commit = true
+
+[decision_loops.hedge_watch.actions.decide_lp.args.knobs]
+imbalance_threshold = 0.92       # AUTO_TUNE_IMBALANCE_THRESHOLD: prod 0.92 (progress.md:1707; HANDOVER.md:769); code default 0.9
+bin_count = 28                   # AUTO_TUNE_BIN_COUNT: entry config bins 28 (BACKLOG.md:826; HANDOVER.md:125,164-170); code default 20
+storm_pct_5m = 2.0               # LP_VOL_PAUSE_PCT_5M: prod 2 (ADR-021 decisions.md:1727; progress.md:1605); code default 0
+trend_confirm_ms = 600000        # TREND_CONFIRM_MS: prod 600000 since 2026-07-10 (BACKLOG.md:188-197 §A11); code default 0
+reentry_confirm_ms = 7200000     # REENTRY_CONFIRM_MS: prod 7200000 (CLAUDE.md:108, ADR-026; BACKLOG.md:373); code default 0
+reentry_tol_frac = 0.20          # REENTRY_TOL_FRAC: prod 0.20 since 2026-07-15 (BACKLOG.md:320-336 §A15.1); bot CLAUDE.md:108 0.15 is the pre-§A15.1 value; code default 0.15
+max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE_GATE_BPS default 50 (env.ts:366)
+max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
+min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2
+rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1

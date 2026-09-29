@@ -1,0 +1,42 @@
+{
+  "captured_at_utc": "2026-09-24T17:47:14Z",
+  "files": {
+    "jupiter_price_v3.json": {
+      "source": "live",
+      "request": "GET https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "http_status": 200,
+      "captured_unix_s": 1790272034,
+      "note": "top-level map mint -> {usdPrice, blockId, decimals, liquidity, priceChange24h (percent), createdAt}; wSOL blockId 450100683"
+    },
+    "jupiter_price_v3_unknown.json": {
+      "source": "live",
+      "request": "GET https://lite-api.jup.ag/price/v3?ids=11111111111111111111111111111111",
+      "http_status": 200,
+      "note": "an unpriced mint is omitted: the body is {}"
+    },
+    "pyth_hermes_v2_latest_documented.json": {
+      "source": "hand-written (documented shape)",
+      "request": "GET https://hermes.pyth.network/v2/updates/price/latest?ids[]=0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+      "http_status": 401,
+      "note": "Hermes (and benchmarks.pyth.network/v1/updates) answered HTTP 401 'unauthorized' on 2026-09-24, so no live body exists. Shape = Hermes v2 docs + delta_neutral_bot src/core/priceOracle.ts:193-205 (parsed[0].price.{price: string, conf: string, expo: number, publish_time}). Values are illustrative (price = Jupiter wSOL usdPrice of the same capture rounded to 1e-8). Feed ids verified live via https://benchmarks.pyth.network/v1/price_feeds: Crypto.SOL/USD ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d, Crypto.USDC/USD eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+    },
+    "datapi_pools_sol_usdc.json": {
+      "source": "live",
+      "request": "GET https://dlmm.datapi.meteora.ag/pools?page=1&page_size=20&query=SOL-USDC",
+      "http_status": 200,
+      "captured_unix_s": 1790272057,
+      "note": "total 129; every row satisfies apr == fees['24h'] / tvl * 100 == fee_tvl_ratio['24h'] (daily fee/TVL percent, not annual)"
+    },
+    "datapi_pools_sol_usdc_p7.json": {
+      "source": "live",
+      "request": "GET https://dlmm.datapi.meteora.ag/pools?page=7&page_size=20&query=SOL-USDC",
+      "http_status": 200,
+      "note": "tail page: dust-TVL rows (tvl < 0.001 USD, fees 0, apr 0.0) and current_price 0.0 on two rows (the price must decode to None, not 0). No row has exactly 0 TVL; the unit test forces one to check 0/0 -> None"
+    },
+    "datapi_pools_empty.json": {
+      "source": "live",
+      "request": "GET https://dlmm.datapi.meteora.ag/pools?page=1&page_size=10&query=ZZNOTAPAIRZZ",
+      "http_status": 200
+    }
+  }
+}

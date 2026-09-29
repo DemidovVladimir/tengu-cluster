@@ -1,0 +1,97 @@
+{
+  "captured_at_utc": "2026-09-24T17:50Z",
+  "rpc_host": "api.mainnet-beta.solana.com",
+  "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S",
+  "files": {
+    "get_balance.json": {
+      "method": "getBalance",
+      "params": ["F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"],
+      "slot": 450101494
+    },
+    "token_accounts_tokenkeg.json": {
+      "method": "getTokenAccountsByOwner",
+      "params": ["F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}, {"encoding": "jsonParsed"}],
+      "slot": 450101524
+    },
+    "token_accounts_token2022.json": {
+      "method": "getTokenAccountsByOwner",
+      "params": ["F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", {"programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"}, {"encoding": "jsonParsed"}],
+      "slot": 450101529
+    },
+    "gma_base64.json": {
+      "method": "getMultipleAccounts",
+      "encoding": "base64",
+      "slot": 450101767,
+      "keys": [
+        "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S",
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "So11111111111111111111111111111111111111112",
+        "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g",
+        "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+        "D9ScKYy15cw1tpkkuwEnDKv62nCyuETwrvRSdP4usGg1",
+        "DQsXEvePuhSGqJZzsKrg3QTSJcRWFcBvTL6F8THrCiVF",
+        "E4PCnfEconGJW6vf7GDycEnkFe1VWC7teiNWJzQv3NTA",
+        "BUACmTyTknjx6zdRwazawArchbQehNUYkZjjweMvyNLb"
+      ],
+      "roles": [
+        "wallet (system account)",
+        "USDC mint (Tokenkeg, 82 B)",
+        "wSOL mint (Tokenkeg, 82 B)",
+        "mint 98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g (Tokenkeg, 82 B)",
+        "PYUSD mint (Token-2022, 866 B, extensions; account-type byte @165 = 1)",
+        "wallet USDC ATA (Tokenkeg token account, 165 B)",
+        "wallet ATA for 98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g (165 B)",
+        "wallet wSOL ATA (absent)",
+        "wallet PYUSD ATA under Token-2022 (absent)"
+      ]
+    },
+    "gma_json_parsed.json": {
+      "method": "getMultipleAccounts",
+      "encoding": "jsonParsed",
+      "slot": 450101771,
+      "keys": "same order as gma_base64.json",
+      "note": "RPC's own SPL parser view of the same accounts: the independent check for the Rust decoders (supplies/amounts equal at both slots)"
+    },
+    "sig_statuses_history.json": {
+      "method": "getSignatureStatuses",
+      "params": [["L8TEY2sSvscX2R2EBChD1p1o3HApdBUHqVfTJKLxJ4zK4M6pebL3diuYKcKjPF5deW7GF6DVnMdPU2tBwgz1Mfi", "24vJBCdpUCW5nAb9JQZL4E5ptwSCyQ7QYvrrTTYp13esMq5q26LdZ9mzC1qZX6MDF31hsAcr3HWLHa3kaa9P1yPE"], {"searchTransactionHistory": true}],
+      "slot": 450101639
+    },
+    "sig_statuses_recent_only.json": {
+      "method": "getSignatureStatuses",
+      "params": [["L8TEY2sSvscX2R2EBChD1p1o3HApdBUHqVfTJKLxJ4zK4M6pebL3diuYKcKjPF5deW7GF6DVnMdPU2tBwgz1Mfi"]],
+      "slot": 450101646,
+      "note": "without searchTransactionHistory an old signature is null (outside the status cache)"
+    },
+    "sig_statuses_unknown.json": {
+      "method": "getSignatureStatuses",
+      "params": [["99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8"], {"searchTransactionHistory": true}],
+      "slot": 450101863,
+      "note": "well-formed 64-byte signature (all bytes 0x07) that never landed"
+    },
+    "tx_ok.json": {
+      "method": "getTransaction",
+      "params": ["L8TEY2sSvscX2R2EBChD1p1o3HApdBUHqVfTJKLxJ4zK4M6pebL3diuYKcKjPF5deW7GF6DVnMdPU2tBwgz1Mfi", {"encoding": "json", "maxSupportedTransactionVersion": 0}],
+      "tx_slot": 447559707
+    },
+    "tx_failed.json": {
+      "method": "getTransaction",
+      "params": ["24vJBCdpUCW5nAb9JQZL4E5ptwSCyQ7QYvrrTTYp13esMq5q26LdZ9mzC1qZX6MDF31hsAcr3HWLHa3kaa9P1yPE", {"encoding": "json", "maxSupportedTransactionVersion": 0}],
+      "tx_slot": 439814004
+    },
+    "tx_unknown.json": {
+      "method": "getTransaction",
+      "params": ["99eUso3aSbE9tqGSTXzo3TLfKb9RkMTURrHKQ1K7Zh3BbeqPevr5E1iCbpTjqHuTFLtfxTTD5ekfVuZFzQyEQf8", {"encoding": "json", "maxSupportedTransactionVersion": 0}],
+      "note": "result null"
+    }
+  },
+  "golden_atas": {
+    "source": "scripts/golden/wallet_atas.cjs (@solana/spl-token getAssociatedTokenAddressSync from delta_neutral_bot/node_modules)",
+    "rows": [
+      {"mint": "So11111111111111111111111111111111111111112", "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ata": "E4PCnfEconGJW6vf7GDycEnkFe1VWC7teiNWJzQv3NTA"},
+      {"mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ata": "D9ScKYy15cw1tpkkuwEnDKv62nCyuETwrvRSdP4usGg1"},
+      {"mint": "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g", "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ata": "DQsXEvePuhSGqJZzsKrg3QTSJcRWFcBvTL6F8THrCiVF"},
+      {"mint": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo", "token_program": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb", "ata": "BUACmTyTknjx6zdRwazawArchbQehNUYkZjjweMvyNLb"}
+    ]
+  }
+}

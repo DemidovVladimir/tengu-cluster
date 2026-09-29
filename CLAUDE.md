@@ -118,6 +118,13 @@ config, channels) — it is the index into everything below.
      (the inner tool loop).
    - `docs/compression-flow-2026-04-27.{md,svg}` — Layer 5 deep-dive
      (`compress_and_store` step protocol).
+10. **`docs/typed-observations-2026-09-24.md`** — typed tool results
+    (`Observation` envelope), the observation cache
+    (`<workspace>/.tengu/observations.db`), decision-loop `world` /
+    `requires`, and the 10 Solana LP tools (args, keys, TTLs, hosts, knobs).
+    Read BEFORE touching `domain/observation.rs`, `application/observe.rs`,
+    `application/decision_loop/`, `adapters/outbound/tools/solana/`,
+    `adapters/outbound/solana/` or `domain/lp/`.
 
 ---
 
@@ -143,6 +150,7 @@ flow, audit these for staleness **before declaring done**:
 | `docs/tools.md` | If you changed the tool catalog, tool gating, `[[mcp_servers]]` handling, or how agents get tools. |
 | `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
+| `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, or a Solana tool's args, key, TTL, hosts or knobs. |
 | `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
@@ -450,6 +458,35 @@ These are not preferences. They're load-bearing.
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
   that say "check that tool X is in your tool list" should look for both
   forms or just attempt the call and read the error.
+- **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
+  (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
+  via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
+  the next action + its argument slots; existing tools execute it through the
+  loop agent's executor (same scopes/egress as a `run-agent` child).
+  Jev returns typed choices, never text or tool-call JSON — it cannot be an
+  `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
+  the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
+  `auth_header_env`, not HMAC) or `tengu decide`. History is in-process;
+  audit in `<TENGU_HOME>/logs/decisions.jsonl` (incl. `args`, `ok`, `output`);
+  `tengu chat` on a config with `[decision_loops]` tails it and shows each
+  decision of those loops as a System bubble. Plan:
+  `docs/decision-loop-plan-2026-09-24.md`.
+- **Typed observations + cache (2026-09-24)** — a tool may return
+  `ToolOutput.observation` (`domain/observation.rs`); `execute_typed` carries
+  it (the default wraps `execute`; `PluginToolExecutor` and
+  `SanitizedToolExecutor` override it). Typed tools cache through
+  `application/observe.rs::observe()` in `<workspace>/.tengu/observations.db`:
+  key `<schema>:<subject>` with full ids, slot-monotonic, `Error` rows never
+  stored, `max_age_secs = 0` forces a live read. Failed reads are
+  `Field::Error` / `ObsStatus`, never 0; `features` ≤ 32 scalars; line 1 of
+  `render_text` ≤ 200 chars with full ids. Decision loops read rows via
+  `world` (never fetched) and gate actions with `requires`. The 10 Solana
+  tools (`tools/solana/`) are opt-in; each needs `[default_scopes.<tool>]`
+  with `fs_roots` = the workspace (store), its `net_hosts`, and
+  `env_reads = ["SOLANA_RPC_URL"]` — without it the public RPC is used
+  silently; the RPC URL is never rendered (host only). `hedge_decide` /
+  `lp_decide` knobs are all required (no defaults); `commit` defaults to
+  false. Doc: `docs/typed-observations-2026-09-24.md`.
 
 ---
 
@@ -489,7 +526,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-23 (hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-24 (typed observations + observation cache + Solana LP read tools — `docs/typed-observations-2026-09-24.md`; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

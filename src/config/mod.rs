@@ -2,9 +2,11 @@
 //! validation, and path resolution. Imports only `domain` (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod paths;
 pub(crate) mod skill_lifecycle;
+pub(crate) mod solana;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -145,6 +147,12 @@ pub struct Config {
     #[serde(default)]
     pub webhooks: WebhookConfig,
 
+    /// `[decision_loops.<name>]` — System One (Jev) control loops over
+    /// existing tools; triggered by webhook endpoints with `loop = "<name>"`
+    /// or `tengu decide`. See `config/decision_loop.rs`.
+    #[serde(default)]
+    pub decision_loops: HashMap<String, decision_loop::DecisionLoopConfig>,
+
     #[serde(default)]
     pub scaffold: Option<ScaffoldConfig>,
 
@@ -169,6 +177,12 @@ pub struct Config {
     /// Default is empty: MCP is opt-in per user install.
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+
+    /// `[solana]` — signing key of the Solana write tools (`mode = "send"`)
+    /// and the sandbox rules that keep it private (`config/solana.rs`).
+    /// Absent = the write tools only simulate.
+    #[serde(default)]
+    pub solana: solana::SolanaConfig,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -350,6 +364,17 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
+    /// Runtime (never in TOML): set by `Config::fold_default_scopes` when
+    /// `[solana] signer_key_file` is configured — tools without a configured
+    /// scope then get a fallback that runs no shell
+    /// (`bootstrap::tools::resolve_tool_scopes`).
+    #[serde(skip)]
+    pub no_shell_fallback: bool,
+    /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
+    /// by `Config::fold_default_scopes` so the Solana write tools can load
+    /// the key at send time (`tools/solana/write_common.rs`).
+    #[serde(skip)]
+    pub signer_key_file: Option<PathBuf>,
 }
 
 fn default_lens() -> String {
@@ -607,7 +632,17 @@ impl Default for WebhookConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookEndpointConfig {
     /// Agent name to dispatch to (an `[agents.<name>]` block with a `description`).
+    /// Informational — the planner routes. Required unless `loop` is set.
+    #[serde(default)]
     pub agent: String,
+    /// Feed the payload to `[decision_loops.<loop>]` instead of the planner.
+    #[serde(default, rename = "loop")]
+    pub decision_loop: Option<String>,
+    /// Name of the env var holding the exact `Authorization` header value the
+    /// sender attaches (Helius webhooks' `authHeader`). Constant-time compare,
+    /// no body signature. Mutually exclusive with `secret_env` / `secret`.
+    #[serde(default)]
+    pub auth_header_env: Option<String>,
     /// Name of the environment variable holding the HMAC shared secret.
     /// At verify time the listener reads `std::env::var(secret_env)`;
     /// missing env var → 500 Internal Error (the listener cannot verify
@@ -986,7 +1021,11 @@ impl Config {
     /// `AgentConfig`, so the fallback has to be materialised here; `run-agent`
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
+        let signing_sandbox = self.solana.signer_key_file.is_some();
+        let signer_key_file = self.solana.signer_path();
         for agent in self.agents.values_mut() {
+            agent.no_shell_fallback = signing_sandbox;
+            agent.signer_key_file = signer_key_file.clone();
             for (tool, scope) in &self.default_scopes {
                 agent
                     .scopes
@@ -1063,6 +1102,37 @@ impl Config {
 
         for issue in self.egress.validation_errors() {
             errors.push(issue);
+        }
+        for issue in solana::validation_errors(self) {
+            errors.push(issue);
+        }
+
+        for (name, dl) in &self.decision_loops {
+            for issue in dl.validation_errors(name) {
+                errors.push(issue);
+            }
+            match self.agents.get(&dl.agent) {
+                None => errors.push(format!(
+                    "decision_loops.{name}.agent: no [agents.{}] block",
+                    dl.agent
+                )),
+                Some(agent) if !agent.tools.is_empty() => {
+                    for (an, action) in &dl.actions {
+                        // A dry-run loop may name write tools that are not
+                        // built yet — they are logged, never invoked.
+                        let never_runs = dl.dry_run && !action.read_only;
+                        if let Some(tool) = action.tool.as_ref().filter(|_| !never_runs) {
+                            if !agent.tools.contains(tool) {
+                                errors.push(format!(
+                                    "decision_loops.{name}.actions.{an}.tool: `{tool}` is not in [agents.{}].tools",
+                                    dl.agent
+                                ));
+                            }
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
         }
 
         errors.into_vec()
@@ -1281,6 +1351,8 @@ impl Default for Config {
                 scopes: HashMap::new(),
                 claude_code: None,
                 local: None,
+                no_shell_fallback: false,
+                signer_key_file: None,
             },
         );
 
@@ -1292,11 +1364,13 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
             webhooks: WebhookConfig::default(),
+            decision_loops: HashMap::new(),
             scaffold: None,
             claude_code: None,
             default_scopes: HashMap::new(),
             egress: EgressConfig::default(),
             mcp_servers: Vec::new(),
+            solana: solana::SolanaConfig::default(),
             skill_lifecycle: None,
             sandbox_name: None,
         }

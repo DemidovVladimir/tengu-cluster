@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::domain::message::ToolDef;
+use crate::domain::observation::Observation;
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::memory::MemoryService;
@@ -28,15 +29,32 @@ pub(crate) trait Tool: Send + Sync {
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput>;
 }
 
-/// Output of a tool call.
-#[derive(Debug, Clone)]
-pub(crate) struct ToolOutput {
+/// Output of a tool call. `pub` because `ToolExecutor::execute_typed`
+/// (a `pub` trait) returns it.
+#[derive(Debug, Clone, Default)]
+pub struct ToolOutput {
     pub text: String,
+    /// Typed result for decision loops + the observation cache. `None` =
+    /// legacy text-only tool.
+    pub observation: Option<Observation>,
 }
 
 impl From<String> for ToolOutput {
     fn from(text: String) -> Self {
-        Self { text }
+        Self {
+            text,
+            observation: None,
+        }
+    }
+}
+
+impl ToolOutput {
+    /// Typed output: the text is `obs.render_text(now_ms)`.
+    pub(crate) fn observed(obs: Observation, now_ms: i64) -> Self {
+        Self {
+            text: obs.render_text(now_ms),
+            observation: Some(obs),
+        }
     }
 }
 

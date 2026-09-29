@@ -52,7 +52,9 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
-# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill
+# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill,
+#   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
+#   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -131,6 +133,55 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # agent = "main"
 # secret_env = "TENGU_TEST_WEBHOOK_SECRET"
 # goal_template = "Webhook arrived. Summarise the payload."
+#
+# Helius (static Authorization header) → decision loop instead of the planner:
+# [webhooks.endpoints.helius]
+# loop = "watch"
+# auth_header_env = "HELIUS_WEBHOOK_AUTH"
+
+# --- Decision loops (Jev picks, tools execute) ---
+# Test one event: tengu decide --sandbox <name> --loop watch [--event e.json]
+# Full example: sandboxes/lping/config.toml. Doc: docs/decision-loop-plan-2026-09-24.md.
+# [decision_loops.watch]
+# goal = "Keep the position in range; max 2 SOL"
+# agent = "main"              # tools + scopes + workspace come from this agent
+# dry_run = true              # write actions logged, not run (default true)
+# act_at = 0.8                # min confidence to act; below → escalate to planner
+# [decision_loops.watch.actions.hold]
+# description = "Nothing to do"           # no `tool` = terminal
+# [decision_loops.watch.actions.fetch]
+# description = "Fetch pools"
+# tool = "http_request"
+# read_only = true
+# args = { method = "GET", url = "https://example.com/pools?pair={pair}", return_body = true }
+# slots = { pair = ["SOL-USDC"] }
+# reduce = { pools = "/data/*/{address,tvl}" }
+#
+# Typed tools (results carry an Observation; docs/typed-observations-2026-09-24.md):
+# world = { price = "price_oracle/1:So11111111111111111111111111111111111111112", pools = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000" }  # alias → observation key, read (never fetched) each step
+# world_max_age_secs = 30                 # older world entries render as stale, no numbers (default 30)
+# [decision_loops.watch.actions.price]
+# description = "Refresh the SOL/USD price"
+# tool = "sol_price"                      # opt-in tool: list it in the loop agent's `tools`
+# read_only = true
+# [decision_loops.watch.actions.open]
+# description = "Open a position"
+# tool = "dlmm_open_position"             # not built yet — allowed only while dry_run
+# requires = { price = 30 }               # offered only while `price` is usable and <= 30 s old
+# slots = { pool = { observation = "pools", items = "/data/pools/*", value = "address", top = 5 } }  # from a fresh world entry (written by a dlmm_pools call with the same args)
+
+# --- Solana signing (write tools, phase 6b) ---
+# `mode = "simulate"` (default) needs no key. `mode = "send"` signs with this
+# key, only for an agent whose scope for the tool lists the wallet:
+#   [agents.lp_executor.scopes.dlmm_open_position]
+#   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
+# With a signer the sandbox must have: no claude_code agents, no
+# [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
+# no-shell fallback), and the key outside every fs_roots / workspace. The
+# signing agent has no `description`, is not `default`, and is no webhook
+# endpoint's `agent`. Rules: src/config/solana.rs.
+# [solana]
+# signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
@@ -264,7 +315,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
 # # `workspace_tools` allow-list: agentic_memory / shared_cache / persistent_store /
-# # skill_distill / apply_improver_proposal / manage_skill. Regular tools like
+# # skill_distill / apply_improver_proposal / manage_skill (+ the Solana LP tools,
+# # docs/tools.md). Regular tools like
 # # read_file / list_directory go in `tools`.
 # tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #

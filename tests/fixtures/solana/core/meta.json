@@ -1,0 +1,41 @@
+{
+  "captured_at": "2026-09-24T18:02:19.098689+00:00",
+  "captured_by": "TENGU_CAPTURE_FIXTURES=1 cargo test --bin tengu live_capture_fixtures -- --ignored",
+  "endpoint_host": "api.mainnet-beta.solana.com",
+  "keys": [
+    "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+    "BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y",
+    "So11111111111111111111111111111111111111112",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "EYj9xKw6ZszwpyNibHY7JD5o3QgTVrSdcBp1fMJhrR9o",
+    "CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz",
+    "DwZz4S1Z1LBXomzmncQRVKCYhjCqSAMQ6RPKbUAadr7H",
+    "4N22J4vW2juHocTntJNmXywSonYjkndCwahjZ2cYLDgb",
+    "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq",
+    "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz",
+    "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa",
+    "6HFhuYzQGcqdj4NGwC6vfVETRvMA3pXaVeZnHgWSKsJK",
+    "FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY"
+  ],
+  "labels": {
+    "4N22J4vW2juHocTntJNmXywSonYjkndCwahjZ2cYLDgb": "lb_pair_2.reserve_y",
+    "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq": "jlp_pool",
+    "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6": "lb_pair_sol_usdc",
+    "6HFhuYzQGcqdj4NGwC6vfVETRvMA3pXaVeZnHgWSKsJK": "jup_position_short",
+    "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz": "custody_sol",
+    "BGm1tav58oGcsQJehL9WXBFXF7D27vZsKefj4xJKD5Y": "lb_pair_2",
+    "CoaxzEh8p5YyGLcj36Eo3cUThVJxeKCs7qvLAGDYwBcz": "lb_pair_sol_usdc.reserve_y",
+    "DwZz4S1Z1LBXomzmncQRVKCYhjCqSAMQ6RPKbUAadr7H": "lb_pair_2.reserve_x",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "lb_pair_sol_usdc.token_y_mint",
+    "EYj9xKw6ZszwpyNibHY7JD5o3QgTVrSdcBp1fMJhrR9o": "lb_pair_sol_usdc.reserve_x",
+    "FqymRcB92t63jpwh7om4RLbxMNUGoHnZPQMkkAA8ksVY": "jup_position_long",
+    "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa": "custody_usdc",
+    "So11111111111111111111111111111111111111112": "lb_pair_sol_usdc.token_x_mint"
+  },
+  "method": "getMultipleAccounts",
+  "params": {
+    "commitment": "confirmed",
+    "encoding": "base64"
+  },
+  "slot": 450104084
+}

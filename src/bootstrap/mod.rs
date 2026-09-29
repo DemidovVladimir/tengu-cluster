@@ -3,6 +3,7 @@
 //! sandbox config resolution. May import every layer; only `main.rs` and
 //! inbound adapters import it (see `tests/layering_lint.rs`).
 
+pub(crate) mod decision;
 pub(crate) mod memory;
 pub(crate) mod orchestrator;
 pub(crate) mod sandbox;

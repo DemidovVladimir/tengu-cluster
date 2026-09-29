@@ -148,6 +148,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 | Sandbox | Network | Description |
 |---|---|---|
 | `aura` | `open` (Molecule / Privy / Beach block Tor exits) | DeSci pipeline (research, mint, publish); agents `aura` (planner + pipeline), `researcher`, `learning-agent`, `skill-improver`, `fixture-runner` on `claude_code`; webhook `test` endpoint |
+| `lping` | `open` (RPC / market APIs block Tor, latency) | Crypto research + dry-run Solana LP / hedge decision loops (`lp_watch`, `hedge_watch`; `tengu decide --sandbox lping --loop <name>`) over 10 typed, cached Solana tools (`docs/typed-observations-2026-09-24.md`); writes + signing later. Agents `lping` (planner) + `crypto_researcher`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
 | `storage-test` | tor | Storage agent smoke config (`persistent_store`) |
 | `unlimited` | tor | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
 

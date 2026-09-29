@@ -100,7 +100,7 @@ see one unified event stream.
 
 ---
 
-## §2 — The six subsystems (file-by-file)
+## §2 — The subsystems (file-by-file)
 
 ### Memory — `src/application/memory/` + ports + outbound stores
 
@@ -190,6 +190,19 @@ broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorde
 | `warn_if_proxy_unreachable` | One startup warning from the parent CLI (after sandbox resolution) when the proxy port is closed. `tengu doctor` prints the resolved network. |
 | Telegram | `TelegramPipe::build_bot` builds teloxide's reqwest 0.11 client (`reqwest011` alias) through the proxy's HTTP CONNECT form, 30s connect / 60s timeout (teloxide's 5s/17s defaults time out over Tor). |
 
+### Decision loops + typed observations (2026-09-24)
+
+Outside the chat turn: a System One model (Jev) picks actions; typed tools return `Observation`s that feed the loop and a TTL cache. Docs: `docs/decision-loop-plan-2026-09-24.md`, `docs/typed-observations-2026-09-24.md`.
+
+| File | What it owns |
+|---|---|
+| `config/decision_loop.rs` | `[decision_loops.<name>]`: actions, slots (static / `from` history / `observation`), caps, `dry_run`, `world`, `requires` |
+| `application/decision_loop/{mod,slots,reduce,world}.rs` | per-event loop: read `world` → Jev call → gate (`act_at`) → run via `ToolExecutor::execute_typed` → history (`obs` meta) |
+| `bootstrap/decision.rs` | loop agent's executor wrapped in `SanitizedToolExecutor` + its `observations.db` + `JevClient` (`outbound/decisions.rs`) |
+| `domain/observation.rs`, `ports/observation.rs` | `Observation` envelope (`Field<T>`, `ObsStatus`, features, `render_text`), `ObservationStore` port |
+| `application/observe.rs`, `adapters/outbound/observations.rs` | cache-or-fetch helper; SQLite store `<workspace>/.tengu/observations.db` |
+| `adapters/outbound/tools/solana/`, `adapters/outbound/solana/`, `domain/solana.rs`, `domain/lp/` | 10 Solana LP tools; RPC / JSON clients + read planning; pure decoders, hedge controller port, LP gates |
+
 ---
 
 ## §3 — Open Brain, Wiki, And Planner Files
@@ -201,6 +214,7 @@ broadcast bus, and `OrchestratorEvent::MetricsRecorded` for the TUI/eval recorde
 | Postgres `agentic_memory` | Open Brain live memory: user messages + step outputs + source chunks | planner + `run-agent` + `agentic_memory` tool when `postgres_memory` is enabled | planner recall + agents via tool | TBD |
 | `.tengu/agentic-memory/wiki/` | Karpathy LLM Wiki compiled Markdown | `agentic_memory compile_wiki` | agents, humans, future MCP surface | Git/history |
 | Disk bincode vector store (`adapters/outbound/memory/disk_vector.rs`) | chat-side `memory_ingest` / `memory_search` / `persistent_store` entries | `MemoryPlugin` tools | same tools + `BuiltinMemoryProvider` | `delete_older_than` on the trait, no sweep |
+| `<workspace>/.tengu/observations.db` | typed tool observations (`<schema>:<subject>` rows, incl. `acct/1`, `dlmm_discovery/1`, `lp_state/1`) | typed tools via `observe()` | the same tools (cache hits) + decision-loop `world` | per-row `ttl_ms`; purged after 7 days |
 
 ---
 

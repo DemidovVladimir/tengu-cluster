@@ -44,6 +44,59 @@ fn disable_terminal_mouse_capture() -> Result<()> {
 struct SendEngine(Box<dyn crate::ports::engine::Engine>);
 unsafe impl Send for SendEngine {}
 
+/// Follow the decision audit log (`<TENGU_HOME>/logs/decisions.jsonl`) from
+/// its current end and push every new line of one of `loops` as a System
+/// bubble (`decision_loop::render_audit`). Polls every 300 ms; a partial
+/// trailing line waits for the next poll; ends when the TUI is gone.
+fn spawn_decision_feed(
+    path: PathBuf,
+    loops: std::collections::HashSet<String>,
+    sink: cursive::CbSink,
+) {
+    std::thread::spawn(move || {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut pos = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let mut pending: Vec<u8> = Vec::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let Ok(mut f) = std::fs::File::open(&path) else {
+                continue;
+            };
+            let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+            if len < pos {
+                // Truncated or replaced: start over.
+                pos = 0;
+                pending.clear();
+            }
+            if len == pos || f.seek(SeekFrom::Start(pos)).is_err() {
+                continue;
+            }
+            let Ok(n) = f.take(len - pos).read_to_end(&mut pending) else {
+                continue;
+            };
+            pos += n as u64;
+            while let Some(i) = pending.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = pending.drain(..=i).collect();
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                if !v["loop"].as_str().is_some_and(|l| loops.contains(l)) {
+                    continue;
+                }
+                let Some(text) = crate::application::decision_loop::render_audit(&v) else {
+                    continue;
+                };
+                let sent = sink.send(Box::new(move |siv: &mut Cursive| {
+                    view::push_bubble(siv, BubbleRole::System, &text);
+                }));
+                if sent.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+}
+
 /// Format a single `OrchestratorEvent::RagQueried` event as one compact line
 /// suitable for a System bubble. Shape:
 ///
@@ -327,6 +380,17 @@ pub fn run_tui(
                 "TUI orchestrator configured but no tokio runtime — event subscriber not spawned"
             );
         }
+    }
+
+    // Decision feed: when this config has `[decision_loops]`, each Jev
+    // decision of those loops — from any process (`tengu decide` run by an
+    // agent, the webhook listener) — shows up as a System bubble.
+    if !config.decision_loops.is_empty() {
+        spawn_decision_feed(
+            crate::bootstrap::decision::audit_path(),
+            config.decision_loops.keys().cloned().collect(),
+            siv.cb_sink().clone(),
+        );
     }
 
     // Spawn engine thread
@@ -767,6 +831,14 @@ pub fn run_tui(
                                 &skill_registry,
                                 &current_tools,
                             );
+                            // Claude Code reaches tengu tools only through the
+                            // MCP bridge — same rebuild as the skill-command path.
+                            if manages_workspace {
+                                current_bridge_tools = crate::bootstrap::tools::rebuild_tools(
+                                    &bridge_base_tools,
+                                    &skill_registry,
+                                );
+                            }
                         }
                         tools_dirty = false;
                     }
@@ -876,7 +948,11 @@ pub fn run_tui(
                             max_recall_tokens: memory_config.max_recall_tokens,
                             tool_observer: None,
                             cancel: None,
-                            bridge_tools: None,
+                            bridge_tools: if current_bridge_tools.is_empty() {
+                                None
+                            } else {
+                                Some(&current_bridge_tools)
+                            },
                             mcp_servers: &mcp_servers,
                             suppress_grounding_nudge: false,
                         };

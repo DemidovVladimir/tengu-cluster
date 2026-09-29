@@ -288,13 +288,10 @@ pub fn show_thinking(siv: &mut Cursive) {
 /// Remove the thinking indicator.
 pub fn hide_thinking(siv: &mut Cursive) {
     siv.call_on_name("chat_content", |layout: &mut LinearLayout| {
-        // Find and remove the thinking indicator (last child)
-        let count = layout.len();
-        if count > 0 {
-            // Check if the last child is the thinking indicator by trying to find it
-            if layout.find_child_from_name("thinking_indicator").is_some() {
-                layout.remove_child(count - 1);
-            }
+        // Remove the indicator where it is: System bubbles (decision feed,
+        // orchestrator events) may have been pushed after it mid-turn.
+        if let Some(i) = layout.find_child_from_name("thinking_indicator") {
+            layout.remove_child(i);
         }
     });
     siv.set_autorefresh(false);

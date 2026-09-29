@@ -6,7 +6,53 @@
 
 ---
 
-## TL;DR — current state (2026-09-23): hexagonal layout
+## TL;DR — current state (2026-09-24): typed observations + Solana LP read tools
+
+Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observations-2026-09-24.md`**. Loop doc: `docs/decision-loop-plan-2026-09-24.md`; sandbox: `docs/lping-2026-09-24.md`.
+
+| Area | Change |
+|---|---|
+| Typed observations | `ToolOutput.observation` + `ToolExecutor::execute_typed` (default wraps `execute`); `domain/observation.rs` envelope (features ≤ 32 scalars, line 1 ≤ 200 with full ids, `Field<T>` / `ObsStatus` — failed reads never 0); `ports/observation.rs` + `outbound/observations.rs` (`<workspace>/.tengu/observations.db`, slot-monotonic, `Error` rows never stored, 7-day purge); `application/observe.rs::observe()` |
+| Decision loop | `world` + `world_max_age_secs`, action `requires`, `FromObservation` slots, typed results + `HistoryEntry.obs`; loop tools wrapped in `SanitizedToolExecutor` (`build_decision_loop(.., secrets)`) |
+| Review (2026-09-25) | 6-lens adversarial review: 31 findings, 11 refuted, 20 confirmed (5 medium, 15 low; none reachable with money — dry-run, no signer) and all fixed with regression tests: empty discovery bounded by caller max age (TTL 10 s), explicit-`positions` snapshots never stored under the canonical key, share > bin supply ⇒ incomplete, oracle reuse ≤ 10 s, `lp_state` compare-and-swap commits + unreadable ⇒ block, position/discovery read errors ⇒ `invalid_read`, grace clock per bot, in-cycle storm/freeze via `lp_knobs`, current-event `FromHistory`, JSON-RPC error text scrubbed, ids never cut in slot descriptions, base58 length pre-check. Open: cross-tool slot mixing of cached `acct/1` rows (share ≤ supply catches only part); architecture `.svg` has no decision-loop panel |
+| Solana tools | 10 opt-in tools (`tools/solana/`): `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`. Pure: `domain/solana.rs` (hand-rolled base58 + PDA), `domain/lp/{dlmm,perps,wallet,market,gates,hedge,snapshot}.rs`. IO: `outbound/solana/{rpc,accounts,http_json,plan}.rs` |
+| Policy port | `domain/lp/hedge.rs` = bot hedge controller, 1027/1027 production vectors (`cargo test --bin tengu lp::hedge`); `gates.rs` = re-entry, storm, trend/regime confirm, composition, wallet 50/50, 70-bin range cap |
+| Crates | `base64 = "0.22"` direct; `curve25519-dalek ~4.1` dev-dependency only (off-curve cross-check). No bs58 / solana-sdk / anchor / borsh |
+| lping | `lp_watch` on typed tools (`sol_price`, `dlmm_pools`, `requires = { price = 30 }`); new `hedge_watch` (`lp_snapshot` → `hedge_decide` / `lp_decide`, `commit = true`, production knobs cited in TOML); both `dry_run` |
+| Egress | new hosts: `api.mainnet-beta.solana.com` (or `$SOLANA_RPC_URL`'s host), `lite-api.jup.ag`, `dlmm.datapi.meteora.ag`, `hermes.pyth.network`; RPC URL never rendered (host only) — `docs/egress-2026-09-16.md` |
+
+| Open | Detail |
+|---|---|
+| Phase 5 — push feed | Yellowstone gRPC → `acct/1:<pubkey>` rows (slot-monotonic put) + heartbeat row `stream/1:<name>` so unchanged accounts count as fresh; subscription set = union of `lp_snapshot` `data.watch`; trigger via `DecisionLoop::handle_event`; `egress::grpc_channel` |
+| Phase 6b — writes | `dlmm_open/close_position`, `dlmm_claim_fees`, `jup_perps_order`, `jupiter_swap`, `solana_close_token_accounts`: `WriteResult<D>`, wallet `LeaseStore` (signature in the typed-observations doc; no code yet), `mode` default `simulate`, re-run the pure gate before send, `SolanaSigner` port. Keeper cooldown becomes request-aware (`PositionRequest.executed` + JLP `maxRequestExecutionSec`, 45 s live) instead of the blind 600 s `cooldown_ms` |
+| Pyth 401 | Hermes (and the benchmarks mirror) answer 401 → Pyth only with `pyth_feed_id` (`auth_required` error, Partial row); default oracle is Jupiter-only (`degraded = true` unless a pool cross-check is given) |
+| ATA-only balances | `solana_wallet.balances` and `lp_snapshot.wallet_balances` count the mint's ATA only; tokens in other accounts appear only in `token_accounts` rows |
+| Extended positions | > 70 bins decode fully (SDK-verified on a 164-bin position) but raise `ExtendedPosition`; a missing bin array ⇒ `complete = false` (amounts are a floor, row Partial); farming rewards + Token-2022 transfer fees not modelled; new ranges capped at 70 bins |
+| Two-read slot skew | `plan::read_pool` = 2 GMAs (2nd pinned ≥ 1st slot) + reused `acct/1` rows up to their max age → `LpSnapshot.slot` (min) ≠ `slot_max` is possible; a lagging public node answers `-32016` (retried once) |
+| Hedge knobs `trend_confirm_ms` + `no_lp_grace_ms` | LANDED: clamp-regime confirm for `lp_input = "midpoint"` and bot BUG-011 grace (counts from the first no-LP read, `LpControllerState.no_lp_since_ms`; no re-entry wait ⇒ action `none` "no-LP grace"; `0` = off). `hedge_decide` optional `lp_knobs` computes storm / imbalance freeze in-cycle (hedge_watch passes them) |
+| Non-USDC-quote storm | `lp_decide` storm samples come from the USD `price_oracle` row; for a pool whose quote is not USDC they are dropped → `move_5m_pct = None`, storm never fires |
+| Cache | no cross-process single-flight (WAL prevents corruption, not duplicate RPC on a miss); `acct/1` rows hold base64 data (bin array ≈ 13.5 KB), only the 7-day purge bounds growth |
+| `sol_price` keys | pool-aware: `price_oracle/1:<mint>` vs `price_oracle/1:<mint>:<pool>` — a `world` alias must name the key the loop's `sol_price` call writes |
+
+### 2026-09-29 — `sandboxes/jev-exec` (Claude architect → Jev executor)
+
+| Change | Detail |
+|---|---|
+| Sandbox | `sandboxes/jev-exec/config.toml`: architect (in-process `claude_code`, subscription) whose only usable tool is `run_command` → `tengu decide --loop executor`; executor = Jev loop over `http_request` / `list_directory`. Verified live end to end — `docs/decision-loop-plan-2026-09-24.md` § Jev as an architect's hands |
+| `tengu decide` | prints `history` (args + reduced result per step) — `DecisionLoop::history()` |
+| TUI fix | direct (no-orchestrator) turns passed `bridge_tools: None` and the normal rebuild never set them → an in-process `claude_code` agent in `tengu chat` had NO tengu tools (only `/skill` commands did). Both paths now pass the bridge tools |
+| Jev decision feed | audit lines gain `ok` + `output`; `tengu chat` on a config with `[decision_loops]` shows each decision of those loops live (`jev executor #1 · crypto_price (1.00) → executed` + slots, args, output). `view::hide_thinking` removed the LAST bubble, not the spinner — any mid-turn System bubble (feed, orchestrator events) was lost; now removes the indicator by index |
+| Vault prompt fix | a `tengu` started by a tool (`run_command` → `tengu decide`) re-prompted `Master password:` on `/dev/tty` while the TUI owned it → "Engine stream timed out — no data for 120s". The first `tengu` to open the vault now sets `TENGU_SECRETS_LOADED` (loaded key names, set even on failure; forwarded to the Claude Code bridge); descendants inherit the secrets, register them for redaction, never prompt |
+
+| Open | Detail |
+|---|---|
+| Plugin MCP leak | `claude -p` also loads the user's global Claude Code plugin MCP servers into every `claude_code` agent (outside tengu scopes/egress). Candidate fix: `--strict-mcp-config` in `engines/claude_code.rs` |
+| Hand-off paths | `--sandbox` is cwd-relative and `TENGU_CONFIG` is not forwarded to the bridge → jev-exec hardcodes `~/development/tengu-cluster`. A `decide` tool or `--sandbox` resolution from `$TENGU_HOME` would remove it |
+| Jev args | slots are enumerated only; a `FromEvent` slot source would let the architect pass values |
+
+---
+
+## Previous TL;DR (2026-09-23): hexagonal layout
 
 Branch `refactor/hexagonal` (not merged). Plan + per-phase status: `docs/hexagonal-plan-2026-09-23.md`. Start any "where is / how do I" question at **`docs/code-map.md`** (+ interactive `docs/code-map.html`).
 
@@ -40,6 +86,8 @@ Everything below is **uncommitted on `main`** (on top of the 2026-09-12 /
 | `[egress]` default = Tor | `EgressConfig.network = "tor" \| "open"` (default `tor`). `resolved()`: tor → `proxy` = `TENGU_TOR_PROXY` or `socks5h://127.0.0.1:9050`, `route_llm_api = true`; open → direct. Explicit values win; `route_llm_api` is now `Option<bool>`. Children receive the *resolved* config via `TENGU_EGRESS`. `warn_if_proxy_unreachable` (parent only, after sandbox resolution). `tengu doctor` prints `network`. |
 | Claude Code + Telegram over Tor | `claude_code_profile` no longer refuses `route_llm_api`; the CLI child gets `HTTPS_PROXY`/`HTTP_PROXY` = HTTP CONNECT form of the proxy (`EgressPolicy::http_connect_proxy`, `claude_cli_env`; Arti serves CONNECT on the SOCKS port). `TelegramPipe::build_bot` builds teloxide's reqwest 0.11 client itself (`reqwest011` alias, 2026-09-19). |
 | One agent schema | `agents/*.toml` + `src/adapters/agents/` (`AgentSpec`) **deleted**. `AgentConfig` gained `description` (presence = planner-routable), `example_queries`, `tools`, alias `skills` → `skill_packages`; `LimitsConfig.step_timeout_secs` (default 600). `shared_files::routable_agents` feeds `render_registry`; `RagPlanner::new(.., agents, ..)`; `SubprocessRunner::new(sandbox, session, agents)` — fail-fast on unknown agent, per-step `max_tool_rounds` / `step_timeout_secs` (the old spec `max_turns`/`timeout_secs` were never wired — parent always sent 20 / 180s). `run_agent_subprocess` loads the parent config first, then `[agents.<name>]`; `bootstrap::tools::subagent_config` replaces `agent_config_from_spec`; subagents now run with their real `limits` and per-agent `claude_code` profile. `skill_doctor(&config, ..)`. Also fixed: `tools = [...]` on `[agents.*]` used to be silently dropped (no field). |
+| Decision loops (2026-09-24) | Branch `feature/decision-loop`. `[decision_loops.<name>]` = Jev (`~typesafe/jev-latest`, OpenRouter `/api/alpha/decisions`) picks action + arg slots, existing tools execute via the loop agent's executor. Files: `domain/decision.rs`, `ports/decision.rs`, `config/decision_loop.rs`, `application/decision_loop/`, `outbound/decisions.rs`, `bootstrap/decision.rs`, `cli/decide.rs`; webhooks gained `loop` + `auth_header_env` (Helius). `MetricsKind::Decision`; audit `<TENGU_HOME>/logs/decisions.jsonl`. Verified live (`tengu decide`, webhook 401/202/escalation). Open: history lost on restart, gRPC feed (phase 5), Solana LP tools + signing (phase 6). Plan: `docs/decision-loop-plan-2026-09-24.md` |
+| lping sandbox (2026-09-24) | New `sandboxes/lping/config.toml` placeholder: `lping` planner + `crypto_researcher` (OpenRouter, `http_request`), `network = "open"`, webhook `solana_events` disabled. Plan + open gaps (webhook `Authorization`-header auth for Helius, stream consumer, Jev decisions gate, Solana tools): `docs/lping-2026-09-24.md` |
 | Sandboxes | `aura`: `[egress] network = "open"` (Molecule/Privy/Beach block Tor); `[agents.aura]` = planner + DeSci subagent (description, tools, `step_timeout_secs = 720`); new `[agents.researcher]`, `[agents.learning-agent]` (from the deleted specs). `storage-test`: description/tools, `model = "claude-sonnet-4-6"`. `unlimited`: explicit `[egress] network = "tor"`. `config.example.toml` documents `[egress]` + a subagent example. |
 | deploy/tor | `deploy/snowflake/` (Go lyrebird + socat, fixed-IP subnet) and `refresh-snowflake-bridges.sh` deleted. `deploy/tor/Dockerfile` = Arti 2.6.0 (`--features http-connect`) + lyrebird-rs built from the BuildKit named context `lyrebird-rs` (`../lyrebird-rs`, `LYREBIRD_RS_SRC` = dir or git URL). `arti.toml`: managed transport (`path = /usr/local/bin/lyrebird`, `run_on_startup = true`, protocols obfs4 + snowflake), Tor Browser bridge lines (7 obfs4 + 2 snowflake from lyrebird-rs `tools/arti-e2e/bridges-*.txt`), `tor-state` volume. `compose.yml`: one `tor` service on `127.0.0.1:9050`, healthcheck = `check.torproject.org` `IsTor:true`. `docker-compose.tor.yml` includes it and sets `TENGU_TOR_PROXY=socks5h://tor:9050`. |
 | Makefile | `NETWORK=tor` (default) / `open` selects the compose file set for `up`/`up-memory`/`down`/`logs`/`status`/`doctor`/`clean`/`build`. `tor`, `tor-down`, `tor-logs`, `tor-bridges` (calls lyrebird-rs `bridges.sh`). Removed `up-tor`, `down-tor`, `tor-native`, `tor-native-down`. `LYREBIRD_RS_DIR` (default `../lyrebird-rs`) exported as `LYREBIRD_RS_SRC`. |

@@ -222,17 +222,25 @@ pub(crate) fn list_secret_keys(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Set by the first `tengu` that opens the vault (even when unlocking
+/// fails): comma-separated names of the env vars it loaded. A `tengu`
+/// spawned below it (e.g. `tengu decide` from an agent's `run_command`)
+/// inherits those vars and never prompts — the prompt would block on a
+/// terminal the parent's TUI owns.
+pub(crate) const SECRETS_LOADED_ENV: &str = "TENGU_SECRETS_LOADED";
+
 /// Decrypt the vault and inject every key=value pair into the process
 /// environment.  Used at startup so that the rest of the application
 /// can read secrets via `std::env::var`.
 ///
-/// Returns the secret **values** (not keys) so they can be registered
-/// in the `SecretRegistry` for output redaction.
-pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
+/// Returns the `(key, value)` pairs it set (non-empty values only) so the
+/// values can be registered in the `SecretRegistry` for output redaction
+/// and the keys published in `SECRETS_LOADED_ENV`.
+pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<(String, String)>> {
     let password = prompt_password()?;
     let lines = decrypt_and_parse(path, &password)?;
 
-    let mut secret_values = Vec::new();
+    let mut loaded = Vec::new();
     for line in &lines {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -243,12 +251,12 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<String>> {
             if existing.is_empty() {
                 std::env::set_var(k, v);
                 if !v.is_empty() {
-                    secret_values.push(v.to_string());
+                    loaded.push((k.to_string(), v.to_string()));
                 }
             }
         }
     }
-    Ok(secret_values)
+    Ok(loaded)
 }
 
 /// Change the master password on an existing vault.
@@ -381,5 +389,79 @@ impl ToolExecutor for SanitizedToolExecutor {
     ) -> Result<String> {
         let result = self.inner.execute(call, messages).await?;
         Ok(self.registry.redact(&result))
+    }
+
+    /// Redacts the text and the observation (headline, error messages,
+    /// string features, `data`).
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> Result<crate::ports::tool::ToolOutput> {
+        let mut out = self.inner.execute_typed(call, messages).await?;
+        out.text = self.registry.redact(&out.text);
+        if let Some(obs) = out.observation.as_mut() {
+            self.registry.redact_observation(obs);
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::message::Message;
+    use crate::domain::observation::{ObsSource, ObsStatus, Observation};
+    use crate::domain::secrets::SecretRegistry;
+    use crate::ports::tool::ToolOutput;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    const KEY: &str = "api-key-0123456789abcdef";
+
+    struct Leaky;
+
+    #[async_trait]
+    impl ToolExecutor for Leaky {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, _call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let obs = Observation {
+                key: "leak/1:s".into(),
+                schema: "leak/1".into(),
+                tool: "leak".into(),
+                observed_at_ms: 0,
+                slot: None,
+                ttl_ms: 1_000,
+                source: ObsSource::Live,
+                status: ObsStatus::Ok,
+                errors: vec![],
+                headline: format!("rpc {KEY}"),
+                features: Default::default(),
+                data: json!({"rpc_url": format!("https://rpc.example/?api-key={KEY}"), "n": 1}),
+            };
+            Ok(ToolOutput::observed(obs, 0))
+        }
+    }
+
+    #[tokio::test]
+    async fn sanitized_executor_redacts_observation_data() {
+        let mut reg = SecretRegistry::new();
+        reg.register(KEY.to_string());
+        let exec = SanitizedToolExecutor::new(Arc::new(Leaky), Arc::new(reg));
+        let call = ToolCall {
+            id: "1".into(),
+            name: "leak".into(),
+            arguments: json!({}),
+        };
+        let out = exec.execute_typed(&call, &[]).await.unwrap();
+        assert!(!out.text.contains(KEY), "{}", out.text);
+        let obs = out.observation.unwrap();
+        assert_eq!(
+            obs.data,
+            json!({"rpc_url": "https://rpc.example/?api-key=[REDACTED]", "n": 1})
+        );
+        assert_eq!(obs.headline, "rpc [REDACTED]");
     }
 }
