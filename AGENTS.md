@@ -121,10 +121,12 @@ config, channels) — it is the index into everything below.
 10. **`docs/typed-observations-2026-09-24.md`** — typed tool results
     (`Observation` envelope), the observation cache
     (`<workspace>/.tengu/observations.db`), decision-loop `world` /
-    `requires`, and the 10 Solana LP tools (args, keys, TTLs, hosts, knobs).
+    `requires`, the 10 Solana LP read tools (args, keys, TTLs, hosts, knobs)
+    and the 5 write tools (§ Write tools: modes, signer, lease, fence).
     Read BEFORE touching `domain/observation.rs`, `application/observe.rs`,
     `application/decision_loop/`, `adapters/outbound/tools/solana/`,
-    `adapters/outbound/solana/` or `domain/lp/`.
+    `adapters/outbound/solana/`, `domain/lp/`, `domain/solana_tx.rs`,
+    `domain/solana_write.rs` or `config/solana.rs`.
 
 ---
 
@@ -150,7 +152,7 @@ flow, audit these for staleness **before declaring done**:
 | `docs/tools.md` | If you changed the tool catalog, tool gating, `[[mcp_servers]]` handling, or how agents get tools. |
 | `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
-| `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, or a Solana tool's args, key, TTL, hosts or knobs. |
+| `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, a Solana tool's args, key, TTL, hosts or knobs, or a write tool's send rules (signer, `config/solana.rs`, lease / pending / fence). |
 | `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
@@ -487,6 +489,22 @@ These are not preferences. They're load-bearing.
   silently; the RPC URL is never rendered (host only). `hedge_decide` /
   `lp_decide` knobs are all required (no defaults); `commit` defaults to
   false. Doc: `docs/typed-observations-2026-09-24.md`.
+- **Solana write tools (2026-09-29, phase 6b)** — `solana_close_token_accounts`,
+  `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`,
+  `jup_perps_order` (opt-in rows; runner `tools/solana/write_common.rs`,
+  pipeline `outbound/solana/send.rs`). `mode = "simulate"` (default) is
+  keyless. `mode = "send"` needs BOTH `[solana] signer_key_file` (0600, key =
+  the `wallet` arg) AND `wallets = ["<full pubkey>"]` in that agent's own
+  scope for the tool — never in `[default_scopes]`, only on an agent with no
+  `description`, not `default`, no webhook `agent`. With a signer,
+  `Config::load` refuses `claude_code` agents, `[[mcp_servers]]`, any scope
+  granting `shell_bins`, and a key inside any fs root / workspace
+  (`config/solana.rs`); the permissive fallback then runs no shell. Sends are
+  serialized per wallet by a lease in `<TENGU_HOME>/state/solana-writes.db`
+  (+ pending record resolved before the next send, + write fence that makes
+  older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so
+  never sign with a wallet the bot runs. Doc:
+  `docs/typed-observations-2026-09-24.md` § Write tools.
 
 ---
 
@@ -526,7 +544,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-24 (typed observations + observation cache + Solana LP read tools — `docs/typed-observations-2026-09-24.md`; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-29 (Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

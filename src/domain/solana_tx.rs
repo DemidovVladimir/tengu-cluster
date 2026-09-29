@@ -194,6 +194,7 @@ impl LegacyMessage {
     }
 
     /// Required signers, in signature-slot order.
+    #[cfg(test)]
     pub fn signers(&self) -> &[Pubkey] {
         &self.account_keys[..usize::from(self.header.num_required_signatures)]
     }
@@ -473,13 +474,6 @@ pub fn cu_price(micro_lamports: u64) -> Instruction {
     }
 }
 
-/// Instructions of `ixs` that are not ComputeBudget (the send pipeline sets
-/// its own limit + price).
-pub fn without_compute_budget(ixs: Vec<Instruction>) -> Vec<Instruction> {
-    let cb = ids::key(ids::COMPUTE_BUDGET);
-    ixs.into_iter().filter(|ix| ix.program_id != cb).collect()
-}
-
 #[cfg(test)]
 pub(crate) mod golden {
     //! `tests/fixtures/solana/tx/golden.json` accessors shared by the
@@ -725,11 +719,5 @@ mod tests {
             }
         );
         assert_eq!(msg.instructions[0].accounts, vec![2, 2, 0, 1]);
-    }
-
-    #[test]
-    fn without_compute_budget_drops_only_cb() {
-        let kept = without_compute_budget(vec![cu_limit(1), spl_sync_native(&k(1)), cu_price(1)]);
-        assert_eq!(kept, vec![spl_sync_native(&k(1))]);
     }
 }

@@ -41,13 +41,6 @@ impl LocalKeypair {
             .map_err(|e| anyhow::anyhow!("OS random source failed: {e}"))?;
         Ok(Self::from_seed(&seed))
     }
-
-    /// The 32-byte seed. Only for one-shot position keys, which the send
-    /// pipeline records so a retry reuses the same position account; a
-    /// position key has no authority once the position is initialized.
-    pub(crate) fn seed(&self) -> Zeroizing<[u8; 32]> {
-        Zeroizing::new(self.key.to_bytes())
-    }
 }
 
 impl fmt::Debug for LocalKeypair {
@@ -362,7 +355,6 @@ mod tests {
         let d = format!("{k:?}");
         assert_eq!(d, format!("LocalKeypair({})", signer("wallet")));
         assert!(!d.contains(&hex(&[1; 32])));
-        assert_eq!(*k.seed(), [1; 32]);
     }
 
     #[test]

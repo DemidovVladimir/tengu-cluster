@@ -1,6 +1,6 @@
 # Typed observations + Solana LP tools (2026-09-24)
 
-Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 10 Solana LP tools. Branch `feature/decision-loop`. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
+Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 10 Solana LP read tools and 5 write tools (§ Write tools). Branch `feature/decision-loop`. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
 
 ## Envelope
 
@@ -72,11 +72,41 @@ Every Solana tool's first check is `ctx.scope.check_fs_write(workspace)` (the st
 | `snapshot.rs` | `compose_snapshot`, `decide_hedge` / `decide_lp` (gates first, then `hedge::decide` unchanged), `LpControllerState` | gate tables |
 | `dlmm.rs`, `perps.rs`, `wallet.rs`, `market.rs` | decoders + builders over one `AccountSet` / fetched JSON | SDK / Anchor / live-fixture goldens |
 
-## Phase 6 seam (spec only)
+## Write tools (phase 6b, 2026-09-29)
 
-`LeaseStore { acquire(resource, holder, ttl_ms, now_ms) -> Lease; release(resource, holder) }`, `Lease { resource, holder, acquired_at_ms, expires_at_ms, granted, current_holder }` — single writer per wallet (`wallet:<address>`), SQLite `leases` table beside `observations`. Write tools return `WriteResult<D>` (mode plan \| simulate \| send, default simulate) and re-run the pure gate before sending.
+Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `outbound/solana/send.rs`; encoders `domain/solana_tx.rs`, `domain/lp/{dlmm_ix,perps_ix}.rs`. Result = `write/1:<tool>:<wallet>:<started_ms>` (`domain/solana_write.rs`, ttl 0 — never cached). Every tool: `mode` = `simulate` (default: keyless simulation as the wallet) \| `send`. Reads are live, never cached.
 
-| Rule (review fixes 2026-09-25) | Behaviour |
+| Tool | Args (* required) | Builds | Refuses when |
+|---|---|---|---|
+| `solana_close_token_accounts` | `wallet`*, `keep_mints` | SPL `CloseAccount`, 8 / tx, independent batches | — (`noop` when nothing is empty) |
+| `jupiter_swap` | `wallet`*, `input_mint`*, `output_mint`*, `amount`*, `oracle_gate_bps`* | Ultra `/order` → simulate as-is → sign our slot → `/execute` | send on a non-SOL↔USDC pair; worst fill (`otherAmountThreshold`) vs oracle > gate or no oracle; gasless order; open keeper request |
+| `dlmm_open_position` | `wallet`*, `pool`*, `amount_x`*, `amount_y`*, `bin_count`* (≤ 70), `strategy`*, `max_active_bin_slippage`*, `min_wallet_sol`*, `max_new_bin_arrays`* (≤ 2), `max_divergence_bps`*, `allow_existing` | missing bin arrays → `initialize_position` → ATAs → wrap → `add_liquidity_by_strategy2` → unwrap | a position already in the pool; SOL < legs + rent + 0.005 + `min_wallet_sol`; token leg > ATA; pool vs oracle divergence; Token-2022; too many new bin arrays |
+| `dlmm_close_position` | `wallet`*, `pool`*, `position`*, `arm_reentry`* | remove → claim fee → claim rewards → `close_position_if_empty` → unwrap; ≤ 70-bin chunks, split when > 1232 B | not the owner / other pool / foreign fee owner / Token-2022 |
+| `jup_perps_order` | `wallet`*, `pool`*, `side`*, `action`* (increase \| decrease \| close), `size_usd`, `collateral`, `slippage_bps`*, `max_notional_usd`* | keeper market request (long: wrap / wSOL ATA kept open) | no oracle; open or unreadable keeper request; no position (decrease / close); post-order size > cap; funds |
+
+| Send rule | Detail |
+|---|---|
+| Signer | `[solana] signer_key_file` (0600; solana-keygen JSON or base58; errors never echo content) + the tool's scope `wallets = ["<full pubkey>"]` on ONE agent + key = `wallet` |
+| Signing sandbox (`config/solana.rs`) | no `claude_code` agent, no `[[mcp_servers]]`, no scope with `shell_bins` (fallback runs no shell), key outside every fs root / workspace; a wallet grant only on an agent with no `description`, not `default`, no webhook `agent`, never in `[default_scopes]`; a `read_only` write action must set `mode = "simulate"` |
+| Lease | `<TENGU_HOME>/state/solana-writes.db`, `wallet:<address>`, 150 s, renewed per tx; held ⇒ `lease_held`. The TS bot is invisible to it — never sign with a wallet the bot runs |
+| Pending record | written before submit; the next send resolves it first: landed ⇒ fence, expired ⇒ cleared, in flight ⇒ refused `pending_unresolved` |
+| Own transactions | simulate (fail / no units ⇒ never sent) → CU `min(1.4M, ⌈units × 1.1⌉)` → price (Helius estimate on a `helius` host, clamp [1 000, 5 000 000] µL/CU, else 1 000) → `sendTransaction` once; a JSON-RPC error = not sent; a transport failure ⇒ one resend of the same bytes |
+| Jupiter swap | `/execute` re-POSTed with the same body within Jupiter's 2-minute idempotency window; codes −1/−2/−3/−1002/−1003/−1004 = not sent; else polled |
+| Confirm | `getSignatureStatuses` until confirmed; block height > `lastValidBlockHeight` + a history lookup ⇒ `expired`; 120 s ⇒ `unconfirmed` (record kept) |
+| After landing | fence = landing slot; stale cache rows removed; `lp_snapshot` pins reads to the fence; decide tools treat an older snapshot as `stale_input`; `merge_lp_state` (CAS × 3): close + `arm_reentry` ⇒ `reentry`, perps ⇒ `last_hedge_action` (the `PendingRequest` guard = request-aware cooldown) |
+| Keeper requests | unexecuted and ≤ 300 s old (or unreadable) ⇒ DLMM tools keep the wSOL account open; perps orders and SOL-leg swaps refuse |
+
+| `WriteStatus` | Observation |
+|---|---|
+| `simulated` / `confirmed` / `noop` | ok |
+| `unconfirmed` / `partial` | partial — do not retry blindly |
+| `refused` / `sim_failed` / `failed` / `expired` | error |
+
+Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`scripts/golden/write_ixs.cjs`); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --bin tengu -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
+
+## Review fixes (2026-09-25)
+
+| Rule | Behaviour |
 |---|---|
 | No-LP grace (bot BUG-011) | clock starts at the first no-LP read (`lp_state.no_lp_since_ms`); a fresh/missing state holds for `no_lp_grace_ms`; position observations are recorded before any gate and persisted with `commit = true` even on gated evaluations |
 | Decision-loop `FromHistory` slots | read only the CURRENT event's history entries; `state.history` still shows earlier events as context |
