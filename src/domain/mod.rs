@@ -13,6 +13,7 @@ pub(crate) mod scope;
 pub(crate) mod secrets;
 pub(crate) mod session;
 pub(crate) mod solana;
+pub(crate) mod solana_tx;
 pub(crate) mod token;
 pub(crate) mod tools;
 pub(crate) mod usage;

@@ -200,6 +200,15 @@ pub mod ids {
     pub const JLP_POOL: &str = "5BUwFW4nRbftYTDMbgxykoFWqWHPzahFSNAaaaJtVKsq";
     pub const JUP_CUSTODY_SOL: &str = "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz";
     pub const JUP_CUSTODY_USDC: &str = "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa";
+    pub const COMPUTE_BUDGET: &str = "ComputeBudget111111111111111111111111111111";
+    pub const MEMO: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
+    pub const SYSVAR_RENT: &str = "SysvarRent111111111111111111111111111111111";
+    /// DLMM `["__event_authority"]` PDA (Anchor events CPI).
+    pub const DLMM_EVENT_AUTHORITY: &str = "D1ZN9Wj1fRSUQfCjhvnu1hqDMT7hzjzBBpi12nVniYD6";
+    /// Jupiter perps `["__event_authority"]` PDA.
+    pub const JUP_PERPS_EVENT_AUTHORITY: &str = "37hJBDnntwqhGbK7L6M1bLyvccj4u55CCUiLPdYkiqBN";
+    /// Jupiter perps `["perpetuals"]` PDA (global config account).
+    pub const JUP_PERPETUALS: &str = "H4ND9aYttUVLFmNypZqLjZ52FYiGvdEB45GmwNoKEjTj";
 
     /// Parse a constant from this module (they are valid by construction).
     pub fn key(id: &str) -> super::Pubkey {
