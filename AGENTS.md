@@ -12,6 +12,12 @@
 
 ## What this project is
 
+> **Rust only.** No JavaScript / TypeScript / Python source in this repo —
+> not even test-fixture generators or one-off probes. Produce goldens
+> outside the repo (e.g. with the bot's own libraries) and commit only the
+> resulting fixtures (`tests/fixtures/**`). Existing non-Rust files are
+> infra only: `deploy/*.sh`, `Makefile`, `Dockerfile*`, test shell fixtures.
+
 Tengu-Cluster is a multi-agent harness in **Rust**. Single binary. The user runs
 `tengu chat --sandbox <name>` (or `tengu telegram --sandbox <name>`) and types
 messages into a TUI / Telegram chat. The harness:

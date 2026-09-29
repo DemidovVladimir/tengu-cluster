@@ -611,8 +611,8 @@ mod tests {
     }
 }
 
-/// PDA vectors below were derived with `@solana/web3.js`
-/// (`scripts/golden/solcore_pda.cjs`) and checked against mainnet on
+/// PDA vectors below were derived with `@solana/web3.js` and checked
+/// against mainnet on
 /// 2026-09-24 (slot 450101020): the bin arrays and the Jupiter short
 /// position exist with the expected owner / discriminator / index, the long
 /// position and the wSOL ATA are absent (never opened), and the ATAs match

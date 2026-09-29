@@ -4,8 +4,8 @@
 //! derivation, RPC and caching live in the glue (`tools/solana/dlmm.rs`).
 //!
 //! Layouts (absolute offsets incl. the 8-byte Anchor discriminator), checked
-//! against the SDK IDL (`lb_clmm` 0.11.0 in `@meteora-ag/dlmm` 1.9.7, dump:
-//! `scripts/golden/dlmm_offsets.js`). Decoders check owner + discriminator +
+//! against the SDK IDL (`lb_clmm` 0.11.0 in `@meteora-ag/dlmm` 1.9.7).
+//! Decoders check owner + discriminator +
 //! `len >= min` (live accounts may be longer than the IDL).
 //!
 //! | Account | Disc | Min | Fields read |
@@ -1569,9 +1569,9 @@ mod tests {
     use crate::domain::observation::{assert_features_ok, ObsSource, Observation, MAX_LINE1_CHARS};
     use crate::domain::solana::AccountRead;
 
-    // Mainnet fixture, slot 450102095 (scripts/golden/dlmm_capture.js):
-    // one getMultipleAccounts + expectations computed by @meteora-ag/dlmm
-    // 1.9.7 from the same bytes.
+    // Mainnet fixture, slot 450102095: one getMultipleAccounts +
+    // expectations computed by @meteora-ag/dlmm 1.9.7 from the same bytes
+    // (one-off generator, not kept — the repo is Rust-only).
     const GMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/solana/dlmm/gma.json"

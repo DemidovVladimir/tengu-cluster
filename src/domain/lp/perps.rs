@@ -5,10 +5,9 @@
 //! Pure: no IO, no clocks (`now_s` is an input). PDAs are inputs — derivation
 //! lives in `domain/solana.rs`.
 //!
-//! Layouts = Anchor IDL `delta_neutral_bot/src/idl/jupiter-perps-idl.json`
-//! (offsets: `scripts/golden/perps_idl_offsets.cjs`), checked against live
-//! bytes at slot 450101361 with Anchor's own coder
-//! (`scripts/golden/perps_anchor_decode.cjs`). Live accounts are LONGER than
+//! Layouts = Anchor IDL `delta_neutral_bot/src/idl/jupiter-perps-idl.json`,
+//! checked against live bytes at slot 450101361 with Anchor 0.29's own
+//! coder. Live accounts are LONGER than
 //! the IDL; the extra bytes are trailing, so decoders check `len >= min`:
 //!
 //! | Account | Disc = sha256("account:<Name>")[..8] | IDL len | Live len | Extra |
@@ -1363,8 +1362,8 @@ pub fn request_status(
 #[cfg(test)]
 mod tests {
     //! Golden values: `tests/fixtures/solana/perps/meta.json` — computed by
-    //! `scripts/golden/perps_decode.py` (independent of this file) and
-    //! cross-checked with Anchor's coder (`perps_anchor_decode.cjs`).
+    //! an independent decoder (not this file) and cross-checked with Anchor
+    //! 0.29's coder; the one-off generators are not kept (Rust-only repo).
 
     use super::*;
     use crate::domain::observation::{
@@ -1680,7 +1679,7 @@ mod tests {
         );
         assert!(close(usdc.apr_pct(), 5.719404, 1e-12), "{}", usdc.apr_pct());
         // Bit-identical to the bot's `borrowAprPct` (same f64 operation order;
-        // scripts/golden/perps_ts_math.cjs prints these exact values).
+        // the bot's TypeScript prints these exact values).
         assert_eq!(sol.apr_pct().to_string(), "13.49916");
         assert_eq!(usdc.apr_pct().to_string(), "5.719403999999999");
     }

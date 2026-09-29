@@ -86,7 +86,7 @@
     }
   },
   "golden_atas": {
-    "source": "scripts/golden/wallet_atas.cjs (@solana/spl-token getAssociatedTokenAddressSync from delta_neutral_bot/node_modules)",
+    "source": "@solana/spl-token getAssociatedTokenAddressSync (delta_neutral_bot/node_modules); one-off generator not kept",
     "rows": [
       {"mint": "So11111111111111111111111111111111111111112", "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ata": "E4PCnfEconGJW6vf7GDycEnkFe1VWC7teiNWJzQv3NTA"},
       {"mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "token_program": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "ata": "D9ScKYy15cw1tpkkuwEnDKv62nCyuETwrvRSdP4usGg1"},

@@ -13,7 +13,7 @@ Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-202
 | Area | Change |
 |---|---|
 | Tools | 5 opt-in rows (`tools/solana/write_{tokens,swap,dlmm,perps}.rs`): `solana_close_token_accounts`, `jupiter_swap` (Ultra), `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order`; `mode` = simulate (default, keyless) \| send; result `write/1` (`domain/solana_write.rs`) |
-| Wire format | `domain/solana_tx.rs` (legacy compile + serialize, legacy / v0 parse, System / SPL / ATA / ComputeBudget ix), `domain/lp/{dlmm_ix,perps_ix}.rs` — byte-for-byte goldens from the bot's own libraries (`scripts/golden/write_ixs.cjs` → `tests/fixtures/solana/tx/golden.json`) |
+| Wire format | `domain/solana_tx.rs` (legacy compile + serialize, legacy / v0 parse, System / SPL / ATA / ComputeBudget ix), `domain/lp/{dlmm_ix,perps_ix}.rs` — byte-for-byte goldens from the bot's own libraries (`tests/fixtures/solana/tx/golden.json`) |
 | Signer | `ports/solana_signer.rs`; `outbound/solana/signer.rs` = `ed25519-dalek` over `[solana] signer_key_file` (0600, no-echo errors). Send only with the tool scope's `wallets = ["<pubkey>"]` on one non-routable agent |
 | Signing sandbox | `config/solana.rs`: no `claude_code`, no `[[mcp_servers]]`, no scope with `shell_bins` (runtime: permissive fallback runs no shell — `AgentConfig::no_shell_fallback`), key outside every fs root; grant rules; read_only write actions must simulate |
 | Send pipeline | `outbound/solana/send.rs` + `writes_store.rs` (`<TENGU_HOME>/state/solana-writes.db`): lease per wallet, pending record before submit (resolved first next time), one-attempt `sendTransaction` (JSON-RPC error = not sent), confirm / expire by `lastValidBlockHeight`, write fence; `Submitter` seam (RPC or Ultra `/execute`) |

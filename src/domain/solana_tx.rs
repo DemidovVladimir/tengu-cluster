@@ -11,7 +11,9 @@
 //! instruction's program id before its accounts), partitioned into writable
 //! signers, read-only signers, writable non-signers, read-only non-signers.
 //! Checked byte-for-byte against `tests/fixtures/solana/tx/golden.json`
-//! (`scripts/golden/write_ixs.cjs`).
+//! (produced by web3.js 1.98.4, spl-token 0.4.14, the Meteora SDK 1.9.7's
+//! Anchor program and anchor 0.29 + the perps IDL; the one-off generator
+//! is not kept — the repo is Rust-only).
 
 use crate::domain::solana::{ids, Pubkey};
 

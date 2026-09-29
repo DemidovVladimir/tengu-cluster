@@ -102,7 +102,7 @@ Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `o
 | `unconfirmed` / `partial` | partial — do not retry blindly |
 | `refused` / `sim_failed` / `failed` / `expired` | error |
 
-Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`scripts/golden/write_ixs.cjs`); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --bin tengu -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
+Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`tests/fixtures/solana/tx/golden.json`; generator not kept — Rust-only repo); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --bin tengu -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
 
 ## Review fixes (2026-09-25)
 
