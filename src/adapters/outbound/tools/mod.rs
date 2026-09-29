@@ -240,6 +240,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || solana::defs_named(names::DLMM_OPEN_POSITION),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::JUP_PERPS_ORDER),
+            needs_memory: false,
+            defs: || solana::defs_named(names::JUP_PERPS_ORDER),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
     ]);
     rows
 }

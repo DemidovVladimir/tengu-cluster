@@ -234,9 +234,25 @@ impl Tool for LpSnapshotTool {
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         ctx.scope.check_fs_write(ctx.workspace)?;
-        let req = SnapshotReq::parse(args)?;
+        let mut req = SnapshotReq::parse(args)?;
         let now = now_ms();
         let store = self.shared.store.as_deref();
+        // Read-after-write: a cached row older than the wallet's last
+        // landed write is bypassed and every read pinned to that slot.
+        if let Some(f) = self.shared.fence(&req.wallet).await {
+            let cached = match store {
+                Some(s) => s
+                    .get(&snapshot_key(&req.wallet, &req.pool))
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.slot),
+                None => None,
+            };
+            if cached.is_none_or(|slot| slot < f) {
+                req.min_context_slot = Some(req.min_context_slot.unwrap_or(0).max(f));
+            }
+        }
         let obs = match SolanaRpc::from_ctx(ctx) {
             Ok(rpc) => {
                 let get_json = |url: String| async move { fetch_json(ctx, &url).await };
@@ -636,6 +652,7 @@ async fn snapshot_row(
     store: Option<&dyn ObservationStore>,
     wallet: &Pubkey,
     pool: &Pubkey,
+    fence: Option<u64>,
 ) -> std::result::Result<(Observation, LpSnapshot), String> {
     let key = snapshot_key(wallet, pool);
     let Some(store) = store else {
@@ -667,6 +684,16 @@ async fn snapshot_row(
         return Err(format!(
             "{key} row covers caller-chosen positions only (discovery args); call lp_snapshot without positions"
         ));
+    }
+    // A write of this wallet landed after the row was read: it describes
+    // the chain before that write (write fence, `outbound/solana/send.rs`).
+    if let Some(f) = fence {
+        if row.slot.is_none_or(|s| s < f) {
+            return Err(format!(
+                "{key} row (slot {}) predates the wallet's last write (slot {f}); call lp_snapshot again",
+                row.slot.map_or("none".to_string(), |s| s.to_string())
+            ));
+        }
     }
     Ok((row.served_from_cache(), snap))
 }
@@ -786,7 +813,7 @@ pub(crate) async fn hedge_decide_obs(
     commit: bool,
     now_ms: i64,
 ) -> (Observation, Option<String>) {
-    hedge_decide_obs_in_cycle(store, wallet, pool, knobs, None, commit, now_ms).await
+    hedge_decide_obs_in_cycle(store, wallet, pool, knobs, None, commit, now_ms, None).await
 }
 
 /// `hedge_decide` with optional `lp_decide` knobs: when given, the storm latch
@@ -800,10 +827,11 @@ pub(crate) async fn hedge_decide_obs_in_cycle(
     lp_knobs: Option<&LpKnobs>,
     commit: bool,
     now_ms: i64,
+    fence: Option<u64>,
 ) -> (Observation, Option<String>) {
     let tool = names::HEDGE_DECIDE;
     let (w, p) = (wallet.to_string(), pool.to_string());
-    let (row, snap) = match snapshot_row(store, wallet, pool).await {
+    let (row, snap) = match snapshot_row(store, wallet, pool, fence).await {
         Ok(v) => v,
         Err(why) => {
             let d = HedgeDecision::without_snapshot(&w, &p, knobs, &why);
@@ -847,10 +875,11 @@ pub(crate) async fn lp_decide_obs(
     knobs: &LpKnobs,
     commit: bool,
     now_ms: i64,
+    fence: Option<u64>,
 ) -> (Observation, Option<String>) {
     let tool = names::LP_DECIDE;
     let (w, p) = (wallet.to_string(), pool.to_string());
-    let (row, snap) = match snapshot_row(store, wallet, pool).await {
+    let (row, snap) = match snapshot_row(store, wallet, pool, fence).await {
         Ok(v) => v,
         Err(why) => {
             let d = LpDecision::without_snapshot(&w, &p, knobs, &why);
@@ -901,6 +930,7 @@ impl Tool for HedgeDecideTool {
         };
         let now = now_ms();
         let store = self.shared.store.as_deref();
+        let fence = self.shared.fence(&a.wallet).await;
         let (obs, note) = hedge_decide_obs_in_cycle(
             store,
             &a.wallet,
@@ -909,6 +939,7 @@ impl Tool for HedgeDecideTool {
             lp_knobs.as_ref(),
             a.commit,
             now,
+            fence,
         )
         .await;
         Ok(decided(obs, note, now))
@@ -933,7 +964,9 @@ impl Tool for LpDecideTool {
         let knobs = LpKnobs::parse(&a.knobs).map_err(|e| anyhow!("{tool}: {e}"))?;
         let now = now_ms();
         let store = self.shared.store.as_deref();
-        let (obs, note) = lp_decide_obs(store, &a.wallet, &a.pool, &knobs, a.commit, now).await;
+        let fence = self.shared.fence(&a.wallet).await;
+        let (obs, note) =
+            lp_decide_obs(store, &a.wallet, &a.pool, &knobs, a.commit, now, fence).await;
         Ok(decided(obs, note, now))
     }
 }
@@ -1473,7 +1506,8 @@ mod tests {
             "{:?}",
             d.action
         );
-        let (d, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now + 2_000).await;
+        let (d, note) =
+            lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now + 2_000, None).await;
         let d: LpDecision = d.typed().unwrap();
         assert!(
             matches!(&d.verdict, LpVerdict::Blocked { reason } if reason.contains("caller-chosen")),
@@ -1521,7 +1555,7 @@ mod tests {
         assert!(s.hedge.applicable);
         assert_line1(&o, &[OWNER, POOL]);
         let (w, p) = (k(OWNER), k(POOL));
-        let (d, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), false, now).await;
+        let (d, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), false, now, None).await;
         let d: LpDecision = d.typed().unwrap();
         assert!(
             matches!(d.verdict, LpVerdict::Paused { .. }),
@@ -1580,7 +1614,7 @@ mod tests {
         );
         assert_eq!(note, None, "nothing to commit");
         assert!(store.get(&state_key(&w, &p)).await.unwrap().is_none());
-        let (o, _) = lp_decide_obs(None, &w, &p, &lp_knobs(), true, 1).await;
+        let (o, _) = lp_decide_obs(None, &w, &p, &lp_knobs(), true, 1, None).await;
         let d: LpDecision = o.typed().unwrap();
         assert!(
             matches!(&d.verdict, LpVerdict::Blocked { reason } if reason.contains("observation store unavailable")),
@@ -1601,7 +1635,8 @@ mod tests {
         let (knobs, lpk) = (hedge_knobs(), lp_knobs());
         let at = now + 2_000;
         let (o, _) =
-            hedge_decide_obs_in_cycle(Some(&store), &w, &p, &knobs, Some(&lpk), false, at).await;
+            hedge_decide_obs_in_cycle(Some(&store), &w, &p, &knobs, Some(&lpk), false, at, None)
+                .await;
         let d: HedgeDecision = o.typed().unwrap();
         let row = store.get(&snapshot_key(&w, &p)).await.unwrap().unwrap();
         let samples = price_samples(Some(&store), &snap).await;
@@ -1694,6 +1729,71 @@ mod tests {
         assert_eq!(d.action.guard(), Some(Guard::StaleInput), "{:?}", d.action);
     }
 
+    /// Review M1: a snapshot row read before the wallet's last landed write
+    /// (write fence) is stale for both decide tools.
+    #[tokio::test]
+    async fn a_snapshot_before_the_write_fence_is_stale() {
+        let store = MemStore::default();
+        let now = dlmm_now_ms();
+        seeded(&store, now).await;
+        let (w, p) = (k(BOT_WALLET), k(POOL));
+        let slot = store
+            .get(&snapshot_key(&w, &p))
+            .await
+            .unwrap()
+            .unwrap()
+            .slot
+            .unwrap();
+        let hedge = |fence| {
+            let store = &store;
+            async move {
+                let (o, _) = hedge_decide_obs_in_cycle(
+                    Some(store),
+                    &w,
+                    &p,
+                    &hedge_knobs(),
+                    None,
+                    false,
+                    now,
+                    fence,
+                )
+                .await;
+                o.typed::<HedgeDecision>().unwrap()
+            }
+        };
+        let at = hedge(Some(slot)).await;
+        assert_ne!(
+            at.action.guard(),
+            Some(Guard::StaleInput),
+            "{:?}",
+            at.action
+        );
+        let after = hedge(Some(slot + 1)).await;
+        assert_eq!(
+            after.action.guard(),
+            Some(Guard::StaleInput),
+            "{:?}",
+            after.action
+        );
+        assert!(format!("{:?}", after.action).contains("predates the wallet's last write"));
+        let (o, _) = lp_decide_obs(
+            Some(&store),
+            &w,
+            &p,
+            &lp_knobs(),
+            false,
+            now,
+            Some(slot + 1),
+        )
+        .await;
+        let d: LpDecision = o.typed().unwrap();
+        assert!(
+            format!("{:?}", d.verdict).contains("predates the wallet's last write"),
+            "{:?}",
+            d.verdict
+        );
+    }
+
     #[tokio::test]
     async fn an_unreadable_state_row_is_never_overwritten() {
         let store = MemStore::default();
@@ -1718,7 +1818,7 @@ mod tests {
         assert_eq!(d.action.guard(), Some(Guard::InvalidRead), "{:?}", d.action);
         assert_eq!(d.trace.invalid_fields, vec!["lp_state".to_string()]);
         assert!(d.snapshot.is_some() && d.view.is_none());
-        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now, None).await;
         assert!(note.unwrap().starts_with("lp_state NOT committed"));
         let d: LpDecision = o.typed().unwrap();
         assert_eq!(
@@ -1784,7 +1884,7 @@ mod tests {
         };
         let v1 = *observed_at_ms;
         // ... writer B commits in between (same ms: the version still moves).
-        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now).await;
+        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &lp_knobs(), true, now, None).await;
         assert_eq!(o.features["commit"], json!("committed"));
         let b = store.get(&state_key(&w, &p)).await.unwrap().unwrap();
         assert!(b.observed_at_ms > v1);
@@ -1853,7 +1953,7 @@ mod tests {
 
         let mut knobs = lp_knobs();
         knobs.trend_confirm_ms = 0;
-        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &knobs, false, now).await;
+        let (o, _) = lp_decide_obs(Some(&store), &w, &p, &knobs, false, now, None).await;
         let d: LpDecision = o.typed().unwrap();
         assert!(d.storm.active, "{:?}", d.storm);
         assert!(d.storm.move_5m_pct.unwrap() > 5.0);
@@ -1864,7 +1964,7 @@ mod tests {
         );
         // Storm off → the imbalanced fixture position recenters.
         knobs.storm_pct_5m = 0.0;
-        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &knobs, true, now).await;
+        let (o, note) = lp_decide_obs(Some(&store), &w, &p, &knobs, true, now, None).await;
         let d: LpDecision = o.typed().unwrap();
         assert_eq!(d.verdict.name(), "recenter", "{:?}", d.verdict);
         assert!(note.unwrap().starts_with("lp_state committed"));
