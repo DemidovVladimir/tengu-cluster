@@ -9,8 +9,6 @@
 //! (`jupiterPerps.ts:185-202`). An absent `referral` is the program id.
 //! Checked against `tests/fixtures/solana/tx/golden.json`.
 
-use sha2::{Digest, Sha256};
-
 use crate::domain::solana::{ata, find_program_address, ids, Pubkey};
 use crate::domain::solana_tx::{AccountMeta, Instruction};
 
@@ -177,7 +175,9 @@ pub fn decrease_market_request(
 }
 
 /// Anchor instruction discriminator `sha256("global:<name>")[..8]`.
+#[cfg(test)]
 pub fn anchor_discriminator(name: &str) -> [u8; 8] {
+    use sha2::{Digest, Sha256};
     let h = Sha256::digest(format!("global:{name}").as_bytes());
     h[..8].try_into().expect("8 bytes")
 }

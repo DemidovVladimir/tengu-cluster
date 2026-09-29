@@ -6,7 +6,30 @@
 
 ---
 
-## TL;DR — current state (2026-09-24): typed observations + Solana LP read tools
+## TL;DR — current state (2026-09-29): Solana write tools (phase 6b)
+
+Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-2026-09-24.md` § Write tools**. Plan: `/Users/vladimirdemidov/.claude/plans/enchanted-waddling-reef.md` (reviewed: 5 high findings folded in).
+
+| Area | Change |
+|---|---|
+| Tools | 5 opt-in rows (`tools/solana/write_{tokens,swap,dlmm,perps}.rs`): `solana_close_token_accounts`, `jupiter_swap` (Ultra), `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order`; `mode` = simulate (default, keyless) \| send; result `write/1` (`domain/solana_write.rs`) |
+| Wire format | `domain/solana_tx.rs` (legacy compile + serialize, legacy / v0 parse, System / SPL / ATA / ComputeBudget ix), `domain/lp/{dlmm_ix,perps_ix}.rs` — byte-for-byte goldens from the bot's own libraries (`scripts/golden/write_ixs.cjs` → `tests/fixtures/solana/tx/golden.json`) |
+| Signer | `ports/solana_signer.rs`; `outbound/solana/signer.rs` = `ed25519-dalek` over `[solana] signer_key_file` (0600, no-echo errors). Send only with the tool scope's `wallets = ["<pubkey>"]` on one non-routable agent |
+| Signing sandbox | `config/solana.rs`: no `claude_code`, no `[[mcp_servers]]`, no scope with `shell_bins` (runtime: permissive fallback runs no shell — `AgentConfig::no_shell_fallback`), key outside every fs root; grant rules; read_only write actions must simulate |
+| Send pipeline | `outbound/solana/send.rs` + `writes_store.rs` (`<TENGU_HOME>/state/solana-writes.db`): lease per wallet, pending record before submit (resolved first next time), one-attempt `sendTransaction` (JSON-RPC error = not sent), confirm / expire by `lastValidBlockHeight`, write fence; `Submitter` seam (RPC or Ultra `/execute`) |
+| State | fence pins `lp_snapshot` and makes older snapshots `stale_input` in the decide tools; `merge_lp_state` (CAS × 3): close ⇒ `reentry`, perps ⇒ `last_hedge_action` (request-aware cooldown); open keeper requests keep wSOL open / refuse SOL-leg orders |
+| Verified live (keyless) | mainnet simulations: Ultra 0.01 SOL→USDC (48 640 CU), DLMM open 20 bins (163 105 CU), DLMM close of a real 46-bin position (356 418 CU), perps short increase (98 233 CU) — `cargo test --bin tengu -- --ignored live_` |
+| lping | new `[agents.lp_executor]` (no `description`) runs both loops; write tools simulate-only (no signer, no grant); `lp_watch.open_position` uses the real schema, `mode = "simulate"`; `http_request` `env_reads` tightened to `SOLANA_RPC_URL`; "Signing" how-to at the end of the config |
+
+| Open | Detail |
+|---|---|
+| First live send | not done: needs a DEDICATED wallet (never the bot's `F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S` — the lease cannot see the TS bot) + the operator's go; order: close token accounts → ~$1 swap → tiny DLMM open + close → minimum perps order |
+| Human approval | `TelegramConfig.tool_approvals` / `approve_only` are parsed but never read — no approval gate exists |
+| Token-2022 pools | refused by the DLMM write tools (transfer-hook slices not built) |
+| Privy signer | second `SolanaSigner` impl possible later |
+| Loop write actions | `hedge_watch` has no write actions yet; `lp_watch.open_position` stays `dry_run` + `mode = "simulate"` |
+
+## Previous TL;DR (2026-09-24): typed observations + Solana LP read tools
 
 Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observations-2026-09-24.md`**. Loop doc: `docs/decision-loop-plan-2026-09-24.md`; sandbox: `docs/lping-2026-09-24.md`.
 
@@ -24,7 +47,7 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 | Open | Detail |
 |---|---|
 | Phase 5 — push feed | Yellowstone gRPC → `acct/1:<pubkey>` rows (slot-monotonic put) + heartbeat row `stream/1:<name>` so unchanged accounts count as fresh; subscription set = union of `lp_snapshot` `data.watch`; trigger via `DecisionLoop::handle_event`; `egress::grpc_channel` |
-| Phase 6b — writes | `dlmm_open/close_position`, `dlmm_claim_fees`, `jup_perps_order`, `jupiter_swap`, `solana_close_token_accounts`: `WriteResult<D>`, wallet `LeaseStore` (signature in the typed-observations doc; no code yet), `mode` default `simulate`, re-run the pure gate before send, `SolanaSigner` port. Keeper cooldown becomes request-aware (`PositionRequest.executed` + JLP `maxRequestExecutionSec`, 45 s live) instead of the blind 600 s `cooldown_ms` |
+| ~~Phase 6b — writes~~ | LANDED 2026-09-29 — see the TL;DR above |
 | Pyth 401 | Hermes (and the benchmarks mirror) answer 401 → Pyth only with `pyth_feed_id` (`auth_required` error, Partial row); default oracle is Jupiter-only (`degraded = true` unless a pool cross-check is given) |
 | ATA-only balances | `solana_wallet.balances` and `lp_snapshot.wallet_balances` count the mint's ATA only; tokens in other accounts appear only in `token_accounts` rows |
 | Extended positions | > 70 bins decode fully (SDK-verified on a 164-bin position) but raise `ExtendedPosition`; a missing bin array ⇒ `complete = false` (amounts are a floor, row Partial); farming rewards + Token-2022 transfer fees not modelled; new ranges capped at 70 bins |

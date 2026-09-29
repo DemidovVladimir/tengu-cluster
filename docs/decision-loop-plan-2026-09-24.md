@@ -12,9 +12,9 @@ Jev-driven control loop for `sandboxes/lping`. Context + probes: `docs/lping-202
 | 4 Helius trigger | ✅ `auth_header_env` + endpoint `loop` | live listener: wrong header → 401; Helius-shaped POST → 202 → loop → escalated at 0.79 → planner turn started |
 | 5 gRPC feed | ⏳ | — (seam ready: a stream writes `acct/1:<pubkey>` rows) |
 | 6a Typed read tools + observation cache | ✅ | 10 Solana tools, `world` / `requires` / `FromObservation`, `obs` meta in history; `lp_watch` + `hedge_watch` use them (`sandboxes/lping`) |
-| 6b Write tools + signing | ⏳ | `open_position` names `dlmm_open_position` (allowed only while `dry_run`) |
+| 6b Write tools + signing | ✅ built, send not exercised live | 5 write tools, simulate by default (`docs/typed-observations-2026-09-24.md` § Write tools); live keyless mainnet simulations of swap / open / close / perps order; `lp_watch.open_position` uses the real schema (`mode = "simulate"`); loops run as `lp_executor` (no `description`) |
 
-Deviations from the sketch below: history is in-process (not `shared_cache`); a dry-run loop may name write tools not built yet; `tengu decide` never escalates (no orchestrator) — the webhook listener does.
+Deviations from the sketch below: history is in-process (not `shared_cache`); a dry-run loop may name write tools not built yet; `tengu decide` never escalates (no orchestrator) — the webhook listener does. 6b: signer = local key file (user decision 2026-09-29); no Telegram approval gate (`TelegramConfig.tool_approvals` is not wired) — the gates are the per-agent wallet grant, `mode` default simulate and the loop's `dry_run`; no devnet run — verified by keyless mainnet simulation instead; `dlmm_claim_fees` dropped (close claims).
 
 ### Jev as an architect's hands — `sandboxes/jev-exec` (2026-09-29, experiment)
 
@@ -96,7 +96,7 @@ caps  = { size_sol = 2.0 }
 | 4 | Push triggers | webhook `auth_header_env` mode (Helius); endpoint `loop = "<name>"` feeds the loop instead of the planner | signed + header-auth tests |
 | 5 | gRPC feed | Yellowstone client behind `solana_stream` feature (tonic); `egress` gains `grpc_channel` (open network only at first) | subscribe to Meteora DLMM program, events → loop |
 | 6a | Typed read tools ✅ | observation envelope + cache (`domain/observation.rs`, `ports/observation.rs`, `outbound/observations.rs`, `application/observe.rs`), `world.rs`, `tools/solana/*`, `domain/lp/*` | `tengu decide --sandbox lping --loop lp_watch` twice < 60 s → second read `obs.source = cache` |
-| 6b | Write tools + signing | `dlmm_open/close_position`, `jup_perps_order`, `jupiter_swap`; `SolanaSigner` port (none exists — crypto tools are EVM-only); `WriteResult`, wallet lease, simulate by default; Telegram approval on sign | devnet first; `dry_run = false` only after |
+| 6b ✅ | Write tools + signing | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open/close_position`, `jup_perps_order`; `SolanaSigner` port (local key file); `WriteResult`, wallet lease + pending record + write fence, simulate by default | goldens + fake cluster + live keyless simulations; first `send` on a dedicated wallet only with the operator's go |
 
 Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 
@@ -111,7 +111,7 @@ Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 
 ## Docs to update when landing
 
-Done for phases 1–4 and 6a. Phase 5: `docs/egress-2026-09-16.md` (`grpc_channel`), `docs/typed-observations-2026-09-24.md` (stream rows). Phase 6b: `docs/tools.md`, `docs/typed-observations-2026-09-24.md`, `CLAUDE.md` + `AGENTS.md`.
+Done for phases 1–4, 6a and 6b. Phase 5: `docs/egress-2026-09-16.md` (`grpc_channel`), `docs/typed-observations-2026-09-24.md` (stream rows).
 
 ## Open questions
 
@@ -119,4 +119,4 @@ Done for phases 1–4 and 6a. Phase 5: `docs/egress-2026-09-16.md` (`grpc_channe
 |---|---|---|
 | 1 | v1 trigger: polling tick or Helius webhook? | polling (no provider needed) |
 | 2 | Jev as a chat `Engine` instead (tool `enum` params → slots)? | no — separate port; chat history ≠ normalised state |
-| 3 | Signing: Privy Solana wallets or local keypair? | decide in phase 6b (`SolanaSigner` port, both impls possible) |
+| 3 | ~~Signing: Privy Solana wallets or local keypair?~~ | decided 2026-09-29: local key file (`[solana] signer_key_file`); Privy can be a second `SolanaSigner` impl later |

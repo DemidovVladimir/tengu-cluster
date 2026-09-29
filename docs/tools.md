@@ -22,7 +22,7 @@
 | `agentic_memory/` | `agentic_memory` | opt-in, feature `postgres_memory` |
 | `skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (+ implicit `compress_and_store`) | opt-in |
 | `manage_skill/` | `manage_skill` | opt-in |
-| `solana/` | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide` — typed, cached (args / keys / TTLs / hosts: `docs/typed-observations-2026-09-24.md`) | opt-in, one row per name |
+| `solana/` | reads: `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide` — typed, cached; writes: `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` — `mode = simulate` (default) \| `send` (args / keys / hosts / send rules: `docs/typed-observations-2026-09-24.md`) | opt-in, one row per name |
 
 The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. That row drives in-process registration, the MCP bridge (Claude Code subagents), and the tool list the model sees.
 
@@ -68,6 +68,7 @@ net_hosts = ["*"]
 | `workspace_tools` | Older way to switch on opt-in tools; merged with `tools`. |
 | `scopes.<tool>` | `fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`. Per-agent entry replaces `default_scopes` wholesale. |
 | Solana tools | need `fs_roots` = the workspace (observation store), `net_hosts` per tool, `env_reads = ["SOLANA_RPC_URL"]` (else the public RPC is used silently). Working example: `sandboxes/lping/config.toml` |
+| Solana write tools, `mode = "send"` | `[solana] signer_key_file` + `wallets = ["<full pubkey>"]` in that ONE agent's own scope for the tool (never `[default_scopes]`; the agent has no `description`); signing-sandbox rules in `src/config/solana.rs`. Without both they only simulate |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
 
 ## MCP servers

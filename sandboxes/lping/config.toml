@@ -9,7 +9,13 @@
 #                      jup_perps, solana_wallet, solana_tx, lp_snapshot,
 #                      hedge_decide, lp_decide (typed, cached observations)  (done)
 #   3. data feed     — Yellowstone gRPC stream → acct/1 rows                  (phase 5)
-#   4. write tools   — dlmm_open_position & co, simulate by default           (phase 6)
+#   4. write tools   — solana_close_token_accounts, jupiter_swap,
+#                      dlmm_open_position, dlmm_close_position,
+#                      jup_perps_order; simulate by default                   (done, 6b)
+#
+# Signing is OFF here: no [solana] signer_key_file and no wallet grant, so
+# every write tool only simulates (keyless). To let `lp_executor` send, see
+# "Signing" at the bottom of this file.
 
 runtime_profile = "auto"
 
@@ -54,7 +60,7 @@ goal_template = "A Solana on-chain event arrived. Summarise what happened (pool,
 # it, add that URL's host to their net_hosts too.
 [default_scopes.http_request]
 net_hosts = ["*"]
-env_reads = ["*"]       # tighten to e.g. ["HELIUS_API_KEY"] once the feed is wired
+env_reads = ["SOLANA_RPC_URL"]   # explicit: "*" would expand any $SECRET into a URL (review H1)
 fs_roots = ["~/lping-workspace"]
 
 # Jupiter lite price v3; Hermes only with `pyth_feed_id` (401 today); the RPC
@@ -107,6 +113,35 @@ fs_roots = ["~/lping-workspace"]
 [default_scopes.lp_decide]
 fs_roots = ["~/lping-workspace"]
 
+# Write tools (phase 6b): simulate-only here — a signing grant (`wallets`)
+# is never allowed in [default_scopes]; it goes on one agent's own scope.
+# Reads are live (RPC); jupiter_swap / dlmm_open_position / jup_perps_order
+# also read the Jupiter price (and jupiter_swap calls Jupiter Ultra).
+[default_scopes.solana_close_token_accounts]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.jupiter_swap]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.dlmm_open_position]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.dlmm_close_position]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
+[default_scopes.jup_perps_order]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+fs_roots = ["~/lping-workspace"]
+
 [orchestrator]
 agent = "lping"
 engine = "rag"
@@ -125,10 +160,12 @@ tools = ["http_request", "read_file", "list_directory"]
 
 [agents.lping.identity]
 name = "LPing"
-instructions = """You coordinate crypto research and (later) Solana liquidity
-provisioning. Delegate research to the `crypto_researcher` agent. Never sign or
-send transactions — no signing tools are wired in this sandbox yet. Always show
-token mints, pool addresses and tx signatures in full, never shortened."""
+instructions = """You coordinate crypto research and Solana liquidity
+provisioning. Delegate research and write-tool simulations to the
+`crypto_researcher` agent. Never ask for mode = "send": only the
+decision loops' `lp_executor` agent may sign, and only once the operator has
+granted it a wallet. Always show token mints, pool addresses and tx
+signatures in full, never shortened."""
 
 # Routable subagent (has a `description`) — runs as `tengu run-agent`, and is
 # the tool / scope / workspace owner of both decision loops below. The ten
@@ -142,15 +179,20 @@ tools = [
     "http_request", "read_file", "list_directory",
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
     "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    # write tools: simulate only (no wallet grant on this routable agent)
+    "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
+    "dlmm_close_position", "jup_perps_order",
 ]
 description = """
 Researches crypto assets and Solana DeFi: token prices, market caps, volume, \
 DEX pools (Meteora DLMM/DAMM, Raydium CLMM/CPMM), pool TVL, fees and APR, \
 on-chain account data, a wallet's Meteora DLMM positions and Jupiter perps \
-hedge, and read-only hedge / LP decisions. \
+hedge, read-only hedge / LP decisions, and keyless SIMULATIONS of LP / swap / \
+perps transactions (what an open, close, swap or hedge order would do and cost). \
 Best for: "what's the best SOL/USDC pool", "compare Meteora vs Raydium fees", \
-"research this token mint", "is the operator wallet delta-neutral". NOT for: \
-signing, sending transactions, or opening/closing LP positions (not wired yet).
+"research this token mint", "is the operator wallet delta-neutral", "simulate \
+opening 1 SOL in this pool". NOT for: signing or sending transactions (this \
+agent can only simulate).
 """
 example_queries = [
     "what is the SOL price and 24h volume?",
@@ -158,6 +200,7 @@ example_queries = [
     "research this token mint and its top liquidity pools",
     "compare DLMM bin step options for a volatile pair",
     "snapshot the operator wallet's SOL/USDC LP and hedge",
+    "simulate a 0.5 SOL spot position in the best SOL/USDC pool",
 ]
 
 [agents.crypto_researcher.identity]
@@ -166,7 +209,10 @@ instructions = """You research crypto markets and Solana DeFi. Prefer the typed
 Solana tools (sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps,
 solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide) — they are
 cached and never report a failed read as 0. Call lp_snapshot before
-hedge_decide / lp_decide; leave `commit` false unless asked. Fall back to
+hedge_decide / lp_decide; leave `commit` false unless asked. Write tools
+(solana_close_token_accounts, jupiter_swap, dlmm_open_position,
+dlmm_close_position, jup_perps_order) only simulate here: never pass
+mode = "send"; report their checks, compute units and program logs. Fall back to
 http_request for other primary sources: Solana JSON-RPC (RPC URL from
 $SOLANA_RPC_URL when set, else https://api.mainnet-beta.solana.com), DEX APIs
 (Meteora, Raydium), DexScreener, CoinGecko. Cite the endpoint for every number.
@@ -177,6 +223,21 @@ research/."""
 max_tool_rounds = 40
 step_timeout_secs = 600
 max_tool_result_chars = 50_000
+
+# Decision-loop executor: NOT routable (no `description`) — the planner can
+# never send chat or webhook content to it. Owns every tool the loops run.
+# Signing needs a per-agent wallet grant + [solana] signer_key_file (see
+# "Signing" at the end); without them its write tools only simulate.
+[agents.lp_executor]
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "~/lping-workspace"
+tools = [
+    "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
+    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
+    "dlmm_close_position", "jup_perps_order",
+]
 
 # --- Decision loops (Jev picks, tools execute) --------------------------------
 # Design: docs/decision-loop-plan-2026-09-24.md. Test one event:
@@ -190,7 +251,7 @@ Every event, in this order: refresh_price, then fetch_pools (both are cached \
 reads, cheap to repeat), then open_position in the pool with the best 24h \
 fee/TVL among pools with TVL above $100k (dry run: it is only logged), then \
 hold. No position is open yet."""
-agent = "crypto_researcher"          # tools + scopes + workspace
+agent = "lp_executor"                # tools + scopes + workspace
 dry_run = true                       # open_position is logged, never run
 act_at = 0.8
 history = 8
@@ -219,11 +280,27 @@ reduce = { pools = "/data/pools/*/{address,name,tvl_usd,fee_tvl_24h_pct,bin_step
 
 [decision_loops.lp_watch.actions.open_position]
 description = "Open a DLMM LP position in one of the fetched pools"
-tool = "dlmm_open_position"          # phase 6 — not built; dry_run only
+tool = "dlmm_open_position"          # dry_run: logged only; mode stays "simulate" even with dry_run = false
 requires = { price = 30 }            # offered only while the SOL price is ≤ 30 s old
-args = { pool = "{pool}", size_sol = "{size_sol}" }   # the dry-run log records the full pool address
 slots ={ pool = { from = "fetch_pools", items = "/pools/*", value = "address", top = 5 }, size_sol = [0.5, 1, 2, 3] }
 caps = { size_sol = 2.0 }
+
+# Knobs = the bot's production entry values (delta_neutral_bot): 28 bins
+# (AUTO_TUNE_BIN_COUNT, BACKLOG.md:826), spot (METEORA_STRATEGY_TYPE
+# default), active-bin slippage 1 (SLIPPAGE_BPS 0.005 read as % by SDK
+# 1.9.7), wallet reserve 0.2 (MINIMUM_WALLET_BALANCE_SOL).
+[decision_loops.lp_watch.actions.open_position.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"   # simulate-only here (the TS bot trades it)
+pool = "{pool}"
+amount_x = "{size_sol}"
+amount_y = 0
+bin_count = 28
+strategy = "spot"
+max_active_bin_slippage = 1
+min_wallet_sol = 0.2
+max_new_bin_arrays = 1
+max_divergence_bps = 50
+mode = "simulate"
 
 # --- hedge_watch: the operator wallet's LP + Jupiter perps hedge (read-only) ---
 # Wallet F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S (operator; read-only use),
@@ -239,7 +316,7 @@ hedge under watch. Every event runs exactly this sequence: 1) snapshot — \
 always first, even when world.snap is fresh (it is then served from the \
 cache), 2) decide_hedge, 3) decide_lp, 4) hold. Read-only: the decisions are \
 logged, nothing is ever signed or sent."""
-agent = "crypto_researcher"
+agent = "lp_executor"
 dry_run = true
 act_at = 0.8
 history = 8
@@ -323,3 +400,22 @@ max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE
 max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
 min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2
 rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
+
+# --- Signing (off) -------------------------------------------------------------
+# To let the loops SEND (docs/typed-observations-2026-09-24.md § Write tools):
+#  1. a DEDICATED wallet — never the TS bot's F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S
+#     (the per-wallet lease cannot see the bot's sends);
+#  2. its key file outside ~/lping-workspace, chmod 600, and
+#       [solana]
+#       signer_key_file = "~/.tengu/keys/lping-signer.json"
+#  3. a grant on lp_executor per write tool — the whole scope, since a
+#     per-agent scope replaces the default one:
+#       [agents.lp_executor.scopes.dlmm_open_position]
+#       net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+#       env_reads = ["SOLANA_RPC_URL"]
+#       fs_roots = ["~/lping-workspace"]
+#       wallets = ["<the dedicated wallet, full address>"]
+#  4. the loop action's args: wallet = that address, mode = "send"; the loop
+#     dry_run = false.
+# Config load then refuses claude_code agents, [[mcp_servers]], shell scopes
+# and a key inside any fs root (src/config/solana.rs).
