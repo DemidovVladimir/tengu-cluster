@@ -4,6 +4,7 @@
 
 pub(crate) mod decision;
 pub(crate) mod lp;
+pub(crate) mod market;
 pub(crate) mod memory;
 pub(crate) mod message;
 pub(crate) mod metrics;

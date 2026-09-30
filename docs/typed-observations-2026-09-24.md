@@ -104,6 +104,27 @@ Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `o
 
 Verified: goldens vs web3.js / spl-token / Meteora SDK 1.9.7 / anchor 0.29 (`tests/fixtures/solana/tx/golden.json`; generator not kept — Rust-only repo); fake-cluster pipeline tests; live keyless mainnet simulations (`cargo test --bin tengu -- --ignored live_`): Ultra swap, DLMM open, DLMM close of a real 46-bin position, perps short increase. No live `send` yet.
 
+## Market rows (xmarket, `domain/market.rs`, 2026-09-30)
+
+Instrument id = `<venue>:<native id verbatim>` (`docs/xmarket-tracker-2026-09-29.md` conventions 1–2): venues `hyperliquid`, `robinhood`, `binance-spot`, `binance-usdm`, `bybit-spot`, `bybit-linear`, `okx-spot`, `okx-swap`, `coinbase`, `coinbase-intx`, `ref:<MIC>`. Never shortened: `hyperliquid:xyz:TSLA`, `hyperliquid:@151`, `robinhood:0x322F0929c4625eD5bAd873c95208D54E1c003b2d`, `ref:XNAS:TSLA` (`InstrumentId` rejects unknown venues).
+
+| Key | Row | Status |
+|---|---|---|
+| `mkt_instrument/1:<id>` | `kind` perp \| spot \| outcome · `listing` listed \| delisted \| not_found · `dex`, `asset_id`, `category` (stocks · etf · indices · commodities · fx · rates · preipo · crypto; HL `stock` / `FX` folded, unknown ⇒ none) · `quote_ccy` USDC \| USDT \| USDH \| USDE \| USD · `sz_decimals`, `max_leverage`, `margin_mode` normal \| no_cross \| strict_isolated, `only_isolated`, `oi_cap_usd`, `at_oi_cap`, `deployer_fee_scale`, `growth_mode` · `underlying {listing, ticker, ratio (decimal string), fx_converted}` | not_found ⇒ absent · a failed source (`errors`, field left unknown) ⇒ partial |
+| `mkt_ctx/1:<id>` | `Field<f64>` mark, oracle, index, mid, bid, ask, last, impact_bid / impact_ask, prev_day, premium, funding_1h (per hour), oi_base, vol_24h_usd · funding_interval_h, next_funding_ms · instrument facts copied from `mkt_instrument/1` · `no_book` | delisted / not_found (HL `200 null`) ⇒ absent · no price and a failed read ⇒ error · a failed field or `no_book` (HL null premium / midPx / impactPxs) ⇒ partial |
+
+| `mkt_ctx/1` feature (31 keys) | Rule — an input missing ⇒ key omitted, never 0 |
+|---|---|
+| `mark` … `last`, `impact_bid` / `impact_ask`, `funding_1h`, `oi_base`, `vol_24h_usd` | field values |
+| `basis_bps` | (mark − ref) / ref · 1e4, ref = oracle, else index |
+| `spread_bps` / `impact_spread_bps` | (ask − bid) / mid · 1e4 |
+| `premium_bps` · `funding_apr_pct` · `next_funding_s` | premium · 1e4 · funding_1h · 8760 · 100 · next_funding_ms − as_of_ms |
+| `oi_usd` · `oi_cap_used_pct` · `change_24h_pct` | oi_base · mark · oi_usd / oi_cap_usd · 100 · (mark / prev_day − 1) · 100 |
+| `oracle_eq_mark` | mark = oracle (HL: no book, off-hours, delisted) |
+| `max_leverage`, `only_isolated`, `delisted`, `session`, `category`, `growth_mode`, `taker_fee_bps`, `at_oi_cap` | instrument / calendar facts |
+
+Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_dex_quote/1:<id>` follow the same id rule.
+
 ## Review fixes (2026-09-25)
 
 | Rule | Behaviour |
