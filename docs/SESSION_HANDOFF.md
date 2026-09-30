@@ -6,6 +6,20 @@
 
 ---
 
+## Next session (set 2026-09-30): build xmarket — start with the build plan
+
+| Read | Why |
+|---|---|
+| `docs/xmarket-build-plan-2026-09-30.md` | **First.** The operator's mandate (build the full PRD scope; every tool works 100 % under `openrouter`, `local` and `claude_code`; a separate `xmarket-weekend` sandbox; validate and fix until it runs smoothly), "Before the first item", waves W1–W9 with gates (W1 = E0 engine parity + the weekend-run slice, deadline **Fri 2026-10-02 18:00 ET**), the engine validation matrix, operator inputs, and the kickoff prompt to paste |
+| `docs/xmarket-tracker-2026-09-29.md` **§ 0 Start here** | Rules for every task (R1–R13), definition of done; § 1 milestones (E0 first); § 5 backlog (185 items) |
+| `docs/xmarket-prd-2026-09-29.md` (addendum at the top) | Operator decisions: build everything, engine parity for every tool, paper first, $100 budget + `[risk]` caps, 24/7 `tengu run` on the operator's VPS, network `open` (switchable), no legal gates |
+| `docs/xmarket-feasibility-2026-09-30.md` | Evidence, attached as a warning: verdict re-scope (cross-venue convergence fails after costs); the operator kept the full plan. Holdout: weekend fade passes on 53 new names, post-earnings rule not confirmed. Weekend order books are being recorded Fri 2026-10-02 → Mon 10-05 in `~/.tengu/state/xmarket/research/weekend-2026-10-02/` (throwaway sampler, pid in `sampler.pid`) — analyse them on Monday |
+| `docs/xmarket-gaps-2026-09-29.md` | Per-item detail — read the entry before starting an item |
+
+The xmarket section further down (2026-09-29 / 2026-09-30 rows) lists what is decided and what the operator still has to provide.
+
+---
+
 ## TL;DR — current state (2026-09-29): Solana write tools (phase 6b)
 
 Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-2026-09-24.md` § Write tools**. Plan: `/Users/vladimirdemidov/.claude/plans/enchanted-waddling-reef.md` (reviewed: 5 high findings folded in).
@@ -72,6 +86,22 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 | Plugin MCP leak | `claude -p` also loads the user's global Claude Code plugin MCP servers into every `claude_code` agent (outside tengu scopes/egress). Candidate fix: `--strict-mcp-config` in `engines/claude_code.rs` |
 | Hand-off paths | `--sandbox` is cwd-relative and `TENGU_CONFIG` is not forwarded to the bridge → jev-exec hardcodes `~/development/tengu-cluster`. A `decide` tool or `--sandbox` resolution from `$TENGU_HOME` would remove it |
 | Jev args | slots are enumerated only; a `FromEvent` slot source would let the architect pass values |
+
+### 2026-09-29 — `xmarket` PRD + gap tracker (planning only, no code)
+
+| Doc | What |
+|---|---|
+| `docs/xmarket-prd-2026-09-29.md` | Operator PRD, verbatim: event-driven cross-market trading intelligence (news / X / EDGAR + Hyperliquid HIP-3 + Robinhood Chain → Jev → risk gate → paper) |
+| `docs/xmarket-tracker-2026-09-29.md` | The backlog: 179 items in M0–M8 + M3b (live pilot), 20 conventions, accounts + operator setup, decisions, risks, verified facts |
+| `docs/xmarket-gaps-2026-09-29.md` | Per-item research notes (files, API shapes, no-Rust options, evidence) — look up by id |
+
+| Open | Detail |
+|---|---|
+| M0 not started | thin paper slice running 24/7 on the operator's Hetzner / Hostinger VPS (Docker): bridge parity first, then `tengu run` + HL reads + EDGAR 8-K → one Jev loop → risk gate ($100 budget) → paper fill → exit rules → audit (40 items); M3 is a go / no-go edge check; M3b = live pilot on a $100 Hyperliquid sub-account after an M3 go |
+| Operator decisions (2026-09-30) | Operator in Kazakhstan, no legal or regulatory gate in the plan (venue choice is the operator's; only effect: Kazakh connections cannot reach Coinbase, OKX, … → deploy outside); `network = "open"`, switchable later (convention 17); one OpenRouter key for Jev + LLM at $40 / day. `SEC_USER_AGENT` set in `.env` and verified 2026-09-30. Budget $100, paper first then real (M3b), server = operator's Hetzner or Hostinger VPS. Pending operator action: create the xmarket OpenRouter key; pick the server + SSH alias (tracker § 6, operator setup) |
+| Doc contradiction | OpenRouter over Tor: `docs/egress-2026-09-16.md` says reachable, `docs/lping-2026-09-24.md` says blocked — `hl-tor-probe` (M1) settles it |
+| Claude Code rule (2026-09-30) | Every tool must work under `engine = "claude_code"`, no exceptions — CLAUDE.md / AGENTS.md step 4 + gotcha, `docs/tools.md` step 5, tracker convention 20. The bridge is not at parity today (default config + `main` agent, empty `SecretRegistry`, `no_shell = false`, no `TENGU_CONFIG` / `--strict-mcp-config`): M0 items `x-bridge-parity`, `x-claude-code-hardening`, `x-bridge-conformance-test` |
+| ~~Stale gotcha~~ fixed 2026-09-30 | CLAUDE.md / AGENTS.md said only aura runs `open`; now they list aura, lping, jev-exec, unlimited (and the planned xmarket) |
 
 ---
 

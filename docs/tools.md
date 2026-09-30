@@ -32,6 +32,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
 4. `cargo test --bin tengu catalog && cargo test --test scope_lint`.
+5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept, keep results within a local model's context window, and add its schema-lint, bridge-conformance and engine-matrix smoke cases (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`). The bridge's current parity gaps are listed in CLAUDE.md / AGENTS.md (Key gotchas).
 
 ## Add a typed (cached) tool
 

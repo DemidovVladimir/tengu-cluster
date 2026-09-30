@@ -133,6 +133,15 @@ config, channels) — it is the index into everything below.
     `application/decision_loop/`, `adapters/outbound/tools/solana/`,
     `adapters/outbound/solana/`, `domain/lp/`, `domain/solana_tx.rs`,
     `domain/solana_write.rs` or `config/solana.rs`.
+11. **`docs/xmarket-tracker-2026-09-29.md`** (+ `docs/xmarket-prd-2026-09-29.md`,
+    `docs/xmarket-gaps-2026-09-29.md`) — the `xmarket` sandbox: the operator's
+    PRD with its 2026-09-30 addendum (decisions and rules), and the backlog
+    (185 items, milestones E0, M0–M8, M3b), plus
+    `docs/xmarket-build-plan-2026-09-30.md` — how to execute it (waves, gates,
+    the weekend sandbox, a kickoff prompt). **§ 0 Start here** of the tracker
+    holds the rules for every task and the definition of done. Read BEFORE any xmarket work: `tengu run`, feeds,
+    `[risk]` / paper trading, Hyperliquid / Robinhood / news tools, or the
+    MCP-bridge parity items.
 
 ---
 
@@ -159,6 +168,7 @@ flow, audit these for staleness **before declaring done**:
 | `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
 | `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, a Solana tool's args, key, TTL, hosts or knobs, or a write tool's send rules (signer, `config/solana.rs`, lease / pending / fence). |
+| `docs/xmarket-tracker-2026-09-29.md` (+ PRD addendum) | If you worked on an xmarket item: tick it (✅ + commit), update § 0 "Where to begin" when the next step changes, and keep the conventions, decisions and PRD addendum current when a rule changes. |
 | `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
@@ -197,6 +207,7 @@ global metrics sink so the TUI sees a unified stream.
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
 3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
+4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint, bridge conformance case and live engine-matrix smoke pass (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`; until E0 lands, config-dependent tools are not at parity — see the gotcha below).
 
 No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
 
@@ -394,8 +405,11 @@ These are not preferences. They're load-bearing.
   `[egress]` proxy. Set
   `limits.context_window` — the 1_000_000 default is wrong for local models.
   Guide: `docs/engine-backends.md` § Local.
-- **`sandboxes/aura` is `network = "open"`** — Molecule / Privy / Beach block
-  Tor exits. Every other sandbox and the base config run over Tor.
+- **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
+  exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
+  `network = "open"`; the planned `xmarket` runs `open` and must stay switchable
+  to Tor (every transport through `egress.rs`). `tor-check`, `storage-test` and
+  the base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI
   has tool access via MCP at engine-construction time, so the planner-side
   tool stripping (intended for OpenRouter's per-turn `tools = []`) doesn't
@@ -466,6 +480,18 @@ These are not preferences. They're load-bearing.
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
   that say "check that tool X is in your tool list" should look for both
   forms or just attempt the call and read the error.
+- **Every tool must work under every engine — `openrouter`, `local`,
+  `claude_code` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
+  to add a new tool". The bridge
+  is not at parity yet: `build_bridge_executor`
+  (`src/adapters/inbound/mcp_bridge.rs`) builds tools from `Config::default()`
+  and the default `main` agent instead of the sandbox config, uses a fresh
+  empty `SecretRegistry` (no redaction of vault secrets) and passes
+  `no_shell = false`; `ClaudeCodeEngine` forwards neither `TENGU_CONFIG` nor
+  `--strict-mcp-config`. Fixes: milestone E0 in
+  `docs/xmarket-tracker-2026-09-29.md` — `x-bridge-parity`,
+  `x-claude-code-hardening`, `x-bridge-conformance-test`, `x-tool-schema-lint`,
+  `x-local-model-fit`, `x-engine-matrix-smoke`, `x-engine-parity-audit`.
 - **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
   (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
   via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
@@ -516,7 +542,10 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. As of 2026-05-14, the
+See `docs/SESSION_HANDOFF.md` for the running list. Next up (2026-09-30): the
+`xmarket` sandbox — start at `docs/xmarket-build-plan-2026-09-30.md` (kickoff
+prompt at its end) and `docs/xmarket-tracker-2026-09-29.md` § 0.
+As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind
 `postgres_memory`) has landed all six phases: the `agentic_memory` plugin, the
 schema, the planner/runner recall replacement, the LLM Wiki compiler
@@ -550,7 +579,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-29 (Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-30 (operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

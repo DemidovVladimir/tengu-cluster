@@ -128,13 +128,20 @@ Manual test with stdin:
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-bridge
 ```
 
+## Parity rule (operator, 2026-09-30)
+
+Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). The limitations below marked **parity gap** break that rule; they are E0 items in `docs/xmarket-tracker-2026-09-29.md`: `x-bridge-parity` (sandbox + agent config, secrets and redaction, `no_shell`, call id), `x-claude-code-hardening` (`--strict-mcp-config`; built-in tools off where money or signing is involved), `x-bridge-conformance-test` (a CI case per catalog tool).
+
 ## Known Limitations
 
 - Bridge constructs a fresh registry per invocation (no shared state with parent Tengu)
 - Memory tools (`memory_ingest`, `memory_search`, `persistent_store`) need `OPENROUTER_API_KEY` for embeddings (forwarded by the engine) and use a disk `DiskVectorStore` under `<workspace>/memory`; missing key → skipped with a warn
 - `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the engine does not put it in the MCP `env` block, so through the bridge the tool errors unless the CLI passes the variable through
-- No secret redaction in the bridge: `SanitizedToolExecutor` wraps only the TUI / Telegram executors, and the bridge's `SecretRegistry` starts empty
-- The bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) do flow through; other per-agent fields do not
+- **Parity gap** — no secret redaction in the bridge: `SanitizedToolExecutor` wraps only the TUI / Telegram executors, and the bridge's `SecretRegistry` starts empty (`x-bridge-parity`)
+- **Parity gap** — the bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`, the Solana tools) do flow through; other per-agent fields do not (`x-bridge-parity`)
+- **Parity gap** — `TENGU_CONFIG` is not forwarded, so sandbox sections beyond scopes (e.g. `[solana]`, the planned `[risk]` / `[paper]`) are invisible to bridged tools (`x-bridge-parity`)
+- **Parity gap** — the bridge always resolves scopes with `no_shell = false`: tools without a configured scope get the permissive fallback, shell included (`x-bridge-parity`)
+- The engine does not pass `--strict-mcp-config`, so the Claude CLI also loads the user's global plugin MCP servers, outside tengu scopes and egress (`x-claude-code-hardening`)
 
 ## Related
 - [[engine-backends#Claude Code]] — the engine that spawns the bridge

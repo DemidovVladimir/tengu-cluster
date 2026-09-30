@@ -70,7 +70,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 ### How it works
 1. `Engine::run()` formats the conversation into one prompt and spawns `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence [--model <bare slug>] --system-prompt <sp> --tools <profile list>` with `current_dir` = workspace
 2. `[egress]`: with `route_llm_api` (default under Tor) the child gets `HTTPS_PROXY` / `HTTP_PROXY` = HTTP CONNECT form of the proxy (`socks5h://h:p` → `http://h:p`, Arti serves CONNECT on 9050) and `NO_PROXY=localhost,127.0.0.1,::1` (`egress::claude_cli_env`)
-3. Claude CLI loads its own CLAUDE.md, MCP servers, and native tools
+3. Claude CLI loads its own CLAUDE.md, MCP servers, and native tools — today including the user's global plugin MCP servers, since `--strict-mcp-config` is not passed yet (`x-claude-code-hardening` in `docs/xmarket-tracker-2026-09-29.md`)
 4. Tengu tools (`EngineContext.bridge_tools`) are written to a temp `--mcp-config` that launches `tengu mcp-bridge` ([[mcp-bridge]]); each is allow-listed as `--allowedTools mcp__tengu-tools__<name>`
 5. Claude executes the full prompt internally (may use many tools across multiple turns)
 6. NDJSON `assistant` text → `StreamEvent::TextDelta`; `result` → `StreamEvent::Done`
@@ -110,6 +110,13 @@ The CLI runs with `--dangerously-skip-permissions`; there is no per-call permiss
 | Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy |
 
 Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, workspace containment for builtin tools (the CLI is only started with `current_dir` = workspace).
+
+### Operator rules (2026-09-30)
+
+| Rule | State |
+|---|---|
+| Every tengu tool works 100 % under all three engines — `openrouter`, `local` (in-process) and `claude_code` (through the bridge, exactly as in-process) — no exceptions | Rule in CLAUDE.md / AGENTS.md step 4; milestone E0 in `docs/xmarket-tracker-2026-09-29.md` (schema lint, bridge parity + conformance, local context fit, live engine-matrix smoke on OpenRouter, Ollama `gemma4:latest` and the Claude CLI); the bridge's parity gaps are listed in [[mcp-bridge]] § Known Limitations |
+| Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Planned (`x-claude-code-hardening`). Today a configured Solana signer refuses every `claude_code` agent at config load (`src/config/solana.rs`) |
 
 ### MCP Bridge
 
