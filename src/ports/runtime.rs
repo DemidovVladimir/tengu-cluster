@@ -1,12 +1,12 @@
 //! Runtime state port — what `tengu run` keeps in its state dir (the
-//! `[xmarket]` state dir, else `<TENGU_HOME>/state`): today the single-runner
-//! lease in `runtime.db`. Impl: `adapters::outbound::runtime_store`. Later
-//! waves add feed cursors, the ingest seen-set and timers (tracker
-//! convention 3).
+//! `[xmarket]` state dir, else `<TENGU_HOME>/state`): the single-runner lease
+//! in `runtime.db` and the heartbeat file `run-<sandbox>.json`. Impl:
+//! `adapters::outbound::runtime_store`. Later waves add feed cursors, the
+//! ingest seen-set and timers (tracker convention 3).
 
 use async_trait::async_trait;
 
-use crate::domain::runtime::RunnerLease;
+use crate::domain::runtime::{Heartbeat, RunnerLease};
 
 #[async_trait]
 pub(crate) trait RuntimeStore: Send + Sync {
@@ -22,4 +22,7 @@ pub(crate) trait RuntimeStore: Send + Sync {
     ) -> anyhow::Result<RunnerLease>;
     /// Drop `holder`'s lease (no-op when someone else holds it).
     async fn release_lease(&self, resource: &str, holder: &str) -> anyhow::Result<()>;
+    /// Replace `run-<hb.sandbox>.json` atomically (readers never see a
+    /// partial file).
+    async fn write_heartbeat(&self, hb: &Heartbeat) -> anyhow::Result<()>;
 }

@@ -6,7 +6,9 @@
 //! | [`Supervisor`] | named long-running tasks sharing one stop signal (`tokio::sync::watch`); a task that ends before the stop fails the run; shutdown waits until a deadline, then aborts |
 //! | [`keep_lease`] | renews `runtime:<sandbox>` every `renew_ms`; a lost lease stops the run (failed) |
 //! | [`loops::LoopDispatch`] | loop events: one at a time per loop, `[runtime] max_decisions_in_flight` across loops, drain on shutdown |
+//! | [`health::HealthBoard`] | heartbeat file + `loop/1` / `feed/1` rows every `[runtime] heartbeat_secs`; `FeedWriter` for the scheduler |
 
+pub(crate) mod health;
 pub(crate) mod loops;
 
 use std::future::Future;
@@ -303,6 +305,12 @@ mod tests {
             })
         }
         async fn release_lease(&self, _r: &str, _h: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn write_heartbeat(
+            &self,
+            _hb: &crate::domain::runtime::Heartbeat,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
     }

@@ -27,6 +27,8 @@ Typed tool results that one envelope serves to the LLM (text), decision loops (`
 | `acct/1:<pubkey>` | raw account rows (`outbound/solana/accounts.rs::fetch_accounts`, 60 s): reused when fresh, one `getMultipleAccounts` for the rest. **Phase-5 seam**: a stream writing these rows makes builders RPC-free |
 | `dlmm_discovery/1:<wallet>:<pool>` | position discovery (gPA): 60 s found / 10 s empty, and an empty row is reused only within the caller's max age (the bot's 300 s is safe only for the process that opens the positions) / errors never stored. Position reads pinned ≥ the discovery's slot; a discovered key that does not value ⇒ exposure `Error`, never 0 (`outbound/solana/plan.rs`, `dlmm::flag_unvalued`) |
 | `lp_state/1:<wallet>:<pool>` | controller state (regime, timers, re-entry anchor, last hedge action); 7 days; written only with `commit = true`, compare-and-swap on the version read (changed since ⇒ NOT committed, `features.commit = conflict`); unreadable ⇒ the decide tools block `invalid_read`, never overwrite |
+| `loop/1:<loop>` | `tengu run` health of a decision loop (`domain/runtime.rs::LoopHealth`), in the loop agent's store every `[runtime] heartbeat_secs`: queue depth, in flight, counts, `last_decision_age_s` (`docs/runtime-2026-09-30.md`) |
+| `feed/1:<feed>` | `tengu run` health of a feed (`FeedHealth`): state connecting \| live \| backoff \| stalled \| down, `required`, `last_item_age_s`, reconnects, dropped, `last_error_class`. `observed_at_ms` = the feed's last item, so `requires = { feed = N }` gates on data age; no row before the first item |
 
 ## Decision-loop use (`config/decision_loop.rs`, `application/decision_loop/`)
 

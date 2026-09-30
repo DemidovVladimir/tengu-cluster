@@ -1,8 +1,10 @@
-//! `SqliteRuntimeStore` — `ports::runtime::RuntimeStore` over
-//! `<state dir>/runtime.db` (the `[xmarket]` state dir, else
-//! `<TENGU_HOME>/state`): the single-runner lease of `tengu run`. WAL +
-//! busy_timeout; every mutation is one statement, so it is atomic across
-//! processes (same pattern as `solana/writes_store.rs`).
+//! `SqliteRuntimeStore` — `ports::runtime::RuntimeStore` over the runtime
+//! state dir (the `[xmarket]` state dir, else `<TENGU_HOME>/state`):
+//!
+//! | File | Holds |
+//! |---|---|
+//! | `runtime.db` | the single-runner lease of `tengu run` — WAL + busy_timeout, one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
+//! | `run-<sandbox>.json` | the heartbeat — written to a temp file, then renamed (readers never see a partial file); [`read_heartbeat`] serves `tengu doctor --live` |
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -11,7 +13,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use rusqlite::{params, Connection};
 
-use crate::domain::runtime::RunnerLease;
+use crate::domain::runtime::{heartbeat_file, Heartbeat, RunnerLease};
 use crate::ports::runtime::RuntimeStore;
 
 const SCHEMA_SQL: &str = "
@@ -32,7 +34,34 @@ WHERE leases.holder = excluded.holder OR leases.expires_at_ms <= ?3";
 #[derive(Clone)]
 pub(crate) struct SqliteRuntimeStore {
     conn: Arc<Mutex<Connection>>,
+    dir: PathBuf,
     path: PathBuf,
+}
+
+/// Write `<dir>/run-<sandbox>.json` atomically (temp file + rename).
+pub(crate) fn write_heartbeat(dir: &Path, hb: &Heartbeat) -> Result<()> {
+    let path = dir.join(heartbeat_file(&hb.sandbox));
+    let tmp = dir.join(format!(
+        ".{}.{}.tmp",
+        heartbeat_file(&hb.sandbox),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, serde_json::to_vec_pretty(hb)?)
+        .with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("replace {}", path.display()))
+}
+
+/// `<dir>/run-<sandbox>.json`: `None` when absent, `Err` when unreadable.
+pub(crate) fn read_heartbeat(dir: &Path, sandbox: &str) -> Result<Option<Heartbeat>> {
+    let path = dir.join(heartbeat_file(sandbox));
+    let raw = match std::fs::read(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    serde_json::from_slice(&raw)
+        .map(Some)
+        .with_context(|| format!("{} does not parse", path.display()))
 }
 
 impl SqliteRuntimeStore {
@@ -45,6 +74,7 @@ impl SqliteRuntimeStore {
         conn.execute_batch(SCHEMA_SQL)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            dir: dir.to_path_buf(),
             path,
         })
     }
@@ -114,6 +144,13 @@ impl RuntimeStore for SqliteRuntimeStore {
         })
         .await
     }
+
+    async fn write_heartbeat(&self, hb: &Heartbeat) -> Result<()> {
+        let (dir, hb) = (self.dir.clone(), hb.clone());
+        tokio::task::spawn_blocking(move || write_heartbeat(&dir, &hb))
+            .await
+            .context("heartbeat write task")?
+    }
 }
 
 #[cfg(test)]
@@ -178,5 +215,43 @@ mod tests {
                 .unwrap()
                 .granted
         );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_round_trips_atomically() {
+        use crate::domain::runtime::RunState;
+        let (dir, a, _b) = pair();
+        assert!(read_heartbeat(dir.path(), "xmarket-weekend")
+            .unwrap()
+            .is_none());
+        let mut hb = Heartbeat {
+            sandbox: "xmarket-weekend".into(),
+            pid: 4242,
+            holder: "vps-1:4242:0f8c6a52-5d0e-4c8e-9a71-3b2f1c9d7e44".into(),
+            state: RunState::Running,
+            stop_reason: None,
+            started_at_ms: 1,
+            ts_ms: 2,
+            heartbeat_secs: 5,
+            loops: Default::default(),
+            feeds: Default::default(),
+        };
+        a.write_heartbeat(&hb).await.unwrap();
+        hb.state = RunState::Stopped;
+        hb.stop_reason = Some("SIGTERM".into());
+        a.write_heartbeat(&hb).await.unwrap();
+        assert_eq!(
+            read_heartbeat(dir.path(), "xmarket-weekend").unwrap(),
+            Some(hb)
+        );
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".json"))
+            .collect();
+        assert_eq!(names, ["run-xmarket-weekend.json"], "no temp file left");
+        std::fs::write(dir.path().join("run-broken.json"), "{").unwrap();
+        let err = read_heartbeat(dir.path(), "broken").unwrap_err();
+        assert!(format!("{err:#}").contains("run-broken.json does not parse"));
     }
 }

@@ -6,6 +6,7 @@
 //! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else `<TENGU_HOME>/state`; `runtime.db` lives there |
 //! | lease | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
+//! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router today; next wave (`rt-scheduler`) one task per `[feeds.<n>]` that submits via [`Runtime::loops`] |
 //! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → lease released |
 
@@ -19,15 +20,18 @@ use anyhow::{Context, Result};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
+use crate::adapters::outbound::observations::SqliteObservationStore;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
 use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
-use crate::domain::runtime::{lease_resource, RunnerLease};
+use crate::domain::runtime::{lease_resource, RunState, RunnerLease};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::decision::Escalator;
+use crate::ports::observation::ObservationStore;
 use crate::ports::runtime::RuntimeStore;
 
 /// Runner name: the `--sandbox` name, else `default`.
@@ -48,6 +52,24 @@ pub(crate) fn runtime_state_dir(config: &Config) -> PathBuf {
     crate::config::runtime::state_dir(xm.as_deref(), &crate::config::paths::resolve_tengu_home())
 }
 
+/// Workspace of `[agents.<agent>]` as its loop sees it: `workspace` (`~`
+/// expanded), else the process cwd — the `bootstrap/decision.rs` rule, so
+/// `loop/1` rows land in the store the loop reads.
+pub(crate) fn agent_workspace(config: &Config, agent: &str) -> PathBuf {
+    config
+        .agents
+        .get(agent)
+        .and_then(|a| a.workspace.as_ref())
+        .map(|p| crate::config::paths::expand_tilde(p))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// Loop handlers + each loop agent's observation store (for `loop/1` rows).
+type BuiltLoops = (
+    BTreeMap<String, Arc<dyn LoopHandler>>,
+    BTreeMap<String, Arc<dyn ObservationStore>>,
+);
+
 /// What [`Runtime::shutdown`] did.
 #[derive(Debug)]
 pub(crate) struct ShutdownReport {
@@ -59,20 +81,22 @@ pub(crate) struct ShutdownReport {
     pub lease_released: bool,
 }
 
-/// One running `tengu run`: lease, loops, supervised tasks.
+/// One running `tengu run`: lease, loops, health, supervised tasks.
 pub(crate) struct Runtime {
     sandbox: String,
     state_dir: PathBuf,
     cfg: RuntimeConfig,
     store: Arc<dyn RuntimeStore>,
     lease: RunnerLease,
+    started_at_ms: i64,
     supervisor: Supervisor,
     loops: Arc<LoopDispatch>,
+    health: Arc<HealthBoard>,
 }
 
-/// Take the lease, build every decision loop, start the lease keeper.
-/// `escalator` comes from the inbound side (the webhook listener's
-/// orchestrator escalator when built with `--features webhooks`).
+/// Take the lease, build every decision loop, start the lease keeper and
+/// the heartbeat. `escalator` comes from the inbound side (the webhook
+/// listener's orchestrator escalator when built with `--features webhooks`).
 pub(crate) async fn start(
     config: &Config,
     secrets: Arc<SecretRegistry>,
@@ -86,8 +110,8 @@ pub(crate) async fn start(
     )
     .await?;
     match build_loops(config, secrets, escalator) {
-        Ok(handlers) => {
-            rt.launch(handlers);
+        Ok((handlers, stores)) => {
+            rt.launch(handlers, stores);
             Ok(rt)
         }
         Err(e) => {
@@ -101,8 +125,8 @@ fn build_loops(
     config: &Config,
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
-) -> Result<BTreeMap<String, Arc<dyn LoopHandler>>> {
-    let mut out: BTreeMap<String, Arc<dyn LoopHandler>> = BTreeMap::new();
+) -> Result<BuiltLoops> {
+    let (mut handlers, mut stores): BuiltLoops = Default::default();
     let mut names: Vec<&String> = config.decision_loops.keys().collect();
     names.sort();
     for name in names {
@@ -113,9 +137,19 @@ fn build_loops(
             Arc::clone(&secrets),
         )
         .with_context(|| format!("build [decision_loops.{name}]"))?;
-        out.insert(name.clone(), dl);
+        handlers.insert(name.clone(), dl as Arc<dyn LoopHandler>);
+        let workspace = agent_workspace(config, &config.decision_loops[name].agent);
+        match SqliteObservationStore::open(&workspace) {
+            Ok(s) => {
+                stores.insert(name.clone(), Arc::new(s) as Arc<dyn ObservationStore>);
+            }
+            Err(e) => {
+                let error = format!("{e:#}");
+                warn!(decision_loop = %name, %error, "observation store unavailable; no loop/1 rows");
+            }
+        }
     }
-    Ok(out)
+    Ok((handlers, stores))
 }
 
 fn holder_id() -> String {
@@ -161,24 +195,59 @@ impl Runtime {
             BTreeMap::new(),
             cfg.max_decisions_in_flight,
         ));
+        let health = Arc::new(HealthBoard::new(
+            &sandbox,
+            &holder,
+            now,
+            cfg.heartbeat_secs,
+            BTreeMap::new(),
+        ));
         Ok(Self {
             sandbox,
             state_dir,
             cfg,
             store,
             lease,
+            started_at_ms: now,
             supervisor,
             loops,
+            health,
         })
     }
 
-    /// Install the loop handlers and start serving them — once, before
-    /// anything submits events.
-    pub(crate) fn launch(&mut self, handlers: BTreeMap<String, Arc<dyn LoopHandler>>) {
+    /// Install the loop handlers (+ each loop agent's observation store for
+    /// its `loop/1` row) and start serving them and the heartbeat — once,
+    /// before anything submits events or registers feeds.
+    pub(crate) fn launch(
+        &mut self,
+        handlers: BTreeMap<String, Arc<dyn LoopHandler>>,
+        loop_stores: BTreeMap<String, Arc<dyn ObservationStore>>,
+    ) {
         self.loops = Arc::new(LoopDispatch::new(
             handlers,
             self.cfg.max_decisions_in_flight,
         ));
+        self.health = Arc::new(HealthBoard::new(
+            &self.sandbox,
+            &self.lease.holder,
+            self.started_at_ms,
+            self.cfg.heartbeat_secs,
+            loop_stores,
+        ));
+        let (board, loops, store) = (
+            Arc::clone(&self.health),
+            Arc::clone(&self.loops),
+            Arc::clone(&self.store),
+        );
+        self.supervisor.spawn("heartbeat", move |stop| {
+            heartbeat_task(board, loops, store, stop)
+        });
+    }
+
+    /// Where feeds report (`HealthBoard::feed` → `FeedWriter`).
+    #[allow(dead_code)] // rt-scheduler (next wave) registers each [feeds.<n>] here
+    pub(crate) fn health(&self) -> Arc<HealthBoard> {
+        Arc::clone(&self.health)
     }
 
     pub(crate) fn sandbox(&self) -> &str {
@@ -219,7 +288,8 @@ impl Runtime {
     }
 
     /// Stop (if not yet requested), drain loops and tasks until
-    /// `shutdown_grace_secs`, then release the lease.
+    /// `shutdown_grace_secs`, then release the lease. The heartbeat says
+    /// `stopping` during the drain and `stopped` after it.
     pub(crate) async fn shutdown(self) -> ShutdownReport {
         let Runtime {
             cfg,
@@ -227,6 +297,7 @@ impl Runtime {
             lease,
             supervisor,
             loops,
+            health,
             ..
         } = self;
         let stopper = supervisor.stopper();
@@ -235,9 +306,20 @@ impl Runtime {
             reason: "shutdown".into(),
             failed: false,
         });
+        let beat = |state| {
+            let (health, loops, store, reason) = (&health, &loops, &store, &stop.reason);
+            async move {
+                let hb = health
+                    .beat(&loops.stats(), state, Some(reason), now_ms())
+                    .await;
+                write_beat(&**store, &hb).await;
+            }
+        };
+        beat(RunState::Stopping).await;
         let deadline = Instant::now() + Duration::from_secs(cfg.shutdown_grace_secs);
         let (drained, aborted_tasks) =
             tokio::join!(loops.drain(deadline), supervisor.shutdown(deadline));
+        beat(RunState::Stopped).await;
         let lease_released = match store.release_lease(&lease.resource, &lease.holder).await {
             Ok(()) => true,
             Err(e) => {
@@ -259,6 +341,8 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::outbound::runtime_store::read_heartbeat;
+    use crate::application::observe::tests::MemStore;
     use crate::application::runtime::loops::tests::SlowLoop;
     use crate::application::runtime::stopped;
     use serde_json::Value;
@@ -325,15 +409,27 @@ mod tests {
         rt.shutdown().await;
     }
 
+    fn launch_slow(rt: &mut Runtime, ms: u64) -> (Arc<SlowLoop>, Arc<MemStore>) {
+        let slow = SlowLoop::new(ms);
+        let store = Arc::new(MemStore::default());
+        rt.launch(
+            BTreeMap::from([(
+                "xm_main".to_string(),
+                Arc::clone(&slow) as Arc<dyn LoopHandler>,
+            )]),
+            BTreeMap::from([(
+                "xm_main".to_string(),
+                Arc::clone(&store) as Arc<dyn ObservationStore>,
+            )]),
+        );
+        (slow, store)
+    }
+
     #[tokio::test]
     async fn shutdown_drains_a_running_loop_event() {
         let dir = tempfile::tempdir().unwrap();
         let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
-        let slow = SlowLoop::new(200);
-        rt.launch(BTreeMap::from([(
-            "xm_main".to_string(),
-            Arc::clone(&slow) as Arc<dyn LoopHandler>,
-        )]));
+        let (slow, _) = launch_slow(&mut rt, 200);
         rt.loops()
             .submit("xm_main", Value::Null, "s-1".into())
             .unwrap();
@@ -352,8 +448,48 @@ mod tests {
                 aborted: 0
             }
         );
+        assert!(report.aborted_tasks.is_empty(), "{report:?}");
         assert_eq!(loops.stats()["xm_main"].completed, 1);
         assert_eq!(*slow.seen.lock().unwrap(), ["s-1"]);
+    }
+
+    #[tokio::test]
+    async fn heartbeat_file_and_loop_rows_track_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
+        let (_, store) = launch_slow(&mut rt, 1);
+        let read = || read_heartbeat(dir.path(), "xmarket-weekend").unwrap();
+        for _ in 0..400 {
+            if read().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let hb = read().expect("first beat at launch");
+        assert_eq!((hb.state, hb.pid), (RunState::Running, std::process::id()));
+        assert_eq!(hb.holder, rt.holder());
+        assert!(hb.loops.contains_key("xm_main"));
+        let row = store.get("loop/1:xm_main").await.unwrap();
+        assert_eq!(
+            row.expect("loop row").features["in_flight"],
+            serde_json::json!(0)
+        );
+
+        rt.stopper().stop("SIGTERM", false);
+        rt.shutdown().await;
+        let hb = read().unwrap();
+        assert_eq!(hb.state, RunState::Stopped);
+        assert_eq!(hb.stop_reason.as_deref(), Some("SIGTERM"));
+        let live = crate::domain::runtime::live_verdict(
+            "xmarket-weekend",
+            &crate::domain::runtime::HeartbeatRead::Found(hb),
+            &[],
+            now_ms(),
+            crate::domain::runtime::LiveKnobs {
+                heartbeat_stale_secs: 30,
+            },
+        );
+        assert!(!live.ok(), "a stopped run is not live: {live:?}");
     }
 
     #[tokio::test]

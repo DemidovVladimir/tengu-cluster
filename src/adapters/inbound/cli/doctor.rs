@@ -1,9 +1,20 @@
-//! `tengu status` / `tengu doctor` (incl. `--tor` exit check).
+//! `tengu status` / `tengu doctor` (incl. `--tor` exit check and `--live`,
+//! the running `tengu run`: heartbeat file + `loop/1` / `feed/1` rows →
+//! `domain::runtime::live_verdict`).
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
 use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::observations::SqliteObservationStore;
+use crate::adapters::outbound::runtime_store::read_heartbeat;
+use crate::bootstrap::runtime::{agent_workspace, runner_name, runtime_state_dir};
 use crate::config::{Config, RuntimeProfile};
+use crate::domain::observation::{now_ms, Observation, Observed};
+use crate::domain::runtime::{live_verdict, FeedHealth, HeartbeatRead, LiveKnobs, LoopHealth};
+use crate::ports::observation::ObservationStore;
 
 fn format_diagnostics_compact(d: &crate::ports::engine::EngineDiagnostics) -> String {
     let caps = &d.capabilities;
@@ -52,8 +63,9 @@ pub(super) fn print_status(config: &Config, profile: RuntimeProfile) {
 
 /// `tengu doctor` — build every configured agent's engine and print its
 /// diagnostics. Returns `Err` (→ non-zero exit) when any engine fails to
-/// build; the Docker `HEALTHCHECK` relies on that exit code.
-pub(super) async fn run_doctor(config: &Config, tor_check: bool) -> Result<()> {
+/// build, or with `--live` when the sandbox's `tengu run` is not live; the
+/// Docker `HEALTHCHECK` relies on that exit code.
+pub(super) async fn run_doctor(config: &Config, tor_check: bool, live: bool) -> Result<()> {
     println!();
     println!("  TENGU CLUSTER — Doctor");
     println!("  ─────────────────────────────────────");
@@ -79,6 +91,9 @@ pub(super) async fn run_doctor(config: &Config, tor_check: bool) -> Result<()> {
     }
 
     doctor_egress(tor_check, &mut failures).await;
+    if live {
+        doctor_live(config, &mut failures).await;
+    }
 
     println!("  ─────────────────────────────────────");
     println!();
@@ -179,6 +194,75 @@ async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// `--live` block: one line per check of `live_verdict` (heartbeat, loops,
+/// feeds); failing checks fail the doctor.
+async fn doctor_live(config: &Config, failures: &mut Vec<String>) {
+    let (sandbox, dir) = (runner_name(config), runtime_state_dir(config));
+    println!("  Runtime (live): sandbox {sandbox} · {}", dir.display());
+    let heartbeat = match read_heartbeat(&dir, &sandbox) {
+        Ok(Some(hb)) => HeartbeatRead::Found(hb),
+        Ok(None) => HeartbeatRead::Missing,
+        Err(e) => HeartbeatRead::Unreadable(format!("{e:#}")),
+    };
+    let rows = health_rows(config, &heartbeat).await;
+    let knobs = LiveKnobs {
+        heartbeat_stale_secs: config.runtime.heartbeat_stale_secs,
+    };
+    let report = live_verdict(&sandbox, &heartbeat, &rows, now_ms(), knobs);
+    for c in &report.checks {
+        println!(
+            "    {} {:<24} {}",
+            if c.ok { "ok  " } else { "FAIL" },
+            c.subject,
+            c.detail
+        );
+        if !c.ok {
+            failures.push(format!("live: {} — {}", c.subject, c.detail));
+        }
+    }
+    println!("    => {}", if report.ok() { "live" } else { "NOT live" });
+}
+
+/// `loop/1` rows of every configured loop and `feed/1` rows of every feed
+/// the heartbeat lists, from each agent workspace whose observation store
+/// exists (never created here). Unreadable stores are skipped.
+async fn health_rows(config: &Config, heartbeat: &HeartbeatRead) -> Vec<Observation> {
+    let mut keys: BTreeSet<String> = config
+        .decision_loops
+        .keys()
+        .map(|n| Observation::key_for(LoopHealth::SCHEMA, n))
+        .collect();
+    if let HeartbeatRead::Found(hb) = heartbeat {
+        keys.extend(
+            hb.loops
+                .keys()
+                .map(|n| Observation::key_for(LoopHealth::SCHEMA, n)),
+        );
+        keys.extend(
+            hb.feeds
+                .keys()
+                .map(|n| Observation::key_for(FeedHealth::SCHEMA, n)),
+        );
+    }
+    let keys: Vec<String> = keys.into_iter().collect();
+    let workspaces: BTreeSet<PathBuf> = config
+        .agents
+        .keys()
+        .map(|a| agent_workspace(config, a))
+        .filter(|ws| ws.join(".tengu").join("observations.db").exists())
+        .collect();
+    let mut rows = Vec::new();
+    for ws in workspaces {
+        let Ok(store) = SqliteObservationStore::open(&ws) else {
+            continue;
+        };
+        if let Ok(found) = store.get_many(&keys).await {
+            rows.extend(found.into_iter().flatten());
+        }
+    }
+    rows
 }
 
 async fn tor_exit_check(

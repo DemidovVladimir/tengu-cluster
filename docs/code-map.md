@@ -242,7 +242,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/mod.rs` | 18 | Domain — plain data and pure policy. Imports nothing from the rest of the |
 | `src/domain/observation.rs` | 697 | Typed tool observations — `Observation` envelope (LLM text, decision-loop features, cache row), `Observed`, `Field<T>`, `ObsStatus`, `CachePolicy`. |
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
-| `src/domain/runtime.rs` | 60 | `tengu run` pure data — the single-runner lease (one runner per sandbox); `now_ms` always an input. |
+| `src/domain/runtime.rs` | 933 | `tengu run` pure data — the single-runner lease (one runner per sandbox); `now_ms` always an input. |
 | `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; |
 | `src/domain/secrets.rs` | 123 | `SecretRegistry` — secret values to redact from tool output, transcripts, typed observations (`redact_value`, `redact_observation`) |
 | `src/domain/session.rs` | 58 | Chat/flow session state — per-session prompt assembly and loop state. |
@@ -267,7 +267,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
 | `src/ports/observation.rs` | 32 | `ObservationStore` — the TTL cache typed tools read through and decision loops read `world` from. |
 | `src/ports/orchestration.rs` | 172 | Orchestration ports — what the orchestrator needs from the outside world |
-| `src/ports/runtime.rs` | 25 | Runtime state port (`runtime.db` in the state dir): the single-runner lease; later feed cursors, seen-set, timers. |
+| `src/ports/runtime.rs` | 28 | Runtime state port (`runtime.db` in the state dir): the single-runner lease; later feed cursors, seen-set, timers. |
 | `src/ports/shell.rs` | 8 | Port for executing shell commands in a workspace directory. |
 | `src/ports/skill_source.rs` | 7 | Port for discovering skill.md files from the workspace. |
 | `src/ports/solana_signer.rs` | 13 | `SolanaSigner` — public key + ed25519 signature over message bytes (the write tools' signer). |
@@ -286,13 +286,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
 | `src/config/risk.rs` | 758 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required) and the paper fill engine's knobs; load rules. |
-| `src/config/runtime.rs` | 101 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `heartbeat_secs`. |
+| `src/config/runtime.rs` | 143 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `heartbeat_secs`. |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
 | `src/config/solana.rs` | 373 | `[solana] signer_key_file` + signing-sandbox rules (no Claude Code / MCP / shell, key outside fs roots, wallet grants only on a private agent). |
 | `src/config/sections.rs` | 17 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`. |
 | `src/config/xmarket.rs` | 572 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`). |
 
-### application — use cases (48 files)
+### application — use cases (49 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -314,8 +314,9 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/mod.rs` | 12 | Application — use cases (chat turn, orchestration, memory, skills, tool |
 | `src/application/observe.rs` | 182 | `observe()` — cache-or-fetch for typed tools (fresh rows only, `Error` never cached, store failure → live). |
 | `src/application/orchestrator/events.rs` | 87 | `OrchestratorEvent` + broadcast channel. |
-| `src/application/runtime/mod.rs` | 381 | `tengu run` supervisor — named tasks on one stop signal, SIGINT/SIGTERM drain with grace, early task death fails the run. |
+| `src/application/runtime/mod.rs` | 389 | `tengu run` supervisor — named tasks on one stop signal, SIGINT/SIGTERM drain with grace, early task death fails the run. |
 | `src/application/runtime/loops.rs` | 466 | `LoopDispatch` — one event at a time per loop (FIFO), `max_decisions_in_flight` across loops, drain on shutdown; used by `tengu run` and `tengu webhooks`. |
+| `src/application/runtime/health.rs` | 474 | `HealthBoard` — heartbeat task (`<state dir>/run-<sandbox>.json`), `loop/1:<name>` rows, `feed/1:<name>` writers for feeds. |
 | `src/application/orchestrator/executor.rs` | 243 | DAG executor: parallel step dispatch with retry escalation. |
 | `src/application/orchestrator/mod.rs` | 197 | Harness-owned orchestration. |
 | `src/application/orchestrator/planner.rs` | 942 | Planner — runs the orchestrator agent's LLM call, returns Plan or direct response. |
@@ -353,7 +354,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/decision.rs` | 94 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`SanitizedToolExecutor`, caller's `SecretRegistry`) + observation store → `DecisionLoop`; audit path. |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
-| `src/bootstrap/runtime.rs` | 393 | `tengu run` composition — builds every `[decision_loops.*]` once, the lease, webhook routes; `Runtime::spawn` seam for feeds. |
+| `src/bootstrap/runtime.rs` | 529 | `tengu run` composition — builds every `[decision_loops.*]` once, the lease, webhook routes; `Runtime::spawn` seam for feeds. |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
@@ -383,7 +384,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 344 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
-| `src/adapters/outbound/runtime_store.rs` | 182 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
+| `src/adapters/outbound/runtime_store.rs` | 257 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
 | `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |
 | `src/adapters/outbound/scaffold.rs` | 77 | Workspace scaffold — creates directories and seed files before agents start. |
 | `src/adapters/outbound/secrets.rs` | 459 | Secrets management: encrypted vault storage + runtime redaction (`SanitizedToolExecutor` redacts text and observations). |

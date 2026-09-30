@@ -51,6 +51,12 @@ enum Commands {
         /// check.torproject.org and fail unless it reports a Tor exit.
         #[arg(long)]
         tor: bool,
+        /// Also check the sandbox's running `tengu run`: fail when its
+        /// heartbeat is missing or older than `[runtime]
+        /// heartbeat_stale_secs`, or a required feed is down or stale
+        /// (Docker healthcheck).
+        #[arg(long)]
+        live: bool,
     },
     /// Run Telegram bot adapter.
     Telegram {
@@ -431,9 +437,9 @@ pub(crate) async fn run() -> Result<()> {
             print_status(&config, profile);
             Ok(())
         }
-        Commands::Doctor { sandbox, tor } => {
+        Commands::Doctor { sandbox, tor, live } => {
             let config = load_sandbox_or(sandbox, config)?;
-            run_doctor(&config, tor).await
+            run_doctor(&config, tor, live).await
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
