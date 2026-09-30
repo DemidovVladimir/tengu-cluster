@@ -55,6 +55,10 @@
 //! | `min_lifecycle` ≥ `mapped` | §29: discovered / identified instruments are never tradable |
 //! | `kill_switch_file` absolute or `~/…` | loops, the bridge and the operator CLI must see one file |
 //! | `require_hedge_for` names [`STRATEGIES`] only | a misspelled strategy would silently drop its hedge rule |
+//! | Exec tools (`paper_order`, `paper_close`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent` (checked with or without `[risk]`; the tools check the calling agent again) | the planner, a chat user or a webhook must never reach an order tool; loops and the operator's `@<agent>` chat may |
+//! | A loop action running an exec tool is not `read_only` | `read_only` bypasses `dry_run` |
+//! | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present with no `wallets`; no agent scope grants one | Privy signing stays off: a tool without a scope gets the permissive fallback, which grants the `default` wallet |
+//! | Hardened sandbox (`config/hardening.rs`, shared with a Solana signer): `claude_code` only with built-ins off, no `[[mcp_servers]]`, no shell scope, `<TENGU_HOME>/state` + `kill_switch_file` + the config file outside every fs root and workspace | nothing outside tengu scopes can edit `ledger.db`, delete the kill-switch file or lift a limit (convention 12) |
 //!
 //! Halts (§ 7 #8): `daily_loss_limit_usd` trips a halt that clears at 00:00
 //! UTC; `total_loss_limit_usd`, an operator halt and the kill-switch file
@@ -67,6 +71,7 @@ use serde::{Deserialize, Serialize};
 
 use super::paths::expand_tilde;
 use super::Config;
+use crate::domain::tools::{PRIVY_SIGNING_TOOLS, XM_EXEC_TOOLS};
 use crate::domain::xm::risk::{MaxAges, RiskLimits};
 
 /// Venues an order may target (tracker convention 1). `ref:<MIC>` ids are
@@ -261,7 +266,9 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     let mut errs = Vec::new();
     if let Some(r) = &cfg.risk {
         risk_rules(r, &mut errs);
+        privy_signing_rules(cfg, &mut errs);
     }
+    exec_tool_rules(cfg, &mut errs);
     if let Some(p) = &cfg.paper {
         paper_rules(p, &mut errs);
     }
@@ -277,6 +284,101 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
         _ => {}
     }
     errs
+}
+
+/// Exec tools (`XM_EXEC_TOOLS`) — in `tools` or `workspace_tools` — only on
+/// a private agent: no `description` (never planner-routable), not
+/// `default`, no webhook endpoint's `agent`; a loop action running one may
+/// not be `read_only` (that bypasses `dry_run`). `[risk]` or not: without
+/// it the tools refuse anyway.
+fn exec_tool_rules(cfg: &Config, errs: &mut Vec<String>) {
+    let webhook_agents: Vec<&str> = cfg
+        .webhooks
+        .endpoints
+        .values()
+        .map(|e| e.agent.as_str())
+        .collect();
+    let mut agents: Vec<_> = cfg.agents.iter().collect();
+    agents.sort_by(|a, b| a.0.cmp(b.0));
+    for (id, agent) in agents {
+        let held: Vec<&str> = XM_EXEC_TOOLS
+            .iter()
+            .copied()
+            .filter(|t| {
+                agent.tools.iter().any(|x| x == t) || agent.workspace_tools.iter().any(|x| x == t)
+            })
+            .collect();
+        if held.is_empty() {
+            continue;
+        }
+        let tools = held.join(", ");
+        if agent.description.is_some() {
+            errs.push(format!(
+                "agents.{id} holds exec tools ({tools}) but has a `description` — an agent \
+                 that places orders must not be planner-routable"
+            ));
+        }
+        if agent.default {
+            errs.push(format!(
+                "agents.{id} holds exec tools ({tools}) but is the default chat agent"
+            ));
+        }
+        if webhook_agents.contains(&id.as_str()) {
+            errs.push(format!(
+                "agents.{id} holds exec tools ({tools}) but is a webhook endpoint's `agent`"
+            ));
+        }
+    }
+    let mut loops: Vec<_> = cfg.decision_loops.iter().collect();
+    loops.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, dl) in loops {
+        let mut actions: Vec<_> = dl.actions.iter().collect();
+        actions.sort_by(|a, b| a.0.cmp(b.0));
+        for (an, action) in actions {
+            match action.tool.as_deref() {
+                Some(tool) if action.read_only && XM_EXEC_TOOLS.contains(&tool) => {
+                    errs.push(format!(
+                        "decision_loops.{name}.actions.{an}: `{tool}` places orders — \
+                         read_only = true would run it even under dry_run"
+                    ))
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// `[risk]` sandbox: the Privy signing tools stay off. Each needs an explicit
+/// `[default_scopes.<tool>]` without `wallets` (the permissive fallback
+/// grants the `default` wallet), and no agent scope may grant one.
+fn privy_signing_rules(cfg: &Config, errs: &mut Vec<String>) {
+    for tool in PRIVY_SIGNING_TOOLS {
+        match cfg.default_scopes.get(*tool) {
+            None => errs.push(format!(
+                "[risk]: add an empty [default_scopes.{tool}] — Privy signing stays off in a \
+                 [risk] sandbox (a tool without a scope gets the `default` wallet)"
+            )),
+            Some(s) if !s.wallets.is_empty() => errs.push(format!(
+                "default_scopes.{tool}.wallets: Privy signing is off in a [risk] sandbox — \
+                 leave wallets empty"
+            )),
+            Some(_) => {}
+        }
+        let mut agents: Vec<_> = cfg.agents.iter().collect();
+        agents.sort_by(|a, b| a.0.cmp(b.0));
+        for (id, agent) in agents {
+            if agent
+                .scopes
+                .get(*tool)
+                .is_some_and(|s| !s.wallets.is_empty())
+            {
+                errs.push(format!(
+                    "agents.{id}.scopes.{tool}.wallets: Privy signing is off in a [risk] \
+                     sandbox — leave wallets empty"
+                ));
+            }
+        }
+    }
 }
 
 fn positive(errs: &mut Vec<String>, path: &str, v: f64) {
@@ -530,6 +632,10 @@ ctx = 20000
 reference = 60000
 quote = 20000
 
+[default_scopes.sign_and_send_transaction]
+
+[default_scopes.sign_message]
+
 [paper]
 initial_cash_usd = 100
 latency_ms = 250
@@ -699,6 +805,77 @@ order_types = ["market", "ioc"]
             r#"instruments_deny = ["robinhood:0x322F0929c4625eD5bAd873c95208D54E1c003b2d"]"#,
         );
         assert_eq!(errs_of(&rh), "");
+    }
+
+    /// Exec tools only on a private agent, with or without `[risk]`; a loop
+    /// action running one is never `read_only`.
+    #[test]
+    fn exec_tools_only_on_a_private_agent() {
+        let agent = |name: &str, extra: &str| {
+            format!("[agents.{name}]\nengine = \"openrouter\"\nmodel = \"m\"\n{extra}\n")
+        };
+        let private = agent("exec", "tools = [\"paper_order\", \"hl_book\"]");
+        assert_eq!(errs_of(&format!("{RISK_100}\n{private}")), "");
+        assert_eq!(
+            errs_of(&private),
+            "",
+            "no [risk]: the tools refuse at call time"
+        );
+        let routable = agent(
+            "exec",
+            "description = \"routable\"\nworkspace_tools = [\"paper_close\"]\ntools = [\"paper_order\"]",
+        );
+        let e = errs_of(&format!("{RISK_100}\n{routable}"));
+        assert!(
+            e.contains(
+                "agents.exec holds exec tools (paper_order, paper_close) but has a `description`"
+            ),
+            "{e}"
+        );
+        let default = agent("chat", "default = true\ntools = [\"paper_close\"]");
+        assert!(errs_of(&default)
+            .contains("agents.chat holds exec tools (paper_close) but is the default chat agent"));
+        let hook = format!(
+            "{private}[webhooks.endpoints.edgar]\nagent = \"exec\"\nsecret_env = \"HOOK_SECRET\"\n"
+        );
+        assert!(errs_of(&hook).contains(
+            "agents.exec holds exec tools (paper_order) but is a webhook endpoint's `agent`"
+        ));
+        let looped = |read_only: bool| {
+            format!(
+                "{private}[decision_loops.entry]\ngoal = \"g\"\nagent = \"exec\"\n\
+                 [decision_loops.entry.actions.enter]\ndescription = \"enter\"\n\
+                 tool = \"paper_order\"\nread_only = {read_only}\n"
+            )
+        };
+        assert!(errs_of(&looped(true)).contains(
+            "decision_loops.entry.actions.enter: `paper_order` places orders — read_only = true"
+        ));
+        assert_eq!(errs_of(&looped(false)), "");
+    }
+
+    /// `[risk]` turns Privy signing off: an explicit empty default scope per
+    /// signing tool, no wallet grant anywhere.
+    #[test]
+    fn privy_signing_is_off_in_a_risk_sandbox() {
+        let e = errs_of(&RISK_100.replace("[default_scopes.sign_message]\n", ""));
+        assert!(
+            e.contains("[risk]: add an empty [default_scopes.sign_message]"),
+            "{e}"
+        );
+        assert!(!e.contains("sign_and_send_transaction"), "{e}");
+        let granted = RISK_100.replace(
+            "[default_scopes.sign_and_send_transaction]\n",
+            "[default_scopes.sign_and_send_transaction]\nwallets = [\"default\"]\n",
+        );
+        assert!(errs_of(&granted)
+            .contains("default_scopes.sign_and_send_transaction.wallets: Privy signing is off"));
+        let per_agent =
+            format!("{RISK_100}\n[agents.main.scopes.sign_message]\nwallets = [\"default\"]\n");
+        assert!(errs_of(&per_agent)
+            .contains("agents.main.scopes.sign_message.wallets: Privy signing is off"));
+        // Without [risk] nothing is required.
+        assert_eq!(errs_of(""), "");
     }
 
     #[test]

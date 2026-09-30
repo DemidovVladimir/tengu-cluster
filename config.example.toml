@@ -281,6 +281,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # fee_tier = 0                               # Hyperliquid tier 0–6
 # staking_discount_pct = 0                   # HYPE staking discount, 0–40
 # order_types = ["market", "ioc"]
+# [default_scopes.sign_and_send_transaction]   # required with [risk], no wallets: Privy signing off
+# [default_scopes.sign_message]                # (a tool without a scope would get the `default` wallet)
 
 # The `risk_status` tool (opt-in; row risk_state/1:<account>) reads the
 # ledger and the kill-switch file itself; its scope needs only the workspace

@@ -18,7 +18,7 @@
 //! | Workspace | the agent's `workspace` (`~` expanded), else the cwd |
 //! | Memory | `[memory] enabled` → `build_memory_manager_async` (as `run-agent`) |
 //! | Secrets | `process_secret_registry` (inherited `TENGU_SECRETS_LOADED`, else the vault) + `SanitizedToolExecutor` |
-//! | Call id | `--call-id` / a line's `call_id` → `ToolCtx.call_id`, mapped like the bridge's JSON-RPC id (`mcp_bridge::call_id`: string verbatim, number in decimal); absent = none |
+//! | Call id | `--call-id` / a line's `call_id` → `ToolCtx.call_id`, mapped like the bridge's JSON-RPC id (`mcp_bridge::call_id`: `mcp:<process nonce>:<id>`, the id a string verbatim, a number in decimal); absent = none |
 //! | Egress | the config's `[egress]`; `TENGU_EGRESS` wins |
 //!
 //! A failed call prints `is_error: true` and `text` = `ERROR: <error>`,
@@ -98,10 +98,9 @@ pub(super) async fn run_tool_command(
             }
             let args: Value = serde_json::from_str(&args).context("--args is not JSON")?;
             let tool = tool.context("--tool is required without --batch")?;
-            println!(
-                "{}",
-                tools.call(&tool, args, call_id.unwrap_or_default()).await
-            );
+            let id = call_id.map_or(Value::Null, Value::String);
+            let id = crate::adapters::inbound::mcp_bridge::call_id(&id);
+            println!("{}", tools.call(&tool, args, id).await);
             Ok(())
         }
     }

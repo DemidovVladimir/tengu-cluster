@@ -5,6 +5,7 @@
 //! |---|---|---|
 //! | `bridge_proxies_external_mcp_server_tools` | `TENGU_BRIDGE_TOOLS` naming a `{server}__{tool}` entry + `TENGU_BRIDGE_MCP_SERVERS` (`tests/fixtures/fake_mcp_server.sh`) | the external tool is listed and callable through the bridge |
 //! | `bridge_runs_tools_as_the_configured_agent` | `TENGU_CONFIG` + `TENGU_BRIDGE_AGENT` naming an agent with a denying scope; `TENGU_SECRETS_LOADED` naming a var | the agent's scope applies (not the permissive fallback); the secret comes back redacted |
+//! | `two_bridge_processes_never_share_a_call_id` | two bridges (two Claude CLI sessions), the same JSON-RPC id | `ToolCtx.call_id` = `mcp:<process nonce>:<id>` differs — an exec tool's idempotency key never replays another session's order (the bridge logs each call id at info) |
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -160,4 +161,59 @@ fs_roots = []
         listed["isError"], true,
         "the agent's scope (no fs roots) must deny: {listed}"
     );
+}
+
+/// Two bridge processes number their JSON-RPC requests alike (each Claude
+/// CLI session starts over); the call ids the tools see differ by the
+/// per-process nonce. Read from the bridge's own `MCP tool call started`
+/// log line (`tengu=info` is always on for the bridge).
+#[test]
+fn two_bridge_processes_never_share_a_call_id() {
+    let workspace = tempfile::TempDir::new().unwrap();
+    std::fs::write(workspace.path().join("notes.txt"), "n\n").unwrap();
+    let call_id = || -> String {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_tengu"))
+            .arg("mcp-bridge")
+            .env("TENGU_EGRESS", r#"{"network":"open","audit":false}"#)
+            .env("TENGU_BRIDGE_WORKSPACE", workspace.path())
+            .env("TENGU_BRIDGE_TOOLS", json!([tool("read_file")]).to_string())
+            .env("TENGU_CONFIG", workspace.path().join("absent.toml"))
+            .env_remove("TENGU_AGENT_IPC")
+            .env_remove("TENGU_BRIDGE_AGENT")
+            .env_remove("RUST_LOG")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn tengu mcp-bridge");
+        {
+            let mut stdin = child.stdin.take().unwrap();
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            for req in [
+                json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                       "params": {"name": "read_file", "arguments": {"path": "notes.txt"}}}),
+            ] {
+                writeln!(stdin, "{req}").unwrap();
+                stdin.flush().unwrap();
+                let mut line = String::new();
+                stdout.read_line(&mut line).unwrap();
+            }
+        } // stdin closed: the bridge exits
+        let out = child.wait_with_output().expect("bridge exit");
+        let log = String::from_utf8_lossy(&out.stderr);
+        let plain = regex::Regex::new("\x1b\\[[0-9;]*m")
+            .unwrap()
+            .replace_all(&log, "");
+        let id = regex::Regex::new(r"call_id=(\S+)")
+            .unwrap()
+            .captures(&plain)
+            .unwrap_or_else(|| panic!("no call_id in the bridge log:\n{plain}"))[1]
+            .to_string();
+        id
+    };
+    let (a, b) = (call_id(), call_id());
+    let shape = regex::Regex::new(r"^mcp:[0-9a-f]{32}:2$").unwrap();
+    assert!(shape.is_match(&a) && shape.is_match(&b), "{a} / {b}");
+    assert_ne!(a, b, "two bridge processes, one JSON-RPC id, two call ids");
 }

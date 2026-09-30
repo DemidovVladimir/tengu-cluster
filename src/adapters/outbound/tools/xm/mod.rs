@@ -6,16 +6,21 @@
 //! | File | Tool |
 //! |---|---|
 //! | `risk_status.rs` | `risk_status` — `risk_state/1:<account>`: halt + kill switch, equity / P&L / loss headroom at fresh `mkt_ctx/1` marks, exposure, order rate |
+//! | `exec_common.rs` | `run_exec` — the `[risk]` gate inside every exec tool: gate + fill + ledger write in one transaction, `paper_fill/1:<account>:<client_order_id>` |
 //!
 //! The plugin opens the observation store (`open_observation_store`) and —
 //! only with `[risk]` — the ledger (`open_paper_ledger`) once. No store ⇒
 //! rows are not cached (fail-soft). No `[risk]` ⇒ every tool refuses
-//! `risk_config_missing` (tracker convention 9); no ledger (no `[xmarket]`)
-//! ⇒ refused with that reason. Scope: `fs_roots` = the workspace (store).
+//! `risk_config_missing` (tracker convention 9); no ledger ⇒
+//! `state_dir_missing` (no `[xmarket]`) or `ledger_unavailable`. Scope:
+//! `fs_roots` = the workspace (store); exec tools also read books:
+//! `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]`.
 //! The ledger and the kill-switch file sit outside every fs root by design
-//! (convention 12): they are the tools' own state, never agent paths.
+//! (convention 12, `config/hardening.rs`): they are the tools' own state,
+//! never agent paths.
 
 pub(crate) mod defs;
+pub(crate) mod exec_common;
 pub(crate) mod risk_status;
 
 use std::sync::Arc;
@@ -35,6 +40,10 @@ pub(crate) use defs::defs_named;
 
 /// Refusal when the sandbox has no `[risk]` (tracker convention 9).
 pub(crate) const RISK_CONFIG_MISSING: &str = "risk_config_missing";
+/// Refusal when `[risk]` has no ledger dir (no `[xmarket]`).
+pub(crate) const STATE_DIR_MISSING: &str = "state_dir_missing";
+/// Refusal when the ledger could not be opened.
+pub(crate) const LEDGER_UNAVAILABLE: &str = "ledger_unavailable";
 
 /// Handles every family tool shares.
 #[derive(Clone)]
@@ -56,10 +65,7 @@ impl XmShared {
                 "{RISK_CONFIG_MISSING}: this sandbox has no [risk] + [paper] section"
             ));
         };
-        let ledger = self
-            .ledger
-            .as_ref()
-            .map_err(|why| anyhow!("paper ledger unavailable: {why}"))?;
+        let ledger = self.ledger.as_ref().map_err(|why| anyhow!("{why}"))?;
         Ok((risk, paper, ledger))
     }
 }
@@ -84,9 +90,14 @@ impl ToolPlugin for XmPlugin {
                 None
             }
         };
-        let ledger = match &sections.risk {
-            None => Err(RISK_CONFIG_MISSING.to_string()),
-            Some(_) => open_paper_ledger(sections).map_err(|e| format!("{e:#}")),
+        let ledger = match (&sections.risk, &sections.xm_state_dir) {
+            (None, _) => Err(RISK_CONFIG_MISSING.to_string()),
+            (Some(_), None) => Err(format!(
+                "{STATE_DIR_MISSING}: paper ledger unavailable: no [xmarket] section — add \
+                 [xmarket] state = \"<name>\" (ledger <TENGU_HOME>/state/<name>/ledger.db)"
+            )),
+            (Some(_), Some(_)) => open_paper_ledger(sections)
+                .map_err(|e| format!("{LEDGER_UNAVAILABLE}: paper ledger unavailable: {e:#}")),
         };
         let shared = XmShared {
             store,

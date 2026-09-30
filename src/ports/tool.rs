@@ -126,12 +126,13 @@ pub(crate) struct ToolCtx<'a> {
     /// | Caller | Id | Never repeats |
     /// |---|---|---|
     /// | decision loop | `{loop}:{session_id}:{t}` | across events and restarts (one session id per event) |
-    /// | `tengu mcp-bridge` | the JSON-RPC `tools/call` request id | within one Claude CLI session |
+    /// | `[feeds.<n>]` tool feed | `feed:<name>:<slot ms>:<i>` | across slots; a retry of a slot reuses it |
+    /// | `tengu mcp-bridge`, `tengu tool call` | `mcp:<process nonce>:<JSON-RPC id>` | across processes (`mcp_bridge::call_nonce`) |
     /// | in-process chat | the model's tool-call id | engine-dependent |
     ///
-    /// Exec-tool contract (order tools, next wave): `client_order_id` = the
-    /// tool's `client_order_id` arg if given, else `call_id`; refuse when
-    /// neither exists — never a random id, so a retry deduplicates.
+    /// Exec-tool contract (`tools/xm/exec_common.rs`): `client_order_id` =
+    /// the tool's `client_order_id` arg if given, else `call_id`; refuse
+    /// when neither exists — never a random id, so a retry deduplicates.
     pub call_id: Option<&'a str>,
 }
 

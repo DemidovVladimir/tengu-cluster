@@ -345,7 +345,8 @@ fn hl_xyz(c: Case) -> Case {
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
 /// ledger lands in `<TENGU_HOME>/state/conf/ledger.db`; the kill-switch file
-/// sits outside the workspace (absent).
+/// sits outside the workspace (absent); Privy signing off (required with
+/// `[risk]`).
 const XM_RISK_TOML: &str = r#"
 [xmarket]
 state = "conf"
@@ -389,6 +390,10 @@ latency_jitter_ms = 100
 fee_tier = 0
 staking_discount_pct = 0
 order_types = ["market", "ioc"]
+
+[default_scopes.sign_and_send_transaction]
+
+[default_scopes.sign_message]
 "#;
 
 /// A skill in the project tier (`<cwd>/skills/demo`).

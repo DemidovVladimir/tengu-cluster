@@ -1,6 +1,41 @@
 # xmarket risk + paper — operator reference (2026-09-30)
 
-The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tool `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Extended by `risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`.
+The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Extended by `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`.
+
+## Load rules (`Config::load`, any violation fails it)
+
+| Rule | Why |
+|---|---|
+| A `[risk]` sandbox is hardened like a Solana signer (`config/hardening.rs`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`; no `[[mcp_servers]]`; no scope grants `shell_bins` (tools without a scope run no shell, in-process and in the bridge) | nothing outside tengu scopes runs (convention 12) |
+| `<TENGU_HOME>/state` (no overlap either way), `kill_switch_file` and the config file itself outside every `fs_roots` and agent `workspace` (symlinks resolved) | `read_file` / `write_file` cannot edit `ledger.db`, delete the kill-switch file or lift a limit for the next load |
+| Exec tools (`paper_order`, `paper_close` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
+| `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the permissive fallback's `default` wallet) |
+
+## Gate enforcement — `run_exec` (every exec tool, in-process and through the bridge)
+
+| Step | Rule | Refusal (tool error, nothing written) |
+|---|---|---|
+| Config | `[risk]` + `[paper]`, the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
+| Agent | the caller is private again at call time (a planner step's `compose.tools` could hand any tool to a routable agent) | `exec_agent_not_private` |
+| Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–128 chars, no whitespace; never random | `no_client_order_id` · `invalid_client_order_id` |
+| Replay | an order stored under the key ⇒ its `paper_fill/1` row (`replayed`): no latency, no book read, nothing written | — |
+| Rows (never fetched) | `mkt_ctx/1` of the open positions + the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first) |
+| Funding | every hour the open positions owe, at a fresh `mkt_ctx/1` rate + oracle, before the order | — |
+| Order | `[paper] order_types`, well-formed; a close = the whole position, reduce-only | `order_type` · `invalid_order` · `no_position` |
+| Latency + book | sleep `latency_ms ± jitter`, then a live `l2Book` (`hl_book/1` recorded + stored); a failed read = the gate's `missing:book` | — |
+| Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: value at marks (day roll), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only | — |
+
+Underlying: the position's; none yet ⇒ the instrument id itself (asset exposure nets per instrument until the catalog, M1). A reduce-only close with no book after the latency is allowed degraded but rejected `stale_book` by the fill.
+
+## `paper_fill/1:<account>:<client_order_id>` (TTL 0: recorded, never cached)
+
+| Status | When | Features that say why |
+|---|---|---|
+| `ok` | filled | `status = filled`, `risk = allow`, `filled_qty`, `avg_px`, `slippage_bps`, `fee_usd`, `levels_used` |
+| `partial` | the IOC bound or visible depth stopped the walk | `status = partial`, `reason` (`bound` · `depth`) |
+| `error` | denied by the gate · rejected by the venue | `risk = deny` + `risk_rule` · `status = rejected` + `reason` (HL code) |
+
+Every row: `latency_ms`, `book_age_ms`, `position_qty_after`, `equity_usd_after` (fresh marks; omitted, never 0, when one fails), `replayed`; `data` = the first failed check, the judged intent, the fill levels, the verdict row id (`risk_decisions.id`). Line 1 carries status, side, the full instrument id, the fill, the verdict and the full key.
 
 ## `[risk]` → gate rules (`evaluate`, first failing rule = the verdict's `rule`)
 

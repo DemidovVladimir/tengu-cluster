@@ -8,7 +8,7 @@
 //! | Reads | `l2Book {coin}` (weight 2, full precision, ≤ 20 levels per side); with `include_trades` also `recentTrades {coin}` (20 + 1 per 20 trades), concurrently |
 //! | Writes | the live row (2 s), recorded like `observe()`; an `error` row is recorded, never stored. The stored row carries the notionals of the call that wrote it (`notional_usd_k`) |
 //! | HL errors | `200 null` / `500 null` ⇒ `not_found` (absent); anything else ⇒ `error` with the class (`outbound/hyperliquid/info.rs`) |
-//! | Paper fill engine | [`fresh_book`]: `l2Book` now (never the cache), stored + recorded with the default notionals, `(Observation, L2Book)` or the `ReadError` a `BookSource` returns |
+//! | Paper fill engine | [`HlBookSource`] (the exec tools' live `BookSource`) → [`fresh_book`]: `l2Book` now (never the cache), stored + recorded with the default notionals, `(Observation, L2Book)` or the `ReadError` a `BookSource` returns |
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +31,7 @@ use crate::domain::market::{InstrumentId, HYPERLIQUID};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{now_ms, ErrorClass, ObsSource, Observation, Observed, ReadError};
 use crate::domain::tools as names;
+use crate::ports::book::{BookRead, BookSource};
 use crate::ports::observation::ObservationStore;
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
@@ -180,14 +181,12 @@ pub(crate) async fn read_book(
     (obs, row.book)
 }
 
-/// The paper fill engine's live book (`ports::book::BookSource`, wired by
-/// `risk-gate-enforcement`): `l2Book` for `id` now — never the cache —
-/// recorded and stored as `hl_book/1:<id>` like any `hl_book` read
-/// ([`BookRequest::fresh`]). An empty book (delisted / halted) is a book.
-/// `Err` = no book: `not_applicable` when `id` is not a Hyperliquid
-/// instrument or HL does not know it, else the failed read's class.
-// Consumer lands with `risk-gate-enforcement` (the live `BookSource`).
-#[allow(dead_code)]
+/// The paper fill engine's live book (behind [`HlBookSource`]): `l2Book`
+/// for `id` now — never the cache — recorded and stored as `hl_book/1:<id>`
+/// like any `hl_book` read ([`BookRequest::fresh`]). An empty book
+/// (delisted / halted) is a book. `Err` = no book: `not_applicable` when
+/// `id` is not a Hyperliquid instrument or HL does not know it, else the
+/// failed read's class.
 pub(crate) async fn fresh_book(
     hl: &HlInfo,
     store: Option<&dyn ObservationStore>,
@@ -211,6 +210,40 @@ pub(crate) async fn fresh_book(
                 format!("Hyperliquid does not list {id}"),
             )
         })),
+    }
+}
+
+/// The live `ports::book::BookSource` of the exec tools (tracker convention
+/// 16): [`fresh_book`] per read, on the calling tool's scope and HL budget.
+/// A client that could not be built (a bad `HL_API_URL`) fails every read
+/// with that error — the gate then denies `missing:book`.
+// Constructed by the exec tools (`risk-paper-tools`).
+#[allow(dead_code)]
+pub(crate) struct HlBookSource {
+    pub hl: std::result::Result<HlInfo, ReadError>,
+    pub store: Option<Arc<dyn ObservationStore>>,
+}
+
+#[allow(dead_code)]
+impl HlBookSource {
+    /// The source for one tool call (`HlInfo::from_ctx`).
+    pub(crate) fn for_call(ctx: &ToolCtx<'_>, store: Option<Arc<dyn ObservationStore>>) -> Self {
+        Self {
+            hl: HlInfo::from_ctx(ctx).map_err(|e| read_error("book", &e)),
+            store,
+        }
+    }
+}
+
+#[async_trait]
+impl BookSource for HlBookSource {
+    async fn fresh_book(&self, id: &InstrumentId) -> std::result::Result<BookRead, ReadError> {
+        let hl = self.hl.as_ref().map_err(Clone::clone)?;
+        let (obs, book) = fresh_book(hl, self.store.as_deref(), id, now_ms()).await?;
+        Ok(BookRead {
+            book,
+            observed_at_ms: obs.observed_at_ms,
+        })
     }
 }
 

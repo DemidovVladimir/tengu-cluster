@@ -19,7 +19,7 @@
 //! | `markPx`, `oraclePx`, `midPx`, `impactPxs [bid, ask]`, `prevDayPx`, `premium`, `funding` (per hour), `openInterest` (base), `dayNtlVlm` | `mark`, `oracle`, `mid`, `impact_bid` / `impact_ask`, `prev_day`, `premium`, `funding_1h`, `oi_base`, `vol_24h_usd` |
 //! | null `premium` / `midPx` / `impactPxs` on a listed market | `no_book` (row `partial`) |
 //! | spot: `markPx`, `midPx`, `prevDayPx`, `dayNtlVlm`; pair `tokens [base, quote]` | `mark`, `mid`, `prev_day`, `vol_24h_usd`; `sz_decimals` = base token's, `quote_ccy` = quote token, `display_name` = `BASE/QUOTE` |
-//! | `taker_fee_bps` | `domain::xm::cost::hl_fee_schedule` with the paper fee basis, the deployer scale and growth mode; only on USDC-quoted markets (the aligned-quote term of USDH / USDE / USDT0 is not modelled) — else omitted |
+//! | `taker_fee_bps` | `domain::hl::usdc_fee_schedule` (`domain::xm::cost::hl_fee_schedule`) with the paper fee basis, the deployer scale and growth mode; only on USDC-quoted markets (the aligned-quote term of USDH / USDE / USDT0 is not modelled) — else omitted. The paper fills use the same rule (`domain::hl::paper_fees`) |
 //!
 //! Spot ctx entries without a universe pair (`@71`) and outcome entries
 //! (`#…`) get no rows. A failed side read leaves its field unknown and puts
@@ -33,6 +33,7 @@ use serde_json::Value;
 
 use super::{
     collateral_quote, dex_label, next_funding_ms, perp_asset_id, spot_asset_id, token_quote,
+    usdc_fee_schedule,
 };
 use crate::domain::lp::market::fmt_sig;
 use crate::domain::market::{
@@ -42,7 +43,7 @@ use crate::domain::market::{
 use crate::domain::observation::{
     set_bool, set_int, ErrorClass, Features, Field, ObsStatus, Observed, ReadError,
 };
-use crate::domain::xm::cost::{hl_fee_schedule, HlFeeMarket, HlUserRates};
+use crate::domain::xm::cost::{HlFeeMarket, HlUserRates};
 
 /// `mkt_ctx/1` TTL.
 pub(crate) const CTX_TTL_MS: u64 = 5_000;
@@ -346,18 +347,14 @@ fn small_u32(u: &Value, key: &str) -> Option<u32> {
     u.get(key)?.as_u64().and_then(|x| u32::try_from(x).ok())
 }
 
-/// Taker fee in bps on a USDC-quoted market; `None` when an input is unknown.
+/// Taker fee in bps on a USDC-quoted market (`usdc_fee_schedule`, the rule
+/// the paper fills use); `None` when an input is unknown.
 fn taker_bps(
     rates: Option<HlUserRates>,
     quote: Option<QuoteCcy>,
     market: HlFeeMarket,
 ) -> Option<f64> {
-    if quote != Some(QuoteCcy::Usdc) {
-        return None;
-    }
-    hl_fee_schedule(rates?, 0.0, false, market)
-        .ok()
-        .map(|f| f.taker_bps)
+    usdc_fee_schedule(rates?, quote, market).map(|f| f.taker_bps)
 }
 
 /// `metaAndAssetCtxs {dex}` → one [`CoinRows`] per universe entry (the ctx

@@ -1067,7 +1067,9 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let content = Self::substitute_env_vars(&content)?;
         let mut config: Config = toml::from_str(&content)?;
-        config.validate()?;
+        let mut errors = config.validation_errors();
+        errors.extend(hardening::config_file_errors(&config, path));
+        Self::fail_on(errors)?;
         for warning in config.validation_warnings() {
             tracing::warn!(path = %path.display(), "{warning}");
         }
@@ -1129,9 +1131,14 @@ impl Config {
         }
     }
 
-    /// Validate cross-field configuration invariants.
+    /// Validate cross-field configuration invariants. `Config::load` adds the
+    /// rules that need the file's path (`hardening::config_file_errors`).
     pub fn validate(&self) -> anyhow::Result<()> {
-        let errors = self.validation_errors();
+        Self::fail_on(self.validation_errors())
+    }
+
+    /// `Ok` for no errors, else one error listing them all.
+    fn fail_on(errors: Vec<String>) -> anyhow::Result<()> {
         if errors.is_empty() {
             return Ok(());
         }

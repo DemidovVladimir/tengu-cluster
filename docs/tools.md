@@ -92,7 +92,8 @@ net_hosts = ["*"]
 | `scopes.<tool>` | `fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`. Per-agent entry replaces `default_scopes` wholesale. |
 | Solana tools | need `fs_roots` = the workspace (observation store), `net_hosts` per tool, `env_reads = ["SOLANA_RPC_URL"]` (else the public RPC is used silently). Working example: `sandboxes/lping/config.toml` |
 | Hyperliquid tools | need `fs_roots` = the workspace (observation store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (testnet override; unset = mainnet). Request weight budgets against `[rate_limits.hyperliquid]`. Example: `config.example.toml` |
-| Solana write tools, `mode = "send"` | `[solana] signer_key_file` + `wallets = ["<full pubkey>"]` in that ONE agent's own scope for the tool (never `[default_scopes]`; the agent has no `description`); signing-sandbox rules in `src/config/solana.rs`. Without both they only simulate |
+| Solana write tools, `mode = "send"` | `[solana] signer_key_file` + `wallets = ["<full pubkey>"]` in that ONE agent's own scope for the tool (never `[default_scopes]`; the agent has no `description`); signing-sandbox rules in `src/config/solana.rs` + `src/config/hardening.rs`. Without both they only simulate |
+| `[risk]` sandbox (xmarket) | hardened like a signer (`src/config/hardening.rs`: no shell scope, no `[[mcp_servers]]`, `claude_code` only with built-ins off, `<TENGU_HOME>/state` / kill-switch file / config file outside every fs root); `[default_scopes.sign_and_send_transaction]` + `[default_scopes.sign_message]` required without `wallets` (Privy signing off); exec tools (`domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent — rules `src/config/risk.rs`, doc `docs/xmarket-risk-paper-2026-09-30.md` |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
 
 ## MCP servers

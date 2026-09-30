@@ -264,6 +264,32 @@ impl Position {
     }
 }
 
+/// Hour boundaries whose funding `position` still owes at `now_ms`, oldest
+/// first — the hours [`Position::accrue_funding`] books: on or after
+/// `opened_ms`, after `last_funding_hour_ms`, at most `now_ms`. Flat ⇒ none.
+pub fn due_funding_hours(position: &Position, now_ms: i64) -> Vec<i64> {
+    let Some(opened) = position.opened_ms.filter(|_| !position.is_flat()) else {
+        return Vec::new();
+    };
+    let from_opened = opened.div_euclid(HOUR_MS) * HOUR_MS
+        + if opened.rem_euclid(HOUR_MS) == 0 {
+            0
+        } else {
+            HOUR_MS
+        };
+    let first = match position.last_funding_hour_ms {
+        Some(last) => from_opened.max(last + HOUR_MS),
+        None => from_opened,
+    };
+    let mut out = Vec::new();
+    let mut h = first;
+    while h <= now_ms {
+        out.push(h);
+        h += HOUR_MS;
+    }
+    out
+}
+
 /// Exit deadline of a position after a fill (the ledger's
 /// `positions.exit_at_ms`; exit rules and the weekend fade set one per
 /// order): an open or a flip takes the order's deadline, an increase keeps
@@ -1217,5 +1243,32 @@ mod tests {
         assert_eq!(pp.status(), ObsStatus::Partial);
         assert_eq!(pp.errors().len(), 1);
         assert!(!pp.features().contains_key("leverage"));
+    }
+
+    /// Due hours match what `accrue_funding` books: on or after the open,
+    /// after the last booked hour, up to now; flat owes nothing.
+    #[test]
+    fn due_funding_hours_follow_the_booking_rule() {
+        let mut p = Position::flat(TSLA_HL, TESLA, "hyperliquid");
+        assert!(due_funding_hours(&p, T0 + 5 * HOUR_MS).is_empty(), "flat");
+        p.apply_fill(&fill(TSLA_HL, Side::Buy, 1.0, 100.0, 0.0, T0 + 10 * MIN))
+            .unwrap();
+        assert!(due_funding_hours(&p, T0 + 59 * MIN).is_empty());
+        let due = due_funding_hours(&p, T0 + 3 * HOUR_MS);
+        assert_eq!(due, [T0 + HOUR_MS, T0 + 2 * HOUR_MS, T0 + 3 * HOUR_MS]);
+        for h in &due {
+            assert!(
+                p.accrue_funding(0.0001, 100.0, *h).unwrap().is_some(),
+                "{h}"
+            );
+        }
+        assert!(due_funding_hours(&p, T0 + 3 * HOUR_MS + 59 * MIN).is_empty());
+        // Opened exactly on the hour: that hour is due.
+        let mut q = Position::flat(TSLA_HL, TESLA, "hyperliquid");
+        q.apply_fill(&fill(TSLA_HL, Side::Sell, 1.0, 100.0, 0.0, T0))
+            .unwrap();
+        assert_eq!(due_funding_hours(&q, T0), [T0]);
+        let paid = q.accrue_funding(0.0001, 100.0, T0).unwrap().unwrap();
+        close(paid, -0.01, "a short receives");
     }
 }

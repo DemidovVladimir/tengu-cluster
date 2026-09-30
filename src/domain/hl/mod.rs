@@ -26,8 +26,10 @@
 pub(crate) mod book;
 pub(crate) mod ctx;
 
-use crate::domain::market::QuoteCcy;
-use crate::domain::xm::cost::{CostError, HlKind, HlUserRates};
+use crate::domain::market::{InstrumentKind, MarketInstrument, QuoteCcy};
+use crate::domain::xm::cost::{
+    hl_fee_schedule, CostError, FeeSchedule, HlFeeMarket, HlKind, HlUserRates,
+};
 
 /// How keys and headlines name HL's default dex (the API's `""`).
 pub(crate) const DEFAULT_DEX_LABEL: &str = "default";
@@ -143,6 +145,35 @@ impl FeeBasis {
     pub(crate) fn user_rates(&self, kind: HlKind) -> Result<HlUserRates, CostError> {
         HlUserRates::from_tier(kind, self.tier, self.staking_discount_pct)
     }
+}
+
+/// `hl_fee_schedule` for the paper account on a USDC-quoted market (no
+/// referral discount); `None` on any other quote — the aligned-quote term
+/// of USDH / USDE / USDT0 is not modelled — or a rejected input. The one
+/// rule behind `mkt_ctx/1.taker_fee_bps` and the paper fills.
+pub(crate) fn usdc_fee_schedule(
+    rates: HlUserRates,
+    quote: Option<QuoteCcy>,
+    market: HlFeeMarket,
+) -> Option<FeeSchedule> {
+    if quote != Some(QuoteCcy::Usdc) {
+        return None;
+    }
+    hl_fee_schedule(rates, 0.0, false, market).ok()
+}
+
+/// The paper fee schedule of a Hyperliquid perp from its `mkt_instrument/1`
+/// row: `basis` × deployer fee scale × growth mode (`usdc_fee_schedule`);
+/// `None` for a spot / outcome market or an unknown input.
+pub(crate) fn paper_fees(inst: &MarketInstrument, basis: FeeBasis) -> Option<FeeSchedule> {
+    if inst.kind != InstrumentKind::Perp {
+        return None;
+    }
+    let market = HlFeeMarket::Perp {
+        deployer_fee_scale: inst.deployer_fee_scale?,
+        growth_mode: inst.growth_mode?,
+    };
+    usdc_fee_schedule(basis.user_rates(HlKind::Perp).ok()?, inst.quote_ccy, market)
 }
 
 #[cfg(test)]

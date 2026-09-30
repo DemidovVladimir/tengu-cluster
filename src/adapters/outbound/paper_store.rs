@@ -784,6 +784,27 @@ impl PaperLedger for SqlitePaperLedger {
         self.with_conn(move |c| read_order(c, &account, &id)).await
     }
 
+    async fn stored(&self, account: &str, client_order_id: &str) -> Result<Option<Placement>> {
+        let (account, id) = (account.to_string(), client_order_id.to_string());
+        self.with_conn(move |conn| {
+            // One read transaction: the order, its verdict and the account agree.
+            let tx = conn.transaction()?;
+            let Some(order) = read_order(&tx, &account, &id)? else {
+                return Ok(None);
+            };
+            let decision = read_decision(&tx, order.decision_id)?;
+            let (a, _) = load_account(&tx, &account)?;
+            tx.commit()?;
+            Ok(Some(Placement {
+                replayed: true,
+                decision,
+                order: Some(order),
+                account: a,
+            }))
+        })
+        .await
+    }
+
     async fn decisions(&self, account: &str, limit: usize) -> Result<Vec<StoredDecision>> {
         let account = account.to_string();
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);

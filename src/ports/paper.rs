@@ -12,13 +12,14 @@
 //! | [`PaperLedger::update_risk_state`] | one `BEGIN IMMEDIATE`: `update(&snapshot)` returns the next risk state (the `risk_status` roll + trips, `tengu risk halt / resume`); `Err` writes nothing |
 //! | [`PaperLedger::accrue_funding`] | one `BEGIN IMMEDIATE`: the HL funding of one hour boundary, once per (account, instrument, hour) |
 //! | [`PaperLedger::open_account`] | creates the account and its `deposit` cash row once |
-//! | reads | [`PaperLedger::snapshot`], [`PaperLedger::order`], [`PaperLedger::decisions`], [`PaperLedger::accounts`] |
+//! | reads | [`PaperLedger::snapshot`], [`PaperLedger::order`], [`PaperLedger::stored`] (a replay without the write lock), [`PaperLedger::decisions`], [`PaperLedger::accounts`] |
 //!
 //! `decide` runs while the ledger's write lock is held: every read (books,
 //! ctx rows, the opportunity row, the kill-switch file) happens before
 //! `place`, so the closure only computes.
 
-// Consumers land in wave W1 (`risk-gate-enforcement`, `risk-paper-tools`).
+// `place` / `stored` / `accrue_funding` callers land with `risk-paper-tools`
+// (the exec tools run `tools/xm/exec_common.rs::run_exec`).
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -184,6 +185,15 @@ pub(crate) trait PaperLedger: Send + Sync {
         account: &str,
         client_order_id: &str,
     ) -> anyhow::Result<Option<StoredOrder>>;
+    /// `place`'s replay answer without its write lock: the stored order, the
+    /// verdict that allowed it and the account now (`replayed = true`).
+    /// `None` = no order under that id — the exec tools check this before
+    /// the latency and the book read.
+    async fn stored(
+        &self,
+        account: &str,
+        client_order_id: &str,
+    ) -> anyhow::Result<Option<Placement>>;
     /// Verdict rows of `account`, newest first, at most `limit`.
     async fn decisions(&self, account: &str, limit: usize) -> anyhow::Result<Vec<StoredDecision>>;
     /// Book the HL funding of hour boundary `hour_ms` for `instrument`

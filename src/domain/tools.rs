@@ -32,6 +32,23 @@ pub(crate) const HL_BOOK: &str = "hl_book";
 // xmarket risk / paper family (`adapters/outbound/tools/xm/`) — typed rows
 // over the paper ledger; one `xm` plugin serves all of them.
 pub(crate) const RISK_STATUS: &str = "risk_status";
+pub(crate) const PAPER_ORDER: &str = "paper_order";
+pub(crate) const PAPER_CLOSE: &str = "paper_close";
+
+/// Exec tools: each places orders through the `[risk]` gate inside the tool
+/// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
+/// transaction). Only a private agent may hold one — no `description`, not
+/// `default`, no webhook endpoint's `agent` (`config/risk.rs`, and again at
+/// call time).
+pub(crate) const XM_EXEC_TOOLS: &[&str] = &[PAPER_ORDER, PAPER_CLOSE];
+
+// Privy wallet tools (`adapters/outbound/tools/crypto/`) that sign; a
+// `[risk]` sandbox turns them off (`config/risk.rs`).
+pub(crate) const SIGN_AND_SEND_TRANSACTION: &str = "sign_and_send_transaction";
+pub(crate) const SIGN_MESSAGE: &str = "sign_message";
+
+/// Every Privy tool that signs with a wallet (`ToolScope::check_wallet`).
+pub(crate) const PRIVY_SIGNING_TOOLS: &[&str] = &[SIGN_AND_SEND_TRANSACTION, SIGN_MESSAGE];
 
 /// Every opt-in workspace tool name.
 pub(crate) const WORKSPACE_TOOLS: &[&str] = &[

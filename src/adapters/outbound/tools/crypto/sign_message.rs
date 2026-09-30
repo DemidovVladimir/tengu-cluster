@@ -20,7 +20,7 @@ impl SignMessageTool {
     pub(crate) fn new() -> Self {
         Self {
             def: ToolDef::new(
-                "sign_message",
+                crate::domain::tools::SIGN_MESSAGE,
                 "Sign a message via Privy wallet.",
                 json!({
                     "type": "object",

@@ -364,16 +364,33 @@ fn handle_tools_list(id: serde_json::Value, tools: &[McpToolDef]) -> JsonRpcResp
     JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
 }
 
-/// `ToolCall.id` — and so `ToolCtx.call_id` — for a `tools/call` request: its
-/// JSON-RPC id, a string verbatim, a number in decimal. No id = empty = no
-/// call id (never a random one). `tengu tool call --batch` maps a line's
-/// `call_id` with it too (`cli/tool.rs`).
+/// This process's call-id nonce: a uuid (32 hex digits) minted once. The
+/// Claude CLI numbers its JSON-RPC requests from the start again in every
+/// session, and each turn or plan step runs a new CLI and so a new bridge;
+/// the nonce keeps an exec tool's idempotency key (`client_order_id` =
+/// `ToolCtx.call_id`) from matching an earlier process's order, which would
+/// replay that order's stored fill instead of placing this one.
+pub(crate) fn call_nonce() -> &'static str {
+    static NONCE: once_cell::sync::Lazy<String> =
+        once_cell::sync::Lazy::new(|| uuid::Uuid::new_v4().simple().to_string());
+    NONCE.as_str()
+}
+
+/// `ToolCall.id` — and so `ToolCtx.call_id` — for a `tools/call` request:
+/// `mcp:<call_nonce>:<JSON-RPC id>` (the id a string verbatim, a number in
+/// decimal). No id = empty = no call id (never a random one). `tengu tool
+/// call` maps `--call-id` and a batch line's `call_id` with it too
+/// (`cli/tool.rs`).
 pub(crate) fn call_id(id: &serde_json::Value) -> String {
-    match id {
+    let raw = match id {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
         _ => String::new(),
+    };
+    if raw.is_empty() {
+        return raw;
     }
+    format!("mcp:{}:{raw}", call_nonce())
 }
 
 async fn handle_tools_call(
@@ -920,7 +937,8 @@ net_hosts = ["api.hyperliquid.xyz"]
         assert!(!err.to_string().contains(KEY), "{err}");
     }
 
-    /// The JSON-RPC request id is the tool's `ToolCtx.call_id`.
+    /// The JSON-RPC request id, behind this process's nonce, is the tool's
+    /// `ToolCtx.call_id`.
     #[tokio::test]
     async fn request_id_is_the_call_id() {
         let ws = TempDir::new().unwrap();
@@ -929,12 +947,19 @@ net_hosts = ["api.hyperliquid.xyz"]
             with_probe(build_bridge_executor(&s, &no_secrets()).await.unwrap()),
             &no_secrets(),
         );
+        let nonce = call_nonce();
+        assert!(
+            nonce.len() == 32 && nonce.chars().all(|c| c.is_ascii_hexdigit()),
+            "{nonce}"
+        );
+        assert_eq!(call_nonce(), nonce, "one nonce per process");
         let seen = |r: Value| -> Value { serde_json::from_str(text(&r)).unwrap() };
         let n = seen(call(exec.as_ref(), json!(42), "probe", json!({})).await);
-        assert_eq!(n["call_id"], "42");
+        assert_eq!(n["call_id"], format!("mcp:{nonce}:42"));
         let s = seen(call(exec.as_ref(), json!("req-7"), "probe", json!({})).await);
-        assert_eq!(s["call_id"], "req-7");
+        assert_eq!(s["call_id"], format!("mcp:{nonce}:req-7"));
         let none = seen(call(exec.as_ref(), Value::Null, "probe", json!({})).await);
         assert!(none["call_id"].is_null());
+        assert_eq!(call_id(&json!("")), "", "an empty id is no id");
     }
 }

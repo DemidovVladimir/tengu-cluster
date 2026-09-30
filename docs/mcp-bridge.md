@@ -103,7 +103,7 @@ Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `wor
 | Scopes | `resolve_tool_scopes(workspace, agent.scopes, …, agent.no_shell_fallback)` — the in-process call |
 | `no_shell` | from the agent (`no_shell_fallback`: signing sandbox, later `[risk]`); the permissive fallback then has no `shell_bins` |
 | Secrets + redaction | `process_secret_registry(None)`: values named in `TENGU_SECRETS_LOADED` + `TENGU_MASTER_PASSWORD`, never prompts (same function as the CLI and `run-agent`); `SanitizedToolExecutor` redacts text and typed observations; error text is redacted too |
-| Call id | `ToolCall.id` = the JSON-RPC `tools/call` id (string verbatim, number in decimal; none → no id) → `ToolCtx.call_id`. Ids restart with each Claude CLI session |
+| Call id | `ToolCall.id` = `mcp:<process nonce>:<JSON-RPC tools/call id>` (the id a string verbatim, a number in decimal; none → no id) → `ToolCtx.call_id`. The nonce (a uuid, 32 hex digits, `mcp_bridge::call_nonce`) is minted once per bridge process: JSON-RPC ids restart with every Claude CLI session, and every turn or plan step starts a new CLI + bridge — without it an exec tool's idempotency key (`client_order_id` = call id) would replay an earlier session's order. `tengu tool call` maps `--call-id` / batch `call_id` the same way (its own nonce) |
 | Egress | the loaded config's `[egress]`, overridden by `TENGU_EGRESS` |
 
 A standalone `tengu mcp-bridge` (no `TENGU_EGRESS`, no config file) installs `EgressConfig::default()` — `network = "tor"`, i.e. `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides).
@@ -160,9 +160,9 @@ server starts even without these — tool calls just error or degrade.
 
 | Test | Covers |
 |---|---|
-| `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` |
+| `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` (`mcp:<nonce>:<id>`) |
 | `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`; `tool_use` → `tool_result` pairs become `StreamEvent::ToolRan` |
-| `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]` |
+| `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]`, runs tools as the configured agent; two bridge processes give the same JSON-RPC id two call ids (`mcp:<nonce>:<id>`) |
 | `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20) |
 | `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs the workspace, Hyperliquid and `risk_status` tool sets through a real bridge — workspace grant under `run-agent`, a registered secret back as `[REDACTED]` (`docs/engine-backends.md` § Engine matrix) |
 

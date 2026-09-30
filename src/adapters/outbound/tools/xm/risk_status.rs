@@ -3,7 +3,7 @@
 //!
 //! | Step | Rule |
 //! |---|---|
-//! | Refuse | no `[risk]` ⇒ `risk_config_missing`; no ledger ⇒ its reason (no `[xmarket]`) |
+//! | Refuse | no `[risk]` ⇒ `risk_config_missing`; no ledger ⇒ `state_dir_missing` (no `[xmarket]`) / `ledger_unavailable` |
 //! | Account | `[risk] account`, created with `[paper] initial_cash_usd` on first use |
 //! | Marks | the open positions' `mkt_ctx/1:<id>` rows in the workspace store — never fetched: `mark` at the row's time; missing, failed or older than `[risk] max_data_age_ms.ctx` ⇒ that position's numbers are omitted (`partial`), never 0 |
 //! | Kill switch | `kill_switch_file` present ⇒ a `file` halt; unreadable ⇒ an error field, reported halted |
@@ -350,11 +350,11 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         let dir = tempfile::tempdir().unwrap();
         let l = Arc::new(SqlitePaperLedger::open(dir.path()).unwrap());
         let mut s = shared(None, l, dir.path());
-        s.ledger = Err("no [xmarket] section".into());
+        s.ledger = Err("state_dir_missing: paper ledger unavailable: no [xmarket] section".into());
         let e = read_status(&s, NOW).await.unwrap_err();
         assert!(
             e.to_string()
-                .contains("paper ledger unavailable: no [xmarket]"),
+                .starts_with("state_dir_missing: paper ledger unavailable: no [xmarket]"),
             "{e}"
         );
         s.risk = None;

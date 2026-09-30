@@ -26,7 +26,7 @@ impl SignAndSendTransactionTool {
     pub(crate) fn new(cancel: Option<Arc<AtomicBool>>) -> Self {
         Self {
             def: ToolDef::new(
-                "sign_and_send_transaction",
+                crate::domain::tools::SIGN_AND_SEND_TRANSACTION,
                 "Sign and send an EVM transaction via Privy wallet.",
                 json!({
                     "type": "object",

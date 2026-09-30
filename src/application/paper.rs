@@ -14,18 +14,39 @@
 //!
 //! A caller that re-reads its position after the sleep (the gate's ledger
 //! transaction) re-runs `simulate_fill` on `PaperFill.book` — pure, cheap.
+//!
+//! [`decide`] is that step for the exec tools (`risk-gate-enforcement`,
+//! `tools/xm/exec_common.rs`): the `Decide` closure `PaperLedger::place` runs
+//! inside its transaction.
+//!
+//! | Step (on the snapshot read inside the transaction) | Rule |
+//! |---|---|
+//! | Value | `RiskState::value` at the plan's marks with the UTC day rolled |
+//! | Intent | the order's size at the post-latency book's mid (else the mark, else the position's entry); a close = the whole snapshot position, opposite side; underlying = the position's, else the instrument id |
+//! | Gate | `evaluate` against the plan's legs (the book read after the latency, the `mkt_ctx/1` row), opportunity row and kill-switch probe |
+//! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; no book ⇒ refused `stale_book` (a degraded exit may be allowed without one) |
+//! | Trips | the verdict's halts recorded (`RiskState::trip`) |
 
-// Consumers land next wave (`risk-gate-enforcement`, `risk-paper-tools`).
+// Callers land with `risk-paper-tools` (the exec tools run `run_exec`).
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
 use crate::config::risk::{OrderType, PaperConfig};
-use crate::domain::observation::ReadError;
+use crate::domain::book::Side;
+use crate::domain::observation::{Field, ReadError};
+use crate::domain::xm::cost::FeeSchedule;
+use crate::domain::xm::ledger::{Mark, Position};
 use crate::domain::xm::paper::{
-    check_order, jittered_latency_ms, simulate_fill, FillEnv, FillReason, FillResult, OrderKind,
-    PaperOrder, Tif,
+    check_order, jittered_latency_ms, simulate_fill, FillEnv, FillReason, FillResult, MarketStatus,
+    OrderKind, OrderSize, PaperOrder, Tif, VenueRules,
+};
+use crate::domain::xm::risk::{
+    evaluate, venue_of, EdgeInput, LegMarket, OrderIntent, RiskContext, RiskLimits,
 };
 use crate::ports::book::{BookRead, BookSource};
 use crate::ports::clock::Clock;
+use crate::ports::paper::{Decide, Decision, LedgerSnapshot, Outcome};
 
 /// One paper order after its latency.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +116,133 @@ pub(crate) async fn fill_with_latency(
         latency_ms,
         book: Some(read),
         result,
+    })
+}
+
+/// Everything an exec order read before `PaperLedger::place`: the closure
+/// only computes (`ports/paper.rs`).
+pub(crate) struct ExecPlan {
+    /// The gate's limits: `[risk]`, or a shadow account's own.
+    pub limits: RiskLimits,
+    /// The order as sent — sized from the position read before the latency.
+    pub order: PaperOrder,
+    /// Close the whole position: size and side from the snapshot.
+    pub close: bool,
+    pub strategy: Option<String>,
+    pub hedge_instrument: Option<String>,
+    pub opportunity_key: Option<String>,
+    pub exit_at_ms: Option<i64>,
+    /// Marks by full id: the open positions and the order's instrument.
+    pub marks: BTreeMap<String, Field<Mark>>,
+    /// Market inputs by full id: the order leg (the book below + its
+    /// `mkt_ctx/1` row), the hedge leg.
+    pub legs: BTreeMap<String, LegMarket>,
+    pub opportunity: Field<EdgeInput>,
+    pub kill_switch: Field<bool>,
+    pub rules: VenueRules,
+    pub fees: FeeSchedule,
+    pub status: MarketStatus,
+    /// The book read after the latency, or why there is none.
+    pub book: Result<BookRead, ReadError>,
+}
+
+/// The ledger closure for `plan` (module table).
+pub(crate) fn decide(plan: ExecPlan) -> Decide {
+    Box::new(move |snap: &LedgerSnapshot| {
+        let now = snap.now_ms;
+        let limits = &plan.limits;
+        let id = plan.order.instrument.to_string();
+        let held = snap.account.positions.get(&id);
+        let underlying = held.map_or_else(|| id.clone(), |p| p.underlying.clone());
+        let position = held
+            .cloned()
+            .unwrap_or_else(|| Position::flat(&id, &underlying, venue_of(&id).unwrap_or_default()));
+        let mut order = plan.order.clone();
+        if plan.close {
+            if position.qty != 0.0 {
+                order.side = if position.qty > 0.0 {
+                    Side::Sell
+                } else {
+                    Side::Buy
+                };
+            }
+            // Flat inside the transaction ⇒ qty 0 ⇒ denied `intent`.
+            order.size = OrderSize::Qty(position.qty.abs());
+        }
+        let book_mid = plan.book.as_ref().ok().and_then(|b| b.book.mid());
+        let mark_px = plan.marks.get(&id).and_then(|m| m.value()).map(|m| m.px);
+        let ref_px = book_mid
+            .or(mark_px)
+            .or(position.avg_px)
+            .filter(|p| p.is_finite() && *p > 0.0);
+        let (qty, notional_usd) = match (order.size, ref_px) {
+            (OrderSize::Qty(q), Some(px)) => (q, q * px),
+            (OrderSize::Qty(q), None) => (q, f64::NAN),
+            (OrderSize::NotionalUsd(n), Some(px)) => (n / px, n),
+            (OrderSize::NotionalUsd(n), None) => (f64::NAN, n),
+        };
+        let intent = OrderIntent {
+            account: limits.account.clone(),
+            instrument: id.clone(),
+            underlying,
+            side: order.side,
+            qty,
+            notional_usd,
+            reduce_only: order.reduce_only,
+            strategy: plan.strategy.clone(),
+            hedge_instrument: plan.hedge_instrument.clone(),
+            opportunity_key: plan.opportunity_key.clone(),
+        };
+        let (valued, rolled) =
+            snap.risk
+                .value(&snap.account, &plan.marks, now, limits.max_data_age_ms.ctx);
+        let ctx = RiskContext {
+            account: valued,
+            halt: rolled.effective_halt(now).cloned(),
+            kill_switch: plan.kill_switch.clone(),
+            lifecycle: Field::Absent,
+            orders_last_min: snap.orders_last_min,
+            open_orders: snap.open_orders,
+            legs: plan.legs.clone(),
+            opportunity: plan.opportunity.clone(),
+        };
+        let verdict = evaluate(&intent, &ctx, limits, now);
+        let outcome = if verdict.allow {
+            let env = FillEnv {
+                rules: &plan.rules,
+                status: plan.status,
+                position: &position,
+                fees: &plan.fees,
+                max_book_age_ms: limits.max_data_age_ms.book,
+            };
+            let result = match &plan.book {
+                Ok(read) => simulate_fill(&order, &read.book, read.age_ms(now), &env),
+                Err(e) => FillResult::refused(
+                    &order,
+                    FillReason::StaleBook,
+                    &format!(
+                        "no book after the latency: {} {} {}",
+                        e.field,
+                        e.class.as_str(),
+                        e.message
+                    ),
+                ),
+            };
+            Outcome::Sent {
+                result,
+                exit_at_ms: plan.exit_at_ms,
+            }
+        } else {
+            Outcome::Denied
+        };
+        let next = rolled.trip(&verdict.trips, now);
+        Decision {
+            intent,
+            verdict,
+            context: ctx.digest(now),
+            outcome,
+            risk: (next != snap.risk).then_some(next),
+        }
     })
 }
 

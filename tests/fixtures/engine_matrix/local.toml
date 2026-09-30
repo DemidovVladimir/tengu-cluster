@@ -46,7 +46,7 @@ require_hedge_for = ["convergence"]
 max_skew_ms = 5000
 max_orders_per_min = 6
 max_open_orders = 4
-kill_switch_file = "/nonexistent/tengu-engine-matrix/KILL"
+kill_switch_file = "/nonexistent/tengu-engine-matrix-kill/KILL"   # outside every fs root (hardened sandbox)
 allow_reduce_degraded = true
 
 [risk.max_data_age_ms]
@@ -62,6 +62,12 @@ latency_jitter_ms = 100
 fee_tier = 0
 staking_discount_pct = 0
 order_types = ["market", "ioc"]
+
+# [risk] turns Privy signing off: both signing tools need an explicit scope
+# without wallets (src/config/risk.rs).
+[default_scopes.sign_and_send_transaction]
+
+[default_scopes.sign_message]
 
 # Configured scopes that do NOT cover the workspace: every tool works only
 # through the workspace grant a run-agent step adds to each configured scope

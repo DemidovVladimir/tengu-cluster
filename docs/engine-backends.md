@@ -147,7 +147,7 @@ The CLI runs with `--dangerously-skip-permissions`; there is no per-call permiss
 | Builtin tools | `--tools` per profile (above) |
 | MCP servers | `--strict-mcp-config`: the tengu bridge only, never the operator's own |
 | Tengu tools | `--allowedTools mcp__tengu-tools__<name>` for each bridged tool only |
-| Hardened sandbox (`src/config/hardening.rs`: a `[solana]` signer) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `editor_shell` = refused); every agent's fallback scope runs no shell (`no_shell_fallback`) |
+| Hardened sandbox (`src/config/hardening.rs`: a `[solana]` signer or `[risk]`, one code path) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `editor_shell` = refused), any `[[mcp_servers]]`, any scope granting `shell_bins`, and an fs root / workspace reaching the signer key, `<TENGU_HOME>/state`, the kill-switch file or the config file; every agent's fallback scope runs no shell (`no_shell_fallback`) |
 | Per-tool scopes | `[default_scopes.*]` / `[agents.<id>.scopes.*]` exported as `TENGU_BRIDGE_SCOPES`; the bridge enforces them (`fs_roots` includes the child workspace) |
 | Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy |
 
@@ -158,7 +158,7 @@ Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, w
 | Rule | State |
 |---|---|
 | Every tengu tool works 100 % under all three engines — `openrouter`, `local` (in-process) and `claude_code` (through the bridge, exactly as in-process) — no exceptions | Rule in CLAUDE.md / AGENTS.md step 4; milestone E0 in `docs/xmarket-tracker-2026-09-29.md` (schema lint, bridge parity + conformance, local context fit, live engine-matrix smoke on OpenRouter, Ollama `gemma4:latest` and the Claude CLI); the bridge's parity gaps are listed in [[mcp-bridge]] § Known Limitations |
-| Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Done for a Solana signer (`x-claude-code-hardening`): `--strict-mcp-config` on every run; load rule in `src/config/hardening.rs` (replaced the signer's blanket `claude_code` refusal). `[risk]` joins the predicate with its section |
+| Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Done (`x-claude-code-hardening`, `risk-gate-enforcement`): `--strict-mcp-config` on every run; load rules in `src/config/hardening.rs` for a signer and `[risk]` alike (replaced the signer's blanket `claude_code` refusal) |
 
 ### MCP Bridge
 
