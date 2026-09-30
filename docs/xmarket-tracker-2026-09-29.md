@@ -46,7 +46,7 @@ For an implementation session: read this section and § 4, then [`xmarket-build-
 |---|---|
 | 0 | Read [`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md) — the operator kept the full plan with that report attached as a warning (§ 7 #20). Check its follow-ups (holdout test result; weekend order books in `<TENGU_HOME>/state/xmarket/research/weekend-2026-10-02/`) before step 1 |
 | 1 | Build plan § "Before the first item": branch `feature/xmarket` from `main`, commit the planning docs, baseline checks, engines ready |
-| 2 | Wave W1 (branch `feature/xmarket`, deadline Fri 2026-10-02 18:00 ET for `sandboxes/xmarket-weekend`): 29 items ✅ — wave A, wave B, `risk-gate-enforcement`, `risk-paper-tools` (paper flow live-green on OpenRouter + Claude CLI), `risk-audit-verdicts`, `x-exit-rules` (`xm_exits` live-green in the xm legs: gemini-2.5-flash-lite, claude-haiku-4.5, Claude CLI). **Operator rule: one agent at a time, low priority, no local models on this Mac** (SESSION_HANDOFF top). Next, in order: `x-shared-workspace-and-state-layout` → `ops-sandbox-config`; `x-engine-parity-audit` (leads: W1 notes); then D (`x-weekend-fade-strategy` → `x-weekend-sandbox` + 30-min soak) |
+| 2 | Wave W1 (branch `feature/xmarket`, deadline Fri 2026-10-02 18:00 ET for `sandboxes/xmarket-weekend`): 29 items ✅ — waves A + B, `risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`. **Operator rule: one agent at a time, low priority, no local models on this Mac** (SESSION_HANDOFF top). Next, in order (weekend deadline first): `x-shared-workspace-and-state-layout` → `x-weekend-fade-strategy` → `x-weekend-sandbox` + 30-min soak (inputs: `~/.tengu/state/xmarket/research/{replay-2026-09-26,wave_d_notes.md}`) → `ops-sandbox-config` → `x-engine-parity-audit` (leads: W1 notes) → W1 gate |
 | 3 | Then waves W2–W9 in order (build plan § Waves), each ending at its gate |
 | 4 | Operator inputs: build plan § Operator inputs (and § 6 here) |
 
@@ -204,9 +204,9 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ b2082d7 | `risk-exec-idempotency-ids` | `ToolCtx.call_id` + restart-safe loop ids (`{loop}:{session}:{t}`) | §30 §31 §32 | S | rust |
 | ✅ 5dd0a96 | `risk-gate-enforcement` | Gate inside every exec tool, in-process and through the bridge alike + `[risk]` load rules: no shell anywhere, `claude_code` only when hardened (convention 12), no `[[mcp_servers]]` | §26 §28 §30 §36 | M | rust |
 | ✅ 4209d64 | `risk-paper-tools` | `paper_order`, `paper_close`, `paper_positions` (typed results) | §22 §30 §31 | M | rust |
-| ✅ | `x-exit-rules` | Exit rules for every open position: take-profit / stop-loss (bps) + max holding time, checked by a `kind = "tick"` feed that calls `paper_close` (live entries also carry exchange-side TP / SL, `risk-hl-exchange`) — keeps the $100 budget turning over | §25 §28 §30 | M | rust |
+| ✅ 845cf25 | `x-exit-rules` | Exit rules for every open position: take-profit / stop-loss (bps) + max holding time, checked by a `kind = "tick"` feed that calls `paper_close` (live entries also carry exchange-side TP / SL, `risk-hl-exchange`) — keeps the $100 budget turning over | §25 §28 §30 | M | rust |
 | ✅ ea69033 | `risk-kill-switch` | Kill switch + daily / total loss trip; `tengu risk status / halt / resume` (TTY only); `risk_status` tool | §28 §29 §32 | M | rust |
-| ✅ | `risk-audit-verdicts` | `risk_decisions` table joinable with the decision audit by `call_id` | §28 §31 §32 | S | rust |
+| ✅ 1cd924d | `risk-audit-verdicts` | `risk_decisions` table joinable with the decision audit by `call_id` | §28 §31 §32 | S | rust |
 | ✅ 3963c59 | `ops-audit-atomic-write` | Decision audit: one write per line, a line for failed Jev calls, ms timestamps | §31 §32 | S | rust |
 | ☐ | `jev-xmarket-loops-toml` | `[decision_loops.*]` + planner / executor agents; M0 loop `inspect_book` → `compare` → `paper_enter`, `escalate = false` (loop set per convention 8) | §22 §27 §30 | M | toml |
 | ✅ 7fad3a6 | `rt-health` | Feed / loop health rows, heartbeat, `tengu doctor --live` for the Docker healthcheck | §20 §28 | S | rust |
