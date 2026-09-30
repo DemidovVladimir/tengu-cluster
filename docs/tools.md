@@ -31,8 +31,12 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (from `ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*(..)` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
-4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint`.
-5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add its bridge-conformance and engine-matrix smoke cases (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`). The bridge's current parity gaps are listed in CLAUDE.md / AGENTS.md (Key gotchas).
+4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
+5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add:
+   - a bridge conformance case — one `case("<tool>", json!({..}))` row in `tests/bridge_conformance.rs::cases()` with its scope TOML, mock replies (fixtures under `tests/fixtures/<area>/`) and expected outcome; `bridge_conformance` fails for a catalog tool without one (`docs/mcp-bridge.md` § Testing);
+   - its engine-matrix smoke case (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`).
+
+   Open parity gaps: `docs/mcp-bridge.md` § Parity rule.
 
 ## Tool schema subset
 

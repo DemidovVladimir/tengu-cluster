@@ -6,6 +6,7 @@ mod doctor;
 mod history;
 mod run_agent;
 mod skill;
+mod tool;
 
 use clap::{Parser, Subcommand};
 
@@ -184,6 +185,15 @@ enum Commands {
     /// `[agents.<name>]` block of the parent's config.
     #[command(hide = true)]
     RunAgent,
+    /// INTERNAL — run one catalog tool in-process as `[agents.<name>]` and
+    /// print `{text, observation, is_error}` (`tool call`), or list every
+    /// catalog tool (`tool list`). The in-process half of
+    /// `tests/bridge_conformance.rs`; see `cli/tool.rs`.
+    #[command(hide = true)]
+    Tool {
+        #[command(subcommand)]
+        action: tool::ToolAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -336,6 +346,19 @@ pub(crate) async fn run() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
         return run_agent_subprocess().await;
+    }
+
+    if let Some(Commands::Tool { action }) = cli.command {
+        // stdout is one JSON value; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return tool::run_tool_command(cli.config, action).await;
     }
 
     let tengu_home = resolve_tengu_home();
@@ -633,6 +656,9 @@ pub(crate) async fn run() -> Result<()> {
             // Handled by the early-return in main(); this arm is for
             // exhaustiveness only.
             unreachable!("Commands::RunAgent is dispatched earlier in main()")
+        }
+        Commands::Tool { .. } => {
+            unreachable!("Commands::Tool is dispatched earlier in main()")
         }
     }
 }

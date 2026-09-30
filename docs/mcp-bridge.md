@@ -163,15 +163,54 @@ server starts even without these — tool calls just error or degrade.
 | `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` |
 | `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT` |
 | `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]` |
+| `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20) |
 
 Manual test with stdin:
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-bridge
 ```
 
+### Conformance harness (`x-bridge-conformance-test`)
+
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_AGENT_IPC=1`). 45 cases on 8 threads, < 10 s.
+
+| Must match (both sides normalised) | How |
+|---|---|
+| `is_error` + text per step, and the case's expected outcome | bridge `result.content[0].text` vs `tengu tool call` `text` |
+| Files left under the workspace and `TENGU_HOME` | SQLite files dumped as sorted rows per table (`observations` without `observed_at_ms`; history day files, `solana-writes.db`, `cache.db` …), text files as content |
+| Upstream requests | a loopback mock logs every request; sorted lists compared |
+| Completeness | every `tengu tool list` name has a case; a case for a tool the build lacks fails unless `.gated()` (feature) |
+
+| Fixture | Rule |
+|---|---|
+| Network | `[egress] network = "open"`, `allow_hosts = ["127.0.0.1"]`: hard-coded upstream hosts are refused (deterministic error), never reached |
+| Upstreams | mock routes: method + path + substrings → inline JSON, a `tests/fixtures/…` file, or `getMultipleAccounts` built from captured accounts; base-URL overrides via `.scoped("SOLANA_RPC_URL")` / `.scoped("HL_API_URL")` (scope with the workspace, `127.0.0.1`, the env var → the mock) |
+| Secrets | `TENGU_SECRETS_LOADED` names a test secret on both sides; it must come back `[REDACTED]` |
+| Result size | cases stay under the bridge's cap (`TENGU_BRIDGE_MAX_RESULT_CHARS`, 50 000): only the bridge truncates, the in-process executor does not (engines cap later) |
+| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids — table in the test's module doc |
+| Debug | `TENGU_CONFORMANCE_VERBOSE=1 cargo test --test bridge_conformance -- --nocapture` prints each case's text, files and requests |
+
+Add a case — one row in `cases()`, e.g. a Hyperliquid read:
+
+```rust
+case("hl_ctx", json!({"coin": "xyz:TSLA"}))
+    .scoped("HL_API_URL")
+    .route(post("/info").has("\"type\":\"metaAndAssetCtxs\"").has("\"dex\":\"xyz\"")
+        .file("hyperliquid/metaAndAssetCtxs_xyz.json"))
+    .ok("hyperliquid:xyz:TSLA"),
+```
+
+Tools whose upstream host is hard-coded (no base-URL override) run their deterministic path: `sol_price` + `lp_snapshot` oracle (`lite-api.jup.ag`), `dlmm_pools` (`dlmm.datapi.meteora.ag`), `jupiter_swap` simulate (Jupiter Ultra), Privy crypto tools (no `PRIVY_*` env), memory tools (no embeddings key), `agentic_memory` (no `TENGU_MEMORY_DATABASE_URL`, `--features postgres_memory`).
+
 ## Parity rule (operator, 2026-09-30)
 
-Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). `x-bridge-parity` (2026-09-30) closed the config, secrets, `no_shell` and call-id gaps (§ Configuration); `x-claude-code-hardening` added `--strict-mcp-config` and built-in tools off in hardened sandboxes. Still open in E0 (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-conformance-test` (a CI case per catalog tool), `x-engine-parity-audit` (shell-skill tools are not bridged).
+Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). `x-bridge-parity` (2026-09-30) closed the config, secrets, `no_shell` and call-id gaps (§ Configuration); `x-claude-code-hardening` added `--strict-mcp-config` and built-in tools off in hardened sandboxes; `x-bridge-conformance-test` checks every catalog tool in CI (§ Testing). Still open in E0 (`docs/xmarket-tracker-2026-09-29.md`), `x-engine-parity-audit`:
+
+| Gap | Where |
+|---|---|
+| Shell-skill tools are not bridged | the bridge has no `SkillRegistry` |
+| `compress_and_store` through the bridge answers `ERROR: Tool 'compress_and_store' is not available to this agent.` — only the `run-agent` loop intercepts it (OpenRouter / local); a Claude Code subagent's summary falls back to its final text | bridge + `run-agent` |
+| In-process executors register every `[[mcp_servers]]` tool (`McpPlugin` with an empty allow-list), so a tool outside the agent's `tools` still runs in-process; the bridge refuses it | `bootstrap/tools.rs::build_tool_executor` |
 
 ## Known Limitations
 

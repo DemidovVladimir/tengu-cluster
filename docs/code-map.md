@@ -213,6 +213,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `tests/code_map.rs` | this file lists every source file; `code-map.html` graph is current |
 | `tests/run_agent_ipc.rs` | `tengu run-agent` IPC boundary |
 | `tests/mcp_bridge_external.rs` | bridge proxies `[[mcp_servers]]` (fixture `tests/fixtures/fake_mcp_server.sh`) |
+| `tests/bridge_conformance.rs` | every catalog tool gives the same text + store rows in-process (`tengu tool call`) and through a real `tengu mcp-bridge`; fails for a catalog tool without a case (convention 20) |
 
 ## 7. Every source file
 
@@ -459,7 +460,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/test_support.rs` | 79 | Shared test harness for workspace tool unit tests. |
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 135 | `write_file` tool — write content to a file in the workspace. |
 
-### adapters/inbound — driving adapters (18 files)
+### adapters/inbound — driving adapters (19 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -471,6 +472,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/cli/mod.rs` | 624 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
+| `src/adapters/inbound/cli/tool.rs` | 254 | Hidden `tengu tool list|call` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds (bridge conformance harness). |
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
 | `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol. |

@@ -366,8 +366,9 @@ fn handle_tools_list(id: serde_json::Value, tools: &[McpToolDef]) -> JsonRpcResp
 
 /// `ToolCall.id` — and so `ToolCtx.call_id` — for a `tools/call` request: its
 /// JSON-RPC id, a string verbatim, a number in decimal. No id = empty = no
-/// call id (never a random one).
-fn call_id(id: &serde_json::Value) -> String {
+/// call id (never a random one). `tengu tool call --batch` maps a line's
+/// `call_id` with it too (`cli/tool.rs`).
+pub(crate) fn call_id(id: &serde_json::Value) -> String {
     match id {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
