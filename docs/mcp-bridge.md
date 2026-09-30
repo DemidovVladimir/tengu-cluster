@@ -141,7 +141,7 @@ Every tool must work under every engine — `openrouter`, `local` and, through t
 - **Parity gap** — the bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`, the Solana tools) do flow through; other per-agent fields do not (`x-bridge-parity`)
 - **Parity gap** — `TENGU_CONFIG` is not forwarded, so sandbox sections beyond scopes (e.g. `[solana]`, the planned `[risk]` / `[paper]`) are invisible to bridged tools (`x-bridge-parity`)
 - **Parity gap** — the bridge always resolves scopes with `no_shell = false`: tools without a configured scope get the permissive fallback, shell included (`x-bridge-parity`)
-- The engine does not pass `--strict-mcp-config`, so the Claude CLI also loads the user's global plugin MCP servers, outside tengu scopes and egress (`x-claude-code-hardening`)
+- The engine passes `--strict-mcp-config` on every run (`x-claude-code-hardening`): the bridge is the Claude CLI's only MCP server — the user's own / plugin MCP servers are not loaded
 
 ## Related
 - [[engine-backends#Claude Code]] — the engine that spawns the bridge

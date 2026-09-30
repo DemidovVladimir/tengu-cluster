@@ -4,6 +4,7 @@
 
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
+pub(crate) mod hardening;
 pub(crate) mod paths;
 pub(crate) mod risk;
 pub(crate) mod sections;
@@ -386,9 +387,9 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
-    /// Runtime (never in TOML): set by `Config::fold_default_scopes` when
-    /// `[solana] signer_key_file` is configured — tools without a configured
-    /// scope then get a fallback that runs no shell
+    /// Runtime (never in TOML): set by `Config::fold_default_scopes` in a
+    /// hardened sandbox (`config/hardening.rs`: a `[solana]` signer) — tools
+    /// without a configured scope then get a fallback that runs no shell
     /// (`bootstrap::tools::resolve_tool_scopes`).
     #[serde(skip)]
     pub no_shell_fallback: bool,
@@ -1048,11 +1049,11 @@ impl Config {
     /// `AgentConfig`, so the fallback has to be materialised here; `run-agent`
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
-        let signing_sandbox = self.solana.signer_key_file.is_some();
+        let hardened = hardening::requires_hardened_claude_code(self);
         let signer_key_file = self.solana.signer_path();
         let sections = std::sync::Arc::new(self.sandbox_sections());
         for agent in self.agents.values_mut() {
-            agent.no_shell_fallback = signing_sandbox;
+            agent.no_shell_fallback = hardened;
             agent.signer_key_file = signer_key_file.clone();
             agent.sandbox = std::sync::Arc::clone(&sections);
             for (tool, scope) in &self.default_scopes {
@@ -1143,6 +1144,9 @@ impl Config {
             errors.push(issue);
         }
         for issue in solana::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in hardening::validation_errors(self) {
             errors.push(issue);
         }
         if let Some(x) = &self.xmarket {

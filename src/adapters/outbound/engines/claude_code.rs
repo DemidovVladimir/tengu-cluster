@@ -2,7 +2,9 @@
 //!
 //! Uses `claude -p --output-format stream-json` for NDJSON streaming. Claude CLI
 //! spawns as a subprocess, connects to the `tengu mcp-bridge` for Tengu-native
-//! tools, and uses its own native workspace tools (Read, Write, Bash, etc.).
+//! tools, and uses its own native workspace tools (Read, Write, Bash, etc.) per
+//! `builtin_tools_profile`. `--strict-mcp-config` on every run: the bridge is
+//! its only MCP server (`cli_args`).
 //!
 //! The NDJSON stream yields per-turn events: system init (session_id), assistant
 //! messages (text + tool activity), and a final result with cost/usage metrics.
@@ -214,6 +216,54 @@ impl ClaudeCodeEngine {
             }
         })
     }
+}
+
+/// `claude` arguments for one run — all but the prompt (stdin), the working
+/// directory and the env. Pure, so tests pin the hardening flags.
+///
+/// | Arg | Why |
+/// |---|---|
+/// | `--strict-mcp-config` | always: only the `--mcp-config` servers (the tengu bridge), never the operator's user / project / plugin MCP servers — they run outside tengu scopes and egress. No bridge = no MCP server |
+/// | `--tools <profile>` | built-in tools; `""` = none (`builtin_tools_profile = "none"`) |
+/// | `--mcp-config <file>` `--allowedTools mcp__tengu-tools__<name>…` | the bridge; `--tools` covers built-ins only, so each bridged tool is allowed by name |
+fn cli_args(
+    profile: BuiltinToolsProfile,
+    model: Option<&str>,
+    system_prompt: Option<&str>,
+    bridge: Option<(&std::path::Path, &[ToolDef])>,
+) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    if let Some(model) = model {
+        args.extend(["--model".into(), model.into()]);
+    }
+    if let Some(sp) = system_prompt {
+        args.extend(["--system-prompt".into(), sp.into()]);
+    }
+    args.extend(["--tools".into(), profile.cli_tools_arg().into()]);
+    if let Some((config, tools)) = bridge {
+        args.extend(["--mcp-config".into(), config.as_os_str().to_owned()]);
+        // Variadic flag: last, and never bare (the CLI rejects a value-less one).
+        if !tools.is_empty() {
+            args.push("--allowedTools".into());
+            args.extend(
+                tools
+                    .iter()
+                    .map(|t| format!("mcp__tengu-tools__{}", t.name).into()),
+            );
+        }
+    }
+    args
 }
 
 /// Process a single NDJSON line from the Claude CLI stream.
@@ -531,15 +581,10 @@ impl Engine for ClaudeCodeEngine {
             .as_ref()
             .map(|p| crate::config::paths::expand_tilde(p));
 
-        // Build subprocess command
+        // Build subprocess command (arguments: `cli_args`, after the bridge
+        // config is written)
         let mut cmd = tokio::process::Command::new(&self.cli_path);
-        cmd.arg("-p")
-            .arg("--output-format")
-            .arg("stream-json")
-            .arg("--verbose")
-            .arg("--dangerously-skip-permissions")
-            .arg("--no-session-persistence")
-            .stdin(Stdio::piped())
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -549,20 +594,6 @@ impl Engine for ClaudeCodeEngine {
         for (k, v) in crate::adapters::outbound::egress::policy().claude_cli_env() {
             cmd.env(k, v);
         }
-
-        // Model
-        if let Some(ref model) = self.model {
-            cmd.arg("--model").arg(model);
-        }
-
-        // System prompt
-        if let Some(ref sp) = context.system_prompt {
-            cmd.arg("--system-prompt").arg(sp);
-        }
-
-        // Built-in tools based on profile
-        let tools_arg = self.profile.cli_tools_arg();
-        cmd.arg("--tools").arg(&tools_arg);
 
         // Working directory
         if let Some(ref ws) = workspace {
@@ -589,17 +620,6 @@ impl Engine for ClaudeCodeEngine {
                     );
                     let mut tmp = tempfile::NamedTempFile::new()?;
                     serde_json::to_writer(&mut tmp, &config)?;
-                    cmd.arg("--mcp-config").arg(tmp.path());
-
-                    // --tools only allowlists BUILT-IN tools; MCP tools need --allowedTools.
-                    // Without this, the tengu-tools server spawns but its tools are silently
-                    // denied at call time and never appear in the session init manifest.
-                    let mcp_tool_args: Vec<String> = bridge_tools
-                        .iter()
-                        .map(|t| format!("mcp__tengu-tools__{}", t.name))
-                        .collect();
-                    cmd.arg("--allowedTools").args(&mcp_tool_args);
-
                     Some(tmp)
                 } else {
                     None
@@ -608,14 +628,26 @@ impl Engine for ClaudeCodeEngine {
                 None
             };
 
+        // `--tools` only allowlists BUILT-IN tools; without `--allowedTools`
+        // the bridge's tools are silently denied at call time.
+        let bridge = mcp_temp.as_ref().map(|tmp| {
+            let tools: &[ToolDef] = context.bridge_tools.as_deref().unwrap_or_default();
+            (tmp.path(), tools)
+        });
+        cmd.args(cli_args(
+            self.profile,
+            self.model.as_deref(),
+            context.system_prompt.as_deref(),
+            bridge,
+        ));
+
         debug!(
             profile = ?self.profile,
             workspace = ?workspace,
             bridge_tools = context.bridge_tools.as_ref().map(|t| t.len()).unwrap_or(0),
             prompt_len = prompt.len(),
             timeout_secs = self.timeout_secs,
-            tools = %tools_arg,
-            "Spawning Claude Code CLI subprocess (stream-json)"
+            "Spawning Claude Code CLI subprocess (stream-json, --strict-mcp-config)"
         );
 
         // Spawn subprocess
@@ -754,6 +786,72 @@ mod tests {
                 .collect(),
             auth: None,
         }
+    }
+
+    fn strings(args: Vec<std::ffi::OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|a| a.into_string().expect("utf-8 arg"))
+            .collect()
+    }
+
+    fn value_after<'a>(args: &'a [String], flag: &str) -> &'a str {
+        let i = args.iter().position(|a| a == flag).expect(flag);
+        &args[i + 1]
+    }
+
+    /// `--strict-mcp-config` rides on every run — with the bridge (only its
+    /// servers) and without one (no MCP server at all).
+    #[test]
+    fn cli_args_always_pass_strict_mcp_config() {
+        let bare = strings(cli_args(BuiltinToolsProfile::None, None, None, None));
+        assert!(bare.iter().any(|a| a == "--strict-mcp-config"), "{bare:?}");
+        assert_eq!(
+            value_after(&bare, "--tools"),
+            "",
+            "profile none = no built-ins"
+        );
+        assert!(!bare
+            .iter()
+            .any(|a| a == "--mcp-config" || a == "--allowedTools" || a == "--model"));
+
+        let tools = vec![
+            ToolDef::new("read_file", "d", serde_json::json!({})),
+            ToolDef::new("fake__echo", "d", serde_json::json!({})),
+        ];
+        let cfg = std::path::Path::new("/tmp/tengu-mcp.json");
+        let full = strings(cli_args(
+            BuiltinToolsProfile::ReadOnly,
+            Some("claude-haiku-4-5"),
+            Some("be brief"),
+            Some((cfg, &tools)),
+        ));
+        assert!(full.iter().any(|a| a == "--strict-mcp-config"), "{full:?}");
+        assert_eq!(value_after(&full, "--model"), "claude-haiku-4-5");
+        assert_eq!(value_after(&full, "--system-prompt"), "be brief");
+        assert_eq!(value_after(&full, "--tools"), "Read,Glob,Grep");
+        let i = full.iter().position(|a| a == "--mcp-config").unwrap();
+        assert_eq!(
+            full[i..],
+            [
+                "--mcp-config",
+                "/tmp/tengu-mcp.json",
+                "--allowedTools",
+                "mcp__tengu-tools__read_file",
+                "mcp__tengu-tools__fake__echo",
+            ],
+            "variadic --allowedTools comes last"
+        );
+
+        let no_tools = strings(cli_args(
+            BuiltinToolsProfile::None,
+            None,
+            None,
+            Some((cfg, &[])),
+        ));
+        assert!(
+            !no_tools.iter().any(|a| a == "--allowedTools"),
+            "never bare"
+        );
     }
 
     #[test]

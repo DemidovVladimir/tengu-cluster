@@ -87,7 +87,7 @@ Opt-in, one catalog row each. Runner `tools/solana/write_common.rs`; pipeline `o
 | Send rule | Detail |
 |---|---|
 | Signer | `[solana] signer_key_file` (0600; solana-keygen JSON or base58; errors never echo content) + the tool's scope `wallets = ["<full pubkey>"]` on ONE agent + key = `wallet` |
-| Signing sandbox (`config/solana.rs`) | no `claude_code` agent, no `[[mcp_servers]]`, no scope with `shell_bins` (fallback runs no shell), key outside every fs root / workspace; a wallet grant only on an agent with no `description`, not `default`, no webhook `agent`, never in `[default_scopes]`; a `read_only` write action must set `mode = "simulate"` |
+| Signing sandbox (`config/solana.rs`, `config/hardening.rs`) | `claude_code` agents only with `builtin_tools_profile = "none"` (the CLI always runs `--strict-mcp-config`), no `[[mcp_servers]]`, no scope with `shell_bins` (fallback runs no shell), key outside every fs root / workspace; a wallet grant only on an agent with no `description`, not `default`, no webhook `agent`, never in `[default_scopes]`; a `read_only` write action must set `mode = "simulate"` |
 | Lease | `<TENGU_HOME>/state/solana-writes.db`, `wallet:<address>`, 150 s, renewed per tx; held ⇒ `lease_held`. The TS bot is invisible to it — never sign with a wallet the bot runs |
 | Pending record | written before submit; the next send resolves it first: landed ⇒ fence, expired ⇒ cleared, in flight ⇒ refused `pending_unresolved` |
 | Own transactions | simulate (fail / no units ⇒ never sent) → CU `min(1.4M, ⌈units × 1.1⌉)` → price (Helius estimate on a `helius` host, clamp [1 000, 5 000 000] µL/CU, else 1 000) → `sendTransaction` once; a JSON-RPC error = not sent; a transport failure ⇒ one resend of the same bytes |

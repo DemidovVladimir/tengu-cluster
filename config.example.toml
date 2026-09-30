@@ -175,11 +175,12 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # key, only for an agent whose scope for the tool lists the wallet:
 #   [agents.lp_executor.scopes.dlmm_open_position]
 #   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
-# With a signer the sandbox must have: no claude_code agents, no
+# With a signer the sandbox is hardened: claude_code agents only with
+# [agents.<name>.claude_code] builtin_tools_profile = "none", no
 # [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
 # no-shell fallback), and the key outside every fs_roots / workspace. The
 # signing agent has no `description`, is not `default`, and is no webhook
-# endpoint's `agent`. Rules: src/config/solana.rs.
+# endpoint's `agent`. Rules: src/config/solana.rs, src/config/hardening.rs.
 # [solana]
 # signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
 
@@ -305,9 +306,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Run agents powered by your Claude Code subscription instead of API tokens.
 # Requires: cargo build --features claude_code
 # Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
-# Claude loads your CLAUDE.md, skills, MCP servers — everything from the workspace.
-# Tengu-native tools (http_request, crypto, cache) are bridged via MCP.
-# See docs/engine-backends.md for details.
+# Claude loads your CLAUDE.md and skills from the workspace. MCP: only the tengu
+# bridge (--strict-mcp-config) — Tengu-native tools (http_request, crypto,
+# cache) and this sandbox's [[mcp_servers]]; your own Claude MCP servers are
+# not loaded. See docs/engine-backends.md for details.
 
 # [claude_code]
 # cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
@@ -320,7 +322,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"

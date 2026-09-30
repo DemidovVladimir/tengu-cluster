@@ -68,10 +68,10 @@ api_key_env = "UNSLOTH_API_KEY" # unset/empty env → no Authorization header
 Runs agents through the local Claude Code CLI. Uses the operator's Claude subscription instead of API tokens (`ANTHROPIC_API_KEY` is removed from the child env).
 
 ### How it works
-1. `Engine::run()` formats the conversation into one prompt and spawns `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence [--model <bare slug>] --system-prompt <sp> --tools <profile list>` with `current_dir` = workspace
+1. `Engine::run()` formats the conversation into one prompt and spawns `claude -p --output-format stream-json --verbose --dangerously-skip-permissions --no-session-persistence --strict-mcp-config [--model <bare slug>] --system-prompt <sp> --tools <profile list>` with `current_dir` = workspace (args: `claude_code.rs::cli_args`)
 2. `[egress]`: with `route_llm_api` (default under Tor) the child gets `HTTPS_PROXY` / `HTTP_PROXY` = HTTP CONNECT form of the proxy (`socks5h://h:p` → `http://h:p`, Arti serves CONNECT on 9050) and `NO_PROXY=localhost,127.0.0.1,::1` (`egress::claude_cli_env`)
-3. Claude CLI loads its own CLAUDE.md, MCP servers, and native tools — today including the user's global plugin MCP servers, since `--strict-mcp-config` is not passed yet (`x-claude-code-hardening` in `docs/xmarket-tracker-2026-09-29.md`)
-4. Tengu tools (`EngineContext.bridge_tools`) are written to a temp `--mcp-config` that launches `tengu mcp-bridge` ([[mcp-bridge]]); each is allow-listed as `--allowedTools mcp__tengu-tools__<name>`
+3. Claude CLI loads its own CLAUDE.md and native tools. MCP: `--strict-mcp-config` on every run — only the `--mcp-config` servers (the tengu bridge); the operator's user / project / plugin MCP servers are never loaded (no bridge ⇒ no MCP server)
+4. Tengu tools (`EngineContext.bridge_tools`) are written to a temp `--mcp-config` that launches `tengu mcp-bridge` ([[mcp-bridge]]); each is allow-listed as `--allowedTools mcp__tengu-tools__<name>`; the sandbox's `[[mcp_servers]]` reach Claude only through the bridge
 5. Claude executes the full prompt internally (may use many tools across multiple turns)
 6. NDJSON `assistant` text → `StreamEvent::TextDelta`; `result` → `StreamEvent::Done`
 7. Tengu's outer tool loop sees no tool calls — passes through immediately
@@ -105,7 +105,9 @@ The CLI runs with `--dangerously-skip-permissions`; there is no per-call permiss
 | Layer | Mechanism |
 |---|---|
 | Builtin tools | `--tools` per profile (above) |
+| MCP servers | `--strict-mcp-config`: the tengu bridge only, never the operator's own |
 | Tengu tools | `--allowedTools mcp__tengu-tools__<name>` for each bridged tool only |
+| Hardened sandbox (`src/config/hardening.rs`: a `[solana]` signer) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `editor_shell` = refused); every agent's fallback scope runs no shell (`no_shell_fallback`) |
 | Per-tool scopes | `[default_scopes.*]` / `[agents.<id>.scopes.*]` exported as `TENGU_BRIDGE_SCOPES`; the bridge enforces them (`fs_roots` includes the child workspace) |
 | Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy |
 
@@ -116,7 +118,7 @@ Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, w
 | Rule | State |
 |---|---|
 | Every tengu tool works 100 % under all three engines — `openrouter`, `local` (in-process) and `claude_code` (through the bridge, exactly as in-process) — no exceptions | Rule in CLAUDE.md / AGENTS.md step 4; milestone E0 in `docs/xmarket-tracker-2026-09-29.md` (schema lint, bridge parity + conformance, local context fit, live engine-matrix smoke on OpenRouter, Ollama `gemma4:latest` and the Claude CLI); the bridge's parity gaps are listed in [[mcp-bridge]] § Known Limitations |
-| Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Planned (`x-claude-code-hardening`). Today a configured Solana signer refuses every `claude_code` agent at config load (`src/config/solana.rs`) |
+| Where money or signing is involved (a `[risk]` sandbox, a Solana signer), `claude_code` agents are allowed only hardened: `builtin_tools_profile = "none"` + `--strict-mcp-config` | Done for a Solana signer (`x-claude-code-hardening`): `--strict-mcp-config` on every run; load rule in `src/config/hardening.rs` (replaced the signer's blanket `claude_code` refusal). `[risk]` joins the predicate with its section |
 
 ### MCP Bridge
 

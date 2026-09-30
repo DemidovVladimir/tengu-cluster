@@ -9,7 +9,7 @@
 //!
 //! | Rule (load time — any violation fails `Config::load`) | Why |
 //! |---|---|
-//! | Signer: no `engine = "claude_code"` agent | the CLI runs its own shell with the full environment |
+//! | Signer: a hardened sandbox — `engine = "claude_code"` agents only with `builtin_tools_profile = "none"` (`config/hardening.rs`) | the CLI's built-in Read / Bash would ignore tengu scopes |
 //! | Signer: no `[[mcp_servers]]` | foreign processes with our filesystem |
 //! | Signer: no configured scope grants `shell_bins`; tools without a scope get a no-shell fallback (`AgentConfig::no_shell_fallback`, runtime) | a shell reads any file |
 //! | Signer: the key file is absolute (or `~/…`) and outside every `fs_roots` and agent `workspace` | `read_file` / `list_directory` must not reach it |
@@ -93,16 +93,10 @@ fn signer_rules(cfg: &Config, errors: &mut Vec<String>) {
     }
     let key = resolved(&key);
 
+    // `claude_code` agents: `config/hardening.rs` (built-in tools off).
     let mut agents: Vec<_> = cfg.agents.iter().collect();
     agents.sort_by(|a, b| a.0.cmp(b.0));
     for (id, agent) in &agents {
-        if agent.engine == "claude_code" {
-            errors.push(format!(
-                "solana.signer_key_file: agents.{id} uses engine = \"claude_code\" — its CLI \
-                 runs a shell with the full environment and could read the key; keep signing \
-                 sandboxes free of Claude Code agents"
-            ));
-        }
         if let Some(ws) = &agent.workspace {
             let ws = resolved(&expand_tilde(ws));
             if key.starts_with(&ws) {
@@ -260,8 +254,10 @@ mod tests {
         assert_eq!(errs(&cfg), "");
     }
 
+    /// `claude_code` agents are no longer refused here — `config/hardening.rs`
+    /// admits them with built-in tools off.
     #[test]
-    fn signer_refuses_claude_code_mcp_and_shell() {
+    fn signer_refuses_mcp_and_shell_not_claude_code() {
         let mut cfg = with_signer("/keys/signer.json");
         cfg.agents.get_mut("main").unwrap().engine = "claude_code".into();
         cfg.mcp_servers.push(crate::config::McpServerConfig {
@@ -277,10 +273,7 @@ mod tests {
             scope(|s| s.shell_bins = vec!["ls".into()]),
         );
         let e = errs(&cfg);
-        assert!(
-            e.contains("agents.main uses engine = \"claude_code\""),
-            "{e}"
-        );
+        assert!(!e.contains("claude_code"), "{e}");
         assert!(e.contains("[[mcp_servers]] are not allowed"), "{e}");
         assert!(e.contains("default_scopes.run_command.shell_bins"), "{e}");
     }
