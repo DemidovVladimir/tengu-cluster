@@ -4,7 +4,7 @@ What Tengu must add to run [`xmarket-prd-2026-09-29.md`](xmarket-prd-2026-09-29.
 
 | State | Next |
 |---|---|
-| Planning only, no code. 185 items in 11 milestones (E0, M0–M8, M3b), 148 of them Rust. Operator decisions recorded 2026-09-30 (§ 7, PRD addendum): build the full scope; every tool works under `openrouter`, `local` and `claude_code` (convention 20). **Execution: [`xmarket-build-plan-2026-09-30.md`](xmarket-build-plan-2026-09-30.md)** (waves, gates, weekend sandbox, kickoff prompt) | **Feasibility study 2026-09-30: verdict re-scope** ([`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md)) — cross-venue convergence fails; two Hyperliquid-only rules to paper-test. **Operator kept the full plan** (report attached as a warning, § 7 #20). Holdout test done: the weekend fade passes on 53 new names (+49.8 bps, same weekends), the post-earnings rule is not confirmed. Weekend order-book recording Fri 2026-10-02 → Mon 10-05, then § 0 |
+| **W1 in progress on `feature/xmarket` (2026-09-30): wave A merged — 16 items ✅ (5 of 7 E0).** 185 items in 11 milestones (E0, M0–M8, M3b), 148 of them Rust. Operator decisions recorded 2026-09-30 (§ 7, PRD addendum): build the full scope; every tool works under `openrouter`, `local` and `claude_code` (convention 20). **Execution: [`xmarket-build-plan-2026-09-30.md`](xmarket-build-plan-2026-09-30.md)** (waves, gates, weekend sandbox, kickoff prompt) | **Feasibility study 2026-09-30: verdict re-scope** ([`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md)) — cross-venue convergence fails; two Hyperliquid-only rules to paper-test. **Operator kept the full plan** (report attached as a warning, § 7 #20). Holdout test done: the weekend fade passes on 53 new names (+49.8 bps, same weekends), the post-earnings rule is not confirmed. Weekend order-book recording Fri 2026-10-02 → Mon 10-05, then § 0 |
 
 Legend: ☐ open · 🟡 in progress · ✅ done (append PR / commit) · ✖ dropped (say why). Size: S < 1 day · M 1–3 days · L ≈ 1 week · XL > 1 week. Kind: rust · toml · skill · infra · docs · research · account.
 
@@ -46,9 +46,24 @@ For an implementation session: read this section and § 4, then [`xmarket-build-
 |---|---|
 | 0 | Read [`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md) — the operator kept the full plan with that report attached as a warning (§ 7 #20). Check its follow-ups (holdout test result; weekend order books in `<TENGU_HOME>/state/xmarket/research/weekend-2026-10-02/`) before step 1 |
 | 1 | Build plan § "Before the first item": branch `feature/xmarket` from `main`, commit the planning docs, baseline checks, engines ready |
-| 2 | Wave W1: E0 (engine parity for every existing tool + the bridge trio), then the weekend-run slice of M0 / M1 — deadline Fri 2026-10-02 18:00 ET for `sandboxes/xmarket-weekend` |
+| 2 | Wave W1 (branch `feature/xmarket`, deadline Fri 2026-10-02 18:00 ET for `sandboxes/xmarket-weekend`): wave A merged 2026-09-30 (16 items, see the W1 notes below); wave B running (`hl-ctx-tool`, `hl-book-tool`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-kill-switch`, `risk-paper-fill-engine`, `rt-scheduler`, `x-bridge-conformance-test`, `x-engine-matrix-smoke`); then C (`risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`, `x-engine-parity-audit`, `ops-sandbox-config`, `x-shared-workspace-and-state-layout`) and D (`x-weekend-fade-strategy`, `x-weekend-sandbox` + 30-min soak) |
 | 3 | Then waves W2–W9 in order (build plan § Waves), each ending at its gate |
 | 4 | Operator inputs: build plan § Operator inputs (and § 6 here) |
+
+### W1 notes (2026-09-30) — where the code differs from the gaps doc
+
+| Item / topic | Note |
+|---|---|
+| Prep commits | `f2a3fae` `[xmarket] state` + `AgentConfig::sandbox` sections (`config/sections.rs`) + `domain/tz.rs`; `ce56fd3` `ports/clock.rs` — shared seams landed before parallel waves, not tracker items |
+| Sandbox sections | Tools read `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]` via `AgentConfig::sandbox` (one `Arc`, set by `fold_default_scopes`) — not per-section `#[serde(skip)]` fields |
+| `x-bridge-parity` | The Claude CLI merges the `--mcp-config` env over its inherited env (verified 2.1.285): no secret forwarding needed; `load_sandbox_or` pins `TENGU_CONFIG` to the absolute sandbox file |
+| `x-claude-code-hardening` | Predicate `config/hardening.rs::requires_hardened_claude_code` = signer OR `[risk]` (the `[risk]` half added at merge) |
+| `kg-calendars` | Evaluator in `src/domain/calendar.rs` (not `domain/xmarket/`); NYSE 2026–2028 holidays verified on nyse.com |
+| `risk-calc-costs` | Absorbs `hl-fee-model` in `src/domain/xm/cost.rs` (not `domain/hl/fees.rs`); L2 book + walk in `src/domain/book.rs` |
+| `hl-info-client` | `HlInfo` keeps its own egress gate (`http_json` not moved); decimal helpers in `domain/market.rs`; config table is `[rate_limits.<name>]` |
+| `ops-history-recorder` | Store opens go through `open_observation_store(workspace, &sections)`; day files `<state dir>/history/<YYYYMMDD>.db` |
+| Open for the parity audit | Temp `--mcp-config` still carries `OPENROUTER_API_KEY` / `[[mcp_servers]]` values (now redundant, on disk 0600); `compress_and_store` advertised through the bridge but refused; `builtin_tools_profile` values with whitespace map to `editor_shell` outside hardened sandboxes; eval's `StubbedExecutor` lacks `execute_typed` |
+| Open for W1 C/D | `[risk]` without `[xmarket]` loads but has no ledger dir (exec tools refuse) — load rule in `x-shared-workspace-and-state-layout`; HL `stocks` category includes ETFs — the weekend-fade universe needs an explicit exclusion list |
 
 ## 1. Milestones
 
@@ -142,11 +157,11 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 
 | | Id | Item | PRD | Size | Kind |
 |---|---|---|---|---|---|
-| ✅ | `x-tool-schema-lint` | Test: every catalog tool schema stays in the subset OpenRouter's providers, local OpenAI-compatible servers and Claude accept (name `^[a-zA-Z0-9_-]{1,64}$`, object root, no top-level `$ref` / `oneOf`, bounded description length); CI fails otherwise | addendum | S | rust |
-| ✅ | `x-bridge-parity` | `tengu mcp-bridge` runs every catalog tool exactly as in-process: loads the sandbox config (`ClaudeCodeEngine` forwards `TENGU_CONFIG` + the agent name), uses that agent's `AgentConfig` (not the default `main`), the process `SecretRegistry` + `SanitizedToolExecutor`, the agent's `no_shell`, and the MCP request id as `ToolCtx.call_id` | §26 §30 §32 | M | rust |
-| ✅ | `x-claude-code-hardening` | `--strict-mcp-config` in `engines/claude_code.rs` (no user plugin MCP servers); load rule: in a `[risk]` or signing sandbox every `claude_code` agent needs `builtin_tools_profile = "none"`; replaces the Solana signer's blanket `claude_code` refusal (`src/config/solana.rs`) with that rule | §26 §28 | M | rust |
+| ✅ f77320f | `x-tool-schema-lint` | Test: every catalog tool schema stays in the subset OpenRouter's providers, local OpenAI-compatible servers and Claude accept (name `^[a-zA-Z0-9_-]{1,64}$`, object root, no top-level `$ref` / `oneOf`, bounded description length); CI fails otherwise | addendum | S | rust |
+| ✅ c9d3755 | `x-bridge-parity` | `tengu mcp-bridge` runs every catalog tool exactly as in-process: loads the sandbox config (`ClaudeCodeEngine` forwards `TENGU_CONFIG` + the agent name), uses that agent's `AgentConfig` (not the default `main`), the process `SecretRegistry` + `SanitizedToolExecutor`, the agent's `no_shell`, and the MCP request id as `ToolCtx.call_id` | §26 §30 §32 | M | rust |
+| ✅ f3e6bea | `x-claude-code-hardening` | `--strict-mcp-config` in `engines/claude_code.rs` (no user plugin MCP servers); load rule: in a `[risk]` or signing sandbox every `claude_code` agent needs `builtin_tools_profile = "none"`; replaces the Solana signer's blanket `claude_code` refusal (`src/config/solana.rs`) with that rule | §26 §28 | M | rust |
 | ☐ | `x-bridge-conformance-test` | Conformance harness: each catalog tool runs once in-process and once through a real `tengu mcp-bridge` subprocess on the same fixture config; text + store rows must match; CI fails for a catalog row without a case (convention 20) | §30 §32 | M | rust |
-| ✅ | `x-local-model-fit` | Tool results fit a local model's `limits.context_window`: compact `render_text` for typed tools, bounded `data`, per-engine result caps; documented settings for Ollama `gemma4:latest` | addendum | S | rust |
+| ✅ 450d1cf | `x-local-model-fit` | Tool results fit a local model's `limits.context_window`: compact `render_text` for typed tools, bounded `data`, per-engine result caps; documented settings for Ollama `gemma4:latest` | addendum | S | rust |
 | ☐ | `x-engine-matrix-smoke` | Live smoke harness (`#[ignore]` tests + `tengu doctor --engines`): a scripted turn that calls each tool of a set and reads its result, on OpenRouter (`google/gemini-2.5-flash-lite`, `anthropic/claude-haiku-4.5`), Ollama `gemma4:latest` and the Claude CLI (subscription); one fixture sandbox per engine | addendum | M | rust |
 | ☐ | `x-engine-parity-audit` | Run every existing catalog tool (workspace, http, memory, cache, skills, crypto, Solana, agentic memory, …) through the lint, conformance and smoke above and fix every failure; the gap list and fixes are recorded here | addendum | M | rust |
 
@@ -157,11 +172,11 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `ops-sandbox-config` | `sandboxes/xmarket/config.toml` — one owner, sections staged per milestone (agents, egress, scopes, feeds, secrets list) | §1 §26 §27 | S | toml |
 | ☐ | `x-shared-workspace-and-state-layout` | Enforce one xmarket workspace + the `<TENGU_HOME>/state/xmarket/` layout; paths outside every fs root | §30 §32 §36 | S | rust |
 | ☐ | `ops-openrouter-budget-key` | Dedicated OpenRouter key with a daily credit limit — hard cap for LLM and Jev calls, which share it (split keys if escalations ever starve Jev) | §27 | S | account |
-| ✅ | `rt-daemon` | `tengu run --sandbox <s>`: one process for feeds + loops + webhook router (feature-gated); graceful shutdown; single-runner lease | §3 §13 §20 | M | rust |
-| ✅ | `rt-backoff-budget` | Shared backoff per `ErrorClass` (jitter, Retry-After) + the one request limiter, `[rate_limits.<name>]` (token buckets, weights) | §20 §28 | S | rust |
+| ✅ a5ff418 | `rt-daemon` | `tengu run --sandbox <s>`: one process for feeds + loops + webhook router (feature-gated); graceful shutdown; single-runner lease | §3 §13 §20 | M | rust |
+| ✅ 6af07a4 | `rt-backoff-budget` | Shared backoff per `ErrorClass` (jitter, Retry-After) + the one request limiter, `[rate_limits.<name>]` (token buckets, weights) | §20 §28 | S | rust |
 | ☐ | `rt-scheduler` | `[feeds.<n>]` scheduler: `kind = "tick"`, `"tool"`, `"poll"`; M0 feeds name `target = "<loop>"` (direct `handle_event`, one in flight per loop) until `rt-bus-dispatch` adds topics | §19 §20 | M | rust |
-| ✅ | `hl-info-client` | Hyperliquid `POST /info` client on the shared limiter; HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF) | §19 §20 | M | rust |
-| ✅ | `hl-market-schema` | Cross-venue schemas `mkt_instrument/1` + `mkt_ctx/1`, keyed by instrument id | §19 §20 §23 §25 | M | rust |
+| ✅ 2831269 | `hl-info-client` | Hyperliquid `POST /info` client on the shared limiter; HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF) | §19 §20 | M | rust |
+| ✅ f8a46b3 | `hl-market-schema` | Cross-venue schemas `mkt_instrument/1` + `mkt_ctx/1`, keyed by instrument id | §19 §20 §23 §25 | M | rust |
 | ☐ | `hl-ctx-tool` | `hl_ctx`: mark / oracle / mid / impact / basis / funding / OI / volume; each sweep also reads `perpDexs` + `perpsAtOpenInterestCap` into `mkt_instrument/1` (fee scale, growth mode, OI cap, status) — M0 subset of `kg-sync-hyperliquid` | §12 §14 §20 §23 | M | rust |
 | ☐ | `hl-book-tool` | `hl_book`: executable bid / ask, depth, imbalance, VWAP slippage for a notional | §20 §21 §25 §31 | M | rust |
 | ☐ | `info-fetch` | Egress-gated feed fetcher on the shared limiter: headers + User-Agent, conditional GET (`[feeds] kind = "poll"`) | §15 | M | rust |
@@ -169,22 +184,22 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `info-edgar` | EDGAR adapter: `$SEC_USER_AGENT`, ≤ 10 req/s, accession ids, 8-K item codes, CIK → ticker; M0 feed scoped to the allow-listed CIK (Tesla `0001318605`); Ex-99.1 text in M4 | §15 §16 | S | rust |
 | ☐ | `jev-event-key` | Event key ⇒ session id, dedupe window, audit key (M0: EDGAR accession) | §18 §27 §32 | S | rust |
 | ☐ | `jev-event-templating` | `{event:/pointer}` in args and world keys + `FromEvent` slots | §22 §23 | M | rust |
-| ✅ | `risk-config-schema` | `[risk]` + `[paper]` sections: every limit required, no defaults, fail closed; `Config::load` rejects unknown top-level keys | §28 §29 §31 | S | rust |
-| ✅ | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
+| ✅ 21e0936 | `risk-config-schema` | `[risk]` + `[paper]` sections: every limit required, no defaults, fail closed; `Config::load` rejects unknown top-level keys | §28 §29 §31 | S | rust |
+| ✅ b2f4c5c | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
 | ☐ | `risk-calc-tools` | Store-only compute tools `xm_cost`, `xm_compare` (the row the gate re-reads for `min_edge_bps`; M0: HL book vs HL oracle) | §12 §23 §24 §25 | M | rust |
-| ✅ | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
+| ✅ 7bd877c | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
 | ☐ | `risk-gate-domain` | Pure policy: every §28 rule as a `Check`, fail closed on missing data | §13 §28 §29 §30 | M | rust |
 | ☐ | `risk-paper-ledger-store` | `ledger.db`: one account per sandbox, idempotent `client_order_id`, gate + fill + write in one transaction | §31 §32 | M | rust |
 | ☐ | `risk-paper-fill-engine` | Market / IOC orders, L2 depth-walk fills, partial / failed fills, injected latency, HL rejection codes (ALO in P1; AMM / RFQ path in `rh-paper-fill`) | §20 §25 §31 | L | rust |
-| ✅ | `risk-exec-idempotency-ids` | `ToolCtx.call_id` + restart-safe loop ids (`{loop}:{session}:{t}`) | §30 §31 §32 | S | rust |
+| ✅ b2082d7 | `risk-exec-idempotency-ids` | `ToolCtx.call_id` + restart-safe loop ids (`{loop}:{session}:{t}`) | §30 §31 §32 | S | rust |
 | ☐ | `risk-gate-enforcement` | Gate inside every exec tool, in-process and through the bridge alike + `[risk]` load rules: no shell anywhere, `claude_code` only when hardened (convention 12), no `[[mcp_servers]]` | §26 §28 §30 §36 | M | rust |
 | ☐ | `risk-paper-tools` | `paper_order`, `paper_close`, `paper_positions` (typed results) | §22 §30 §31 | M | rust |
 | ☐ | `x-exit-rules` | Exit rules for every open position: take-profit / stop-loss (bps) + max holding time, checked by a `kind = "tick"` feed that calls `paper_close` (live entries also carry exchange-side TP / SL, `risk-hl-exchange`) — keeps the $100 budget turning over | §25 §28 §30 | M | rust |
 | ☐ | `risk-kill-switch` | Kill switch + daily / total loss trip; `tengu risk status / halt / resume` (TTY only); `risk_status` tool | §28 §29 §32 | M | rust |
 | ☐ | `risk-audit-verdicts` | `risk_decisions` table joinable with the decision audit by `call_id` | §28 §31 §32 | S | rust |
-| ✅ | `ops-audit-atomic-write` | Decision audit: one write per line, a line for failed Jev calls, ms timestamps | §31 §32 | S | rust |
+| ✅ 3963c59 | `ops-audit-atomic-write` | Decision audit: one write per line, a line for failed Jev calls, ms timestamps | §31 §32 | S | rust |
 | ☐ | `jev-xmarket-loops-toml` | `[decision_loops.*]` + planner / executor agents; M0 loop `inspect_book` → `compare` → `paper_enter`, `escalate = false` (loop set per convention 8) | §22 §27 §30 | M | toml |
-| ✅ | `rt-health` | Feed / loop health rows, heartbeat, `tengu doctor --live` for the Docker healthcheck | §20 §28 | S | rust |
+| ✅ 7fad3a6 | `rt-health` | Feed / loop health rows, heartbeat, `tengu doctor --live` for the Docker healthcheck | §20 §28 | S | rust |
 | ☐ | `x-weekend-fade-strategy` | Deterministic weekend-fade rule (W): at Sun 18:00 ET (last closed day before a trading day) s = ln(HL at 18:00 / HL at Fri 20:00 ET) per name; paper-fade every eligible name in a shadow ledger (no cap, depth-walk fills) and the 4 names with the largest absolute s, at least 50 bps, at $25 each in the capped ledger; exit Mon 09:00 ET; ET clock ticks via `rt-scheduler` | §21 §31 | M | rust |
 | ☐ | `x-weekend-sandbox` | `sandboxes/xmarket-weekend/config.toml`: floor profile (no LLM, no X, Jev off), `hl_ctx` every 60 s + `hl_book` every 5 min (60 s around entry and exit) with recording, the W strategy, its own state dir; runbook with `caffeinate`; offline replay of the 2026-09-26 → 09-28 weekend + a 30-min live soak (build plan § weekend sandbox) | §31 §35 | S | toml |
 | ☐ | `ops-deploy-compose` | Docker on the operator's Hetzner / Hostinger VPS: `tengu run` service with `restart: unless-stopped`, persistent `<TENGU_HOME>/state/xmarket` + workspace volumes, `webhooks` feature, healthcheck `tengu doctor --live`; operator chat on demand | §35 | M | infra |
@@ -208,11 +223,11 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `kg-equivalence` | Cross-venue equivalence classes with ratios, relation `same` / `proxy`, quote currency, conflict flags | §4 §8 §19 §21 | M | rust |
 | ☐ | `kg-lifecycle` | §29 states, deterministic gates, demotion, audit, fail-closed reads; VALIDATED waits for M2 reference quotes (convention 10) | §28 §29 §32 | M | rust |
 | ☐ | `kg-seed-data` | Curated seeds: non-listed entities, equivalence classes, relationship edges | §4 §5 §10 §11 | S | toml |
-| ✅ | `kg-calendars` | One session evaluator: NYSE holidays / early closes, trade[XYZ] windows, RH mint window, 24/5, 24/7 | §2 §19 §20 §21 | S | rust |
+| ✅ 43427da | `kg-calendars` | One session evaluator: NYSE holidays / early closes, trade[XYZ] windows, RH mint window, 24/5, 24/7 | §2 §19 §20 §21 | S | rust |
 | ☐ | `kg-sync-schedule` | Syncs + lifecycle evaluation as `[feeds.*] kind = "tool"` rows (no host timers) | §19 §29 | S | toml |
 | ☐ | `kg-xm-cli` | `tengu xm sync / seed / status / show / backup` (no LLM) | §19 §29 §32 | S | rust |
 | ☐ | `rh-evm-rpc` | EVM JSON-RPC read transport (`eth_call`, `eth_getLogs`, blocks, Multicall3) + `[evm.chains]`; route the existing receipt poll through it | §1 §19 §20 | M | rust |
-| ✅ | `ops-history-recorder` | `HistoryStore` + SQLite day files under `state/xmarket/history/` (snapshots, depth, funding, OI, events, universe) | §20 §33 §34 | L | rust |
+| ✅ 9b2280f | `ops-history-recorder` | `HistoryStore` + SQLite day files under `state/xmarket/history/` (snapshots, depth, funding, OI, events, universe) | §20 §33 §34 | L | rust |
 | ☐ | `hl-tor-probe` | Probe every xmarket host over Arti exits and from the deployment host's own network (Kazakh connections cannot reach Coinbase, OKX and 1,100+ other platforms); per-host table so `network = "tor"` stays a one-line switch | §20 | S | research |
 | ☐ | `hl-skill` | `skills/hyperliquid/SKILL.md`: info API over `http_request` for the architect | §4 §19 §26 | S | skill |
 | ☐ | `rh-skill` | `skills/robinhood-chain/SKILL.md`: venue knowledge for the architect and planner | §8 §19 §20 §26 | S | skill |

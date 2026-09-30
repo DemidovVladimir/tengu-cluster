@@ -207,7 +207,7 @@ global metrics sink so the TUI sees a unified stream.
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
 3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
-4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint, bridge conformance case and live engine-matrix smoke pass (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`; until E0 lands, config-dependent tools are not at parity — see the gotcha below).
+4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`; see the gotcha below for what is still open).
 
 No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
 
@@ -293,9 +293,9 @@ These are not preferences. They're load-bearing.
   `[default_scopes.<tool>]` / `[agents.<id>.scopes.<tool>]` are folded into
   `AgentConfig.scopes` at `Config::load` (`fold_default_scopes`; per-agent wins
   wholesale; `~` in `fs_roots` expanded). `build_tool_executor` and the MCP
-  bridge (`TENGU_BRIDGE_SCOPES`, exported by `ClaudeCodeEngine::with_scopes`)
-  use the configured scope for each tool and `permissive_scope` only for tools
-  with no entry. A configured scope is deny-by-default per field: an
+  bridge (the agent's folded scopes loaded from `TENGU_CONFIG`;
+  `TENGU_BRIDGE_SCOPES` only as its fallback) use the configured scope for
+  each tool and `permissive_scope` only for tools with no entry. A configured scope is deny-by-default per field: an
   `http_request` scope with empty `fs_roots` denies multipart file uploads —
   `sandboxes/aura/config.toml` sets `fs_roots = ["~/aura-workspace"]` for that
   reason. Subprocess children get their own workspace added to every inherited
@@ -305,7 +305,11 @@ These are not preferences. They're load-bearing.
   wholesale; otherwise `--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`.
   The `run-agent` child gets the same file: `--sandbox` travels over IPC and
   `main` pins `TENGU_CONFIG` to the resolved path so `-c/--config` reaches
-  children and the MCP bridge too; it then takes `[agents.<name>]` from it.
+  children and the MCP bridge too, and `load_sandbox_or` re-pins it to the
+  absolute sandbox file; each takes `[agents.<name>]` from it. `Config` is
+  `deny_unknown_fields` (2026-09-30): an unknown or misspelled top-level key
+  (`[rsik]`) fails the load — a new section must be a `Config` field first
+  (`config::risk::tests` loads every `sandboxes/*/config.toml`).
   Docker mounts `./config.toml` (or `sandboxes/<name>/config.toml` via
   `make up SANDBOX=<name>`) as `TENGU_CONFIG`; `make` derives `NETWORK` from
   that file's `[egress] network`.
@@ -403,8 +407,12 @@ These are not preferences. They're load-bearing.
   `[agents.<n>.local] base_url` / `api_key_env`. Own engine
   `engines/local.rs` (`LocalEngine`); direct connection, never via the
   `[egress]` proxy. Set
-  `limits.context_window` — the 1_000_000 default is wrong for local models.
-  Guide: `docs/engine-backends.md` § Local.
+  `limits.context_window` — the 1_000_000 default is wrong for local models
+  (load warns) and must equal the served window (Ollama:
+  `OLLAMA_CONTEXT_LENGTH`). Local agents get each tool result capped at 1/8
+  of the window and typed rows compacted (`data` → a pointer to the store
+  key; `Engine::tool_result_char_cap`, `Observation::compact_text`);
+  `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
 - **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
   exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
   `network = "open"`; the planned `xmarket` runs `open` and must stay switchable
@@ -482,16 +490,49 @@ These are not preferences. They're load-bearing.
   forms or just attempt the call and read the error.
 - **Every tool must work under every engine — `openrouter`, `local`,
   `claude_code` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
-  to add a new tool". The bridge
-  is not at parity yet: `build_bridge_executor`
-  (`src/adapters/inbound/mcp_bridge.rs`) builds tools from `Config::default()`
-  and the default `main` agent instead of the sandbox config, uses a fresh
-  empty `SecretRegistry` (no redaction of vault secrets) and passes
-  `no_shell = false`; `ClaudeCodeEngine` forwards neither `TENGU_CONFIG` nor
-  `--strict-mcp-config`. Fixes: milestone E0 in
-  `docs/xmarket-tracker-2026-09-29.md` — `x-bridge-parity`,
-  `x-claude-code-hardening`, `x-bridge-conformance-test`, `x-tool-schema-lint`,
-  `x-local-model-fit`, `x-engine-matrix-smoke`, `x-engine-parity-audit`.
+  to add a new tool". Bridge parity (`x-bridge-parity`, 2026-09-30):
+  `ClaudeCodeEngine` forwards `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`;
+  `tengu mcp-bridge` loads that config once and runs tools as
+  `[agents.<name>]` — folded scopes (+ the workspace root under a `run-agent`
+  child), `AgentConfig::sandbox` sections, `no_shell_fallback`, `[memory]` —
+  behind `SanitizedToolExecutor` (`secrets::process_secret_registry`; text,
+  observations and errors redacted), with the JSON-RPC request id as
+  `ToolCtx.call_id`; no config / unknown agent → default `main` +
+  `TENGU_BRIDGE_SCOPES` with a warn. The Claude CLI merges the `--mcp-config`
+  `env` over its inherited env (verified CLI 2.1.285, `docs/mcp-bridge.md`
+  § Env). The engine passes `--strict-mcp-config` on every run (the bridge is
+  its only MCP server). Schemas: `x-tool-schema-lint`. Still open in E0
+  (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-conformance-test`,
+  `x-engine-matrix-smoke`, `x-engine-parity-audit` (shell-skill tools are not
+  bridged; `compress_and_store` is advertised through the bridge but refused).
+- **Hardened sandboxes (2026-09-30, `config/hardening.rs`)** — a `[solana]`
+  signer or a `[risk]` section: every `claude_code` agent must set
+  `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
+  `editor_shell` = load error), and `fold_default_scopes` sets
+  `no_shell_fallback` on every agent (in-process and bridge fallbacks run no
+  shell).
+- **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
+  `config/sections.rs::SandboxSections` (one `Arc` per config, set by
+  `fold_default_scopes`): `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
+  install-wide stores), `[risk]` / `[paper]` (every field required,
+  `config/risk.rs`), `[xmarket.calendars.*]`, `[rate_limits.<name>]`,
+  `[recorder]`. A new section a tool reads goes there — never a new
+  `#[serde(skip)]` field on `AgentConfig`. Every surface (in-process,
+  `run-agent`, loops, `tengu run`, bridge) sees the same values.
+- **`tengu run --sandbox <s>` (2026-09-30, `docs/runtime-2026-09-30.md`)** —
+  one runner per sandbox (lease `runtime:<s>` in `<state dir>/runtime.db`,
+  TTL 30 s; a second instance exits 1); every `[decision_loops.*]` built once
+  behind `LoopDispatch` (one event per loop at a time, `[runtime]
+  max_decisions_in_flight`); `/webhooks/:name` with `--features webhooks`;
+  SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
+  `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
+  --sandbox <s> --live` is the Docker healthcheck. Never run `tengu webhooks`
+  beside `tengu run` for the same sandbox. Budgets: `[rate_limits.<name>]`
+  (`outbound/rate_limit.rs`, per process; unconfigured = unlimited); backoff
+  `domain/backoff.rs`; HTTP errors classify through `outbound/http_class.rs`;
+  Hyperliquid `POST /info` via `outbound/hyperliquid/info.rs` (`500 null` ⇒
+  not applicable). Time: `domain/tz.rs` (NY / Paris DST), `domain/calendar.rs`
+  (NYSE holidays, weekend window), `ports/clock.rs`.
 - **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
   (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
   via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
@@ -500,8 +541,13 @@ These are not preferences. They're load-bearing.
   Jev returns typed choices, never text or tool-call JSON — it cannot be an
   `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
-  `auth_header_env`, not HMAC) or `tengu decide`. History is in-process;
-  audit in `<TENGU_HOME>/logs/decisions.jsonl` (incl. `args`, `ok`, `output`);
+  `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
+  in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
+  exec tools key idempotency on a `client_order_id` arg, else `call_id`).
+  Jev retries once on 429 / 5xx and has a 30 s circuit breaker. Audit in
+  `<TENGU_HOME>/logs/decisions.jsonl` — one `write_all` per line, a line for a
+  failed Jev call (`outcome = "error"`), `ts_ms` / `latency_ms` / `sandbox` /
+  `act_at` (incl. `args`, `ok`, `output`);
   `tengu chat` on a config with `[decision_loops]` tails it and shows each
   decision of those loops as a System bubble. Plan:
   `docs/decision-loop-plan-2026-09-24.md`.
@@ -509,9 +555,13 @@ These are not preferences. They're load-bearing.
   `ToolOutput.observation` (`domain/observation.rs`); `execute_typed` carries
   it (the default wraps `execute`; `PluginToolExecutor` and
   `SanitizedToolExecutor` override it). Typed tools cache through
-  `application/observe.rs::observe()` in `<workspace>/.tengu/observations.db`:
-  key `<schema>:<subject>` with full ids, slot-monotonic, `Error` rows never
-  stored, `max_age_secs = 0` forces a live read. Failed reads are
+  `application/observe.rs::observe()` in `<workspace>/.tengu/observations.db`
+  (open it with `outbound::observations::open_observation_store(workspace,
+  &agent.sandbox)` — with `[recorder]` on it also appends every live result,
+  `Error` and ttl-0 rows too, to `<state dir>/history/<YYYYMMDD>.db`; read
+  with `tengu history range|asof`): key `<schema>:<subject>` with full ids,
+  slot-monotonic, `Error` rows never cached, `max_age_secs = 0` forces a live
+  read. Failed reads are
   `Field::Error` / `ObsStatus`, never 0; `features` ≤ 32 scalars; line 1 of
   `render_text` ≤ 200 chars with full ids. Decision loops read rows via
   `world` (never fetched) and gate actions with `requires`. The 10 Solana
@@ -529,9 +579,10 @@ These are not preferences. They're load-bearing.
   the `wallet` arg) AND `wallets = ["<full pubkey>"]` in that agent's own
   scope for the tool — never in `[default_scopes]`, only on an agent with no
   `description`, not `default`, no webhook `agent`. With a signer,
-  `Config::load` refuses `claude_code` agents, `[[mcp_servers]]`, any scope
-  granting `shell_bins`, and a key inside any fs root / workspace
-  (`config/solana.rs`); the permissive fallback then runs no shell. Sends are
+  `Config::load` refuses `claude_code` agents unless `builtin_tools_profile =
+  "none"` (`config/hardening.rs`), `[[mcp_servers]]`, any scope granting
+  `shell_bins`, and a key inside any fs root / workspace (`config/solana.rs`);
+  the permissive fallback then runs no shell. Sends are
   serialized per wallet by a lease in `<TENGU_HOME>/state/solana-writes.db`
   (+ pending record resolved before the next send, + write fence that makes
   older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so
@@ -579,7 +630,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-30 (operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-09-30 (xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

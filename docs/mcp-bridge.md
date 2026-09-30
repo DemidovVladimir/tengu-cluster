@@ -47,7 +47,7 @@ The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::reg
 
 The bridge does **not** register:
 - The `skill` plugin — shell-skill tools need a `SkillRegistry` the bridge cannot construct; they run in the main Tengu process only
-- The `mcp` plugin — the external Claude Code client has its own MCP server access; surfacing Tengu's inbound MCP manifest through the outbound bridge would cause name collisions and double-hop routing
+- The `mcp` plugin in general — only the `[[mcp_servers]]` the Claude Code engine passes in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names are in the allow-list) are proxied; a standalone bridge registers none. The CLI runs with `--strict-mcp-config`, so the bridge is its only MCP server
 
 ## Configuration
 

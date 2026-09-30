@@ -6,6 +6,19 @@
 
 ---
 
+## Current (2026-09-30, W1 in progress): xmarket wave A merged on `feature/xmarket`
+
+| State | Detail |
+|---|---|
+| Branch | `feature/xmarket` (local, not pushed); one commit per tracker item; progress + deviations: tracker § 0 "Where to begin" + "W1 notes" |
+| Landed (wave A, 16 items) | E0: `x-bridge-parity`, `x-claude-code-hardening`, `x-tool-schema-lint`, `x-local-model-fit` (+ `risk-exec-idempotency-ids`) · M0: `risk-config-schema`, `ops-audit-atomic-write`, `hl-market-schema`, `rt-backoff-budget`, `hl-info-client`, `risk-calc-costs`, `risk-paper-ledger-domain`, `rt-daemon`, `rt-health` · M1: `kg-calendars`, `ops-history-recorder` |
+| Running (wave B) | `hl-ctx-tool`, `hl-book-tool`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-kill-switch`, `risk-paper-fill-engine`, `rt-scheduler`, `x-bridge-conformance-test`, `x-engine-matrix-smoke` |
+| Next | wave C: `risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`, `x-engine-parity-audit`, `ops-sandbox-config`, `x-shared-workspace-and-state-layout`; wave D: `x-weekend-fade-strategy`, `x-weekend-sandbox` + 30-min soak by Fri 2026-10-02 18:00 ET |
+| New commands | `tengu run [--sandbox <s>]` (lease, heartbeat, drain), `tengu doctor --sandbox <s> --live`, `tengu history range|asof <key>` — `docs/runtime-2026-09-30.md` |
+| Verified live | Claude CLI 2.1.285 merges the `--mcp-config` env (secrets reach the bridge by inheritance); without `--strict-mcp-config` it loaded 28 operator MCP servers (144 tools), with it none; all 38 tool schemas accepted by gemini-2.5-flash-lite, claude-haiku-4.5, gpt-4o-mini (OpenRouter) and parsed by Ollama 0.24; a haiku turn through the bridge returned a vault secret as `[REDACTED]` |
+| How waves run | `Workflow` with `isolation: "worktree"` (worktrees start from `main` — agents `git merge --ff-only <base>` first); each agent builds in its own `CARGO_TARGET_DIR` cloned (APFS `cp -Rc`) from `~/.cache/tengu-xm/seed` — a shared `target/` let a stale test binary from a deleted worktree run (`tests/code_map.rs` "NotFound"); coordinator cherry-picks one item at a time, adds code-map rows + regenerates the html, ticks the tracker, runs the item gate |
+| Weekend data | throwaway sampler pid in `~/.tengu/state/xmarket/research/weekend-2026-10-02/sampler.pid` (records Fri 19:30 ET → Mon 10:00 ET); 5m candles of the 2026-09-26 weekend for all 128 xyz markets saved outside the repo for the replay fixture |
+
 ## Next session (set 2026-09-30): build xmarket — start with the build plan
 
 | Read | Why |
