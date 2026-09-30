@@ -26,6 +26,32 @@
     { "side": "buy", "target": { "qty": 100 }, "limit_px": 347.27, "filled_qty": 61.594, "filled_notional": 21388.57325, "vwap": 347.25092135597623145111, "worst_px": 347.27, "levels": 4, "slippage_bps_vs_mid": 1.6106613279635781, "slippage_bps_vs_touch": 0.6025215556326196, "unfilled": 38.406, "end": "limit" },
     { "side": "sell", "target": { "qty": 100 }, "limit_px": 347.12, "filled_qty": 98.15, "filled_notional": 34073.48478, "vwap": 347.15725705552725420275, "worst_px": 347.12, "levels": 3, "slippage_bps_vs_mid": 1.0870820280460777, "slippage_bps_vs_touch": 0.0790109595790355, "unfilled": 1.85, "end": "limit" }
   ],
+  "fills": {
+    "about": "Paper fill engine goldens (src/domain/xm/paper.rs, risk-paper-fill-engine), hand-computed with bc on the same body; no script kept. Taker fee 0.9 bps (xyz:TSLA tier 0: 4.5 x 2 x 0.1). szDecimals 3: prices 5 significant figures and <= 3 decimals. Market IOC bound = ref x (1 +/- max_slippage_bps / 1e4), buy rounded down, sell up; limit IOC bound = the tighter of limit_px and that. Notional sizes = notional / ref rounded down to 3 decimals; ref = the book mid 347.195 unless ref_mid is given. Value for MinTradeNtl = size x bound.",
+    "vectors": [
+      { "order": "market buy notional 1000, 30 bps", "raw_qty": 2.880225809703480752891, "order_qty": 2.88, "raw_bound": 348.236585, "bound_px": 348.23, "status": "filled", "filled_qty": 2.88, "filled_notional": 1000.0224, "avg_px": 347.23, "slippage_bps": 1.0080790333962182635, "fee_usd": 0.090002016, "levels": 1 },
+      { "order": "market buy notional 10000, 30 bps", "raw_qty": 28.802258097034807528910, "order_qty": 28.802, "bound_px": 348.23, "status": "filled", "filled_qty": 28.802, "filled_notional": 10000.99987, "avg_px": 347.232826539823623359488924380251, "slippage_bps": 1.0894897629177655061, "fee_usd": 0.9000899883, "levels": 2 },
+      { "order": "market sell qty 100, 30 bps", "raw_bound": 346.153415, "bound_px": 346.16, "status": "filled", "filled_qty": 100, "filled_notional": 34715.63828, "avg_px": 347.1563828, "slippage_bps": 1.1122625613848125, "fee_usd": 3.1244074452, "levels": 4 },
+      { "order": "market sell notional 50000, 30 bps", "raw_qty": 144.011290485174037644551, "order_qty": 144.011, "bound_px": 346.16, "status": "filled", "filled_qty": 144.011, "filled_notional": 49992.29649, "avg_px": 347.142207817458388595315635611168, "slippage_bps": 1.5205340670692666854, "fee_usd": 4.4993066841, "levels": 4 },
+      { "order": "market buy notional 25, 30 bps", "raw_qty": 0.072005645242587018822, "order_qty": 0.072, "bound_px": 348.23, "value_usd": 25.07256, "status": "filled", "filled_qty": 0.072, "filled_notional": 25.00056, "avg_px": 347.23, "fee_usd": 0.0022500504, "levels": 1 },
+      { "order": "market buy notional 10.5, 30 bps", "raw_qty": 0.030242371001886547905, "order_qty": 0.03, "value_usd": 10.4469, "status": "filled", "filled_notional": 10.4169, "fee_usd": 0.000937521 },
+      { "order": "market buy qty 100, 2 bps", "raw_bound": 347.264439, "bound_px": 347.26, "status": "partial", "reason": "bound", "filled_qty": 32.572, "filled_notional": 11310.10331, "avg_px": 347.233922080314380449465798845634, "slippage_bps": 1.1210438028883033876, "fee_usd": 1.0179092979, "levels": 3 },
+      { "order": "market buy qty 1000, 100 bps", "raw_bound": 350.66695, "bound_px": 350.66, "status": "partial", "reason": "depth", "filled_qty": 530.752, "filled_notional": 184357.9116, "avg_px": 347.35226923308814662968, "slippage_bps": 4.5297090421275257, "fee_usd": 16.592212044, "levels": 20 },
+      { "order": "limit IOC buy qty 100 @ 347.27, 30 bps", "bound_px": 347.27, "status": "partial", "reason": "bound", "filled_qty": 61.594, "filled_notional": 21388.57325, "avg_px": 347.25092135597623145111, "slippage_bps": 1.6106613279635781, "fee_usd": 1.9249715925, "levels": 4 },
+      { "order": "limit IOC sell qty 100 @ 347.12, 30 bps", "bound_px": 347.12, "status": "partial", "reason": "bound", "filled_qty": 98.15, "filled_notional": 34073.48478, "avg_px": 347.15725705552725420275, "slippage_bps": 1.0870820280460777, "fee_usd": 3.0666136302, "levels": 3 },
+      { "order": "reduce-only market sell qty 5 vs long 2", "order_qty": 2, "status": "filled", "filled_notional": 694.32 },
+      { "order": "reduce-only market sell notional 25 vs long 0.009 (whole position, exempt from $10)", "order_qty": 0.009, "value_usd": 3.11544, "status": "filled", "filled_notional": 3.12444 }
+    ],
+    "rejections": [
+      { "order": "market buy notional 10, 30 bps", "raw_qty": 0.028802258097034807528, "order_qty": 0.028, "value_usd": 9.75044, "reason": "MinTradeNtl" },
+      { "order": "reduce-only market sell qty 0.02 vs long 2", "value_usd": 6.9232, "reason": "MinTradeNtl" },
+      { "order": "limit IOC buy qty 1 @ 347.165", "reason": "Tick", "why": "6 significant figures" },
+      { "order": "limit IOC buy qty 1 @ 347.2", "reason": "IocCancel", "why": "best ask 347.23 above the limit" },
+      { "order": "market buy notional 1000, ref_mid 345 (priced before a move)", "raw_qty": 2.898550724637681159, "order_qty": 2.898, "raw_bound": 346.035, "bound_px": 346.03, "value_usd": 1002.79494, "reason": "MarketOrderNoLiquidity", "why": "best ask 347.23 above the bound" },
+      { "order": "market buy notional 1000, oracle band 100 bps, oracle 340", "bound_px": 348.23, "deviation_bps": 242.0588235294117647, "reason": "Oracle" },
+      { "order": "market buy notional 1000, oracle band 100 bps, oracle 347", "bound_px": 348.23, "deviation_bps": 35.4466858789625360, "reason": null }
+    ]
+  },
   "depth_within": [
     { "bps": 2, "bid_floor": 347.125561, "ask_ceiling": 347.264439, "bid_levels": 2, "bid_usd": 33860.00598, "ask_levels": 3, "ask_usd": 11310.10331 },
     { "bps": 5, "bid_floor": 347.0214025, "ask_ceiling": 347.3685975, "bid_levels": 10, "bid_usd": 151769.13046, "ask_levels": 12, "ask_usd": 97621.23158 },

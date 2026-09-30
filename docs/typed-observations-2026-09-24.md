@@ -151,6 +151,22 @@ Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_
 | `403` | `auth_required` — "blocked (geo/WAF/Tor exit?)" |
 | other `5xx` · timeout · non-JSON `200` | `transient` · `timeout` · `decode` |
 
+## Paper fills (xmarket `risk-paper-fill-engine`, 2026-09-30)
+
+Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16). No tool yet: `paper_order` / `paper_close` (`risk-paper-tools`, row `paper_fill/1:<account>:<client_order_id>`) and the live / replay `BookSource` (`risk-gate-enforcement`, `ops-replay-harness`) wire it. Here until the risk + paper operator doc (`risk-docs`).
+
+| Piece | Rule |
+|---|---|
+| Order | `PaperOrder {client_order_id, instrument (full id), side, size {qty \| notional_usd}, kind market \| limit, tif ioc, limit_px (limit only), reduce_only, max_slippage_bps, ref_mid?}` — GTC / ALO P1; AMM / RFQ venues `rh-paper-fill` (M6) |
+| Inputs | `VenueRules {kind perp \| spot, sz_decimals, min_notional_usd (HL 10), oracle_band {oracle_px, max_bps}?, at_oi_cap?}` · `MarketStatus` open \| halted \| closed \| delisted · the position · `FeeSchedule` · `[risk] max_data_age_ms.book` |
+| Latency | `[paper] latency_ms ± latency_jitter_ms`, uniform in an injected `rand01`: sleep on the `Clock`, THEN `fresh_book`, THEN fill THAT book (the market moves meanwhile); `ref_mid` = the pre-latency price anchor. `[paper] order_types` gates `market` / `ioc`. A failed read = `Err`, nothing filled |
+| Bound, size | market = ref ± `max_slippage_bps` on the HL tick grid (buy rounded down, sell up); limit = the tighter of `limit_px` and that. Notional ⇒ size = notional / ref, rounded down to `szDecimals`; ref = `ref_mid`, else the book mid |
+| Fill | `domain/book.rs` walk to the bound, taker fee ⇒ `filled` · `partial` (`bound` / `depth` — never hidden liquidity) · `rejected`; missing numbers `None`, never 0 |
+| Rejections, first failing check | `invalid_order` · `market_halted` / `market_closed` / `delisted` · `stale_book` / `bad_book` · `missing:mid` · `Tick` · `Oracle` / `missing:oracle` · `ReduceOnly` · `MinTradeNtl` (size × bound < $10; a reduce-only whole-position close is exempt) · `PositionIncreaseAtOpenInterestCap` / `PositionFlipAtOpenInterestCap` / `missing:at_oi_cap` · `MarketOrderNoLiquidity` (market) / `IocCancel` (limit). HL codes verbatim; `message` leads with HL's documented error string |
+| Ledger | `FillResult::ledger_fill(underlying, ts)` ⇒ `xm/ledger.rs::Fill` (qty, VWAP, fee) |
+| Unconfirmed until a testnet fill (M3b) | a market order that takes nothing = `MarketOrderNoLiquidity`; reduce-only closes under $10 accepted; the oracle band width is an input (HL documents none) |
+| Goldens | `tests/fixtures/xm/meta.json` `fills` (bc on `l2_xyz_TSLA.json`) |
+
 ## Review fixes (2026-09-25)
 
 | Rule | Behaviour |
