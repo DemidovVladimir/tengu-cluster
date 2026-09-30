@@ -402,7 +402,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [feeds.xm_exits]                          # the exit rules (x-exit-rules): no LLM, no Jev
 # kind = "tool"
 # agent = "xm_exec"                         # the private exec agent; its `tools` list xm_exits
-# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps)
+# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps); needs the hl_ctx feed
+#                                           # (mkt_instrument/1 rows for closes, mkt_ctx/1 marks for TP / SL);
+#                                           # exits count toward max_orders_per_min
 # every_secs = 15
 # required = true
 #

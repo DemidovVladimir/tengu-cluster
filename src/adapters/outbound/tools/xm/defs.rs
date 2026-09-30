@@ -159,7 +159,8 @@ fn xm_exits() -> ToolDef {
         "Exit rules for the [risk] paper account: close every open position that is due — its \
          exit_at_ms deadline passed, it is older than [risk.exits] max_hold_secs, or its P&L at a \
          fresh mark reached stop_loss_bps / take_profit_bps (mkt_ctx/1 rows from the store; a \
-         missing or stale mark never triggers those two). Each close is a reduce-only market IOC \
+         missing or stale mark never triggers those two; read hl_ctx first — a close also needs \
+         the mkt_instrument/1 row). Each close is a reduce-only market IOC \
          of the whole position through the same [risk] gate, keyed \
          exit:<account>:<instrument>:<reason>:<opened_ms>, so a retry never closes twice. Typed \
          observation xm_exits/1:<account>: n_open, n_due, n_closed, n_failed, n_stale_marks; per \
