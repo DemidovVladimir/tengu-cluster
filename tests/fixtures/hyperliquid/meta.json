@@ -1,0 +1,17 @@
+{
+  "endpoint": "POST https://api.hyperliquid.xyz/info",
+  "captured_at": "2026-09-30T13:38Z/13:40Z",
+  "captured_by": "curl -s -X POST -H 'Content-Type: application/json' -d '<request>' https://api.hyperliquid.xyz/info, run outside the repo (Rust-only repo: no capture script is committed)",
+  "files": {
+    "perpDexs.json": {"request": {"type": "perpDexs"}, "status": 200, "note": "full reply; index 0 is null (the default dex)"},
+    "metaAndAssetCtxs_xyz.json": {"request": {"type": "metaAndAssetCtxs", "dex": "xyz"}, "status": 200, "note": "full reply: 128 markets, xyz:TSLA at index 1"},
+    "metaAndAssetCtxs_default.json": {"request": {"type": "metaAndAssetCtxs"}, "status": 200, "trimmed": "universe and asset ctxs cut to the first 40 of 234 entries, index-aligned (asset ids unchanged); marginTables and collateralToken kept"},
+    "l2Book_xyz_TSLA.json": {"request": {"type": "l2Book", "coin": "xyz:TSLA"}, "status": 200, "note": "20 levels per side"},
+    "l2Book_flx_TSLA.json": {"request": {"type": "l2Book", "coin": "flx:TSLA"}, "status": 200, "note": "delisted market: levels [[],[]]"},
+    "perpsAtOpenInterestCap_xyz.json": {"request": {"type": "perpsAtOpenInterestCap", "dex": "xyz"}, "status": 200, "note": "no xyz market at its cap at capture time"},
+    "perpsAtOpenInterestCap_default.json": {"request": {"type": "perpsAtOpenInterestCap"}, "status": 200},
+    "allPerpMetas.json": {"request": {"type": "allPerpMetas"}, "status": 200, "note": "full reply: 11 dex metas, 530 markets, 329 listed"},
+    "candleSnapshot_xyz_TSLA_1h.json": {"request": {"type": "candleSnapshot", "req": {"coin": "xyz:TSLA", "interval": "1h", "startTime": 1790366400000, "endTime": 1790604000000}}, "status": 200, "note": "Fri 2026-09-25 20:00 UTC to Mon 2026-09-28 14:00 UTC, 67 candles"},
+    "errors.json": {"note": "status, content type and body of three error replies, keyed by case"}
+  }
+}

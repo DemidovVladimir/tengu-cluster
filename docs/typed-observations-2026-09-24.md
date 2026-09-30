@@ -124,7 +124,16 @@ Instrument id = `<venue>:<native id verbatim>` (`docs/xmarket-tracker-2026-09-29
 | `oracle_eq_mark` | mark = oracle (HL: no book, off-hours, delisted) |
 | `max_leverage`, `only_isolated`, `delisted`, `session`, `category`, `growth_mode`, `taker_fee_bps`, `at_oi_cap` | instrument / calendar facts |
 
-Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_dex_quote/1:<id>` follow the same id rule.
+Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_dex_quote/1:<id>` follow the same id rule. Venue decimal strings parse through `domain/market.rs::{parse_decimal, decimal_field}` (malformed ⇒ `decode` field error, `null` ⇒ absent, never 0).
+
+| HL `POST /info` reply (`outbound/hyperliquid/info.rs`) | Class a tool records |
+|---|---|
+| `200 null` | none — `InfoReply::Null`: HL does not know the coin / user (row `absent`) |
+| `500` + body `null` | `not_applicable` — unknown dex / coin, not an outage |
+| `422` (`Failed to deserialize the JSON body …`) | `fatal` — bad request `type` / shape |
+| `429` | `rate_limited` + `retry_after_ms`; the `[rate_limits.hyperliquid]` bucket is drained |
+| `403` | `auth_required` — "blocked (geo/WAF/Tor exit?)" |
+| other `5xx` · timeout · non-JSON `200` | `transient` · `timeout` · `decode` |
 
 ## Review fixes (2026-09-25)
 

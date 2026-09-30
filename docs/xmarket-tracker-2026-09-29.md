@@ -160,7 +160,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ | `rt-daemon` | `tengu run --sandbox <s>`: one process for feeds + loops + webhook router (feature-gated); graceful shutdown; single-runner lease | §3 §13 §20 | M | rust |
 | ✅ | `rt-backoff-budget` | Shared backoff per `ErrorClass` (jitter, Retry-After) + the one request limiter, `[rate_limits.<name>]` (token buckets, weights) | §20 §28 | S | rust |
 | ☐ | `rt-scheduler` | `[feeds.<n>]` scheduler: `kind = "tick"`, `"tool"`, `"poll"`; M0 feeds name `target = "<loop>"` (direct `handle_event`, one in flight per loop) until `rt-bus-dispatch` adds topics | §19 §20 | M | rust |
-| ☐ | `hl-info-client` | Hyperliquid `POST /info` client on the shared limiter; HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF) | §19 §20 | M | rust |
+| ✅ | `hl-info-client` | Hyperliquid `POST /info` client on the shared limiter; HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF) | §19 §20 | M | rust |
 | ✅ | `hl-market-schema` | Cross-venue schemas `mkt_instrument/1` + `mkt_ctx/1`, keyed by instrument id | §19 §20 §23 §25 | M | rust |
 | ☐ | `hl-ctx-tool` | `hl_ctx`: mark / oracle / mid / impact / basis / funding / OI / volume; each sweep also reads `perpDexs` + `perpsAtOpenInterestCap` into `mkt_instrument/1` (fee scale, growth mode, OI cap, status) — M0 subset of `kg-sync-hyperliquid` | §12 §14 §20 §23 | M | rust |
 | ☐ | `hl-book-tool` | `hl_book`: executable bid / ask, depth, imbalance, VWAP slippage for a notional | §20 §21 §25 §31 | M | rust |

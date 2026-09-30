@@ -16,6 +16,7 @@
 //! |---|---|---|
 //! | `http_request` | proxy + `check_url` on every hop (redirects re-checked) + audit | enforced |
 //! | crypto tools (Privy) | proxy (shared tool client) | enforced |
+//! | Hyperliquid info (`outbound/hyperliquid/info.rs`) | tool client + `check_url` + scope `net_hosts` per request + `[rate_limits.hyperliquid]` + audit (`hl_info`) | enforced |
 //! | MCP `http` servers | proxy, loopback exempt | enforced |
 //! | Telegram Bot API (`tengu telegram`) | teloxide client (reqwest 0.11) via HTTP CONNECT on the proxy port (`http_connect_proxy`), 30s/60s timeouts | enforced |
 //! | LLM API (OpenRouter chat, embeddings, wiki compiler) | proxy iff `route_llm_api` (default: on under Tor) | enforced |

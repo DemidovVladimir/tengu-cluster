@@ -19,6 +19,11 @@
 //! Derived features never replace a missing input with 0: `basis_bps` needs
 //! `mark` and a reference (`oracle`, else `index`), `oi_usd` needs `oi_base`
 //! and `mark`, and so on — otherwise the key is omitted.
+//!
+//! Venue decimal strings (HL, Binance, Bybit send prices as strings):
+//! [`parse_decimal`] / [`decimal_field`] → `f64` for features and
+//! arithmetic; decoders keep the raw string where exactness matters (tick
+//! and lot rounding).
 
 // Consumers land next wave (`hl-ctx-tool`, `hl-book-tool`, `kg-sync-*`).
 #![allow(dead_code)]
@@ -26,12 +31,88 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::domain::lp::market::fmt_sig;
 use crate::domain::observation::{
-    set_bool, set_int, set_num, set_str, Features, Field, ObsStatus, Observed, ReadError,
-    MAX_FEATURE_STR,
+    set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsStatus, Observed,
+    ReadError, MAX_FEATURE_STR,
 };
+
+// ---------------------------------------------------------------------------
+// Venue decimal strings
+// ---------------------------------------------------------------------------
+
+/// A venue decimal string (`"347.19"`, `"-0.0000015073"`, `"1e-5"`) → finite
+/// `f64`. Only `[+-]digits[.digits][(e|E)[+-]digits]` parses: no spaces,
+/// no `NaN` / `inf`, no empty string.
+pub(crate) fn parse_decimal(s: &str) -> Option<f64> {
+    let b = s.as_bytes();
+    let digits = |from: usize| b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
+    let int = digits(i);
+    i += int;
+    let mut frac = 0;
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        frac = digits(i);
+        i += frac;
+    }
+    if int + frac == 0 {
+        return None;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let exp = digits(i);
+        if exp == 0 {
+            return None;
+        }
+        i += exp;
+    }
+    if i != b.len() {
+        return None;
+    }
+    s.parse::<f64>().ok().filter(|x| x.is_finite())
+}
+
+/// A decimal string or a JSON number → finite `f64`; anything else `None`.
+pub(crate) fn decimal_value(v: &Value) -> Option<f64> {
+    match v {
+        Value::String(s) => parse_decimal(s),
+        Value::Number(n) => n.as_f64().filter(|x| x.is_finite()),
+        _ => None,
+    }
+}
+
+/// `obj[key]` as a field: a decimal ⇒ `Ok`, `null` / missing ⇒ `Absent`,
+/// anything else ⇒ a `Decode` error named `field` — never 0.
+pub(crate) fn decimal_field(obj: &Value, key: &str, field: &str) -> Field<f64> {
+    let v = match obj.get(key) {
+        None | Some(Value::Null) => return Field::Absent,
+        Some(v) => v,
+    };
+    match decimal_value(v) {
+        Some(x) => Field::ok(x),
+        None => {
+            let what = match v {
+                Value::String(s) => format!("the string \"{s}\""),
+                Value::Number(n) => format!("the number {n}"),
+                Value::Bool(_) => "a bool".to_string(),
+                Value::Array(_) => "an array".to_string(),
+                Value::Object(_) => "an object".to_string(),
+                Value::Null => "null".to_string(),
+            };
+            Field::err(ReadError::new(
+                field,
+                ErrorClass::Decode,
+                format!("{key} is {what}, not a decimal"),
+            ))
+        }
+    }
+}
 
 /// Venue ids of convention 1 (a venue slice adds its own here). Reference
 /// listings use `ref:<MIC>` (ISO 10383, four characters).
@@ -861,6 +942,47 @@ mod tests {
     fn num(f: &Features, k: &str) -> f64 {
         f[k].as_f64()
             .unwrap_or_else(|| panic!("{k} missing in {f:?}"))
+    }
+
+    #[test]
+    fn decimal_strings_parse_strictly() {
+        for (s, want) in [
+            ("347.19", Some(347.19)),
+            ("-0.0000015073", Some(-0.000_001_507_3)),
+            ("0.0", Some(0.0)),
+            ("+5", Some(5.0)),
+            (".5", Some(0.5)),
+            ("5.", Some(5.0)),
+            ("1e-5", Some(1e-5)),
+            ("2.5E3", Some(2_500.0)),
+            ("20249511.1999999993", Some(20_249_511.199_999_999_3)),
+            ("", None),
+            ("-", None),
+            (".", None),
+            (" 1", None),
+            ("1 ", None),
+            ("NaN", None),
+            ("inf", None),
+            ("1e", None),
+            ("1e+", None),
+            ("0x10", None),
+            ("1,5", None),
+            ("1e999", None),
+        ] {
+            assert_eq!(parse_decimal(s), want, "{s:?}");
+        }
+        let ctx = serde_json::json!({
+            "markPx": "347.19", "n": 2.5, "midPx": null, "bad": "abc", "obj": {"a": 1}
+        });
+        assert_eq!(decimal_field(&ctx, "markPx", "mark"), Field::ok(347.19));
+        assert_eq!(decimal_field(&ctx, "n", "n"), Field::ok(2.5));
+        assert_eq!(decimal_field(&ctx, "midPx", "mid"), Field::Absent);
+        assert_eq!(decimal_field(&ctx, "impactPxs", "impact"), Field::Absent);
+        let e = decimal_field(&ctx, "bad", "oracle");
+        let e = e.error().unwrap();
+        assert_eq!((e.field.as_str(), e.class), ("oracle", ErrorClass::Decode));
+        assert_eq!(e.message, "bad is the string \"abc\", not a decimal");
+        assert!(decimal_field(&ctx, "obj", "x").is_error());
     }
 
     #[test]
