@@ -6,9 +6,11 @@
 //! convention 20). A new section a tool needs goes here, not into another
 //! `#[serde(skip)]` field on `AgentConfig`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::risk::{PaperConfig, RiskConfig};
+use crate::domain::calendar::Calendar;
 
 /// Resolved sandbox sections (runtime only, never in TOML).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -21,4 +23,7 @@ pub struct SandboxSections {
     pub risk: Option<RiskConfig>,
     /// `[paper]` — the paper fill engine's knobs (`config/risk.rs`).
     pub paper: Option<PaperConfig>,
+    /// `[xmarket.calendars.<id>]`, built (`domain/calendar.rs`); an invalid
+    /// row fails `Config::load`, so every configured id is here.
+    pub calendars: BTreeMap<String, Calendar>,
 }

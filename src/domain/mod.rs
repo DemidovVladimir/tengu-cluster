@@ -2,6 +2,7 @@
 //! crate except `domain` itself, and no IO crates (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod calendar;
 pub(crate) mod decision;
 pub(crate) mod lp;
 pub(crate) mod market;

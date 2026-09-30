@@ -1082,6 +1082,11 @@ impl Config {
             xm_state_dir: self.xmarket.as_ref().map(|x| x.state_dir(&home)),
             risk: self.risk.as_ref().map(risk::RiskConfig::resolved),
             paper: self.paper.clone(),
+            calendars: self
+                .xmarket
+                .as_ref()
+                .map(|x| x.calendars())
+                .unwrap_or_default(),
         }
     }
 

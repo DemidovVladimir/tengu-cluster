@@ -208,7 +208,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `kg-equivalence` | Cross-venue equivalence classes with ratios, relation `same` / `proxy`, quote currency, conflict flags | §4 §8 §19 §21 | M | rust |
 | ☐ | `kg-lifecycle` | §29 states, deterministic gates, demotion, audit, fail-closed reads; VALIDATED waits for M2 reference quotes (convention 10) | §28 §29 §32 | M | rust |
 | ☐ | `kg-seed-data` | Curated seeds: non-listed entities, equivalence classes, relationship edges | §4 §5 §10 §11 | S | toml |
-| ☐ | `kg-calendars` | One session evaluator: NYSE holidays / early closes, trade[XYZ] windows, RH mint window, 24/5, 24/7 | §2 §19 §20 §21 | S | rust |
+| ✅ | `kg-calendars` | One session evaluator: NYSE holidays / early closes, trade[XYZ] windows, RH mint window, 24/5, 24/7 | §2 §19 §20 §21 | S | rust |
 | ☐ | `kg-sync-schedule` | Syncs + lifecycle evaluation as `[feeds.*] kind = "tool"` rows (no host timers) | §19 §29 | S | toml |
 | ☐ | `kg-xm-cli` | `tengu xm sync / seed / status / show / backup` (no LLM) | §19 §29 §32 | S | rust |
 | ☐ | `rh-evm-rpc` | EVM JSON-RPC read transport (`eth_call`, `eth_getLogs`, blocks, Multicall3) + `[evm.chains]`; route the existing receipt poll through it | §1 §19 §20 | M | rust |
