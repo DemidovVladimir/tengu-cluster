@@ -17,6 +17,12 @@
 //! `decide` runs while the ledger's write lock is held: every read (books,
 //! ctx rows, the opportunity row, the kill-switch file) happens before
 //! `place`, so the closure only computes.
+//!
+//! Verdict rows (`risk-audit-verdicts`): each carries the request's
+//! `call_id` (joins the decision audit), `tool` and `session_id`; the
+//! adapter mirrors every one it writes to `<TENGU_HOME>/logs/risk.jsonl`
+//! after the commit (the row stays canonical: `logs/` is pruned, the ledger
+//! never).
 
 use std::collections::BTreeMap;
 
@@ -92,6 +98,12 @@ pub(crate) struct PlaceRequest {
     pub client_order_id: String,
     /// `ToolCtx.call_id`: joins the verdict to the decision audit.
     pub call_id: Option<String>,
+    /// The exec tool that placed it (`paper_order`, `xm_exits`, …).
+    pub tool: String,
+    /// `TENGU_SESSION_ID` of the calling process, when it has one (a
+    /// `run-agent` child, its bridge); loop and feed sessions are inside
+    /// `call_id`.
+    pub session_id: Option<String>,
     pub now_ms: i64,
 }
 
@@ -103,6 +115,10 @@ pub(crate) struct StoredDecision {
     pub account: String,
     pub client_order_id: String,
     pub call_id: Option<String>,
+    /// `PlaceRequest::tool`; `None` on rows written before
+    /// `risk-audit-verdicts`.
+    pub tool: Option<String>,
+    pub session_id: Option<String>,
     pub instrument: String,
     pub verdict: RiskVerdict,
     /// The `OrderIntent` as judged (JSON: a malformed intent stays readable).

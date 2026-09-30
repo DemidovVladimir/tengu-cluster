@@ -21,13 +21,17 @@
 //!    agent) and append to `history`: a typed result contributes its
 //!    `decision_value` (or the reducer over `decision_root`), `ok = status
 //!    != error` and `obs` meta; a text result goes through
-//!    `reduce::parse_tool_output`. Continue.
+//!    `reduce::parse_tool_output`. A typed result with `features.risk =
+//!    "deny"` (an exec tool's `[risk]` gate refused the order) is outcome
+//!    `Refused { rule }`, else `Executed`. Continue.
 //!
 //! Every decisions call writes one JSONL audit line (`AuditLog`) — a failed
 //! call too (`outcome = "error"`), before its error propagates — and a
 //! successful one also emits a `MetricsKind::Decision` record. A line is one
 //! `write_all` on an append-mode file, so concurrent loops and processes
-//! never interleave inside it.
+//! never interleave inside it. A step that ran a tool carries its `call_id`
+//! (`{loop}:{session_id}:{t}`), which the exec tools' risk verdicts carry
+//! too (`ledger.db` `risk_decisions`, `<TENGU_HOME>/logs/risk.jsonl`).
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
 
@@ -50,7 +54,7 @@ use crate::config::decision_loop::DecisionLoopConfig;
 use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome};
 use crate::domain::message::ToolCall;
 use crate::domain::metrics::{now_unix, MetricsKind, MetricsRecord};
-use crate::domain::observation::now_ms;
+use crate::domain::observation::{now_ms, Observation};
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
@@ -124,7 +128,10 @@ impl DecisionLoop {
         let mut outcomes = Vec::new();
         for step in 0..self.cfg.max_steps {
             let outcome = self.step(&mut st, &event, step, session_id).await?;
-            let stop = !matches!(outcome, StepOutcome::Executed { .. });
+            let stop = !matches!(
+                outcome,
+                StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+            );
             outcomes.push(outcome);
             if stop {
                 break;
@@ -350,19 +357,19 @@ impl DecisionLoop {
             };
         }
 
-        // `{loop}:{session_id}:{t}` — `ToolCtx.call_id` in the tool; never
-        // repeats across events or restarts (session ids are per event).
         let call = ToolCall {
-            id: format!("{}:{session_id}:{t}", self.name),
+            id: self.call_id(session_id, t),
             name: tool.clone(),
             arguments: args.clone(),
         };
         let now = now_ms();
+        let mut refused = None;
         let (ok, result, obs) = match self.tools.execute_typed(&call, &[]).await {
             // Typed: features (or the reducer over `{.., features, data}`);
             // a status-`error` observation is a failure.
             Ok(out) => match out.observation {
                 Some(o) => {
+                    refused = risk_refusal(&o);
                     let result = if action.reduce.is_empty() {
                         o.decision_value(now)
                     } else {
@@ -389,9 +396,22 @@ impl DecisionLoop {
                 obs,
             },
         );
-        StepOutcome::Executed {
-            action: action_name,
+        match refused {
+            Some(rule) => StepOutcome::Refused {
+                action: action_name,
+                rule,
+            },
+            None => StepOutcome::Executed {
+                action: action_name,
+            },
         }
+    }
+
+    /// `{loop}:{session_id}:{t}` — step `t`'s tool call id (`ToolCtx.call_id`
+    /// in the tool); never repeats across events or restarts (session ids
+    /// are per event). The audit line and a risk verdict carry it.
+    fn call_id(&self, session_id: &str, t: u64) -> String {
+        format!("{}:{session_id}:{t}", self.name)
     }
 
     fn push(&self, st: &mut LoopState, entry: HistoryEntry) {
@@ -451,7 +471,9 @@ impl DecisionLoop {
     /// One JSONL line per decisions call; `d = None` = the call failed
     /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
     /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
-    /// `act_at` join it. Fail-soft: audit errors only warn.
+    /// `act_at` join it; `call_id` when the step ran a tool (`Executed` /
+    /// `Refused`) — the key its risk verdict carries. Fail-soft: audit
+    /// errors only warn.
     fn audit(
         &self,
         session_id: &str,
@@ -462,6 +484,10 @@ impl DecisionLoop {
         latency_ms: u64,
     ) {
         let Some(audit) = &self.audit else { return };
+        let ran = matches!(
+            outcome,
+            StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+        );
         let line = json!({
             "ts": now_unix(),
             "ts_ms": now_ms(),
@@ -469,6 +495,7 @@ impl DecisionLoop {
             "sandbox": audit.sandbox,
             "session_id": session_id,
             "t": t,
+            "call_id": ran.then(|| self.call_id(session_id, t)),
             "decision_id": d.map(|d| &d.id),
             // The build Jev reported; the configured slug when the call failed.
             "model": d.map_or(self.engine.model(), |d| d.model.as_str()),
@@ -493,8 +520,9 @@ impl DecisionLoop {
 /// Append one whole line (newline included) with a single `write_all` on an
 /// append-mode file: concurrent writers never interleave inside a line.
 /// `writeln!` over `serde_json::Value`'s `Display` issued one write per
-/// token on the unbuffered `File`.
-fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+/// token on the unbuffered `File`. Also the risk verdict mirror's writer
+/// (`outbound/paper_store.rs`).
+pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -509,6 +537,16 @@ fn slot_key(action: &str, slot: &str) -> String {
     format!("{action}__{slot}")
 }
 
+/// `Some(rule)` when a typed result says the `[risk]` gate refused the
+/// order (`features.risk = "deny"`, rule `features.risk_rule`).
+fn risk_refusal(o: &Observation) -> Option<String> {
+    let deny = o.features.get("risk").and_then(Value::as_str) == Some("deny");
+    deny.then(|| {
+        let rule = o.features.get("risk_rule").and_then(Value::as_str);
+        rule.unwrap_or("?").to_string()
+    })
+}
+
 fn rejected(action: &str, reason: &str) -> StepOutcome {
     StepOutcome::Rejected {
         action: action.to_string(),
@@ -517,10 +555,11 @@ fn rejected(action: &str, reason: &str) -> StepOutcome {
 }
 
 /// One audit line (see `DecisionLoop::audit`) as a short readable block:
-/// the chosen action + confidence, its slot answers, the args it ran with
-/// and what came back; a failed decisions call as one `decide failed` line.
-/// The TUI decision feed renders it. `None` when the line has neither a
-/// `next_action` answer nor an error. Values are never shortened.
+/// the chosen action + confidence (a risk refusal names its rule), its slot
+/// answers, the args it ran with, its call id and what came back; a failed
+/// decisions call as one `decide failed` line. The TUI decision feed renders
+/// it. `None` when the line has neither a `next_action` answer nor an
+/// error. Values are never shortened.
 pub(crate) fn render_audit(v: &Value) -> Option<String> {
     if v.pointer("/result/outcome").and_then(Value::as_str) == Some("error") {
         let reason = v.pointer("/result/reason").and_then(Value::as_str);
@@ -545,6 +584,12 @@ pub(crate) fn render_audit(v: &Value) -> Option<String> {
                 .and_then(Value::as_str)
                 .unwrap_or("?")
         ),
+        Some("refused") => format!(
+            "refused by the risk gate: {}",
+            v.pointer("/result/rule")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+        ),
         Some(o) => o.to_string(),
         None => "?".to_string(),
     };
@@ -565,6 +610,9 @@ pub(crate) fn render_audit(v: &Value) -> Option<String> {
     }
     if let Some(args) = v.get("args").filter(|a| !a.is_null()) {
         out += &format!("\n  args   {args}");
+    }
+    if let Some(id) = v.get("call_id").and_then(Value::as_str) {
+        out += &format!("\n  call   {id}");
     }
     if let Some(o) = v.get("output").filter(|o| !o.is_null()) {
         let label = match v.get("ok").and_then(Value::as_bool) {
@@ -1282,6 +1330,7 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
             "sandbox",
             "session_id",
             "t",
+            "call_id",
             "decision_id",
             "model",
             "act_at",
@@ -1301,6 +1350,7 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
             ok["result"],
             json!({"outcome": "stopped", "action": "hold"})
         );
+        assert!(ok["call_id"].is_null(), "a terminal step ran no tool");
         assert_eq!(ok["sandbox"], json!("xmarket"));
         assert_eq!(ok["act_at"], json!(0.8));
         assert!(ok["ts_ms"].as_u64().unwrap() >= ok["ts"].as_u64().unwrap() * 1000);
@@ -1316,6 +1366,251 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
         assert_eq!(
             render_audit(failed).unwrap(),
             "jev t #0 · decide failed → error: decisions HTTP 402: insufficient credits"
+        );
+    }
+
+    // ── risk refusals + the verdict join ──────────────────────────────
+
+    const TSLA: &str = "hyperliquid:xyz:TSLA";
+    const OPP: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
+
+    /// `enter_small` ($20) and `enter_big` ($30) run `paper_order`; `done`
+    /// stops.
+    fn entry_cfg() -> DecisionLoopConfig {
+        let args = |usd: u32| {
+            format!(
+                "{{ instrument = \"{TSLA}\", side = \"buy\", notional_usd = {usd}, kind = \
+                 \"market\", max_slippage_bps = 30, opportunity = \"{OPP}\" }}"
+            )
+        };
+        toml::from_str(&format!(
+            r#"
+goal = "enter TSLA within the budget"
+agent = "exec"
+dry_run = false
+[actions.done]
+description = "stop"
+[actions.enter_small]
+description = "buy $20 of TSLA"
+tool = "paper_order"
+args = {}
+[actions.enter_big]
+description = "buy $30 of TSLA"
+tool = "paper_order"
+args = {}
+"#,
+            args(20),
+            args(30)
+        ))
+        .unwrap()
+    }
+
+    /// Every call returns the `paper_fill/1` row of an order the gate denied
+    /// `min_edge`.
+    struct DenyingTools;
+
+    #[async_trait]
+    impl ToolExecutor for DenyingTools {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let now = now_ms();
+            let features = [
+                ("risk", "deny"),
+                ("risk_rule", "min_edge"),
+                ("status", "denied"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
+            let obs = Observation {
+                key: format!("paper_fill/1:xmarket:{}", call.id),
+                schema: "paper_fill/1".into(),
+                tool: "paper_order".into(),
+                observed_at_ms: now,
+                slot: None,
+                ttl_ms: 0,
+                source: ObsSource::Live,
+                status: ObsStatus::Error,
+                errors: vec![ReadError::new(
+                    "risk",
+                    ErrorClass::NotApplicable,
+                    "denied min_edge: edge 4 bps < 10 bps",
+                )],
+                headline: format!("paper_fill denied buy {TSLA} risk=deny rule=min_edge"),
+                features,
+                data: Value::Null,
+            };
+            Ok(ToolOutput::observed(obs, now))
+        }
+    }
+
+    /// A gate denial is `Refused` (counted apart from `Executed`), the loop
+    /// goes on; the audit line names the rule and the call; the feed shows it.
+    #[tokio::test]
+    async fn a_gate_denial_is_refused_and_the_loop_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let l = DecisionLoop::new(
+            "entry",
+            entry_cfg(),
+            Arc::new(Scripted::new(vec![
+                pick(&[("next_action", "enter_small", 0.95)]),
+                pick(&[("next_action", "done", 0.99)]),
+            ])),
+            Arc::new(DenyingTools),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: None,
+            }),
+        );
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(
+            out,
+            vec![
+                StepOutcome::Refused {
+                    action: "enter_small".into(),
+                    rule: "min_edge".into()
+                },
+                StepOutcome::Stopped {
+                    action: "done".into()
+                },
+            ]
+        );
+        assert_eq!(l.history().await[0].ok, Some(false));
+        let line: Value = serde_json::from_str(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            line["result"],
+            json!({"outcome": "refused", "action": "enter_small", "rule": "min_edge"})
+        );
+        assert_eq!(line["call_id"], json!("entry:s:1"));
+        let text = render_audit(&line).unwrap();
+        assert!(
+            text.starts_with(
+                "jev entry #1 · enter_small (0.95) → refused by the risk gate: min_edge"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\n  call   entry:s:1"), "{text}");
+    }
+
+    /// Runs `paper_order` through the real `run_exec` on an xm test rig
+    /// (scripted clock + book, ledger mirroring to `risk.jsonl`), keyed by
+    /// the loop's call id.
+    struct RigTools(crate::adapters::outbound::tools::xm::exec_common::tests::Rig);
+
+    #[async_trait]
+    impl ToolExecutor for RigTools {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let limits = self.0.shared.risk.as_ref().unwrap().limits();
+            let order =
+                crate::adapters::outbound::tools::xm::paper::parse_order(&call.arguments, limits)?;
+            let obs = self.0.run(order, &call.id).await?;
+            Ok(ToolOutput::observed(obs, now_ms()))
+        }
+    }
+
+    /// Tracker convention 9: the decision audit line of a step that placed
+    /// an order and the order's risk verdict (`risk.jsonl`, the ledger row)
+    /// share the call id `{loop}:{session}:{t}` — allowed and denied alike.
+    #[tokio::test]
+    async fn loop_audit_and_risk_verdicts_join_by_call_id() {
+        use crate::adapters::outbound::tools::xm::exec_common::tests::Rig;
+        use crate::ports::paper::PaperLedger;
+
+        let rig = Rig::new(25).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let tools = Arc::new(RigTools(rig));
+        let l = DecisionLoop::new(
+            "entry",
+            entry_cfg(),
+            Arc::new(Scripted::new(vec![
+                pick(&[("next_action", "enter_small", 0.95)]),
+                pick(&[("next_action", "enter_big", 0.95)]),
+                pick(&[("next_action", "done", 0.99)]),
+            ])),
+            tools.clone(),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: Some("xmarket".into()),
+            }),
+        );
+        let out = l
+            .handle_event(&json!({}), "0001318605-26-000123")
+            .await
+            .unwrap();
+        assert_eq!(
+            out[..2],
+            [
+                StepOutcome::Executed {
+                    action: "enter_small".into()
+                },
+                StepOutcome::Refused {
+                    action: "enter_big".into(),
+                    rule: "order_notional".into()
+                },
+            ]
+        );
+        let audit: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let risk = tools.0.risk_lines();
+        assert_eq!(risk.len(), 2, "one verdict per order");
+        let joined: Vec<(String, String, String)> = audit
+            .iter()
+            .filter_map(|a| {
+                let call = a["call_id"].as_str()?;
+                let r = risk.iter().find(|r| r["call_id"] == call)?;
+                Some((
+                    call.to_string(),
+                    a["result"]["outcome"].as_str()?.to_string(),
+                    r["verdict"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            joined,
+            [
+                (
+                    "entry:0001318605-26-000123:1".to_string(),
+                    "executed".to_string(),
+                    "allow".to_string()
+                ),
+                (
+                    "entry:0001318605-26-000123:2".to_string(),
+                    "refused".to_string(),
+                    "deny".to_string()
+                ),
+            ]
+        );
+        // The ledger rows carry the same keys.
+        let rows = tools.0.ledger.decisions("xmarket", 10).await.unwrap();
+        let mut calls: Vec<&str> = rows.iter().filter_map(|d| d.call_id.as_deref()).collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                "entry:0001318605-26-000123:1",
+                "entry:0001318605-26-000123:2"
+            ]
         );
     }
 

@@ -16,8 +16,14 @@
 //! | `orders` | id · UNIQUE (account, client_order_id) | one per allowed order: status, reason, fill summary, the engine's `FillResult` (JSON), the id of the verdict that allowed it |
 //! | `fills` | id | the ledger fill (VWAP) of a filled / partial order: qty, px, fee, realized P&L, qty before / after |
 //! | `funding` | (account, instrument, hour_ms) | one HL funding payment |
-//! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id |
+//! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id, the exec tool, the session id |
 //! | `risk_state` | account | `domain::xm::risk_state::RiskState`: halt reason + since, the UTC day + its starting equity (no row = the default) |
+//!
+//! Every verdict row `place` writes is mirrored, after the commit, as one
+//! line of `<TENGU_HOME>/logs/risk.jsonl` ([`audit_line`]; one `write_all`
+//! per line, so concurrent writers never tear one). The row is canonical:
+//! `tengu prune` deletes `logs/`, never the ledger; a failed mirror write
+//! only warns. A replay writes no verdict row, so no line.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,7 +32,10 @@ use std::sync::{Arc, Mutex};
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde_json::{json, Value};
+use tracing::warn;
 
+use crate::application::decision_loop::append_line;
 use crate::config::sections::SandboxSections;
 use crate::domain::observation::{ErrorClass, Field, ReadError};
 use crate::domain::xm::ledger::{exit_deadline, Fill, FillEffect, PaperAccount, Position};
@@ -40,6 +49,8 @@ use crate::ports::paper::{
 
 /// File name under the xmarket state dir.
 pub(crate) const LEDGER_FILE: &str = "ledger.db";
+/// The verdict mirror, under `<TENGU_HOME>/logs/`.
+pub(crate) const RISK_LOG_FILE: &str = "risk.jsonl";
 
 /// The gate's order-rate window.
 const ORDER_RATE_WINDOW_MS: i64 = 60_000;
@@ -78,7 +89,7 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
   id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, account TEXT NOT NULL,
   client_order_id TEXT NOT NULL, call_id TEXT, instrument TEXT NOT NULL, class TEXT NOT NULL,
   allow INTEGER NOT NULL, rule TEXT NOT NULL, verdict TEXT NOT NULL, intent TEXT NOT NULL,
-  context TEXT NOT NULL);
+  context TEXT NOT NULL, tool TEXT, session_id TEXT);
 CREATE INDEX IF NOT EXISTS risk_decisions_account ON risk_decisions(account, id);
 CREATE INDEX IF NOT EXISTS risk_decisions_call ON risk_decisions(call_id);
 CREATE TABLE IF NOT EXISTS risk_state (
@@ -99,15 +110,30 @@ ON CONFLICT(account, instrument) DO UPDATE SET underlying = excluded.underlying,
 const ORDER_COLUMNS: &str =
     "id, account, client_order_id, call_id, decision_id, ts_ms, underlying, exit_at_ms, result";
 
-const DECISION_COLUMNS: &str =
-    "id, ts_ms, account, client_order_id, call_id, instrument, verdict, intent, context";
+const DECISION_COLUMNS: &str = "id, ts_ms, account, client_order_id, call_id, tool, session_id, \
+     instrument, verdict, intent, context";
+
+/// Columns added after their table first shipped: (table, column, type).
+/// `CREATE TABLE IF NOT EXISTS` leaves an older ledger's table as it was.
+const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("risk_decisions", "tool", "TEXT"),
+    ("risk_decisions", "session_id", "TEXT"),
+];
 
 /// `<state_dir>/ledger.db`.
 pub(crate) fn ledger_path(state_dir: &Path) -> PathBuf {
     state_dir.join(LEDGER_FILE)
 }
 
-/// The sandbox's ledger (`[xmarket]` state dir); refused without `[xmarket]`.
+/// `<TENGU_HOME>/logs/risk.jsonl`.
+pub(crate) fn risk_log_path() -> PathBuf {
+    crate::config::paths::resolve_tengu_home()
+        .join("logs")
+        .join(RISK_LOG_FILE)
+}
+
+/// The sandbox's ledger (`[xmarket]` state dir), mirroring its verdicts to
+/// [`risk_log_path`]; refused without `[xmarket]`.
 pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn PaperLedger>> {
     let dir = sections.xm_state_dir.as_deref().ok_or_else(|| {
         anyhow!(
@@ -115,7 +141,9 @@ pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn Pa
              <TENGU_HOME>/state/<xmarket.state>/{LEDGER_FILE} — add [xmarket] state = \"<name>\""
         )
     })?;
-    Ok(Arc::new(SqlitePaperLedger::open(dir)?))
+    Ok(Arc::new(
+        SqlitePaperLedger::open(dir)?.with_audit(risk_log_path()),
+    ))
 }
 
 /// `[risk] kill_switch_file` present? Any directory entry at the path
@@ -136,20 +164,32 @@ pub(crate) fn kill_switch_state(path: &Path) -> Field<bool> {
 #[derive(Clone)]
 pub(crate) struct SqlitePaperLedger {
     conn: Arc<Mutex<Connection>>,
+    /// `risk.jsonl` (module doc); `None` = verdicts are not mirrored.
+    audit: Option<PathBuf>,
 }
 
 impl SqlitePaperLedger {
-    /// Open (creating) `<state_dir>/ledger.db`.
+    /// Open (creating) `<state_dir>/ledger.db`; an older ledger gains the
+    /// [`ADDED_COLUMNS`] it lacks.
     pub(crate) fn open(state_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
         let path = ledger_path(state_dir);
-        let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
+        let mut conn =
+            Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA_SQL)?;
+        add_missing_columns(&mut conn).with_context(|| format!("upgrade {}", path.display()))?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            audit: None,
         })
+    }
+
+    /// Mirror every verdict row this handle writes to `path` (module doc).
+    pub(crate) fn with_audit(mut self, path: PathBuf) -> Self {
+        self.audit = Some(path);
+        self
     }
 
     async fn with_conn<T, F>(&self, f: F) -> Result<T>
@@ -165,6 +205,24 @@ impl SqlitePaperLedger {
         .await
         .context("paper ledger task")?
     }
+}
+
+/// One `BEGIN IMMEDIATE`, so two processes opening an older ledger never
+/// both add a column.
+fn add_missing_columns(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (table, column, ty) in ADDED_COLUMNS {
+        let present = tx
+            .prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"
+            ))?
+            .exists(params![column])?;
+        if !present {
+            tx.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {ty}"))?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 // ── reads ─────────────────────────────────────────────────────────
@@ -387,6 +445,8 @@ type DecisionRow = (
     String,
     String,
     Option<String>,
+    Option<String>,
+    Option<String>,
     String,
     String,
     String,
@@ -404,11 +464,25 @@ fn decision_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DecisionRow> {
         r.get(6)?,
         r.get(7)?,
         r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
     ))
 }
 
 fn parse_decision(row: DecisionRow) -> Result<StoredDecision> {
-    let (id, ts_ms, account, client_order_id, call_id, instrument, verdict, intent, context) = row;
+    let (
+        id,
+        ts_ms,
+        account,
+        client_order_id,
+        call_id,
+        tool,
+        session_id,
+        instrument,
+        verdict,
+        intent,
+        context,
+    ) = row;
     let what = |part: &str| format!("risk decision {id}: stored {part} does not parse");
     Ok(StoredDecision {
         id,
@@ -416,6 +490,8 @@ fn parse_decision(row: DecisionRow) -> Result<StoredDecision> {
         account,
         client_order_id,
         call_id,
+        tool,
+        session_id,
         instrument,
         verdict: serde_json::from_str(&verdict).with_context(|| what("verdict"))?,
         intent: serde_json::from_str(&intent).with_context(|| what("intent"))?,
@@ -482,8 +558,8 @@ fn write_position(
 fn insert_decision(c: &Connection, req: &PlaceRequest, d: &Decision) -> Result<i64> {
     c.execute(
         "INSERT INTO risk_decisions(ts_ms, account, client_order_id, call_id, instrument, class,
-           allow, rule, verdict, intent, context)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+           allow, rule, verdict, intent, context, tool, session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             req.now_ms,
             req.account,
@@ -496,6 +572,8 @@ fn insert_decision(c: &Connection, req: &PlaceRequest, d: &Decision) -> Result<i
             serde_json::to_string(&d.verdict)?,
             serde_json::to_string(&d.intent)?,
             serde_json::to_string(&d.context)?,
+            req.tool,
+            req.session_id,
         ],
     )?;
     Ok(c.last_insert_rowid())
@@ -691,6 +769,55 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
     })
 }
 
+/// The `risk.jsonl` line of the verdict row `p` wrote: the row's fields
+/// (`verdict` = `allow` / `deny`), every check, the headroom, and `fill` =
+/// the order the verdict allowed (`order_id` joins `orders` and `fills`;
+/// `null` when denied).
+fn audit_line(p: &Placement) -> Value {
+    let d = &p.decision;
+    let v = &d.verdict;
+    let fill = p.order.as_ref().map(|o| {
+        let r = &o.result;
+        json!({
+            "order_id": o.id,
+            "status": r.status.as_str(),
+            "reason": r.reason.map(|x| x.as_str()),
+            "filled_qty": r.filled_qty,
+            "avg_px": r.avg_px,
+            "fee_usd": r.fee_usd,
+            "slippage_bps": r.slippage_bps,
+            "exit_at_ms": o.exit_at_ms,
+        })
+    });
+    json!({
+        "ts_ms": d.ts_ms,
+        "decision_id": d.id,
+        "account": d.account,
+        "call_id": d.call_id,
+        "session_id": d.session_id,
+        "tool": d.tool,
+        "client_order_id": d.client_order_id,
+        "instrument": d.instrument,
+        "verdict": if v.allow { "allow" } else { "deny" },
+        "rule": v.rule,
+        "class": v.class,
+        "degraded": v.degraded,
+        "trips": v.trips,
+        "checks": v.checks,
+        "headroom": v.headroom,
+        "intent": d.intent,
+        "context": d.context,
+        "fill": fill,
+    })
+}
+
+/// Append `p`'s line to `path`; fail-soft (the row is canonical).
+fn mirror(path: &Path, p: &Placement) {
+    if let Err(e) = append_line(path, &format!("{}\n", audit_line(p))) {
+        warn!(path = %path.display(), error = %e, "risk audit write failed");
+    }
+}
+
 #[async_trait]
 impl PaperLedger for SqlitePaperLedger {
     async fn open_account(
@@ -750,8 +877,16 @@ impl PaperLedger for SqlitePaperLedger {
     }
 
     async fn place(&self, req: PlaceRequest, decide: Decide) -> Result<Placement> {
-        self.with_conn(move |conn| place_tx(conn, req, decide))
-            .await
+        let audit = self.audit.clone();
+        self.with_conn(move |conn| {
+            let p = place_tx(conn, req, decide)?;
+            // A replay wrote no verdict row.
+            if let Some(path) = audit.as_deref().filter(|_| !p.replayed) {
+                mirror(path, &p);
+            }
+            Ok(p)
+        })
+        .await
     }
 
     async fn update_risk_state(
@@ -966,6 +1101,8 @@ pub(crate) mod tests {
             account: o.account.clone(),
             client_order_id: o.coid.clone(),
             call_id: Some(format!("call-{}", o.coid)),
+            tool: "paper_order".into(),
+            session_id: None,
             now_ms,
         }
     }
@@ -1681,5 +1818,163 @@ pub(crate) mod tests {
             "and rolled the day"
         );
         assert_eq!(rows(dir.path())["risk_state"], 1);
+    }
+
+    /// `risk.jsonl` lines, parsed — a torn line fails the test.
+    pub(crate) fn audit_lines(path: &Path) -> Vec<Value> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| {
+                serde_json::from_str(l).unwrap_or_else(|e| panic!("torn risk line ({e}): {l}"))
+            })
+            .collect()
+    }
+
+    /// Every verdict row is mirrored once, after the commit: a deny with no
+    /// fill, an allow with the order it placed; a replay adds nothing. The
+    /// row keeps the tool and the session id the line shows.
+    #[tokio::test]
+    async fn every_verdict_row_is_mirrored_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        let l = ledger(dir.path()).await.with_audit(log.clone());
+        let nvda = buy("o-nvda", ACCOUNT, NVDA);
+        l.place(req(&nvda, NOW), gate(&nvda, limits(), None))
+            .await
+            .unwrap();
+        let o = buy("o-1", ACCOUNT, TSLA);
+        let mut r = req(&o, NOW + 1);
+        r.session_id = Some("session-7".into());
+        let p = l.place(r.clone(), gate(&o, limits(), None)).await.unwrap();
+        l.place(r, Box::new(|_| panic!("a replay never decides")))
+            .await
+            .unwrap();
+        let lines = audit_lines(&log);
+        assert_eq!(lines.len(), 2, "two verdict rows; the replay wrote none");
+        let (deny, allow) = (&lines[0], &lines[1]);
+        let stored = l.decisions(ACCOUNT, 10).await.unwrap();
+        assert_eq!(
+            (&deny["verdict"], &deny["rule"], &deny["decision_id"]),
+            (
+                &json!("deny"),
+                &json!(rules::INSTRUMENT),
+                &json!(stored[1].id)
+            )
+        );
+        assert_eq!(
+            (&deny["instrument"], &deny["fill"]),
+            (&json!(NVDA), &Value::Null)
+        );
+        assert_eq!(allow, &audit_line(&p), "the line is the placement's");
+        for (k, v) in [
+            ("verdict", json!("allow")),
+            ("call_id", json!("call-o-1")),
+            ("tool", json!("paper_order")),
+            ("session_id", json!("session-7")),
+            ("client_order_id", json!("o-1")),
+            ("instrument", json!(TSLA)),
+        ] {
+            assert_eq!(allow[k], v, "{k}");
+        }
+        let order = p.order.as_ref().unwrap();
+        assert_eq!(allow["fill"]["order_id"], order.id);
+        assert_eq!(
+            (&allow["fill"]["status"], &allow["fill"]["filled_qty"]),
+            (&json!("filled"), &json!(0.072))
+        );
+        assert!(
+            allow["checks"].as_array().unwrap().len() > 10,
+            "every check"
+        );
+        assert!(allow["context"]["legs"].get(TSLA).is_some(), "the digest");
+        assert_eq!(
+            (stored[0].tool.as_deref(), stored[0].session_id.as_deref()),
+            (Some("paper_order"), Some("session-7"))
+        );
+    }
+
+    /// Four connections (processes) deny 50 orders each at once: one whole
+    /// line per verdict row, each with that row's call id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_writers_never_tear_audit_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("logs").join(RISK_LOG_FILE);
+        ledger(dir.path()).await;
+        let writers: Vec<_> = (0..4)
+            .map(|w| {
+                let l = SqlitePaperLedger::open(dir.path())
+                    .unwrap()
+                    .with_audit(log.clone());
+                tokio::spawn(async move {
+                    for i in 0..50i64 {
+                        let o = buy(&format!("w{w}-{i}"), ACCOUNT, NVDA);
+                        let p = l
+                            .place(req(&o, NOW + i), gate(&o, limits(), None))
+                            .await
+                            .unwrap();
+                        assert!(!p.decision.verdict.allow);
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.await.unwrap();
+        }
+        let lines = audit_lines(&log);
+        assert_eq!(lines.len(), 200);
+        let calls: BTreeMap<i64, Option<String>> = SqlitePaperLedger::open(dir.path())
+            .unwrap()
+            .decisions(ACCOUNT, 1_000)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| (d.id, d.call_id))
+            .collect();
+        assert_eq!(calls.len(), 200);
+        let mut seen = std::collections::BTreeSet::new();
+        for line in &lines {
+            let id = line["decision_id"].as_i64().unwrap();
+            assert_eq!(line["call_id"], json!(calls[&id]), "{line}");
+            assert!(seen.insert(id), "decision {id} mirrored twice");
+        }
+    }
+
+    /// A ledger from before `risk-audit-verdicts` gains `tool` and
+    /// `session_id`: its old rows read without them, new rows carry them.
+    #[tokio::test]
+    async fn an_older_ledger_gains_the_audit_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let c = Connection::open(ledger_path(dir.path())).unwrap();
+            c.execute_batch(
+                "CREATE TABLE risk_decisions (
+                   id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, account TEXT NOT NULL,
+                   client_order_id TEXT NOT NULL, call_id TEXT, instrument TEXT NOT NULL,
+                   class TEXT NOT NULL, allow INTEGER NOT NULL, rule TEXT NOT NULL,
+                   verdict TEXT NOT NULL, intent TEXT NOT NULL, context TEXT NOT NULL);",
+            )
+            .unwrap();
+            let verdict = r#"{"allow":false,"rule":"instrument","class":"entry","degraded":false,"checks":[],"headroom":{}}"#;
+            c.execute(
+                "INSERT INTO risk_decisions(ts_ms, account, client_order_id, call_id, instrument,
+                   class, allow, rule, verdict, intent, context)
+                 VALUES (?1, ?2, 'old-1', NULL, ?3, 'entry', 0, 'instrument', ?4, '{}', '{}')",
+                params![NOW - 1, ACCOUNT, NVDA, verdict],
+            )
+            .unwrap();
+        }
+        let l = ledger(dir.path()).await;
+        SqlitePaperLedger::open(dir.path()).expect("a second open adds nothing");
+        let o = buy("o-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let d = l.decisions(ACCOUNT, 10).await.unwrap();
+        assert_eq!(
+            (d[1].client_order_id.as_str(), d[1].tool.as_deref()),
+            ("old-1", None)
+        );
+        assert_eq!(d[0].tool.as_deref(), Some("paper_order"));
     }
 }

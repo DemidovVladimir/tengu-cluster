@@ -5,7 +5,7 @@
 //!
 //! | Command | Rule |
 //! |---|---|
-//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines), orders in the last 60 s, the latest verdicts, and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
+//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines), orders in the last 60 s, the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
 //! | `halt` | operator only: an `operator` halt (a sticky halt stays as is) — entries deny `halted`, reduce-only exits still pass (`allow_reduce_degraded`). The `[risk]` account is opened first if new |
 //! | `resume` | operator only; refused while the kill-switch file exists (checked again inside the ledger transaction); the operator types the account name to confirm; clears any halt. A loss still over its limit halts again at the next valuation |
 //! | operator only | refused when stdin or stdout is not a terminal (a piped `y` is never accepted) or `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` is set (an agent process) |
@@ -242,11 +242,12 @@ async fn status(
         for d in ledger.decisions(&name, 5).await? {
             let verdict = if d.verdict.allow { "allow" } else { "deny" };
             console.say(&format!(
-                "  verdict {} {verdict} {} {} {} call {}",
+                "  verdict {} {verdict} {} {} {} by {} call {}",
                 iso(d.ts_ms),
                 d.verdict.rule,
                 d.instrument,
                 d.client_order_id,
+                d.tool.as_deref().unwrap_or("-"),
                 d.call_id.as_deref().unwrap_or("-"),
             ));
         }

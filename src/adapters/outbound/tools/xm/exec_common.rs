@@ -15,7 +15,7 @@
 //! | 6 | funding the open positions owe booked first: every due hour at a fresh `mkt_ctx/1` rate + oracle (`ledger::due_funding_hours`) | — |
 //! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position | `order_type` · `invalid_order` · `no_position` |
 //! | 8 | `fill_with_latency` on the `Clock` + `BookSource` (live: `SystemClock`, `hyperliquid::book::HlBookSource`, the `hl_book/1` read recorded + stored); a hedge leg's book right after | — a failed read is the gate's `missing:book` |
-//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate, fill, write — a deny writes one verdict row | — |
+//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate, fill, write — a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
 //! | 10 | row `paper_fill/1:<account>:<client_order_id>` (ttl 0: recorded, never cached) — `domain/xm/exec.rs` | — |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -254,6 +254,8 @@ pub(crate) async fn run_exec(
         account,
         client_order_id: coid.clone(),
         call_id: call_id.clone(),
+        tool: order.tool.to_string(),
+        session_id: std::env::var("TENGU_SESSION_ID").ok(),
         now_ms: now,
     };
     let placement = ledger.place(req, decide(plan)).await?;
@@ -565,7 +567,8 @@ pub(crate) mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::adapters::outbound::paper_store::SqlitePaperLedger;
+    use crate::adapters::outbound::paper_store::tests::audit_lines;
+    use crate::adapters::outbound::paper_store::{SqlitePaperLedger, RISK_LOG_FILE};
     use crate::adapters::outbound::shell::LocalShellExecutor;
     use crate::adapters::outbound::tools::workspace::test_support::NoopActivity;
     use crate::application::observe::tests::MemStore;
@@ -698,7 +701,11 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 store.put(&row).await.unwrap();
             }
             store.put(&opportunity(12.0, NOW - 1_000)).await.unwrap();
-            let ledger = Arc::new(SqlitePaperLedger::open(&dir.path().join("state")).unwrap());
+            let ledger = Arc::new(
+                SqlitePaperLedger::open(&dir.path().join("state"))
+                    .unwrap()
+                    .with_audit(dir.path().join("logs").join(RISK_LOG_FILE)),
+            );
             let shared = XmShared {
                 store: Some(store.clone() as Arc<dyn ObservationStore>),
                 ledger: Ok(ledger.clone() as Arc<dyn PaperLedger>),
@@ -787,6 +794,11 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             run_exec(&self.shared, &self.ctx(Some(call_id)), &io, order).await
         }
 
+        /// The `risk.jsonl` lines the ledger mirrored.
+        pub(crate) fn risk_lines(&self) -> Vec<serde_json::Value> {
+            audit_lines(&self.dir.path().join("logs").join(RISK_LOG_FILE))
+        }
+
         /// Rows per ledger table.
         pub(crate) fn rows(&self) -> BTreeMap<&'static str, i64> {
             let c = rusqlite::Connection::open(self.dir.path().join("state/ledger.db")).unwrap();
@@ -843,8 +855,8 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         );
     }
 
-    /// Denied: exactly one verdict row, no order / fill / position; the row
-    /// has status error and names the rule.
+    /// Denied: exactly one verdict row and one `risk.jsonl` line, no order /
+    /// fill / position; the row has status error and names the rule.
     #[tokio::test]
     async fn a_denied_intent_writes_one_verdict_row_and_no_order() {
         let rig = Rig::new(25).await;
@@ -867,6 +879,22 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             (n["orders"], n["fills"], n["positions"], n["risk_decisions"]),
             (0, 0, 0, 1)
         );
+        let lines = rig.risk_lines();
+        assert_eq!(lines.len(), 1, "one mirror line per verdict row");
+        let line = &lines[0];
+        for (k, v) in [
+            ("verdict", "deny"),
+            ("rule", rules::ORDER_NOTIONAL),
+            ("call_id", "loop:s:1"),
+            ("client_order_id", "loop:s:1"),
+            ("tool", names::PAPER_ORDER),
+            ("instrument", TSLA),
+        ] {
+            assert_eq!(line[k], v, "{k}");
+        }
+        assert_eq!(line["decision_id"], r.gate.decision_id);
+        assert!(line["fill"].is_null(), "no order, no fill");
+        assert_eq!(line["intent"]["notional_usd"], 30.0);
         // No opportunity row: an entry is denied `missing:edge_after_costs_bps`.
         let mut blind = rig.buy(20.0);
         blind.opportunity_key = None;
@@ -913,6 +941,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             (rig.clock.now_ms(), rig.books.reads(), rig.rows()),
             (t, reads, rows)
         );
+        assert_eq!(rig.risk_lines().len(), 1, "a replay mirrors nothing");
         assert_eq!(again.latency_ms, None);
         // An explicit client_order_id wins over the call id.
         let mut named = rig.buy(25.0);

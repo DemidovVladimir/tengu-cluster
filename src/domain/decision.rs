@@ -122,6 +122,11 @@ pub(crate) struct HistoryEntry {
 pub(crate) enum StepOutcome {
     /// Tool ran (successfully or not — see the history entry's `ok`).
     Executed { action: String },
+    /// Tool ran and the `[risk]` gate refused the order: its typed result
+    /// carries `features.risk = "deny"`; `rule` = `features.risk_rule`.
+    /// Counted apart from `Executed` (no output parsing); the loop goes on
+    /// as after a failed tool (the history entry has `ok = false`).
+    Refused { action: String, rule: String },
     /// Write action chosen while `dry_run = true`; logged, not run.
     DryRun { action: String },
     /// Terminal action (no tool): loop stops for this event.

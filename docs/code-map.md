@@ -184,7 +184,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/config.toml` | you | base config |
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit |
-| `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at` |
+| `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it) |
+| `<TENGU_HOME>/logs/risk.jsonl` | `outbound/paper_store.rs` | one line per risk verdict — mirror of `ledger.db` `risk_decisions` (canonical); joins `decisions.jsonl` by `call_id` (`docs/xmarket-risk-paper-2026-09-30.md` § Audit) |
 | `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (single-runner lease), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `<TENGU_HOME>/state/` without `[xmarket]` |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
 | `<workspace>/.tengu/memory.bin`, `<workspace>/.tengu/cache.db` | memory tools / `shared_cache` | disk vector store / SQLite cache |
@@ -237,7 +238,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
-| `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
+| `src/domain/decision.rs` | 192 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate). |
 | `src/domain/engine_smoke.rs` | 221 | `tengu doctor --engines` smoke turn (pure): prompt, `SMOKE_TOOLS`, verdict (every tool called, none failed, token in the answer), "tools called" cell. |
 | `src/domain/hl/book.rs` | 608 | `hl_book` decoders (pure): `l2Book` (≤ 20 levels a side, validated) + `recentTrades` → `hl_book/1` (touch, spread, depth 10 / 50 bps, imbalance, slippage vs mid per notional via `domain/book.rs`, last trade). |
 | `src/domain/hl/ctx.rs` | 1426 | `hl_ctx` decoders (pure): `metaAndAssetCtxs` / `spotMetaAndAssetCtxs` / `perpDexs` / `perpCategories` / `perpsAtOpenInterestCap` → `mkt_ctx/1` + `mkt_instrument/1` rows, side rows `hl_perp_meta/1`, `hl_at_oi_cap/1`, summary `hl_sweep/1`. |
@@ -291,7 +292,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
 | `src/ports/observation.rs` | 32 | `ObservationStore` — the TTL cache typed tools read through and decision loops read `world` from. |
 | `src/ports/orchestration.rs` | 172 | Orchestration ports — what the orchestrator needs from the outside world |
-| `src/ports/paper.rs` | 210 | `PaperLedger` — paper accounts (cash, positions, orders, fills, funding, gate verdicts); `place` = gate + fill + write in one transaction through a pure `Decide` closure, idempotent per `client_order_id`. |
+| `src/ports/paper.rs` | 226 | `PaperLedger` — paper accounts (cash, positions, orders, fills, funding, gate verdicts with call id + tool + session id); `place` = gate + fill + write in one transaction through a pure `Decide` closure, idempotent per `client_order_id`. |
 | `src/ports/runtime.rs` | 28 | Runtime state port (`runtime.db` in the state dir): the single-runner lease; later feed cursors, seen-set, timers. |
 | `src/ports/shell.rs` | 8 | Port for executing shell commands in a workspace directory. |
 | `src/ports/skill_source.rs` | 7 | Port for discovering skill.md files from the workspace. |
@@ -334,7 +335,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 969 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit. |
+| `src/application/decision_loop/mod.rs` | 1670 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`). |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 314 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
@@ -414,7 +415,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
-| `src/adapters/outbound/paper_store.rs` | 1685 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline), orders `UNIQUE(account, client_order_id)`, fills, funding, `risk_decisions`; refused without `[xmarket]`. |
+| `src/adapters/outbound/paper_store.rs` | 1980 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline), orders `UNIQUE(account, client_order_id)`, fills, funding, `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); refused without `[xmarket]`. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
 | `src/adapters/outbound/runtime_store.rs` | 257 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
 | `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |
@@ -450,7 +451,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/hyperliquid/defs.rs` | 99 | The Hyperliquid family's interface — names, descriptions, JSON input schemas. |
 | `src/adapters/outbound/tools/hyperliquid/mod.rs` | 241 | Hyperliquid tool family — `HyperliquidPlugin` (observation store once, `[paper]` fee basis), `HlShared`, cache `policy` / `store_live`, a test `POST /info` server. |
 | `src/adapters/outbound/tools/xm/defs.rs` | 176 | The xmarket risk / paper family's interface — names, descriptions, JSON input schemas. |
-| `src/adapters/outbound/tools/xm/exec_common.rs` | 1031 | `run_exec` — the `[risk]` gate inside every exec tool: private-agent + idempotency-key refusals, replay without latency, store-only market rows, funding owed, `fill_with_latency` on the live `HlBookSource`, gate + fill + ledger write in one `place` transaction, `paper_fill/1` row. |
+| `src/adapters/outbound/tools/xm/exec_common.rs` | 1060 | `run_exec` — the `[risk]` gate inside every exec tool: private-agent + idempotency-key refusals, replay without latency, store-only market rows, funding owed, `fill_with_latency` on the live `HlBookSource`, gate + fill + ledger write in one `place` transaction, `paper_fill/1` row. |
 | `src/adapters/outbound/tools/xm/mod.rs` | 114 | xmarket risk / paper tool family — `XmPlugin` (observation store + paper ledger once, `[risk]` / `[paper]`), `XmShared`, `risk_config_missing` / `state_dir_missing` / `ledger_unavailable` refusals. |
 | `src/adapters/outbound/tools/xm/paper.rs` | 768 | `paper_order`, `paper_close` (exec tools through `run_exec`: strict args, one position or all) and `paper_positions` (`paper_positions/1:<account>`: funding owed first, fresh marks, exit deadlines). |
 | `src/adapters/outbound/tools/xm/risk_status.rs` | 383 | `risk_status` — `risk_state/1:<account>`: marks from fresh `mkt_ctx/1` rows, kill-switch file, UTC day roll + trips in one ledger transaction. |
@@ -498,7 +499,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/cli/doctor.rs` | 557 | `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live` runner health, `--engines` smoke turn per agent: `list_directory` + `read_file` on its own engine + model; a loopback `local` agent on macOS is skipped, never contacted). |
 | `src/adapters/inbound/cli/decide.rs` | 49 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop. |
 | `src/adapters/inbound/cli/history.rs` | 107 | `tengu history range|asof <key>` — read the recorder day files (no LLM). |
-| `src/adapters/inbound/cli/risk.rs` | 583 | `tengu risk status|halt|resume` — ledger risk state (no LLM); halt / resume only at a TTY and never under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME`; resume asks for the account name, refused while the kill-switch file exists. |
+| `src/adapters/inbound/cli/risk.rs` | 584 | `tengu risk status|halt|resume` — ledger risk state (no LLM; verdict lines name the exec tool and call id); halt / resume only at a TTY and never under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME`; resume asks for the account name, refused while the kill-switch file exists. |
 | `src/adapters/inbound/cli/mod.rs` | 682 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |

@@ -23,7 +23,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | Funding | every hour the open positions owe, at a fresh `mkt_ctx/1` rate + oracle, before the order | — |
 | Order | `[paper] order_types`, well-formed; a close = the whole position, reduce-only | `order_type` · `invalid_order` · `no_position` |
 | Latency + book | sleep `latency_ms ± jitter`, then a live `l2Book` (`hl_book/1` recorded + stored); a failed read = the gate's `missing:book` | — |
-| Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: value at marks (day roll), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only | — |
+| Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: value at marks (day roll), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only (each verdict row also a `risk.jsonl` line — § Audit) | — |
 
 Underlying: the position's; none yet ⇒ the instrument id itself (asset exposure nets per instrument until the catalog, M1). A reduce-only close with no book after the latency is allowed degraded but rejected `stale_book` by the fill.
 
@@ -83,9 +83,29 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | `accounts` · `cash` | several accounts (weekend: capped + shadow), created with `[paper] initial_cash_usd` · journal deposit / fill / funding + running balance |
 | `positions` · `fills` · `funding` | per (account, instrument) incl. `exit_at_ms` · VWAP fill per filled / partial order · one HL payment per (account, instrument, hour) |
 | `orders` | allowed orders, `UNIQUE (account, client_order_id)`: a retry returns the stored result, writes nothing |
-| `risk_decisions` · `risk_state` | every verdict (checks, headroom, trips, intent, context digest, call id) · halt + UTC day + day-start equity |
+| `risk_decisions` · `risk_state` | every verdict (checks, headroom, trips, intent, context digest, call id, exec tool, session id — § Audit) · halt + UTC day + day-start equity |
 
-`place` = gate + fill + write in one `BEGIN IMMEDIATE`; a deny writes the verdict (and a changed risk state) only.
+`place` = gate + fill + write in one `BEGIN IMMEDIATE`; a deny writes the verdict (and a changed risk state) only. Columns added later reach an older `ledger.db` on open (`ALTER TABLE … ADD COLUMN`, one transaction).
+
+## Audit — every verdict (`risk-audit-verdicts`)
+
+| Record | Where | Kept |
+|---|---|---|
+| verdict row — canonical | `ledger.db` `risk_decisions` (written by `place`, deny or allow) | never pruned |
+| mirror line | `<TENGU_HOME>/logs/risk.jsonl`: one line per verdict row, written after the commit with one `write_all` (concurrent processes never tear a line); a replay writes neither; a failed write only warns | `tengu prune` deletes `logs/` |
+| loop outcome | `decisions.jsonl` `result = {outcome: "refused", action, rule}` when a typed exec result carries `risk = deny` (`StepOutcome::Refused`, counted apart from `executed`; the loop goes on); the TUI feed shows `refused by the risk gate: <rule>` | as `decisions.jsonl` |
+
+| `risk.jsonl` field | Value |
+|---|---|
+| `ts_ms` · `decision_id` | the row's time and `risk_decisions.id` |
+| `account` · `client_order_id` · `instrument` | full ids |
+| `call_id` | `ToolCtx.call_id` — loop `{loop}:{session}:{t}` (= that step's `call_id` in `decisions.jsonl`), feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<nonce>:<id>` |
+| `session_id` · `tool` | `TENGU_SESSION_ID` of the process (a `run-agent` child, its bridge), else null — loop and feed sessions are inside `call_id` · the exec tool (`paper_order`, `paper_close`, `xm_exits`) |
+| `verdict` · `rule` · `class` · `degraded` · `trips` · `checks` · `headroom` | allow / deny, the first failed rule, entry / exit, every check with its values and limits |
+| `intent` · `context` | the judged `OrderIntent` · the digest of row keys, ages and values the gate read |
+| `fill` | null when denied; else `order_id` (joins `orders` and `fills`), `status`, `reason`, `filled_qty`, `avg_px`, `fee_usd`, `slippage_bps`, `exit_at_ms` |
+
+Join a loop step to its verdict: `jq -c 'select(.call_id == "<call id>")' <TENGU_HOME>/logs/decisions.jsonl <TENGU_HOME>/logs/risk.jsonl`; refusals per rule: `jq -r 'select(.verdict == "deny") | .rule' risk.jsonl | sort | uniq -c`.
 
 ## Halts (§ 7 #8)
 
