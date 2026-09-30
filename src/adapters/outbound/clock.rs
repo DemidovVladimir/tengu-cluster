@@ -1,8 +1,7 @@
 //! `SystemClock` — the real `ports::clock::Clock`: wall time from the OS,
-//! sleeping on the tokio timer.
-
-// Wired by `rt-scheduler` (wave W1 B).
-#![allow(dead_code)]
+//! sleeping on the tokio timer. Used by the `[feeds]` scheduler
+//! (`bootstrap/runtime.rs`), which naps ≤ 60 s at a time so a wall-clock
+//! jump (NTP step, system sleep) is noticed within a minute.
 
 use async_trait::async_trait;
 

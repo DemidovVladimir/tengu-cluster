@@ -13,8 +13,8 @@
 //! Also the IO side of `domain::backoff`: [`mono_ms`] (monotonic clock) and
 //! [`jitter01`] (OS randomness).
 
-// Consumers: `outbound/hyperliquid/info.rs` now; feeds (`rt-scheduler`) and
-// `info-fetch` next.
+// Consumers: `outbound/hyperliquid/info.rs` and the feed scheduler
+// (`jitter01`, `bootstrap/runtime.rs`) now; `info-fetch` next.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};

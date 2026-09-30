@@ -1,6 +1,7 @@
 //! `tengu run --sandbox <s>` — the long-running process of a sandbox: one
-//! runner per sandbox (lease), every decision loop built once, the webhook
-//! routes when built with `--features webhooks` and `[webhooks] enabled`,
+//! runner per sandbox (lease), every decision loop built once, every
+//! `[feeds.*]` scheduled, the webhook routes when built with
+//! `--features webhooks` and `[webhooks] enabled`,
 //! graceful shutdown on SIGINT / SIGTERM (a second signal exits at once,
 //! code 130). Composition `bootstrap/runtime.rs`; operator doc
 //! `docs/runtime-2026-09-30.md`. Logs go to `<TENGU_HOME>/logs/tengu.log` +
@@ -41,6 +42,7 @@ pub(crate) async fn run_runtime(config: Config, secrets: Arc<SecretRegistry>) ->
         holder = %rt.holder(),
         state_dir = %rt.state_dir().display(),
         loops = ?rt.loops().names(),
+        feeds = ?config.feeds.keys().collect::<Vec<_>>(),
         "tengu run started"
     );
 

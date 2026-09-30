@@ -11,9 +11,6 @@
 //! standard offset (02:30 on the US switch day → 03:30 EDT); one inside the
 //! fall-back overlap resolves to the earlier instant (daylight offset).
 
-// Consumers land in wave W1 (`rt-scheduler` clock ticks, `kg-calendars`).
-#![allow(dead_code)]
-
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Weekday};
 
 const HOUR_MS: i64 = 3_600_000;

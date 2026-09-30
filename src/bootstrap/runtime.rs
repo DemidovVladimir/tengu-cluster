@@ -7,30 +7,37 @@
 //! | lease | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
-//! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router today; next wave (`rt-scheduler`) one task per `[feeds.<n>]` that submits via [`Runtime::loops`] |
+//! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
+//! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
 //! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → lease released |
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
+use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::observations::open_observation_store;
+use crate::adapters::outbound::rate_limit::jitter01;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, Rand01};
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
 use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
+use crate::config::feeds::{FeedConfig, FeedKind};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::{lease_resource, RunState, RunnerLease};
 use crate::domain::secrets::SecretRegistry;
+use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
+use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
 use crate::ports::runtime::RuntimeStore;
 
@@ -109,14 +116,152 @@ pub(crate) async fn start(
         LeaseTiming::default(),
     )
     .await?;
-    match build_loops(config, secrets, escalator) {
-        Ok((handlers, stores)) => {
-            rt.launch(handlers, stores);
-            Ok(rt)
-        }
+    let started = build_loops(config, Arc::clone(&secrets), escalator).and_then(|(h, s)| {
+        rt.launch(h, s);
+        start_feeds(config, &mut rt, &secrets, Arc::new(SystemClock))
+    });
+    match started {
+        Ok(()) => Ok(rt),
         Err(e) => {
             rt.shutdown().await;
             Err(e)
+        }
+    }
+}
+
+/// One agent's tool executor + the tool names it runs.
+type AgentTools = (Arc<dyn ToolExecutor>, Arc<BTreeSet<String>>);
+
+/// One supervised task per `[feeds.<n>]`, in name order (module table).
+/// Call after [`Runtime::launch`]: tick feeds need their target loop.
+pub(crate) fn start_feeds(
+    config: &Config,
+    rt: &mut Runtime,
+    secrets: &Arc<SecretRegistry>,
+    clock: Arc<dyn Clock>,
+) -> Result<()> {
+    let rand01: Rand01 = Arc::new(jitter01);
+    let mut executors: BTreeMap<String, AgentTools> = BTreeMap::new();
+    let mut stores: BTreeMap<String, Option<Arc<dyn ObservationStore>>> = BTreeMap::new();
+    for (name, feed) in &config.feeds {
+        let (spec, agent) = feed_spec(config, name, feed, rt, secrets, &mut executors)
+            .with_context(|| format!("start [feeds.{name}]"))?;
+        let store = stores
+            .entry(agent.clone())
+            .or_insert_with(|| agent_store(config, &agent))
+            .clone();
+        let health = rt.health().feed(
+            name,
+            feed.required,
+            feed.stale_after_secs(),
+            store,
+            clock.now_ms(),
+        );
+        info!(
+            feed = %name,
+            kind = %feed.kind,
+            every_secs = ?feed.every_secs,
+            windows = feed.windows.len(),
+            at = ?feed.at,
+            tz = %spec.schedule.zone.name(),
+            required = feed.required,
+            "feed started"
+        );
+        let env = FeedEnv {
+            clock: Arc::clone(&clock),
+            rand01: Arc::clone(&rand01),
+            health,
+        };
+        rt.spawn(format!("feed:{name}"), move |stop| {
+            run_feed(spec, env, stop)
+        });
+    }
+    Ok(())
+}
+
+/// `[feeds.<name>]` built, + the agent whose store takes its `feed/1` row.
+/// A tool feed whose agent cannot run its tool is refused here.
+fn feed_spec(
+    config: &Config,
+    name: &str,
+    feed: &FeedConfig,
+    rt: &Runtime,
+    secrets: &Arc<SecretRegistry>,
+    executors: &mut BTreeMap<String, AgentTools>,
+) -> Result<(FeedSpec, String)> {
+    let schedule = feed.schedule().map_err(|e| anyhow!("{}", e.join("; ")))?;
+    let (job, agent) = match feed.kind().map_err(|e| anyhow!("{e}"))? {
+        FeedKind::Tool => {
+            let (agent_name, tool) = match (&feed.agent, &feed.tool) {
+                (Some(a), Some(t)) => (a.clone(), t.clone()),
+                _ => anyhow::bail!("a tool feed needs `agent` and `tool`"),
+            };
+            let agent = config
+                .agents
+                .get(&agent_name)
+                .ok_or_else(|| anyhow!("agent: no [agents.{agent_name}] block"))?;
+            let (executor, runs) = executors
+                .entry(agent_name.clone())
+                .or_insert_with(|| {
+                    let workspace = agent_workspace(config, &agent_name);
+                    let (executor, runs) = crate::bootstrap::decision::agent_tool_executor(
+                        config, agent, &workspace, secrets,
+                    );
+                    (executor, Arc::new(runs))
+                })
+                .clone();
+            if !runs.contains(&tool) {
+                anyhow::bail!(
+                    "tool: [agents.{agent_name}] cannot run `{tool}` (not in its tools or \
+                     workspace_tools, not built into this binary, or its plugin failed — see \
+                     the log above)"
+                );
+            }
+            let job = FeedJob::Tool {
+                executor,
+                tool,
+                calls: feed.calls(),
+                concurrency: feed.concurrency(),
+            };
+            (job, agent_name)
+        }
+        FeedKind::Tick => {
+            let target = feed.target.clone().unwrap_or_default();
+            let (Some(dl), true) = (config.decision_loops.get(&target), rt.loops().has(&target))
+            else {
+                anyhow::bail!("target: decision loop `{target}` is not running in this process");
+            };
+            let job = FeedJob::Tick {
+                loops: rt.loops(),
+                target,
+                event: feed.event.clone(),
+            };
+            (job, dl.agent.clone())
+        }
+    };
+    let spec = FeedSpec {
+        name: name.to_string(),
+        schedule,
+        jitter_pct: feed.jitter_pct,
+        run_on_start: feed.run_on_start,
+        job,
+    };
+    Ok((spec, agent))
+}
+
+/// `[agents.<agent>]`'s observation store (fail-soft: no `feed/1` rows).
+fn agent_store(config: &Config, agent: &str) -> Option<Arc<dyn ObservationStore>> {
+    let sections = config
+        .agents
+        .get(agent)
+        .map(|a| Arc::clone(&a.sandbox))
+        .unwrap_or_default();
+    match open_observation_store(&agent_workspace(config, agent), &sections) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            let error = format!("{e:#}");
+            warn!(%agent, %error, "observation store unavailable; no feed/1 rows");
+            None
         }
     }
 }
@@ -253,7 +398,6 @@ impl Runtime {
     }
 
     /// Where feeds report (`HealthBoard::feed` → `FeedWriter`).
-    #[allow(dead_code)] // rt-scheduler (next wave) registers each [feeds.<n>] here
     pub(crate) fn health(&self) -> Arc<HealthBoard> {
         Arc::clone(&self.health)
     }
@@ -271,7 +415,7 @@ impl Runtime {
         &self.lease.holder
     }
 
-    /// Where loop events go (webhook endpoints now, feeds next wave).
+    /// Where loop events go (webhook endpoints, tick feeds).
     pub(crate) fn loops(&self) -> Arc<LoopDispatch> {
         Arc::clone(&self.loops)
     }
@@ -285,8 +429,7 @@ impl Runtime {
     }
 
     /// Register a long-running task (see `Supervisor::spawn`): the webhook
-    /// server today, one task per feed next wave.
-    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+    /// server, one task per feed.
     pub(crate) fn spawn<F, Fut>(&mut self, name: impl Into<String>, f: F)
     where
         F: FnOnce(StopRx) -> Fut,
@@ -498,6 +641,159 @@ mod tests {
             },
         );
         assert!(!live.ok(), "a stopped run is not live: {live:?}");
+    }
+
+    /// Agent `main` in `workspace` + loop `xm_main` + `feeds`, loaded like
+    /// `Config::load` does.
+    fn feed_config(workspace: &Path, feeds: &str) -> Config {
+        let text = format!(
+            r#"
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "m"
+            workspace = "{}"
+
+            [decision_loops.xm_main]
+            goal = "g"
+            agent = "main"
+            [decision_loops.xm_main.actions.hold]
+            description = "Nothing to do"
+
+            {feeds}
+            "#,
+            workspace.display()
+        );
+        let mut c: Config = toml::from_str(&text).unwrap();
+        c.validate().unwrap();
+        c.fold_default_scopes();
+        c
+    }
+
+    #[tokio::test]
+    async fn feeds_start_with_the_runtime_and_tick_their_loop() {
+        use crate::domain::runtime::{FeedHealth, FeedState};
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
+        let (slow, _) = launch_slow(&mut rt, 1);
+        let config = feed_config(
+            ws.path(),
+            r#"
+            [feeds.exit_tick]
+            kind = "tick"
+            target = "xm_main"
+            every_secs = 3600
+            run_on_start = true
+            event = { phase = "exit" }
+            "#,
+        );
+        let secrets = Arc::new(SecretRegistry::new());
+        start_feeds(&config, &mut rt, &secrets, Arc::new(SystemClock)).unwrap();
+        for _ in 0..400 {
+            if !slow.seen.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let seen = slow.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "run_on_start ticked once: {seen:?}");
+        assert!(seen[0].starts_with("exit_tick:"), "{seen:?}");
+        // The feed/1 row lands in the loop agent's store.
+        let store = open_observation_store(ws.path(), &config.agents["main"].sandbox).unwrap();
+        let row = store
+            .get("feed/1:exit_tick")
+            .await
+            .unwrap()
+            .expect("feed row");
+        let h: FeedHealth = row.typed().unwrap();
+        assert_eq!((h.state, h.items, h.required), (FeedState::Live, 1, false));
+        let report = rt.shutdown().await;
+        assert!(
+            report.aborted_tasks.is_empty() && !report.stop.failed,
+            "{report:?}"
+        );
+    }
+
+    // Multi-thread: the executor build `block_on`s plugin registration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tool_feed_calls_through_its_agents_executor() {
+        use crate::domain::runtime::{FeedHealth, FeedState};
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        std::fs::write(ws.path().join("notes.txt"), "hello").unwrap();
+        let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
+        launch_slow(&mut rt, 1);
+        let mut config = feed_config(
+            ws.path(),
+            r#"
+            [feeds.notes]
+            kind = "tool"
+            agent = "main"
+            tool = "read_file"
+            each = { path = ["notes.txt", "missing.txt"] }
+            every_secs = 3600
+            run_on_start = true
+            required = true
+            "#,
+        );
+        config.agents.get_mut("main").unwrap().tools = vec!["read_file".into()];
+        let secrets = Arc::new(SecretRegistry::new());
+        start_feeds(&config, &mut rt, &secrets, Arc::new(SystemClock)).unwrap();
+        let store = open_observation_store(ws.path(), &config.agents["main"].sandbox).unwrap();
+        let mut row = None;
+        for _ in 0..400 {
+            row = store.get("feed/1:notes").await.unwrap();
+            if row.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let h: FeedHealth = row.expect("feed row").typed().unwrap();
+        // One file read, the missing one failed without a retry.
+        assert_eq!((h.state, h.items, h.required), (FeedState::Live, 1, true));
+        assert!(h.last_error_class.is_some(), "{h:?}");
+        rt.shutdown().await;
+    }
+
+    // Multi-thread: the executor build `block_on`s plugin registration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_tool_feed_whose_agent_cannot_run_the_tool_refuses_to_start() {
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
+        launch_slow(&mut rt, 1);
+        // No allow-list and not an opt-in name: validation passes, but no
+        // plugin provides it (a typo).
+        let config = feed_config(
+            ws.path(),
+            "[feeds.notes]\nkind = \"tool\"\nagent = \"main\"\ntool = \"read_fil\"\nevery_secs = 60\n",
+        );
+        let secrets = Arc::new(SecretRegistry::new());
+        let err = start_feeds(&config, &mut rt, &secrets, Arc::new(SystemClock)).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("start [feeds.notes]") && err.contains("cannot run `read_fil`"),
+            "{err}"
+        );
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_tick_feed_without_its_loop_refuses_to_start() {
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut rt = begin(dir.path(), slow_timing()).await.unwrap();
+        rt.launch(BTreeMap::new(), BTreeMap::new()); // xm_main not built
+        let config = feed_config(
+            ws.path(),
+            "[feeds.exit_tick]\nkind = \"tick\"\ntarget = \"xm_main\"\nevery_secs = 60\n",
+        );
+        let secrets = Arc::new(SecretRegistry::new());
+        let err = start_feeds(&config, &mut rt, &secrets, Arc::new(SystemClock)).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("start [feeds.exit_tick]")
+                && err.contains("decision loop `xm_main` is not running"),
+            "{err}"
+        );
+        rt.shutdown().await;
     }
 
     #[tokio::test]

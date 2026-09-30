@@ -1,6 +1,6 @@
 //! Loop events of one process (`tengu run`, `tengu webhooks` loop
-//! endpoints; the `[feeds]` scheduler submits here next wave). Every loop is
-//! built once, so its history and state live in this one place.
+//! endpoints; `[feeds]` ticks via [`LoopDispatch::submit_tracked`]). Every
+//! loop is built once, so its history and state live in this one place.
 //!
 //! | Rule | How |
 //! |---|---|
@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{oneshot, watch, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::warn;
@@ -134,7 +134,6 @@ impl LoopDispatch {
         self.slots.keys().cloned().collect()
     }
 
-    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))] // webhooks; feeds next wave
     pub(crate) fn has(&self, name: &str) -> bool {
         self.slots.contains_key(name)
     }
@@ -149,14 +148,37 @@ impl LoopDispatch {
 
     /// Queue `event` for `loop_name` and return at once; it runs when the
     /// loop and an in-flight slot are free. Refused after [`Self::drain`]
-    /// began. Callers: webhook loop endpoints; the `[feeds]` scheduler next
-    /// wave.
+    /// began. Callers: webhook loop endpoints.
     #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
     pub(crate) fn submit(
         &self,
         loop_name: &str,
         event: Value,
         session_id: String,
+    ) -> Result<(), Refused> {
+        self.enqueue(loop_name, event, session_id, None)
+    }
+
+    /// [`Self::submit`], plus a receiver that closes once the event is done
+    /// — finished, failed, dropped at shutdown or aborted. The `[feeds]`
+    /// scheduler sends a feed's next tick only then.
+    pub(crate) fn submit_tracked(
+        &self,
+        loop_name: &str,
+        event: Value,
+        session_id: String,
+    ) -> Result<oneshot::Receiver<()>, Refused> {
+        let (done, rx) = oneshot::channel();
+        self.enqueue(loop_name, event, session_id, Some(done))?;
+        Ok(rx)
+    }
+
+    fn enqueue(
+        &self,
+        loop_name: &str,
+        event: Value,
+        session_id: String,
+        done: Option<oneshot::Sender<()>>,
     ) -> Result<(), Refused> {
         let slot = Arc::clone(self.slots.get(loop_name).ok_or(Refused::UnknownLoop)?);
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
@@ -169,6 +191,8 @@ impl LoopDispatch {
         let permits = Arc::clone(&self.permits);
         let mut closing = self.closing.subscribe();
         tasks.spawn(async move {
+            // Dropped with the task, whatever ends it: closes the receiver.
+            let _done = done;
             let mut ticket = ticket;
             let acquired = tokio::select! {
                 biased;
@@ -436,6 +460,36 @@ pub(crate) mod tests {
         assert_eq!(
             (st.completed, st.dropped, st.queued, st.in_flight),
             (1, 2, 0, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn tracked_receivers_close_when_the_event_is_done_or_dropped() {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let a = SlowLoop::new(60);
+        let d = dispatch(&[("a", a.clone())], 4);
+        let mut running = d
+            .submit_tracked("a", Value::Null, "running".into())
+            .unwrap();
+        let mut queued = d.submit_tracked("a", Value::Null, "queued".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert_eq!(running.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(queued.try_recv(), Err(TryRecvError::Empty));
+        let wait = |rx| tokio::time::timeout(Duration::from_secs(5), rx);
+        assert!(wait(&mut running).await.expect("closed").is_err());
+        assert_eq!(*a.seen.lock().unwrap(), ["running", "queued"]);
+        assert!(wait(&mut queued).await.expect("closed").is_err());
+        // Dropped at shutdown (never ran): closed too.
+        let slow = SlowLoop::new(150);
+        let d = dispatch(&[("s", slow)], 4);
+        d.submit("s", Value::Null, "first".into()).unwrap();
+        let mut dropped = d.submit_tracked("s", Value::Null, "second".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        d.drain(Instant::now() + Duration::from_secs(5)).await;
+        assert_eq!(dropped.try_recv(), Err(TryRecvError::Closed));
+        assert_eq!(
+            d.submit_tracked("nope", Value::Null, "x".into()).err(),
+            Some(Refused::UnknownLoop)
         );
     }
 

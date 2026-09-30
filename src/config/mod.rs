@@ -4,6 +4,7 @@
 
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
+pub(crate) mod feeds;
 pub(crate) mod hardening;
 pub(crate) mod paths;
 pub(crate) mod rate_limits;
@@ -224,6 +225,12 @@ pub struct Config {
     /// `<TENGU_HOME>/state/<xmarket.state>/history/`. Default: off.
     #[serde(default)]
     pub recorder: recorder::RecorderConfig,
+    /// `[feeds.<name>]` — scheduled work of `tengu run` (`config/feeds.rs`):
+    /// `kind = "tool"` calls a tool of an agent, `kind = "tick"` sends a
+    /// decision-loop event, on `every_secs` / `windows` / `at` clock ticks.
+    /// Absent = no feeds.
+    #[serde(default)]
+    pub feeds: std::collections::BTreeMap<String, feeds::FeedConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1221,6 +1228,9 @@ impl Config {
         for issue in self.recorder.validation_errors(self.xmarket.is_some()) {
             errors.push(issue);
         }
+        for issue in feeds::validation_errors(self) {
+            errors.push(issue);
+        }
 
         for (name, dl) in &self.decision_loops {
             for issue in dl.validation_errors(name) {
@@ -1493,6 +1503,7 @@ impl Default for Config {
             rate_limits: HashMap::new(),
             runtime: Default::default(),
             recorder: recorder::RecorderConfig::default(),
+            feeds: Default::default(),
             skill_lifecycle: None,
             sandbox_name: None,
         }

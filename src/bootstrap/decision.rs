@@ -4,9 +4,11 @@
 //! caller's `SecretRegistry`) + the agent workspace's observation store
 //! (`open_observation_store`: `<workspace>/.tengu/observations.db`, source of
 //! `state.world`, + the history recorder when `[recorder]` is on; fail-soft)
-//! → `application::decision_loop::DecisionLoop`.
+//! → `application::decision_loop::DecisionLoop`. [`agent_tool_executor`] also
+//! builds each `[feeds]` tool feed's executor (`bootstrap/runtime.rs`).
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +20,7 @@ use crate::adapters::outbound::noop::NoopActivity;
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::decision_loop::DecisionLoop;
-use crate::config::Config;
+use crate::config::{AgentConfig, Config};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
@@ -28,6 +30,39 @@ pub(crate) fn audit_path() -> PathBuf {
     crate::config::paths::resolve_tengu_home()
         .join("logs")
         .join("decisions.jsonl")
+}
+
+/// Tool executor of `agent` for a decision loop or a `[feeds]` feed: the
+/// allow-list, scopes and workspace a `run-agent` child of that agent gets,
+/// wrapped in `SanitizedToolExecutor` with the process `secrets` — plus the
+/// tool names it runs (none when no executor could be built: every call
+/// then fails).
+pub(crate) fn agent_tool_executor(
+    config: &Config,
+    agent: &AgentConfig,
+    workspace: &Path,
+    secrets: &Arc<SecretRegistry>,
+) -> (Arc<dyn ToolExecutor>, BTreeSet<String>) {
+    let (_, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
+        agent,
+        config,
+        workspace,
+        secrets,
+        Arc::new(NoopActivity),
+        None,
+    );
+    let (inner, runs): (Arc<dyn ToolExecutor>, BTreeSet<String>) = match executor {
+        Some(e) => {
+            let runs = e.additional_tool_defs(&[]).into_iter().map(|d| d.name);
+            (Arc::new(e), runs.collect())
+        }
+        None => (
+            Arc::new(crate::adapters::outbound::noop::NoopRuntimeToolExecutor),
+            BTreeSet::new(),
+        ),
+    };
+    let tools = Arc::new(SanitizedToolExecutor::new(inner, Arc::clone(secrets)));
+    (tools, runs)
 }
 
 /// `secrets` is the process registry: tool text and typed observations are
@@ -59,19 +94,7 @@ pub(crate) fn build_decision_loop(
         .as_ref()
         .map(|p| crate::config::paths::expand_tilde(p))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let (_, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
-        agent,
-        config,
-        &workspace,
-        &secrets,
-        Arc::new(NoopActivity),
-        None,
-    );
-    let inner: Arc<dyn ToolExecutor> = match executor {
-        Some(e) => Arc::new(e),
-        None => Arc::new(crate::adapters::outbound::noop::NoopRuntimeToolExecutor),
-    };
-    let tools: Arc<dyn ToolExecutor> = Arc::new(SanitizedToolExecutor::new(inner, secrets));
+    let (tools, _) = agent_tool_executor(config, agent, &workspace, &secrets);
 
     let observations = match open_observation_store(&workspace, &agent.sandbox) {
         Ok(s) => Some(s),

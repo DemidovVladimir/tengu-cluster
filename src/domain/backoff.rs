@@ -14,8 +14,9 @@
 //! | [`TokenBucket`] | one `[rate_limits.<name>]` budget: refill `per_minute`, capacity `burst`, request weights, an execution reserve reads may not use, post-hoc charges (debt) |
 //! | [`CircuitBreaker`] | `threshold` consecutive failures open it for `cooldown_ms` (calls fail fast); then calls pass again — the next failure re-opens at once, a success closes |
 
-// Users: Jev (`outbound/decisions.rs`) and the limiters
-// (`outbound/rate_limit.rs`) now; `rt-scheduler` / `rt-health` next.
+// Users: Jev (`outbound/decisions.rs`), the limiters
+// (`outbound/rate_limit.rs`) and the feed scheduler
+// (`application/runtime/feeds.rs`); not every item has a caller yet.
 #![allow(dead_code)]
 
 use crate::domain::observation::ErrorClass;

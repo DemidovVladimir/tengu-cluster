@@ -19,8 +19,8 @@
 //!
 //! A single mid-week holiday is a break too (`closed_days = 1`).
 
-// Consumers land in the next wave (`x-weekend-fade-strategy`, `rt-scheduler`
-// clock ticks); config builds the calendars today.
+// Consumers land in the next wave (`x-weekend-fade-strategy`); config builds
+// the calendars and `domain/schedule.rs` parses clock times here today.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

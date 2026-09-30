@@ -143,7 +143,7 @@ impl Observed for LoopHealth {
     }
 }
 
-/// State of a feed (`[feeds.<n>]`, scheduler next wave).
+/// State of a feed (`[feeds.<n>]`, `application/runtime/feeds.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FeedState {

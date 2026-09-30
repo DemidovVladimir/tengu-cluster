@@ -322,6 +322,54 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
 # heartbeat_stale_secs = 30                 # `tengu doctor --sandbox <name> --live` fails past this
+#
+# --- Feeds: scheduled work of `tengu run` (docs/runtime-2026-09-30.md § Feeds) ---
+# kind = "tool" calls a tool of `agent` (the executor its decision loop would
+# get: scopes, workspace, secret redaction; call id feed:<name>:<slot ms>:<i>);
+# kind = "tick" sends `event` + ts_ms to a [decision_loops.*] block. When:
+# every_secs (UTC grid) · windows (local time in tz; replace every_secs inside)
+# · at (clock ticks in tz: "Sun 18:00", "daily 09:00"). Rules: src/config/feeds.rs.
+# [feeds.hl_ctx]
+# kind = "tool"
+# agent = "xm_feeds"                        # its `tools` list hl_ctx, hl_book and risk_status
+# tool = "hl_ctx"
+# args = { dex = "xyz" }
+# every_secs = 60
+# jitter_pct = 10                           # start up to 6 s late (spreads the request budget)
+# run_on_start = true
+# required = true                           # `tengu doctor --live` fails when down or stale
+# stale_after_secs = 180                    # default 3 × the longest interval
+#
+# [feeds.hl_book]
+# kind = "tool"
+# agent = "xm_feeds"
+# tool = "hl_book"
+# each = { coin = ["xyz:TSLA", "xyz:NVDA"] }  # one call per value, in order
+# every_secs = 300
+# tz = "America/New_York"
+# windows = [                               # every 60 s around the weekend clock
+#   { days = ["Sun"], from = "17:00", to = "19:00", every_secs = 60 },
+#   { days = ["Mon"], from = "08:30", to = "09:30", every_secs = 60 },
+# ]
+# required = true
+#
+# [feeds.risk_day]                          # rolls the daily-loss base (day-start equity)
+# kind = "tool"
+# agent = "xm_feeds"
+# tool = "risk_status"                      # no args
+# tz = "UTC"
+# at = ["daily 00:01"]                      # shortly after the UTC day starts
+# run_on_start = true
+# required = true
+# stale_after_secs = 90000                  # 25 h (default without every_secs: 8 days)
+#
+# [feeds.weekend_review]                    # a Jev loop event at clock times
+# kind = "tick"
+# target = "xm_main"                        # a [decision_loops.*] block
+# tz = "America/New_York"
+# at = ["Sun 18:00", "Mon 09:00"]           # wall-clock times, DST-safe
+# event = { phase = "review" }              # the loop gets { phase, ts_ms }
+
 # --- Observation history (recorder; needs [xmarket]) ---
 # Typed-tool observations appended to <TENGU_HOME>/state/<xmarket.state>/history/
 # <YYYYMMDD>.db (UTC day). Read: tengu history range|asof. Rules:

@@ -7,7 +7,9 @@
 //! | [`keep_lease`] | renews `runtime:<sandbox>` every `renew_ms`; a lost lease stops the run (failed) |
 //! | [`loops::LoopDispatch`] | loop events: one at a time per loop, `[runtime] max_decisions_in_flight` across loops, drain on shutdown |
 //! | [`health::HealthBoard`] | heartbeat file + `loop/1` / `feed/1` rows every `[runtime] heartbeat_secs`; `FeedWriter` for the scheduler |
+//! | [`feeds::run_feed`] | one `[feeds.<n>]`: fire on its schedule (`Clock`), call the agent's tool or tick a loop, back off on errors, report health |
 
+pub(crate) mod feeds;
 pub(crate) mod health;
 pub(crate) mod loops;
 
@@ -81,8 +83,8 @@ impl Stopper {
 }
 
 /// Named long-running tasks sharing one stop signal — the seam where
-/// `tengu run` registers the lease keeper, the webhook server and (next
-/// wave) one task per feed.
+/// `tengu run` registers the lease keeper, the heartbeat, the webhook server
+/// and one task per feed.
 pub(crate) struct Supervisor {
     stopper: Stopper,
     tasks: Vec<(String, JoinHandle<()>)>,

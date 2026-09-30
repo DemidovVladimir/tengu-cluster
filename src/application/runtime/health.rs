@@ -8,8 +8,8 @@
 //! | `loop/1:<name>` (`LoopHealth`) | the loop agent's observation store | every beat |
 //! | `feed/1:<name>` (`FeedHealth`) | the store the feed registered with | once it has an item: every beat and on each report (items at most 1/s); `observed_at_ms` = last item |
 //!
-//! Feeds report through [`FeedWriter`] (the `[feeds]` scheduler, next wave).
-//! Row writes are fail-soft (warn, doctrine #4).
+//! Feeds report through [`FeedWriter`] (the `[feeds]` scheduler,
+//! `runtime/feeds.rs`). Row writes are fail-soft (warn, doctrine #4).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -73,7 +73,6 @@ impl HealthBoard {
 
     /// Register feed `name` (`connecting`); its `feed/1` rows go to `store`
     /// (the feed agent's observation store). Re-registering resets it.
-    #[allow(dead_code)] // rt-scheduler (next wave) registers each [feeds.<n>] here
     pub(crate) fn feed(
         self: &Arc<Self>,
         name: &str,
@@ -183,7 +182,6 @@ pub(crate) struct FeedWriter {
     name: String,
 }
 
-#[allow(dead_code)] // rt-scheduler (next wave) reports through these
 impl FeedWriter {
     /// An item arrived (poll answered, message received): `live`.
     pub(crate) async fn item(&self, now_ms: i64) {
@@ -209,6 +207,7 @@ impl FeedWriter {
     }
 
     /// (Re)connecting: `connecting`, one more reconnect.
+    #[allow(dead_code)] // stream feeds (`rt-ws-client`, M2); polls never reconnect
     pub(crate) async fn reconnecting(&self, now_ms: i64) {
         self.board
             .report(&self.name, now_ms, |h| h.on_reconnect(now_ms))

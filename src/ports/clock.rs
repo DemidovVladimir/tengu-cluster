@@ -3,9 +3,6 @@
 //! in tests and on recorded time in `tengu xm replay`. Impl: `SystemClock`
 //! (`adapters/outbound/clock.rs`); test double `ManualClock` below.
 
-// Consumers land in wave W1 B (`rt-scheduler`, `risk-paper-fill-engine`).
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 
 #[async_trait]
@@ -15,6 +12,7 @@ pub(crate) trait Clock: Send + Sync {
     /// Return once `now_ms() >= t_ms` (immediately when already past).
     async fn sleep_until_ms(&self, t_ms: i64);
     /// `sleep_until_ms(now_ms() + ms)`.
+    #[cfg_attr(not(test), allow(dead_code))] // feeds and fills sleep until instants
     async fn sleep_ms(&self, ms: u64) {
         let t = self.now_ms().saturating_add(ms.min(i64::MAX as u64) as i64);
         self.sleep_until_ms(t).await;

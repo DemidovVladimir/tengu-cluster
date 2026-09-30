@@ -64,7 +64,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` |
 | Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
 | Solana LP tools (`sol_price` … `lp_decide`; writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
-| `tengu run` (loops, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health}.rs` · `src/domain/runtime.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · doc `docs/runtime-2026-09-30.md` |
+| `tengu run` (loops, feeds, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health,feeds}.rs` · `src/domain/runtime.rs` · fire times `src/domain/schedule.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · `[feeds.<n>]` `src/config/feeds.rs` · doc `docs/runtime-2026-09-30.md` |
 | Sandbox sections tools read (`[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`) | `src/config/sections.rs` (`AgentConfig::sandbox`) · `src/config/{xmarket,risk,rate_limits,recorder,hardening}.rs` |
 | Hyperliquid tools (`hl_ctx`, `hl_book`) + market rows + costs + ledger math | interfaces `src/adapters/outbound/tools/hyperliquid/defs.rs` · plugin + tools `src/adapters/outbound/tools/hyperliquid/` · decoders `src/domain/hl/` · `/info` client `src/adapters/outbound/hyperliquid/info.rs` · `src/domain/market.rs` · `src/domain/book.rs` · `src/domain/xm/{cost,ledger}.rs` |
 | Risk gate + paper fills + ledger + kill switch (`[risk]` limits → `RiskVerdict` → `ledger.db`) | gate `src/domain/xm/risk.rs` (`evaluate`) · halts `src/domain/xm/risk_state.rs` · limits `src/config/risk.rs` (`RiskConfig::limits`) · fill engine `src/domain/xm/paper.rs` + latency `src/application/paper.rs` · ledger math `src/domain/xm/ledger.rs` · ledger port `src/ports/paper.rs` + store `src/adapters/outbound/paper_store.rs` · tool `src/adapters/outbound/tools/xm/` (`risk_status`) · CLI `src/adapters/inbound/cli/risk.rs` · doc `docs/xmarket-risk-paper-2026-09-30.md` |
@@ -108,6 +108,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[risk]` / `[paper]` | `RiskConfig` / `PaperConfig` (`config/risk.rs`) | `AgentConfig::sandbox` → the exec tools' gate and fill engine | **error** |
 | `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`) | **error** |
 | `[runtime]` | `RuntimeConfig` (`config/runtime.rs`) | `bootstrap/runtime.rs`, `inbound/run.rs` | **error** |
+| `[feeds.<n>]` | `FeedConfig` (`config/feeds.rs`) | `bootstrap/runtime.rs::start_feeds` → `application/runtime/feeds.rs` (`tengu run`) | **error** |
 | `[recorder]` | `RecorderConfig` (`config/recorder.rs`) | `outbound/observations.rs::open_observation_store` (every typed-tool store) | **error** |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`config/skill_lifecycle.rs`) | `inbound/evolve.rs`, `inbound/eval.rs` | ignored |
 | `[hub]` | `HubConfig` | validation + `tengu status` display only | ignored |
@@ -225,12 +226,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (41 files)
+### domain — data + pure policy (42 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
-| `src/domain/backoff.rs` | 398 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
+| `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
 | `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
@@ -254,6 +255,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/observation.rs` | 697 | Typed tool observations — `Observation` envelope (LLM text, decision-loop features, cache row), `Observed`, `Field<T>`, `ObsStatus`, `CachePolicy`. |
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
 | `src/domain/runtime.rs` | 933 | `tengu run` pure data — the single-runner lease (one runner per sandbox); `now_ms` always an input. |
+| `src/domain/schedule.rs` | 804 | Feed fire times — `next_fire`: UTC-grid interval, local-time windows (own interval), at-ticks in a zone (DST-safe), jitter, late grace; missed slots skipped. |
 | `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; |
 | `src/domain/secrets.rs` | 123 | `SecretRegistry` — secret values to redact from tool output, transcripts, typed observations (`redact_value`, `redact_observation`) |
 | `src/domain/session.rs` | 58 | Chat/flow session state — per-session prompt assembly and loop state. |
@@ -271,14 +273,14 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/risk.rs` | 2688 | Pre-trade risk gate (pure): `OrderIntent` + `RiskContext` + `RiskLimits` ⇒ `RiskVerdict` — every §28 rule a `Check` (permission, caps after the fill, leverage, losses, kill switch, halt, min edge, depth / slippage, hedge + skew, freshness, order rate), fail closed `missing:<field>`, reduce-only exits under `allow_reduce_degraded`; §29 `Lifecycle`, `HaltReason`. |
 | `src/domain/xm/risk_state.rs` | 671 | Account risk state (pure): halts (`daily_loss` clears 00:00 UTC; `total_loss` / `operator` / `file` only by resume), UTC day roll + day-start equity, `valuation_trips`, `RiskStatus` → `risk_state/1:<account>`. |
 
-### ports — traits (15 files)
+### ports — traits (17 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
 | `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
-| `src/ports/clock.rs` | 77 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `ManualClock` test double. |
+| `src/ports/clock.rs` | 75 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `ManualClock` test double. |
 | `src/ports/book.rs` | 191 | `BookSource` — a fresh L2 book per instrument (`BookRead`), live or replayed; `ScriptedBooks` test fake. |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
@@ -293,14 +295,15 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (12 files)
+### config — TOML schema (14 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
 | `src/config/decision_loop.rs` | 401 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, slots (static / history / observation), caps, reducers, `dry_run`, `world`, `requires`. |
+| `src/config/feeds.rs` | 696 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |
 | `src/config/hardening.rs` | 177 | Hardened sandboxes (`[solana]` signer or `[risk]`): `claude_code` agents only with `builtin_tools_profile = "none"`; no-shell fallback. |
-| `src/config/mod.rs` | 1792 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
+| `src/config/mod.rs` | 2010 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
@@ -311,7 +314,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/sections.rs` | 17 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`. |
 | `src/config/xmarket.rs` | 572 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`). |
 
-### application — use cases (50 files)
+### application — use cases (51 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -334,9 +337,10 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/observe.rs` | 182 | `observe()` — cache-or-fetch for typed tools (fresh rows only, `Error` never cached, store failure → live). |
 | `src/application/paper.rs` | 323 | `fill_with_latency` — sleep the `[paper]` latency on the `Clock`, then read the book, then fill against it (convention 16). |
 | `src/application/orchestrator/events.rs` | 87 | `OrchestratorEvent` + broadcast channel. |
-| `src/application/runtime/mod.rs` | 389 | `tengu run` supervisor — named tasks on one stop signal, SIGINT/SIGTERM drain with grace, early task death fails the run. |
-| `src/application/runtime/loops.rs` | 466 | `LoopDispatch` — one event at a time per loop (FIFO), `max_decisions_in_flight` across loops, drain on shutdown; used by `tengu run` and `tengu webhooks`. |
-| `src/application/runtime/health.rs` | 474 | `HealthBoard` — heartbeat task (`<state dir>/run-<sandbox>.json`), `loop/1:<name>` rows, `feed/1:<name>` writers for feeds. |
+| `src/application/runtime/mod.rs` | 391 | `tengu run` supervisor — named tasks on one stop signal, SIGINT/SIGTERM drain with grace, early task death fails the run. |
+| `src/application/runtime/loops.rs` | 520 | `LoopDispatch` — one event at a time per loop (FIFO), `max_decisions_in_flight` across loops, drain on shutdown; `submit_tracked` for feed ticks; used by `tengu run` and `tengu webhooks`. |
+| `src/application/runtime/health.rs` | 473 | `HealthBoard` — heartbeat task (`<state dir>/run-<sandbox>.json`), `loop/1:<name>` rows, `feed/1:<name>` writers for feeds. |
+| `src/application/runtime/feeds.rs` | 1340 | Feed runner — one task per `[feeds.<n>]` on a `Clock`: tool calls (`feed:<name>:<slot ms>:<i>` call ids, fan-out) or loop ticks, one run in flight, backoff on error rows, `feed/1` health. |
 | `src/application/orchestrator/executor.rs` | 243 | DAG executor: parallel step dispatch with retry escalation. |
 | `src/application/orchestrator/mod.rs` | 197 | Harness-owned orchestration. |
 | `src/application/orchestrator/planner.rs` | 942 | Planner — runs the orchestrator agent's LLM call, returns Plan or direct response. |
@@ -371,10 +375,10 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
-| `src/bootstrap/decision.rs` | 94 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`SanitizedToolExecutor`, caller's `SecretRegistry`) + observation store → `DecisionLoop`; audit path. |
+| `src/bootstrap/decision.rs` | 120 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
-| `src/bootstrap/runtime.rs` | 537 | `tengu run` composition — builds every `[decision_loops.*]` once, the lease, webhook routes; `Runtime::spawn` seam for feeds. |
+| `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the lease, every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`), webhook routes via `Runtime::spawn`. |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
@@ -383,7 +387,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/outbound/bridge_env.rs` | 11 | Env contract between the Claude Code engine (writes it into the CLI's |
-| `src/adapters/outbound/clock.rs` | 41 | `SystemClock` — OS wall time, tokio sleep (`ports::clock::Clock`). |
+| `src/adapters/outbound/clock.rs` | 40 | `SystemClock` — OS wall time, tokio sleep (`ports::clock::Clock`). |
 | `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic. |
 | `src/adapters/outbound/http_class.rs` | 433 | HTTP status / transport error → `ErrorClass` (`HttpError`), credential `Scrubber`, `display_url`; shared by Solana, Hyperliquid and feeds. |
 | `src/adapters/outbound/history_sqlite.rs` | 531 | `SqliteHistoryStore` — `<state dir>/history/<YYYYMMDD>.db` UTC day files (WAL), range / asof across days, retention sweeper. |
@@ -495,7 +499,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
 | `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol. |
-| `src/adapters/inbound/run.rs` | 176 | `tengu run [--sandbox <s>]` — the long-running process: loops, webhook routes (feature `webhooks`), lease, graceful shutdown; file + stderr logs. |
+| `src/adapters/inbound/run.rs` | 178 | `tengu run [--sandbox <s>]` — the long-running process: loops, feeds, webhook routes (feature `webhooks`), lease, graceful shutdown; file + stderr logs. |
 | `src/adapters/inbound/mod.rs` | 15 | Inbound (driving) adapters — what turns outside input into use-case calls |
 | `src/adapters/inbound/telegram.rs` | 2079 | Telegram adapter — pipe, commands, and runtime in one module. |
 | `src/adapters/inbound/tui/app.rs` | 40 | TUI application state model — pure data, no widget state. |
