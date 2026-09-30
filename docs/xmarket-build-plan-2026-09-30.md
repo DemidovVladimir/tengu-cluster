@@ -27,6 +27,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Topic | Rule |
 |---|---|
 | Unit of work | One tracker item = one commit on `feature/xmarket` whose message starts with the item id; code, tests and docs together; tick the item (✅ + short hash) in the tracker in the same commit |
+| Machine load (operator 2026-09-30) | On the operator's Mac: one agent at a time, low priority (`renice` + `taskpolicy -b`, `CARGO_BUILD_JOBS=2`, build dirs under a `.noindex` folder), no local models — parallel waves only on a machine the operator is not using |
 | Parallelism | Workflows with `isolation: "worktree"` for items that touch disjoint files. Shared files — `src/adapters/outbound/tools/mod.rs` (catalog), `src/domain/tools.rs`, `src/config/mod.rs`, `docs/code-map.{md,html}`, the tracker — are edited only by the coordinator when merging. Merge one worktree at a time and run the item gate after each merge |
 | Order | Follow the waves below; inside a wave follow the tracker's M-table order unless the "After:" lines in the gaps doc allow parallel work |
 | Loop | For long waves run `/loop` (self-paced): each iteration takes the next ☐ item of the current wave, implements it, runs the item gate, commits, ticks. The loop stops at a wave gate for the full validation |
@@ -85,7 +86,7 @@ A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit
 | Input | Needed for | When |
 |---|---|---|
 | Mac on, lid open, online Fri 2026-10-02 19:30 ET → Mon 2026-10-05 10:00 ET (Sat 04:30 → Mon 19:00 UTC+5) | weekend run + sampler | W1 |
-| Ollama running with `gemma4:latest`; Claude CLI logged in | engine matrix | W1 |
+| Ollama with `gemma4:latest` on the operator's **Windows gaming PC** (reached over the LAN; never on the dev Mac), `OLLAMA_HOST=0.0.0.0`, `OLLAMA_CONTEXT_LENGTH=16384`, its address; Claude CLI logged in | engine matrix (`local` column live check) | when the operator says go |
 | Dedicated xmarket OpenRouter key, $40 / day limit | 24/7 runs | before W2 deploy (the current key is fine for development) |
 | VPS choice (Hetzner or Hostinger) + an SSH alias; Docker installed | `ops-deploy-compose` | W2 |
 | Alpaca key (reference equities) | `rh-ref-equities` | W3 |
