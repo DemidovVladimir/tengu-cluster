@@ -5,8 +5,10 @@
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod paths;
+pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
+pub(crate) mod xmarket;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -183,6 +185,12 @@ pub struct Config {
     /// Absent = the write tools only simulate.
     #[serde(default)]
     pub solana: solana::SolanaConfig,
+
+    /// `[xmarket]` — xmarket runtime settings (`config/xmarket.rs`): the
+    /// install-wide state directory `<TENGU_HOME>/state/<state>`. Absent =
+    /// not an xmarket sandbox.
+    #[serde(default)]
+    pub xmarket: Option<xmarket::XmarketConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -375,6 +383,11 @@ pub struct AgentConfig {
     /// the key at send time (`tools/solana/write_common.rs`).
     #[serde(skip)]
     pub signer_key_file: Option<PathBuf>,
+    /// Runtime (never in TOML): sandbox-level sections tools read at call
+    /// time (`config/sections.rs`) — one `Arc` shared by every agent, set by
+    /// `Config::fold_default_scopes`.
+    #[serde(skip)]
+    pub sandbox: std::sync::Arc<sections::SandboxSections>,
 }
 
 fn default_lens() -> String {
@@ -1023,9 +1036,11 @@ impl Config {
     pub fn fold_default_scopes(&mut self) {
         let signing_sandbox = self.solana.signer_key_file.is_some();
         let signer_key_file = self.solana.signer_path();
+        let sections = std::sync::Arc::new(self.sandbox_sections());
         for agent in self.agents.values_mut() {
             agent.no_shell_fallback = signing_sandbox;
             agent.signer_key_file = signer_key_file.clone();
+            agent.sandbox = std::sync::Arc::clone(&sections);
             for (tool, scope) in &self.default_scopes {
                 agent
                     .scopes
@@ -1042,6 +1057,14 @@ impl Config {
             for root in scope.fs_roots.iter_mut() {
                 *root = crate::config::paths::expand_tilde(root);
             }
+        }
+    }
+
+    /// The sandbox sections every agent's tools read (`config/sections.rs`).
+    fn sandbox_sections(&self) -> sections::SandboxSections {
+        let home = crate::config::paths::resolve_tengu_home();
+        sections::SandboxSections {
+            xm_state_dir: self.xmarket.as_ref().map(|x| x.state_dir(&home)),
         }
     }
 
@@ -1105,6 +1128,11 @@ impl Config {
         }
         for issue in solana::validation_errors(self) {
             errors.push(issue);
+        }
+        if let Some(x) = &self.xmarket {
+            for issue in x.validation_errors() {
+                errors.push(issue);
+            }
         }
 
         for (name, dl) in &self.decision_loops {
@@ -1353,6 +1381,7 @@ impl Default for Config {
                 local: None,
                 no_shell_fallback: false,
                 signer_key_file: None,
+                sandbox: Default::default(),
             },
         );
 
@@ -1371,6 +1400,7 @@ impl Default for Config {
             egress: EgressConfig::default(),
             mcp_servers: Vec::new(),
             solana: solana::SolanaConfig::default(),
+            xmarket: None,
             skill_lifecycle: None,
             sandbox_name: None,
         }
@@ -1739,6 +1769,44 @@ ttl_days = 7
             scopes["write_file"].fs_roots[0].to_str().unwrap(),
             "./agent-specific"
         );
+    }
+
+    /// `[xmarket]` resolves to one state dir that every agent's tools see
+    /// through the shared `AgentConfig::sandbox` handle; absent = none.
+    #[test]
+    fn fold_shares_sandbox_sections_with_every_agent() {
+        let toml_str = r#"
+            [xmarket]
+            state = "xmarket-weekend"
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4-6"
+
+            [agents.exec]
+            engine = "openrouter"
+            model = "anthropic/claude-haiku-4.5"
+        "#;
+        let mut config: Config = toml::from_str(toml_str).expect("should parse");
+        config.validate().expect("valid");
+        config.fold_default_scopes();
+        let dir = config.agents["main"].sandbox.xm_state_dir.clone().unwrap();
+        assert!(dir.ends_with("state/xmarket-weekend"), "{}", dir.display());
+        assert!(std::sync::Arc::ptr_eq(
+            &config.agents["main"].sandbox,
+            &config.agents["exec"].sandbox
+        ));
+
+        let mut plain = Config::default();
+        plain.fold_default_scopes();
+        assert!(plain.agents["main"].sandbox.xm_state_dir.is_none());
+
+        let bad: Config = toml::from_str(
+            "[xmarket]\nstate = \"../x\"\n[agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
     }
 
     #[test]

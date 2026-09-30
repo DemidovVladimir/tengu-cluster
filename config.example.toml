@@ -183,6 +183,13 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [solana]
 # signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
 
+# --- xmarket (docs/xmarket-tracker-2026-09-29.md) ---
+# Install-wide state of the xmarket runtime lives in <TENGU_HOME>/state/<state>/
+# (ledger.db, runtime.db, history/ …) — outside every workspace; `tengu prune`
+# keeps it. One directory name.
+# [xmarket]
+# state = "xmarket"                         # the weekend sandbox uses "xmarket-weekend"
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in
