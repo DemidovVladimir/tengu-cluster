@@ -8,7 +8,7 @@
 #   TENGU_MATRIX_LOCAL_BASE_URL=http://<windows-pc>:11434/v1 \
 #     tengu -c tests/fixtures/engine_matrix/local.toml doctor --engines
 #
-# The xm set holds exec tools (paper_order, paper_close): only a private
+# The xm set holds exec tools (paper_order, paper_close, xm_exits): only a private
 # agent may hold them, and run-agent runs routable ones only, so it runs on
 # the private `xm_*` agent through `tengu tool turn -c <this file> --agent
 # xm_<name> --goal ...` (one in-process turn, the `@<agent>` chat path).
@@ -59,6 +59,13 @@ book = 5000
 ctx = 20000
 reference = 60000
 quote = 20000
+
+# `xm_exits` closes the position the second paper_order opens with an
+# exit_at_ms in the past (reason `deadline`); these rules never fire first.
+[risk.exits]
+take_profit_bps = 200
+stop_loss_bps = 100
+max_hold_secs = 86400
 
 [paper]
 initial_cash_usd = 86.42
@@ -116,6 +123,11 @@ fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
 net_hosts = ["api.hyperliquid.xyz"]
 env_reads = ["HL_API_URL"]
 
+[default_scopes.xm_exits]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
 [agents.gemma]
 engine = "local"
 model = "gemma4:latest"
@@ -136,7 +148,7 @@ api_key_env = ""
 [agents.xm_gemma]
 engine = "local"
 model = "gemma4:latest"
-tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "xm_exits", "risk_status"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.xm_gemma.limits]

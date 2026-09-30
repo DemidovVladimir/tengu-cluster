@@ -407,6 +407,11 @@ mod tests {
         model = "m"
         tools = ["hl_ctx", "hl_book", "risk_status"]
 
+        [agents.xm_exec]
+        engine = "openrouter"
+        model = "m"
+        tools = ["xm_exits"]
+
         [agents.open]
         engine = "openrouter"
         model = "m"
@@ -677,7 +682,16 @@ mod tests {
         let cfg = load(&block.join("\n"));
         assert_eq!(validation_errors(&cfg), Vec::<String>::new());
         let names: Vec<&str> = cfg.feeds.keys().map(String::as_str).collect();
-        assert_eq!(names, ["hl_book", "hl_ctx", "risk_day", "weekend_review"]);
+        assert_eq!(
+            names,
+            [
+                "hl_book",
+                "hl_ctx",
+                "risk_day",
+                "weekend_review",
+                "xm_exits"
+            ]
+        );
         assert_eq!(
             cfg.feeds["hl_book"].schedule().unwrap(),
             load(WEEKEND_BOOK).feeds["hl_book"].schedule().unwrap()
@@ -692,5 +706,16 @@ mod tests {
         let review = &cfg.feeds["weekend_review"];
         assert_eq!(review.kind(), Ok(FeedKind::Tick));
         assert_eq!(review.schedule().unwrap().at.len(), 2);
+        // The exit rules every 15 s on the private exec agent, no arguments.
+        let exits = &cfg.feeds["xm_exits"];
+        assert_eq!(
+            (
+                exits.kind(),
+                exits.schedule().unwrap().every_ms,
+                exits.required
+            ),
+            (Ok(FeedKind::Tool), Some(15_000), true)
+        );
+        assert_eq!(exits.calls(), vec![json!({})]);
     }
 }

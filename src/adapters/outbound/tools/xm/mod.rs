@@ -8,6 +8,7 @@
 //! | `risk_status.rs` | `risk_status` — `risk_state/1:<account>`: halt + kill switch, equity / P&L / loss headroom at fresh `mkt_ctx/1` marks, exposure, order rate |
 //! | `exec_common.rs` | `run_exec` — the `[risk]` gate inside every exec tool: gate + fill + ledger write in one transaction, `paper_fill/1:<account>:<client_order_id>` |
 //! | `paper.rs` | `paper_order`, `paper_close` (exec tools, through `run_exec`), `paper_positions` — `paper_positions/1:<account>` |
+//! | `exits.rs` | `xm_exits` (exec tool) — the exit rules: closes every due open position (deadline, max hold, stop-loss, take-profit) through `run_exec` under a deterministic id; `xm_exits/1:<account>` |
 //!
 //! The plugin opens the observation store (`open_observation_store`) and —
 //! only with `[risk]` — the ledger (`open_paper_ledger`) once. No store ⇒
@@ -22,6 +23,7 @@
 
 pub(crate) mod defs;
 pub(crate) mod exec_common;
+pub(crate) mod exits;
 pub(crate) mod paper;
 pub(crate) mod risk_status;
 
@@ -109,6 +111,7 @@ impl ToolPlugin for XmPlugin {
         };
         let mut tools = risk_status::tools(&shared);
         tools.extend(paper::tools(&shared));
+        tools.extend(exits::tools(&shared));
         Ok(tools)
     }
 }

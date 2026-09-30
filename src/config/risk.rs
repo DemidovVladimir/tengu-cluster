@@ -35,6 +35,11 @@
 //! kill_switch_file = "~/.tengu/state/xmarket/KILL"
 //! allow_reduce_degraded = true
 //!
+//! [risk.exits]                   # `xm_exits` (x-exit-rules)
+//! take_profit_bps = 200
+//! stop_loss_bps = 100
+//! max_hold_secs = 86400
+//!
 //! [paper]
 //! initial_cash_usd = 100
 //! latency_ms = 250
@@ -53,9 +58,10 @@
 //! | `max_order ≤ max_position ≤ max_gross_exposure`, `daily_loss ≤ total_loss` | catches a cap typed one digit too long |
 //! | `hyperliquid` in `venues` ⇒ `max_order_notional_usd ≥ 10` | HL rejects orders under $10 (`MinTradeNtl`) |
 //! | `min_lifecycle` ≥ `mapped` | §29: discovered / identified instruments are never tradable |
+//! | `[risk.exits]` present: `take_profit_bps`, `stop_loss_bps` finite > 0, `max_hold_secs` > 0 | exits keep the budget turning over (§25); a 0 threshold would close every position at once |
 //! | `kill_switch_file` absolute or `~/…` | loops, the bridge and the operator CLI must see one file |
 //! | `require_hedge_for` names [`STRATEGIES`] only | a misspelled strategy would silently drop its hedge rule |
-//! | Exec tools (`paper_order`, `paper_close`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent` (checked with or without `[risk]`; the tools check the calling agent again) | the planner, a chat user or a webhook must never reach an order tool; loops and the operator's `@<agent>` chat may |
+//! | Exec tools (`paper_order`, `paper_close`, `xm_exits`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent` (checked with or without `[risk]`; the tools check the calling agent again) | the planner, a chat user or a webhook must never reach an order tool; loops and the operator's `@<agent>` chat may |
 //! | A loop action running an exec tool is not `read_only` | `read_only` bypasses `dry_run` |
 //! | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present with no `wallets`; no agent scope grants one | Privy signing stays off: a tool without a scope gets the permissive fallback, which grants the `default` wallet |
 //! | Hardened sandbox (`config/hardening.rs`, shared with a Solana signer): `claude_code` only with built-ins off, no `[[mcp_servers]]`, no shell scope, `<TENGU_HOME>/state` + `kill_switch_file` + the config file outside every fs root and workspace | nothing outside tengu scopes can edit `ledger.db`, delete the kill-switch file or lift a limit (convention 12) |
@@ -72,6 +78,7 @@ use serde::{Deserialize, Serialize};
 use super::paths::expand_tilde;
 use super::Config;
 use crate::domain::tools::{PRIVY_SIGNING_TOOLS, XM_EXEC_TOOLS};
+use crate::domain::xm::exits::ExitRules;
 use crate::domain::xm::risk::{MaxAges, RiskLimits};
 
 /// Venues an order may target (tracker convention 1). `ref:<MIC>` ids are
@@ -156,6 +163,34 @@ pub struct RiskConfig {
     /// § 7 #7: with stale data or a halted account a reduce-only / close
     /// order still passes, and the verdict records `allow_reduce_degraded`.
     pub allow_reduce_degraded: bool,
+    /// When `xm_exits` closes an open position.
+    pub exits: ExitsConfig,
+}
+
+/// `[risk.exits]` — the exit rules `xm_exits` applies to every open
+/// position (`domain/xm/exits.rs`; a position's own `exit_at_ms` deadline
+/// comes first).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExitsConfig {
+    /// P&L at a fresh mark, bps of the entry, that closes a winner.
+    pub take_profit_bps: f64,
+    /// Loss at a fresh mark, bps of the entry, that closes a loser.
+    pub stop_loss_bps: f64,
+    /// Longest a position stays open.
+    pub max_hold_secs: u64,
+}
+
+impl ExitsConfig {
+    /// The domain's rules (`exit_due`).
+    pub(crate) fn rules(&self) -> ExitRules {
+        ExitRules {
+            take_profit_bps: self.take_profit_bps,
+            stop_loss_bps: self.stop_loss_bps,
+            max_hold_ms: i64::try_from(self.max_hold_secs.saturating_mul(1_000))
+                .unwrap_or(i64::MAX),
+        }
+    }
 }
 
 /// `[risk] mode`.
@@ -532,6 +567,9 @@ fn risk_rules(r: &RiskConfig, errs: &mut Vec<String>) {
             kill.display()
         ));
     }
+    positive(errs, "risk.exits.take_profit_bps", r.exits.take_profit_bps);
+    positive(errs, "risk.exits.stop_loss_bps", r.exits.stop_loss_bps);
+    nonzero(errs, "risk.exits.max_hold_secs", r.exits.max_hold_secs);
 }
 
 fn paper_rules(p: &PaperConfig, errs: &mut Vec<String>) {
@@ -632,6 +670,11 @@ ctx = 20000
 reference = 60000
 quote = 20000
 
+[risk.exits]
+take_profit_bps = 200
+stop_loss_bps = 100
+max_hold_secs = 86400
+
 [default_scopes.sign_and_send_transaction]
 
 [default_scopes.sign_message]
@@ -644,6 +687,10 @@ fee_tier = 0
 staking_discount_pct = 0
 order_types = ["market", "ioc"]
 "#;
+
+    /// `RISK_100`'s `[risk.exits]` block.
+    const EXITS_BLOCK: &str =
+        "[risk.exits]\ntake_profit_bps = 200\nstop_loss_bps = 100\nmax_hold_secs = 86400\n";
 
     fn parse(sections: &str) -> Result<Config, String> {
         toml::from_str::<Config>(&format!("{AGENT}{sections}")).map_err(|e| e.to_string())
@@ -693,14 +740,14 @@ order_types = ["market", "ioc"]
 
     /// Every `key = value` line of `RISK_100` is required: dropping any one
     /// is a parse error naming it (`[risk]`, `[risk.max_data_age_ms]`,
-    /// `[paper]` alike).
+    /// `[risk.exits]`, `[paper]` alike).
     #[test]
     fn every_field_is_required() {
         let keys: Vec<&str> = RISK_100
             .lines()
             .filter_map(|l| l.split_once(" = ").map(|(k, _)| k))
             .collect();
-        assert_eq!(keys.len(), 24 + 4 + 6, "{keys:?}");
+        assert_eq!(keys.len(), 24 + 4 + 3 + 6, "{keys:?}");
         for key in keys {
             let toml = with(key, "");
             let err = parse(&toml).expect_err(key);
@@ -710,9 +757,11 @@ order_types = ["market", "ioc"]
             );
         }
         let (head, tail) = RISK_100.split_once("[risk.max_data_age_ms]").unwrap();
-        let no_ages = format!("{head}{}", &tail[tail.find("[paper]").unwrap()..]);
+        let no_ages = format!("{head}{}", &tail[tail.find("[risk.exits]").unwrap()..]);
         let err = parse(&no_ages).unwrap_err();
         assert!(err.contains("missing field `max_data_age_ms`"), "{err}");
+        let err = parse(&RISK_100.replace(EXITS_BLOCK, "")).unwrap_err();
+        assert!(err.contains("missing field `exits`"), "{err}");
     }
 
     #[test]
@@ -720,6 +769,7 @@ order_types = ["market", "ioc"]
         for (after, bad) in [
             ("[risk]", "max_exposure_usd = 100"),
             ("[risk.max_data_age_ms]", "trade = 1"),
+            ("[risk.exits]", "trailing_stop_bps = 50"),
             ("[paper]", "fee_bps = 4.5"),
         ] {
             let toml = RISK_100.replacen(after, &format!("{after}\n{bad}"), 1);
@@ -789,6 +839,10 @@ order_types = ["market", "ioc"]
             ("book", "book = 0", "risk.max_data_age_ms.book must be > 0"),
             ("max_open_orders", "max_open_orders = 0", "risk.max_open_orders must be > 0"),
             ("kill_switch_file", r#"kill_switch_file = "KILL""#, "must be absolute"),
+            ("take_profit_bps", "take_profit_bps = 0", "risk.exits.take_profit_bps must be a finite number > 0"),
+            ("stop_loss_bps", "stop_loss_bps = -5", "risk.exits.stop_loss_bps must be a finite number > 0"),
+            ("stop_loss_bps", "stop_loss_bps = inf", "risk.exits.stop_loss_bps must be a finite number > 0"),
+            ("max_hold_secs", "max_hold_secs = 0", "risk.exits.max_hold_secs must be > 0"),
             ("initial_cash_usd", "initial_cash_usd = 0", "paper.initial_cash_usd"),
             ("latency_jitter_ms", "latency_jitter_ms = 300", "exceeds latency_ms"),
             ("fee_tier", "fee_tier = 7", "tiers are 0–6"),
@@ -975,6 +1029,14 @@ order_types = ["market", "ioc"]
         );
         assert_eq!(l.require_hedge_for, vec!["convergence"]);
         assert!(l.allow_reduce_degraded);
+        assert_eq!(
+            r.exits.rules(),
+            ExitRules {
+                take_profit_bps: 200.0,
+                stop_loss_bps: 100.0,
+                max_hold_ms: 86_400_000
+            }
+        );
     }
 
     /// The commented `[risk]` / `[paper]` block of `config.example.toml`,
@@ -1003,6 +1065,7 @@ order_types = ["market", "ioc"]
             ),
             (100.0, 25.0, 50.0, 1.0, 10.0, 25.0)
         );
+        assert_eq!(r.exits.max_hold_secs, 86_400);
         assert_eq!(cfg.paper.unwrap().initial_cash_usd, 100.0);
     }
 }

@@ -6,7 +6,7 @@
 # file) and TENGU_HOME (fresh: ledger.db); OPENROUTER_API_KEY comes from the
 # env or the repo's .env.
 #
-# The xm set holds exec tools (paper_order, paper_close): only a private
+# The xm set holds exec tools (paper_order, paper_close, xm_exits): only a private
 # agent may hold them, and run-agent runs routable ones only, so it runs on
 # the private `xm_*` agent through `tengu tool turn -c <this file> --agent
 # xm_<name> --goal ...` (one in-process turn, the `@<agent>` chat path).
@@ -57,6 +57,13 @@ book = 5000
 ctx = 20000
 reference = 60000
 quote = 20000
+
+# `xm_exits` closes the position the second paper_order opens with an
+# exit_at_ms in the past (reason `deadline`); these rules never fire first.
+[risk.exits]
+take_profit_bps = 200
+stop_loss_bps = 100
+max_hold_secs = 86400
 
 [paper]
 initial_cash_usd = 86.42
@@ -114,6 +121,11 @@ fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
 net_hosts = ["api.hyperliquid.xyz"]
 env_reads = ["HL_API_URL"]
 
+[default_scopes.xm_exits]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
 [agents.gemini]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
@@ -138,7 +150,7 @@ max_tool_rounds = 10
 [agents.xm_gemini]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
-tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "xm_exits", "risk_status"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.xm_gemini.limits]
@@ -153,7 +165,7 @@ env_reads = ["HL_API_URL"]
 [agents.xm_haiku]
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
-tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "xm_exits", "risk_status"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.xm_haiku.limits]

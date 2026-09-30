@@ -66,7 +66,11 @@ pub(crate) fn tools(shared: &XmShared) -> Vec<Arc<dyn Tool>> {
 
 /// `args` as an object whose keys are all in `allowed`; `null` values
 /// count as absent.
-fn object<'a>(tool: &str, args: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>> {
+pub(super) fn object<'a>(
+    tool: &str,
+    args: &'a Value,
+    allowed: &[&str],
+) -> Result<&'a Map<String, Value>> {
     let o = args
         .as_object()
         .ok_or_else(|| anyhow!("{tool}: arguments must be a JSON object"))?;
@@ -101,7 +105,13 @@ fn req_str<'a>(tool: &str, o: &'a Map<String, Value>, key: &str) -> Result<&'a s
 }
 
 /// A finite number inside `(lo, hi)`.
-fn opt_num(tool: &str, o: &Map<String, Value>, key: &str, lo: f64, hi: f64) -> Result<Option<f64>> {
+pub(super) fn opt_num(
+    tool: &str,
+    o: &Map<String, Value>,
+    key: &str,
+    lo: f64,
+    hi: f64,
+) -> Result<Option<f64>> {
     match field(o, key) {
         None => Ok(None),
         Some(v) => match v.as_f64().filter(|x| x.is_finite() && *x > lo && *x < hi) {

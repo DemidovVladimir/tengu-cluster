@@ -274,6 +274,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_open_orders = 4
 # kill_switch_file = "~/.tengu/state/xmarket/KILL"   # present = halted; absolute or ~/
 # allow_reduce_degraded = true               # stale data / halted: reduce-only + close still pass
+# exits = { take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }   # [risk.exits]: xm_exits closes at TP / SL (bps vs the entry, fresh mark) or after max hold; all required
 # [paper]
 # initial_cash_usd = 100
 # latency_ms = 250                           # sleep, re-read the book, fill against it
@@ -292,18 +293,20 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [default_scopes.risk_status]
 # fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
 #
-# Exec tools paper_order / paper_close (opt-in; the [risk] gate runs inside
+# Exec tools paper_order / paper_close / xm_exits (opt-in; the [risk] gate runs inside
 # the tool: gate + fill + ledger write in one transaction) — only on a
 # private agent: no `description`, not `default`, no webhook `agent`
 # (config load refuses otherwise; the tools check the caller again).
 # paper_positions (not an exec tool) reads the account at fresh marks.
-# Rows paper_fill/1, paper_close/1, paper_positions/1 —
+# xm_exits closes every due position (deadline, max hold, [risk.exits]) —
+# run it from the feed below, every 15 s.
+# Rows paper_fill/1, paper_close/1, paper_positions/1, xm_exits/1 —
 # docs/xmarket-risk-paper-2026-09-30.md § Exec tools.
 # [agents.xm_exec]                          # a decision loop's / feed's agent
 # engine = "openrouter"
 # model = "google/gemini-2.5-flash-lite"
 # workspace = "~/xmarket-workspace"
-# tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status"]
+# tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status", "xm_exits"]
 #
 # [default_scopes.paper_order]              # the live book after the latency
 # fs_roots = ["~/xmarket-workspace"]
@@ -317,6 +320,11 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #
 # [default_scopes.paper_positions]
 # fs_roots = ["~/xmarket-workspace"]
+#
+# [default_scopes.xm_exits]                 # closes read the live book too
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
 
 # --- Request budgets (src/config/rate_limits.rs) ---
 # One token bucket per name, shared by every feed and tool of this process
@@ -390,6 +398,13 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # run_on_start = true
 # required = true
 # stale_after_secs = 90000                  # 25 h (default without every_secs: 8 days)
+#
+# [feeds.xm_exits]                          # the exit rules (x-exit-rules): no LLM, no Jev
+# kind = "tool"
+# agent = "xm_exec"                         # the private exec agent; its `tools` list xm_exits
+# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps)
+# every_secs = 15
+# required = true
 #
 # [feeds.weekend_review]                    # a Jev loop event at clock times
 # kind = "tick"

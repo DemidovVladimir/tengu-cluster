@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | `cost.rs` | HL tick / lot rounding, fee schedules (tiers, staking, HIP-3 deployer scale + growth mode), funding carry, EVM gas, taker cost of a depth walk, edge after costs | `risk-calc-costs` |
 //! | `exec.rs` | exec-tool orders: `client_order_id` rule, venue facts from the market rows, the `paper_fill/1:<account>:<client_order_id>` row | `risk-gate-enforcement` |
+//! | `exits.rs` | exit rules: deadline, max hold, stop-loss, take-profit (`exit_due`), the exit idempotency key, the `xm_exits/1:<account>` row | `x-exit-rules` |
 //! | `ledger.rs` | paper positions, cash, average-cost P&L, mark-to-market, exposure (per underlying / venue), leverage, HL funding; `paper_positions/1:<account>` | `risk-paper-ledger-domain` |
 //! | `paper.rs` | paper fill engine: market / IOC orders vs an L2 book, HL rejection codes, partial fills, latency jitter | `risk-paper-fill-engine` |
 //! | `risk.rs` | the pre-trade gate: `OrderIntent` + `RiskContext` + `RiskLimits` ⇒ `RiskVerdict` (every §28 rule a `Check`, fail closed), §29 `Lifecycle` | `risk-gate-domain` |
@@ -15,6 +16,7 @@
 
 pub(crate) mod cost;
 pub(crate) mod exec;
+pub(crate) mod exits;
 pub(crate) mod ledger;
 pub(crate) mod paper;
 pub(crate) mod risk;

@@ -287,6 +287,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             plugin: |_| Box::new(xm::XmPlugin),
         },
         ToolEntry {
+            opt_in: Some(names::XM_EXITS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::XM_EXITS),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
             opt_in: Some(names::PAPER_POSITIONS),
             needs_memory: false,
             defs: || xm::defs_named(names::PAPER_POSITIONS),

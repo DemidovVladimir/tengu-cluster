@@ -192,8 +192,8 @@ pub(crate) trait PaperLedger: Send + Sync {
         now_ms: i64,
         update: RiskUpdate,
     ) -> anyhow::Result<LedgerSnapshot>;
-    /// The stored order `client_order_id` of `account`.
-    #[cfg_attr(not(test), allow(dead_code))] // the audit join (`risk-audit-verdicts`)
+    /// The stored order `client_order_id` of `account` (`xm_exits` looks up
+    /// its exit attempts).
     async fn order(
         &self,
         account: &str,

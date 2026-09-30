@@ -403,6 +403,11 @@ ctx = 20000
 reference = 60000
 quote = 20000
 
+[risk.exits]
+take_profit_bps = 200
+stop_loss_bps = 100
+max_hold_secs = 86400
+
 [paper]
 initial_cash_usd = 100
 latency_ms = 50
@@ -756,6 +761,20 @@ fn cases() -> Vec<Case> {
             .then("paper_positions", json!({}))
             .ok("paper_positions account=conf open=1")
             .retool("paper_positions"),
+        // x-exit-rules: a position past its deadline is closed through the
+        // same gate under its deterministic exit id.
+        paper(case("paper_order", {
+            let mut a = paper_buy();
+            a["exit_at_ms"] = json!(1_000_000_000_000_i64);
+            a
+        }))
+        .then("xm_exits", json!({}))
+        .ok("xm_exits account=conf open=1 due=1 closed=1 failed=0 deadline hyperliquid:xyz:TSLA filled")
+        .retool("xm_exits"),
+        // Nothing open: a check that places nothing.
+        paper(case("xm_exits", json!({})))
+            .named("idle")
+            .ok("xm_exits account=conf open=0 due=0 closed=0 failed=0"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

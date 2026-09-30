@@ -1,6 +1,6 @@
 # xmarket risk + paper — operator reference (2026-09-30)
 
-The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Extended by `risk-audit-verdicts`, `x-exit-rules`.
+The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Verdict audit: § Audit (`risk-audit-verdicts`); exit rules: § Exits (`x-exit-rules`, `src/domain/xm/exits.rs` + `src/adapters/outbound/tools/xm/exits.rs`).
 
 ## Load rules (`Config::load`, any violation fails it)
 
@@ -8,7 +8,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 |---|---|
 | A `[risk]` sandbox is hardened like a Solana signer (`config/hardening.rs`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`; no `[[mcp_servers]]`; no scope grants `shell_bins` (tools without a scope run no shell, in-process and in the bridge) | nothing outside tengu scopes runs (convention 12) |
 | `<TENGU_HOME>/state` (no overlap either way), `kill_switch_file` and the config file itself outside every `fs_roots` and agent `workspace` (symlinks resolved) | `read_file` / `write_file` cannot edit `ledger.db`, delete the kill-switch file or lift a limit for the next load |
-| Exec tools (`paper_order`, `paper_close` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
+| Exec tools (`paper_order`, `paper_close`, `xm_exits` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
 | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the permissive fallback's `default` wallet) |
 
 ## Gate enforcement — `run_exec` (every exec tool, in-process and through the bridge)
@@ -39,12 +39,13 @@ Underlying: the position's; none yet ⇒ the instrument id itself (asset exposur
 |---|---|---|
 | `paper_order` | `instrument`* (full id), `side`* buy / sell, `notional_usd`*, `kind`* market / limit, `limit_px` (limit only), `tif` ioc, `reduce_only`, `max_slippage_bps`*, `strategy` (§21 type), `hedge_instrument`, `opportunity` (row key), `client_order_id`, `exit_at_ms` (position deadline for the exit rules) | `paper_fill/1:<account>:<client_order_id>` |
 | `paper_close` | `instrument` or `all = true`; `max_slippage_bps`*; `client_order_id` — reduce-only market IOC of the whole position, same gate | `paper_fill/1` · all: `paper_close/1:<account>:<client_order_id>` (legs `<client_order_id>:<instrument>`, each replayed by its own id) |
+| `xm_exits` (§ Exits) | `max_slippage_bps` (default `[risk] max_slippage_bps`) — closes every due position of the `[risk]` account, same gate | `xm_exits/1:<account>`; each close its own `paper_fill/1` |
 | `paper_positions` (not an exec tool) | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): funding owed booked first (every due hour at the fresh `mkt_ctx/1` rate + oracle — past hours at the current rate); marks fresh or omitted, never 0; `exit_at_ms` per position |
 
 | Setup | Value |
 |---|---|
-| Agent | a private block: no `description`, not `default`, no webhook `agent`; `tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status"]` |
-| Scopes | `fs_roots` = the workspace (store); `paper_order` / `paper_close` also `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` |
+| Agent | a private block: no `description`, not `default`, no webhook `agent`; `tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status", "xm_exits"]` |
+| Scopes | `fs_roots` = the workspace (store); `paper_order` / `paper_close` / `xm_exits` also `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` |
 | Reached by | decision loops and feeds (their agent), `@<agent>` chat, `tengu tool call` / `tool turn` — never the planner, a `run-agent` step or a webhook |
 | Engines | all three (convention 20): conformance cases for each tool; live legs `openrouter_*_xm`, `claude_code_xm` run the set through `tengu tool turn` on the fixtures' private `xm_*` agents |
 
@@ -106,6 +107,23 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | `fill` | null when denied; else `order_id` (joins `orders` and `fills`), `status`, `reason`, `filled_qty`, `avg_px`, `fee_usd`, `slippage_bps`, `exit_at_ms` |
 
 Join a loop step to its verdict: `jq -c 'select(.call_id == "<call id>")' <TENGU_HOME>/logs/decisions.jsonl <TENGU_HOME>/logs/risk.jsonl`; refusals per rule: `jq -r 'select(.verdict == "deny") | .rule' risk.jsonl | sort | uniq -c`.
+
+## Exits — `xm_exits` (`x-exit-rules`)
+
+`[risk.exits]` (every key required, unknown keys refused): `take_profit_bps`, `stop_loss_bps` (finite > 0), `max_hold_secs` (> 0). The exec tool `xm_exits` checks every open position of the `[risk]` account (`domain/xm/exits.rs::exit_due`) and closes the due ones through `run_exec` — reduce-only market IOC of the whole position, sized inside the ledger transaction, the gate inside (an exit passes halted / on stale data under `allow_reduce_degraded`).
+
+| Reason (first due wins) | Due when | Needs a fresh mark |
+|---|---|---|
+| `deadline` | the position's `exit_at_ms` ≤ now — set by the order that opened it (`paper_order exit_at_ms`, a strategy such as the weekend fade) | no |
+| `max_hold` | `opened_ms` + `max_hold_secs` ≤ now | no |
+| `stop_loss` · `take_profit` | P&L at mark (side-signed `(mark − entry) / entry`, bps; fees and funding not counted) ≤ −`stop_loss_bps` · ≥ `take_profit_bps` | yes: a `mkt_ctx/1` row within `max_data_age_ms.ctx` (never fetched); a stale or missing mark never triggers them (`n_stale_marks`) |
+
+| Detail | Rule |
+|---|---|
+| Id | `exit:<account>:<instrument>:<reason>:<opened_ms>` (full ids); when that id's order is stored but left the position open (rejected, e.g. `stale_book`; partial) the next run uses the first unstored `…:<n>`; a denial stores nothing, so the same id is judged again. A retry after a crash never closes twice: the close is sized from the position inside the transaction (flat ⇒ nothing to close) |
+| Row `xm_exits/1:<account>` (ttl 0) | features `n_open`, `n_due`, `n_closed`, `n_failed`, `n_stale_marks`; `data` per open position: full id, qty, entry, `opened_ms`, `exit_at_ms`, mark, P&L bps, reason, status (`held` · `filled` · `partial` · `rejected` · `denied` · `flat` · `error`), id + attempt, gate rule, fill; `ok` nothing failed · `partial` a close failed or a mark was stale · `error` every due close failed |
+| Audit | each close is its own `paper_fill/1` row and verdict (`tool = xm_exits`, the feed's call id) |
+| Feed | `[feeds.xm_exits] kind = "tool"`, `agent` = the private exec agent (its `tools` list `xm_exits`), `tool = "xm_exits"`, `every_secs = 15`, `required = true` — no LLM, no Jev (`config.example.toml`); an `error` row reports the feed `down` until a run closes them |
 
 ## Halts (§ 7 #8)
 

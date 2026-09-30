@@ -11,7 +11,7 @@
 //! |---|---|---|
 //! | `workspace` | `list_directory` `.` → `read_file` the `token-*` file → `write_file` `answer.txt` = the token → `read_file` `second.txt` | the answer holds the token (its file name is only in the listing, its value only in the file); `answer.txt` = the token; `second.txt` holds a registered secret (`TENGU_SECRETS_LOADED`): the answer quotes `REDACTED`; Claude Code: the bridge's result for it, logged by the engine, is `[REDACTED]` |
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
-//! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → `risk_status`, on a new paper account (`[xmarket]` + `[risk]` + `[paper]`, ledger in a temp `TENGU_HOME`) | the answer quotes the buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buy and the filled reduce-only sell, each with a verdict row joined by its call id |
+//! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status`, on a new paper account (`[xmarket]` + `[risk]` + `[paper]`, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id, and no open position; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //!
 //! Every leg: exit 0, `status = ok`, every tool of the set in the `tools`
 //! activity and no run of it failed (Claude Code: the bridged calls the
@@ -55,6 +55,11 @@ const EQUITY: &str = "86.42";
 const XM_STATE: &str = "engine-matrix";
 /// The opportunity row the xm set's `paper_order` names (seeded per leg).
 const OPPORTUNITY: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
+/// The xm set's instrument.
+const INSTRUMENT: &str = "hyperliquid:xyz:TSLA";
+/// `xm_exits`' id for the second buy (its `exit_at_ms` is in the past),
+/// up to the position's `opened_ms`.
+const EXIT_ID_PREFIX: &str = "exit:matrix:hyperliquid:xyz:TSLA:deadline:";
 /// Env a parent Claude Code session sets (when these tests run from one): a
 /// nested `claude` must start like one from the operator's terminal.
 const PARENT_SESSION_ENV: &[&str] = &[
@@ -153,6 +158,7 @@ impl Set {
                 "paper_order",
                 "paper_positions",
                 "paper_close",
+                "xm_exits",
                 "risk_status",
             ],
         }
@@ -184,9 +190,11 @@ impl Set {
                     "Call paper_order with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"side\": \"buy\", \"notional_usd\": 15, \"kind\": \"market\", \"max_slippage_bps\": 30, \"opportunity\": \"xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA\"}.",
                     "Call paper_positions with no arguments.",
                     "Call paper_close with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"max_slippage_bps\": 50}.",
+                    "Call paper_order with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"side\": \"buy\", \"notional_usd\": 15, \"kind\": \"market\", \"max_slippage_bps\": 30, \"opportunity\": \"xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA\", \"exit_at_ms\": 1000000000000}.",
+                    "Call xm_exits with no arguments.",
                     "Call risk_status with no arguments.",
                 ],
-                "the avg_px= value paper_order returned and the equity= value risk_status returned, exactly as printed",
+                "the avg_px= value the first paper_order returned and the equity= value risk_status returned, exactly as printed",
             ),
         };
         let steps: Vec<String> = steps
@@ -597,19 +605,61 @@ fn seed_opportunity(ws: &Workspace) {
     .unwrap();
 }
 
-/// `(side, status, avg_px, call_id)` of every order in the leg's ledger.
-fn ledger_orders(ws: &Workspace) -> Vec<(String, String, Option<f64>, Option<String>)> {
-    let path = ws.home.join("state").join(XM_STATE).join("ledger.db");
-    let Ok(conn) = rusqlite::Connection::open(&path) else {
+/// One order in the leg's ledger.
+#[derive(Debug)]
+struct LedgerOrder {
+    client_order_id: String,
+    side: String,
+    status: String,
+    avg_px: Option<f64>,
+    call_id: Option<String>,
+}
+
+fn ledger_path(ws: &Workspace) -> PathBuf {
+    ws.home.join("state").join(XM_STATE).join("ledger.db")
+}
+
+/// Every order in the leg's ledger, in order.
+fn ledger_orders(ws: &Workspace) -> Vec<LedgerOrder> {
+    let Ok(conn) = rusqlite::Connection::open(ledger_path(ws)) else {
         return Vec::new();
     };
-    let Ok(mut stmt) = conn.prepare("SELECT side, status, avg_px, call_id FROM orders ORDER BY id")
+    let Ok(mut stmt) = conn
+        .prepare("SELECT client_order_id, side, status, avg_px, call_id FROM orders ORDER BY id")
     else {
         return Vec::new();
     };
-    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .map(|rows| rows.flatten().collect())
+    stmt.query_map([], |r| {
+        Ok(LedgerOrder {
+            client_order_id: r.get(0)?,
+            side: r.get(1)?,
+            status: r.get(2)?,
+            avg_px: r.get(3)?,
+            call_id: r.get(4)?,
+        })
+    })
+    .map(|rows| rows.flatten().collect())
+    .unwrap_or_default()
+}
+
+/// The quantity the leg's account holds in `xyz:TSLA` (`None`: no row).
+fn open_qty(ws: &Workspace) -> Option<f64> {
+    let conn = rusqlite::Connection::open(ledger_path(ws)).ok()?;
+    conn.query_row(
+        "SELECT qty FROM positions WHERE account = 'matrix' AND instrument = ?1",
+        [INSTRUMENT],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// `<TENGU_HOME>/logs/risk.jsonl`, one verdict per line.
+fn risk_lines(ws: &Workspace) -> Vec<Value> {
+    std::fs::read_to_string(ws.home.join("logs").join("risk.jsonl"))
         .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
 }
 
 /// Print the leg's result line, then assert what every leg shares and what
@@ -702,23 +752,43 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace) {
         }
         Set::Xm => {
             let orders = ledger_orders(ws);
-            let filled = |side: &str| {
+            let filled = |side: &str, exit: bool| {
                 orders
                     .iter()
-                    .find(|(s, st, _, _)| s == side && st == "filled")
-                    .cloned()
-            };
-            let (Some(buy), Some(_)) = (filled("buy"), filled("sell")) else {
-                panic!(
-                    "{label}: the ledger has no filled buy + filled close: {orders:?}\n{}",
-                    leg.context()
-                );
+                    .filter(|o| {
+                        o.side == side
+                            && o.status == "filled"
+                            && o.client_order_id.starts_with(EXIT_ID_PREFIX) == exit
+                    })
+                    .count()
             };
             assert!(
-                orders.iter().all(|o| o.3.is_some()),
+                filled("buy", false) >= 2
+                    && filled("sell", false) >= 1
+                    && filled("sell", true) >= 1,
+                "{label}: the ledger lacks the two filled buys, the paper_close sell or the \
+                 xm_exits sell: {orders:?}\n{}",
+                leg.context()
+            );
+            assert!(
+                orders.iter().all(|o| o.call_id.is_some()),
                 "{label}: an order without a call id: {orders:?}"
             );
-            let px = buy.2.expect("a filled order has avg_px");
+            assert_eq!(
+                open_qty(ws),
+                Some(0.0),
+                "{label}: a position is still open: {orders:?}"
+            );
+            let exits = risk_lines(ws)
+                .into_iter()
+                .filter(|l| l["tool"] == "xm_exits" && l["verdict"] == "allow")
+                .count();
+            assert!(exits >= 1, "{label}: no xm_exits verdict in risk.jsonl");
+            let px = orders
+                .iter()
+                .find(|o| o.side == "buy" && o.status == "filled")
+                .and_then(|o| o.avg_px)
+                .expect("a filled order has avg_px");
             assert!(
                 quotes_any(&answer, &[px]),
                 "{label}: the answer does not quote the buy's avg_px {px}\n{}",
@@ -977,7 +1047,8 @@ fn offline_local_xm() {
             "paper_close",
             "paper_order",
             "paper_positions",
-            "risk_status"
+            "risk_status",
+            "xm_exits"
         ],
         "the xm agent's tools, no compress_and_store on the chat path"
     );

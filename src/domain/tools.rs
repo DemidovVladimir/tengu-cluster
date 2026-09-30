@@ -35,13 +35,14 @@ pub(crate) const RISK_STATUS: &str = "risk_status";
 pub(crate) const PAPER_ORDER: &str = "paper_order";
 pub(crate) const PAPER_CLOSE: &str = "paper_close";
 pub(crate) const PAPER_POSITIONS: &str = "paper_positions";
+pub(crate) const XM_EXITS: &str = "xm_exits";
 
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
 /// `default`, no webhook endpoint's `agent` (`config/risk.rs`, and again at
 /// call time).
-pub(crate) const XM_EXEC_TOOLS: &[&str] = &[PAPER_ORDER, PAPER_CLOSE];
+pub(crate) const XM_EXEC_TOOLS: &[&str] = &[PAPER_ORDER, PAPER_CLOSE, XM_EXITS];
 
 // Privy wallet tools (`adapters/outbound/tools/crypto/`) that sign; a
 // `[risk]` sandbox turns them off (`config/risk.rs`).
@@ -80,6 +81,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     PAPER_ORDER,
     PAPER_CLOSE,
     PAPER_POSITIONS,
+    XM_EXITS,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

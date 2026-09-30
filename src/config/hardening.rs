@@ -359,6 +359,7 @@ mod tests {
         max_open_orders = 4
         kill_switch_file = "/srv/xm/KILL"
         allow_reduce_degraded = true
+        exits = { take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }
 
         [paper]
         initial_cash_usd = 100

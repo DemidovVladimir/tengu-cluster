@@ -209,6 +209,7 @@ max_orders_per_min = 6
 max_open_orders = 4
 kill_switch_file = "{}"
 allow_reduce_degraded = true
+exits = {{ take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }}
 max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 }}
 "#,
             kill.display()
