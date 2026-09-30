@@ -82,7 +82,7 @@ idle_timeout_minutes = 30
 
 [agents.main.limits]
 max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
-# context_window_override = 200000
+# context_window = 200000           # model's real window (default 1_000_000)
 # max_output_tokens_per_turn = 4096  # optional; unset omits max_tokens (model/provider default)
 # request_timeout_secs = 600         # total budget for one non-streaming HTTP call (default 600)
 # max_cost_per_flow = 5.0           # USD cost limit (optional)
@@ -189,6 +189,44 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # keeps it. One directory name.
 # [xmarket]
 # state = "xmarket"                         # the weekend sandbox uses "xmarket-weekend"
+
+# --- Risk + paper trading (xmarket, $100 budget — tracker § 7 #3) ---
+# The gate inside every exec tool enforces [risk]; no [risk] = every order is
+# refused. Every key is required (no defaults), unknown keys are errors, and
+# [paper] comes with [risk]. Rules: src/config/risk.rs.
+# [risk]
+# account = "xmarket"                        # ledger account in <state dir>/ledger.db
+# mode = "paper"                             # "live" is refused until the live pilot (M3b)
+# venues = ["hyperliquid"]
+# min_lifecycle = "paper_tradable"           # §29; M0 permits by instruments_allow only
+# instruments_allow = ["hyperliquid:xyz:TSLA"]   # full <venue>:<native id>, never shortened
+# instruments_deny = []
+# max_order_notional_usd = 25                # HL minimum order is $10
+# max_position_notional_usd = 50
+# max_asset_exposure_usd = 50                # net per underlying, across venues
+# max_venue_exposure_usd = 100
+# max_gross_exposure_usd = 100               # the whole budget
+# max_net_exposure_usd = 100
+# max_leverage = 1                           # no leverage
+# daily_loss_limit_usd = 10                  # halt; clears 00:00 UTC
+# total_loss_limit_usd = 25                  # halt; clears only via `tengu risk resume` (TTY)
+# min_edge_bps = 10                          # edge after costs an entry needs (xm_compare/1 row)
+# max_slippage_bps = 30
+# min_depth_usd = 250                        # book depth within max_slippage_bps
+# require_hedge_for = ["convergence"]
+# max_data_age_ms = { book = 5000, ctx = 20000, reference = 60000, quote = 20000 }
+# max_skew_ms = 5000
+# max_orders_per_min = 6
+# max_open_orders = 4
+# kill_switch_file = "~/.tengu/state/xmarket/KILL"   # present = halted; absolute or ~/
+# allow_reduce_degraded = true               # stale data / halted: reduce-only + close still pass
+# [paper]
+# initial_cash_usd = 100
+# latency_ms = 250                           # sleep, re-read the book, fill against it
+# latency_jitter_ms = 100
+# fee_tier = 0                               # Hyperliquid tier 0–6
+# staking_discount_pct = 0                   # HYPE staking discount, 0–40
+# order_types = ["market", "ioc"]
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`

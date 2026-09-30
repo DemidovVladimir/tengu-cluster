@@ -5,6 +5,7 @@
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod paths;
+pub(crate) mod risk;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
@@ -121,8 +122,11 @@ impl RuntimeProfile {
 // Configuration schema
 // ---------------------------------------------------------------------------
 
-/// Root configuration object loaded from `config.toml`.
+/// Root configuration object loaded from `config.toml`. Unknown top-level
+/// keys are a parse error (tracker convention 6: a misspelled `[risk]` must
+/// not load as "no limits"); tests in `config/risk.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_profile")]
     pub runtime_profile: String,
@@ -191,6 +195,16 @@ pub struct Config {
     /// not an xmarket sandbox.
     #[serde(default)]
     pub xmarket: Option<xmarket::XmarketConfig>,
+
+    /// `[risk]` — every limit the gate inside each exec tool checks
+    /// (`config/risk.rs`; every field required). Absent = exec tools refuse.
+    #[serde(default)]
+    pub risk: Option<risk::RiskConfig>,
+
+    /// `[paper]` — paper fill engine knobs (`config/risk.rs`); required with
+    /// `[risk]`.
+    #[serde(default)]
+    pub paper: Option<risk::PaperConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1065,6 +1079,8 @@ impl Config {
         let home = crate::config::paths::resolve_tengu_home();
         sections::SandboxSections {
             xm_state_dir: self.xmarket.as_ref().map(|x| x.state_dir(&home)),
+            risk: self.risk.as_ref().map(risk::RiskConfig::resolved),
+            paper: self.paper.clone(),
         }
     }
 
@@ -1133,6 +1149,9 @@ impl Config {
             for issue in x.validation_errors() {
                 errors.push(issue);
             }
+        }
+        for issue in risk::validation_errors(self) {
+            errors.push(issue);
         }
 
         for (name, dl) in &self.decision_loops {
@@ -1401,6 +1420,8 @@ impl Default for Config {
             mcp_servers: Vec::new(),
             solana: solana::SolanaConfig::default(),
             xmarket: None,
+            risk: None,
+            paper: None,
             skill_lifecycle: None,
             sandbox_name: None,
         }
