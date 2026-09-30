@@ -55,6 +55,7 @@ default_lens = "eco"
 # workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill,
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
+#   + Hyperliquid (typed, cached): hl_ctx — scope example under "Request budgets" below
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -288,6 +289,15 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # per_minute = 1200                         # HL: 1200 weight / min / IP (l2Book 2, most info requests 20)
 # burst = 1200                              # bucket size; default = per_minute
 # exec_reserve = 0                          # weight reads leave for order calls
+#
+# Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
+# weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each
+# needs its scope: the workspace (observation store), the HL host, and
+# HL_API_URL (testnet override https://api.hyperliquid-testnet.xyz; unset = mainnet).
+# [default_scopes.hl_ctx]
+# fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
 
 # --- tengu run (docs/runtime-2026-09-30.md) ---
 # `tengu run --sandbox <name>`: one long-running process per sandbox (lease

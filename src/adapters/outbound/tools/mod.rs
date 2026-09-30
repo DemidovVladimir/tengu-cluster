@@ -26,6 +26,7 @@ pub(crate) mod args;
 pub(crate) mod cache;
 pub(crate) mod crypto;
 pub(crate) mod http;
+pub(crate) mod hyperliquid;
 pub(crate) mod manage_skill;
 pub(crate) mod memory;
 #[cfg(test)]
@@ -247,6 +248,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || solana::defs_named(names::JUP_PERPS_ORDER),
             plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        // Hyperliquid family: one opt-in row per tool, all sharing the
+        // `hyperliquid` plugin (interfaces in `hyperliquid/defs.rs`).
+        ToolEntry {
+            opt_in: Some(names::HL_CTX),
+            needs_memory: false,
+            defs: || hyperliquid::defs_named(names::HL_CTX),
+            plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
         },
     ]);
     rows

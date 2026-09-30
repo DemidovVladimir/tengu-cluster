@@ -187,17 +187,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 | Upstreams | mock routes: method + path + substrings → inline JSON, a `tests/fixtures/…` file, or `getMultipleAccounts` built from captured accounts; base-URL overrides via `.scoped("SOLANA_RPC_URL")` / `.scoped("HL_API_URL")` (scope with the workspace, `127.0.0.1`, the env var → the mock) |
 | Secrets | `TENGU_SECRETS_LOADED` names a test secret on both sides; it must come back `[REDACTED]` |
 | Result size | cases stay under the bridge's cap (`TENGU_BRIDGE_MAX_RESULT_CHARS`, 50 000): only the bridge truncates, the in-process executor does not (engines cap later) |
-| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids — table in the test's module doc |
+| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), `next_*_s` countdowns, ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids — table in the test's module doc |
 | Debug | `TENGU_CONFORMANCE_VERBOSE=1 cargo test --test bridge_conformance -- --nocapture` prints each case's text, files and requests |
 
-Add a case — one row in `cases()`, e.g. a Hyperliquid read:
+Add a case — one row in `cases()`, e.g. a Hyperliquid read (`info(<type>)` = `POST /info` with that body `type`; `hl_xyz` adds the xyz ctx, at-cap and perp-meta replies):
 
 ```rust
-case("hl_ctx", json!({"coin": "xyz:TSLA"}))
+hl_xyz(case("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
     .scoped("HL_API_URL")
-    .route(post("/info").has("\"type\":\"metaAndAssetCtxs\"").has("\"dex\":\"xyz\"")
-        .file("hyperliquid/metaAndAssetCtxs_xyz.json"))
-    .ok("hyperliquid:xyz:TSLA"),
+    .ok("mkt hyperliquid:xyz:TSLA mark=347.19"),
 ```
 
 Tools whose upstream host is hard-coded (no base-URL override) run their deterministic path: `sol_price` + `lp_snapshot` oracle (`lite-api.jup.ag`), `dlmm_pools` (`dlmm.datapi.meteora.ag`), `jupiter_swap` simulate (Jupiter Ultra), Privy crypto tools (no `PRIVY_*` env), memory tools (no embeddings key), `agentic_memory` (no `TENGU_MEMORY_DATABASE_URL`, `--features postgres_memory`).

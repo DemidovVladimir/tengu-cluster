@@ -24,6 +24,10 @@ pub(crate) const LP_SNAPSHOT: &str = "lp_snapshot";
 pub(crate) const HEDGE_DECIDE: &str = "hedge_decide";
 pub(crate) const LP_DECIDE: &str = "lp_decide";
 
+// Hyperliquid family (`adapters/outbound/tools/hyperliquid/`) — typed,
+// cached market reads; one `hyperliquid` plugin serves all of them.
+pub(crate) const HL_CTX: &str = "hl_ctx";
+
 /// Every opt-in workspace tool name.
 pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     AGENTIC_MEMORY,
@@ -47,6 +51,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     DLMM_CLOSE_POSITION,
     DLMM_OPEN_POSITION,
     JUP_PERPS_ORDER,
+    HL_CTX,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

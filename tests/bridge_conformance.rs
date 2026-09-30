@@ -24,7 +24,8 @@
 //! answers inline JSON, a fixture file (`tests/fixtures/…`) or a
 //! `getMultipleAccounts` reply built per request from captured accounts
 //! (`Reply::Gma`). Tools with a base-URL override reach it through
-//! `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`).
+//! `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`: `POST /info` routes
+//! by body `type`, captured replies in `tests/fixtures/hyperliquid/`).
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -34,6 +35,7 @@
 //! | durations `12ms` / `12 ms` | `<N>ms` |
 //! | observation age after its status (`\| ok 3s`; line-start `ok 3s`) | `<AGE>s` |
 //! | `*age_s` / `*age_ms` / `*age_secs` values (ages at read time; `max_*` / `min_*` limits kept) | `<AGE>` |
+//! | `next_*_s` values (countdowns at read time: `next_funding_s`) | `<COUNTDOWN>` |
 //! | ISO-8601 timestamps | `<TIME>` |
 //! | history day files `YYYYMMDD.db` | `<DAY>.db` |
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
@@ -324,6 +326,23 @@ fn snapshot(c: Case) -> Case {
         .route(rpc("getMultipleAccounts").gma(&[DLMM_GMA, PERPS_GMA, WALLET_GMA]))
 }
 
+/// Every reply `hl_ctx` needs for the HIP-3 dex `xyz`: its ctx + at-cap
+/// reads and the perp meta (`hyperliquid/meta.json` captures).
+fn hl_xyz(c: Case) -> Case {
+    c.route(
+        info("metaAndAssetCtxs")
+            .has("\"dex\":\"xyz\"")
+            .file("hyperliquid/metaAndAssetCtxs_xyz.json"),
+    )
+    .route(
+        info("perpsAtOpenInterestCap")
+            .has("\"dex\":\"xyz\"")
+            .file("hyperliquid/perpsAtOpenInterestCap_xyz.json"),
+    )
+    .route(info("perpDexs").file("hyperliquid/perpDexs.json"))
+    .route(info("perpCategories").file("hyperliquid/perpCategories.json"))
+}
+
 /// A skill in the project tier (`<cwd>/skills/demo`).
 const DEMO_SKILL: &str = "---\nname: demo\ndescription: Conformance demo skill.\neditable_by_learner: true\n---\n\n# demo\n\nBody.\n";
 
@@ -577,6 +596,11 @@ fn cases() -> Vec<Case> {
         ))
         .env("SOLANA_RPC_URL", "{mock}")
         .ok("no_signer"),
+        // ── Hyperliquid reads: `HL_API_URL` → the mock ─────────────────
+        // One coin: the whole xyz dex is written (2 × 128 rows + meta + cap).
+        hl_xyz(case("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
+            .scoped("HL_API_URL")
+            .ok("mkt hyperliquid:xyz:TSLA mark=347.19"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -651,6 +675,11 @@ fn post(path: &'static str) -> Route {
 /// A Solana JSON-RPC method on the mock root.
 fn rpc(method: &str) -> Route {
     post("/").has(&format!("\"method\":\"{method}\""))
+}
+
+/// A Hyperliquid `POST /info` request of `type` (`HL_API_URL` = the mock).
+fn info(t: &str) -> Route {
+    post("/info").has(&format!("\"type\":\"{t}\""))
 }
 
 impl Route {
@@ -1054,6 +1083,10 @@ fn normalize(s: &str, roots: &[String]) -> String {
     static AGE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r#"\b(\w*?)(age_(?:s|ms|secs)\b"?\s?[=:]\s?)-?\d+(\.\d+)?"#).unwrap()
     });
+    // `next_<event>_s` = seconds until the event at read time (not `_ms`
+    // epoch stamps, which `EPOCH` covers).
+    static COUNTDOWN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"\b(next_\w*?_s\b"?\s?[=:]\s?)-?\d+(\.\d+)?"#).unwrap());
     static EPOCH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b1\d{9}(\d{3})?\b").unwrap());
     const WINDOW_S: i64 = 2 * 86_400;
     let now_s = std::time::SystemTime::now()
@@ -1078,6 +1111,7 @@ fn normalize(s: &str, roots: &[String]) -> String {
             }
         })
         .into_owned();
+    out = COUNTDOWN.replace_all(&out, "${1}<COUNTDOWN>").into_owned();
     EPOCH
         .replace_all(&out, |c: &regex::Captures<'_>| {
             let digits = &c[0];

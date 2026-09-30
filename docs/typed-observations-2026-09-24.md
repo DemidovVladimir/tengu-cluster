@@ -151,6 +151,30 @@ Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_
 | `403` | `auth_required` — "blocked (geo/WAF/Tor exit?)" |
 | other `5xx` · timeout · non-JSON `200` | `transient` · `timeout` · `decode` |
 
+## Hyperliquid tools (`adapters/outbound/tools/hyperliquid/`, opt-in, one `hyperliquid` plugin)
+
+Host `api.hyperliquid.xyz` (`$HL_API_URL` when the scope may read it: testnet `https://api.hyperliquid-testnet.xyz`). Every request goes through `HlInfo` (egress gate, `[rate_limits.hyperliquid]` weight, the reply table above). Decoders: `domain/hl/` (pure). Coins are HL names verbatim: `ETH`, `kPEPE` (default dex), `xyz:TSLA` (HIP-3), `@151` / `PURR/USDC` (spot); ids `hyperliquid:<coin>`.
+
+| Tool | Args (* one of) | Returns | Reads (weight) | Writes (TTL) |
+|---|---|---|---|---|
+| `hl_ctx` | `coins`* (1–64; `#…` outcome refused), `dex`* (`""` / `"default"` = the default dex; ignored as `""` next to `coins`), `max_age_secs` | one coin: `mkt_ctx/1:hyperliquid:<coin>`; a dex or several coins: `hl_sweep/1` | one `metaAndAssetCtxs {dex}` per needed perp dex, concurrent (20 each); `spotMetaAndAssetCtxs` for spot coins (20); side rows below through the cache | every coin of each reply: `mkt_ctx/1` (5 s) + `mkt_instrument/1` (60 s); a requested coin HL lacks ⇒ `not_found` rows |
+
+| Side row (cached, shared by every agent of the workspace) | TTL | Source (weight) | Feeds |
+|---|---|---|---|
+| `hl_perp_meta/1:hyperliquid` | 1 h; 60 s when a source failed | `perpDexs` + `perpCategories` (20 + 20); only when a HIP-3 dex is read | `asset_id` (`100000 + 10000·position + index`), `oi_cap_usd` (`assetToStreamingOiCap`), `category` (HIP-3 coins only; default-dex coins stay unknown) |
+| `hl_at_oi_cap/1:hyperliquid:<dex label>` | 60 s | `perpsAtOpenInterestCap {dex}` (20) | `at_oi_cap` |
+
+Budget: a live read of one HIP-3 dex = 20, + 20 per minute per dex (at-cap), + 40 per hour (meta); the default dex needs no meta. A failed side read leaves its field unknown and puts an error on every `mkt_instrument/1` row (`partial`); `taker_fee_bps` = `hl_fee_schedule` (tier / staking from `[paper]`, else tier 0) on USDC-quoted markets only.
+
+| `hl_sweep/1` | Rule |
+|---|---|
+| Key | `hl_sweep/1:hyperliquid:<dex label>` (dex sweep, cached 5 s) · `hl_sweep/1:hyperliquid:<coin>,<coin>,…` (sorted, de-duplicated; ttl 0, rebuilt from the per-coin rows) |
+| `data` | `scope`, `reads` (`info`, `dex`, `weight`, `failed` class), `rows_written`, `coins` (`coin`, `status`, `mark`, `basis_bps` / `funding_apr_pct` rounded to 0.1, flags `delisted` / `not_found` / `no_book` / `at_oi_cap`), `errors` — 10.7 KB for the 128-market xyz dex; local engines get the store pointer instead (< 600 chars in all) |
+| Features (14) | `n_coins`, `n_ok`, `n_partial`, `n_absent`, `n_error`, `n_delisted`, `n_not_found`, `n_no_book`, `n_at_oi_cap`, `n_reads`, `n_failed_reads`, `weight`, `rows_written`, `from_cache` |
+| Status | no coin or every coin `error` ⇒ `error` (a `not_applicable` unknown dex ⇒ `absent`) · every coin absent ⇒ `absent` · a coin `error` / `partial` or a failed side read ⇒ `partial` · else `ok` |
+
+Scope per tool: `fs_roots` = the workspace (store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (example: `config.example.toml`).
+
 ## Paper fills (xmarket `risk-paper-fill-engine`, 2026-09-30)
 
 Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16). No tool yet: `paper_order` / `paper_close` (`risk-paper-tools`, row `paper_fill/1:<account>:<client_order_id>`) and the live / replay `BookSource` (`risk-gate-enforcement`, `ops-replay-harness`) wire it. Here until the risk + paper operator doc (`risk-docs`).

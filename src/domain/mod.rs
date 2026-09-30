@@ -6,6 +6,7 @@ pub(crate) mod backoff;
 pub(crate) mod book;
 pub(crate) mod calendar;
 pub(crate) mod decision;
+pub(crate) mod hl;
 pub(crate) mod lp;
 pub(crate) mod market;
 pub(crate) mod memory;

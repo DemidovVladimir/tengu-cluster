@@ -12,6 +12,8 @@
     "perpsAtOpenInterestCap_default.json": {"request": {"type": "perpsAtOpenInterestCap"}, "status": 200},
     "allPerpMetas.json": {"request": {"type": "allPerpMetas"}, "status": 200, "note": "full reply: 11 dex metas, 530 markets, 329 listed"},
     "candleSnapshot_xyz_TSLA_1h.json": {"request": {"type": "candleSnapshot", "req": {"coin": "xyz:TSLA", "interval": "1h", "startTime": 1790366400000, "endTime": 1790604000000}}, "status": 200, "note": "Fri 2026-09-25 20:00 UTC to Mon 2026-09-28 14:00 UTC, 67 candles"},
+    "perpCategories.json": {"request": {"type": "perpCategories"}, "status": 200, "captured_at": "2026-09-30T14:40Z", "note": "full reply: 207 [coin, label] pairs, HIP-3 coins only (no default-dex coin); labels verbatim (stock / stocks, fx / FX)"},
+    "spotMetaAndAssetCtxs_trimmed.json": {"request": {"type": "spotMetaAndAssetCtxs"}, "status": 200, "captured_at": "2026-09-30T14:41Z", "trimmed": "full reply was 301 KB (503 tokens, 330 pairs, 885 ctxs); kept pairs PURR/USDC, @1, @107, @141 (no book), @151, @166 (USDT0/USDC), @207 (HYPE/USDT0), the tokens they reference, their ctxs, the ctx of @71 (no universe pair) and one outcome ctx (#67890). Ctxs match pairs by coin, tokens by index"},
     "errors.json": {"note": "status, content type and body of three error replies, keyed by case"}
   }
 }
