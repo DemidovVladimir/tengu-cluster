@@ -6,6 +6,7 @@ pub(crate) mod engine;
 pub(crate) mod memory;
 pub(crate) mod observation;
 pub(crate) mod orchestration;
+pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod skill_source;
 pub(crate) mod solana_signer;

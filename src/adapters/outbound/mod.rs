@@ -12,6 +12,7 @@ pub(crate) mod noop;
 pub(crate) mod observations;
 pub(crate) mod prune;
 pub(crate) mod rate_limit;
+pub(crate) mod runtime_store;
 pub(crate) mod scaffold;
 pub(crate) mod secrets;
 pub(crate) mod shell;

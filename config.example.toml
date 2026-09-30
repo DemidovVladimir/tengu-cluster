@@ -289,6 +289,14 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # burst = 1200                              # bucket size; default = per_minute
 # exec_reserve = 0                          # weight reads leave for order calls
 
+# --- tengu run (docs/runtime-2026-09-30.md) ---
+# `tengu run --sandbox <name>`: one long-running process per sandbox (lease
+# runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
+# once + the [webhooks] routes (build with --features webhooks). All optional.
+# [runtime]
+# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events get this long, then abort
+# max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in

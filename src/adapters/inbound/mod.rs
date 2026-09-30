@@ -8,6 +8,7 @@ pub(crate) mod cli;
 pub(crate) mod eval;
 pub(crate) mod evolve;
 pub(crate) mod mcp_bridge;
+pub(crate) mod run;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram;
 pub(crate) mod tui;

@@ -67,6 +67,15 @@ enum Commands {
         #[arg(long)]
         sandbox: Option<String>,
     },
+    /// Run the sandbox's long-running process: every `[decision_loops.*]`
+    /// built once, the webhook routes (with `--features webhooks` and
+    /// `[webhooks] enabled`), one runner per sandbox (lease), graceful
+    /// shutdown on SIGINT / SIGTERM. See docs/runtime-2026-09-30.md.
+    Run {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
     /// Run one event through a `[decision_loops.<name>]` loop (Jev picks,
     /// tools execute) and print the step outcomes. No escalation — use
     /// `tengu webhooks` with an endpoint `loop = "<name>"` for that.
@@ -325,10 +334,13 @@ pub(crate) async fn run() -> Result<()> {
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
-    // Webhook listener uses the same dual-output (file + stderr) pattern as
-    // telegram so operators can `tail -f tengu.log` while also watching the
-    // console for HMAC-fail / dispatch events.
-    let is_webhooks = matches!(cli.command, Some(Commands::Webhooks { .. }));
+    // Webhook listener and `tengu run` use the same dual-output (file +
+    // stderr) pattern as telegram so operators can `tail -f tengu.log` while
+    // also watching the console for HMAC-fail / dispatch events.
+    let is_webhooks = matches!(
+        cli.command,
+        Some(Commands::Webhooks { .. } | Commands::Run { .. })
+    );
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
@@ -440,6 +452,10 @@ pub(crate) async fn run() -> Result<()> {
         #[cfg(not(feature = "webhooks"))]
         Commands::Webhooks { .. } => {
             anyhow::bail!("webhook listener requires: cargo build --features webhooks")
+        }
+        Commands::Run { sandbox } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            crate::adapters::inbound::run::run_runtime(config, secret_registry).await
         }
         Commands::Decide {
             sandbox,

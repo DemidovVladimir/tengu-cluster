@@ -8,6 +8,7 @@ pub(crate) mod hardening;
 pub(crate) mod paths;
 pub(crate) mod rate_limits;
 pub(crate) mod risk;
+pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
@@ -213,6 +214,10 @@ pub struct Config {
     /// section is unlimited.
     #[serde(default)]
     pub rate_limits: HashMap<String, rate_limits::RateLimitConfig>,
+    /// `[runtime]` — `tengu run` knobs (`config/runtime.rs`): shutdown grace,
+    /// loop events in flight. Defaults apply when absent.
+    #[serde(default)]
+    pub runtime: runtime::RuntimeConfig,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1198,6 +1203,9 @@ impl Config {
         for issue in rate_limits::validation_errors(&self.rate_limits) {
             errors.push(issue);
         }
+        for issue in self.runtime.validation_errors() {
+            errors.push(issue);
+        }
 
         for (name, dl) in &self.decision_loops {
             for issue in dl.validation_errors(name) {
@@ -1468,6 +1476,7 @@ impl Default for Config {
             risk: None,
             paper: None,
             rate_limits: HashMap::new(),
+            runtime: Default::default(),
             skill_lifecycle: None,
             sandbox_name: None,
         }

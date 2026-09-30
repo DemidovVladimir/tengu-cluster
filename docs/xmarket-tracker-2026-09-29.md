@@ -157,7 +157,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `ops-sandbox-config` | `sandboxes/xmarket/config.toml` — one owner, sections staged per milestone (agents, egress, scopes, feeds, secrets list) | §1 §26 §27 | S | toml |
 | ☐ | `x-shared-workspace-and-state-layout` | Enforce one xmarket workspace + the `<TENGU_HOME>/state/xmarket/` layout; paths outside every fs root | §30 §32 §36 | S | rust |
 | ☐ | `ops-openrouter-budget-key` | Dedicated OpenRouter key with a daily credit limit — hard cap for LLM and Jev calls, which share it (split keys if escalations ever starve Jev) | §27 | S | account |
-| ☐ | `rt-daemon` | `tengu run --sandbox <s>`: one process for feeds + loops + webhook router (feature-gated); graceful shutdown; single-runner lease | §3 §13 §20 | M | rust |
+| ✅ | `rt-daemon` | `tengu run --sandbox <s>`: one process for feeds + loops + webhook router (feature-gated); graceful shutdown; single-runner lease | §3 §13 §20 | M | rust |
 | ✅ | `rt-backoff-budget` | Shared backoff per `ErrorClass` (jitter, Retry-After) + the one request limiter, `[rate_limits.<name>]` (token buckets, weights) | §20 §28 | S | rust |
 | ☐ | `rt-scheduler` | `[feeds.<n>]` scheduler: `kind = "tick"`, `"tool"`, `"poll"`; M0 feeds name `target = "<loop>"` (direct `handle_event`, one in flight per loop) until `rt-bus-dispatch` adds topics | §19 §20 | M | rust |
 | ☐ | `hl-info-client` | Hyperliquid `POST /info` client on the shared limiter; HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF) | §19 §20 | M | rust |

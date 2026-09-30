@@ -8,5 +8,6 @@ pub(crate) mod memory;
 pub(crate) mod metrics;
 pub(crate) mod observe;
 pub(crate) mod orchestrator;
+pub(crate) mod runtime;
 pub(crate) mod skills;
 pub(crate) mod tools;

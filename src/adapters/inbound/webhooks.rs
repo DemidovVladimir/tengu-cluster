@@ -18,10 +18,14 @@
 //! - `run_webhooks(...)` — entry point called by `Commands::Webhooks` in
 //!   `main.rs`. Owns the long-running tokio task that hosts the axum
 //!   server.
+//! - `app_state(...)` + `router(...)` — the same routes for `tengu run`
+//!   (`inbound/run.rs`), which mounts them in its own process on its
+//!   `LoopDispatch` (every loop built once) with graceful shutdown.
 //! - `WebhookAppState` — per-process shared state (config, memory
-//!   manager). Cloned into each request handler.
+//!   manager, loop dispatch). Cloned into each request handler.
 //! - `dispatch_webhook(...)` — per-request handler. HMAC verify → mint
-//!   session_id → spawn orchestrator turn → 202 reply.
+//!   session_id → queue the loop event (`LoopDispatch::submit`; 503 while
+//!   shutting down) or spawn an orchestrator turn → 202 reply.
 //! - `verify_hmac(...)` — constant-time HMAC-SHA256 verify via the
 //!   `hmac` crate's `Mac::verify_slice`.
 //!
@@ -36,7 +40,7 @@
 
 #![cfg(feature = "webhooks")]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,8 +48,8 @@ use std::sync::Arc;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::application::chat::tool_loop::collect_engine_response;
-use crate::application::decision_loop::DecisionLoop;
 use crate::application::memory::manager::MemoryManager;
+use crate::application::runtime::loops::{LoopDispatch, LoopHandler, Refused};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role, ToolDef};
@@ -80,6 +84,66 @@ const SIG_HEADER: &str = "x-tengu-signature";
 /// Long-running entry point. Boots the axum server and never returns
 /// (until ctrl-c).
 pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
+    check_config(&config)?;
+    let addr = bind_addr(&config)?;
+
+    // Memory manager is shared across all requests — opening it per
+    // request would be wasteful (store open + embedder per webhook).
+    let memory_manager = Arc::new(MemoryManager::new());
+
+    // One `DecisionLoop` per loop referenced by an endpoint — built once so
+    // its action history survives across events. Escalation reuses the
+    // one-shot orchestrator path when `[orchestrator]` is configured.
+    let escalator = orchestrator_escalator(&config, &memory_manager);
+    let mut handlers: BTreeMap<String, Arc<dyn LoopHandler>> = BTreeMap::new();
+    for ep in config.webhooks.endpoints.values() {
+        let Some(name) = &ep.decision_loop else {
+            continue;
+        };
+        if handlers.contains_key(name) {
+            continue;
+        }
+        let dl = crate::bootstrap::decision::build_decision_loop(
+            &config,
+            name,
+            escalator.clone(),
+            Arc::clone(&secret_registry),
+        )?;
+        handlers.insert(name.clone(), dl);
+    }
+    let loops = Arc::new(LoopDispatch::new(
+        handlers,
+        config.runtime.max_decisions_in_flight,
+    ));
+
+    let state = app_state(config, memory_manager, loops, secret_registry)?;
+    let endpoints_summary: Vec<&str> = state
+        .config
+        .webhooks
+        .endpoints
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
+    info!(
+        %addr,
+        endpoints = ?endpoints_summary,
+        sandbox = ?state.config.sandbox_name,
+        "tengu webhooks listening"
+    );
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind webhook listener to {}", addr))?;
+
+    axum::serve(listener, router(state))
+        .await
+        .context("webhook server exited unexpectedly")?;
+    Ok(())
+}
+
+/// Refuse a config the listener cannot serve: disabled, no endpoints,
+/// planner endpoints without `[orchestrator]`, bad endpoint auth or loop refs.
+fn check_config(config: &Config) -> Result<()> {
     if !config.webhooks.enabled {
         return Err(anyhow!(
             "[webhooks] not enabled in this sandbox config — set `[webhooks] enabled = true` to start the listener"
@@ -100,91 +164,72 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
             "[webhooks] requires `[orchestrator]` to be configured — endpoints without `loop` dispatch through the orchestrator"
         ));
     }
-    validate_endpoints(&config.webhooks.endpoints, &config.decision_loops)?;
+    validate_endpoints(&config.webhooks.endpoints, &config.decision_loops)
+}
 
-    let bind = config.webhooks.bind.clone();
-    let port = config.webhooks.port;
-    let addr: SocketAddr = format!("{}:{}", bind, port)
+/// `[webhooks] bind:port`.
+pub(crate) fn bind_addr(config: &Config) -> Result<SocketAddr> {
+    let (bind, port) = (&config.webhooks.bind, config.webhooks.port);
+    format!("{bind}:{port}")
         .parse()
-        .with_context(|| format!("invalid bind address {}:{}", bind, port))?;
+        .with_context(|| format!("invalid bind address {bind}:{port}"))
+}
 
-    // Memory manager is shared across all requests — opening it per
-    // request would be wasteful (store open + embedder per webhook).
-    let memory_manager = Arc::new(MemoryManager::new());
+/// The escalator loops use when `[orchestrator]` is configured: a
+/// low-confidence step becomes a one-shot orchestrator turn.
+pub(crate) fn orchestrator_escalator(
+    config: &Config,
+    memory_manager: &Arc<MemoryManager>,
+) -> Option<Arc<dyn Escalator>> {
+    config.orchestrator.as_ref().map(|_| {
+        Arc::new(OrchestratorEscalator {
+            config: config.clone(),
+            memory_manager: Arc::clone(memory_manager),
+        }) as Arc<dyn Escalator>
+    })
+}
 
-    // One `DecisionLoop` per loop referenced by an endpoint — built once so
-    // its action history survives across events. Escalation reuses the
-    // one-shot orchestrator path when `[orchestrator]` is configured.
-    let mut loops = HashMap::new();
-    for ep in config.webhooks.endpoints.values() {
-        let Some(name) = &ep.decision_loop else {
-            continue;
-        };
-        if loops.contains_key(name) {
-            continue;
+/// Validated shared state for [`router`]. `loops` must hold every loop an
+/// endpoint names (`tengu run` passes its dispatch with every loop).
+pub(crate) fn app_state(
+    config: Config,
+    memory_manager: Arc<MemoryManager>,
+    loops: Arc<LoopDispatch>,
+    secret_registry: Arc<SecretRegistry>,
+) -> Result<Arc<WebhookAppState>> {
+    check_config(&config)?;
+    for (name, ep) in &config.webhooks.endpoints {
+        if let Some(l) = ep.decision_loop.as_ref().filter(|l| !loops.has(l)) {
+            return Err(anyhow!(
+                "[webhooks.endpoints.{name}] loop `{l}` is not running in this process"
+            ));
         }
-        let escalator: Option<Arc<dyn Escalator>> = config.orchestrator.as_ref().map(|_| {
-            Arc::new(OrchestratorEscalator {
-                config: config.clone(),
-                memory_manager: Arc::clone(&memory_manager),
-            }) as Arc<dyn Escalator>
-        });
-        let dl = crate::bootstrap::decision::build_decision_loop(
-            &config,
-            name,
-            escalator,
-            Arc::clone(&secret_registry),
-        )?;
-        loops.insert(name.clone(), dl);
     }
-
-    let state = Arc::new(WebhookAppState {
+    Ok(Arc::new(WebhookAppState {
         config,
         memory_manager,
         loops,
         _secret_registry: secret_registry,
-    });
+    }))
+}
 
-    let endpoints_summary: Vec<&str> = state
-        .config
-        .webhooks
-        .endpoints
-        .keys()
-        .map(|s| s.as_str())
-        .collect();
-    info!(
-        bind = %bind,
-        port = port,
-        endpoints = ?endpoints_summary,
-        sandbox = ?state.config.sandbox_name,
-        "tengu webhooks listening"
-    );
-
-    // axum router: one route handles all endpoints via the {name} path
-    // capture. Per-request lookup against config keeps the route shape
-    // declarative — adding a new endpoint is a TOML edit, no router
-    // rebuild.
-    let app = Router::new()
+/// One route handles all endpoints via the {name} path capture.
+/// Per-request lookup against config keeps the route shape declarative —
+/// adding a new endpoint is a TOML edit, no router rebuild.
+pub(crate) fn router(state: Arc<WebhookAppState>) -> Router {
+    Router::new()
         .route("/webhooks/:name", post(dispatch_webhook))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind webhook listener to {}", addr))?;
-
-    axum::serve(listener, app)
-        .await
-        .context("webhook server exited unexpectedly")?;
-    Ok(())
+        .with_state(state)
 }
 
 /// Per-process shared state. Cloned cheaply into each request handler
 /// via the axum `State` extractor wrapping an `Arc`.
-struct WebhookAppState {
+pub(crate) struct WebhookAppState {
     config: Config,
     memory_manager: Arc<MemoryManager>,
-    /// Decision loops by name, for endpoints with `loop = "<name>"`.
-    loops: HashMap<String, Arc<DecisionLoop>>,
+    /// Loop events for endpoints with `loop = "<name>"` (one dispatch per
+    /// process: `tengu webhooks` builds its own, `tengu run` passes its).
+    loops: Arc<LoopDispatch>,
     /// Held for redaction parity with telegram (unused in v1 — webhook
     /// responses are 202s with no agent text). Kept for the inevitable
     /// future "sync mode" that mirrors telegram's `secret_registry.redact`.
@@ -245,23 +290,30 @@ async fn dispatch_webhook(
 
     // 5a. Decision-loop endpoint: the body is the event (Helius sends a
     //     JSON array of transactions). Non-JSON bodies become a string.
+    //     Queued on the loop (one event at a time per loop); failures are
+    //     logged by the dispatch and land in the decision audit.
     if let Some(loop_name) = &endpoint.decision_loop {
-        let Some(dl) = state.loops.get(loop_name).cloned() else {
-            error!(name = %name, decision_loop = %loop_name, "decision loop not built");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("decision loop '{}' not available", loop_name)})),
-            )
-                .into_response();
-        };
         let event: serde_json::Value = serde_json::from_slice(&body)
             .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&body).into()));
-        let sid = session_id.clone();
-        tokio::spawn(async move {
-            if let Err(e) = dl.handle_event(&event, &sid).await {
-                warn!(session_id = %sid, error = %format!("{e:#}"), "decision loop event failed");
+        match state.loops.submit(loop_name, event, session_id.clone()) {
+            Ok(()) => {}
+            Err(refused @ Refused::ShuttingDown) => {
+                warn!(name = %name, decision_loop = %loop_name, session_id = %session_id, "loop event refused: shutting down");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"error": refused.to_string()})),
+                )
+                    .into_response();
             }
-        });
+            Err(Refused::UnknownLoop) => {
+                error!(name = %name, decision_loop = %loop_name, "decision loop not built");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("decision loop '{}' not available", loop_name)})),
+                )
+                    .into_response();
+            }
+        }
         info!(
             endpoint = %name,
             decision_loop = %loop_name,
@@ -968,6 +1020,101 @@ mod tests {
             toml::from_str("goal=\"g\"\nagent=\"a\"\n[actions.hold]\ndescription=\"n\"").unwrap(),
         )]);
         validate_endpoints(&endpoints, &loops).unwrap();
+    }
+
+    /// A loop-endpoint config: `[webhooks.endpoints.h] loop = "watch"`,
+    /// inline HMAC secret `k`.
+    fn loop_config() -> Config {
+        let mut config = Config::default();
+        config.webhooks.enabled = true;
+        config.webhooks.endpoints.insert(
+            "h".to_string(),
+            WebhookEndpointConfig {
+                secret: Some("k".to_string()),
+                ..loop_endpoint(None, None)
+            },
+        );
+        config.decision_loops.insert(
+            "watch".to_string(),
+            toml::from_str("goal=\"g\"\nagent=\"main\"\n[actions.hold]\ndescription=\"n\"")
+                .unwrap(),
+        );
+        config
+    }
+
+    fn slow_dispatch(
+        loops: &[&str],
+    ) -> (
+        Arc<LoopDispatch>,
+        Arc<crate::application::runtime::loops::tests::SlowLoop>,
+    ) {
+        let slow = crate::application::runtime::loops::tests::SlowLoop::new(1);
+        let handlers = loops
+            .iter()
+            .map(|n| (n.to_string(), Arc::clone(&slow) as Arc<dyn LoopHandler>))
+            .collect();
+        (Arc::new(LoopDispatch::new(handlers, 4)), slow)
+    }
+
+    async fn post_signed(state: &Arc<WebhookAppState>, body: &'static [u8]) -> StatusCode {
+        let mut headers = HeaderMap::new();
+        headers.insert(SIG_HEADER, sign(body, b"k").parse().unwrap());
+        dispatch_webhook(
+            Path("h".to_string()),
+            State(Arc::clone(state)),
+            headers,
+            Bytes::from_static(body),
+        )
+        .await
+        .into_response()
+        .status()
+    }
+
+    #[tokio::test]
+    async fn loop_endpoint_queues_on_the_dispatch_and_503s_while_draining() {
+        let (loops, slow) = slow_dispatch(&["watch"]);
+        let state = app_state(
+            loop_config(),
+            Arc::new(MemoryManager::new()),
+            Arc::clone(&loops),
+            Arc::new(SecretRegistry::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            post_signed(&state, b"{\"n\":1}").await,
+            StatusCode::ACCEPTED
+        );
+        for _ in 0..200 {
+            if loops.stats()["watch"].completed == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let seen = slow.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].starts_with("webhook-h-"), "{seen:?}");
+        loops.drain(tokio::time::Instant::now()).await;
+        assert_eq!(
+            post_signed(&state, b"{\"n\":2}").await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
+    fn app_state_refuses_an_endpoint_whose_loop_is_not_running() {
+        let (loops, _) = slow_dispatch(&["other"]);
+        let err = app_state(
+            loop_config(),
+            Arc::new(MemoryManager::new()),
+            loops,
+            Arc::new(SecretRegistry::new()),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            err.to_string().contains("loop `watch` is not running"),
+            "{err}"
+        );
     }
 
     #[test]
