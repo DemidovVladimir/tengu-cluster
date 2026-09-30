@@ -237,8 +237,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
     crate::bootstrap::tools::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
+    // The base block's name: a Claude Code bridge loads `[agents.<it>]`.
     let engine = crate::adapters::outbound::engines::build_engine(
-        &input.agent_name,
+        &spec_load_name,
         &agent_cfg_for_engine,
         parent_config.claude_code.as_ref(),
     )
@@ -257,7 +258,11 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
 
     // ----- Build tool stack (Phase 5b) -----
-    let secret_registry = std::sync::Arc::new(crate::domain::secrets::SecretRegistry::new());
+    // The parent's vault values (inherited, never prompts): tool output is
+    // redacted like in the parent and in a Claude Code bridge.
+    let secret_registry = std::sync::Arc::new(
+        crate::adapters::outbound::secrets::process_secret_registry(None),
+    );
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
@@ -286,6 +291,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         activity,
         memory_manager.clone(),
     );
+    let executor = executor.map(|e| {
+        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
+            std::sync::Arc::new(e),
+            std::sync::Arc::clone(&secret_registry),
+        )
+    });
     // Diagnostic: log the actual tool NAMES the subprocess can call, so we
     // can verify (in the parent log) whether expected tools like
     // `persistent_store` made it through the `[agents.<name>].tools` allow-list +

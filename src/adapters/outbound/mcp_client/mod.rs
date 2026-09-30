@@ -329,6 +329,7 @@ pub(crate) mod tests {
             activity: &NoActivity,
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
+            call_id: None,
         };
         let out = tools[0]
             .execute(&serde_json::json!({}), &tool_ctx)

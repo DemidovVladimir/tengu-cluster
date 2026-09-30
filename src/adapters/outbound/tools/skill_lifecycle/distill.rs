@@ -423,6 +423,7 @@ mod tests {
             activity,
             conversation: ConversationView::new(messages),
             agent_config: None,
+            call_id: None,
         }
     }
 
@@ -446,6 +447,7 @@ mod tests {
             activity,
             conversation: ConversationView::new(messages),
             agent_config: Some(agent_config),
+            call_id: None,
         }
     }
 

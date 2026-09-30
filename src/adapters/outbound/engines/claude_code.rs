@@ -76,7 +76,14 @@ pub(crate) struct ClaudeCodeEngine {
     /// `[default_scopes]` already folded in). Exported to the bridge
     /// subprocess as `TENGU_BRIDGE_SCOPES` so MCP-routed tool calls are
     /// gated the same way in-process calls are. Empty = every tool permissive.
+    /// The bridge prefers the agent's scopes from `bridge_agent`'s config;
+    /// this map is its fallback when it cannot resolve the agent.
     scopes: std::collections::HashMap<String, crate::domain::scope::ToolScope>,
+    /// `[agents.<id>]` + the absolute config file it came from, exported as
+    /// `TENGU_BRIDGE_AGENT` / `TENGU_CONFIG`: the bridge loads that block, so
+    /// bridged tools see the same config as in-process ones. `None` (planner
+    /// engine) = the bridge's standalone fallback.
+    bridge_agent: Option<(String, PathBuf)>,
 }
 
 impl ClaudeCodeEngine {
@@ -92,6 +99,7 @@ impl ClaudeCodeEngine {
             model,
             timeout_secs,
             scopes: std::collections::HashMap::new(),
+            bridge_agent: None,
         }
     }
 
@@ -102,6 +110,18 @@ impl ClaudeCodeEngine {
         scopes: std::collections::HashMap<String, crate::domain::scope::ToolScope>,
     ) -> Self {
         self.scopes = scopes;
+        self
+    }
+
+    /// Name the agent and its config file for the bridge (see
+    /// `bridge_agent`). `config` is made absolute here — the bridge runs in
+    /// the agent workspace. `engines::build_engine` passes the agent id and
+    /// `config::paths::default_config_path()`.
+    pub fn with_bridge_agent(mut self, agent_id: &str, config: &std::path::Path) -> Self {
+        self.bridge_agent = Some((
+            agent_id.to_string(),
+            crate::config::paths::absolute_path(config),
+        ));
         self
     }
 
@@ -141,9 +161,8 @@ impl ClaudeCodeEngine {
         mcp_servers: &[crate::config::McpServerConfig],
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
-        // Per-tool scopes cross the process boundary as JSON; the bridge's
-        // `build_bridge_executor` reads them back and falls back to
-        // `permissive_scope` for any tool without an entry.
+        // Per-tool scopes cross the process boundary as JSON — the bridge's
+        // fallback when it cannot resolve `bridge_agent` from the config.
         let scopes_json = serde_json::to_string(&self.scopes).unwrap_or_else(|_| "{}".into());
         let mut env = serde_json::json!({
             "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
@@ -152,10 +171,22 @@ impl ClaudeCodeEngine {
         });
         env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SCOPES_ENV] =
             serde_json::Value::String(scopes_json);
+        // Agent + config file: the bridge builds its tools from that
+        // `[agents.<id>]` block (sandbox sections, scopes, `no_shell`).
+        if let Some((agent, config)) = &self.bridge_agent {
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_AGENT_ENV] =
+                serde_json::Value::String(agent.clone());
+            env[crate::config::paths::TENGU_CONFIG_ENV] =
+                serde_json::Value::String(config.to_string_lossy().into_owned());
+        }
+        // The CLI merges this `env` over its own inherited env (verified with
+        // CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the bridge also gets
+        // this process's env — vault secrets included. The keys below are
+        // forwarded explicitly anyway, as part of the documented contract.
+        //
         // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
         // `bridge_tools`: the bridge reconnects to them and proxies the calls
-        // under its egress policy. Their `$VAR` references are forwarded
-        // because this env replaces the inherited one.
+        // under its egress policy, resolving their `$VAR` references.
         use crate::adapters::outbound::mcp_client::{is_server_tool, referenced_env_vars};
         let servers: Vec<&crate::config::McpServerConfig> = mcp_servers
             .iter()
@@ -186,23 +217,20 @@ impl ClaudeCodeEngine {
         if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP") {
             env["TENGU_PERSISTENT_STORE_CHUNK_OVERLAP"] = serde_json::Value::String(v);
         }
-        // Phase 7.6 — forward session id so `agentic_memory` `capture` in the
-        // bridge stamps `session_id` on Open Brain writes when the LLM omits
-        // it (the MCP config replaces the inherited env).
+        // Phase 7.6 — session id, so `agentic_memory` `capture` in the
+        // bridge stamps `session_id` on Open Brain writes when the LLM omits it.
         if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
             env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
         }
-        // A `tengu` run by a bridge tool (`run_command`) must not re-prompt
-        // for the vault password on the terminal the TUI owns.
+        // The names of the vault vars: the bridge registers their values for
+        // redaction, and a `tengu` run by a bridge tool (`run_command`) does
+        // not re-prompt for the vault password on the terminal the TUI owns.
         let loaded = crate::adapters::outbound::secrets::SECRETS_LOADED_ENV;
         if let Ok(v) = std::env::var(loaded) {
             env[loaded] = serde_json::Value::String(v);
         }
-        // Forward OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
+        // OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
         // + Embedder) needs it.
-        // The MCP config replaces inherited env, so without explicit forwarding
-        // the bridge process boots without API access and memory tools silently
-        // fail to register.
         if let Ok(v) = std::env::var("OPENROUTER_API_KEY") {
             env["OPENROUTER_API_KEY"] = serde_json::Value::String(v);
         }
@@ -852,6 +880,31 @@ mod tests {
             !no_tools.iter().any(|a| a == "--allowedTools"),
             "never bare"
         );
+    }
+
+    /// The bridge env names the agent and its config file (absolute — the
+    /// bridge runs in the agent workspace); a planner engine names neither.
+    #[test]
+    fn bridge_env_names_the_agent_and_its_config_file() {
+        let engine =
+            ClaudeCodeEngine::new(PathBuf::from("claude"), BuiltinToolsProfile::None, None, 60);
+        let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
+        let ws = std::path::Path::new("/tmp");
+        let plain = engine.build_mcp_config_json("tengu", ws, &tools, 1000, &[]);
+        let env = &plain["mcpServers"]["tengu-tools"]["env"];
+        assert!(env.get("TENGU_BRIDGE_AGENT").is_none());
+        assert!(env.get("TENGU_CONFIG").is_none());
+
+        let engine = engine.with_bridge_agent(
+            "xm_architect",
+            std::path::Path::new("sandboxes/xmarket/config.toml"),
+        );
+        let cfg = engine.build_mcp_config_json("tengu", ws, &tools, 1000, &[]);
+        let env = &cfg["mcpServers"]["tengu-tools"]["env"];
+        assert_eq!(env["TENGU_BRIDGE_AGENT"], "xm_architect");
+        let config = std::path::Path::new(env["TENGU_CONFIG"].as_str().unwrap());
+        assert!(config.is_absolute(), "{}", config.display());
+        assert!(config.ends_with("sandboxes/xmarket/config.toml"));
     }
 
     #[test]

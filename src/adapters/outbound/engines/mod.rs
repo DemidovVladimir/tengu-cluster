@@ -66,9 +66,11 @@ pub(crate) fn build_planner_engine(
     }
 }
 
-/// Build configured engine instance for one agent.
+/// Build configured engine instance for one agent. `agent_id` names the
+/// `[agents.<id>]` block of the config in `TENGU_CONFIG` for the Claude Code
+/// bridge (the base agent for a composed plan step).
 pub(crate) fn build_engine(
-    _agent_id: &str,
+    agent_id: &str,
     agent_config: &crate::config::AgentConfig,
     claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
 ) -> Result<Box<dyn Engine>> {
@@ -93,9 +95,10 @@ pub(crate) fn build_engine(
                     Some(agent_config.model.clone())
                 };
                 let timeout = agent_config.limits.stream_event_timeout_secs;
-                // Per-tool scopes ride into the MCP bridge subprocess as
-                // TENGU_BRIDGE_SCOPES so Claude Code subagents are gated the
-                // same way in-process OpenRouter agents are.
+                // The MCP bridge subprocess loads `[agents.<agent_id>]` from
+                // the config in effect (TENGU_BRIDGE_AGENT + TENGU_CONFIG) so
+                // Claude Code tools see what in-process ones do; the scope
+                // map (TENGU_BRIDGE_SCOPES) is its fallback.
                 Ok(Box::new(
                     crate::adapters::outbound::engines::claude_code::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
@@ -103,12 +106,13 @@ pub(crate) fn build_engine(
                         model_opt,
                         timeout,
                     )
-                    .with_scopes(agent_config.scopes.clone()),
+                    .with_scopes(agent_config.scopes.clone())
+                    .with_bridge_agent(agent_id, &crate::config::paths::default_config_path()),
                 ))
             }
             #[cfg(not(feature = "claude_code"))]
             {
-                let _ = claude_code_config;
+                let _ = (agent_id, claude_code_config);
                 anyhow::bail!("claude_code engine requires --features claude_code")
             }
         }

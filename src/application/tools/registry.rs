@@ -163,6 +163,7 @@ impl ToolExecutor for PluginToolExecutor {
             activity: self.activity.as_ref(),
             conversation: ConversationView::new(messages),
             agent_config: self.agent_config.as_ref(),
+            call_id: Some(call.id.as_str()).filter(|id| !id.is_empty()),
         };
 
         self.registry
@@ -278,6 +279,38 @@ mod tests {
         assert_eq!(obs.key, "typed/1:s");
         assert!(out.text.starts_with("typed s | ok 0s slot=7 live"));
         assert_eq!(exec.execute(&call, &[]).await.unwrap(), out.text);
+    }
+
+    /// Echoes `ToolCtx.call_id` (`-` for `None`).
+    struct CallIdTool {
+        def: ToolDef,
+    }
+
+    #[async_trait]
+    impl Tool for CallIdTool {
+        fn definition(&self) -> &ToolDef {
+            &self.def
+        }
+        async fn execute(&self, _args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+            // scope: pure-compute
+            Ok(ToolOutput::from(ctx.call_id.unwrap_or("-").to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn call_id_reaches_the_tool_ctx() {
+        let mut exec = make_executor(vec![]);
+        exec.registry.register_tool(Arc::new(CallIdTool {
+            def: ToolDef::new("probe", "desc", serde_json::json!({})),
+        }));
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            name: "probe".into(),
+            arguments: serde_json::json!({}),
+        };
+        let seen = exec.execute(&call("t:s-1:3"), &[]).await.unwrap();
+        assert_eq!(seen, "t:s-1:3");
+        assert_eq!(exec.execute(&call(""), &[]).await.unwrap(), "-");
     }
 
     #[test]

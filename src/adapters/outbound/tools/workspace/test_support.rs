@@ -74,6 +74,7 @@ impl TestHarness {
             activity: self.activity.as_ref(),
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
+            call_id: None,
         }
     }
 }

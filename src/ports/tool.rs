@@ -120,6 +120,10 @@ pub(crate) struct ToolCtx<'a> {
     /// (e.g. `tengu eval` runner construction, MetricRunCtx-degraded paths,
     /// most unit tests).
     pub agent_config: Option<&'a crate::config::AgentConfig>,
+    /// Id of this call (`ToolCall.id`), set by `PluginToolExecutor`; `None`
+    /// when the caller has none (empty id, harness calls, tests). Through
+    /// `tengu mcp-bridge` it is the JSON-RPC `tools/call` request id.
+    pub call_id: Option<&'a str>,
 }
 
 /// Construction-time context passed to `ToolPlugin::tools()`.

@@ -43,7 +43,7 @@ Claude sees each tool as `mcp__tengu-tools__<name>` (e.g. `mcp__tengu-tools__per
 
 ## Dispatch
 
-The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): workspace, memory (`memory_ingest`, `memory_search`, `persistent_store`), cache, skill_lifecycle, http, crypto, skill_resource, view_skill, manage_skill, and `agentic_memory` under `postgres_memory`. `compress_and_store` is advertised only — the `run-agent` child intercepts it out-of-band. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits `executor.execute(&call)` directly.
+The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor` inside a `SanitizedToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): workspace, memory (`memory_ingest`, `memory_search`, `persistent_store`), cache, skill_lifecycle, http, crypto, skill_resource, view_skill, manage_skill, the opt-in Solana tools, and `agentic_memory` under `postgres_memory`. `compress_and_store` is advertised only — the `run-agent` child intercepts it out-of-band. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits `executor.execute(&call)` directly.
 
 The bridge does **not** register:
 - The `skill` plugin — shell-skill tools need a `SkillRegistry` the bridge cannot construct; they run in the main Tengu process only
@@ -51,28 +51,62 @@ The bridge does **not** register:
 
 ## Configuration
 
-The bridge is configured via environment variables set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_json`):
+Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_json`; names in `adapters/outbound/bridge_env.rs`):
 
 | Variable | Description |
 |----------|-------------|
+| `TENGU_CONFIG` | Absolute path of the config file in effect — the sandbox file (`load_sandbox_or` pins it) or the base config. The bridge loads it once with `Config::load` (validated + folded) |
+| `TENGU_BRIDGE_AGENT` | The calling `[agents.<name>]` (the base block for a composed plan step); the bridge runs tools as that agent |
 | `TENGU_BRIDGE_WORKSPACE` | Workspace directory path |
 | `TENGU_BRIDGE_TOOLS` | JSON array of `ToolDef` objects to expose (the allow-list) |
 | `TENGU_BRIDGE_MAX_RESULT_CHARS` | Result cap per call (`[limits] max_mcp_result_chars`, default 50 000) |
-| `TENGU_BRIDGE_SCOPES` | JSON `HashMap<String, ToolScope>` — the agent's per-tool scopes, **enforced** by the bridge; missing/unparsable → all permissive with a warn |
-| `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over any config the bridge would load itself |
+| `TENGU_BRIDGE_SCOPES` | JSON `HashMap<String, ToolScope>` — the agent's scope map; used only by the fallback below (missing/unparsable → all permissive with a warn) |
+| `TENGU_BRIDGE_MCP_SERVERS` | The `[[mcp_servers]]` behind requested `{server}__{tool}` names |
+| `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over the loaded config's `[egress]` |
+| `TENGU_SECRETS_LOADED` | Names of the vault vars the parent loaded; the bridge registers their values for redaction |
 | `TENGU_SESSION_ID`, `OPENROUTER_API_KEY`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set |
 
-The engine treats the MCP `env` block as a replaced environment — anything the bridge needs must be in the list above. Shape of the temp `--mcp-config` file:
+Shape of the temp `--mcp-config` file:
 
 ```json
 { "mcpServers": { "tengu-tools": {
     "command": "<path to current tengu binary>",
     "args": ["mcp-bridge"],
-    "env": { "TENGU_BRIDGE_WORKSPACE": "/path", "TENGU_BRIDGE_TOOLS": "[...]", "TENGU_BRIDGE_SCOPES": "{...}", "TENGU_EGRESS": "{...}" }
+    "env": { "TENGU_CONFIG": "/abs/sandboxes/<name>/config.toml", "TENGU_BRIDGE_AGENT": "<agent>", "TENGU_BRIDGE_WORKSPACE": "/path", "TENGU_BRIDGE_TOOLS": "[...]", "TENGU_BRIDGE_SCOPES": "{...}", "TENGU_EGRESS": "{...}" }
 } } }
 ```
 
-A standalone `tengu mcp-bridge` (no `TENGU_EGRESS`) installs `EgressConfig::default()` — `network = "tor"`, i.e. `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides).
+### Env: merged, not replaced (verified 2026-09-30)
+
+| Check | Result |
+|---|---|
+| Probe | `claude -p "reply ok" --strict-mcp-config --mcp-config <tmp.json>` (CLI 2.1.285, subscription); the stdio server was a throwaway `sh -c 'env > $TMPDIR/…'` with one var in its `env` block and one set only in the CLI's env |
+| Seen by the server | both vars, plus the CLI's whole env (71 vars: `PATH`, `HOME`, `TMPDIR`, …) |
+| Meaning | the `env` block is **merged over** the inherited env. Vault secrets (loaded into the parent's env), `TENGU_HOME`, `TENGU_AGENT_IPC`, `TENGU_MEMORY_DATABASE_URL` reach the bridge by inheritance; no secret value is added to the temp file for redaction |
+| If a CLI release switches to replace | the explicit keys above still arrive; other secret values would not (not redacted, but not visible to the bridge's tools either) — `x-engine-matrix-smoke` is the live check |
+
+### Agent + config resolution
+
+| `TENGU_CONFIG` file | `[agents.<TENGU_BRIDGE_AGENT>]` | Tools run as |
+|---|---|---|
+| present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, …), `no_shell_fallback`, signer; `[memory]` as in-process. Under a `run-agent` child (`TENGU_AGENT_IPC=1`, inherited) every configured scope also gets the workspace as an fs root — the child's own executor does the same (`grant_workspace_root`) |
+| present | absent / unset | `Config::default()`'s `main` + `TENGU_BRIDGE_SCOPES`, warn; shell-free when the loaded config's agents are |
+| absent | — | standalone bridge: default `main` + `TENGU_BRIDGE_SCOPES`, warn; disk memory under `<workspace>/memory` |
+| present but invalid | — | the bridge exits with the load error |
+
+Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `workspace_tools` (the merge `subagent_config` applies to `tools`).
+
+### Parity with in-process tools
+
+| Topic | Bridge |
+|---|---|
+| Scopes | `resolve_tool_scopes(workspace, agent.scopes, …, agent.no_shell_fallback)` — the in-process call |
+| `no_shell` | from the agent (`no_shell_fallback`: signing sandbox, later `[risk]`); the permissive fallback then has no `shell_bins` |
+| Secrets + redaction | `process_secret_registry(None)`: values named in `TENGU_SECRETS_LOADED` + `TENGU_MASTER_PASSWORD`, never prompts (same function as the CLI and `run-agent`); `SanitizedToolExecutor` redacts text and typed observations; error text is redacted too |
+| Call id | `ToolCall.id` = the JSON-RPC `tools/call` id (string verbatim, number in decimal; none → no id) → `ToolCtx.call_id`. Ids restart with each Claude CLI session |
+| Egress | the loaded config's `[egress]`, overridden by `TENGU_EGRESS` |
+
+A standalone `tengu mcp-bridge` (no `TENGU_EGRESS`, no config file) installs `EgressConfig::default()` — `network = "tor"`, i.e. `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides).
 
 ## Standalone `agentic-memory` MCP server
 
@@ -86,6 +120,7 @@ Build with `--features postgres_memory`.
 | Tool set | `TENGU_BRIDGE_TOOLS` (caller-supplied) | fixed: `agentic_memory` only |
 | Spawned by | the Claude Code engine | any MCP client config |
 | `serverInfo.name` | `tengu-tools` | `tengu-agentic-memory` |
+| Agent | `[agents.<TENGU_BRIDGE_AGENT>]` of `TENGU_CONFIG` | default `main` (no config load) |
 | Needs | — | `TENGU_MEMORY_DATABASE_URL` (per call) |
 
 Workspace (where `.tengu/agentic-memory/{raw,wiki}/` live) defaults to the cwd,
@@ -107,9 +142,9 @@ overridable via `TENGU_BRIDGE_WORKSPACE`. Wire it into an external MCP client:
 }
 ```
 
-**Env forwarding matters.** MCP clients typically launch the server with a
+**Env forwarding matters.** Some MCP clients launch the server with a
 *replaced* environment (only the keys in the `env` block), not the inherited
-shell env — same trap `adapters/outbound/engines/claude_code.rs` documents for the bridge. So:
+shell env (the Claude CLI merges — § Env above). Put these in the `env` block:
 
 - `TENGU_MEMORY_DATABASE_URL` — required; without it every tool call errors.
 - `OPENROUTER_API_KEY` — without it `recall` falls back to FTS-only,
@@ -123,6 +158,12 @@ server starts even without these — tool calls just error or degrade.
 
 ## Testing
 
+| Test | Covers |
+|---|---|
+| `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` |
+| `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT` |
+| `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]` |
+
 Manual test with stdin:
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-bridge
@@ -130,17 +171,14 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ## Parity rule (operator, 2026-09-30)
 
-Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). The limitations below marked **parity gap** break that rule; they are E0 items in `docs/xmarket-tracker-2026-09-29.md`: `x-bridge-parity` (sandbox + agent config, secrets and redaction, `no_shell`, call id), `x-claude-code-hardening` (`--strict-mcp-config`; built-in tools off where money or signing is involved), `x-bridge-conformance-test` (a CI case per catalog tool).
+Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). `x-bridge-parity` (2026-09-30) closed the config, secrets, `no_shell` and call-id gaps (§ Configuration); `x-claude-code-hardening` added `--strict-mcp-config` and built-in tools off in hardened sandboxes. Still open in E0 (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-conformance-test` (a CI case per catalog tool), `x-engine-parity-audit` (shell-skill tools are not bridged).
 
 ## Known Limitations
 
 - Bridge constructs a fresh registry per invocation (no shared state with parent Tengu)
-- Memory tools (`memory_ingest`, `memory_search`, `persistent_store`) need `OPENROUTER_API_KEY` for embeddings (forwarded by the engine) and use a disk `DiskVectorStore` under `<workspace>/memory`; missing key → skipped with a warn
-- `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the engine does not put it in the MCP `env` block, so through the bridge the tool errors unless the CLI passes the variable through
-- **Parity gap** — no secret redaction in the bridge: `SanitizedToolExecutor` wraps only the TUI / Telegram executors, and the bridge's `SecretRegistry` starts empty (`x-bridge-parity`)
-- **Parity gap** — the bridge has no agent config: `PluginCtx.config` is `Config::default()`'s `main` agent with `workspace_tools` synthesized as `TENGU_BRIDGE_TOOLS ∩ WORKSPACE_TOOLS`, so opt-ins (`persistent_store`, `shared_cache`, `agentic_memory`, `skill_distill`, `apply_improver_proposal`, `manage_skill`, the Solana tools) do flow through; other per-agent fields do not (`x-bridge-parity`)
-- **Parity gap** — `TENGU_CONFIG` is not forwarded, so sandbox sections beyond scopes (e.g. `[solana]`, the planned `[risk]` / `[paper]`) are invisible to bridged tools (`x-bridge-parity`)
-- **Parity gap** — the bridge always resolves scopes with `no_shell = false`: tools without a configured scope get the permissive fallback, shell included (`x-bridge-parity`)
+- Memory tools (`memory_ingest`, `memory_search`, `persistent_store`) need `OPENROUTER_API_KEY` for embeddings; with a config they follow `[memory]` (off → not registered, as in-process), standalone they use a disk `DiskVectorStore` under `<workspace>/memory`
+- `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the bridge inherits it from the parent env
+- `tengu eval` builds engines from the eval config while `TENGU_CONFIG` names the base config: a `claude_code` eval agent's bridge resolves the agent there or falls back (warn)
 - The engine passes `--strict-mcp-config` on every run (`x-claude-code-hardening`): the bridge is the Claude CLI's only MCP server — the user's own / plugin MCP servers are not loaded
 
 ## Related

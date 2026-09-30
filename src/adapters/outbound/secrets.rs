@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 
 use crate::domain::message::ToolCall;
+use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
 
 // ── vault constants ─────────────────────────────────────────────
@@ -259,6 +260,74 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<(String, String)>
     Ok(loaded)
 }
 
+/// The process `SecretRegistry` — the values tool output is redacted with.
+///
+/// | Case | Registered |
+/// |---|---|
+/// | `TENGU_SECRETS_LOADED` set (an ancestor `tengu` opened the vault) | the env value of each name it lists — never prompts again |
+/// | else `vault` given and present (the CLI) | the vault, unlocked (prompt / `TENGU_MASTER_PASSWORD`), loaded into the env; names published in `TENGU_SECRETS_LOADED` |
+/// | always | `TENGU_MASTER_PASSWORD` |
+///
+/// `tengu mcp-bridge` and `run-agent` pass `None`: their stdin is a protocol
+/// channel, so they never prompt.
+pub(crate) fn process_secret_registry(vault: Option<&Path>) -> SecretRegistry {
+    let mut registry = SecretRegistry::new();
+    if let Ok(names) = std::env::var(SECRETS_LOADED_ENV) {
+        register_named(&mut registry, &names, |k| std::env::var(k).ok());
+    } else if let Some(path) = vault.filter(|p| p.exists()) {
+        warn_if_group_or_world_readable(path);
+        let loaded = load_secrets_into_env(path).unwrap_or_else(|e| {
+            eprintln!("WARNING: Failed to load secrets vault: {}", e);
+            Vec::new()
+        });
+        let keys: Vec<&str> = loaded.iter().map(|(k, _)| k.as_str()).collect();
+        std::env::set_var(SECRETS_LOADED_ENV, keys.join(","));
+        for (_, v) in loaded {
+            registry.register(v);
+        }
+    }
+    if let Ok(pw) = std::env::var("TENGU_MASTER_PASSWORD") {
+        registry.register(pw);
+    }
+    registry
+}
+
+/// Register the value of each var named in the comma-separated `names`
+/// (unset or empty values are skipped).
+fn register_named(
+    registry: &mut SecretRegistry,
+    names: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) {
+    for value in names
+        .split(',')
+        .filter(|k| !k.is_empty())
+        .filter_map(lookup)
+    {
+        registry.register(value);
+    }
+}
+
+fn warn_if_group_or_world_readable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                eprintln!(
+                    "WARNING: {} has permissions {:o} — should be 600. \
+                     Run: chmod 600 {}",
+                    path.display(),
+                    mode,
+                    path.display()
+                );
+            }
+        }
+    }
+    let _ = path; // suppress unused warning on non-unix
+}
+
 /// Change the master password on an existing vault.
 pub(crate) fn change_password(path: &Path) -> Result<()> {
     if !path.exists() {
@@ -443,6 +512,20 @@ mod tests {
             };
             Ok(ToolOutput::observed(obs, 0))
         }
+    }
+
+    /// Inherited vault names → their values are registered; unset and
+    /// empty ones are skipped.
+    #[test]
+    fn inherited_secret_names_register_their_values() {
+        let env =
+            std::collections::HashMap::from([("VAULT_A", "alpha-0123456789"), ("VAULT_EMPTY", "")]);
+        let mut reg = SecretRegistry::new();
+        register_named(&mut reg, "VAULT_A,,VAULT_EMPTY,VAULT_UNSET", |k| {
+            env.get(k).map(|v| v.to_string())
+        });
+        assert_eq!(reg.redact("k=alpha-0123456789;"), "k=[REDACTED];");
+        assert_eq!(reg.redact("nothing else"), "nothing else");
     }
 
     #[tokio::test]

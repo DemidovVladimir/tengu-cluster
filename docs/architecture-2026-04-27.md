@@ -289,7 +289,7 @@ Each `[agents.<name>]` block declares its `engine` (`"openrouter"` or `"claude_c
 
 `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` sets `EngineContext.bridge_tools = Some(tools)` when the agent's `engine == "claude_code"`. Claude Code spawns `tengu mcp-bridge` as an MCP server, advertises tools as `mcp__tengu-tools__<name>`, and routes calls through it. The bridge has its own `ToolRegistry` (built by `build_bridge_executor`) from the same tool catalog (`register_catalog`) so it can't drift from the in-process registry. Since 2026-09-23 the engine also passes the `[[mcp_servers]]` behind any `{server}__{tool}` bridge entry (`TENGU_BRIDGE_MCP_SERVERS`, names in `adapters/outbound/bridge_env.rs`); the bridge registers `McpPlugin` for them.
 
-Two env vars are critical to forward to the bridge subprocess (Claude Code's MCP config replaces inherited env): `TENGU_SESSION_ID` (for `compress_and_store` writes) and `OPENROUTER_API_KEY` (for the embedder + memory tools).
+Since `x-bridge-parity` (2026-09-30) the bridge runs tools as the calling agent: the engine forwards `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`, and the bridge loads that `[agents.<name>]` block (scopes, sandbox sections, `no_shell_fallback`), redacts the process secrets and passes the JSON-RPC request id as `ToolCtx.call_id` (`docs/mcp-bridge.md`). The Claude CLI merges the MCP config's `env` over its own env (verified, CLI 2.1.285), so the bridge also inherits the parent's env; `TENGU_SESSION_ID` (for `compress_and_store` writes) and `OPENROUTER_API_KEY` (for the embedder + memory tools) are still forwarded explicitly.
 
 ### I. parse_verdict has a prose-fallback (Phase 7.4)
 

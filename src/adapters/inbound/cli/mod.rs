@@ -16,7 +16,6 @@ use crate::adapters::outbound::secrets;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::{default_config_path, resolve_tengu_home};
 use crate::config::{Config, RuntimeProfile};
-use crate::domain::secrets::SecretRegistry;
 use doctor::{print_status, run_doctor};
 use run_agent::run_agent_subprocess;
 use skill::run_skill_command;
@@ -315,50 +314,12 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     let tengu_home = resolve_tengu_home();
-    let secrets_path = tengu_home.join("secrets.vault");
-    let mut secret_registry = SecretRegistry::new();
-    if let Ok(keys) = std::env::var(secrets::SECRETS_LOADED_ENV) {
-        // An ancestor `tengu` already opened the vault; its secrets are in
-        // our env. Register them for redaction — never prompt again.
-        for v in keys.split(',').filter_map(|k| std::env::var(k).ok()) {
-            if !v.is_empty() {
-                secret_registry.register(v);
-            }
-        }
-    } else if secrets_path.exists() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&secrets_path) {
-                let mode = meta.permissions().mode() & 0o777;
-                if mode & 0o077 != 0 {
-                    eprintln!(
-                        "WARNING: {} has permissions {:o} — should be 600. \
-                         Run: chmod 600 {}",
-                        secrets_path.display(),
-                        mode,
-                        secrets_path.display()
-                    );
-                }
-            }
-        }
-        let loaded = secrets::load_secrets_into_env(&secrets_path).unwrap_or_else(|e| {
-            eprintln!("WARNING: Failed to load secrets vault: {}", e);
-            Vec::new()
-        });
-        let keys: Vec<&str> = loaded.iter().map(|(k, _)| k.as_str()).collect();
-        std::env::set_var(secrets::SECRETS_LOADED_ENV, keys.join(","));
-        for (_, v) in loaded {
-            secret_registry.register(v);
-        }
-    }
-    // Also register the master password itself if set via env.
-    if let Ok(pw) = std::env::var("TENGU_MASTER_PASSWORD") {
-        if !pw.is_empty() {
-            secret_registry.register(pw);
-        }
-    }
-    let secret_registry = std::sync::Arc::new(secret_registry);
+    // Inherited vault names (`TENGU_SECRETS_LOADED`), else the vault itself,
+    // plus the master password — the same registry `tengu mcp-bridge` and
+    // `run-agent` build (without the vault prompt).
+    let secret_registry = std::sync::Arc::new(secrets::process_secret_registry(Some(
+        &secrets::secrets_file_path(&tengu_home),
+    )));
 
     // In TUI mode, persist logs to file only so interactive output stays clean.
     // In Telegram mode, log to both file and stderr so operators can monitor.
