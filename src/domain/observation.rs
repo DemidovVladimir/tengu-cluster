@@ -20,7 +20,8 @@ pub const MAX_FEATURE_STR: usize = 64;
 /// Max chars of `render_text` line 1 (`application/chat/tool_loop.rs` keeps
 /// only line 1 of older tool results, capped at 200 chars).
 pub const MAX_LINE1_CHARS: usize = 200;
-/// `render_text` omits `data` above this many chars (never cut mid-JSON).
+/// `render_text` omits `data` above this many chars (never cut mid-JSON);
+/// `compact_text` (local engines) replaces it at any size.
 pub const MAX_DATA_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,14 +330,37 @@ impl Observation {
             ));
         }
         if !self.data.is_null() {
-            let data = self.data.to_string();
-            if data.chars().count() <= MAX_DATA_CHARS {
-                lines.push(data);
-            } else {
-                lines.push(format!("data: {} bytes omitted", data.len()));
-            }
+            lines.push(data_line(self.data.to_string()));
         }
         lines.join("\n")
+    }
+
+    /// Compact LLM text for small context windows (`engine = "local"`,
+    /// `application/chat/tool_loop.rs::fit_tool_result`): `text` — this
+    /// row's `render_text` plus anything the tool appended (the `lp_decide`
+    /// commit note) — with the `data` line replaced by
+    /// `data: <n> bytes in observation <key>` (full key). Line 1, features,
+    /// errors and appended lines stay as rendered; `text` without this row's
+    /// data line (custom text) comes back unchanged.
+    pub fn compact_text(&self, text: &str) -> String {
+        if self.data.is_null() {
+            return text.to_string();
+        }
+        let data = self.data.to_string();
+        let pointer = format!("data: {} bytes in observation {}", data.len(), self.key);
+        let rendered = data_line(data);
+        let mut swapped = false;
+        text.split('\n')
+            .map(|line| {
+                if !swapped && line == rendered {
+                    swapped = true;
+                    pointer.as_str()
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// `{status, age_s, slot?, source, features, errors?}` — floats rounded
@@ -464,6 +488,16 @@ pub fn feature_problems(f: &Features) -> Vec<String> {
 pub(crate) fn assert_features_ok(f: &Features) {
     let p = feature_problems(f);
     assert!(p.is_empty(), "features contract violated: {p:?}");
+}
+
+/// `render_text`'s `data` line: the compact JSON, or a size note above
+/// `MAX_DATA_CHARS`.
+fn data_line(data: String) -> String {
+    if data.chars().count() <= MAX_DATA_CHARS {
+        data
+    } else {
+        format!("data: {} bytes omitted", data.len())
+    }
 }
 
 fn age_secs(age_ms: u64) -> f64 {
@@ -635,6 +669,65 @@ mod tests {
         o.data = json!({"blob": "x".repeat(MAX_DATA_CHARS + 1)});
         let text = o.render_text(0);
         assert!(text.lines().last().unwrap().ends_with("bytes omitted"));
+    }
+
+    #[test]
+    fn compact_keeps_line1_features_errors_and_full_ids_drops_data() {
+        let mut o = Observation::of("probe", &probe(), 0, 5_000, ObsSource::Live);
+        o.errors
+            .push(ReadError::new("usd", ErrorClass::Timeout, "rpc slow"));
+        o.data = json!({"pool": POOL, "bins": "b".repeat(4_000)});
+        let text = o.render_text(3_000);
+        let compact = o.compact_text(&text);
+        let (full_lines, lines): (Vec<&str>, Vec<&str>) =
+            (text.lines().collect(), compact.lines().collect());
+        assert_eq!(lines.len(), full_lines.len());
+        assert_eq!(lines[0], full_lines[0], "line 1 intact");
+        assert!(
+            lines[0].contains(WALLET) && lines[0].contains(POOL),
+            "{}",
+            lines[0]
+        );
+        assert!(compact.contains("regime=neutral"), "{compact}");
+        assert!(compact.contains("error usd: timeout rpc slow"), "{compact}");
+        assert!(!compact.contains("bbbb"), "data dropped: {compact}");
+        let data_bytes = o.data.to_string().len();
+        assert_eq!(
+            *lines.last().unwrap(),
+            format!("data: {data_bytes} bytes in observation probe/1:{WALLET}:{POOL}")
+        );
+        assert!(compact.len() < 400, "{} chars", compact.len());
+    }
+
+    #[test]
+    fn compact_keeps_what_the_tool_appended() {
+        let o = Observation::of("probe", &probe(), 0, 5_000, ObsSource::Live);
+        let note = format!("lp_state committed: lp_state/1:{WALLET}:{POOL}");
+        let text = format!("{}\n{note}", o.render_text(0));
+        let compact = o.compact_text(&text);
+        let lines: Vec<&str> = compact.lines().collect();
+        assert_eq!(lines[lines.len() - 1], note);
+        assert!(lines[lines.len() - 2].starts_with("data: "), "{compact}");
+        assert!(lines[lines.len() - 2].ends_with(&format!(" bytes in observation {}", o.key)));
+    }
+
+    #[test]
+    fn compact_replaces_the_omitted_note_and_passes_other_text_through() {
+        let mut o = Observation::of("probe", &probe(), 0, 5_000, ObsSource::Live);
+        o.data = json!({"blob": "x".repeat(MAX_DATA_CHARS + 1)});
+        let compact = o.compact_text(&o.render_text(0));
+        assert!(
+            compact
+                .lines()
+                .last()
+                .unwrap()
+                .ends_with(&format!(" bytes in observation {}", o.key)),
+            "{compact}"
+        );
+        assert_eq!(o.compact_text("custom text\nline 2"), "custom text\nline 2");
+        o.data = Value::Null;
+        let text = o.render_text(0);
+        assert_eq!(o.compact_text(&text), text);
     }
 
     #[test]

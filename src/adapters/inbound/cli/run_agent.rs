@@ -57,7 +57,9 @@ async fn try_persist_agentic_step_summary(
 /// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪ {compress_and_store}`
 ///    plus a `PluginToolExecutor` over those tools.
 /// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
-///    dispatch each → append assistant + tool messages → repeat. Stop on:
+///    dispatch each → append assistant + tool messages → repeat. Results
+///    enter as returned, except on engines with a per-result cap (local:
+///    `tool_loop::fit_tool_result`, older rounds compacted to line 1). Stop on:
 ///    - empty tool_calls (model done)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
@@ -256,6 +258,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "subprocess engine built"
     );
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
+    // Local models (`Engine::tool_result_char_cap`): each result fitted to
+    // the window, older rounds compacted — as `collect_engine_response`
+    // does in-process. Other engines: results enter unchanged.
+    let result_cap = engine
+        .tool_result_char_cap()
+        .map(|cap| cap.min(spec.limits.max_tool_result_chars as usize));
 
     // ----- Build tool stack (Phase 5b) -----
     // The parent's vault values (inherited, never prompts): tool output is
@@ -415,6 +423,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
         // Append the assistant message carrying the tool_calls so the next
         // engine turn sees the full call/result history.
+        let compact_cutoff = messages.len();
         messages.push(Message {
             role: Role::Assistant,
             content: text.clone(),
@@ -427,7 +436,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
         // Dispatch each tool call.
         for call in &tool_calls {
-            let result = if call.name == "compress_and_store" {
+            let (result, observation) = if call.name == "compress_and_store" {
                 // Out-of-band handling: capture the summary here; with
                 // `postgres_memory` it is persisted to Postgres `agentic_memory`.
                 let extracted_summary = call
@@ -448,23 +457,40 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                     )
                     .await;
                 }
-                "stored".to_string()
+                ("stored".to_string(), None)
             } else if let Some(ref exec) = executor {
                 use crate::ports::engine::ToolExecutor;
-                match exec.execute(call, &messages).await {
-                    Ok(s) => s,
-                    Err(e) => format!("tool error: {}", e),
+                match exec.execute_typed(call, &messages).await {
+                    Ok(out) => (out.text, out.observation),
+                    Err(e) => (format!("tool error: {}", e), None),
                 }
             } else {
-                format!("tool '{}' is not available in this subprocess", call.name)
+                (
+                    format!("tool '{}' is not available in this subprocess", call.name),
+                    None,
+                )
+            };
+            let content = match result_cap {
+                Some(cap) => crate::application::chat::tool_loop::fit_tool_result(
+                    &result,
+                    observation.as_ref(),
+                    cap,
+                ),
+                None => result,
             };
 
             messages.push(Message {
                 role: Role::Tool,
-                content: result,
+                content,
                 tool_call_id: Some(call.id.clone()),
                 tool_calls: None,
             });
+        }
+        if result_cap.is_some() && turn >= 1 {
+            crate::application::chat::tool_loop::compact_older_tool_results(
+                &mut messages[..compact_cutoff],
+                spec.limits.compact_result_limit as usize,
+            );
         }
 
         if compress_called {

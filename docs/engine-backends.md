@@ -34,7 +34,7 @@ The default backend. Sends chat completions to OpenRouter, which proxies to any 
 | Server | Start | `base_url` | Key |
 |---|---|---|---|
 | Unsloth (default) | `unsloth run --model unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL` | `http://127.0.0.1:8888` | `sk-unsloth-…` in `$UNSLOTH_API_KEY` (Settings → API) |
-| Ollama | `ollama serve` | `http://127.0.0.1:11434` | none (`api_key_env = ""`) |
+| Ollama | `ollama serve` | `http://127.0.0.1:11434/v1` (a trailing `/v1` is dropped; the root works too) | none (`api_key_env = ""`) |
 | llama.cpp | `llama-server -m model.gguf --jinja` | `http://127.0.0.1:8080` | none |
 | vLLM / LM Studio | `vllm serve …` / LM Studio server | `:8000` / `:1234` | none |
 
@@ -44,7 +44,7 @@ engine = "local"
 model = "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL"   # verbatim; Unsloth: GET /v1/models
 description = "Private/offline work on the local model."
 [agents.local.limits]
-context_window = 32000          # REQUIRED in practice — default is 1_000_000
+context_window = 32000          # REQUIRED in practice — default is 1_000_000 (load warns)
 request_timeout_secs = 900      # local generation is slow
 [agents.local.local]            # optional; defaults shown
 base_url = "http://127.0.0.1:8888"
@@ -58,6 +58,46 @@ api_key_env = "UNSLOTH_API_KEY" # unset/empty env → no Authorization header
 | Planner role | OK (plain chat completions, tools stripped like OpenRouter) — small models may emit bad plan JSON (3 retries) |
 | `unsloth start <agent>` | Not used — that launches *external* agent CLIs (Claude Code, Codex, Hermes…) against Unsloth. Tengu talks to the server directly |
 | Verified | 2026-09-23: `run-agent` step on Ollama `gemma4:latest`, Tor-default policy with Tor down → `compress_and_store` called, `status=ok` |
+
+### Tool results fit the window (`x-local-model-fit`)
+
+| Mechanism | Rule |
+|---|---|
+| Per-result cap | `LocalEngine::tool_result_char_cap` = 1/8 of `limits.context_window` at 4 chars/token (`domain::token::tool_result_char_budget`): 16 384 → 8 192 chars; never above `max_tool_result_chars`; the `[truncated — showing X of Y chars]` footer counts inside it |
+| Typed rows | `Observation::compact_text`: line 1, features, errors and any note the tool appended stay; `data` → `data: <n> bytes in observation <key>` (full key) |
+| Where | Both loops that feed tool results to a model: `chat/tool_loop.rs::collect_engine_response` (TUI, Telegram, webhooks, eval) and `run-agent`, which for local agents also cuts older rounds to line 1 (≤ `compact_result_limit`) like the in-process loop. OpenRouter and Claude Code are unchanged; decision loops feed no tool text to a model |
+| System prompt | A system message repeating `EngineContext.system_prompt` is sent once (`run-agent` passes both) |
+| Load warning | `Config::load` warns when a `local` agent keeps the 1 000 000 default `context_window` |
+
+### Ollama `gemma4:latest` — working settings
+
+| Setting | Value |
+|---|---|
+| Model | `gemma4:latest`: 8.0B, Q4_K_M, 9.6 GB, tools + thinking (`ollama show gemma4:latest`, Ollama 0.24.0) |
+| `base_url` | `http://127.0.0.1:11434/v1`, `api_key_env = ""` |
+| Model max window | 131 072 tokens (`ollama show` → context length) |
+| Served window | `num_ctx` = `OLLAMA_CONTEXT_LENGTH`, else 4k / 32k / 256k by VRAM (`ollama serve --help`). The OpenAI endpoint cannot set it per request, and a longer prompt is truncated without an error (older messages dropped first — the goal and earlier results vanish) |
+| Raise it | Server-wide: `OLLAMA_CONTEXT_LENGTH=16384 ollama serve` (app: Settings → Context length). One model: a Modelfile `FROM gemma4:latest` + `PARAMETER num_ctx 16384`, `ollama create gemma4-16k -f Modelfile`, `model = "gemma4-16k"`. Check `ollama ps` (CONTEXT) after the first call |
+| `limits.context_window` | The served `num_ctx`: start at `16384` on a 16 GB Mac (`ollama ps`: CONTEXT 16384, PROCESSOR ideally 100% GPU), `32768` with memory to spare |
+| Tool-result cap | Automatic: 8 192 chars at 16 384 (16 384 at 32 768) |
+| `limits.max_tool_rounds` | `10` (default 70 is sized for hosted models; every local round re-reads the prompt) |
+| `limits.request_timeout_secs` | `900` |
+
+```toml
+[agents.gemma]
+engine = "local"
+model = "gemma4:latest"
+description = "Offline work on the local gemma4 model."
+[agents.gemma.limits]
+context_window = 16384          # = the num_ctx Ollama serves
+max_tool_rounds = 10
+request_timeout_secs = 900
+[agents.gemma.local]
+base_url = "http://127.0.0.1:11434/v1"
+api_key_env = ""
+```
+
+Live check: `x-engine-matrix-smoke` (E0, `docs/xmarket-tracker-2026-09-29.md`).
 
 ## Claude Code (`engine = "claude_code"`)
 

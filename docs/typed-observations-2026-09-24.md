@@ -11,6 +11,7 @@ Typed tool results that one envelope serves to the LLM (text), decision loops (`
 | `Observation` | `domain/observation.rs` | `key = <schema>:<subject>` (full ids joined by `:`), `schema = name/N`, `tool`, `observed_at_ms`, `slot?`, `ttl_ms`, `source` live \| cache \| stream, `status`, `errors[]`, `headline`, `features`, `data` (typed payload) |
 | `features` | same | ≤ 32 keys (`MAX_FEATURES`); number \| bool \| string ≤ 64 chars; missing = omitted, never 0; ids go in `data` |
 | `render_text` | same | line 1 = `{headline} \| {status} {age}s slot={slot} {source}`, ≤ 200 chars with full ids; too long ⇒ suffix moves to line 2 (ids never cut); then features, one line per error, `data` (omitted whole > 16 000 chars) |
+| `compact_text(text)` | same | local engines only (`Engine::tool_result_char_cap`, `chat/tool_loop.rs::fit_tool_result`, also in `run-agent`): the tool's text with the `data` line → `data: <n> bytes in observation <key>` (full key); line 1, features, errors and appended notes (`lp_decide` commit) unchanged; text without that data line passes through. OpenRouter / Claude Code / decision loops see `render_text` as before |
 | `Field<T>` / `ObsStatus` | same | field = ok \| absent \| error; row = ok \| partial \| absent \| error. Failed reads never become 0 (bot BUG-023) |
 | `ErrorClass` | same | quota_exhausted · rate_limited · auth_required · timeout · transient · decode · not_applicable · fatal |
 

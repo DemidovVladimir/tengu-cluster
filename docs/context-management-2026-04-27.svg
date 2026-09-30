@@ -195,10 +195,10 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">14</text>
       <text x="52" y="32" class="mech">truncate_tool_result</text>
-      <text x="20" y="56" class="small mono">adapters/outbound/engines/mod.rs:944</text>
-      <text x="20" y="76" class="small">Per-call char-cap on insert.</text>
+      <text x="20" y="56" class="small mono">application/chat/tool_loop.rs</text>
+      <text x="20" y="76" class="small">Per-call char-cap on insert, UTF-8 safe.</text>
       <text x="20" y="92" class="small mono">max_tool_result_chars = 300_000</text>
-      <text x="20" y="108" class="small">UTF-8 boundary safe.</text>
+      <text x="20" y="108" class="small">local: window/8×4 chars, typed data → key</text>
       <text x="20" y="124" class="tiny">footer: "[truncated — showing X of Y chars]"</text>
     </g>
 

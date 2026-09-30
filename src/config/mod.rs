@@ -471,6 +471,9 @@ pub struct LimitsConfig {
     pub max_cost_per_flow: Option<f64>,
     #[serde(default)]
     pub warn_at_cost: Option<f64>,
+    /// Model window in tokens (default 1_000_000). `engine = "local"`: set
+    /// the server's real window (load warns on the default); one tool
+    /// result is capped at 1/8 of it (`domain::token::tool_result_char_budget`).
     #[serde(default = "default_context_window")]
     pub context_window: u32,
     #[serde(default)]
@@ -779,7 +782,8 @@ impl Default for AgentClaudeCodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentLocalConfig {
-    /// Server root, without `/v1`. Loopback bypasses the Tor proxy.
+    /// Server root; a trailing `/v1` (Ollama's documented form) is dropped.
+    /// Loopback bypasses the Tor proxy.
     #[serde(default = "default_local_base_url")]
     pub base_url: String,
     /// Env var holding the bearer key (Unsloth: `sk-unsloth-…`). Unset or
@@ -1039,6 +1043,9 @@ impl Config {
         let content = Self::substitute_env_vars(&content)?;
         let mut config: Config = toml::from_str(&content)?;
         config.validate()?;
+        for warning in config.validation_warnings() {
+            tracing::warn!(path = %path.display(), "{warning}");
+        }
         config.fold_default_scopes();
         Ok(config)
     }
@@ -1108,6 +1115,24 @@ impl Config {
                 .join("\n")
         );
         Err(anyhow::anyhow!(message))
+    }
+
+    /// Non-fatal smells, logged by `Config::load`: a `local` agent on the
+    /// 1_000_000 default `context_window` (its tool-result cap and history
+    /// budget derive from it; the server's real window is far smaller).
+    pub fn validation_warnings(&self) -> Vec<String> {
+        let default = default_context_window();
+        let mut out = Vec::new();
+        for (id, agent) in &self.agents {
+            if agent.engine == "local" && agent.limits.context_window == default {
+                out.push(format!(
+                    "agents.{id}.limits.context_window is the {default} default; set the local \
+                     server's real window (Ollama: num_ctx) — docs/engine-backends.md § Local"
+                ));
+            }
+        }
+        out.sort();
+        out
     }
 
     fn validation_errors(&self) -> Vec<String> {
@@ -1914,5 +1939,24 @@ ttl_days = 7
         .unwrap();
         let err = zero.validate().unwrap_err().to_string();
         assert!(err.contains("step_timeout_secs"), "{err}");
+    }
+
+    #[test]
+    fn local_agent_on_the_default_context_window_warns_only() {
+        let cfg: Config = toml::from_str(
+            "[agents.gemma]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+             [agents.sized]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+             [agents.sized.limits]\ncontext_window = 16384\n\
+             [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
+        assert!(cfg.validate().is_ok(), "a warning, not an error");
+        let warnings = cfg.validation_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("agents.gemma.limits.context_window is the 1000000 default"),
+            "{}",
+            warnings[0]
+        );
     }
 }

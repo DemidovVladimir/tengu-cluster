@@ -549,9 +549,9 @@ const MECHS = [
     pills: ["char-cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
 
   // Layer 3
-  { n: 14, layer: 3, title: "truncate_tool_result", where: "adapters/outbound/engines/mod.rs:944",
-    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe.",
-    pills: ["max_tool_result_chars = 300_000"], tags: ["truncate", "tool", "result", "char"] },
+  { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs",
+    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — typed row <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then ≤ 1/8 of <code>context_window</code> × 4 chars, footer included; <code>run-agent</code> does the same (+ older rounds cut to line 1) for local agents only.",
+    pills: ["max_tool_result_chars = 300_000", "local: window / 8 × 4 chars"], tags: ["truncate", "tool", "result", "char", "local", "compact"] },
   { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "adapters/outbound/engines/mod.rs:921",
     star: true,
     body: "<strong>Closest to /compact at the inner-loop level.</strong> After round ≥ 1, walks <code>messages[..compact_cutoff]</code> and rewrites every Role::Tool to first-line-only.",
