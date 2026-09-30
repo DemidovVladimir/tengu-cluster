@@ -170,7 +170,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `jev-event-key` | Event key ⇒ session id, dedupe window, audit key (M0: EDGAR accession) | §18 §27 §32 | S | rust |
 | ☐ | `jev-event-templating` | `{event:/pointer}` in args and world keys + `FromEvent` slots | §22 §23 | M | rust |
 | ✅ | `risk-config-schema` | `[risk]` + `[paper]` sections: every limit required, no defaults, fail closed; `Config::load` rejects unknown top-level keys | §28 §29 §31 | S | rust |
-| ☐ | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
+| ✅ | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
 | ☐ | `risk-calc-tools` | Store-only compute tools `xm_cost`, `xm_compare` (the row the gate re-reads for `min_edge_bps`; M0: HL book vs HL oracle) | §12 §23 §24 §25 | M | rust |
 | ☐ | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
 | ☐ | `risk-gate-domain` | Pure policy: every §28 rule as a `Check`, fail closed on missing data | §13 §28 §29 §30 | M | rust |

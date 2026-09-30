@@ -1,0 +1,35 @@
+{
+  "about": "xmarket cost fixtures for src/domain/book.rs and src/domain/xm/cost.rs. l2_xyz_TSLA.json = ONE live Hyperliquid l2Book response body, byte for byte. Goldens below were hand-computed outside the repo (jq + awk + bc on the same body; no script kept — Rust-only repo). mid = (347.16 + 347.23) / 2 = 347.195. Slippage bps are positive = cost to the taker.",
+  "files": {
+    "l2_xyz_TSLA.json": {
+      "source": "live",
+      "request": "POST https://api.hyperliquid.xyz/info {\"type\":\"l2Book\",\"coin\":\"xyz:TSLA\"}",
+      "http_status": 200,
+      "captured_at_utc": "2026-09-30T13:35:52Z",
+      "venue_time_ms": 1790775352605,
+      "levels": "20 bids (347.16 … 346.93, 748.214 qty) + 20 asks (347.23 … 347.44, 530.752 qty)"
+    }
+  },
+  "market_meta_at_capture": {
+    "request": "POST https://api.hyperliquid.xyz/info {\"type\":\"meta\",\"dex\":\"xyz\"}",
+    "xyz:TSLA": { "szDecimals": 3, "maxLeverage": 20, "growthMode": "enabled", "deployerFeeScale": "1.0" },
+    "xyz:MSTR": { "growthMode": null, "deployerFeeScale": "1.0" },
+    "note": "perpDexs carries no fee scale; it is per asset in meta. Taker fee at tier 0: xyz:TSLA 4.5 × 2 × 0.1 = 0.9 bps, xyz:MSTR 4.5 × 2 = 9 bps (feeRates, HL docs 'Fees' § Fee formula for developers)"
+  },
+  "walks": [
+    { "side": "buy", "target": { "notional": 1000 }, "filled_qty": 2.87993548944503643118, "vwap": 347.23, "worst_px": 347.23, "levels": 1, "slippage_bps_vs_mid": 1.0080790333962182, "slippage_bps_vs_touch": 0, "end": "filled" },
+    { "side": "buy", "target": { "notional": 10000 }, "filled_qty": 28.79912052182928234074, "vwap": 347.23282582258567955732, "worst_px": 347.24, "levels": 2, "slippage_bps_vs_mid": 1.0894691048453911, "slippage_bps_vs_touch": 0.0813818675137389, "end": "filled" },
+    { "side": "buy", "target": { "qty": 100 }, "filled_notional": 34726.73271, "vwap": 347.2673271, "worst_px": 347.3, "levels": 6, "slippage_bps_vs_mid": 2.0831838016100462, "slippage_bps_vs_touch": 1.0749964000806381, "end": "filled" },
+    { "side": "sell", "target": { "qty": 100 }, "filled_notional": 34715.63828, "vwap": 347.1563828, "worst_px": 347.11, "levels": 4, "slippage_bps_vs_mid": 1.1122625613848125, "slippage_bps_vs_touch": 0.1041940315704574, "end": "filled" },
+    { "side": "sell", "target": { "notional": 50000 }, "filled_qty": 144.03319328166863530292, "vwap": 347.14220285473314103269, "worst_px": 347.11, "levels": 4, "slippage_bps_vs_mid": 1.5206770047627116, "slippage_bps_vs_touch": 0.5126496505029083, "end": "filled" },
+    { "side": "buy", "target": { "qty": 1000 }, "filled_qty": 530.752, "filled_notional": 184357.9116, "vwap": 347.35226923308814662968, "worst_px": 347.44, "levels": 20, "slippage_bps_vs_mid": 4.5297090421275257, "slippage_bps_vs_touch": 3.521275036377808, "unfilled": 469.248, "end": "depth" },
+    { "side": "buy", "target": { "qty": 100 }, "limit_px": 347.27, "filled_qty": 61.594, "filled_notional": 21388.57325, "vwap": 347.25092135597623145111, "worst_px": 347.27, "levels": 4, "slippage_bps_vs_mid": 1.6106613279635781, "slippage_bps_vs_touch": 0.6025215556326196, "unfilled": 38.406, "end": "limit" },
+    { "side": "sell", "target": { "qty": 100 }, "limit_px": 347.12, "filled_qty": 98.15, "filled_notional": 34073.48478, "vwap": 347.15725705552725420275, "worst_px": 347.12, "levels": 3, "slippage_bps_vs_mid": 1.0870820280460777, "slippage_bps_vs_touch": 0.0790109595790355, "unfilled": 1.85, "end": "limit" }
+  ],
+  "depth_within": [
+    { "bps": 2, "bid_floor": 347.125561, "ask_ceiling": 347.264439, "bid_levels": 2, "bid_usd": 33860.00598, "ask_levels": 3, "ask_usd": 11310.10331 },
+    { "bps": 5, "bid_floor": 347.0214025, "ask_ceiling": 347.3685975, "bid_levels": 10, "bid_usd": 151769.13046, "ask_levels": 12, "ask_usd": 97621.23158 },
+    { "bps": 100, "bid_levels": 20, "bid_usd": 259662.54183, "ask_levels": 20, "ask_usd": 184357.9116 }
+  ],
+  "spread_bps": 2.0161580667924365
+}

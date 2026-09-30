@@ -3,6 +3,7 @@
 //! `tests/layering_lint.rs`).
 
 pub(crate) mod backoff;
+pub(crate) mod book;
 pub(crate) mod calendar;
 pub(crate) mod decision;
 pub(crate) mod lp;
@@ -22,3 +23,4 @@ pub(crate) mod token;
 pub(crate) mod tools;
 pub(crate) mod tz;
 pub(crate) mod usage;
+pub(crate) mod xm;
