@@ -3,6 +3,7 @@
 
 mod decide;
 mod doctor;
+mod history;
 mod run_agent;
 mod skill;
 
@@ -95,6 +96,15 @@ enum Commands {
         /// Event JSON file (`-` = stdin). Omitted = `{}`.
         #[arg(long)]
         event: Option<PathBuf>,
+    },
+    /// Read recorded observation history (`[recorder]`): `range` / `asof`,
+    /// JSON lines with full keys.
+    History {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: history::HistoryAction,
     },
     /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
     Eval {
@@ -388,6 +398,16 @@ pub(crate) async fn run() -> Result<()> {
             .with(stderr_layer);
         tracing::subscriber::set_global_default(subscriber)
             .expect("Failed to set tracing subscriber");
+    } else if matches!(cli.command, Some(Commands::History { .. })) {
+        // stdout carries JSON lines; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -470,6 +490,10 @@ pub(crate) async fn run() -> Result<()> {
         } => {
             let config = load_sandbox_or(sandbox, config)?;
             decide::run_decide(&config, &loop_name, event.as_deref(), secret_registry).await
+        }
+        Commands::History { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            history::run_history(&config, action).await
         }
         Commands::Eval {
             skills,

@@ -5,6 +5,7 @@ pub(crate) mod bridge_env;
 pub(crate) mod decisions;
 pub(crate) mod egress;
 pub(crate) mod engines;
+pub(crate) mod history_sqlite;
 pub(crate) mod http_class;
 pub(crate) mod hyperliquid;
 pub(crate) mod mcp_client;

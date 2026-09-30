@@ -2,7 +2,8 @@
 //! tool executor (same allow-list, scopes and workspace a `run-agent`
 //! subprocess of that agent gets; wrapped in `SanitizedToolExecutor` with the
 //! caller's `SecretRegistry`) + the agent workspace's observation store
-//! (`<workspace>/.tengu/observations.db`, source of `state.world`; fail-soft)
+//! (`open_observation_store`: `<workspace>/.tengu/observations.db`, source of
+//! `state.world`, + the history recorder when `[recorder]` is on; fail-soft)
 //! → `application::decision_loop::DecisionLoop`.
 
 use std::path::PathBuf;
@@ -14,14 +15,13 @@ use tracing::warn;
 
 use crate::adapters::outbound::decisions::JevClient;
 use crate::adapters::outbound::noop::NoopActivity;
-use crate::adapters::outbound::observations::SqliteObservationStore;
+use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::decision_loop::DecisionLoop;
 use crate::config::Config;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
-use crate::ports::observation::ObservationStore;
 
 /// `<TENGU_HOME>/logs/decisions.jsonl` — one line per decision.
 pub(crate) fn audit_path() -> PathBuf {
@@ -73,8 +73,8 @@ pub(crate) fn build_decision_loop(
     };
     let tools: Arc<dyn ToolExecutor> = Arc::new(SanitizedToolExecutor::new(inner, secrets));
 
-    let observations = match SqliteObservationStore::open(&workspace) {
-        Ok(s) => Some(Arc::new(s) as Arc<dyn ObservationStore>),
+    let observations = match open_observation_store(&workspace, &agent.sandbox) {
+        Ok(s) => Some(s),
         Err(e) => {
             let error = format!("{e:#}");
             warn!(decision_loop = %name, %error, "observation store unavailable; world reads as errors");

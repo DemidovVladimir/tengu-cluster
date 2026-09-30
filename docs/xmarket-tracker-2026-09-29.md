@@ -212,7 +212,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `kg-sync-schedule` | Syncs + lifecycle evaluation as `[feeds.*] kind = "tool"` rows (no host timers) | §19 §29 | S | toml |
 | ☐ | `kg-xm-cli` | `tengu xm sync / seed / status / show / backup` (no LLM) | §19 §29 §32 | S | rust |
 | ☐ | `rh-evm-rpc` | EVM JSON-RPC read transport (`eth_call`, `eth_getLogs`, blocks, Multicall3) + `[evm.chains]`; route the existing receipt poll through it | §1 §19 §20 | M | rust |
-| ☐ | `ops-history-recorder` | `HistoryStore` + SQLite day files under `state/xmarket/history/` (snapshots, depth, funding, OI, events, universe) | §20 §33 §34 | L | rust |
+| ✅ | `ops-history-recorder` | `HistoryStore` + SQLite day files under `state/xmarket/history/` (snapshots, depth, funding, OI, events, universe) | §20 §33 §34 | L | rust |
 | ☐ | `hl-tor-probe` | Probe every xmarket host over Arti exits and from the deployment host's own network (Kazakh connections cannot reach Coinbase, OKX and 1,100+ other platforms); per-host table so `network = "tor"` stays a one-line switch | §20 | S | research |
 | ☐ | `hl-skill` | `skills/hyperliquid/SKILL.md`: info API over `http_request` for the architect | §4 §19 §26 | S | skill |
 | ☐ | `rh-skill` | `skills/robinhood-chain/SKILL.md`: venue knowledge for the architect and planner | §8 §19 §20 §26 | S | skill |

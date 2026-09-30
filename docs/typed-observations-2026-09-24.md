@@ -19,16 +19,30 @@ Typed tool results that one envelope serves to the LLM (text), decision loops (`
 
 | Piece | Rule |
 |---|---|
-| Port | `ports/observation.rs::ObservationStore` — `get` (`Err` on a row that does not parse), `get_many` (skips it), `put -> bool`, `put_if_unchanged(obs, expected_observed_at_ms) -> bool` (compare-and-swap; default impl never writes) |
-| Store | `outbound/observations.rs::SqliteObservationStore` → `<workspace>/.tengu/observations.db`, table `observations`, WAL + `busy_timeout` 5000, rows > 7 days purged on open |
+| Port | `ports/observation.rs::ObservationStore` — `get` (`Err` on a row that does not parse), `get_many` (skips it), `put -> bool`, `put_if_unchanged(obs, expected_observed_at_ms) -> bool` (compare-and-swap; default impl never writes), `record(obs)` (history; default no-op) |
+| Store | `outbound/observations.rs::SqliteObservationStore` → `<workspace>/.tengu/observations.db`, table `observations`, WAL + `busy_timeout` 5000, rows > 7 days purged on open. Opened only via `open_observation_store(workspace, &AgentConfig.sandbox)` (§ History recorder) |
 | `put` | `Error` rows ignored; slot-monotonic (an older slot never overwrites; rows without a slot always replace). `put_if_unchanged`: one conditional statement, atomic across processes |
-| `application/observe.rs::observe()` | fresh row (`status != error`, age ≤ min(ttl, `max_age_secs`)) ⇒ served with `source = cache`; else fetch, store if usable and ttl > 0. Store failure ⇒ warn + live read (doctrine #4) |
+| `application/observe.rs::observe()` | fresh row (`status != error`, age ≤ min(ttl, `max_age_secs`)) ⇒ served with `source = cache`; else fetch, `record` it (every live result, `Error` and ttl-0 too), store if usable and ttl > 0. Store failure ⇒ warn + live read (doctrine #4) |
 | `max_age_secs` | optional arg on every typed tool; `0` forces a live read |
 | `acct/1:<pubkey>` | raw account rows (`outbound/solana/accounts.rs::fetch_accounts`, 60 s): reused when fresh, one `getMultipleAccounts` for the rest. **Phase-5 seam**: a stream writing these rows makes builders RPC-free |
 | `dlmm_discovery/1:<wallet>:<pool>` | position discovery (gPA): 60 s found / 10 s empty, and an empty row is reused only within the caller's max age (the bot's 300 s is safe only for the process that opens the positions) / errors never stored. Position reads pinned ≥ the discovery's slot; a discovered key that does not value ⇒ exposure `Error`, never 0 (`outbound/solana/plan.rs`, `dlmm::flag_unvalued`) |
 | `lp_state/1:<wallet>:<pool>` | controller state (regime, timers, re-entry anchor, last hedge action); 7 days; written only with `commit = true`, compare-and-swap on the version read (changed since ⇒ NOT committed, `features.commit = conflict`); unreadable ⇒ the decide tools block `invalid_read`, never overwrite |
 | `loop/1:<loop>` | `tengu run` health of a decision loop (`domain/runtime.rs::LoopHealth`), in the loop agent's store every `[runtime] heartbeat_secs`: queue depth, in flight, counts, `last_decision_age_s` (`docs/runtime-2026-09-30.md`) |
 | `feed/1:<feed>` | `tengu run` health of a feed (`FeedHealth`): state connecting \| live \| backoff \| stalled \| down, `required`, `last_item_age_s`, reconnects, dropped, `last_error_class`. `observed_at_ms` = the feed's last item, so `requires = { feed = N }` gates on data age; no row before the first item |
+
+## History recorder (`ops-history-recorder`, 2026-09-30)
+
+Append-only time series of observations (xmarket tracker conventions 3 + 5): research, replay, the weekend clock.
+
+| Piece | Rule |
+|---|---|
+| Config | `[recorder]` (`config/recorder.rs`, `deny_unknown_fields`): `enabled` (false; needs `[xmarket]`), `schemas` (`"*"` = all), `keep_data` (schemas that keep `data`; others features only), `change_only` (true), `heartbeat_secs` (300; 0 = never), `min_interval_secs = { "<schema>" = secs }`, `retention_days` (30; 0 = keep). Resolved into `AgentConfig.sandbox` (`recorder`, `history_dir`) |
+| Port | `ports/history.rs::HistoryStore` — `append(&[HistoryRow])`, `range(key, from_ms, to_ms)` (half-open, oldest first), `asof(keys, t_ms, max_age_ms)` (latest row ≤ t per key, `None` when older than `max_age_ms`). `HistoryRow` = envelope minus `tool`, `ttl_ms`, `headline`; `venue_ts_ms` = `features.venue_ts_ms` |
+| Store | `outbound/history_sqlite.rs::SqliteHistoryStore` → `<TENGU_HOME>/state/<xmarket.state>/history/<YYYYMMDD>.db` (UTC day of `observed_at_ms`), table `obs_history(key, schema, observed_at_ms, venue_ts_ms, slot, source, status, errors, features, data)`, unique `(key, observed_at_ms)` (re-append = no-op), WAL (`synchronous = NORMAL`) + `busy_timeout` 5000. Day files older than `retention_days` deleted on open and at each new day file; rows that old are not appended |
+| Feed | `outbound/observations.rs::RecordingObservationStore` wraps the cache: rows `put` / `put_if_unchanged` wrote + every live `observe()` result via `record`. The cache still never stores `Error` / ttl-0 rows |
+| Filter (per key, per process) | schema listed · each `(key, observed_at_ms)` once (`record`, then `put`) · nothing within `min_interval_secs` · `change_only`: skip a row whose status, errors, features (minus `venue_ts_ms`) and kept `data` equal the last recorded row until that row is `heartbeat_secs` old |
+| Constructor | `open_observation_store(workspace, &SandboxSections)` — the only way tool plugins (`tools/solana/mod.rs`) and decision loops (`bootstrap/decision.rs`) open the store; new tools call it too. History fails to open ⇒ warn, cache only |
+| CLI | `tengu history range <key> --from <rfc3339 \| ms> --to <…>` · `tengu history asof <key>… --at <…> [--max-age-secs N]` (`--sandbox`) → JSON lines, full keys; reads only (creates / deletes nothing) |
 
 ## Decision-loop use (`config/decision_loop.rs`, `application/decision_loop/`)
 

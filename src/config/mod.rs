@@ -7,6 +7,7 @@ pub(crate) mod egress;
 pub(crate) mod hardening;
 pub(crate) mod paths;
 pub(crate) mod rate_limits;
+pub(crate) mod recorder;
 pub(crate) mod risk;
 pub(crate) mod runtime;
 pub(crate) mod sections;
@@ -218,6 +219,11 @@ pub struct Config {
     /// loop events in flight. Defaults apply when absent.
     #[serde(default)]
     pub runtime: runtime::RuntimeConfig,
+    /// `[recorder]` — observation history (`config/recorder.rs`): which
+    /// schemas `RecordingObservationStore` appends to
+    /// `<TENGU_HOME>/state/<xmarket.state>/history/`. Default: off.
+    #[serde(default)]
+    pub recorder: recorder::RecorderConfig,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1107,6 +1113,12 @@ impl Config {
                 .map(|x| x.calendars())
                 .unwrap_or_default(),
             rate_limits: self.rate_limits.clone(),
+            recorder: self.recorder.clone(),
+            history_dir: self
+                .xmarket
+                .as_ref()
+                .filter(|_| self.recorder.enabled)
+                .map(|x| x.history_dir(&home)),
         }
     }
 
@@ -1204,6 +1216,9 @@ impl Config {
             errors.push(issue);
         }
         for issue in self.runtime.validation_errors() {
+            errors.push(issue);
+        }
+        for issue in self.recorder.validation_errors(self.xmarket.is_some()) {
             errors.push(issue);
         }
 
@@ -1477,6 +1492,7 @@ impl Default for Config {
             paper: None,
             rate_limits: HashMap::new(),
             runtime: Default::default(),
+            recorder: recorder::RecorderConfig::default(),
             skill_lifecycle: None,
             sandbox_name: None,
         }

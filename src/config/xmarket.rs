@@ -60,6 +60,11 @@ impl XmarketConfig {
         tengu_home.join("state").join(&self.state)
     }
 
+    /// `<tengu_home>/state/<state>/history` — the recorder's day files.
+    pub fn history_dir(&self, tengu_home: &Path) -> PathBuf {
+        self.state_dir(tengu_home).join("history")
+    }
+
     /// Every calendar that builds (an invalid one fails `validation_errors`).
     pub fn calendars(&self) -> BTreeMap<String, Calendar> {
         self.calendars
@@ -383,6 +388,10 @@ mod tests {
         assert_eq!(
             x.state_dir(Path::new("/h")),
             PathBuf::from("/h/state/xmarket")
+        );
+        assert_eq!(
+            x.history_dir(Path::new("/h")),
+            PathBuf::from("/h/state/xmarket/history")
         );
         assert!(x.validation_errors().is_empty());
         assert!(x.calendars().is_empty());

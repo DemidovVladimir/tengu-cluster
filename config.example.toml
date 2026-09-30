@@ -298,6 +298,18 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
 # heartbeat_stale_secs = 30                 # `tengu doctor --sandbox <name> --live` fails past this
+# --- Observation history (recorder; needs [xmarket]) ---
+# Typed-tool observations appended to <TENGU_HOME>/state/<xmarket.state>/history/
+# <YYYYMMDD>.db (UTC day). Read: tengu history range|asof. Rules:
+# docs/typed-observations-2026-09-24.md § History recorder.
+# [recorder]
+# enabled = true
+# schemas = ["mkt_ctx/1", "hl_book/1"]       # "*" = every schema
+# keep_data = ["hl_book/1"]                  # full payload; others keep features only
+# change_only = true                         # skip rows equal to the key's last one …
+# heartbeat_secs = 300                       # … until it is this old (0 = never)
+# min_interval_secs = { "hl_book/1" = 60 }   # at most one row per key per interval
+# retention_days = 30                        # older day files deleted (0 = keep all)
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`

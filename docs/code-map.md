@@ -103,6 +103,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[risk]` / `[paper]` | `RiskConfig` / `PaperConfig` (`config/risk.rs`) | `AgentConfig::sandbox` → the exec tools' gate and fill engine | **error** |
 | `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`) | **error** |
 | `[runtime]` | `RuntimeConfig` (`config/runtime.rs`) | `bootstrap/runtime.rs`, `inbound/run.rs` | **error** |
+| `[recorder]` | `RecorderConfig` (`config/recorder.rs`) | `outbound/observations.rs::open_observation_store` (every typed-tool store) | **error** |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`config/skill_lifecycle.rs`) | `inbound/evolve.rs`, `inbound/eval.rs` | ignored |
 | `[hub]` | `HubConfig` | validation + `tengu status` display only | ignored |
 
@@ -257,11 +258,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/cost.rs` | 915 | HL price / size rules + rounding, fee schedules (tiers, staking, HIP-3 deployer scale, growth mode), funding carry, gas, round-trip cost, edge after costs. |
 | `src/domain/xm/ledger.rs` | 1160 | Paper ledger math: positions (average cost, flip), HL hourly funding, marks (missing ⇒ error, never 0), `PaperPositions` → `paper_positions/1:<account>`. |
 
-### ports — traits (11 files)
+### ports — traits (12 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
+| `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
 | `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
@@ -275,7 +277,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (11 files)
+### config — TOML schema (12 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -285,6 +287,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/mod.rs` | 1792 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
+| `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
 | `src/config/risk.rs` | 758 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required) and the paper fill engine's knobs; load rules. |
 | `src/config/runtime.rs` | 143 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `heartbeat_secs`. |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
@@ -354,17 +357,18 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/decision.rs` | 94 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`SanitizedToolExecutor`, caller's `SecretRegistry`) + observation store → `DecisionLoop`; audit path. |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
-| `src/bootstrap/runtime.rs` | 529 | `tengu run` composition — builds every `[decision_loops.*]` once, the lease, webhook routes; `Runtime::spawn` seam for feeds. |
+| `src/bootstrap/runtime.rs` | 537 | `tengu run` composition — builds every `[decision_loops.*]` once, the lease, webhook routes; `Runtime::spawn` seam for feeds. |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (75 files)
+### adapters/outbound — driven adapters (76 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/outbound/bridge_env.rs` | 11 | Env contract between the Claude Code engine (writes it into the CLI's |
 | `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic. |
 | `src/adapters/outbound/http_class.rs` | 433 | HTTP status / transport error → `ErrorClass` (`HttpError`), credential `Scrubber`, `display_url`; shared by Solana, Hyperliquid and feeds. |
+| `src/adapters/outbound/history_sqlite.rs` | 531 | `SqliteHistoryStore` — `<state dir>/history/<YYYYMMDD>.db` UTC day files (WAL), range / asof across days, retention sweeper. |
 | `src/adapters/outbound/hyperliquid/mod.rs` | 6 | Hyperliquid outbound — the `POST /info` client (`info.rs`). |
 | `src/adapters/outbound/hyperliquid/info.rs` | 775 | `HlInfo` — Hyperliquid `POST /info` over the scoped egress client, request weights from `[rate_limits.hyperliquid]`, HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF). |
 | `src/adapters/outbound/decisions.rs` | 130 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
@@ -382,7 +386,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/memory/mod.rs` | 9 | Memory adapters — `BuiltinMemoryProvider` (MEMORY.md, identity files, |
 | `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
-| `src/adapters/outbound/observations.rs` | 344 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
+| `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
 | `src/adapters/outbound/runtime_store.rs` | 257 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
 | `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |
@@ -448,7 +452,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/test_support.rs` | 79 | Shared test harness for workspace tool unit tests. |
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 135 | `write_file` tool — write content to a file in the workspace. |
 
-### adapters/inbound — driving adapters (17 files)
+### adapters/inbound — driving adapters (18 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -456,6 +460,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/channel.rs` | 231 | Helpers shared by the chat channels (TUI, Telegram): loop-state factory, |
 | `src/adapters/inbound/cli/doctor.rs` | 199 | `tengu status` / `tengu doctor` (incl. `--tor` exit check). |
 | `src/adapters/inbound/cli/decide.rs` | 49 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop. |
+| `src/adapters/inbound/cli/history.rs` | 107 | `tengu history range|asof <key>` — read the recorder day files (no LLM). |
 | `src/adapters/inbound/cli/mod.rs` | 624 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |

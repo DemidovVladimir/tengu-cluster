@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
+use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
 
 /// Resolved sandbox sections (runtime only, never in TOML).
@@ -30,4 +31,10 @@ pub struct SandboxSections {
     /// `[rate_limits.<name>]` as loaded; a tool hands the entry it budgets
     /// against to `outbound/rate_limit.rs` (absent = unlimited).
     pub rate_limits: HashMap<String, RateLimitConfig>,
+    /// `[recorder]` (`config/recorder.rs`): what `RecordingObservationStore`
+    /// records.
+    pub recorder: RecorderConfig,
+    /// `<xm_state_dir>/history` when `[recorder] enabled`: the day files
+    /// `open_observation_store` records into; `None` = no recording.
+    pub history_dir: Option<PathBuf>,
 }

@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
-use crate::adapters::outbound::observations::SqliteObservationStore;
+use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
@@ -138,10 +138,18 @@ fn build_loops(
         )
         .with_context(|| format!("build [decision_loops.{name}]"))?;
         handlers.insert(name.clone(), dl as Arc<dyn LoopHandler>);
-        let workspace = agent_workspace(config, &config.decision_loops[name].agent);
-        match SqliteObservationStore::open(&workspace) {
+        let agent = &config.decision_loops[name].agent;
+        let workspace = agent_workspace(config, agent);
+        let sections = config
+            .agents
+            .get(agent)
+            .map(|a| Arc::clone(&a.sandbox))
+            .unwrap_or_default();
+        // Same constructor as the tools: `loop/1` rows reach the recorder
+        // when `[recorder] schemas` lists them.
+        match open_observation_store(&workspace, &sections) {
             Ok(s) => {
-                stores.insert(name.clone(), Arc::new(s) as Arc<dyn ObservationStore>);
+                stores.insert(name.clone(), s);
             }
             Err(e) => {
                 let error = format!("{e:#}");
