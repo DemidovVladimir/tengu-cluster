@@ -105,8 +105,8 @@ Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 | Surface | What |
 |---|---|
 | `MetricsKind::Decision` | new variant; tokens + cost + latency per Jev call |
-| `<TENGU_HOME>/logs/decisions.jsonl` | state hash, questions, answers + probabilities, action taken / skipped / escalated, `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`) |
-| TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit` |
+| `<TENGU_HOME>/logs/decisions.jsonl` | one line per decisions call, written with one `write_all` (concurrent loops / processes never interleave): `ts` (s) + `ts_ms`, `loop`, `sandbox`, `session_id`, `t`, `decision_id`, `model`, `act_at`, `latency_ms`, answers + probabilities, `usage`, `result` (action taken / skipped / escalated / rejected), `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`). A failed call (timeout, 402, 5xx) writes `result = {outcome: "error", reason}` with null answers, then the error propagates |
+| TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit`; a failed call as `jev <loop> #<t> · decide failed → error: <reason>` |
 | `agentic_memory` | executed actions + escalations (durable, recallable by planner) |
 
 ## Docs to update when landing

@@ -89,6 +89,9 @@ pub(crate) fn build_decision_loop(
         tools,
         observations,
         escalator,
-        Some(audit_path()),
+        Some(crate::application::decision_loop::AuditLog {
+            path: audit_path(),
+            sandbox: config.sandbox_name.clone(),
+        }),
     )))
 }

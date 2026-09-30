@@ -23,7 +23,11 @@
 //!    != error` and `obs` meta; a text result goes through
 //!    `reduce::parse_tool_output`. Continue.
 //!
-//! Every call emits a `MetricsKind::Decision` record and one JSONL audit line.
+//! Every decisions call writes one JSONL audit line (`AuditLog`) — a failed
+//! call too (`outcome = "error"`), before its error propagates — and a
+//! successful one also emits a `MetricsKind::Decision` record. A line is one
+//! `write_all` on an append-mode file, so concurrent loops and processes
+//! never interleave inside it.
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
 
@@ -33,7 +37,7 @@ pub(crate) mod world;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -63,8 +67,16 @@ pub(crate) struct DecisionLoop {
     /// Source of `state.world`; `None` = every world entry reads as an error.
     observations: Option<Arc<dyn ObservationStore>>,
     escalator: Option<Arc<dyn Escalator>>,
-    audit_path: Option<PathBuf>,
+    audit: Option<AuditLog>,
     state: Mutex<LoopState>,
+}
+
+/// Where the decision audit goes (`<TENGU_HOME>/logs/decisions.jsonl`) and
+/// the sandbox name (`Config::sandbox_name`) every line carries.
+#[derive(Debug, Clone)]
+pub(crate) struct AuditLog {
+    pub path: PathBuf,
+    pub sandbox: Option<String>,
 }
 
 #[derive(Default)]
@@ -86,7 +98,7 @@ impl DecisionLoop {
         tools: Arc<dyn ToolExecutor>,
         observations: Option<Arc<dyn ObservationStore>>,
         escalator: Option<Arc<dyn Escalator>>,
-        audit_path: Option<PathBuf>,
+        audit: Option<AuditLog>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -95,7 +107,7 @@ impl DecisionLoop {
             tools,
             observations,
             escalator,
-            audit_path,
+            audit,
             state: Mutex::new(LoopState::default()),
         }
     }
@@ -197,21 +209,34 @@ impl DecisionLoop {
             o.insert("world".into(), w);
         }
 
-        // 3. Decide.
+        // 3. Decide. A failed call (timeout, 402, 5xx) is audited, then propagates.
         let started = Instant::now();
-        let decision = self.engine.decide(&state, &questions).await?;
-        self.record_metrics(
-            session_id,
-            &state,
-            &decision,
-            started.elapsed().as_millis() as u64,
-        );
+        let decided = self.engine.decide(&state, &questions).await;
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let decision = match decided {
+            Ok(d) => d,
+            Err(e) => {
+                let outcome = StepOutcome::Error {
+                    reason: format!("{e:#}"),
+                };
+                self.audit(session_id, st.t, None, &outcome, None, latency_ms);
+                return Err(e);
+            }
+        };
+        self.record_metrics(session_id, &state, &decision, latency_ms);
 
         let t_before = st.t;
         let outcome = self.apply(st, &legal, &decision, &state, session_id).await;
         // A step that ran (or dry-ran) appended one history entry with the resolved args.
         let entry = st.history.back().filter(|_| st.t > t_before);
-        self.audit(session_id, st.t, &decision, &outcome, entry);
+        self.audit(
+            session_id,
+            st.t,
+            Some(&decision),
+            &outcome,
+            entry,
+            latency_ms,
+        );
         info!(
             decision_loop = %self.name,
             session_id = %session_id,
@@ -421,25 +446,34 @@ impl DecisionLoop {
         });
     }
 
-    /// One JSONL line per decision. Fail-soft: audit errors only warn.
+    /// One JSONL line per decisions call; `d = None` = the call failed
+    /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
+    /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
+    /// `act_at` join it. Fail-soft: audit errors only warn.
     fn audit(
         &self,
         session_id: &str,
         t: u64,
-        d: &Decision,
+        d: Option<&Decision>,
         outcome: &StepOutcome,
         entry: Option<&HistoryEntry>,
+        latency_ms: u64,
     ) {
-        let Some(path) = &self.audit_path else { return };
+        let Some(audit) = &self.audit else { return };
         let line = json!({
             "ts": now_unix(),
+            "ts_ms": now_ms(),
             "loop": self.name,
+            "sandbox": audit.sandbox,
             "session_id": session_id,
             "t": t,
-            "decision_id": d.id,
-            "model": d.model,
-            "answers": d.answers,
-            "usage": d.usage,
+            "decision_id": d.map(|d| &d.id),
+            // The build Jev reported; the configured slug when the call failed.
+            "model": d.map_or(self.engine.model(), |d| d.model.as_str()),
+            "act_at": self.cfg.act_at,
+            "latency_ms": latency_ms,
+            "answers": d.map(|d| &d.answers),
+            "usage": d.map(|d| &d.usage),
             "result": outcome,
             "args": entry.map(|e| &e.args),
             // What the tool returned, as `history` holds it (reduced, redacted).
@@ -448,20 +482,25 @@ impl DecisionLoop {
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
-        let res = (|| -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
-            writeln!(f, "{line}")
-        })();
-        if let Err(e) = res {
-            warn!(path = %path.display(), error = %e, "decision audit write failed");
+        if let Err(e) = append_line(&audit.path, &format!("{line}\n")) {
+            warn!(path = %audit.path.display(), error = %e, "decision audit write failed");
         }
     }
+}
+
+/// Append one whole line (newline included) with a single `write_all` on an
+/// append-mode file: concurrent writers never interleave inside a line.
+/// `writeln!` over `serde_json::Value`'s `Display` issued one write per
+/// token on the unbuffered `File`.
+fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(line.as_bytes())
 }
 
 fn slot_key(action: &str, slot: &str) -> String {
@@ -477,9 +516,19 @@ fn rejected(action: &str, reason: &str) -> StepOutcome {
 
 /// One audit line (see `DecisionLoop::audit`) as a short readable block:
 /// the chosen action + confidence, its slot answers, the args it ran with
-/// and what came back. The TUI decision feed renders it. `None` when the
-/// line has no `next_action` answer. Values are never shortened.
+/// and what came back; a failed decisions call as one `decide failed` line.
+/// The TUI decision feed renders it. `None` when the line has neither a
+/// `next_action` answer nor an error. Values are never shortened.
 pub(crate) fn render_audit(v: &Value) -> Option<String> {
+    if v.pointer("/result/outcome").and_then(Value::as_str) == Some("error") {
+        let reason = v.pointer("/result/reason").and_then(Value::as_str);
+        return Some(format!(
+            "jev {} #{} · decide failed → error: {}",
+            v["loop"].as_str().unwrap_or("?"),
+            v["t"],
+            reason.unwrap_or("?")
+        ));
+    }
     let next = v.pointer("/answers/next_action")?;
     let action = next.get("choice")?.as_str()?;
     let conf = |a: &Value| match a.get("confidence").and_then(Value::as_f64) {
@@ -1016,6 +1065,158 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
         assert!(
             msgs[0].contains("\"A1\""),
             "escalation shows the full resolved value"
+        );
+    }
+
+    // ── audit ──────────────────────────────────────────────────────────
+
+    /// The decisions endpoint failing (402, timeout, 5xx).
+    struct Failing;
+
+    #[async_trait]
+    impl DecisionEngine for Failing {
+        fn model(&self) -> &str {
+            "~typesafe/jev-latest"
+        }
+        async fn decide(&self, _s: &Value, _q: &BTreeMap<String, Question>) -> Result<Decision> {
+            Err(anyhow::anyhow!("decisions HTTP 402: insufficient credits"))
+        }
+    }
+
+    fn audited(name: &str, engine: Arc<dyn DecisionEngine>, path: &Path) -> DecisionLoop {
+        DecisionLoop::new(
+            name,
+            cfg(false),
+            engine,
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.to_path_buf(),
+                sandbox: Some("xmarket".into()),
+            }),
+        )
+    }
+
+    /// 4 writers × 500 lines into one file (loops of one process; other
+    /// processes append the same way): every line parses whole.
+    #[test]
+    fn concurrent_audit_lines_never_interleave() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs").join("decisions.jsonl");
+        let loops: Vec<DecisionLoop> = (0..4)
+            .map(|i| audited(&format!("loop{i}"), Arc::new(Scripted::new(vec![])), &path))
+            .collect();
+        let d = pick(&[
+            ("next_action", "open", 0.91),
+            ("open__pool", "pool_2", 0.88),
+            ("open__size", "2", 0.97),
+        ]);
+        let entry = HistoryEntry {
+            t: 1,
+            action: "open".into(),
+            args: json!({"pool": POOL_B, "size": 2}),
+            ok: Some(true),
+            result: json!({"pools": (0..40).map(|i| json!({"address": POOL_A, "fees": i})).collect::<Vec<_>>()}),
+            obs: None,
+        };
+        let outcome = StepOutcome::Executed {
+            action: "open".into(),
+        };
+        let (d, entry, outcome) = (&d, &entry, &outcome);
+        std::thread::scope(|s| {
+            for l in &loops {
+                s.spawn(move || {
+                    for t in 0..500 {
+                        l.audit("s", t, Some(d), outcome, Some(entry), 7);
+                    }
+                });
+            }
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2000);
+        let mut per_loop: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        for line in text.lines() {
+            let v: Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("torn audit line ({e}): {line}"));
+            assert_eq!(v["output"]["pools"].as_array().unwrap().len(), 40);
+            per_loop
+                .entry(v["loop"].as_str().unwrap().to_string())
+                .or_default()
+                .push(v["t"].as_u64().unwrap());
+        }
+        assert_eq!(per_loop.len(), 4);
+        for (name, mut ts) in per_loop {
+            ts.sort_unstable();
+            assert_eq!(ts, (0..500).collect::<Vec<u64>>(), "{name}");
+        }
+    }
+
+    /// Old keys stay, ms fields join; a failed decisions call leaves one
+    /// `error` line, then its error propagates; the feed renders it.
+    #[tokio::test]
+    async fn audit_lines_for_decided_and_failed_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let hold = Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])]));
+        audited("t", hold, &path)
+            .handle_event(&json!({}), "s1")
+            .await
+            .unwrap();
+        let err = audited("t", Arc::new(Failing), &path)
+            .handle_event(&json!({}), "s2")
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("402"), "{err:#}");
+
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        let (ok, failed) = (&lines[0], &lines[1]);
+        for key in [
+            "ts",
+            "ts_ms",
+            "loop",
+            "sandbox",
+            "session_id",
+            "t",
+            "decision_id",
+            "model",
+            "act_at",
+            "latency_ms",
+            "answers",
+            "usage",
+            "result",
+            "args",
+            "ok",
+            "output",
+            "obs",
+        ] {
+            assert!(ok.get(key).is_some(), "{key}: {ok}");
+            assert!(failed.get(key).is_some(), "{key}: {failed}");
+        }
+        assert_eq!(
+            ok["result"],
+            json!({"outcome": "stopped", "action": "hold"})
+        );
+        assert_eq!(ok["sandbox"], json!("xmarket"));
+        assert_eq!(ok["act_at"], json!(0.8));
+        assert!(ok["ts_ms"].as_u64().unwrap() >= ok["ts"].as_u64().unwrap() * 1000);
+        assert!(ok["latency_ms"].is_u64());
+
+        assert_eq!(
+            failed["result"],
+            json!({"outcome": "error", "reason": "decisions HTTP 402: insufficient credits"})
+        );
+        assert_eq!(failed["session_id"], json!("s2"));
+        assert!(failed["answers"].is_null() && failed["decision_id"].is_null());
+        assert_eq!(failed["model"], json!("~typesafe/jev-latest"));
+        assert_eq!(
+            render_audit(failed).unwrap(),
+            "jev t #0 · decide failed → error: decisions HTTP 402: insufficient credits"
         );
     }
 

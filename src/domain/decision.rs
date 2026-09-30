@@ -130,6 +130,9 @@ pub(crate) enum StepOutcome {
     Escalated { action: String, confidence: f64 },
     /// A cap or slot check rejected the decision.
     Rejected { action: String, reason: String },
+    /// The decisions call itself failed (timeout, 402, 5xx): no action was
+    /// chosen. Audited, then the error propagates.
+    Error { reason: String },
 }
 
 #[cfg(test)]
