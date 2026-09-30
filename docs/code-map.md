@@ -67,6 +67,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `tengu run` (loops, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health}.rs` · `src/domain/runtime.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · doc `docs/runtime-2026-09-30.md` |
 | Sandbox sections tools read (`[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`) | `src/config/sections.rs` (`AgentConfig::sandbox`) · `src/config/{xmarket,risk,rate_limits,recorder,hardening}.rs` |
 | Hyperliquid tools (`hl_ctx`, `hl_book`) + market rows + costs + ledger math | interfaces `src/adapters/outbound/tools/hyperliquid/defs.rs` · plugin + tools `src/adapters/outbound/tools/hyperliquid/` · decoders `src/domain/hl/` · `/info` client `src/adapters/outbound/hyperliquid/info.rs` · `src/domain/market.rs` · `src/domain/book.rs` · `src/domain/xm/{cost,ledger}.rs` |
+| Risk gate + paper fills (`[risk]` limits → `RiskVerdict`) | gate `src/domain/xm/risk.rs` (`evaluate`) · limits `src/config/risk.rs` (`RiskConfig::limits`) · fill engine `src/domain/xm/paper.rs` + latency `src/application/paper.rs` · ledger math `src/domain/xm/ledger.rs` |
 | History recorder, budgets, backoff, time | `src/adapters/outbound/history_sqlite.rs` + `open_observation_store` (`outbound/observations.rs`) · `src/adapters/outbound/rate_limit.rs` · `src/domain/backoff.rs` · `src/adapters/outbound/http_class.rs` · `src/domain/{tz,calendar}.rs` · `src/ports/clock.rs` |
 | Channels | `src/adapters/inbound/{tui/,telegram.rs,webhooks.rs}` + shared `channel.rs` |
 
@@ -224,7 +225,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (39 files)
+### domain — data + pure policy (40 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -263,10 +264,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/tools.rs` | 45 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/tz.rs` | 277 | Civil time in `America/New_York` / `Europe/Paris` / UTC with hand-rolled DST rules (xmarket clocks, calendars). |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
-| `src/domain/xm/mod.rs` | 15 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
+| `src/domain/xm/mod.rs` | 17 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
 | `src/domain/xm/cost.rs` | 915 | HL price / size rules + rounding, fee schedules (tiers, staking, HIP-3 deployer scale, growth mode), funding carry, gas, round-trip cost, edge after costs. |
 | `src/domain/xm/ledger.rs` | 1160 | Paper ledger math: positions (average cost, flip), HL hourly funding, marks (missing ⇒ error, never 0), `PaperPositions` → `paper_positions/1:<account>`. |
 | `src/domain/xm/paper.rs` | 1422 | Paper fill engine (pure): market / IOC order against an L2 book — IOC bound, depth-walk fills, partial / rejected with HL codes (Tick, MinTradeNtl, ReduceOnly, IocCancel, MarketOrderNoLiquidity, Oracle, OI cap). |
+| `src/domain/xm/risk.rs` | 2688 | Pre-trade risk gate (pure): `OrderIntent` + `RiskContext` + `RiskLimits` ⇒ `RiskVerdict` — every §28 rule a `Check` (permission, caps after the fill, leverage, losses, kill switch, halt, min edge, depth / slippage, hedge + skew, freshness, order rate), fail closed `missing:<field>`, reduce-only exits under `allow_reduce_degraded`; §29 `Lifecycle`, `HaltReason`. |
 
 ### ports — traits (14 files)
 
@@ -300,7 +302,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
-| `src/config/risk.rs` | 758 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required) and the paper fill engine's knobs; load rules. |
+| `src/config/risk.rs` | 833 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required) and the paper fill engine's knobs; load rules. |
 | `src/config/runtime.rs` | 143 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `heartbeat_secs`. |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
 | `src/config/solana.rs` | 373 | `[solana] signer_key_file` + signing-sandbox rules (no Claude Code / MCP / shell, key outside fs roots, wallet grants only on a private agent). |

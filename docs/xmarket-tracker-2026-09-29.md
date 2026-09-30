@@ -62,6 +62,7 @@ For an implementation session: read this section and § 4, then [`xmarket-build-
 | `risk-calc-costs` | Absorbs `hl-fee-model` in `src/domain/xm/cost.rs` (not `domain/hl/fees.rs`); L2 book + walk in `src/domain/book.rs` |
 | `hl-info-client` | `HlInfo` keeps its own egress gate (`http_json` not moved); decimal helpers in `domain/market.rs`; config table is `[rate_limits.<name>]` |
 | `ops-history-recorder` | Store opens go through `open_observation_store(workspace, &sections)`; day files `<state dir>/history/<YYYYMMDD>.db` |
+| `risk-gate-domain` | `Lifecycle` moved to `domain/xm/risk.rs` (`config::risk` re-exports it); `RiskConfig::limits()` maps `[risk]` onto the domain `RiskLimits` in `config/risk.rs` (config may import domain), `min_lifecycle` ⇒ none until the catalog (M0 permission = allow / deny lists); opportunity rows: any key naming the instrument as whole `:` segments with an `edge_after_costs_bps` feature, within the row TTL |
 | Open for the parity audit | Temp `--mcp-config` still carries `OPENROUTER_API_KEY` / `[[mcp_servers]]` values (now redundant, on disk 0600); `compress_and_store` advertised through the bridge but refused; `builtin_tools_profile` values with whitespace map to `editor_shell` outside hardened sandboxes; eval's `StubbedExecutor` lacks `execute_typed` |
 | Open for W1 C/D | `[risk]` without `[xmarket]` loads but has no ledger dir (exec tools refuse) — load rule in `x-shared-workspace-and-state-layout`; HL `stocks` category includes ETFs — the weekend-fade universe needs an explicit exclusion list |
 
@@ -188,7 +189,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ b2f4c5c | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
 | ☐ | `risk-calc-tools` | Store-only compute tools `xm_cost`, `xm_compare` (the row the gate re-reads for `min_edge_bps`; M0: HL book vs HL oracle) | §12 §23 §24 §25 | M | rust |
 | ✅ 7bd877c | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
-| ☐ | `risk-gate-domain` | Pure policy: every §28 rule as a `Check`, fail closed on missing data | §13 §28 §29 §30 | M | rust |
+| ✅ | `risk-gate-domain` | Pure policy: every §28 rule as a `Check`, fail closed on missing data | §13 §28 §29 §30 | M | rust |
 | ☐ | `risk-paper-ledger-store` | `ledger.db`: one account per sandbox, idempotent `client_order_id`, gate + fill + write in one transaction | §31 §32 | M | rust |
 | ✅ 7859383 | `risk-paper-fill-engine` | Market / IOC orders, L2 depth-walk fills, partial / failed fills, injected latency, HL rejection codes (ALO in P1; AMM / RFQ path in `rh-paper-fill`) | §20 §25 §31 | L | rust |
 | ✅ b2082d7 | `risk-exec-idempotency-ids` | `ToolCtx.call_id` + restart-safe loop ids (`{loop}:{session}:{t}`) | §30 §31 §32 | S | rust |

@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 
 use super::paths::expand_tilde;
 use super::Config;
+use crate::domain::xm::risk::{MaxAges, RiskLimits};
 
 /// Venues an order may target (tracker convention 1). `ref:<MIC>` ids are
 /// reference prices, never tradable.
@@ -162,18 +163,9 @@ pub enum RiskMode {
     Live,
 }
 
-/// §29 lifecycle states, in order (`kg-lifecycle` owns the transitions).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Lifecycle {
-    Discovered,
-    Identified,
-    Mapped,
-    Observed,
-    Validated,
-    PaperTradable,
-    LiveApproved,
-}
+/// §29 lifecycle states, in order — defined with the gate
+/// (`domain/xm/risk.rs`); `kg-lifecycle` owns the transitions.
+pub use crate::domain::xm::risk::Lifecycle;
 
 /// `[risk.max_data_age_ms]` — per input kind, milliseconds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,6 +216,45 @@ impl RiskConfig {
         Self {
             kill_switch_file: expand_tilde(&self.kill_switch_file),
             ..self.clone()
+        }
+    }
+
+    /// The gate's limits (`domain/xm/risk.rs`). `min_lifecycle` maps to none
+    /// until the catalog exists: the M0 permission is `instruments_allow` /
+    /// `instruments_deny` only (convention 10; `kg-lifecycle` turns it on).
+    // First consumer: the `risk_status` tool (`risk-kill-switch`).
+    #[allow(dead_code)]
+    pub(crate) fn limits(&self) -> RiskLimits {
+        let a = &self.max_data_age_ms;
+        RiskLimits {
+            account: self.account.clone(),
+            venues: self.venues.clone(),
+            min_lifecycle: None,
+            instruments_allow: self.instruments_allow.clone(),
+            instruments_deny: self.instruments_deny.clone(),
+            max_order_notional_usd: self.max_order_notional_usd,
+            max_position_notional_usd: self.max_position_notional_usd,
+            max_asset_exposure_usd: self.max_asset_exposure_usd,
+            max_venue_exposure_usd: self.max_venue_exposure_usd,
+            max_gross_exposure_usd: self.max_gross_exposure_usd,
+            max_net_exposure_usd: self.max_net_exposure_usd,
+            max_leverage: self.max_leverage,
+            daily_loss_limit_usd: self.daily_loss_limit_usd,
+            total_loss_limit_usd: self.total_loss_limit_usd,
+            min_edge_bps: self.min_edge_bps,
+            max_slippage_bps: self.max_slippage_bps,
+            min_depth_usd: self.min_depth_usd,
+            require_hedge_for: self.require_hedge_for.clone(),
+            max_data_age_ms: MaxAges {
+                book: a.book,
+                ctx: a.ctx,
+                reference: a.reference,
+                quote: a.quote,
+            },
+            max_skew_ms: self.max_skew_ms,
+            max_orders_per_min: self.max_orders_per_min,
+            max_open_orders: self.max_open_orders,
+            allow_reduce_degraded: self.allow_reduce_degraded,
         }
     }
 }
@@ -725,6 +756,50 @@ order_types = ["market", "ioc"]
         }
         assert!(n >= 6, "found {n} sandbox configs");
         Config::load(&root.join("config.example.toml")).expect("config.example.toml");
+    }
+
+    /// `[risk]` maps field by field into the gate's limits; no lifecycle
+    /// rule before the catalog (M0).
+    #[test]
+    fn limits_map_every_field() {
+        let cfg = parse(RISK_100).unwrap();
+        let r = cfg.risk.unwrap().resolved();
+        let l = r.limits();
+        assert_eq!(l.account, "xmarket");
+        assert_eq!(l.instruments_allow, vec!["hyperliquid:xyz:TSLA"]);
+        assert_eq!(l.min_lifecycle, None);
+        assert_eq!(
+            (
+                l.max_order_notional_usd,
+                l.max_position_notional_usd,
+                l.max_asset_exposure_usd,
+                l.max_venue_exposure_usd,
+                l.max_gross_exposure_usd,
+                l.max_net_exposure_usd,
+                l.max_leverage,
+                l.daily_loss_limit_usd,
+                l.total_loss_limit_usd,
+                l.min_edge_bps,
+                l.max_slippage_bps,
+                l.min_depth_usd,
+            ),
+            (25.0, 50.0, 50.0, 100.0, 100.0, 100.0, 1.0, 10.0, 25.0, 10.0, 30.0, 250.0)
+        );
+        assert_eq!(
+            (
+                l.max_data_age_ms.book,
+                l.max_data_age_ms.ctx,
+                l.max_data_age_ms.reference
+            ),
+            (5_000, 20_000, 60_000)
+        );
+        assert_eq!(l.max_data_age_ms.quote, 20_000);
+        assert_eq!(
+            (l.max_skew_ms, l.max_orders_per_min, l.max_open_orders),
+            (5_000, 6, 4)
+        );
+        assert_eq!(l.require_hedge_for, vec!["convergence"]);
+        assert!(l.allow_reduce_degraded);
     }
 
     /// The commented `[risk]` / `[paper]` block of `config.example.toml`,
