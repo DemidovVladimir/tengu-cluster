@@ -82,6 +82,7 @@ caps  = { size_sol = 2.0 }
 | `requires` | alias → max age secs; the action is offered only while each alias is usable and that fresh |
 | `ok` | typed: `status != error`; text: HTTP status / parse (`reduce::parse_tool_output`) |
 | Executor | loop agent's tools wrapped in `SanitizedToolExecutor` (process `SecretRegistry`) — text and observations redacted before history, audit, Jev |
+| Tool-call id | `{loop}:{session_id}:{t}` → the tool's `ToolCtx.call_id`; never repeats across events or restarts (one session id per event) — the idempotency key of exec tools (`client_order_id` arg, else `call_id`) |
 | Caps | re-checked in code after Jev answers; violation = skip + audit |
 | `dry_run` | non-`read_only` actions are logged, not executed |
 | Escalation | reuse `webhooks::run_one_shot` path: state JSON as the user message, session `decide-<loop>-<uuid>` |

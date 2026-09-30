@@ -350,8 +350,10 @@ impl DecisionLoop {
             };
         }
 
+        // `{loop}:{session_id}:{t}` — `ToolCtx.call_id` in the tool; never
+        // repeats across events or restarts (session ids are per event).
         let call = ToolCall {
-            id: format!("{}-{t}", self.name),
+            id: format!("{}:{session_id}:{t}", self.name),
             name: tool.clone(),
             arguments: args.clone(),
         };
@@ -704,6 +706,103 @@ caps = {{ size = 2.0 }}
             None,
         );
         (l, engine, tools, esc)
+    }
+
+    // ── tool-call ids ─────────────────────────────────────────────────
+
+    fn fetch_then_hold() -> Vec<Decision> {
+        vec![
+            pick(&[("next_action", "fetch", 0.95)]),
+            pick(&[("next_action", "hold", 0.99)]),
+        ]
+    }
+
+    /// `{loop}:{session_id}:{t}`: two sessions never share an id, and a
+    /// restarted loop (`t` from 0 again) never repeats an earlier one.
+    #[tokio::test]
+    async fn call_ids_carry_the_session_and_survive_restarts() {
+        let (l, _, tools, _) = build(false, [fetch_then_hold(), fetch_then_hold()].concat());
+        l.handle_event(&json!({}), "webhook-a").await.unwrap();
+        l.handle_event(&json!({}), "webhook-b").await.unwrap();
+        let (restarted, _, after, _) = build(false, fetch_then_hold());
+        restarted
+            .handle_event(&json!({}), "webhook-c")
+            .await
+            .unwrap();
+        let ids: Vec<String> = tools
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .chain(after.0.lock().unwrap().iter())
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(ids, ["t:webhook-a:1", "t:webhook-b:3", "t:webhook-c:1"]);
+    }
+
+    /// Through the real executor the id reaches the tool as `ToolCtx.call_id`.
+    #[tokio::test]
+    async fn loop_call_id_reaches_the_tool_ctx() {
+        use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
+        use crate::domain::message::ToolDef;
+        use crate::ports::tool::{Tool, ToolCtx};
+
+        struct Recorder {
+            def: ToolDef,
+            seen: Arc<StdMutex<Vec<Option<String>>>>,
+        }
+        #[async_trait]
+        impl Tool for Recorder {
+            fn definition(&self) -> &ToolDef {
+                &self.def
+            }
+            async fn execute(&self, _args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+                // scope: pure-compute
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push(ctx.call_id.map(str::to_string));
+                Ok(ToolOutput::from(
+                    "HTTP 200 https://x\n{\"pools\":[]}".to_string(),
+                ))
+            }
+        }
+        struct Quiet;
+        impl crate::ports::tool_activity::ToolActivityPort for Quiet {
+            fn publish_tool_activity(&self, _call: &ToolCall) {}
+        }
+
+        let seen = Arc::new(StdMutex::new(vec![]));
+        let mut registry = ToolRegistry::new();
+        registry.register_tool(Arc::new(Recorder {
+            def: ToolDef::new("http_request", "d", json!({})),
+            seen: Arc::clone(&seen),
+        }));
+        let exec = PluginToolExecutor {
+            registry,
+            workspace: PathBuf::from("."),
+            shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
+            http: reqwest::Client::new(),
+            memory_manager: None,
+            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
+            activity: Arc::new(Quiet),
+            scopes: Default::default(),
+            agent_config: None,
+        };
+        let l = DecisionLoop::new(
+            "exec",
+            cfg(false),
+            Arc::new(Scripted::new(fetch_then_hold())),
+            Arc::new(exec),
+            None,
+            None,
+            None,
+        );
+        l.handle_event(&json!({}), "decide-exec-7").await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [Some("exec:decide-exec-7:1".to_string())]
+        );
     }
 
     // ── typed tools, world, requires, FromObservation ─────────────────
