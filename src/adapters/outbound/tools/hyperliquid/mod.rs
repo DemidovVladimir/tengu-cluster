@@ -7,6 +7,7 @@
 //! | File | Tool |
 //! |---|---|
 //! | `ctx.rs` | `hl_ctx` — `mkt_ctx/1` + `mkt_instrument/1` rows for a dex sweep or ≤ 64 coins |
+//! | `book.rs` | `hl_book` — `hl_book/1` L2 book, depth, slippage; [`book::fresh_book`] = the paper fill engine's live book |
 //!
 //! The plugin opens the workspace observation store once
 //! (`open_observation_store`: plus the history recorder when `[recorder]` is
@@ -16,6 +17,7 @@
 //! `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]`
 //! (testnet override; unset = mainnet).
 
+pub(crate) mod book;
 pub(crate) mod ctx;
 pub(crate) mod defs;
 
@@ -24,13 +26,50 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::domain::hl::FeeBasis;
+use crate::domain::observation::{CachePolicy, ObsStatus, Observation};
 use crate::ports::observation::ObservationStore;
 use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) use defs::defs_named;
+
+/// `max_age_ms = min(ttl, max_age_secs)` as in `CachePolicy::new`.
+pub(crate) fn policy(
+    schema: &str,
+    subject: &str,
+    ttl_ms: u64,
+    max_age_secs: Option<u64>,
+) -> CachePolicy {
+    CachePolicy {
+        key: Observation::key_for(schema, subject),
+        ttl_ms,
+        max_age_ms: max_age_secs.map_or(ttl_ms, |s| ttl_ms.min(s.saturating_mul(1000))),
+    }
+}
+
+/// Record + store one live row the way `observe()` does (history first;
+/// the cache keeps neither `error` nor ttl-0 rows). `true` = stored.
+pub(crate) async fn store_live(store: Option<&dyn ObservationStore>, obs: &Observation) -> bool {
+    let Some(s) = store else {
+        return false;
+    };
+    if let Err(e) = s.record(obs).await {
+        warn!(key = %obs.key, error = %e, "observation history write failed");
+    }
+    if obs.status == ObsStatus::Error || obs.ttl_ms == 0 {
+        return false;
+    }
+    match s.put(obs).await {
+        Ok(stored) => stored,
+        Err(e) => {
+            warn!(key = %obs.key, error = %e, "observation store write failed");
+            false
+        }
+    }
+}
 
 /// An optional non-negative integer argument (absent / `null` ⇒ `None`).
 pub(crate) fn opt_u64_arg(args: &Value, tool: &str, key: &str) -> Result<Option<u64>> {
@@ -81,7 +120,9 @@ impl ToolPlugin for HyperliquidPlugin {
             })
             .unwrap_or_default();
         let shared = HlShared { store, fees };
-        Ok(ctx::tools(&shared))
+        let mut tools = ctx::tools(&shared);
+        tools.extend(book::tools(&shared));
+        Ok(tools)
     }
 }
 

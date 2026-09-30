@@ -11,7 +11,7 @@ use crate::domain::tools as names;
 
 /// Every Hyperliquid tool definition, in catalog order.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    vec![hl_ctx()]
+    vec![hl_ctx(), hl_book()]
 }
 
 /// The definition named `name` as a one-element vec (catalog rows); empty
@@ -61,6 +61,38 @@ fn hl_ctx() -> ToolDef {
                 "max_age_secs": max_age(5),
             },
             "required": [],
+            "additionalProperties": false,
+        }),
+    )
+}
+
+fn hl_book() -> ToolDef {
+    ToolDef::new(
+        names::HL_BOOK,
+        "Hyperliquid L2 order book of one coin (≤ 20 levels per side, full precision): best bid / \
+         ask, mid, spread, resting USD depth within 10 and 50 bps of mid per side, imbalance, and \
+         taker buy / sell slippage vs mid for up to 3 USD notionals (omitted when the visible book \
+         cannot fill one). Optional last trade. Typed observation hl_book/1:hyperliquid:<coin>, \
+         cached 2 s; the levels stay in data. An empty book (delisted / halted) is absent.",
+        json!({
+            "type": "object",
+            "properties": {
+                "coin": {
+                    "type": "string",
+                    "description": "Full Hyperliquid coin name, verbatim: ETH, xyz:TSLA (HIP-3 dex xyz), @151 (spot).",
+                },
+                "notional_usd": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Up to 3 USD notionals (> 0) to walk each side of the book for buy_slip_bps_k / sell_slip_bps_k. Default [100, 1000, 10000]; [] = none.",
+                },
+                "include_trades": {
+                    "type": "boolean",
+                    "description": "Also read recentTrades (weight 20+) for last and last_age_s. Default false.",
+                },
+                "max_age_secs": max_age(2),
+            },
+            "required": ["coin"],
             "additionalProperties": false,
         }),
     )

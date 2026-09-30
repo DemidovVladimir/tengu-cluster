@@ -4,7 +4,7 @@
 //!
 //! | Impl | Serves | Lands in |
 //! |---|---|---|
-//! | live | `hl_book` read with `max_age_secs = 0`, recorded as `hl_book/1:<id>` | `risk-gate-enforcement` (with `hl-book-tool`) |
+//! | live | `fresh_book` (`adapters/outbound/tools/hyperliquid/book.rs`): `l2Book` now, never the cache, recorded + stored as `hl_book/1:<id>`; `Err` = no book | `risk-gate-enforcement` |
 //! | replay | `HistoryStore::asof(["hl_book/1:<id>"], clock now, …)` — the book as of decision time + latency | `ops-replay-harness` (M7) |
 //! | tests | [`ScriptedBooks`]: the scripted book in force at the clock's now | here |
 

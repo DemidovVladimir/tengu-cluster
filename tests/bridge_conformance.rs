@@ -601,6 +601,23 @@ fn cases() -> Vec<Case> {
         hl_xyz(case("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
             .scoped("HL_API_URL")
             .ok("mkt hyperliquid:xyz:TSLA mark=347.19"),
+        // Book + last trade: 20 levels a side stored in `data`.
+        case(
+            "hl_book",
+            json!({"coin": "xyz:TSLA", "include_trades": true}),
+        )
+        .scoped("HL_API_URL")
+        .route(
+            info("l2Book")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .file("hyperliquid/l2Book_xyz_TSLA.json"),
+        )
+        .route(
+            info("recentTrades")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .file("hyperliquid/recentTrades_xyz_TSLA.json"),
+        )
+        .ok("book hyperliquid:xyz:TSLA bid=347.94 ask=347.97"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

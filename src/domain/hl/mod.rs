@@ -1,11 +1,13 @@
 //! Hyperliquid wire decoders — pure maps from `POST /info` replies to the
-//! cross-venue rows of `domain/market.rs` (`mkt_ctx/1`, `mkt_instrument/1`).
-//! No IO; the read time is an input. The `hl_*` tools
-//! (`adapters/outbound/tools/hyperliquid/`) fetch, cache and store.
+//! cross-venue rows of `domain/market.rs` (`mkt_ctx/1`, `mkt_instrument/1`)
+//! and the book of `domain/book.rs`. No IO; the read time is an input. The
+//! `hl_*` tools (`adapters/outbound/tools/hyperliquid/`) fetch, cache and
+//! store.
 //!
 //! | File | Replies | Rows |
 //! |---|---|---|
 //! | `ctx.rs` | `metaAndAssetCtxs {dex}`, `spotMetaAndAssetCtxs`, `perpDexs`, `perpCategories`, `perpsAtOpenInterestCap {dex}` | `mkt_ctx/1`, `mkt_instrument/1`, `hl_perp_meta/1`, `hl_at_oi_cap/1`, `hl_sweep/1` |
+//! | `book.rs` | `l2Book {coin}`, `recentTrades {coin}` | `hl_book/1` |
 //!
 //! | Coin (HL name, verbatim) | Market | Ctx request |
 //! |---|---|---|
@@ -21,6 +23,7 @@
 //! | Quote (collateral token) | 0 USDC · 235 USDE · 268 USDT0 (→ `USDT`) · 360 USDH (`spotMeta` token indexes); other tokens ⇒ unknown |
 //! | Fee basis | `[paper] fee_tier` / `staking_discount_pct` (tier 0, no staking without `[paper]`) → `domain::xm::cost::HlUserRates` |
 
+pub(crate) mod book;
 pub(crate) mod ctx;
 
 use crate::domain::market::QuoteCcy;

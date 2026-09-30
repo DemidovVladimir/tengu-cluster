@@ -257,6 +257,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || hyperliquid::defs_named(names::HL_CTX),
             plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::HL_BOOK),
+            needs_memory: false,
+            defs: || hyperliquid::defs_named(names::HL_BOOK),
+            plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
+        },
     ]);
     rows
 }

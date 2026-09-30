@@ -140,7 +140,7 @@ Instrument id = `<venue>:<native id verbatim>` (`docs/xmarket-tracker-2026-09-29
 | `oracle_eq_mark` | mark = oracle (HL: no book, off-hours, delisted) |
 | `max_leverage`, `only_isolated`, `delisted`, `session`, `category`, `growth_mode`, `taker_fee_bps`, `at_oi_cap` | instrument / calendar facts |
 
-Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_dex_quote/1:<id>` follow the same id rule. Venue decimal strings parse through `domain/market.rs::{parse_decimal, decimal_field}` (malformed ⇒ `decode` field error, `null` ⇒ absent, never 0).
+Order books (`hl_book/1:<id>`, § Hyperliquid tools) walk through `domain/book.rs`; `rh_quote/1:<id>`, `rh_dex_quote/1:<id>` follow the same id rule. Venue decimal strings parse through `domain/market.rs::{parse_decimal, decimal_field}` (malformed ⇒ `decode` field error, `null` ⇒ absent, never 0).
 
 | HL `POST /info` reply (`outbound/hyperliquid/info.rs`) | Class a tool records |
 |---|---|
@@ -155,9 +155,10 @@ Order books (`hl_book/1:<id>`) live in `domain/book.rs`; `rh_quote/1:<id>`, `rh_
 
 Host `api.hyperliquid.xyz` (`$HL_API_URL` when the scope may read it: testnet `https://api.hyperliquid-testnet.xyz`). Every request goes through `HlInfo` (egress gate, `[rate_limits.hyperliquid]` weight, the reply table above). Decoders: `domain/hl/` (pure). Coins are HL names verbatim: `ETH`, `kPEPE` (default dex), `xyz:TSLA` (HIP-3), `@151` / `PURR/USDC` (spot); ids `hyperliquid:<coin>`.
 
-| Tool | Args (* one of) | Returns | Reads (weight) | Writes (TTL) |
+| Tool | Args (* one of, ** required) | Returns | Reads (weight) | Writes (TTL) |
 |---|---|---|---|---|
 | `hl_ctx` | `coins`* (1–64; `#…` outcome refused), `dex`* (`""` / `"default"` = the default dex; ignored as `""` next to `coins`), `max_age_secs` | one coin: `mkt_ctx/1:hyperliquid:<coin>`; a dex or several coins: `hl_sweep/1` | one `metaAndAssetCtxs {dex}` per needed perp dex, concurrent (20 each); `spotMetaAndAssetCtxs` for spot coins (20); side rows below through the cache | every coin of each reply: `mkt_ctx/1` (5 s) + `mkt_instrument/1` (60 s); a requested coin HL lacks ⇒ `not_found` rows |
+| `hl_book` | `coin`** (one HL name, verbatim), `notional_usd` (≤ 3 numbers > 0; default `[100, 1000, 10000]`, `[]` = none), `include_trades` (default false), `max_age_secs` | `hl_book/1:hyperliquid:<coin>` | `l2Book {coin}` (2; full precision, ≤ 20 levels a side); with `include_trades` also `recentTrades {coin}` (20 + 1 per 20 trades), concurrently | that row (2 s): levels + HL `time` in `data`; a fresh cached row is re-walked for the caller's notionals (no request) |
 
 | Side row (cached, shared by every agent of the workspace) | TTL | Source (weight) | Feeds |
 |---|---|---|---|
@@ -172,6 +173,12 @@ Budget: a live read of one HIP-3 dex = 20, + 20 per minute per dex (at-cap), + 4
 | `data` | `scope`, `reads` (`info`, `dex`, `weight`, `failed` class), `rows_written`, `coins` (`coin`, `status`, `mark`, `basis_bps` / `funding_apr_pct` rounded to 0.1, flags `delisted` / `not_found` / `no_book` / `at_oi_cap`), `errors` — 10.7 KB for the 128-market xyz dex; local engines get the store pointer instead (< 600 chars in all) |
 | Features (14) | `n_coins`, `n_ok`, `n_partial`, `n_absent`, `n_error`, `n_delisted`, `n_not_found`, `n_no_book`, `n_at_oi_cap`, `n_reads`, `n_failed_reads`, `weight`, `rows_written`, `from_cache` |
 | Status | no coin or every coin `error` ⇒ `error` (a `not_applicable` unknown dex ⇒ `absent`) · every coin absent ⇒ `absent` · a coin `error` / `partial` or a failed side read ⇒ `partial` · else `ok` |
+
+| `hl_book/1` | Rule (`domain/hl/book.rs`; walks and depth only through `domain/book.rs`) |
+|---|---|
+| Status | `absent`: HL does not know the coin (`200 null` / `500 null`) or `book_empty` (both sides empty: delisted / halted) · `error`: the read failed or the reply did not decode (crossed / unordered levels, bad decimals) — class as in the reply table above, never stored · `partial`: one side empty, or the asked `recentTrades` read failed (error field `last`) · else `ok` |
+| Features (≤ 27) | `bid`, `ask`, `mid`, `spread_bps` · `depth_usd_{10,50}bps_{bid,ask}` (resting within N bps of mid, visible levels only: equal to `depth_usd_<side>` ⇒ a lower bound) · `imbalance_10bps` = (bid − ask) / (bid + ask) · `depth_usd_{bid,ask}`, `{bid,ask}_levels` (all visible) · `notional_usd_k` + `buy_slip_bps_k` / `sell_slip_bps_k` (k = 1..3: taker VWAP vs mid of a walk that fills the notional; beyond the visible depth ⇒ omitted, never a partial number) · `book_empty` · `venue_ts_ms`, `book_age_ms` · `last`, `last_age_s` (`include_trades`) |
+| Paper fills | `tools/hyperliquid/book.rs::fresh_book(hl, store, id, now_ms) -> Result<(Observation, L2Book), ReadError>`: `l2Book` now (never the cache), recorded + stored with the default notionals; `Err` = no book (`not_applicable`: not HL / unknown coin; else the read's class) — the live `BookSource` of `ports/book.rs` (`risk-gate-enforcement`) |
 
 Scope per tool: `fs_roots` = the workspace (store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (example: `config.example.toml`).
 

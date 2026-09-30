@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tracing::warn;
 
-use super::{defs, opt_u64_arg, HlShared};
+use super::{defs, opt_u64_arg, policy, store_live, HlShared};
 use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::hyperliquid::info::{request_weight, HlInfo, InfoReply};
 use crate::application::observe::observe;
@@ -31,7 +31,7 @@ use crate::domain::hl::{classify, dex_label, parse_dex, CoinKind, FeeBasis};
 use crate::domain::market::{InstrumentId, InstrumentKind, Listing, MarketCtx, MarketInstrument};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
-    now_ms, CachePolicy, ErrorClass, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
+    now_ms, ErrorClass, Field, ObsSource, Observation, Observed, ReadError,
 };
 use crate::domain::tools as names;
 use crate::domain::xm::cost::{HlKind, HlUserRates};
@@ -129,15 +129,6 @@ impl Tool for HlCtxTool {
             Err(e) => failed(&target, read_error("hl", &e), now),
         };
         Ok(ToolOutput::observed(obs, now))
-    }
-}
-
-/// `max_age_ms = min(ttl, max_age_secs)` as in `CachePolicy::new`.
-fn policy(schema: &str, subject: &str, ttl_ms: u64, max_age_secs: Option<u64>) -> CachePolicy {
-    CachePolicy {
-        key: Observation::key_for(schema, subject),
-        ttl_ms,
-        max_age_ms: max_age_secs.map_or(ttl_ms, |s| ttl_ms.min(s.saturating_mul(1000))),
     }
 }
 
@@ -677,27 +668,6 @@ fn decoded<T>(
     }
 }
 
-/// Record + store one live row the way `observe()` does (history first;
-/// the cache keeps neither `error` nor ttl-0 rows). `true` = stored.
-async fn store_live(store: Option<&dyn ObservationStore>, obs: &Observation) -> bool {
-    let Some(s) = store else {
-        return false;
-    };
-    if let Err(e) = s.record(obs).await {
-        warn!(key = %obs.key, error = %e, "observation history write failed");
-    }
-    if obs.status == ObsStatus::Error || obs.ttl_ms == 0 {
-        return false;
-    }
-    match s.put(obs).await {
-        Ok(stored) => stored,
-        Err(e) => {
-            warn!(key = %obs.key, error = %e, "observation store write failed");
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,7 +680,9 @@ mod tests {
         AT_CAP_DEFAULT, CATEGORIES, MAC_DEFAULT, MAC_XYZ, NOW, PERP_DEXS, SPOT,
     };
     use crate::domain::market::{Category, QuoteCcy};
-    use crate::domain::observation::{assert_features_ok, MAX_FEATURES, MAX_LINE1_CHARS};
+    use crate::domain::observation::{
+        assert_features_ok, ObsStatus, MAX_FEATURES, MAX_LINE1_CHARS,
+    };
     use crate::domain::scope::ToolScope;
 
     const AT_CAP_XYZ: &str = "[]";
