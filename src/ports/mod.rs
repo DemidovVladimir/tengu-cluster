@@ -9,6 +9,7 @@ pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod observation;
 pub(crate) mod orchestration;
+pub(crate) mod paper;
 pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod skill_source;

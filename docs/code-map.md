@@ -67,7 +67,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `tengu run` (loops, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health}.rs` · `src/domain/runtime.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · doc `docs/runtime-2026-09-30.md` |
 | Sandbox sections tools read (`[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`) | `src/config/sections.rs` (`AgentConfig::sandbox`) · `src/config/{xmarket,risk,rate_limits,recorder,hardening}.rs` |
 | Hyperliquid tools (`hl_ctx`, `hl_book`) + market rows + costs + ledger math | interfaces `src/adapters/outbound/tools/hyperliquid/defs.rs` · plugin + tools `src/adapters/outbound/tools/hyperliquid/` · decoders `src/domain/hl/` · `/info` client `src/adapters/outbound/hyperliquid/info.rs` · `src/domain/market.rs` · `src/domain/book.rs` · `src/domain/xm/{cost,ledger}.rs` |
-| Risk gate + paper fills (`[risk]` limits → `RiskVerdict`) | gate `src/domain/xm/risk.rs` (`evaluate`) · limits `src/config/risk.rs` (`RiskConfig::limits`) · fill engine `src/domain/xm/paper.rs` + latency `src/application/paper.rs` · ledger math `src/domain/xm/ledger.rs` |
+| Risk gate + paper fills + ledger (`[risk]` limits → `RiskVerdict` → `ledger.db`) | gate `src/domain/xm/risk.rs` (`evaluate`) · limits `src/config/risk.rs` (`RiskConfig::limits`) · fill engine `src/domain/xm/paper.rs` + latency `src/application/paper.rs` · ledger math `src/domain/xm/ledger.rs` · ledger port `src/ports/paper.rs` + store `src/adapters/outbound/paper_store.rs` |
 | History recorder, budgets, backoff, time | `src/adapters/outbound/history_sqlite.rs` + `open_observation_store` (`outbound/observations.rs`) · `src/adapters/outbound/rate_limit.rs` · `src/domain/backoff.rs` · `src/adapters/outbound/http_class.rs` · `src/domain/{tz,calendar}.rs` · `src/ports/clock.rs` |
 | Channels | `src/adapters/inbound/{tui/,telegram.rs,webhooks.rs}` + shared `channel.rs` |
 
@@ -182,7 +182,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit |
 | `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at` |
-| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (single-runner lease), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`); `<TENGU_HOME>/state/` without `[xmarket]` |
+| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (single-runner lease), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `<TENGU_HOME>/state/` without `[xmarket]` |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
 | `<workspace>/.tengu/memory.bin`, `<workspace>/.tengu/cache.db` | memory tools / `shared_cache` | disk vector store / SQLite cache |
 | `TENGU_PLANNER_REGISTRY.md`, `TENGU_PLAN.md` (repo root) | `application/orchestrator/shared_files.rs` | planner registry / debug copy of the plan |
@@ -266,11 +266,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
 | `src/domain/xm/mod.rs` | 17 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
 | `src/domain/xm/cost.rs` | 915 | HL price / size rules + rounding, fee schedules (tiers, staking, HIP-3 deployer scale, growth mode), funding carry, gas, round-trip cost, edge after costs. |
-| `src/domain/xm/ledger.rs` | 1160 | Paper ledger math: positions (average cost, flip), HL hourly funding, marks (missing ⇒ error, never 0), `PaperPositions` → `paper_positions/1:<account>`. |
+| `src/domain/xm/ledger.rs` | 1213 | Paper ledger math: positions (average cost, flip), HL hourly funding, marks (missing ⇒ error, never 0), `PaperPositions` → `paper_positions/1:<account>`, per-position exit deadline. |
 | `src/domain/xm/paper.rs` | 1422 | Paper fill engine (pure): market / IOC order against an L2 book — IOC bound, depth-walk fills, partial / rejected with HL codes (Tick, MinTradeNtl, ReduceOnly, IocCancel, MarketOrderNoLiquidity, Oracle, OI cap). |
 | `src/domain/xm/risk.rs` | 2688 | Pre-trade risk gate (pure): `OrderIntent` + `RiskContext` + `RiskLimits` ⇒ `RiskVerdict` — every §28 rule a `Check` (permission, caps after the fill, leverage, losses, kill switch, halt, min edge, depth / slippage, hedge + skew, freshness, order rate), fail closed `missing:<field>`, reduce-only exits under `allow_reduce_degraded`; §29 `Lifecycle`, `HaltReason`. |
 
-### ports — traits (14 files)
+### ports — traits (15 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -283,6 +283,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
 | `src/ports/observation.rs` | 32 | `ObservationStore` — the TTL cache typed tools read through and decision loops read `world` from. |
 | `src/ports/orchestration.rs` | 172 | Orchestration ports — what the orchestrator needs from the outside world |
+| `src/ports/paper.rs` | 182 | `PaperLedger` — paper accounts (cash, positions, orders, fills, funding, gate verdicts); `place` = gate + fill + write in one transaction through a pure `Decide` closure, idempotent per `client_order_id`. |
 | `src/ports/runtime.rs` | 28 | Runtime state port (`runtime.db` in the state dir): the single-runner lease; later feed cursors, seen-set, timers. |
 | `src/ports/shell.rs` | 8 | Port for executing shell commands in a workspace directory. |
 | `src/ports/skill_source.rs` | 7 | Port for discovering skill.md files from the workspace. |
@@ -376,7 +377,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (91 files)
+### adapters/outbound — driven adapters (92 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -403,6 +404,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
+| `src/adapters/outbound/paper_store.rs` | 1404 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline), orders `UNIQUE(account, client_order_id)`, fills, funding, `risk_decisions`; refused without `[xmarket]`. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
 | `src/adapters/outbound/runtime_store.rs` | 257 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
 | `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |

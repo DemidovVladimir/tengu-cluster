@@ -15,6 +15,7 @@
 //! | Leverage | gross / equity; equity ≤ 0 ⇒ `Error` |
 //! | Funding | HL: at each hour boundary, payment = qty × oracle × rate_1h, positive rate ⇒ longs pay; `funding_paid` positive = paid. Book every hour in time order before any later fill; an hour already booked, or before `opened_ms`, is skipped |
 //! | `paper_positions/1:<account>` | status `partial` when an open position's mark failed (its numbers omitted, never 0); per-position rows with full ids in `data` |
+//! | Exit deadline ([`exit_deadline`]) | open / flip ⇒ the order's; increase ⇒ the earlier; reduce ⇒ kept; flat ⇒ none |
 //!
 //! Not yet: maintenance margin from the HL margin tables (P1).
 
@@ -260,6 +261,25 @@ impl Position {
         self.funding_paid += payment;
         self.last_funding_hour_ms = Some(hour_ms);
         Ok(Some(payment))
+    }
+}
+
+/// Exit deadline of a position after a fill (the ledger's
+/// `positions.exit_at_ms`; exit rules and the weekend fade set one per
+/// order): an open or a flip takes the order's deadline, an increase keeps
+/// the earlier of the two, a reduce keeps the position's, flat clears it.
+pub fn exit_deadline(effect: &FillEffect, held: Option<i64>, order: Option<i64>) -> Option<i64> {
+    if effect.qty_after == 0.0 {
+        None
+    } else if effect.qty_before == 0.0 || effect.flipped {
+        order
+    } else if effect.closed_qty == 0.0 {
+        match (held, order) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    } else {
+        held
     }
 }
 
@@ -1133,6 +1153,39 @@ mod tests {
             .find(|r| r.instrument == TSLA_RH)
             .unwrap();
         assert!(rh.upnl_usd.is_error() && rh.notional_usd.is_error());
+    }
+
+    /// Open / flip take the order's deadline, an increase the earlier one,
+    /// a reduce keeps it, flat clears it.
+    #[test]
+    fn exit_deadline_follows_the_position() {
+        let mut a = PaperAccount::new(ACCOUNT, 1_000.0).unwrap();
+        let mut step = |side, qty| {
+            a.apply_fill(&fill(TSLA_HL, side, qty, 100.0, 0.0, T0))
+                .unwrap()
+        };
+        let open = step(Side::Buy, 2.0);
+        assert_eq!(exit_deadline(&open, None, Some(9)), Some(9));
+        assert_eq!(exit_deadline(&open, Some(5), None), None, "a new position");
+        let add = step(Side::Buy, 1.0);
+        for (held, order, want) in [
+            (Some(9), Some(7), Some(7)),
+            (Some(7), Some(9), Some(7)),
+            (Some(9), None, Some(9)),
+            (None, Some(9), Some(9)),
+            (None, None, None),
+        ] {
+            assert_eq!(exit_deadline(&add, held, order), want, "{held:?} {order:?}");
+        }
+        let reduce = step(Side::Sell, 1.0);
+        assert_eq!(exit_deadline(&reduce, Some(9), Some(3)), Some(9));
+        assert_eq!(exit_deadline(&reduce, None, Some(3)), None);
+        let flip = step(Side::Sell, 3.0);
+        assert!(flip.flipped);
+        assert_eq!(exit_deadline(&flip, Some(9), Some(3)), Some(3));
+        let close = step(Side::Buy, 1.0);
+        assert_eq!(close.qty_after, 0.0);
+        assert_eq!(exit_deadline(&close, Some(9), Some(3)), None);
     }
 
     #[test]

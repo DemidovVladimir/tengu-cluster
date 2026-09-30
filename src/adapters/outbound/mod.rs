@@ -13,6 +13,7 @@ pub(crate) mod mcp_client;
 pub(crate) mod memory;
 pub(crate) mod noop;
 pub(crate) mod observations;
+pub(crate) mod paper_store;
 pub(crate) mod prune;
 pub(crate) mod rate_limit;
 pub(crate) mod runtime_store;
