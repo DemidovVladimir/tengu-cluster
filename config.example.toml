@@ -280,6 +280,15 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # staking_discount_pct = 0                   # HYPE staking discount, 0–40
 # order_types = ["market", "ioc"]
 
+# --- Request budgets (src/config/rate_limits.rs) ---
+# One token bucket per name, shared by every feed and tool of this process
+# that budgets against it (weights in the venue's units). No section = the
+# name is unlimited (one debug line). Unknown keys fail config load.
+# [rate_limits.hyperliquid]
+# per_minute = 1200                         # HL: 1200 weight / min / IP (l2Book 2, most info requests 20)
+# burst = 1200                              # bucket size; default = per_minute
+# exec_reserve = 0                          # weight reads leave for order calls
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in

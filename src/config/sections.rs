@@ -6,9 +6,10 @@
 //! convention 20). A new section a tool needs goes here, not into another
 //! `#[serde(skip)]` field on `AgentConfig`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
 use crate::domain::calendar::Calendar;
 
@@ -26,4 +27,7 @@ pub struct SandboxSections {
     /// `[xmarket.calendars.<id>]`, built (`domain/calendar.rs`); an invalid
     /// row fails `Config::load`, so every configured id is here.
     pub calendars: BTreeMap<String, Calendar>,
+    /// `[rate_limits.<name>]` as loaded; a tool hands the entry it budgets
+    /// against to `outbound/rate_limit.rs` (absent = unlimited).
+    pub rate_limits: HashMap<String, RateLimitConfig>,
 }

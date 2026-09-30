@@ -86,6 +86,7 @@ caps  = { size_sol = 2.0 }
 | Caps | re-checked in code after Jev answers; violation = skip + audit |
 | `dry_run` | non-`read_only` actions are logged, not executed |
 | Escalation | reuse `webhooks::run_one_shot` path: state JSON as the user message, session `decide-<loop>-<uuid>` |
+| Jev call failures (`outbound/decisions.rs`, 2026-09-30) | HTTP 429 / 5xx / connect error ⇒ one retry after 0.5–1 s (`Retry-After` ≤ 5 s honoured, longer ⇒ no retry; `domain/backoff.rs::next_delay`); timeout / other 4xx / unparseable ⇒ no retry; 3 consecutive failed calls open a 30 s circuit (fail fast, no request), then calls pass again |
 
 ## Phases (one branch, `feature/decision-loop`)
 

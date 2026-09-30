@@ -101,6 +101,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[scaffold]` | `ScaffoldConfig` | `outbound/scaffold.rs` | ignored |
 | `[xmarket]` | `XmarketConfig` (`config/xmarket.rs`) | `Config::fold_default_scopes` → `AgentConfig::sandbox` (`config/sections.rs`) | **error** |
 | `[risk]` / `[paper]` | `RiskConfig` / `PaperConfig` (`config/risk.rs`) | `AgentConfig::sandbox` → the exec tools' gate and fill engine | **error** |
+| `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`) | **error** |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`config/skill_lifecycle.rs`) | `inbound/evolve.rs`, `inbound/eval.rs` | ignored |
 | `[hub]` | `HubConfig` | validation + `tengu status` display only | ignored |
 
@@ -215,11 +216,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (25 files)
+### domain — data + pure policy (26 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
+| `src/domain/backoff.rs` | 398 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
 | `src/domain/decision.rs` | 184 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome`. |
 | `src/domain/lp/dlmm.rs` | 2506 | Meteora DLMM — LbPair / PositionV2 / BinArray decoders, pool + position typed outputs, share and fee math. |
@@ -266,7 +268,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (9 files)
+### config — TOML schema (10 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -275,6 +277,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/hardening.rs` | 177 | Hardened sandboxes (`[solana]` signer or `[risk]`): `claude_code` agents only with `builtin_tools_profile = "none"`; no-shell fallback. |
 | `src/config/mod.rs` | 1792 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
+| `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
 | `src/config/risk.rs` | 758 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required) and the paper fill engine's knobs; load rules. |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
 | `src/config/solana.rs` | 373 | `[solana] signer_key_file` + signing-sandbox rules (no Claude Code / MCP / shell, key outside fs roots, wallet grants only on a private agent). |
@@ -343,12 +346,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (70 files)
+### adapters/outbound — driven adapters (72 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/outbound/bridge_env.rs` | 11 | Env contract between the Claude Code engine (writes it into the CLI's |
 | `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic. |
+| `src/adapters/outbound/http_class.rs` | 433 | HTTP status / transport error → `ErrorClass` (`HttpError`), credential `Scrubber`, `display_url`; shared by Solana, Hyperliquid and feeds. |
 | `src/adapters/outbound/decisions.rs` | 130 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
 | `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |
@@ -366,6 +370,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 344 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
+| `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |
 | `src/adapters/outbound/scaffold.rs` | 77 | Workspace scaffold — creates directories and seed files before agents start. |
 | `src/adapters/outbound/secrets.rs` | 459 | Secrets management: encrypted vault storage + runtime redaction (`SanitizedToolExecutor` redacts text and observations). |
 | `src/adapters/outbound/shell.rs` | 81 | Shell execution adapter for running skill commands. |

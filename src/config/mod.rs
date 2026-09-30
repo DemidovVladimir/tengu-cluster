@@ -6,6 +6,7 @@ pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod hardening;
 pub(crate) mod paths;
+pub(crate) mod rate_limits;
 pub(crate) mod risk;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
@@ -206,6 +207,12 @@ pub struct Config {
     /// `[risk]`.
     #[serde(default)]
     pub paper: Option<risk::PaperConfig>,
+    /// `[rate_limits.<name>]` — request budgets (one token bucket per name,
+    /// per-request weights) shared process-wide by feeds and tools
+    /// (`config/rate_limits.rs`, `outbound/rate_limit.rs`). A name without a
+    /// section is unlimited.
+    #[serde(default)]
+    pub rate_limits: HashMap<String, rate_limits::RateLimitConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1094,6 +1101,7 @@ impl Config {
                 .as_ref()
                 .map(|x| x.calendars())
                 .unwrap_or_default(),
+            rate_limits: self.rate_limits.clone(),
         }
     }
 
@@ -1185,6 +1193,9 @@ impl Config {
             }
         }
         for issue in risk::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in rate_limits::validation_errors(&self.rate_limits) {
             errors.push(issue);
         }
 
@@ -1456,6 +1467,7 @@ impl Default for Config {
             xmarket: None,
             risk: None,
             paper: None,
+            rate_limits: HashMap::new(),
             skill_lifecycle: None,
             sandbox_name: None,
         }
