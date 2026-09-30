@@ -272,6 +272,26 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || xm::defs_named(names::RISK_STATUS),
             plugin: |_| Box::new(xm::XmPlugin),
         },
+        // Exec tools: the `[risk]` gate inside the tool (`xm/exec_common.rs`);
+        // only a private agent may hold them (`config/risk.rs`).
+        ToolEntry {
+            opt_in: Some(names::PAPER_ORDER),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_ORDER),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::PAPER_CLOSE),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_CLOSE),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::PAPER_POSITIONS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_POSITIONS),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
     ]);
     rows
 }

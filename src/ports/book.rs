@@ -8,9 +8,6 @@
 //! | replay | `HistoryStore::asof(["hl_book/1:<id>"], clock now, …)` — the book as of decision time + latency | `ops-replay-harness` (M7) |
 //! | tests | [`ScriptedBooks`]: the scripted book in force at the clock's now | here |
 
-// Consumers land next wave (`risk-gate-enforcement`, `risk-paper-tools`).
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 

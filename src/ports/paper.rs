@@ -18,10 +18,6 @@
 //! ctx rows, the opportunity row, the kill-switch file) happens before
 //! `place`, so the closure only computes.
 
-// `place` / `stored` / `accrue_funding` callers land with `risk-paper-tools`
-// (the exec tools run `tools/xm/exec_common.rs::run_exec`).
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
@@ -133,6 +129,7 @@ pub(crate) struct StoredOrder {
 impl StoredOrder {
     /// The ledger fill this order applied (VWAP, fee); `None` when nothing
     /// filled.
+    #[cfg_attr(not(test), allow(dead_code))] // the audit join (`risk-audit-verdicts`)
     pub(crate) fn fill(&self) -> Option<Fill> {
         self.result.ledger_fill(&self.underlying, self.ts_ms)
     }
@@ -180,6 +177,7 @@ pub(crate) trait PaperLedger: Send + Sync {
         update: RiskUpdate,
     ) -> anyhow::Result<LedgerSnapshot>;
     /// The stored order `client_order_id` of `account`.
+    #[cfg_attr(not(test), allow(dead_code))] // the audit join (`risk-audit-verdicts`)
     async fn order(
         &self,
         account: &str,

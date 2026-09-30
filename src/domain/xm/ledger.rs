@@ -488,6 +488,11 @@ pub struct PositionRow {
     pub realized_pnl_usd: f64,
     pub fees_usd: f64,
     pub funding_usd: f64,
+    /// The position's exit deadline (the ledger's `positions.exit_at_ms`),
+    /// when the caller knows it — `paper_positions` fills it in; `build`
+    /// leaves it `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_at_ms: Option<i64>,
 }
 
 /// Exposure of one underlying or venue.
@@ -603,6 +608,7 @@ impl PaperPositions {
                     realized_pnl_usd: p.realized_pnl,
                     fees_usd: p.fees_paid,
                     funding_usd: p.funding_paid,
+                    exit_at_ms: None,
                 }
             })
             .collect();

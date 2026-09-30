@@ -34,6 +34,7 @@ pub(crate) const HL_BOOK: &str = "hl_book";
 pub(crate) const RISK_STATUS: &str = "risk_status";
 pub(crate) const PAPER_ORDER: &str = "paper_order";
 pub(crate) const PAPER_CLOSE: &str = "paper_close";
+pub(crate) const PAPER_POSITIONS: &str = "paper_positions";
 
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
@@ -76,6 +77,9 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     HL_CTX,
     HL_BOOK,
     RISK_STATUS,
+    PAPER_ORDER,
+    PAPER_CLOSE,
+    PAPER_POSITIONS,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

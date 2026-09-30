@@ -1,23 +1,27 @@
 //! Engine matrix (`x-engine-matrix-smoke`, milestone E0, tracker convention
-//! 20): one scripted turn through `tengu run-agent` per engine × model × tool
-//! set, on the fixture sandboxes in `tests/fixtures/engine_matrix/` — one
-//! agent per engine × model; the IPC `compose` hands each leg exactly its
-//! tool set (as a planner step with `Step.compose` does).
+//! 20): one scripted turn per engine × model × tool set, on the fixture
+//! sandboxes in `tests/fixtures/engine_matrix/`. The workspace and
+//! Hyperliquid sets run through `tengu run-agent` on the routable agent of
+//! each engine × model (the IPC `compose` hands each leg exactly its set, as
+//! a planner step with `Step.compose` does); the xm set holds exec tools, so
+//! it runs through `tengu tool turn` on that engine × model's private
+//! `xm_*` agent (no `description` — run-agent never runs one).
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
 //! |---|---|---|
 //! | `workspace` | `list_directory` `.` → `read_file` the `token-*` file → `write_file` `answer.txt` = the token → `read_file` `second.txt` | the answer holds the token (its file name is only in the listing, its value only in the file); `answer.txt` = the token; `second.txt` holds a registered secret (`TENGU_SECRETS_LOADED`): the answer quotes `REDACTED`; Claude Code: the bridge's result for it, logged by the engine, is `[REDACTED]` |
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
-//! | `xm` | `risk_status` on a new paper account (`[xmarket]` + `[risk]` + `[paper]`, ledger in a temp `TENGU_HOME`) | the answer holds `86.42` (its `equity=`: the fixtures' `initial_cash_usd`); `ledger.db` is under that `TENGU_HOME` |
+//! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → `risk_status`, on a new paper account (`[xmarket]` + `[risk]` + `[paper]`, ledger in a temp `TENGU_HOME`) | the answer quotes the buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buy and the filled reduce-only sell, each with a verdict row joined by its call id |
 //!
-//! Every leg: exit 0, `status = ok`, every tool of the set in the IPC `tools`
+//! Every leg: exit 0, `status = ok`, every tool of the set in the `tools`
 //! activity and no run of it failed (Claude Code: the bridged calls the
 //! engine reports, `StreamEvent::ToolRan`); the secret's value is nowhere in
-//! the child's stdout or stderr. The fixtures' configured scopes exclude the
-//! workspace, so every call also proves the `run-agent` workspace grant — for
-//! Claude Code the bridge's (`TENGU_AGENT_IPC=1`). Children run in the leg's
-//! workspace (no repo `.env`, no `TENGU_PLAN.md`), without `HL_API_URL`
-//! (mainnet) and without a parent Claude Code session's env.
+//! the child's stdout or stderr. The workspace / Hyperliquid sets' configured
+//! scopes exclude the workspace, so every call also proves the `run-agent`
+//! workspace grant — for Claude Code the bridge's (`TENGU_AGENT_IPC=1`); the
+//! xm scopes name the workspace (no grant on the chat path). Children run in
+//! the leg's workspace (no repo `.env`, no `TENGU_PLAN.md`), without
+//! `HL_API_URL` (mainnet) and without a parent Claude Code session's env.
 //!
 //! | Engine · model | Fixture · agent | Tests | Needs |
 //! |---|---|---|---|
@@ -25,7 +29,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `openrouter.toml` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude_code.toml` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription) |
 //! | local · `gemma4:latest` | `local.toml` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `local.toml` · `gemma` | `offline_local_workspace`, `offline_local_xm` (not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `local.toml` · `gemma` / `xm_gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`, no network; not ignored) | nothing |
 //! | — | all three | `fixtures_load_and_agree` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg):
@@ -49,6 +53,8 @@ const SECRET_FILE: &str = "second.txt";
 const EQUITY: &str = "86.42";
 /// The fixtures' `[xmarket] state`.
 const XM_STATE: &str = "engine-matrix";
+/// The opportunity row the xm set's `paper_order` names (seeded per leg).
+const OPPORTUNITY: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
 /// Env a parent Claude Code session sets (when these tests run from one): a
 /// nested `claude` must start like one from the operator's terminal.
 const PARENT_SESSION_ENV: &[&str] = &[
@@ -77,12 +83,14 @@ enum Kind {
     Local,
 }
 
-/// One engine × model: its fixture and agent.
+/// One engine × model: its fixture, its routable agent and its private
+/// exec agent (the xm set).
 #[derive(Clone, Copy)]
 struct Target {
     kind: Kind,
     fixture: &'static str,
     agent: &'static str,
+    xm_agent: &'static str,
     label: &'static str,
 }
 
@@ -90,24 +98,28 @@ const GEMINI: Target = Target {
     kind: Kind::OpenRouter,
     fixture: "openrouter.toml",
     agent: "gemini",
+    xm_agent: "xm_gemini",
     label: "openrouter google/gemini-2.5-flash-lite",
 };
 const HAIKU: Target = Target {
     kind: Kind::OpenRouter,
     fixture: "openrouter.toml",
     agent: "haiku",
+    xm_agent: "xm_haiku",
     label: "openrouter anthropic/claude-haiku-4.5",
 };
 const CLAUDE: Target = Target {
     kind: Kind::ClaudeCode,
     fixture: "claude_code.toml",
     agent: "claude",
+    xm_agent: "xm_claude",
     label: "claude_code claude-haiku-4-5",
 };
 const GEMMA: Target = Target {
     kind: Kind::Local,
     fixture: "local.toml",
     agent: "gemma",
+    xm_agent: "xm_gemma",
     label: "local gemma4:latest",
 };
 /// `GEMMA` against the offline mock server.
@@ -124,8 +136,6 @@ enum Set {
 }
 
 impl Set {
-    const ALL: [Set; 3] = [Set::Workspace, Set::Hyperliquid, Set::Xm];
-
     fn name(self) -> &'static str {
         match self {
             Set::Workspace => "workspace",
@@ -138,7 +148,13 @@ impl Set {
         match self {
             Set::Workspace => &["list_directory", "read_file", "write_file"],
             Set::Hyperliquid => &["hl_ctx", "hl_book"],
-            Set::Xm => &["risk_status"],
+            Set::Xm => &[
+                "hl_ctx",
+                "paper_order",
+                "paper_positions",
+                "paper_close",
+                "risk_status",
+            ],
         }
     }
 
@@ -163,8 +179,14 @@ impl Set {
                 "the mark= value hl_ctx returned and the bid= value hl_book returned, exactly as printed",
             ),
             Set::Xm => (
-                &["Call risk_status with no arguments."],
-                "the account and the equity= value risk_status returned, exactly as printed",
+                &[
+                    "Call hl_ctx with {\"coins\": [\"xyz:TSLA\"]}.",
+                    "Call paper_order with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"side\": \"buy\", \"notional_usd\": 15, \"kind\": \"market\", \"max_slippage_bps\": 30, \"opportunity\": \"xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA\"}.",
+                    "Call paper_positions with no arguments.",
+                    "Call paper_close with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"max_slippage_bps\": 50}.",
+                    "Call risk_status with no arguments.",
+                ],
+                "the avg_px= value paper_order returned and the equity= value risk_status returned, exactly as printed",
             ),
         };
         let steps: Vec<String> = steps
@@ -234,7 +256,13 @@ fn live_leg(target: Target, set: Set) {
         },
     };
     let ws = workspace();
-    let leg = run_leg(target, set, &ws, &envs, Duration::from_secs(timeout));
+    let leg = match set {
+        Set::Xm => {
+            seed_opportunity(&ws);
+            run_turn_leg(target, set, &ws, &envs, Duration::from_secs(timeout))
+        }
+        _ => run_leg(target, set, &ws, &envs, Duration::from_secs(timeout)),
+    };
     assert_leg(target, set, &leg, &ws);
 }
 
@@ -402,20 +430,13 @@ fn tail(s: &str, n: usize) -> &str {
     &s[start..]
 }
 
-/// Run `tengu run-agent` for `target` over `set`, like `SubprocessRunner`
-/// does (`TENGU_AGENT_IPC=1`, one JSON on stdin; `compose` = the set), with
-/// `envs` on top and a watchdog.
-fn run_leg(
-    target: Target,
-    set: Set,
-    ws: &Workspace,
-    envs: &[(&str, String)],
-    timeout: Duration,
-) -> Leg {
+/// `tengu <args>` in the leg's workspace with the leg's env: temp
+/// `TENGU_HOME`, the fixture as `TENGU_CONFIG`, the registered secret, no
+/// parent session's env, mainnet HL; `envs` on top.
+fn leg_command(target: Target, ws: &Workspace, envs: &[(&str, String)], args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tengu"));
-    cmd.arg("run-agent")
+    cmd.args(args)
         .current_dir(&ws.path)
-        .env("TENGU_AGENT_IPC", "1")
         .env("TENGU_HOME", &ws.home)
         .env("TENGU_CONFIG", fixture(target.fixture))
         .env("TENGU_MATRIX_WORKSPACE", &ws.path)
@@ -424,6 +445,7 @@ fn run_leg(
         .env_remove("TENGU_EGRESS")
         .env_remove("TENGU_SESSION_ID")
         .env_remove("TENGU_AGENT_NAME")
+        .env_remove("TENGU_AGENT_IPC")
         .env_remove("HL_API_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -434,6 +456,21 @@ fn run_leg(
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    cmd
+}
+
+/// Run `tengu run-agent` for `target` over `set`, like `SubprocessRunner`
+/// does (`TENGU_AGENT_IPC=1`, one JSON on stdin; `compose` = the set), with
+/// `envs` on top and a watchdog.
+fn run_leg(
+    target: Target,
+    set: Set,
+    ws: &Workspace,
+    envs: &[(&str, String)],
+    timeout: Duration,
+) -> Leg {
+    let mut cmd = leg_command(target, ws, envs, &["run-agent"]);
+    cmd.env("TENGU_AGENT_IPC", "1");
     let input = json!({
         "goal": set.goal(),
         "agent_name": target.agent,
@@ -443,14 +480,48 @@ fn run_leg(
         "step_id": format!("matrix-{}", set.name()),
         "compose": {"base_agent": target.agent, "skills": [], "tools": set.tools()},
     });
+    drive(cmd, Some(input.to_string()), timeout, target.label)
+}
+
+/// Run `tengu tool turn` as `target`'s private exec agent over `set` — the
+/// `@<agent>` chat path (no `run-agent`, no workspace grant).
+fn run_turn_leg(
+    target: Target,
+    set: Set,
+    ws: &Workspace,
+    envs: &[(&str, String)],
+    timeout: Duration,
+) -> Leg {
+    let config = fixture(target.fixture).display().to_string();
+    let goal = set.goal();
+    let args = [
+        "tool",
+        "turn",
+        "-c",
+        &config,
+        "--agent",
+        target.xm_agent,
+        "--goal",
+        &goal,
+    ];
+    drive(
+        leg_command(target, ws, envs, &args),
+        None,
+        timeout,
+        target.label,
+    )
+}
+
+/// Spawn `cmd`, write `input` to its stdin, wait with a watchdog.
+fn drive(mut cmd: Command, input: Option<String>, timeout: Duration, label: &str) -> Leg {
     let started = Instant::now();
-    let mut child = cmd.spawn().expect("spawn tengu run-agent");
-    child
-        .stdin
-        .take()
-        .expect("stdin")
-        .write_all(input.to_string().as_bytes())
-        .expect("write IPC input");
+    let mut child = cmd.spawn().expect("spawn tengu");
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        if let Some(input) = input {
+            stdin.write_all(input.as_bytes()).expect("write stdin");
+        }
+    }
     let mut out_pipe = child.stdout.take().expect("stdout");
     let mut err_pipe = child.stderr.take().expect("stderr");
     let out = std::thread::spawn(move || {
@@ -481,8 +552,7 @@ fn run_leg(
     let stderr = ansi.replace_all(&err.join().unwrap(), "").into_owned();
     let Some(status) = status else {
         panic!(
-            "run-agent ({}) did not exit within {timeout:?}\n--- stderr (tail) ---\n{}",
-            target.label,
+            "tengu ({label}) did not exit within {timeout:?}\n--- stderr (tail) ---\n{}",
             tail(&stderr, 6_000)
         );
     };
@@ -494,6 +564,52 @@ fn run_leg(
         ipc,
         secs,
     }
+}
+
+/// The opportunity row the xm set's `paper_order` names (`min_edge`): 25
+/// bps after costs, stamped now, 10 min TTL, in the leg's workspace store.
+fn seed_opportunity(ws: &Workspace) {
+    let dir = ws.path.join(".tengu");
+    std::fs::create_dir_all(&dir).unwrap();
+    let conn = rusqlite::Connection::open(dir.join("observations.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS observations (
+           key TEXT PRIMARY KEY, schema TEXT NOT NULL, observed_at_ms INTEGER NOT NULL,
+           slot INTEGER, ttl_ms INTEGER NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS observations_schema ON observations(schema, observed_at_ms);",
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let row = json!({
+        "key": OPPORTUNITY, "schema": "xm_compare/1", "tool": "xm_compare",
+        "observed_at_ms": now, "ttl_ms": 600_000, "source": "live", "status": "ok",
+        "headline": "compare hyperliquid:xyz:TSLA edge_after_costs_bps=25",
+        "features": {"edge_after_costs_bps": 25.0}, "data": null
+    });
+    conn.execute(
+        "INSERT OR REPLACE INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+         VALUES (?1, 'xm_compare/1', ?2, NULL, 600000, 'ok', ?3)",
+        rusqlite::params![OPPORTUNITY, now, row.to_string()],
+    )
+    .unwrap();
+}
+
+/// `(side, status, avg_px, call_id)` of every order in the leg's ledger.
+fn ledger_orders(ws: &Workspace) -> Vec<(String, String, Option<f64>, Option<String>)> {
+    let path = ws.home.join("state").join(XM_STATE).join("ledger.db");
+    let Ok(conn) = rusqlite::Connection::open(&path) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT side, status, avg_px, call_id FROM orders ORDER BY id")
+    else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
 }
 
 /// Print the leg's result line, then assert what every leg shares and what
@@ -585,13 +701,29 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace) {
             }
         }
         Set::Xm => {
+            let orders = ledger_orders(ws);
+            let filled = |side: &str| {
+                orders
+                    .iter()
+                    .find(|(s, st, _, _)| s == side && st == "filled")
+                    .cloned()
+            };
+            let (Some(buy), Some(_)) = (filled("buy"), filled("sell")) else {
+                panic!(
+                    "{label}: the ledger has no filled buy + filled close: {orders:?}\n{}",
+                    leg.context()
+                );
+            };
             assert!(
-                answer.contains(EQUITY),
-                "{label}: the answer does not hold equity {EQUITY}\n{}",
+                orders.iter().all(|o| o.3.is_some()),
+                "{label}: an order without a call id: {orders:?}"
+            );
+            let px = buy.2.expect("a filled order has avg_px");
+            assert!(
+                quotes_any(&answer, &[px]),
+                "{label}: the answer does not quote the buy's avg_px {px}\n{}",
                 leg.context()
             );
-            let ledger = ws.home.join("state").join(XM_STATE).join("ledger.db");
-            assert!(ledger.exists(), "{label}: no {}", ledger.display());
         }
     }
 }
@@ -748,13 +880,12 @@ fn advertised(body: &str) -> Vec<String> {
 
 fn offline_leg(set: Set, ws: &Workspace, replies: Vec<String>) -> (Leg, Vec<String>) {
     let (url, server) = mock_server(replies);
-    let leg = run_leg(
-        MOCK,
-        set,
-        ws,
-        &[("TENGU_MATRIX_LOCAL_BASE_URL", url)],
-        Duration::from_secs(25),
-    );
+    let envs = [("TENGU_MATRIX_LOCAL_BASE_URL", url)];
+    let timeout = Duration::from_secs(25);
+    let leg = match set {
+        Set::Xm => run_turn_leg(MOCK, set, ws, &envs, timeout),
+        _ => run_leg(MOCK, set, ws, &envs, timeout),
+    };
     let bodies = server.join().expect("mock server");
     (leg, bodies)
 }
@@ -809,9 +940,10 @@ fn offline_local_workspace() {
     );
 }
 
-/// The xm set on the local engine, scripted: `[xmarket]` + `[risk]` +
-/// `[paper]` load, `risk_status` opens a new account in the leg's
-/// `TENGU_HOME` and its row reaches the model.
+/// The xm set's network-free tools on the local engine through `tengu tool
+/// turn`, scripted: `[xmarket]` + `[risk]` + `[paper]` load for the private
+/// `xm_gemma` agent, `risk_status` opens a new account in the leg's
+/// `TENGU_HOME`, `paper_positions` reads it; both rows reach the model.
 #[test]
 fn offline_local_xm() {
     let ws = workspace();
@@ -820,21 +952,52 @@ fn offline_local_xm() {
         &ws,
         vec![
             tool_call_reply("c1", "risk_status", &json!({})),
+            tool_call_reply("c2", "paper_positions", &json!({})),
             text_reply(&format!("matrix equity={EQUITY}")),
         ],
     );
-    assert_leg(MOCK, Set::Xm, &leg, &ws);
-    assert_eq!(bodies.len(), 2, "{}", leg.context());
-    let results = tool_messages(&bodies[1]);
+    assert_eq!(
+        (leg.code, leg.ipc["status"].as_str()),
+        (Some(0), Some("ok")),
+        "{}",
+        leg.context()
+    );
+    let ran: Vec<(String, bool)> = ["risk_status", "paper_positions"]
+        .iter()
+        .map(|t| (t.to_string(), true))
+        .collect();
+    assert_eq!(leg.runs(), ran, "{}", leg.context());
+    assert_eq!(bodies.len(), 3, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "hl_ctx",
+            "paper_close",
+            "paper_order",
+            "paper_positions",
+            "risk_status"
+        ],
+        "the xm agent's tools, no compress_and_store on the chat path"
+    );
+    let results = tool_messages(&bodies[2]);
     assert!(
         results[0].contains(&format!("risk account=matrix halt=none equity={EQUITY}")),
         "{results:?}"
     );
+    assert!(
+        results[1].contains("paper_positions account=matrix open=0"),
+        "{results:?}"
+    );
+    let ledger = ws.home.join("state").join(XM_STATE).join("ledger.db");
+    assert!(ledger.exists(), "no {}", ledger.display());
 }
 
-/// The three fixtures share every section but `[agents.*]`, every agent
-/// holds all three tool sets, and each fixture loads in tengu: its agents
-/// run `risk_status` in-process (`tengu tool call`) — no model involved.
+/// The three fixtures share every section but `[agents.*]`; each routable
+/// agent holds the workspace + Hyperliquid sets, each private `xm_*` agent
+/// the xm set; each fixture loads in tengu: its `xm_*` agents run
+/// `risk_status` in-process (`tengu tool call`) — no model involved.
 #[test]
 fn fixtures_load_and_agree() {
     let mut shared: Option<toml::Table> = None;
@@ -849,8 +1012,21 @@ fn fixtures_load_and_agree() {
                 .iter()
                 .filter_map(|t| t.as_str())
                 .collect();
-            let all: Vec<&str> = Set::ALL.iter().flat_map(|s| s.tools()).copied().collect();
+            // Routable agents: the run-agent sets; `xm_*`: the exec set,
+            // without a description (the exec-tool load rule).
+            let (sets, routable): (&[Set], bool) = if name.starts_with("xm_") {
+                (&[Set::Xm], false)
+            } else {
+                (&[Set::Workspace, Set::Hyperliquid], true)
+            };
+            let all: Vec<&str> = sets.iter().flat_map(|s| s.tools()).copied().collect();
             assert_eq!(tools, all, "{}: agents.{name}.tools", target.fixture);
+            assert_eq!(
+                agent.get("description").is_some(),
+                routable,
+                "{}: agents.{name}.description",
+                target.fixture
+            );
         }
         match &shared {
             None => shared = Some(table),
@@ -868,7 +1044,7 @@ fn fixtures_load_and_agree() {
                 "tool",
                 "call",
                 "--agent",
-                target.agent,
+                target.xm_agent,
                 "--tool",
                 "risk_status",
             ])
@@ -891,7 +1067,7 @@ fn fixtures_load_and_agree() {
                     .is_some_and(|t| t.contains(&format!("equity={EQUITY}"))),
             "{} as {}: {stdout}\n{}",
             target.fixture,
-            target.agent,
+            target.xm_agent,
             String::from_utf8_lossy(&out.stderr)
         );
     }

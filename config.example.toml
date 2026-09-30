@@ -291,6 +291,32 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # docs/xmarket-risk-paper-2026-09-30.md.
 # [default_scopes.risk_status]
 # fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
+#
+# Exec tools paper_order / paper_close (opt-in; the [risk] gate runs inside
+# the tool: gate + fill + ledger write in one transaction) — only on a
+# private agent: no `description`, not `default`, no webhook `agent`
+# (config load refuses otherwise; the tools check the caller again).
+# paper_positions (not an exec tool) reads the account at fresh marks.
+# Rows paper_fill/1, paper_close/1, paper_positions/1 —
+# docs/xmarket-risk-paper-2026-09-30.md § Exec tools.
+# [agents.xm_exec]                          # a decision loop's / feed's agent
+# engine = "openrouter"
+# model = "google/gemini-2.5-flash-lite"
+# workspace = "~/xmarket-workspace"
+# tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status"]
+#
+# [default_scopes.paper_order]              # the live book after the latency
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.paper_close]
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.paper_positions]
+# fs_roots = ["~/xmarket-workspace"]
 
 # --- Request budgets (src/config/rate_limits.rs) ---
 # One token bucket per name, shared by every feed and tool of this process

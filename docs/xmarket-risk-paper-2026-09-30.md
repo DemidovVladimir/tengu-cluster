@@ -1,6 +1,6 @@
 # xmarket risk + paper — operator reference (2026-09-30)
 
-The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Extended by `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`.
+The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Extended by `risk-audit-verdicts`, `x-exit-rules`.
 
 ## Load rules (`Config::load`, any violation fails it)
 
@@ -17,7 +17,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 |---|---|---|
 | Config | `[risk]` + `[paper]`, the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
 | Agent | the caller is private again at call time (a planner step's `compose.tools` could hand any tool to a routable agent) | `exec_agent_not_private` |
-| Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–128 chars, no whitespace; never random | `no_client_order_id` · `invalid_client_order_id` |
+| Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–256 chars, no whitespace; never random | `no_client_order_id` · `invalid_client_order_id` |
 | Replay | an order stored under the key ⇒ its `paper_fill/1` row (`replayed`): no latency, no book read, nothing written | — |
 | Rows (never fetched) | `mkt_ctx/1` of the open positions + the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first) |
 | Funding | every hour the open positions owe, at a fresh `mkt_ctx/1` rate + oracle, before the order | — |
@@ -26,6 +26,27 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: value at marks (day roll), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only | — |
 
 Underlying: the position's; none yet ⇒ the instrument id itself (asset exposure nets per instrument until the catalog, M1). A reduce-only close with no book after the latency is allowed degraded but rejected `stale_book` by the fill.
+
+| Call-id source (the key without a `client_order_id` arg) | Unique across | State |
+|---|---|---|
+| decision loop `{loop}:{session}:{t}` · feed `feed:<name>:<slot>:<i>` | events and restarts · slots (a retried slot replays, never doubles) | ok |
+| bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>` | CLI sessions and processes | ok |
+| in-process chat (`@<agent>`, `tengu tool turn` on OpenRouter / local): the model's own tool-call id | only as far as the provider makes it — a reused id replays an older order's fill instead of placing the new one | **open** (operator 2026-09-30, for `x-engine-parity-audit` / `risk-docs`). Mitigation: namespace in-process call ids with the flow / session id in the chat tool loop, or require an explicit `client_order_id` for chat-originated exec calls |
+
+## Exec tools (`risk-paper-tools`, `src/adapters/outbound/tools/xm/paper.rs`)
+
+| Tool | Args (* required) | Row |
+|---|---|---|
+| `paper_order` | `instrument`* (full id), `side`* buy / sell, `notional_usd`*, `kind`* market / limit, `limit_px` (limit only), `tif` ioc, `reduce_only`, `max_slippage_bps`*, `strategy` (§21 type), `hedge_instrument`, `opportunity` (row key), `client_order_id`, `exit_at_ms` (position deadline for the exit rules) | `paper_fill/1:<account>:<client_order_id>` |
+| `paper_close` | `instrument` or `all = true`; `max_slippage_bps`*; `client_order_id` — reduce-only market IOC of the whole position, same gate | `paper_fill/1` · all: `paper_close/1:<account>:<client_order_id>` (legs `<client_order_id>:<instrument>`, each replayed by its own id) |
+| `paper_positions` (not an exec tool) | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): funding owed booked first (every due hour at the fresh `mkt_ctx/1` rate + oracle — past hours at the current rate); marks fresh or omitted, never 0; `exit_at_ms` per position |
+
+| Setup | Value |
+|---|---|
+| Agent | a private block: no `description`, not `default`, no webhook `agent`; `tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status"]` |
+| Scopes | `fs_roots` = the workspace (store); `paper_order` / `paper_close` also `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` |
+| Reached by | decision loops and feeds (their agent), `@<agent>` chat, `tengu tool call` / `tool turn` — never the planner, a `run-agent` step or a webhook |
+| Engines | all three (convention 20): conformance cases for each tool; live legs `openrouter_*_xm`, `claude_code_xm` run the set through `tengu tool turn` on the fixtures' private `xm_*` agents |
 
 ## `paper_fill/1:<account>:<client_order_id>` (TTL 0: recorded, never cached)
 

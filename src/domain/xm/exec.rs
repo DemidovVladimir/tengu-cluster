@@ -1,7 +1,8 @@
 //! Exec-tool orders (`risk-gate-enforcement`): the pure parts of
 //! `adapters/outbound/tools/xm/exec_common.rs::run_exec` — the idempotency
 //! key, the venue facts the fill engine needs from the market rows, and the
-//! typed result `paper_fill/1:<account>:<client_order_id>`. No IO; the gate
+//! typed results `paper_fill/1:<account>:<client_order_id>` and
+//! `paper_close/1:<account>:<client_order_id>`. No IO; the gate
 //! is `risk.rs`, the fill `paper.rs`, the ledger closure
 //! `application/paper.rs::decide`.
 //!
@@ -12,13 +13,11 @@
 //! | Venue facts | `mkt_instrument/1:<id>` (any age: static facts): a Hyperliquid perp, `sz_decimals`, the fee = the `[paper]` fee basis × HIP-3 deployer scale × growth mode on a USDC-quoted market (`hl_ctx`'s `taker_fee_bps` rule, `domain::hl::paper_fees`); `at_oi_cap` from the `mkt_ctx/1` row when there is one, else the instrument row's (unknown ⇒ opening refused) |
 //! | Market state of the fill | the `mkt_ctx/1` row: not listed ⇒ `delisted`; else `open` (no book ⇒ the book decides); no row ⇒ the instrument row's listing |
 //! | `paper_fill/1` status | `ok` filled · `partial` partial fill · `error` denied by the gate or rejected by the venue (its reason in `errors`) |
+//! | `paper_close/1` (`paper_close` with `all = true`) | one leg per open position, each also its own `paper_fill/1`; `ok` every leg filled (or nothing open) · `partial` some · `error` none |
 //!
 //! Line 1 of the row: status, side, the full instrument id, the fill, the
 //! verdict and the full `client_order_id` (dropped from the headline, never
 //! cut, when the line would pass 200 chars — the key keeps it).
-
-// Callers land with `risk-paper-tools` (the exec tools run `run_exec`).
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,8 +34,9 @@ use crate::domain::xm::paper::{FillResult, FillStatus, MarketStatus, VenueRules}
 use crate::domain::xm::risk::{Check, HaltReason, OrderClass, RiskVerdict};
 
 /// Longest `client_order_id` an exec tool takes (bridge ids are
-/// `mcp:<32 hex>:<n>`, loop ids `<loop>:<session>:<t>`).
-pub(crate) const MAX_CLIENT_ORDER_ID: usize = 128;
+/// `mcp:<32 hex>:<n>`, loop ids `<loop>:<session>:<t>`, a `paper_close`
+/// leg `<base>:<instrument>`).
+pub(crate) const MAX_CLIENT_ORDER_ID: usize = 256;
 
 /// Why `id` cannot key an order; `None` when it can.
 pub(crate) fn client_order_id_error(id: &str) -> Option<String> {
@@ -334,6 +334,109 @@ impl Observed for PaperFillRow {
     }
 }
 
+/// One order of a `paper_close` with `all = true`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CloseLeg {
+    pub instrument: String,
+    pub client_order_id: String,
+    /// `filled` · `partial` · `rejected` · `denied`, or `error` when the
+    /// order was not placed (the message in `error`).
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filled_qty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avg_px: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// `paper_close/1:<account>:<client_order_id>` — `paper_close` with `all =
+/// true`: one reduce-only order per open position (each also its own
+/// `paper_fill/1` row). TTL 0.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PaperCloseAll {
+    pub account: String,
+    /// The base id; each leg's is `<base>:<instrument>`.
+    pub client_order_id: String,
+    pub legs: Vec<CloseLeg>,
+    pub ts_ms: i64,
+}
+
+impl PaperCloseAll {
+    fn count(&self, status: &str) -> usize {
+        self.legs.iter().filter(|l| l.status == status).count()
+    }
+}
+
+impl Observed for PaperCloseAll {
+    const SCHEMA: &'static str = "paper_close/1";
+
+    fn subject(&self) -> String {
+        format!("{}:{}", self.account, self.client_order_id)
+    }
+
+    fn headline(&self) -> String {
+        let mut h = format!(
+            "paper_close all account={} positions={} filled={} partial={} rejected={} denied={} errors={}",
+            self.account,
+            self.legs.len(),
+            self.count("filled"),
+            self.count("partial"),
+            self.count("rejected"),
+            self.count("denied"),
+            self.count("error"),
+        );
+        let with_id = format!("{h} coid={}", self.client_order_id);
+        if with_id.chars().count() <= MAX_LINE1_CHARS {
+            h = with_id;
+        }
+        h
+    }
+
+    fn features(&self) -> Features {
+        let mut f = Features::new();
+        set_int(&mut f, "positions", Some(self.legs.len() as i64));
+        for s in ["filled", "partial", "rejected", "denied", "error"] {
+            set_int(&mut f, s, Some(self.count(s) as i64));
+        }
+        f
+    }
+
+    /// `ok` when every position closed; `partial` when some did; `error`
+    /// when none did (nothing open is `ok`).
+    fn status(&self) -> ObsStatus {
+        let closed = self.count("filled");
+        if closed == self.legs.len() {
+            ObsStatus::Ok
+        } else if closed + self.count("partial") > 0 {
+            ObsStatus::Partial
+        } else {
+            ObsStatus::Error
+        }
+    }
+
+    fn errors(&self) -> Vec<ReadError> {
+        self.legs
+            .iter()
+            .filter(|l| l.status != "filled")
+            .map(|l| {
+                let why = l
+                    .error
+                    .clone()
+                    .or_else(|| l.rule.clone())
+                    .unwrap_or_default();
+                ReadError::new(
+                    format!("close:{}", l.instrument),
+                    ErrorClass::NotApplicable,
+                    format!("{} {why}", l.status),
+                )
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,10 +469,10 @@ mod tests {
             client_order_id_error("xm_entry:0001318605-26-000123:3"),
             None
         );
-        for bad in ["", "a b", "tab\tid", &"x".repeat(129)] {
+        for bad in ["", "a b", "tab\tid", &"x".repeat(257)] {
             assert!(client_order_id_error(bad).is_some(), "{bad:?}");
         }
-        assert_eq!(client_order_id_error(&"x".repeat(128)), None);
+        assert_eq!(client_order_id_error(&"x".repeat(256)), None);
     }
 
     /// `xyz:TSLA` tier 0: 4.5 × 2 (scale 1) × 0.1 (growth mode) = 0.9 bps —
@@ -532,5 +635,33 @@ mod tests {
         assert!(h.chars().count() <= MAX_LINE1_CHARS, "{h}");
         assert!(!h.contains("coid="), "{h}");
         assert!(h.contains(TSLA));
+    }
+
+    #[test]
+    fn close_all_counts_its_legs() {
+        let leg = |i: &str, s: &str| CloseLeg {
+            instrument: i.into(),
+            client_order_id: format!("base:{i}"),
+            status: s.into(),
+            rule: (s == "denied").then(|| "halted".to_string()),
+            filled_qty: None,
+            avg_px: None,
+            error: None,
+        };
+        let mut all = PaperCloseAll {
+            account: "xmarket".into(),
+            client_order_id: "base".into(),
+            legs: vec![leg(TSLA, "filled"), leg("hyperliquid:xyz:NVDA", "denied")],
+            ts_ms: 1,
+        };
+        let o = Observation::of("paper_close", &all, 1, 0, ObsSource::Live);
+        assert_eq!(o.key, "paper_close/1:xmarket:base");
+        assert_eq!(o.status, ObsStatus::Partial);
+        assert!(o.headline.starts_with(
+            "paper_close all account=xmarket positions=2 filled=1 partial=0 rejected=0 denied=1"
+        ));
+        assert_eq!(o.errors[0].field, "close:hyperliquid:xyz:NVDA");
+        all.legs.clear();
+        assert_eq!(all.status(), ObsStatus::Ok, "nothing open");
     }
 }

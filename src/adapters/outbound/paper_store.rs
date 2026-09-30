@@ -19,10 +19,6 @@
 //! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id |
 //! | `risk_state` | account | `domain::xm::risk_state::RiskState`: halt reason + since, the UTC day + its starting equity (no row = the default) |
 
-// `place` / `accrue_funding` consumers land in wave W1 (`risk-gate-enforcement`,
-// `risk-paper-tools`).
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

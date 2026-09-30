@@ -163,8 +163,10 @@ server starts even without these — tool calls just error or degrade.
 | `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` (`mcp:<nonce>:<id>`) |
 | `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`; `tool_use` → `tool_result` pairs become `StreamEvent::ToolRan` |
 | `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]`, runs tools as the configured agent; two bridge processes give the same JSON-RPC id two call ids (`mcp:<nonce>:<id>`) |
-| `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20) |
-| `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs the workspace, Hyperliquid and `risk_status` tool sets through a real bridge — workspace grant under `run-agent`, a registered secret back as `[REDACTED]` (`docs/engine-backends.md` § Engine matrix) |
+| `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20); two bridge sessions on one sandbox place two paper orders with the same JSON-RPC id (`two_bridge_sessions_place_two_orders`) |
+| `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs the workspace and Hyperliquid sets through `run-agent` + a real bridge (workspace grant, a registered secret back as `[REDACTED]`) and the xm set — `hl_ctx`, `paper_order`, `paper_positions`, `paper_close`, `risk_status` — through `tengu tool turn` on the private `xm_claude` agent, its exec tools through the real bridge (`docs/engine-backends.md` § Engine matrix) |
+| `tengu tool call --agent <a> (--tool <t> --args '<json>' [--call-id <id>] \| --batch)` (hidden) | in-process half of the conformance harness: the executor a `run-agent` child or a decision loop builds (`build_subprocess_tool_executor` + `SanitizedToolExecutor`); call ids mapped like the bridge's (`mcp:<process nonce>:<id>`); prints `{text, observation, is_error}` per call |
+| `tengu tool turn --agent <a> --goal <text>` (hidden) | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path, so a private agent (no `description`, the only kind that may hold exec tools) runs too; its configured scopes as they are (no workspace grant); `claude_code` tools through the real bridge (`TENGU_BRIDGE_AGENT` = that agent); prints `{status, output, tools, metrics}` (the `run-agent` IPC fields). The engine matrix's xm legs (`src/adapters/inbound/cli/tool.rs`) |
 
 Manual test with stdin:
 ```bash
@@ -173,7 +175,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ### Conformance harness (`x-bridge-conformance-test`)
 
-`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_AGENT_IPC=1`). 48 cases on 8 threads, < 10 s.
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_AGENT_IPC=1`). 52 cases on 8 threads, < 10 s.
 
 | Must match (both sides normalised) | How |
 |---|---|
@@ -185,10 +187,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 | Fixture | Rule |
 |---|---|
 | Network | `[egress] network = "open"`, `allow_hosts = ["127.0.0.1"]`: hard-coded upstream hosts are refused (deterministic error), never reached |
-| Upstreams | mock routes: method + path + substrings → inline JSON, a `tests/fixtures/…` file, or `getMultipleAccounts` built from captured accounts; base-URL overrides via `.scoped("SOLANA_RPC_URL")` / `.scoped("HL_API_URL")` (scope with the workspace, `127.0.0.1`, the env var → the mock) |
+| Upstreams | mock routes: method + path + substrings → inline JSON, a `tests/fixtures/…` file, `getMultipleAccounts` built from captured accounts, or an `l2Book` capture stamped now (`.book(..)`: a live book the paper gate accepts); base-URL overrides via `.scoped("SOLANA_RPC_URL")` / `.scoped("HL_API_URL")` (scope with the workspace, `127.0.0.1`, the env var → the mock) |
+| Store rows | `.row(..)` seeds `<ws>/.tengu/observations.db` stamped now (the opportunity row a paper entry names) |
 | Secrets | `TENGU_SECRETS_LOADED` names a test secret on both sides; it must come back `[REDACTED]` |
 | Result size | cases stay under the bridge's cap (`TENGU_BRIDGE_MAX_RESULT_CHARS`, 50 000): only the bridge truncates, the in-process executor does not (engines cap later) |
-| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), `next_*_s` countdowns, ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids — table in the test's module doc |
+| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), `next_*_s` countdowns, ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids, the call-id nonce `mcp:<32 hex>:` — table in the test's module doc |
 | Debug | `TENGU_CONFORMANCE_VERBOSE=1 cargo test --test bridge_conformance -- --nocapture` prints each case's text, files and requests |
 
 Add a case — one row in `cases()`, e.g. a Hyperliquid read (`info(<type>)` = `POST /info` with that body `type`; `hl_xyz` adds the xyz ctx, at-cap and perp-meta replies):

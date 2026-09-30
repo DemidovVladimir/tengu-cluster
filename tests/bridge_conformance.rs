@@ -10,6 +10,7 @@
 //! | Per step: same `is_error`, same normalised text; the case's expected outcome | `bridge_matches_in_process` |
 //! | Per case: same files left under the workspace and `TENGU_HOME` — SQLite stores as sorted table rows (`observations` without `observed_at_ms`), text as content | same |
 //! | Per case: same upstream requests to the mock (sorted, normalised) | same |
+//! | Two bridge processes on one sandbox, the same JSON-RPC ids: two orders, never a replay | `two_bridge_sessions_place_two_orders` |
 //!
 //! | Side | Process (cwd = its workspace) | Env (after `env_clear`) |
 //! |---|---|---|
@@ -23,9 +24,12 @@
 //! `Mock`: a route matches method + path + substrings of target and body and
 //! answers inline JSON, a fixture file (`tests/fixtures/…`) or a
 //! `getMultipleAccounts` reply built per request from captured accounts
-//! (`Reply::Gma`). Tools with a base-URL override reach it through
-//! `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`: `POST /info` routes
-//! by body `type`, captured replies in `tests/fixtures/hyperliquid/`).
+//! (`Reply::Gma`), or an `l2Book` capture stamped now (`Reply::Book`: a
+//! live book the paper gate accepts). Tools with a base-URL override reach
+//! it through `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`: `POST /info`
+//! routes by body `type`, captured replies in `tests/fixtures/hyperliquid/`).
+//! `.row(..)` seeds the workspace observation store (the opportunity row a
+//! paper entry names).
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -40,6 +44,7 @@
 //! | history day files `YYYYMMDD.db` | `<DAY>.db` |
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
 //! | JSON-RPC `"id":<n>` (request bodies) | `"id":<N>` |
+//! | call-id nonce `mcp:<32 hex>:` (bridge and `tengu tool call`: one per process) | `mcp:<NONCE>:` |
 //!
 //! Add a case: one `case("<tool>", json!({..}))` row in `cases()` plus the
 //! TOML its scope needs, `.route(..)` replies and `.ok("…")` / `.err("…")`
@@ -136,6 +141,8 @@ struct Case {
     env: Vec<(String, String)>,
     /// Workspace files; `{secret}` expanded.
     files: Vec<(String, String)>,
+    /// Observation rows seeded into the workspace store, stamped now.
+    rows: Vec<Value>,
     routes: Vec<Route>,
     /// `[[mcp_servers]]` JSON handed to the bridge (`TENGU_BRIDGE_MCP_SERVERS`).
     mcp_servers: Option<Value>,
@@ -166,6 +173,7 @@ fn case(tool: &str, args: Value) -> Case {
         scope_env: None,
         env: Vec::new(),
         files: Vec::new(),
+        rows: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
         gated: false,
@@ -176,6 +184,12 @@ fn case(tool: &str, args: Value) -> Case {
 impl Case {
     fn named(mut self, variant: &str) -> Self {
         self.name = format!("{}:{variant}", self.tool);
+        self
+    }
+    /// The case covers `tool` (a later step) — named `<tool>`.
+    fn retool(mut self, tool: &str) -> Self {
+        self.tool = tool.to_string();
+        self.name = tool.to_string();
         self
     }
     fn last(&mut self) -> &mut Step {
@@ -231,6 +245,12 @@ impl Case {
     }
     fn file(mut self, path: &str, content: &str) -> Self {
         self.files.push((path.to_string(), content.to_string()));
+        self
+    }
+    /// A row in `<ws>/.tengu/observations.db` before the first step
+    /// (`observed_at_ms` = now).
+    fn row(mut self, observation: Value) -> Self {
+        self.rows.push(observation);
         self
     }
     fn route(mut self, r: Route) -> Self {
@@ -346,7 +366,7 @@ fn hl_xyz(c: Case) -> Case {
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
 /// ledger lands in `<TENGU_HOME>/state/conf/ledger.db`; the kill-switch file
 /// sits outside the workspace (absent); Privy signing off (required with
-/// `[risk]`).
+/// `[risk]`); a 50 ms paper latency without jitter (both sides alike).
 const XM_RISK_TOML: &str = r#"
 [xmarket]
 state = "conf"
@@ -385,8 +405,8 @@ quote = 20000
 
 [paper]
 initial_cash_usd = 100
-latency_ms = 250
-latency_jitter_ms = 100
+latency_ms = 50
+latency_jitter_ms = 0
 fee_tier = 0
 staking_discount_pct = 0
 order_types = ["market", "ioc"]
@@ -395,6 +415,40 @@ order_types = ["market", "ioc"]
 
 [default_scopes.sign_message]
 "#;
+
+/// The opportunity row a paper entry names (`min_edge`): 25 bps after costs.
+const OPP_KEY: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
+
+fn opportunity_row() -> Value {
+    json!({
+        "key": OPP_KEY, "schema": "xm_compare/1", "tool": "xm_compare",
+        "observed_at_ms": 0, "ttl_ms": 600_000, "source": "live", "status": "ok",
+        "headline": "compare hyperliquid:xyz:TSLA edge_after_costs_bps=25",
+        "features": {"edge_after_costs_bps": 25.0}, "data": null
+    })
+}
+
+/// A $25 market buy of `xyz:TSLA` naming the opportunity row.
+fn paper_buy() -> Value {
+    json!({"instrument": "hyperliquid:xyz:TSLA", "side": "buy", "notional_usd": 25,
+           "kind": "market", "max_slippage_bps": 30, "strategy": "overreaction",
+           "opportunity": OPP_KEY})
+}
+
+/// A paper case: `hl_ctx` first (the `mkt_ctx/1` + `mkt_instrument/1`
+/// rows the gate and the fill read), the $100 budget, the live book (its
+/// `time` = now) on the mock, the opportunity row seeded.
+fn paper(c: Case) -> Case {
+    hl_xyz(c.before("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
+        .toml(XM_RISK_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("l2Book")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .book("hyperliquid/l2Book_xyz_TSLA.json"),
+        )
+        .row(opportunity_row())
+}
 
 /// A skill in the project tier (`<cwd>/skills/demo`).
 const DEMO_SKILL: &str = "---\nname: demo\ndescription: Conformance demo skill.\neditable_by_learner: true\n---\n\n# demo\n\nBody.\n";
@@ -679,6 +733,29 @@ fn cases() -> Vec<Case> {
         case("risk_status", json!({}))
             .named("no_risk")
             .err("risk_config_missing"),
+        // ── xmarket exec tools: the gate inside the tool, both sides alike ──
+        // Allowed: $25 → 0.071 at the ask 347.97 after the latency.
+        paper(case("paper_order", paper_buy()))
+            .ok("paper_fill filled buy hyperliquid:xyz:TSLA qty=0.071"),
+        // No opportunity row named: one verdict row, no order.
+        paper(case("paper_order", {
+            let mut a = paper_buy();
+            a.as_object_mut().unwrap().remove("opportunity");
+            a
+        }))
+        .named("denied")
+        .ok("paper_fill denied buy hyperliquid:xyz:TSLA notional=25.00 risk=deny rule=missing:edge_after_costs_bps"),
+        paper(case("paper_order", paper_buy()))
+            .then(
+                "paper_close",
+                json!({"instrument": "hyperliquid:xyz:TSLA", "max_slippage_bps": 50}),
+            )
+            .ok("paper_fill filled sell hyperliquid:xyz:TSLA qty=0.071")
+            .retool("paper_close"),
+        paper(case("paper_order", paper_buy()))
+            .then("paper_positions", json!({}))
+            .ok("paper_positions account=conf open=1")
+            .retool("paper_positions"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -719,6 +796,8 @@ enum Reply {
     Json(String),
     /// A file under `tests/fixtures/`.
     File(&'static str),
+    /// An HL `l2Book` fixture with its `time` set to now: a live book.
+    Book(&'static str),
     /// `getMultipleAccounts` from captured accounts, in the requested order
     /// (`null` for an unknown key), at the first source's slot.
     Gma(Vec<GmaSource>),
@@ -771,6 +850,10 @@ impl Route {
     }
     fn file(mut self, path: &'static str) -> Self {
         self.reply = Reply::File(path);
+        self
+    }
+    fn book(mut self, path: &'static str) -> Self {
+        self.reply = Reply::Book(path);
         self
     }
     fn gma(mut self, sources: &[GmaSource]) -> Self {
@@ -858,6 +941,48 @@ fn serve(stream: TcpStream, routes: &[Route], log: &Mutex<Vec<String>>) {
     let _ = out.flush();
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// The workspace observation store's table (`outbound/observations.rs`)
+/// with `rows`, each stamped now.
+fn seed_rows(ws: &Path, rows: &[Value]) {
+    if rows.is_empty() {
+        return;
+    }
+    std::fs::create_dir_all(ws.join(".tengu")).unwrap();
+    let conn = rusqlite::Connection::open(ws.join(".tengu/observations.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS observations (
+           key TEXT PRIMARY KEY, schema TEXT NOT NULL, observed_at_ms INTEGER NOT NULL,
+           slot INTEGER, ttl_ms INTEGER NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS observations_schema ON observations(schema, observed_at_ms);",
+    )
+    .unwrap();
+    let now = now_ms();
+    for row in rows {
+        let mut row = row.clone();
+        row["observed_at_ms"] = json!(now);
+        conn.execute(
+            "INSERT INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6)",
+            rusqlite::params![
+                row["key"].as_str().unwrap(),
+                row["schema"].as_str().unwrap(),
+                now,
+                row["ttl_ms"].as_i64().unwrap(),
+                row["status"].as_str().unwrap(),
+                row.to_string()
+            ],
+        )
+        .unwrap();
+    }
+}
+
 fn fixture(path: &str) -> String {
     std::fs::read_to_string(Path::new(FIXTURES).join(path))
         .unwrap_or_else(|e| panic!("fixture {path}: {e}"))
@@ -867,6 +992,11 @@ fn render_reply(reply: &Reply, request_body: &str) -> String {
     match reply {
         Reply::Json(s) => s.clone(),
         Reply::File(p) => fixture(p),
+        Reply::Book(p) => {
+            let mut book: Value = serde_json::from_str(&fixture(p)).unwrap();
+            book["time"] = json!(now_ms());
+            book.to_string()
+        }
         Reply::Gma(sources) => {
             let mut table: HashMap<String, Value> = HashMap::new();
             let mut slot = None;
@@ -926,6 +1056,7 @@ impl Side {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, content.replace("{secret}", SECRET)).unwrap();
         }
+        seed_rows(&ws, &case.rows);
         let tools: Vec<String> = case
             .agent_tools()
             .iter()
@@ -1152,6 +1283,7 @@ fn normalize(s: &str, roots: &[String]) -> String {
             ),
             (r"\b20\d{6}\.db\b", "<DAY>.db"),
             (r#""id":\d+"#, r#""id":<N>"#),
+            (r"\bmcp:[0-9a-f]{32}:", "mcp:<NONCE>:"),
         ]
         .into_iter()
         .map(|(re, to)| (Regex::new(re).unwrap(), to))
@@ -1454,4 +1586,37 @@ fn bridge_matches_in_process() {
         failures.len(),
         failures.join("\n\n")
     );
+}
+
+/// Two Claude CLI sessions = two bridge processes that number their
+/// requests alike: `paper_order` with JSON-RPC id 3 in both lands two
+/// orders (the call-id nonce), never a replay of the first.
+#[test]
+fn two_bridge_sessions_place_two_orders() {
+    let case = paper(case("paper_order", paper_buy()));
+    let mock = Mock::start(case.routes.clone());
+    let side = Side::new(&case, &mock.base);
+    let first = run_bridge(&side, &case, &mock.base).expect("first bridge");
+    let second = run_bridge(&side, &case, &mock.base).expect("second bridge");
+    for (i, a) in [&first, &second].into_iter().enumerate() {
+        let text = &a.last().unwrap().text;
+        assert!(
+            text.starts_with("paper_fill filled buy hyperliquid:xyz:TSLA")
+                && text.contains("replayed=false"),
+            "bridge {i}: {text}"
+        );
+    }
+    let ledger = side.root.join("home/.tengu/state/conf/ledger.db");
+    let conn = rusqlite::Connection::open(&ledger).unwrap();
+    let ids: Vec<String> = conn
+        .prepare("SELECT client_order_id FROM orders ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let shape = regex::Regex::new(r"^mcp:[0-9a-f]{32}:3$").unwrap();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert!(ids.iter().all(|i| shape.is_match(i)), "{ids:?}");
+    assert_ne!(ids[0], ids[1], "one JSON-RPC id, two sessions, two keys");
 }

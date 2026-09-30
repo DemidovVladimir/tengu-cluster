@@ -27,9 +27,6 @@
 //! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; no book ⇒ refused `stale_book` (a degraded exit may be allowed without one) |
 //! | Trips | the verdict's halts recorded (`RiskState::trip`) |
 
-// Callers land with `risk-paper-tools` (the exec tools run `run_exec`).
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use crate::config::risk::{OrderType, PaperConfig};

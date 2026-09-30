@@ -217,14 +217,11 @@ pub(crate) async fn fresh_book(
 /// 16): [`fresh_book`] per read, on the calling tool's scope and HL budget.
 /// A client that could not be built (a bad `HL_API_URL`) fails every read
 /// with that error — the gate then denies `missing:book`.
-// Constructed by the exec tools (`risk-paper-tools`).
-#[allow(dead_code)]
 pub(crate) struct HlBookSource {
     pub hl: std::result::Result<HlInfo, ReadError>,
     pub store: Option<Arc<dyn ObservationStore>>,
 }
 
-#[allow(dead_code)]
 impl HlBookSource {
     /// The source for one tool call (`HlInfo::from_ctx`).
     pub(crate) fn for_call(ctx: &ToolCtx<'_>, store: Option<Arc<dyn ObservationStore>>) -> Self {

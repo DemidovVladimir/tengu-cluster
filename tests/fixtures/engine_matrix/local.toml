@@ -8,6 +8,11 @@
 #   TENGU_MATRIX_LOCAL_BASE_URL=http://<windows-pc>:11434/v1 \
 #     tengu -c tests/fixtures/engine_matrix/local.toml doctor --engines
 #
+# The xm set holds exec tools (paper_order, paper_close): only a private
+# agent may hold them, and run-agent runs routable ones only, so it runs on
+# the private `xm_*` agent through `tengu tool turn -c <this file> --agent
+# xm_<name> --goal ...` (one in-process turn, the `@<agent>` chat path).
+#
 # Everything above [agents.*] is identical in the three fixtures
 # (`fixtures_load_and_agree` checks it).
 
@@ -91,14 +96,31 @@ fs_roots = ["/nonexistent/tengu-engine-matrix"]
 net_hosts = ["api.hyperliquid.xyz"]
 env_reads = ["HL_API_URL"]
 
+# The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
+# require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
+# workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
+# the workspace themselves.
 [default_scopes.risk_status]
-fs_roots = ["/nonexistent/tengu-engine-matrix"]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+
+[default_scopes.paper_positions]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+
+[default_scopes.paper_order]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.paper_close]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
 
 [agents.gemma]
 engine = "local"
 model = "gemma4:latest"
 description = "Engine-matrix fixture: local Ollama gemma4:latest."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "risk_status"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemma.limits]
@@ -109,3 +131,24 @@ request_timeout_secs = 900
 [agents.gemma.local]
 base_url = "${TENGU_MATRIX_LOCAL_BASE_URL}"
 api_key_env = ""
+
+# Private exec agent (no description): the xm set via `tengu tool turn`.
+[agents.xm_gemma]
+engine = "local"
+model = "gemma4:latest"
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+workspace = "${TENGU_MATRIX_WORKSPACE}"
+
+[agents.xm_gemma.limits]
+context_window = 16384
+max_tool_rounds = 10
+request_timeout_secs = 900
+
+[agents.xm_gemma.local]
+base_url = "${TENGU_MATRIX_LOCAL_BASE_URL}"
+api_key_env = ""
+
+[agents.xm_gemma.scopes.hl_ctx]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]

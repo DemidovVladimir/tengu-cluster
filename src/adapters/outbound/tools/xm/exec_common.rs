@@ -18,9 +18,6 @@
 //! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate, fill, write — a deny writes one verdict row | — |
 //! | 10 | row `paper_fill/1:<account>:<client_order_id>` (ttl 0: recorded, never cached) — `domain/xm/exec.rs` | — |
 
-// Callers land with `risk-paper-tools` (`paper_order`, `paper_close`).
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -58,8 +55,8 @@ pub(crate) const NO_CLIENT_ORDER_ID: &str = "no_client_order_id";
 /// Size of an exec order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ExecSize {
+    /// USD at the book mid, rounded down to the lot size.
     NotionalUsd(f64),
-    Qty(f64),
     /// The whole open position, the opposite side, reduce-only (`paper_close`).
     Close,
 }
@@ -124,7 +121,7 @@ pub(crate) async fn run_exec(
         .await?;
     if let Some(p) = ledger.stored(&account, &coid).await? {
         let ids = open_ids(&p.account);
-        let rows = MarketRows::read(store, &ids, &id, None).await;
+        let rows = MarketRows::read(store, &ids, None, None).await;
         let row = row_of(
             &p,
             &coid,
@@ -144,7 +141,7 @@ pub(crate) async fn run_exec(
     if let Some(h) = &order.hedge_instrument {
         ids.insert(h.to_string());
     }
-    let rows = MarketRows::read(store, &ids, &id, order.opportunity_key.as_deref()).await;
+    let rows = MarketRows::read(store, &ids, Some(&id), order.opportunity_key.as_deref()).await;
     let facts = venue_facts(
         rows.instrument.as_ref(),
         rows.ctx_of(&id).as_ref(),
@@ -164,7 +161,6 @@ pub(crate) async fn run_exec(
             ),
         },
         ExecSize::NotionalUsd(n) => (order.side, OrderSize::NotionalUsd(n), false),
-        ExecSize::Qty(q) => (order.side, OrderSize::Qty(q), false),
     };
     let paper_order = PaperOrder {
         client_order_id: coid.clone(),
@@ -276,7 +272,7 @@ pub(crate) async fn run_exec(
 }
 
 /// Step 2 of the module table.
-fn check_private_agent(ctx: &ToolCtx<'_>) -> Result<()> {
+pub(crate) fn check_private_agent(ctx: &ToolCtx<'_>) -> Result<()> {
     let why = match ctx.agent_config {
         None => "no calling agent is known",
         Some(a) if a.description.is_some() => {
@@ -292,7 +288,7 @@ fn check_private_agent(ctx: &ToolCtx<'_>) -> Result<()> {
 }
 
 /// Step 3 of the module table.
-fn client_order_id(arg: Option<&str>, call_id: Option<&str>) -> Result<String> {
+pub(crate) fn client_order_id(arg: Option<&str>, call_id: Option<&str>) -> Result<String> {
     let Some(id) = arg.or(call_id) else {
         bail!(
             "{NO_CLIENT_ORDER_ID}: no client_order_id argument and no call id — an order needs \
@@ -345,10 +341,12 @@ pub(crate) struct MarketRows {
 }
 
 impl MarketRows {
+    /// `mkt_ctx/1` of `ids`, the `mkt_instrument/1` of `instrument`, the
+    /// `opportunity` row — one store read.
     pub(crate) async fn read(
         store: Option<&dyn ObservationStore>,
         ids: &BTreeSet<String>,
-        instrument: &str,
+        instrument: Option<&str>,
         opportunity: Option<&str>,
     ) -> Self {
         let mut out = Self {
@@ -370,7 +368,9 @@ impl MarketRows {
             .map(|id| Observation::key_for(MarketCtx::SCHEMA, id))
             .collect();
         let mut keys = ctx_keys.clone();
-        keys.push(Observation::key_for(MarketInstrument::SCHEMA, instrument));
+        if let Some(i) = instrument {
+            keys.push(Observation::key_for(MarketInstrument::SCHEMA, i));
+        }
         if let Some(k) = opportunity {
             keys.push(k.to_string());
         }
@@ -391,11 +391,13 @@ impl MarketRows {
                 out.ctx.insert(id.clone(), row);
             }
         }
-        out.instrument = rows
-            .next()
-            .flatten()
-            .filter(|r| r.status != ObsStatus::Error)
-            .and_then(|r| r.typed::<MarketInstrument>().ok());
+        if instrument.is_some() {
+            out.instrument = rows
+                .next()
+                .flatten()
+                .filter(|r| r.status != ObsStatus::Error)
+                .and_then(|r| r.typed::<MarketInstrument>().ok());
+        }
         out.opportunity = rows.next().flatten();
         out
     }

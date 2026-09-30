@@ -166,33 +166,33 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 
 ## Engine matrix (`x-engine-matrix-smoke`)
 
-One scripted `tengu run-agent` turn per engine × model × tool set (`tests/engine_matrix.rs`, fixtures `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml`, one agent per engine × model, the set via IPC `compose`). A leg passes when every tool of the set ran without error (IPC `tools`) and its result reached the answer. The fixtures' scopes exclude the workspace, so every call also proves the `run-agent` workspace grant (the bridge's for Claude Code).
+One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`, fixtures `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml`). The workspace and Hyperliquid sets run through `tengu run-agent` on the routable agent of each engine × model (the set via IPC `compose`); their scopes exclude the workspace, so every call also proves the `run-agent` workspace grant (the bridge's for Claude Code). The xm set holds exec tools, which only a private agent may hold (no `description`) and `run-agent` never runs — it runs through the hidden `tengu tool turn` (one in-process engine turn as any agent, the `@<agent>` chat path; Claude Code through its bridge) on the private `xm_*` agent, with scopes naming the workspace. A leg passes when every tool of the set ran without error (`tools` activity) and its result reached the answer.
 
 | Tool set | Calls | Result read = |
 |---|---|---|
 | workspace | `list_directory`, `read_file` (token file), `write_file` `answer.txt`, `read_file` (a registered secret, `TENGU_SECRETS_LOADED`) | the token in the answer and in `answer.txt`; `REDACTED` in the answer, the value nowhere in stdout / stderr; Claude Code: the bridge's result logged as `[REDACTED]` |
 | hyperliquid | `hl_ctx` `{"coins": ["xyz:TSLA"]}`, `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | a number of each stored row's headline (`mkt_ctx/1`, `hl_book/1`) |
-| xm | `risk_status` — `[xmarket]` + `[risk]` + `[paper]`, a new ledger in a temp `TENGU_HOME` | equity `86.42` (the fixtures' `initial_cash_usd`) |
+| xm | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → `risk_status` — `[xmarket]` + `[risk]` + `[paper]`, a new ledger in a temp `TENGU_HOME`; paper only | the buy's `avg_px` in the answer; the ledger holds the filled buy and the filled reduce-only close, each with its call id |
 
 | Command | Runs |
 |---|---|
 | `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg; one `engine_matrix \|` line each (secs, tokens, Claude CLI cost); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL` |
-| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace + xm sets), fixture checks |
+| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace set via `run-agent`; `risk_status` + `paper_positions` via `tool turn`), fixture checks |
 | `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
 
 Results 2026-09-30 (Mac; Claude CLI 2.1.286; OpenRouter list prices):
 
-| Engine · model | workspace | hyperliquid | xm | Cost (3 legs) |
+| Engine · model | workspace | hyperliquid | xm (5 tools, `tool turn`, rerun with `risk-paper-tools`) | Cost (3 legs) |
 |---|---|---|---|---|
-| openrouter · `google/gemini-2.5-flash-lite` | ✅ 3.2 s | ✅ 3.8 s | ✅ 1.6 s | ≈ $0.001 |
-| openrouter · `anthropic/claude-haiku-4.5` | ✅ 7.0 s | ✅ 5.7 s | ✅ 4.3 s | ≈ $0.022 |
-| claude_code · `claude-haiku-4-5`, built-ins off | ✅ 17.4 s | ✅ 19.3 s | ✅ 11.2 s | subscription (CLI: $0.058 API-equivalent) |
+| openrouter · `google/gemini-2.5-flash-lite` | ✅ 4.6 s | ✅ 4.0 s | ✅ 6.1 s — 11 651 / 114 tokens | ≈ $0.002 |
+| openrouter · `anthropic/claude-haiku-4.5` | ✅ 6.0 s | ✅ 5.3 s | ✅ 11.7 s — 22 278 / 501 tokens | ≈ $0.043 |
+| claude_code · `claude-haiku-4-5`, built-ins off | ✅ 17.3 s | ✅ 19.7 s | ✅ 17.7 s | subscription (CLI: $0.077 API-equivalent) |
 | local · `gemma4:latest` | — | — | — | runs on the operator's PC (below) |
 | `tengu doctor --engines` | gemini ✅ 1.7 s · haiku ✅ 3.7 s · claude ✅ 6.6 s · local (loopback) skipped | | | |
 
 | Seen | Detail |
 |---|---|
-| gemini-2.5-flash-lite flake | 1 of 26 workspace legs: first turn 472 prompt / 366 completion tokens, no text and no tool call → `status = failed`; 25 others passed. Rerun the leg |
+| gemini-2.5-flash-lite flake | 2 of 28 workspace legs: first turn 472 prompt tokens, no text and no tool call → `status = failed`; the rerun passed. Rerun the leg |
 | Claude Code `compress_and_store` | through the bridge answers an error (known, [[mcp-bridge]] § Parity rule); the final text becomes the summary — every leg still passes |
 
 Local leg — the operator's Windows PC over the LAN:

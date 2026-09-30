@@ -8,6 +8,7 @@
 //! | `tengu tool list` | every catalog tool name, all opt-ins included (the harness's completeness source), one JSON array |
 //! | `tengu tool call --agent <a> --tool <t> [--args '<json>'] [--call-id <id>] [--sandbox <s>] [-c <file>]` | one `{"text", "observation", "is_error"}` |
 //! | `tengu tool call --agent <a> --batch …` | stdin: one `{"tool", "args", "call_id"}` per line, all through ONE executor (like a `run-agent` step or a bridge session); stdout: one result object per line |
+//! | `tengu tool turn --agent <a> --goal <text> [--sandbox <s>] [-c <file>]` | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path, so a private agent (no `description`: exec tools) runs too; its `tools`, configured scopes as they are (no workspace grant), the bridge for `claude_code`; one `{"status", "output", "tools": [{name, ok}], "metrics"}` (the `run-agent` IPC fields the engine matrix reads) |
 //!
 //! `call` builds the executor like `run-agent` and `bootstrap/decision.rs`:
 //!
@@ -70,6 +71,21 @@ pub(super) enum ToolAction {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
+    /// One engine turn as `[agents.<agent>]`; print `{status, output, tools, metrics}`.
+    Turn {
+        /// The `[agents.<name>]` block (no `description` needed).
+        #[arg(long)]
+        agent: String,
+        /// The user message of the turn.
+        #[arg(long)]
+        goal: String,
+        /// Load config from sandboxes/<name>/config.toml.
+        #[arg(long)]
+        sandbox: Option<String>,
+        /// Config file (after the subcommand; `tengu -c <file> tool …` works too).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
 }
 
 /// Entry point; `top_config` is the top-level `-c/--config`.
@@ -103,7 +119,132 @@ pub(super) async fn run_tool_command(
             println!("{}", tools.call(&tool, args, id).await);
             Ok(())
         }
+        ToolAction::Turn {
+            agent,
+            goal,
+            sandbox,
+            config,
+        } => {
+            let config = load_config(config.or(top_config), sandbox)?;
+            let out = match run_turn(&config, &agent, &goal).await {
+                Ok(v) => v,
+                Err(e) => json!({"status": "error", "error": format!("{e:#}")}),
+            };
+            println!("{out}");
+            Ok(())
+        }
     }
+}
+
+/// System prompt of `tengu tool turn`.
+const TURN_SYSTEM: &str = "You are a tool-using agent under test. Follow the user's steps \
+exactly, one tool call each, using the named tools. Do not ask questions.";
+
+/// `tengu tool turn` (module table): the agent's engine and tools in this
+/// process, one user message, the turn's text and tool runs.
+async fn run_turn(config: &Config, agent_name: &str, goal: &str) -> Result<Value> {
+    use crate::adapters::outbound::engines::build_engine;
+    use crate::application::chat::tool_loop::collect_engine_response;
+    use crate::bootstrap::tools::{build_tool_executor, compute_base_tools, subagent_config};
+    use crate::domain::message::{Message, Role};
+    use crate::ports::engine::EngineContext;
+
+    let mut agent = config
+        .agents
+        .get(agent_name)
+        .cloned()
+        .with_context(|| format!("no [agents.{agent_name}] in the config"))?;
+    agent.workspace = agent
+        .workspace
+        .as_ref()
+        .map(|p| crate::config::paths::expand_tilde(p));
+    let workspace = agent
+        .workspace
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let secrets = Arc::new(process_secret_registry(Some(&secrets_file_path(
+        &resolve_tengu_home(),
+    ))));
+    let engine =
+        build_engine(agent_name, &agent, config.claude_code.as_ref()).context("build engine")?;
+    // `tools` opts workspace tools in (`subagent_config`); an empty list =
+    // every base tool, as in-process.
+    let cfg = subagent_config(&agent);
+    let tools: Vec<crate::domain::message::ToolDef> =
+        compute_base_tools(true, config.memory.enabled, &cfg.workspace_tools)
+            .into_iter()
+            .filter(|t| agent.tools.is_empty() || agent.tools.contains(&t.name))
+            .collect();
+    let memory = if config.memory.enabled {
+        Some(
+            crate::bootstrap::memory::build_memory_manager_async(&config.memory, Some(&workspace))
+                .await,
+        )
+    } else {
+        None
+    };
+    let executor = build_tool_executor(
+        &workspace,
+        &tools,
+        &crate::application::skills::registry::SkillRegistry::new(Vec::new()),
+        &memory,
+        &secrets,
+        Arc::new(crate::adapters::outbound::noop::NoopActivity),
+        None,
+        Some(&config.memory),
+        &cfg,
+        &config.mcp_servers,
+    )
+    .context("no tool executor for this agent")?;
+    let executor = SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(&secrets));
+    let message = |role, content: String| Message {
+        role,
+        content,
+        tool_call_id: None,
+        tool_calls: None,
+    };
+    let messages = [
+        message(Role::System, TURN_SYSTEM.to_string()),
+        message(Role::User, goal.to_string()),
+    ];
+    let limits = &agent.limits;
+    let rounds = limits.max_tool_rounds.max(1);
+    let context = EngineContext {
+        workspace: Some(workspace.clone()),
+        system_prompt: Some(TURN_SYSTEM.to_string()),
+        bridge_tools: engine.manages_own_workspace().then(|| tools.clone()),
+        max_tool_rounds: Some(rounds),
+        max_mcp_result_chars: Some(limits.max_mcp_result_chars),
+        mcp_servers: Vec::new(),
+    };
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(limits.step_timeout_secs),
+        collect_engine_response(
+            engine.as_ref(),
+            &messages,
+            &tools,
+            &context,
+            Some(&executor),
+            None,
+            None,
+            None,
+            rounds,
+            limits.max_tool_result_chars,
+            limits.stream_event_timeout_secs,
+            limits.compact_result_limit,
+        ),
+    )
+    .await
+    .with_context(|| format!("no answer within {}s", limits.step_timeout_secs))??;
+    Ok(json!({
+        "status": "ok",
+        "output": resp.text,
+        "tools": resp.tool_runs,
+        "metrics": [{
+            "prompt_tokens": resp.input_tokens_delta,
+            "completion_tokens": resp.output_tokens_delta,
+        }],
+    }))
 }
 
 /// `advertised_defs` with memory on and every `WORKSPACE_TOOLS` opt-in: the

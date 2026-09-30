@@ -6,6 +6,11 @@
 # file) and TENGU_HOME (fresh: ledger.db); OPENROUTER_API_KEY comes from the
 # env or the repo's .env.
 #
+# The xm set holds exec tools (paper_order, paper_close): only a private
+# agent may hold them, and run-agent runs routable ones only, so it runs on
+# the private `xm_*` agent through `tengu tool turn -c <this file> --agent
+# xm_<name> --goal ...` (one in-process turn, the `@<agent>` chat path).
+#
 # Everything above [agents.*] is identical in the three fixtures
 # (`fixtures_load_and_agree` checks it).
 
@@ -89,14 +94,31 @@ fs_roots = ["/nonexistent/tengu-engine-matrix"]
 net_hosts = ["api.hyperliquid.xyz"]
 env_reads = ["HL_API_URL"]
 
+# The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
+# require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
+# workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
+# the workspace themselves.
 [default_scopes.risk_status]
-fs_roots = ["/nonexistent/tengu-engine-matrix"]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+
+[default_scopes.paper_positions]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+
+[default_scopes.paper_order]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.paper_close]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
 
 [agents.gemini]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
 description = "Engine-matrix fixture: OpenRouter google/gemini-2.5-flash-lite."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "risk_status"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemini.limits]
@@ -106,8 +128,38 @@ max_tool_rounds = 10
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
 description = "Engine-matrix fixture: OpenRouter anthropic/claude-haiku-4.5."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "risk_status"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.haiku.limits]
 max_tool_rounds = 10
+
+# Private exec agent (no description): the xm set via `tengu tool turn`.
+[agents.xm_gemini]
+engine = "openrouter"
+model = "google/gemini-2.5-flash-lite"
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+workspace = "${TENGU_MATRIX_WORKSPACE}"
+
+[agents.xm_gemini.limits]
+max_tool_rounds = 10
+
+[agents.xm_gemini.scopes.hl_ctx]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+# Private exec agent (no description): the xm set via `tengu tool turn`.
+[agents.xm_haiku]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4.5"
+tools = ["hl_ctx", "paper_order", "paper_positions", "paper_close", "risk_status"]
+workspace = "${TENGU_MATRIX_WORKSPACE}"
+
+[agents.xm_haiku.limits]
+max_tool_rounds = 10
+
+[agents.xm_haiku.scopes.hl_ctx]
+fs_roots = ["${TENGU_MATRIX_WORKSPACE}"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
