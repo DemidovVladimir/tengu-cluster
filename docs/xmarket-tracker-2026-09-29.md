@@ -142,7 +142,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 
 | | Id | Item | PRD | Size | Kind |
 |---|---|---|---|---|---|
-| ☐ | `x-tool-schema-lint` | Test: every catalog tool schema stays in the subset OpenRouter's providers, local OpenAI-compatible servers and Claude accept (name `^[a-zA-Z0-9_-]{1,64}$`, object root, no top-level `$ref` / `oneOf`, bounded description length); CI fails otherwise | addendum | S | rust |
+| ✅ | `x-tool-schema-lint` | Test: every catalog tool schema stays in the subset OpenRouter's providers, local OpenAI-compatible servers and Claude accept (name `^[a-zA-Z0-9_-]{1,64}$`, object root, no top-level `$ref` / `oneOf`, bounded description length); CI fails otherwise | addendum | S | rust |
 | ✅ | `x-bridge-parity` | `tengu mcp-bridge` runs every catalog tool exactly as in-process: loads the sandbox config (`ClaudeCodeEngine` forwards `TENGU_CONFIG` + the agent name), uses that agent's `AgentConfig` (not the default `main`), the process `SecretRegistry` + `SanitizedToolExecutor`, the agent's `no_shell`, and the MCP request id as `ToolCtx.call_id` | §26 §30 §32 | M | rust |
 | ✅ | `x-claude-code-hardening` | `--strict-mcp-config` in `engines/claude_code.rs` (no user plugin MCP servers); load rule: in a `[risk]` or signing sandbox every `claude_code` agent needs `builtin_tools_profile = "none"`; replaces the Solana signer's blanket `claude_code` refusal (`src/config/solana.rs`) with that rule | §26 §28 | M | rust |
 | ☐ | `x-bridge-conformance-test` | Conformance harness: each catalog tool runs once in-process and once through a real `tengu mcp-bridge` subprocess on the same fixture config; text + store rows must match; CI fails for a catalog row without a case (convention 20) | §30 §32 | M | rust |

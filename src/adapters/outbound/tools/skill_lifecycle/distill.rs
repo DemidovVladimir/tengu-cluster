@@ -33,7 +33,7 @@ impl SkillDistillTool {
                         "name": { "type": "string" },
                         "description": { "type": "string" },
                         "body_markdown": { "type": "string" },
-                        "metrics": { "type": "array" },
+                        "metrics": { "type": "array", "items": super::metric_spec_schema() },
                         "from_message_index": { "type": "integer", "minimum": 0 },
                         "tier": { "type": "string", "enum": ["project", "workspace", "managed"] },
                         "fixture_hints": {

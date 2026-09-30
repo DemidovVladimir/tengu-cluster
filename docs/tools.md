@@ -31,8 +31,24 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (from `ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*(..)` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. `pub(crate) mod <name>;` + one `ToolEntry` in `catalog()`.
 3. Opt-in only: add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (`catalog_tests` fail otherwise).
-4. `cargo test --bin tengu catalog && cargo test --test scope_lint`.
-5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept, keep results within a local model's context window, and add its schema-lint, bridge-conformance and engine-matrix smoke cases (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`). The bridge's current parity gaps are listed in CLAUDE.md / AGENTS.md (Key gotchas).
+4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint`.
+5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add its bridge-conformance and engine-matrix smoke cases (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`). The bridge's current parity gaps are listed in CLAUDE.md / AGENTS.md (Key gotchas).
+
+## Tool schema subset
+
+`cargo test --bin tengu schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
+
+| Rule | Rejected live (2026-09-30) | Otherwise why |
+|---|---|---|
+| Name `[a-zA-Z0-9_-]`, first a letter or `_`, ≤ 64, unique per agent | `.`: OpenAI, Claude · leading digit: Gemini · duplicate: Claude, Gemini | 64 = OpenAI-style limit (Claude, Gemini: 128) |
+| Root `type: "object"` with `properties`; no top-level `oneOf` / `anyOf` / `allOf` / `not` / `enum` | non-object root: OpenAI · top-level `anyOf`: OpenAI, Claude | — |
+| No `oneOf` / `anyOf` / `allOf` / `not` / `const` / `$ref` / `$defs` at any depth | — | Gemini's schema and Ollama's typed tool structs have none; `const` = one-value `enum` |
+| Every nested schema: one `type` (string, number, integer, boolean, array, object) or an `enum`; arrays have one `items` | — | Ollama parses `type` into typed structs; element types must be declared |
+| `required` ⊆ `properties`, every level | — | a contract bug |
+| `enum`: non-empty list of strings; `format`: `date-time` on strings only | — | Gemini: string enums, formats `enum` / `date-time` only |
+| Tool description ≤ 1024 chars, field description ≤ 512 | — | OpenAI's documented limit; local context windows |
+
+Live check 2026-09-30 (probe kept out of the repo): all 38 definitions accepted by `google/gemini-2.5-flash-lite`, `anthropic/claude-haiku-4.5`, `openai/gpt-4o-mini` (OpenRouter) and parsed by Ollama 0.24; the Claude CLI serves 78-char bridged names (`mcp__tengu-tools__…`).
 
 ## Add a typed (cached) tool
 

@@ -109,6 +109,7 @@ impl ManageSkillTool {
                         },
                         "metrics": {
                             "type": "array",
+                            "items": crate::adapters::outbound::tools::skill_lifecycle::metric_spec_schema(),
                             "description": "Optional MetricSpec[] for create."
                         },
                         "old_string": {

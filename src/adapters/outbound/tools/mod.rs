@@ -28,6 +28,8 @@ pub(crate) mod crypto;
 pub(crate) mod http;
 pub(crate) mod manage_skill;
 pub(crate) mod memory;
+#[cfg(test)]
+mod schema_lint;
 pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod skill_resource;
