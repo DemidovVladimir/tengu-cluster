@@ -44,6 +44,21 @@ pub(crate) const XM_EXITS: &str = "xm_exits";
 /// call time).
 pub(crate) const XM_EXEC_TOOLS: &[&str] = &[PAPER_ORDER, PAPER_CLOSE, XM_EXITS];
 
+/// Every xmarket tool — the opt-in rows of the `hyperliquid` and `xm`
+/// plugins (`catalog_tests` keep the two equal; a new xmarket plugin joins
+/// both). An agent holding one writes or reads rows in its workspace's
+/// observation store, so it shares the sandbox's one xmarket workspace
+/// (`config/xmarket.rs`).
+pub(crate) const XM_TOOLS: &[&str] = &[
+    HL_CTX,
+    HL_BOOK,
+    RISK_STATUS,
+    PAPER_ORDER,
+    PAPER_CLOSE,
+    PAPER_POSITIONS,
+    XM_EXITS,
+];
+
 // Privy wallet tools (`adapters/outbound/tools/crypto/`) that sign; a
 // `[risk]` sandbox turns them off (`config/risk.rs`).
 pub(crate) const SIGN_AND_SEND_TRANSACTION: &str = "sign_and_send_transaction";

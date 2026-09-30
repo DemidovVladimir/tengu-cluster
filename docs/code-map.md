@@ -186,7 +186,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit |
 | `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it) |
 | `<TENGU_HOME>/logs/risk.jsonl` | `outbound/paper_store.rs` | one line per risk verdict — mirror of `ledger.db` `risk_decisions` (canonical); joins `decisions.jsonl` by `call_id` (`docs/xmarket-risk-paper-2026-09-30.md` § Audit) |
-| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (single-runner lease), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `<TENGU_HOME>/state/` without `[xmarket]` |
+| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (single-runner lease), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `catalog` / `events` / `audit` / `spend` `.db` reserved — layout + load rules in `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout; `tengu prune` never deletes it; `<TENGU_HOME>/state/` without `[xmarket]` |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
 | `<workspace>/.tengu/memory.bin`, `<workspace>/.tengu/cache.db` | memory tools / `shared_cache` | disk vector store / SQLite cache |
 | `TENGU_PLANNER_REGISTRY.md`, `TENGU_PLAN.md` (repo root) | `application/orchestrator/shared_files.rs` | planner registry / debug copy of the plan |
@@ -268,7 +268,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/solana_tx.rs` | 735 | Transaction wire format — instructions, legacy compile + serialize, legacy / v0 parse (signer slot), System / SPL / ATA / ComputeBudget ix (web3.js-golden). |
 | `src/domain/solana_write.rs` | 485 | Write results + send policy — `WriteResult` (`write/1`, never cached), `WriteStatus` → obs status, `TxReport`, `Check`, `Lease`, `PendingSend`, CU limit / price rules. |
 | `src/domain/token.rs` | 43 | Shared token-estimation helpers. |
-| `src/domain/tools.rs` | 105 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
+| `src/domain/tools.rs` | 120 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/tz.rs` | 277 | Civil time in `America/New_York` / `Europe/Paris` / UTC with hand-rolled DST rules (xmarket clocks, calendars). |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
 | `src/domain/xm/mod.rs` | 23 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
@@ -308,18 +308,18 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 |---|---:|---|
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
 | `src/config/decision_loop.rs` | 401 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, slots (static / history / observation), caps, reducers, `dry_run`, `world`, `requires`. |
-| `src/config/feeds.rs` | 721 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |
-| `src/config/hardening.rs` | 565 | Hardened sandboxes (`[solana]` signer or `[risk]`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`, no `[[mcp_servers]]`, no shell scope, the signer key / `<TENGU_HOME>/state` / kill-switch file / the config file outside every fs root and workspace; no-shell fallback. |
+| `src/config/feeds.rs` | 724 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |
+| `src/config/hardening.rs` | 582 | Hardened sandboxes (`[solana]` signer or `[risk]`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`, no `[[mcp_servers]]`, no shell scope, the signer key / `<TENGU_HOME>/state` / kill-switch file / the config file outside every fs root and workspace; no-shell fallback. |
 | `src/config/mod.rs` | 2010 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default |
 | `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
-| `src/config/risk.rs` | 1071 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required), `[risk.exits]` (take-profit / stop-loss bps, max hold) and the paper fill engine's knobs; load rules. |
+| `src/config/risk.rs` | 1078 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required), `[risk.exits]` (take-profit / stop-loss bps, max hold) and the paper fill engine's knobs; load rules. |
 | `src/config/runtime.rs` | 143 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `heartbeat_secs`. |
 | `src/config/skill_lifecycle.rs` | 83 | Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]` |
 | `src/config/solana.rs` | 373 | `[solana] signer_key_file` + signing-sandbox rules (no Claude Code / MCP / shell, key outside fs roots, wallet grants only on a private agent). |
 | `src/config/sections.rs` | 17 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`. |
-| `src/config/xmarket.rs` | 572 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`). |
+| `src/config/xmarket.rs` | 1001 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` and its layout (`ledger_db`, `runtime_db`, `history_dir`, reserved store names) + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`); xmarket load rules: `[risk]` needs `[xmarket]`, one shared workspace for feed / loop / xmarket-tool agents (`XM_TOOLS`), with `[risk]` a workspace on every agent, the state dir outside every fs root and workspace. |
 
 ### application — use cases (51 files)
 
@@ -416,8 +416,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
-| `src/adapters/outbound/paper_store.rs` | 1980 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline), orders `UNIQUE(account, client_order_id)`, fills, funding, `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); refused without `[xmarket]`. |
-| `src/adapters/outbound/prune.rs` | 235 | `tengu prune` — wipe all cached/ephemeral state while preserving config, |
+| `src/adapters/outbound/paper_store.rs` | 1974 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline), orders `UNIQUE(account, client_order_id)`, fills, funding, `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); refused without `[xmarket]`. |
+| `src/adapters/outbound/prune.rs` | 343 | `tengu prune` — wipe all cached/ephemeral state while preserving config, secrets, skills and project files; never `<TENGU_HOME>/state` beyond `state/flows`. |
 | `src/adapters/outbound/runtime_store.rs` | 257 | `SqliteRuntimeStore` — `<state dir>/runtime.db`: single-runner lease (acquire / renew / release, TTL takeover). |
 | `src/adapters/outbound/rate_limit.rs` | 365 | Process-wide named request budgets from `[rate_limits.<name>]` (async weighted `acquire`, `charge`, 429 `penalize`); unconfigured = unlimited. |
 | `src/adapters/outbound/scaffold.rs` | 77 | Workspace scaffold — creates directories and seed files before agents start. |

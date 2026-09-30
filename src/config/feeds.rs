@@ -400,16 +400,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// An agent with an allow-list and one decision loop to point at.
+    /// An agent with an allow-list and one decision loop to point at; the
+    /// xmarket agents share one workspace (`config/xmarket.rs`).
     const BASE: &str = r#"
         [agents.xm_feeds]
         engine = "openrouter"
         model = "m"
+        workspace = "/srv/xm-ws"
         tools = ["hl_ctx", "hl_book", "risk_status"]
 
         [agents.xm_exec]
         engine = "openrouter"
         model = "m"
+        workspace = "/srv/xm-ws"
         tools = ["xm_exits"]
 
         [agents.open]

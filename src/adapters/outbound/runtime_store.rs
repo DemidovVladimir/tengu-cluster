@@ -68,7 +68,7 @@ impl SqliteRuntimeStore {
     /// Open (creating) `<dir>/runtime.db`.
     pub(crate) fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let path = dir.join("runtime.db");
+        let path = crate::config::xmarket::runtime_db(dir);
         let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA_SQL)?;

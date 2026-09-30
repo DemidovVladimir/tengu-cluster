@@ -392,6 +392,25 @@ mod catalog_tests {
         }
     }
 
+    /// `XM_TOOLS` (the shared-workspace load rule, `config/xmarket.rs`) is
+    /// exactly the opt-in rows of the `hyperliquid` and `xm` plugins.
+    #[test]
+    fn xm_tools_are_the_hyperliquid_and_xm_rows() {
+        let opts = CatalogOpts {
+            cancel: None,
+            memory_config: None,
+        };
+        let mut rows: Vec<&str> = catalog()
+            .iter()
+            .filter(|r| matches!((r.plugin)(&opts).name(), "hyperliquid" | "xm"))
+            .filter_map(|r| r.opt_in)
+            .collect();
+        rows.sort_unstable();
+        let mut want = names::XM_TOOLS.to_vec();
+        want.sort_unstable();
+        assert_eq!(rows, want);
+    }
+
     #[test]
     fn opt_in_name_is_a_tool_the_row_defines() {
         for row in catalog() {

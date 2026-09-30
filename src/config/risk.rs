@@ -65,6 +65,7 @@
 //! | A loop action running an exec tool is not `read_only` | `read_only` bypasses `dry_run` |
 //! | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present with no `wallets`; no agent scope grants one | Privy signing stays off: a tool without a scope gets the permissive fallback, which grants the `default` wallet |
 //! | Hardened sandbox (`config/hardening.rs`, shared with a Solana signer): `claude_code` only with built-ins off, no `[[mcp_servers]]`, no shell scope, `<TENGU_HOME>/state` + `kill_switch_file` + the config file outside every fs root and workspace | nothing outside tengu scopes can edit `ledger.db`, delete the kill-switch file or lift a limit (convention 12) |
+//! | `[xmarket]` present; every agent sets `workspace` (absolute or `~/…`), the xmarket agents one shared (`config/xmarket.rs`) | the ledger lives in the `[xmarket]` state dir; an agent without a workspace works in the process cwd, which may hold `<TENGU_HOME>/state` |
 //!
 //! Halts (§ 7 #8): `daily_loss_limit_usd` trips a halt that clears at 00:00
 //! UTC; `total_loss_limit_usd`, an operator halt and the kill-switch file
@@ -629,15 +630,19 @@ fn is_evm_address(s: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::Path;
 
-    const AGENT: &str = "[agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+    /// A `[risk]` sandbox's agents set an explicit workspace
+    /// (`config/xmarket.rs`).
+    const AGENT: &str =
+        "[agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\nworkspace = \"/srv/xm-ws\"\n";
 
     /// The $100 budget (tracker § 7 #3), one key per line so every required
-    /// key can be dropped in turn.
-    const RISK_100: &str = r#"
+    /// key can be dropped in turn. Needs `[xmarket]` (the ledger's state
+    /// dir) to validate as a whole sandbox.
+    pub(crate) const RISK_100: &str = r#"
 [risk]
 account = "xmarket"
 mode = "paper"
@@ -720,7 +725,7 @@ order_types = ["market", "ioc"]
 
     #[test]
     fn budget_100_parses_and_validates() {
-        let cfg = parse(RISK_100).unwrap();
+        let cfg = parse(&format!("[xmarket]\n{RISK_100}")).unwrap();
         cfg.validate().expect("valid");
         let r = cfg.risk.as_ref().unwrap();
         assert_eq!(r.mode, RiskMode::Paper);
@@ -1040,7 +1045,8 @@ order_types = ["market", "ioc"]
     }
 
     /// The commented `[risk]` / `[paper]` block of `config.example.toml`,
-    /// uncommented, is the valid $100 budget.
+    /// uncommented, is the valid $100 budget (with the `[xmarket]` block the
+    /// example puts above it).
     #[test]
     fn example_block_uncommented_is_valid() {
         let text = include_str!("../../config.example.toml");
@@ -1051,7 +1057,8 @@ order_types = ["market", "ioc"]
             .map(|l| l.strip_prefix("# ").unwrap_or(l.trim_start_matches('#')))
             .collect();
         assert!(block.len() > 30, "{block:?}");
-        let cfg = parse(&block.join("\n")).unwrap_or_else(|e| panic!("{e}"));
+        let cfg =
+            parse(&format!("[xmarket]\n{}", block.join("\n"))).unwrap_or_else(|e| panic!("{e}"));
         cfg.validate().expect("valid");
         let r = cfg.risk.unwrap();
         assert_eq!(

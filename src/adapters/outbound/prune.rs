@@ -1,5 +1,9 @@
 //! `tengu prune` — wipe all cached/ephemeral state while preserving config,
-//! secrets, skills, and project files.
+//! secrets, skills, and project files. `<TENGU_HOME>/state` is never a
+//! target beyond `state/flows`: it holds the install-wide stores (the
+//! xmarket state dirs — `config/xmarket.rs` layout — and
+//! `solana-writes.db`), so a target that is it, holds it (a `--hard`
+//! workspace around `TENGU_HOME`) or lies inside it is left out.
 
 use std::path::{Path, PathBuf};
 
@@ -31,11 +35,30 @@ pub struct PruneOptions<'a> {
     pub hard: bool,
 }
 
-/// Scan `tengu_home` and workspace directories, returning every prunable target.
+/// True when removing `path` would remove `<tengu_home>/state` or anything
+/// in it but `state/flows` — compared as written and, when both exist, with
+/// symlinks resolved.
+fn touches_state(path: &Path, tengu_home: &Path) -> bool {
+    let hits = |p: &Path, state: &Path| {
+        state.starts_with(p) || (p.starts_with(state) && !p.starts_with(state.join("flows")))
+    };
+    let state = tengu_home.join("state");
+    hits(path, &state)
+        || matches!(
+            (std::fs::canonicalize(path), std::fs::canonicalize(&state)),
+            (Ok(p), Ok(s)) if hits(&p, &s)
+        )
+}
+
+/// Scan `tengu_home` and workspace directories, returning every prunable
+/// target — never `<tengu_home>/state` beyond `state/flows` (module doc).
 pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
-    let mut targets = Vec::new();
+    let mut targets: Vec<PruneTarget> = Vec::new();
 
     let mut push = |path: PathBuf, label: String| {
+        if touches_state(&path, opts.tengu_home) || targets.iter().any(|t| t.path == path) {
+            return;
+        }
         let exists = path.exists();
         targets.push(PruneTarget {
             path,
@@ -213,6 +236,91 @@ mod tests {
         assert!(hard_paths.contains(&ws.join("TENGU_PLAN.md")));
         // The workspace root itself is never a target — only emptied.
         assert!(!hard_paths.contains(&ws));
+    }
+
+    /// The xmarket state dir survives every mode and workspace — even a
+    /// `--hard` workspace around `TENGU_HOME` or the state dir itself as a
+    /// workspace — while `state/flows` goes.
+    #[test]
+    fn never_deletes_the_xmarket_state_dir() {
+        use crate::config::xmarket::{
+            AUDIT_DB, CATALOG_DB, EVENTS_DB, HISTORY_DIR, LEDGER_DB, RUNTIME_DB, SPEND_DB,
+        };
+        let history_day = format!("{HISTORY_DIR}/20261002.db");
+        let files = [
+            LEDGER_DB,
+            RUNTIME_DB,
+            "run-xmarket-weekend.json",
+            history_day.as_str(),
+            CATALOG_DB,
+            EVENTS_DB,
+            AUDIT_DB,
+            SPEND_DB,
+            "KILL",
+        ];
+        // (label, hard, workspace relative to the temp root: "" = the root,
+        // which holds TENGU_HOME = <root>/.tengu)
+        for (label, hard, ws) in [
+            ("soft, a plain workspace", false, "ws"),
+            ("hard, a plain workspace", true, "ws"),
+            ("soft, around TENGU_HOME", false, ""),
+            ("hard, around TENGU_HOME", true, ""),
+            (
+                "soft, the state dir as workspace",
+                false,
+                ".tengu/state/xmarket-weekend",
+            ),
+            (
+                "hard, the state dir as workspace",
+                true,
+                ".tengu/state/xmarket-weekend",
+            ),
+            (
+                "hard, <TENGU_HOME>/state as workspace",
+                true,
+                ".tengu/state",
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let home = root.path().join(".tengu");
+            let xm = home.join("state/xmarket-weekend");
+            std::fs::create_dir_all(xm.join(HISTORY_DIR)).unwrap();
+            for f in files {
+                std::fs::write(xm.join(f), b"x").unwrap();
+            }
+            std::fs::create_dir_all(home.join("state/flows")).unwrap();
+            std::fs::write(home.join("state/flows/f.json"), b"{}").unwrap();
+            std::fs::write(home.join("state/solana-writes.db"), b"x").unwrap();
+            std::fs::create_dir_all(root.path().join("ws/memory")).unwrap();
+            std::fs::create_dir_all(xm.join("memory")).unwrap();
+
+            let workspaces = [root.path().join(ws)];
+            let targets = plan_prune(&PruneOptions {
+                tengu_home: &home,
+                workspaces: &workspaces,
+                project_dirs: &[],
+                hard,
+            });
+            for t in &targets {
+                assert!(
+                    !touches_state(&t.path, &home),
+                    "{label}: {}",
+                    t.path.display()
+                );
+            }
+            for (_, result) in execute_prune(&targets) {
+                result.unwrap();
+            }
+            for f in files {
+                assert!(xm.join(f).exists(), "{label}: {f} deleted");
+            }
+            assert!(xm.join("memory").exists(), "{label}: inside the state dir");
+            assert!(home.join("state/solana-writes.db").exists(), "{label}");
+            assert!(!home.join("state/flows").exists(), "{label}: flows pruned");
+            if ws == "ws" {
+                assert!(!root.path().join("ws/memory").exists(), "{label}");
+            }
+        }
     }
 
     #[test]

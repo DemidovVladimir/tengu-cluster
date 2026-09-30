@@ -16,9 +16,10 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use clap::Subcommand;
 
-use crate::adapters::outbound::paper_store::{kill_switch_state, ledger_path, SqlitePaperLedger};
+use crate::adapters::outbound::paper_store::{kill_switch_state, SqlitePaperLedger};
 use crate::config::paths::resolve_tengu_home;
 use crate::config::risk::{PaperConfig, RiskConfig};
+use crate::config::xmarket::ledger_db;
 use crate::config::Config;
 use crate::domain::observation::{now_ms, Field};
 use crate::ports::paper::PaperLedger;
@@ -184,7 +185,7 @@ async fn status(
     console: &mut dyn Console,
     now_ms: i64,
 ) -> Result<()> {
-    let path = ledger_path(&t.state_dir);
+    let path = ledger_db(&t.state_dir);
     console.say(&kill_switch_line(t));
     if !path.exists() {
         console.say(&format!("no ledger yet: {}", path.display()));
@@ -300,7 +301,7 @@ async fn resume(
             other.error().map(|e| e.message.as_str())
         ),
     }
-    let path = ledger_path(&t.state_dir);
+    let path = ledger_db(&t.state_dir);
     if !path.exists() {
         bail!("no ledger yet ({}): nothing to resume", path.display());
     }
@@ -455,7 +456,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 assert_eq!(c.input.len(), 1, "nothing was read");
             }
         }
-        assert!(!ledger_path(&t.state_dir).exists(), "nothing was opened");
+        assert!(!ledger_db(&t.state_dir).exists(), "nothing was opened");
         assert_eq!(AGENT_ENV, ["TENGU_AGENT_IPC", "TENGU_AGENT_NAME"]);
     }
 
@@ -533,7 +534,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             c.out
         );
         assert!(c.out[0].ends_with("KILL: absent"), "{:?}", c.out);
-        assert!(!ledger_path(&t.state_dir).exists());
+        assert!(!ledger_db(&t.state_dir).exists());
         run(&t, halt_now(), &mut console(true, &[]), None, NOW)
             .await
             .unwrap();

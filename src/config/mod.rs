@@ -1218,10 +1218,8 @@ impl Config {
         for issue in hardening::validation_errors(self) {
             errors.push(issue);
         }
-        if let Some(x) = &self.xmarket {
-            for issue in x.validation_errors() {
-                errors.push(issue);
-            }
+        for issue in xmarket::validation_errors(self) {
+            errors.push(issue);
         }
         for issue in risk::validation_errors(self) {
             errors.push(issue);

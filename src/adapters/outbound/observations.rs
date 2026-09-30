@@ -717,7 +717,7 @@ mod tests {
 
         let ws = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
-        let history_dir = state.path().join("history");
+        let history_dir = crate::config::xmarket::history_dir(state.path());
         let sections = SandboxSections {
             history_dir: Some(history_dir.clone()),
             recorder: toml::from_str("enabled = true\nschemas = [\"mkt_ctx/1\"]\n").unwrap(),

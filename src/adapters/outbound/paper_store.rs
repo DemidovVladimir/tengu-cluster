@@ -37,6 +37,7 @@ use tracing::warn;
 
 use crate::application::decision_loop::append_line;
 use crate::config::sections::SandboxSections;
+use crate::config::xmarket::{ledger_db, LEDGER_DB};
 use crate::domain::observation::{ErrorClass, Field, ReadError};
 use crate::domain::xm::ledger::{exit_deadline, Fill, FillEffect, PaperAccount, Position};
 use crate::domain::xm::paper::FillResult;
@@ -47,8 +48,6 @@ use crate::ports::paper::{
     StoredDecision, StoredOrder,
 };
 
-/// File name under the xmarket state dir.
-pub(crate) const LEDGER_FILE: &str = "ledger.db";
 /// The verdict mirror, under `<TENGU_HOME>/logs/`.
 pub(crate) const RISK_LOG_FILE: &str = "risk.jsonl";
 
@@ -120,11 +119,6 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("risk_decisions", "session_id", "TEXT"),
 ];
 
-/// `<state_dir>/ledger.db`.
-pub(crate) fn ledger_path(state_dir: &Path) -> PathBuf {
-    state_dir.join(LEDGER_FILE)
-}
-
 /// `<TENGU_HOME>/logs/risk.jsonl`.
 pub(crate) fn risk_log_path() -> PathBuf {
     crate::config::paths::resolve_tengu_home()
@@ -138,7 +132,7 @@ pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn Pa
     let dir = sections.xm_state_dir.as_deref().ok_or_else(|| {
         anyhow!(
             "no [xmarket] section: the paper ledger lives in \
-             <TENGU_HOME>/state/<xmarket.state>/{LEDGER_FILE} — add [xmarket] state = \"<name>\""
+             <TENGU_HOME>/state/<xmarket.state>/{LEDGER_DB} — add [xmarket] state = \"<name>\""
         )
     })?;
     Ok(Arc::new(
@@ -174,7 +168,7 @@ impl SqlitePaperLedger {
     pub(crate) fn open(state_dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
-        let path = ledger_path(state_dir);
+        let path = ledger_db(state_dir);
         let mut conn =
             Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
@@ -1236,7 +1230,7 @@ pub(crate) mod tests {
 
     /// Rows per table, for "what did this write".
     fn rows(dir: &Path) -> BTreeMap<&'static str, i64> {
-        let c = Connection::open(ledger_path(dir)).unwrap();
+        let c = Connection::open(ledger_db(dir)).unwrap();
         [
             "accounts",
             "cash",
@@ -1665,7 +1659,7 @@ pub(crate) mod tests {
             ..Default::default()
         };
         assert!(open_paper_ledger(&sections).is_ok());
-        assert!(ledger_path(&dir.path().join("xmarket")).exists());
+        assert!(ledger_db(&dir.path().join("xmarket")).exists());
     }
 
     #[test]
@@ -1946,7 +1940,7 @@ pub(crate) mod tests {
     async fn an_older_ledger_gains_the_audit_columns() {
         let dir = tempfile::tempdir().unwrap();
         {
-            let c = Connection::open(ledger_path(dir.path())).unwrap();
+            let c = Connection::open(ledger_db(dir.path())).unwrap();
             c.execute_batch(
                 "CREATE TABLE risk_decisions (
                    id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, account TEXT NOT NULL,

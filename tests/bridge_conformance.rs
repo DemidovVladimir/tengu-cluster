@@ -20,7 +20,9 @@
 //! Fixture sandbox (`BASE_TOML` + the case's TOML): `[egress] network =
 //! "open"`, `allow_hosts = ["127.0.0.1"]` (a hard-coded upstream host is
 //! refused, never reached: no network), `audit = false`; `[agents.conf]` with
-//! the side's workspace and the case's tools. Upstreams are a loopback
+//! the side's workspace and the case's tools, the default `[agents.main]` on
+//! that workspace too (a `[risk]` sandbox needs one on every agent,
+//! `config/xmarket.rs`). Upstreams are a loopback
 //! `Mock`: a route matches method + path + substrings of target and body and
 //! answers inline JSON, a fixture file (`tests/fixtures/…`) or a
 //! `getMultipleAccounts` reply built per request from captured accounts
@@ -97,6 +99,7 @@ audit = false
 default = true
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
+workspace = "{ws}"
 
 [agents.conf]
 engine = "openrouter"

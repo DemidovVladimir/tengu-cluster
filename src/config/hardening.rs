@@ -14,7 +14,9 @@
 //!
 //! Signer-only rules (key path, wallet grants) live in `config/solana.rs`;
 //! `[risk]`-only rules (exec tools on a private agent, Privy signing off) in
-//! `config/risk.rs`.
+//! `config/risk.rs`; the xmarket workspace + state-dir rules in
+//! `config/xmarket.rs` (which borrows the path check, [`dir_reach_errors`],
+//! for the `[xmarket]` state dir of a sandbox that is not hardened).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -27,6 +29,9 @@ pub(crate) fn requires_hardened_claude_code(cfg: &Config) -> bool {
     cfg.solana.signer_key_file.is_some() || cfg.risk.is_some()
 }
 
+/// Ends every path error of the hardened rules.
+const HARDENED: &str = "hardened sandbox: Solana signer or [risk]";
+
 pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     if !requires_hardened_claude_code(cfg) {
         return Vec::new();
@@ -36,6 +41,7 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     path_errors(
         cfg,
         &protected_paths(cfg, &resolve_tengu_home()),
+        HARDENED,
         &mut errors,
     );
     errors
@@ -49,7 +55,17 @@ pub(crate) fn config_file_errors(cfg: &Config, file: &Path) -> Vec<String> {
     }
     let mut errors = Vec::new();
     let protected = [Protected::file("the config file", file)];
-    path_errors(cfg, &protected, &mut errors);
+    path_errors(cfg, &protected, HARDENED, &mut errors);
+    errors
+}
+
+/// The path check above for one directory any sandbox may protect (the
+/// `[xmarket]` state dir, `config/xmarket.rs`): no `fs_roots` entry and no
+/// agent `workspace` overlaps `dir` either way (symlinks resolved). `why`
+/// ends each message.
+pub(crate) fn dir_reach_errors(cfg: &Config, what: &str, dir: &Path, why: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    path_errors(cfg, &[Protected::dir(what, dir)], why, &mut errors);
     errors
 }
 
@@ -176,7 +192,7 @@ fn protected_paths(cfg: &Config, tengu_home: &Path) -> Vec<Protected> {
     out
 }
 
-fn path_errors(cfg: &Config, protected: &[Protected], errors: &mut Vec<String>) {
+fn path_errors(cfg: &Config, protected: &[Protected], why: &str, errors: &mut Vec<String>) {
     let mut agents: Vec<_> = cfg.agents.iter().collect();
     agents.sort_by(|a, b| a.0.cmp(b.0));
     let workspaces = agents.iter().filter_map(|(id, a)| {
@@ -196,7 +212,7 @@ fn path_errors(cfg: &Config, protected: &[Protected], errors: &mut Vec<String>) 
             if let Some(how) = p.reached_by(&root) {
                 errors.push(format!(
                     "{} `{}` is {how} {at} `{}` — keep it outside every fs root and workspace \
-                     (hardened sandbox: Solana signer or [risk])",
+                     ({why})",
                     p.what,
                     p.path.display(),
                     root.display()
@@ -224,7 +240,7 @@ fn normalize(p: &Path) -> PathBuf {
 /// Absolute, normalised, and symlink-resolved when the path exists — the
 /// longest existing ancestor is resolved otherwise (macOS `/var` →
 /// `/private/var` must compare equal for a file not created yet).
-fn resolved(p: &Path) -> PathBuf {
+pub(crate) fn resolved(p: &Path) -> PathBuf {
     let abs = if p.is_absolute() {
         p.to_path_buf()
     } else {
@@ -404,6 +420,7 @@ mod tests {
         path_errors(
             cfg,
             &protected_paths(cfg, Path::new(tengu_home)),
+            HARDENED,
             &mut errors,
         );
         errors.join("\n")

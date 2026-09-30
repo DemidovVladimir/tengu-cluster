@@ -188,8 +188,14 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- xmarket (docs/xmarket-tracker-2026-09-29.md) ---
 # Install-wide state of the xmarket runtime lives in <TENGU_HOME>/state/<state>/
-# (ledger.db, runtime.db, history/ …) — outside every workspace; `tengu prune`
-# keeps it. One directory name.
+# (ledger.db, runtime.db, history/<YYYYMMDD>.db; catalog / events / audit /
+# spend .db reserved) — `tengu prune` keeps it. One directory name. Load rules
+# with [feeds], [risk] or [xmarket] (src/config/xmarket.rs,
+# docs/runtime-2026-09-30.md § State layout): the agents of feeds, decision
+# loops and xmarket tools (hl_*, risk_status, paper_*, xm_exits) share one
+# `workspace`, absolute or ~/ (it keeps only .tengu/observations.db); with
+# [risk] every agent sets one and [xmarket] is required; the state dir sits
+# outside every fs_roots and workspace.
 # [xmarket]
 # state = "xmarket"                         # the weekend sandbox uses "xmarket-weekend"
 #
@@ -367,7 +373,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # · at (clock ticks in tz: "Sun 18:00", "daily 09:00"). Rules: src/config/feeds.rs.
 # [feeds.hl_ctx]
 # kind = "tool"
-# agent = "xm_feeds"                        # its `tools` list hl_ctx, hl_book and risk_status
+# agent = "xm_feeds"                        # its `tools` list hl_ctx, hl_book and risk_status; workspace = xm_exec's
 # tool = "hl_ctx"
 # args = { dex = "xyz" }
 # every_secs = 60
