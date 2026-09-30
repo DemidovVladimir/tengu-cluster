@@ -24,6 +24,7 @@
 | `manage_skill/` | `manage_skill` | opt-in |
 | `solana/` | reads: `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide` — typed, cached; writes: `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` — `mode = simulate` (default) \| `send` (args / keys / hosts / send rules: `docs/typed-observations-2026-09-24.md`) | opt-in, one row per name |
 | `hyperliquid/` | `hl_ctx` — typed, cached market context (`mkt_ctx/1`, `mkt_instrument/1`, `hl_sweep/1`); `hl_book` — L2 book, depth, slippage per notional (`hl_book/1`); args / keys / weights: `docs/typed-observations-2026-09-24.md` § Hyperliquid tools | opt-in, one row per name |
+| `xm/` | `risk_status` — the `[risk]` paper account's risk state (`risk_state/1`): halt + kill switch, equity, P&L, loss headroom, exposure, order rate; needs `[xmarket]` + `[risk]` + `[paper]`; `docs/xmarket-risk-paper-2026-09-30.md` | opt-in, one row per name |
 
 The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. That row drives in-process registration, the MCP bridge (Claude Code subagents), and the tool list the model sees.
 

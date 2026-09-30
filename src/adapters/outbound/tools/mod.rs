@@ -37,6 +37,7 @@ pub(crate) mod skill_resource;
 pub(crate) mod solana;
 pub(crate) mod view_skill;
 pub(crate) mod workspace;
+pub(crate) mod xm;
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -262,6 +263,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || hyperliquid::defs_named(names::HL_BOOK),
             plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
+        },
+        // xmarket risk / paper family: one opt-in row per tool, all sharing
+        // the `xm` plugin (interfaces in `xm/defs.rs`).
+        ToolEntry {
+            opt_in: Some(names::RISK_STATUS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::RISK_STATUS),
+            plugin: |_| Box::new(xm::XmPlugin),
         },
     ]);
     rows

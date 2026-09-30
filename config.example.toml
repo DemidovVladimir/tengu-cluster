@@ -56,6 +56,7 @@ default_lens = "eco"
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
+#   + xmarket risk (typed): risk_status — needs [xmarket] + [risk] + [paper]; scope example under "Risk + paper trading" below
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -280,6 +281,14 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # fee_tier = 0                               # Hyperliquid tier 0–6
 # staking_discount_pct = 0                   # HYPE staking discount, 0–40
 # order_types = ["market", "ioc"]
+
+# The `risk_status` tool (opt-in; row risk_state/1:<account>) reads the
+# ledger and the kill-switch file itself; its scope needs only the workspace
+# (observation store). Operator: `tengu risk status | halt | resume
+# --sandbox <name>` (halt / resume at a terminal only) —
+# docs/xmarket-risk-paper-2026-09-30.md.
+# [default_scopes.risk_status]
+# fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
 
 # --- Request budgets (src/config/rate_limits.rs) ---
 # One token bucket per name, shared by every feed and tool of this process

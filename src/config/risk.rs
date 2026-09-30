@@ -222,8 +222,6 @@ impl RiskConfig {
     /// The gate's limits (`domain/xm/risk.rs`). `min_lifecycle` maps to none
     /// until the catalog exists: the M0 permission is `instruments_allow` /
     /// `instruments_deny` only (convention 10; `kg-lifecycle` turns it on).
-    // First consumer: the `risk_status` tool (`risk-kill-switch`).
-    #[allow(dead_code)]
     pub(crate) fn limits(&self) -> RiskLimits {
         let a = &self.max_data_age_ms;
         RiskLimits {

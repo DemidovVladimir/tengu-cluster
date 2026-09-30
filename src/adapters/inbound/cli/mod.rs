@@ -4,6 +4,7 @@
 mod decide;
 mod doctor;
 mod history;
+mod risk;
 mod run_agent;
 mod skill;
 mod tool;
@@ -106,6 +107,16 @@ enum Commands {
         sandbox: Option<String>,
         #[command(subcommand)]
         action: history::HistoryAction,
+    },
+    /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
+    /// `halt` / `resume` (operator at a terminal only; resume asks for the
+    /// account name). See docs/xmarket-risk-paper-2026-09-30.md.
+    Risk {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: risk::RiskAction,
     },
     /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
     Eval {
@@ -421,8 +432,11 @@ pub(crate) async fn run() -> Result<()> {
             .with(stderr_layer);
         tracing::subscriber::set_global_default(subscriber)
             .expect("Failed to set tracing subscriber");
-    } else if matches!(cli.command, Some(Commands::History { .. })) {
-        // stdout carries JSON lines; logs go to stderr.
+    } else if matches!(
+        cli.command,
+        Some(Commands::History { .. } | Commands::Risk { .. })
+    ) {
+        // stdout carries JSON lines / the operator's text; logs go to stderr.
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
@@ -517,6 +531,10 @@ pub(crate) async fn run() -> Result<()> {
         Commands::History { sandbox, action } => {
             let config = load_sandbox_or(sandbox, config)?;
             history::run_history(&config, action).await
+        }
+        Commands::Risk { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            risk::run_risk(&config, action).await
         }
         Commands::Eval {
             skills,

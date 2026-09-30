@@ -29,6 +29,10 @@ pub(crate) const LP_DECIDE: &str = "lp_decide";
 pub(crate) const HL_CTX: &str = "hl_ctx";
 pub(crate) const HL_BOOK: &str = "hl_book";
 
+// xmarket risk / paper family (`adapters/outbound/tools/xm/`) — typed rows
+// over the paper ledger; one `xm` plugin serves all of them.
+pub(crate) const RISK_STATUS: &str = "risk_status";
+
 /// Every opt-in workspace tool name.
 pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     AGENTIC_MEMORY,
@@ -54,6 +58,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     JUP_PERPS_ORDER,
     HL_CTX,
     HL_BOOK,
+    RISK_STATUS,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

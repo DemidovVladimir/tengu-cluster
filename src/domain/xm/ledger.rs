@@ -422,16 +422,21 @@ impl PaperAccount {
     }
 
     pub fn realized_pnl(&self) -> f64 {
-        self.positions.values().map(|p| p.realized_pnl).sum()
+        total(self.positions.values().map(|p| p.realized_pnl))
     }
 
     pub fn fees_paid(&self) -> f64 {
-        self.positions.values().map(|p| p.fees_paid).sum()
+        total(self.positions.values().map(|p| p.fees_paid))
     }
 
     pub fn funding_paid(&self) -> f64 {
-        self.positions.values().map(|p| p.funding_paid).sum()
+        total(self.positions.values().map(|p| p.funding_paid))
     }
+}
+
+/// Σ `values`; an empty sum is 0, not the `-0.0` float `Sum` starts from.
+fn total(values: impl Iterator<Item = f64>) -> f64 {
+    values.sum::<f64>() + 0.0
 }
 
 /// Net and gross notional at mark (USD).
@@ -1191,6 +1196,9 @@ mod tests {
     #[test]
     fn flat_account_and_negative_equity() {
         let a = PaperAccount::new(ACCOUNT, 100.0).unwrap();
+        for v in [a.realized_pnl(), a.fees_paid(), a.funding_paid()] {
+            assert!(v == 0.0 && v.is_sign_positive(), "{v}: never -0.0");
+        }
         let pp = PaperPositions::build(&a, &BTreeMap::new(), T0, 5_000, None, None);
         assert_eq!(pp.status(), ObsStatus::Ok);
         assert_eq!(pp.equity_usd, Field::ok(100.0));

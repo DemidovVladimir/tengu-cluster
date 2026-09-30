@@ -8,6 +8,7 @@
 //! | `ledger.rs` | paper positions, cash, average-cost P&L, mark-to-market, exposure (per underlying / venue), leverage, HL funding; `paper_positions/1:<account>` | `risk-paper-ledger-domain` |
 //! | `paper.rs` | paper fill engine: market / IOC orders vs an L2 book, HL rejection codes, partial fills, latency jitter | `risk-paper-fill-engine` |
 //! | `risk.rs` | the pre-trade gate: `OrderIntent` + `RiskContext` + `RiskLimits` ⇒ `RiskVerdict` (every §28 rule a `Check`, fail closed), §29 `Lifecycle` | `risk-gate-domain` |
+//! | `risk_state.rs` | account risk state: halts (daily / total loss, operator, kill-switch file), UTC day roll, `risk_state/1:<account>` | `risk-kill-switch` |
 //!
 //! Depth walks and depth within N bps: `domain/book.rs` (venue-neutral).
 
@@ -15,3 +16,4 @@ pub(crate) mod cost;
 pub(crate) mod ledger;
 pub(crate) mod paper;
 pub(crate) mod risk;
+pub(crate) mod risk_state;

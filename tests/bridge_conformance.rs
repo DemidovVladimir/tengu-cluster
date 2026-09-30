@@ -343,6 +343,54 @@ fn hl_xyz(c: Case) -> Case {
     .route(info("perpCategories").file("hyperliquid/perpCategories.json"))
 }
 
+/// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
+/// ledger lands in `<TENGU_HOME>/state/conf/ledger.db`; the kill-switch file
+/// sits outside the workspace (absent).
+const XM_RISK_TOML: &str = r#"
+[xmarket]
+state = "conf"
+
+[risk]
+account = "conf"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = ["hyperliquid:xyz:TSLA"]
+instruments_deny = []
+max_order_notional_usd = 25
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 100
+max_gross_exposure_usd = 100
+max_net_exposure_usd = 100
+max_leverage = 1
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10
+max_slippage_bps = 30
+min_depth_usd = 250
+require_hedge_for = ["convergence"]
+max_skew_ms = 5000
+max_orders_per_min = 6
+max_open_orders = 4
+kill_switch_file = "{root}/KILL"
+allow_reduce_degraded = true
+
+[risk.max_data_age_ms]
+book = 5000
+ctx = 20000
+reference = 60000
+quote = 20000
+
+[paper]
+initial_cash_usd = 100
+latency_ms = 250
+latency_jitter_ms = 100
+fee_tier = 0
+staking_discount_pct = 0
+order_types = ["market", "ioc"]
+"#;
+
 /// A skill in the project tier (`<cwd>/skills/demo`).
 const DEMO_SKILL: &str = "---\nname: demo\ndescription: Conformance demo skill.\neditable_by_learner: true\n---\n\n# demo\n\nBody.\n";
 
@@ -618,6 +666,14 @@ fn cases() -> Vec<Case> {
                 .file("hyperliquid/recentTrades_xyz_TSLA.json"),
         )
         .ok("book hyperliquid:xyz:TSLA bid=347.94 ask=347.97"),
+        // ── xmarket risk: `[risk]` + `[paper]` + the ledger reach the bridge
+        case("risk_status", json!({}))
+            .toml(XM_RISK_TOML)
+            .ok("risk account=conf halt=none equity=100.00 daily_pnl=0.00 total_pnl=0.00 headroom=10.00"),
+        // Without `[risk]`: refused alike (tracker convention 9).
+        case("risk_status", json!({}))
+            .named("no_risk")
+            .err("risk_config_missing"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

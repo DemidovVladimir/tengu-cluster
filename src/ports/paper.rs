@@ -8,7 +8,8 @@
 //!
 //! | Call | Transaction |
 //! |---|---|
-//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called); else the account is re-read and `decide(&snapshot)` — synchronous and pure: the gate, then the fill simulation — returns a [`Decision`]. The verdict row is written always; order, fill, position and cash rows only when the order was `Sent` |
+//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called); else the account and its risk state are re-read and `decide(&snapshot)` — synchronous and pure: the gate, then the fill simulation — returns a [`Decision`]. The verdict row and a changed risk state (the gate's trips, the day roll) are written always; order, fill, position and cash rows only when the order was `Sent` |
+//! | [`PaperLedger::update_risk_state`] | one `BEGIN IMMEDIATE`: `update(&snapshot)` returns the next risk state (the `risk_status` roll + trips, `tengu risk halt / resume`); `Err` writes nothing |
 //! | [`PaperLedger::accrue_funding`] | one `BEGIN IMMEDIATE`: the HL funding of one hour boundary, once per (account, instrument, hour) |
 //! | [`PaperLedger::open_account`] | creates the account and its `deposit` cash row once |
 //! | reads | [`PaperLedger::snapshot`], [`PaperLedger::order`], [`PaperLedger::decisions`], [`PaperLedger::accounts`] |
@@ -17,8 +18,7 @@
 //! ctx rows, the opportunity row, the kill-switch file) happens before
 //! `place`, so the closure only computes.
 
-// Consumers land in wave W1 (`risk-kill-switch`, `risk-gate-enforcement`,
-// `risk-paper-tools`).
+// Consumers land in wave W1 (`risk-gate-enforcement`, `risk-paper-tools`).
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -29,6 +29,7 @@ use serde_json::Value;
 use crate::domain::xm::ledger::{Fill, PaperAccount};
 use crate::domain::xm::paper::FillResult;
 use crate::domain::xm::risk::{OrderIntent, RiskVerdict};
+use crate::domain::xm::risk_state::RiskState;
 
 /// The account as stored — read inside `place`'s transaction, or by
 /// `snapshot`.
@@ -42,6 +43,9 @@ pub(crate) struct LedgerSnapshot {
     pub orders_last_min: u32,
     /// Resting orders (the gate's `open_orders`): none until GTC / ALO (P1).
     pub open_orders: u32,
+    /// Halt + day-start equity as stored (the default before the first
+    /// write) — roll it with `RiskState::value` before gating.
+    pub risk: RiskState,
     pub now_ms: i64,
 }
 
@@ -70,10 +74,17 @@ pub(crate) struct Decision {
     pub context: Value,
     /// `Sent` exactly when `verdict.allow`.
     pub outcome: Outcome,
+    /// The account's next risk state (the rolled day, the verdict's trips);
+    /// `None` = unchanged.
+    pub risk: Option<RiskState>,
 }
 
 /// The gate + fill step `place` runs inside its transaction.
 pub(crate) type Decide = Box<dyn FnOnce(&LedgerSnapshot) -> Decision + Send>;
+
+/// A risk-state change `update_risk_state` runs inside its transaction:
+/// the next state, or why it is refused.
+pub(crate) type RiskUpdate = Box<dyn FnOnce(&LedgerSnapshot) -> Result<RiskState, String> + Send>;
 
 /// One `place` call.
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +169,15 @@ pub(crate) trait PaperLedger: Send + Sync {
     /// nothing written: an unknown account or empty `client_order_id`, a
     /// store failure, or a `Decision` that contradicts itself or the request.
     async fn place(&self, req: PlaceRequest, decide: Decide) -> anyhow::Result<Placement>;
+    /// Read-modify-write of `account`'s risk state in one transaction; the
+    /// snapshot after it. `Err` (a refused update, an unknown account) =
+    /// nothing written.
+    async fn update_risk_state(
+        &self,
+        account: &str,
+        now_ms: i64,
+        update: RiskUpdate,
+    ) -> anyhow::Result<LedgerSnapshot>;
     /// The stored order `client_order_id` of `account`.
     async fn order(
         &self,

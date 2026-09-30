@@ -182,9 +182,22 @@ Budget: a live read of one HIP-3 dex = 20, + 20 per minute per dex (at-cap), + 4
 
 Scope per tool: `fs_roots` = the workspace (store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (example: `config.example.toml`).
 
+## Risk + paper rows (xmarket, 2026-09-30)
+
+Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) (gate rules, ledger, halts, `tengu risk`). Subject = the ledger account (`[risk] account`, `[A-Za-z0-9._-]`), in full.
+
+| Key | Written by | Row | Status |
+|---|---|---|---|
+| `paper_positions/1:<account>` | `paper_positions` (`risk-paper-tools`); math `domain/xm/ledger.rs::PaperPositions` | features `n_positions`, `cash_usd`, `equity_usd`, `upnl_usd`, `rpnl_usd`, `fees_usd`, `funding_usd`, `gross_exposure_usd`, `net_exposure_usd`, `leverage`, `daily_pnl_usd`, `marks_stale`, `n_marks_stale`, `halted`; per-position rows (full ids, mark, notional, uPnL) in `data` | a failed / stale mark ⇒ `partial`, the numbers it feeds omitted, never 0 |
+| `risk_state/1:<account>` | `risk_status` (opt-in, `xm` plugin, TTL 2 s); `domain/xm/risk_state.rs::RiskStatus` | features `halted`, `reason` (`daily_loss` · `total_loss` · `operator` · `file`), `kill_switch`, `equity_usd`, `cash_usd`, `daily_pnl_usd`, `total_pnl_usd`, `loss_headroom_usd`, `day_start_equity_usd`, `gross_exposure_usd`, `net_exposure_usd`, `leverage`, `n_positions`, `marks_stale`, `orders_last_min`, `open_orders`; `data` = the stored risk state + the valued account | a missing mark, day start or kill-switch state ⇒ `partial`, numbers omitted; an unreadable kill-switch file ⇒ `halted` |
+
+| Tool | Args | Returns | Reads | Writes |
+|---|---|---|---|---|
+| `risk_status` | none | `risk_state/1:<account>` | `<xm_state_dir>/ledger.db` (account opened on first use), `mkt_ctx/1:<id>` rows of the open positions from the store (never fetched; older than `[risk] max_data_age_ms.ctx` ⇒ stale), `kill_switch_file` | the ledger's `risk_state` (UTC day roll + trips, one transaction) and the row (2 s) |
+
 ## Paper fills (xmarket `risk-paper-fill-engine`, 2026-09-30)
 
-Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16). No tool yet: `paper_order` / `paper_close` (`risk-paper-tools`, row `paper_fill/1:<account>:<client_order_id>`) and the live / replay `BookSource` (`risk-gate-enforcement`, `ops-replay-harness`) wire it. Here until the risk + paper operator doc (`risk-docs`).
+Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.rs::fill_with_latency` · book port `ports/book.rs::BookSource` (tracker convention 16). No tool yet: `paper_order` / `paper_close` (`risk-paper-tools`, row `paper_fill/1:<account>:<client_order_id>`) and the live / replay `BookSource` (`risk-gate-enforcement`, `ops-replay-harness`) wire it. Here until `risk-docs` moves it into [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md).
 
 | Piece | Rule |
 |---|---|

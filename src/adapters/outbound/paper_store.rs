@@ -2,10 +2,11 @@
 //! xmarket state dir, `<xm_state_dir>/ledger.db` (tracker convention 3:
 //! `<TENGU_HOME>/state/<xmarket.state>/`, outside every workspace and fs
 //! root; `tengu prune` spares `state/`). WAL + busy_timeout; `place`,
-//! `accrue_funding` and `open_account` each run in one `BEGIN IMMEDIATE`
-//! transaction, so two loops or processes never check-then-act on the same
-//! account (convention 9). Rows are never purged. No `[xmarket]` ⇒
-//! [`open_paper_ledger`] refuses ⇒ the exec tools refuse.
+//! `update_risk_state`, `accrue_funding` and `open_account` each run in one
+//! `BEGIN IMMEDIATE` transaction, so two loops or processes never
+//! check-then-act on the same account (convention 9). Rows are never
+//! purged. No `[xmarket]` ⇒ [`open_paper_ledger`] refuses ⇒ the exec tools
+//! refuse.
 //!
 //! | Table | Key | Row |
 //! |---|---|---|
@@ -16,8 +17,9 @@
 //! | `fills` | id | the ledger fill (VWAP) of a filled / partial order: qty, px, fee, realized P&L, qty before / after |
 //! | `funding` | (account, instrument, hour_ms) | one HL funding payment |
 //! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id |
+//! | `risk_state` | account | `domain::xm::risk_state::RiskState`: halt reason + since, the UTC day + its starting equity (no row = the default) |
 
-// Consumers land in wave W1 (`risk-kill-switch`, `risk-gate-enforcement`,
+// `place` / `accrue_funding` consumers land in wave W1 (`risk-gate-enforcement`,
 // `risk-paper-tools`).
 #![allow(dead_code)]
 
@@ -30,10 +32,13 @@ use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::config::sections::SandboxSections;
+use crate::domain::observation::{ErrorClass, Field, ReadError};
 use crate::domain::xm::ledger::{exit_deadline, Fill, FillEffect, PaperAccount, Position};
 use crate::domain::xm::paper::FillResult;
+use crate::domain::xm::risk::{Halt, HaltReason};
+use crate::domain::xm::risk_state::RiskState;
 use crate::ports::paper::{
-    Decide, Decision, LedgerSnapshot, Outcome, PaperLedger, PlaceRequest, Placement,
+    Decide, Decision, LedgerSnapshot, Outcome, PaperLedger, PlaceRequest, Placement, RiskUpdate,
     StoredDecision, StoredOrder,
 };
 
@@ -79,7 +84,10 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
   allow INTEGER NOT NULL, rule TEXT NOT NULL, verdict TEXT NOT NULL, intent TEXT NOT NULL,
   context TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS risk_decisions_account ON risk_decisions(account, id);
-CREATE INDEX IF NOT EXISTS risk_decisions_call ON risk_decisions(call_id);";
+CREATE INDEX IF NOT EXISTS risk_decisions_call ON risk_decisions(call_id);
+CREATE TABLE IF NOT EXISTS risk_state (
+  account TEXT PRIMARY KEY, halt_reason TEXT, halt_since_ms INTEGER, day_utc_ms INTEGER,
+  day_start_equity_usd REAL, updated_ms INTEGER NOT NULL);";
 
 const UPSERT_POSITION_SQL: &str = "
 INSERT INTO positions(account, instrument, underlying, venue, qty, avg_px, realized_pnl_usd,
@@ -112,6 +120,21 @@ pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn Pa
         )
     })?;
     Ok(Arc::new(SqlitePaperLedger::open(dir)?))
+}
+
+/// `[risk] kill_switch_file` present? Any directory entry at the path
+/// counts (a dangling symlink too); `Error` = could not tell — the gate and
+/// `risk_status` treat it as halted. Checked on every gate call.
+pub(crate) fn kill_switch_state(path: &Path) -> Field<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Field::ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Field::ok(false),
+        Err(e) => Field::err(ReadError::new(
+            "kill_switch",
+            ErrorClass::Fatal,
+            format!("{}: {e}", path.display()),
+        )),
+    }
 }
 
 #[derive(Clone)]
@@ -227,12 +250,70 @@ fn load_snapshot(c: &Connection, account: &str, now_ms: i64) -> Result<LedgerSna
         params![account],
     )?;
     Ok(LedgerSnapshot {
+        risk: load_risk_state(c, account)?,
         account: account_now,
         exit_at_ms,
         orders_last_min,
         open_orders,
         now_ms,
     })
+}
+
+/// The stored risk state; the default when the account has none yet.
+fn load_risk_state(c: &Connection, account: &str) -> Result<RiskState> {
+    let row = c
+        .query_row(
+            "SELECT halt_reason, halt_since_ms, day_utc_ms, day_start_equity_usd, updated_ms
+             FROM risk_state WHERE account = ?1",
+            params![account],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((reason, since, day_utc_ms, day_start_equity_usd, updated_ms)) = row else {
+        return Ok(RiskState::default());
+    };
+    let halt = match (reason, since) {
+        (None, _) => None,
+        (Some(r), Some(since_ms)) => Some(Halt {
+            reason: HaltReason::parse(&r)
+                .ok_or_else(|| anyhow!("risk state of `{account}`: unknown halt reason `{r}`"))?,
+            since_ms,
+        }),
+        (Some(r), None) => bail!("risk state of `{account}`: halt `{r}` without a since time"),
+    };
+    Ok(RiskState {
+        halt,
+        day_utc_ms,
+        day_start_equity_usd,
+        updated_ms,
+    })
+}
+
+fn write_risk_state(c: &Connection, account: &str, s: &RiskState) -> Result<()> {
+    c.execute(
+        "INSERT INTO risk_state(account, halt_reason, halt_since_ms, day_utc_ms,
+           day_start_equity_usd, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(account) DO UPDATE SET halt_reason = excluded.halt_reason,
+           halt_since_ms = excluded.halt_since_ms, day_utc_ms = excluded.day_utc_ms,
+           day_start_equity_usd = excluded.day_start_equity_usd, updated_ms = excluded.updated_ms",
+        params![
+            account,
+            s.halt.as_ref().map(|h| h.reason.as_str()),
+            s.halt.as_ref().map(|h| h.since_ms),
+            s.day_utc_ms,
+            s.day_start_equity_usd,
+            s.updated_ms
+        ],
+    )?;
+    Ok(())
 }
 
 /// `ORDER_COLUMNS` as read; `result` is still JSON.
@@ -564,6 +645,9 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
     let decision = decide(&snapshot);
     check_decision(&req, &decision)?;
     let decision_id = insert_decision(&tx, &req, &decision)?;
+    if let Some(next) = decision.risk.as_ref().filter(|n| **n != snapshot.risk) {
+        write_risk_state(&tx, &req.account, next)?;
+    }
     let LedgerSnapshot {
         mut account,
         exit_at_ms: exits,
@@ -674,6 +758,27 @@ impl PaperLedger for SqlitePaperLedger {
             .await
     }
 
+    async fn update_risk_state(
+        &self,
+        account: &str,
+        now_ms: i64,
+        update: RiskUpdate,
+    ) -> Result<LedgerSnapshot> {
+        let account = account.to_string();
+        self.with_conn(move |conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut snapshot = load_snapshot(&tx, &account, now_ms)?;
+            let next = update(&snapshot).map_err(|e| anyhow!("{e}"))?;
+            if next != snapshot.risk {
+                write_risk_state(&tx, &account, &next)?;
+                snapshot.risk = next;
+            }
+            tx.commit()?;
+            Ok(snapshot)
+        })
+        .await
+    }
+
     async fn order(&self, account: &str, client_order_id: &str) -> Result<Option<StoredOrder>> {
         let (account, id) = (account.to_string(), client_order_id.to_string());
         self.with_conn(move |c| read_order(c, &account, &id)).await
@@ -734,17 +839,17 @@ impl PaperLedger for SqlitePaperLedger {
     }
 }
 
+/// Also the `risk_status` tool's fixtures (`tools/xm/risk_status.rs`).
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::time::Duration;
 
     use super::*;
     use crate::domain::book::fixture::tsla_book;
     use crate::domain::book::Side;
     use crate::domain::market::InstrumentId;
-    use crate::domain::observation::Field;
     use crate::domain::xm::cost::{FeeSchedule, HlKind};
-    use crate::domain::xm::ledger::{Mark, PaperPositions, HOUR_MS};
+    use crate::domain::xm::ledger::{Mark, HOUR_MS};
     use crate::domain::xm::paper::{
         simulate_fill, FillEnv, FillStatus, MarketStatus as VenueStatus, OrderKind, OrderSize,
         PaperOrder, Tif, VenueRules,
@@ -754,22 +859,22 @@ mod tests {
         OrderIntent, RiskContext, RiskLimits,
     };
 
-    const ACCOUNT: &str = "xmarket";
+    pub(crate) const ACCOUNT: &str = "xmarket";
     const SHADOW: &str = "xmarket-shadow";
-    const TSLA: &str = "hyperliquid:xyz:TSLA";
+    pub(crate) const TSLA: &str = "hyperliquid:xyz:TSLA";
     const NVDA: &str = "hyperliquid:xyz:NVDA";
     const TESLA: &str = "company:tesla";
     const OPP: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
     /// Venue time of the fixture book (2026-09-30T13:35:52.605Z).
-    const BOOK_TS: i64 = 1_790_775_352_605;
+    pub(crate) const BOOK_TS: i64 = 1_790_775_352_605;
     /// Orders are placed 400 ms after it.
-    const NOW: i64 = BOOK_TS + 400;
+    pub(crate) const NOW: i64 = BOOK_TS + 400;
     /// Fixture mid: (347.16 + 347.23) / 2.
-    const MID: f64 = 347.195;
+    pub(crate) const MID: f64 = 347.195;
 
     /// The $100 budget (tracker § 7 #3) with a $40 gross cap, so a second
     /// $25 entry breaches it.
-    fn limits() -> RiskLimits {
+    pub(crate) fn limits() -> RiskLimits {
         RiskLimits {
             account: ACCOUNT.into(),
             venues: vec!["hyperliquid".into()],
@@ -803,7 +908,7 @@ mod tests {
     }
 
     /// One order: the intent the gate judges and the order the engine fills.
-    struct Order {
+    pub(crate) struct Order {
         coid: String,
         account: String,
         instrument: String,
@@ -811,10 +916,12 @@ mod tests {
         size: OrderSize,
         reduce_only: bool,
         exit_at_ms: Option<i64>,
+        /// The kill-switch file is present.
+        kill_switch: bool,
     }
 
     /// A $25 market buy of `instrument` on `account`.
-    fn buy(coid: &str, account: &str, instrument: &str) -> Order {
+    pub(crate) fn buy(coid: &str, account: &str, instrument: &str) -> Order {
         Order {
             coid: coid.into(),
             account: account.into(),
@@ -823,6 +930,7 @@ mod tests {
             size: OrderSize::NotionalUsd(25.0),
             reduce_only: false,
             exit_at_ms: None,
+            kill_switch: false,
         }
     }
 
@@ -836,7 +944,7 @@ mod tests {
         }
     }
 
-    fn req(o: &Order, now_ms: i64) -> PlaceRequest {
+    pub(crate) fn req(o: &Order, now_ms: i64) -> PlaceRequest {
         PlaceRequest {
             account: o.account.clone(),
             client_order_id: o.coid.clone(),
@@ -846,9 +954,10 @@ mod tests {
     }
 
     /// What `risk-gate-enforcement` runs inside `place`: value the snapshot
-    /// at the fixture mid, gate the intent against fresh fixture rows, then
-    /// fill against the fixture book. `seen` gets the snapshot.
-    fn gate(
+    /// at the fixture mid with the day rolled, gate the intent against fresh
+    /// fixture rows, fill against the fixture book, record the trips. `seen`
+    /// gets the snapshot.
+    pub(crate) fn gate(
         o: &Order,
         limits: RiskLimits,
         seen: Option<Arc<Mutex<Vec<LedgerSnapshot>>>>,
@@ -881,7 +990,7 @@ mod tests {
             max_slippage_bps: 30.0,
             ref_mid: None,
         };
-        let exit_at_ms = o.exit_at_ms;
+        let (exit_at_ms, kill) = (o.exit_at_ms, o.kill_switch);
         Box::new(move |snap: &LedgerSnapshot| {
             if let Some(seen) = seen {
                 seen.lock().unwrap().push(snap.clone());
@@ -899,9 +1008,7 @@ mod tests {
                     (id.clone(), Field::ok(m))
                 })
                 .collect();
-            let day_start = Some(snap.account.initial_cash_usd);
-            let valued =
-                PaperPositions::build(&snap.account, &marks, now, 20_000, day_start, Some(false));
+            let (valued, rolled) = snap.risk.value(&snap.account, &marks, now, 20_000);
             let book = tsla_book();
             let leg = LegMarket {
                 book: Field::ok(BookInput {
@@ -918,8 +1025,8 @@ mod tests {
             };
             let ctx = RiskContext {
                 account: valued,
-                halt: None,
-                kill_switch: Field::ok(false),
+                halt: rolled.effective_halt(now).cloned(),
+                kill_switch: Field::ok(kill),
                 lifecycle: Field::Absent,
                 orders_last_min: snap.orders_last_min,
                 open_orders: snap.open_orders,
@@ -956,16 +1063,18 @@ mod tests {
             } else {
                 Outcome::Denied
             };
+            let next = rolled.trip(&verdict.trips, now);
             Decision {
                 intent,
                 verdict,
                 context: ctx.digest(now),
                 outcome,
+                risk: (next != snap.risk).then_some(next),
             }
         })
     }
 
-    async fn ledger(dir: &Path) -> SqlitePaperLedger {
+    pub(crate) async fn ledger(dir: &Path) -> SqlitePaperLedger {
         let l = SqlitePaperLedger::open(dir).unwrap();
         l.open_account(ACCOUNT, 100.0, NOW - 60_000).await.unwrap();
         l
@@ -982,6 +1091,7 @@ mod tests {
             "fills",
             "funding",
             "risk_decisions",
+            "risk_state",
         ]
         .into_iter()
         .map(|t| {
@@ -1050,6 +1160,7 @@ mod tests {
             ("orders", 1),
             ("fills", 1),
             ("risk_decisions", 1),
+            ("risk_state", 1),
         ] {
             assert_eq!(r[t], n, "{t}");
         }
@@ -1120,6 +1231,7 @@ mod tests {
             ),
             (1, 0, 0, 0, 1)
         );
+        assert_eq!(r["risk_state"], 1, "the UTC day roll is kept");
         assert_eq!(l.order(ACCOUNT, "o-nvda").await.unwrap(), None);
         let again = l
             .place(req(&o, NOW + 1), gate(&o, limits(), None))
@@ -1400,5 +1512,157 @@ mod tests {
         };
         assert!(open_paper_ledger(&sections).is_ok());
         assert!(ledger_path(&dir.path().join("xmarket")).exists());
+    }
+
+    #[test]
+    fn the_kill_switch_file_is_probed_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let kill = dir.path().join("KILL");
+        assert_eq!(kill_switch_state(&kill), Field::ok(false));
+        std::fs::write(&kill, "").unwrap();
+        assert_eq!(kill_switch_state(&kill), Field::ok(true));
+        std::fs::remove_file(&kill).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.path().join("gone"), &kill).unwrap();
+            assert_eq!(
+                kill_switch_state(&kill),
+                Field::ok(true),
+                "a dangling link counts"
+            );
+        }
+        // Under a file (not a directory): the probe cannot tell.
+        let blocked = dir.path().join("plain");
+        std::fs::write(&blocked, "").unwrap();
+        let e = kill_switch_state(&blocked.join("KILL"));
+        assert!(e.is_error(), "{e:?}");
+    }
+
+    /// The kill-switch file denies entries and records a sticky `file` halt
+    /// in the same transaction; with the file gone the halt stays until a
+    /// resume, and a reduce-only exit passes throughout.
+    #[tokio::test]
+    async fn a_kill_switch_deny_records_a_sticky_halt() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("o-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let mut k = buy("o-2", ACCOUNT, TSLA);
+        k.kill_switch = true;
+        let p = l
+            .place(req(&k, NOW + 100), gate(&k, limits(), None))
+            .await
+            .unwrap();
+        assert_eq!(p.decision.verdict.rule, rules::KILL_SWITCH);
+        let file = Some(Halt {
+            reason: HaltReason::File,
+            since_ms: NOW + 100,
+        });
+        let s = l.snapshot(ACCOUNT, NOW + 200).await.unwrap();
+        assert_eq!(s.risk.halt, file);
+        let o3 = buy("o-3", ACCOUNT, TSLA);
+        let p = l
+            .place(req(&o3, NOW + 300), gate(&o3, limits(), None))
+            .await
+            .unwrap();
+        assert_eq!(
+            p.decision.verdict.rule,
+            rules::HALTED,
+            "file gone, halt kept"
+        );
+        let c = close("o-4", 0.072);
+        let p = l
+            .place(req(&c, NOW + 400), gate(&c, limits(), None))
+            .await
+            .unwrap();
+        assert_eq!(
+            (p.decision.verdict.allow, p.decision.verdict.rule.as_str()),
+            (true, rules::ALLOW_REDUCE_DEGRADED)
+        );
+        let refused = l
+            .update_risk_state(
+                ACCOUNT,
+                NOW + 500,
+                Box::new(|s| s.risk.resume(NOW + 500, true)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("kill-switch file is present"),
+            "{refused}"
+        );
+        let s = l.snapshot(ACCOUNT, NOW + 500).await.unwrap();
+        assert_eq!(s.risk.halt, file);
+        let after = l
+            .update_risk_state(
+                ACCOUNT,
+                NOW + 600,
+                Box::new(|s| s.risk.resume(NOW + 600, false)),
+            )
+            .await
+            .unwrap();
+        assert!(after.risk.halt.is_none());
+        let o5 = buy("o-5", ACCOUNT, TSLA);
+        let p = l
+            .place(req(&o5, NOW + 700), gate(&o5, limits(), None))
+            .await
+            .unwrap();
+        assert!(
+            p.decision.verdict.allow,
+            "{:?}",
+            p.decision.verdict.failed()
+        );
+    }
+
+    /// `update_risk_state` is a read-modify-write; a refused update writes
+    /// nothing; the state survives a reopen and gates the next order.
+    #[tokio::test]
+    async fn risk_state_updates_persist_and_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let operator = Some(Halt {
+            reason: HaltReason::Operator,
+            since_ms: NOW,
+        });
+        {
+            let l = ledger(dir.path()).await;
+            let s = l.snapshot(ACCOUNT, NOW).await.unwrap();
+            assert_eq!(s.risk, RiskState::default());
+            let s = l
+                .update_risk_state(ACCOUNT, NOW, Box::new(|s| Ok(s.risk.halt_operator(NOW))))
+                .await
+                .unwrap();
+            assert_eq!(s.risk.halt, operator);
+            let e = l
+                .update_risk_state(ACCOUNT, NOW + 1, Box::new(|_| Err("refused".into())))
+                .await
+                .unwrap_err();
+            assert_eq!(e.to_string(), "refused");
+            let unknown = l
+                .update_risk_state("nobody", NOW, Box::new(|s| Ok(s.risk.clone())))
+                .await;
+            assert!(unknown.is_err());
+        }
+        let l = SqlitePaperLedger::open(dir.path()).unwrap();
+        let s = l.snapshot(ACCOUNT, NOW + 5).await.unwrap();
+        assert_eq!(
+            (s.risk.halt.clone(), s.risk.updated_ms),
+            (operator.clone(), NOW)
+        );
+        let o = buy("o-1", ACCOUNT, TSLA);
+        let p = l
+            .place(req(&o, NOW + 10), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        assert_eq!(p.decision.verdict.rule, rules::HALTED);
+        let s = l.snapshot(ACCOUNT, NOW + 20).await.unwrap();
+        assert_eq!(s.risk.halt, operator, "the gate call kept the halt");
+        assert_eq!(
+            s.risk.day_start_equity_usd,
+            Some(100.0),
+            "and rolled the day"
+        );
+        assert_eq!(rows(dir.path())["risk_state"], 1);
     }
 }
