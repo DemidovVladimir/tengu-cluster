@@ -1,6 +1,7 @@
 //! Ports — traits the application layer depends on; adapters implement them.
 //! Imports only `domain` and `config` (see `tests/layering_lint.rs`).
 
+pub(crate) mod clock;
 pub(crate) mod decision;
 pub(crate) mod engine;
 pub(crate) mod history;

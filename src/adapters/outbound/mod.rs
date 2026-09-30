@@ -2,6 +2,7 @@
 //! other side-effecting clients the application uses.
 
 pub(crate) mod bridge_env;
+pub(crate) mod clock;
 pub(crate) mod decisions;
 pub(crate) mod egress;
 pub(crate) mod engines;
