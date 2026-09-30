@@ -216,7 +216,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (29 files)
+### domain — data + pure policy (30 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -251,8 +251,9 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/tools.rs` | 45 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/tz.rs` | 277 | Civil time in `America/New_York` / `Europe/Paris` / UTC with hand-rolled DST rules (xmarket clocks, calendars). |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
-| `src/domain/xm/mod.rs` | 11 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
+| `src/domain/xm/mod.rs` | 13 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
 | `src/domain/xm/cost.rs` | 915 | HL price / size rules + rounding, fee schedules (tiers, staking, HIP-3 deployer scale, growth mode), funding carry, gas, round-trip cost, edge after costs. |
+| `src/domain/xm/ledger.rs` | 1160 | Paper ledger math: positions (average cost, flip), HL hourly funding, marks (missing ⇒ error, never 0), `PaperPositions` → `paper_positions/1:<account>`. |
 
 ### ports — traits (10 files)
 

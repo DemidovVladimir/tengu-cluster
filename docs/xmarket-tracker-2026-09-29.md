@@ -172,7 +172,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ | `risk-config-schema` | `[risk]` + `[paper]` sections: every limit required, no defaults, fail closed; `Config::load` rejects unknown top-level keys | §28 §29 §31 | S | rust |
 | ✅ | `risk-calc-costs` | Pure costs: L2 depth walk, HL tick / lot rounding, fee schedules (HIP-3 scale), funding carry, gas, edge after costs | §21 §25 §28 §31 | M | rust |
 | ☐ | `risk-calc-tools` | Store-only compute tools `xm_cost`, `xm_compare` (the row the gate re-reads for `min_edge_bps`; M0: HL book vs HL oracle) | §12 §23 §24 §25 | M | rust |
-| ☐ | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
+| ✅ | `risk-paper-ledger-domain` | Pure ledger math: positions, cash, average-cost P&L, mark-to-market, exposure, leverage, funding | §25 §28 §31 | M | rust |
 | ☐ | `risk-gate-domain` | Pure policy: every §28 rule as a `Check`, fail closed on missing data | §13 §28 §29 §30 | M | rust |
 | ☐ | `risk-paper-ledger-store` | `ledger.db`: one account per sandbox, idempotent `client_order_id`, gate + fill + write in one transaction | §31 §32 | M | rust |
 | ☐ | `risk-paper-fill-engine` | Market / IOC orders, L2 depth-walk fills, partial / failed fills, injected latency, HL rejection codes (ALO in P1; AMM / RFQ path in `rh-paper-fill`) | §20 §25 §31 | L | rust |
