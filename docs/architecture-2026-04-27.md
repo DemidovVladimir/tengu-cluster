@@ -63,7 +63,7 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 - Builds `AgentIpcInput` JSON from the step (agent name, goal, session_id, step_id, `max_turns` = the agent's `limits.max_tool_rounds`, optional `compose` for C→B fallback, **`sandbox_config`** so the child sees the same scopes as the parent — Phase 7.2, **`plan_state`** — the rendered plan for this session, 2026-09-12). `model` / `tools` / `skills` travel empty — the child reads them from its own `[agents.<name>]`.
 - Spawns `tengu run-agent` as a child process with `TENGU_AGENT_IPC=1` env guard and `TENGU_EGRESS` (the parent's *resolved* `[egress]` policy — the child applies it verbatim, 2026-09-16).
 - Pipes the JSON over stdin; reads the result JSON from stdout; kill on drop. Wall-clock cap per step = `limits.step_timeout_secs` (default 600) via `run_with_timeout`.
-- Returns `AgentIpcOutput::Ok { output, summary }` or `Failed { error, output }`.
+- Returns `AgentIpcOutput::Ok { output, summary }` or `Failed { error, output }`, both with `metrics` and `tools` — the step's tool activity (name + ok per call; a Claude Code engine's bridged calls arrive as `StreamEvent::ToolRan`), which `tests/engine_matrix.rs` asserts on.
 
 ### 6. Subagent tool loop (in the child)
 

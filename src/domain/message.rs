@@ -47,6 +47,20 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+/// One tool call as it ran — the activity record of a turn.
+///
+/// | Who ran it | `ok` |
+/// |---|---|
+/// | the harness (OpenRouter, local: `collect_engine_response`, `run-agent`) | the executor returned `Ok` |
+/// | the engine itself (Claude Code → `tengu mcp-bridge`, `StreamEvent::ToolRan`) | the CLI's `tool_result` had no `is_error` |
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRun {
+    /// Tool name as tengu knows it (the bridge's `mcp__tengu-tools__` prefix stripped).
+    pub name: String,
+    /// Returned without error.
+    pub ok: bool,
+}
+
 /// Tool definition exposed to model providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -152,6 +166,11 @@ pub enum StreamEvent {
         input_tokens: u32,
         output_tokens: u32,
     },
+
+    /// A tool call the engine ran itself (Claude Code: the CLI through
+    /// `tengu mcp-bridge`) and its outcome — activity only, never
+    /// dispatched again by the harness.
+    ToolRan { name: String, ok: bool },
 
     /// Terminal event indicating successful completion.
     Done,

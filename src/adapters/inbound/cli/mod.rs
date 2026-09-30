@@ -60,6 +60,13 @@ enum Commands {
         /// (Docker healthcheck).
         #[arg(long)]
         live: bool,
+        /// Also run a tool-using smoke turn (list_directory + read_file in
+        /// a temp workspace) on every agent's own engine + model and print
+        /// agent | engine | model | ok | tools called | secs; fail on any
+        /// failed turn. Calls the models (costs tokens). On macOS a `local`
+        /// agent with a loopback base_url is skipped, never contacted.
+        #[arg(long)]
+        engines: bool,
     },
     /// Run Telegram bot adapter.
     Telegram {
@@ -494,9 +501,14 @@ pub(crate) async fn run() -> Result<()> {
             print_status(&config, profile);
             Ok(())
         }
-        Commands::Doctor { sandbox, tor, live } => {
+        Commands::Doctor {
+            sandbox,
+            tor,
+            live,
+            engines,
+        } => {
             let config = load_sandbox_or(sandbox, config)?;
-            run_doctor(&config, tor, live).await
+            run_doctor(&config, tor, live, engines).await
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {

@@ -6,12 +6,16 @@
 //! |---|---|
 //! | `tool_result_char_cap() = None` (OpenRouter, Claude Code) | text capped at `limits.max_tool_result_chars` |
 //! | `Some(cap)` (local) | `fit_tool_result`: typed row `data` → store-key pointer, then ≤ `min(cap, max_tool_result_chars)` footer included |
+//!
+//! Activity: `EngineResponse.tool_runs` lists every call with its outcome —
+//! the ones run here and the ones the engine ran itself
+//! (`StreamEvent::ToolRan`, Claude Code through `tengu mcp-bridge`).
 
 use anyhow::Result;
 use futures::StreamExt;
 use tracing::debug;
 
-use crate::domain::message::{Message, Role, StreamEvent, ToolCall, ToolDef};
+use crate::domain::message::{Message, Role, StreamEvent, ToolCall, ToolDef, ToolRun};
 use crate::domain::observation::Observation;
 use crate::domain::token::truncate_at_boundary;
 use crate::domain::usage::{absorb_turn_usage_snapshot, apply_turn_usage_to_session_totals};
@@ -29,6 +33,21 @@ pub struct EngineResponse {
     pub output_tokens_delta: u32,
     /// Tool call outcomes collected during the turn (name, result).
     pub tool_outcomes: Vec<(String, String)>,
+    /// Every tool call of the turn in order, with its outcome: the ones run
+    /// here and the ones the engine ran itself (`StreamEvent::ToolRan` —
+    /// Claude Code, which leaves `tool_outcomes` empty).
+    pub tool_runs: Vec<ToolRun>,
+}
+
+/// One drained engine turn (`run_single_engine_turn`).
+pub(crate) struct EngineTurn {
+    pub text: String,
+    /// Calls for the harness to run.
+    pub tool_calls: Vec<ToolCall>,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// Calls the engine already ran (`StreamEvent::ToolRan`).
+    pub engine_runs: Vec<ToolRun>,
 }
 
 /// Optional callback invoked after each tool execution.
@@ -58,6 +77,7 @@ pub async fn collect_engine_response(
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
     let mut tool_outcomes: Vec<(String, String)> = Vec::new();
+    let mut tool_runs: Vec<ToolRun> = Vec::new();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -69,15 +89,18 @@ pub async fn collect_engine_response(
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
                 tool_outcomes,
+                tool_runs,
             });
         }
 
-        let (response_text, tool_calls, input_delta, output_delta) =
+        let turn =
             run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout)
                 .await?;
+        let (response_text, tool_calls) = (turn.text, turn.tool_calls);
+        tool_runs.extend(turn.engine_runs);
 
-        total_input_delta += input_delta;
-        total_output_delta += output_delta;
+        total_input_delta += turn.input_tokens;
+        total_output_delta += turn.output_tokens;
 
         if let Some(budget) = token_budget {
             let total = total_input_delta + total_output_delta;
@@ -93,6 +116,7 @@ pub async fn collect_engine_response(
                     input_tokens_delta: total_input_delta,
                     output_tokens_delta: total_output_delta,
                     tool_outcomes,
+                    tool_runs,
                 });
             }
         }
@@ -129,6 +153,7 @@ pub async fn collect_engine_response(
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
                 tool_outcomes,
+                tool_runs,
             });
         }
 
@@ -152,13 +177,18 @@ pub async fn collect_engine_response(
                     input_tokens_delta: total_input_delta,
                     output_tokens_delta: total_output_delta,
                     tool_outcomes,
+                    tool_runs,
                 });
             }
 
-            let (result, observation) = match executor.execute_typed(tc, &messages).await {
-                Ok(output) => (output.text, output.observation),
-                Err(e) => (format!("ERROR: {}", e), None),
+            let (result, observation, ok) = match executor.execute_typed(tc, &messages).await {
+                Ok(output) => (output.text, output.observation, true),
+                Err(e) => (format!("ERROR: {}", e), None, false),
             };
+            tool_runs.push(ToolRun {
+                name: tc.name.clone(),
+                ok,
+            });
 
             if let Some(observer) = &tool_observer {
                 observer(tc, &result);
@@ -184,20 +214,23 @@ pub async fn collect_engine_response(
     }
 
     // Exhaust all rounds — force a text response.
-    let (response_text, _, input_delta, output_delta) =
+    let turn =
         run_single_engine_turn(engine, &messages, &[], context, cancel, stream_timeout).await?;
-    total_input_delta += input_delta;
-    total_output_delta += output_delta;
+    total_input_delta += turn.input_tokens;
+    total_output_delta += turn.output_tokens;
+    tool_runs.extend(turn.engine_runs);
 
     Ok(EngineResponse {
-        text: response_text,
+        text: turn.text,
         input_tokens_delta: total_input_delta,
         output_tokens_delta: total_output_delta,
         tool_outcomes,
+        tool_runs,
     })
 }
 
-/// Run a single engine turn and collect text, tool calls, and usage.
+/// Run a single engine turn and collect text, tool calls, usage and the
+/// tools the engine ran itself (`EngineTurn`).
 /// Pub(crate) so the run-agent subprocess (Phase 5b) can reuse this stream-
 /// draining loop without duplicating the StreamEvent state machine.
 pub(crate) async fn run_single_engine_turn(
@@ -207,12 +240,13 @@ pub(crate) async fn run_single_engine_turn(
     context: &EngineContext,
     cancel: Option<&std::sync::atomic::AtomicBool>,
     stream_event_timeout_secs: u64,
-) -> Result<(String, Vec<ToolCall>, u32, u32)> {
+) -> Result<EngineTurn> {
     let mut stream = engine.run(messages, tools, context).await?;
 
     let mut response_text = String::new();
     let mut turn_usage_snapshot: Option<(u32, u32)> = None;
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut engine_runs: Vec<ToolRun> = Vec::new();
     let mut pending_tool_id: Option<String> = None;
     let mut pending_tool_name: Option<String> = None;
     let mut pending_tool_args = String::new();
@@ -282,6 +316,7 @@ pub(crate) async fn run_single_engine_turn(
             } => {
                 absorb_turn_usage_snapshot(&mut turn_usage_snapshot, input_tokens, output_tokens);
             }
+            StreamEvent::ToolRan { name, ok } => engine_runs.push(ToolRun { name, ok }),
             StreamEvent::Error { message } => {
                 if response_text.is_empty() {
                     return Err(anyhow::anyhow!("{}", message));
@@ -298,11 +333,17 @@ pub(crate) async fn run_single_engine_turn(
         &mut pending_tool_args,
     );
 
-    let mut input_delta: u32 = 0;
-    let mut output_delta: u32 = 0;
-    apply_turn_usage_to_session_totals(&mut input_delta, &mut output_delta, turn_usage_snapshot);
+    let mut input_tokens: u32 = 0;
+    let mut output_tokens: u32 = 0;
+    apply_turn_usage_to_session_totals(&mut input_tokens, &mut output_tokens, turn_usage_snapshot);
 
-    Ok((response_text, tool_calls, input_delta, output_delta))
+    Ok(EngineTurn {
+        text: response_text,
+        tool_calls,
+        input_tokens,
+        output_tokens,
+        engine_runs,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +630,132 @@ mod tests {
         // Observers / outcomes keep the raw result.
         assert_eq!(outcomes[0].1.len(), 100_000);
         assert_eq!(outcomes[1].1, typed_obs().render_text(0));
+    }
+
+    /// `tool_runs`: calls the engine ran itself (`ToolRan`) and the ones
+    /// dispatched here, in order, `ok` from the executor.
+    #[tokio::test]
+    async fn tool_runs_record_engine_and_dispatched_calls() {
+        struct Mixed(Mutex<u32>);
+        #[async_trait::async_trait]
+        impl Engine for Mixed {
+            fn id(&self) -> &str {
+                "mixed"
+            }
+            fn context_window(&self) -> usize {
+                16_384
+            }
+            fn supports_tool_use(&self) -> bool {
+                true
+            }
+            fn manages_own_workspace(&self) -> bool {
+                false
+            }
+            fn available_models(&self) -> Vec<ModelInfo> {
+                Vec::new()
+            }
+            async fn run(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDef],
+                _context: &EngineContext,
+            ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+                let mut round = self.0.lock().unwrap();
+                let ran = |name: &str, ok| StreamEvent::ToolRan {
+                    name: name.into(),
+                    ok,
+                };
+                let call = |id: &str, name: &str| {
+                    [
+                        StreamEvent::ToolCallStart {
+                            id: id.into(),
+                            name: name.into(),
+                        },
+                        StreamEvent::ToolCallEnd { id: id.into() },
+                    ]
+                };
+                let mut events = if *round == 0 {
+                    let mut v = vec![ran("bridged", false)];
+                    v.extend(call("c1", "big"));
+                    v.extend(call("c2", "boom"));
+                    v
+                } else {
+                    vec![
+                        ran("late", true),
+                        StreamEvent::TextDelta {
+                            text: "done".into(),
+                        },
+                    ]
+                };
+                events.push(StreamEvent::Done);
+                *round += 1;
+                Ok(Box::pin(futures::stream::iter(events)))
+            }
+        }
+        struct Boom;
+        #[async_trait::async_trait]
+        impl ToolExecutor for Boom {
+            async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+                Ok(self.execute_typed(call, m).await?.text)
+            }
+            async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+                match call.name.as_str() {
+                    "boom" => anyhow::bail!("boom failed"),
+                    _ => Ok(ToolOutput::from("fine".to_string())),
+                }
+            }
+        }
+        let tools = [ToolDef::new(
+            "big",
+            "d",
+            serde_json::json!({"type": "object"}),
+        )];
+        let context = EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: None,
+            max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
+        };
+        let prompt = [Message {
+            role: Role::User,
+            content: "go".into(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let resp = collect_engine_response(
+            &Mixed(Mutex::new(0)),
+            &prompt,
+            &tools,
+            &context,
+            Some(&Boom),
+            None,
+            None,
+            None,
+            5,
+            300_000,
+            30,
+            200,
+        )
+        .await
+        .unwrap();
+        let runs: Vec<(&str, bool)> = resp
+            .tool_runs
+            .iter()
+            .map(|r| (r.name.as_str(), r.ok))
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                ("bridged", false),
+                ("big", true),
+                ("boom", false),
+                ("late", true)
+            ]
+        );
+        assert_eq!(resp.tool_outcomes.len(), 2, "dispatched calls only");
+        assert_eq!(resp.text, "done");
     }
 
     #[tokio::test]

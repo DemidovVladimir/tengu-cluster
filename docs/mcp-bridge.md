@@ -83,7 +83,7 @@ Shape of the temp `--mcp-config` file:
 | Probe | `claude -p "reply ok" --strict-mcp-config --mcp-config <tmp.json>` (CLI 2.1.285, subscription); the stdio server was a throwaway `sh -c 'env > $TMPDIR/…'` with one var in its `env` block and one set only in the CLI's env |
 | Seen by the server | both vars, plus the CLI's whole env (71 vars: `PATH`, `HOME`, `TMPDIR`, …) |
 | Meaning | the `env` block is **merged over** the inherited env. Vault secrets (loaded into the parent's env), `TENGU_HOME`, `TENGU_AGENT_IPC`, `TENGU_MEMORY_DATABASE_URL` reach the bridge by inheritance; no secret value is added to the temp file for redaction |
-| If a CLI release switches to replace | the explicit keys above still arrive; other secret values would not (not redacted, but not visible to the bridge's tools either) — `x-engine-matrix-smoke` is the live check |
+| If a CLI release switches to replace | the explicit keys above still arrive; other secret values would not (not redacted, but not visible to the bridge's tools either) — the live check is the engine matrix's `claude_code_workspace` leg (2026-09-30, CLI 2.1.286: a value named in `TENGU_SECRETS_LOADED` came back `[REDACTED]` through the bridge) |
 
 ### Agent + config resolution
 
@@ -161,9 +161,10 @@ server starts even without these — tool calls just error or degrade.
 | Test | Covers |
 |---|---|
 | `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant under `run-agent`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` |
-| `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT` |
+| `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`; `tool_use` → `tool_result` pairs become `StreamEvent::ToolRan` |
 | `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]` |
 | `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20) |
+| `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs the workspace, Hyperliquid and `risk_status` tool sets through a real bridge — workspace grant under `run-agent`, a registered secret back as `[REDACTED]` (`docs/engine-backends.md` § Engine matrix) |
 
 Manual test with stdin:
 ```bash
@@ -202,7 +203,7 @@ Tools whose upstream host is hard-coded (no base-URL override) run their determi
 
 ## Parity rule (operator, 2026-09-30)
 
-Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). `x-bridge-parity` (2026-09-30) closed the config, secrets, `no_shell` and call-id gaps (§ Configuration); `x-claude-code-hardening` added `--strict-mcp-config` and built-in tools off in hardened sandboxes; `x-bridge-conformance-test` checks every catalog tool in CI (§ Testing). Still open in E0 (`docs/xmarket-tracker-2026-09-29.md`), `x-engine-parity-audit`:
+Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). `x-bridge-parity` (2026-09-30) closed the config, secrets, `no_shell` and call-id gaps (§ Configuration); `x-claude-code-hardening` added `--strict-mcp-config` and built-in tools off in hardened sandboxes; `x-bridge-conformance-test` checks every catalog tool in CI; `x-engine-matrix-smoke` runs tool sets live through the CLI (§ Testing). Still open in E0 (`docs/xmarket-tracker-2026-09-29.md`), `x-engine-parity-audit`:
 
 | Gap | Where |
 |---|---|

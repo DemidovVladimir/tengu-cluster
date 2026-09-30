@@ -1,0 +1,102 @@
+# Engine-matrix fixture sandbox (x-engine-matrix-smoke): the Claude CLI on the
+# subscription, hardened (built-in tools off — required by [risk]; the engine
+# always passes --strict-mcp-config), tools through `tengu mcp-bridge`.
+# tests/engine_matrix.rs runs `tengu run-agent` on it once per tool set (build
+# with --features claude_code); the doctor's smoke turn:
+#   tengu -c tests/fixtures/engine_matrix/claude_code.toml doctor --engines
+# The test sets TENGU_MATRIX_WORKSPACE (a fresh temp dir holding the token
+# file), TENGU_HOME (fresh: ledger.db) and a registered secret
+# (TENGU_SECRETS_LOADED) the bridge must redact.
+#
+# Everything above [agents.*] is identical in the three fixtures
+# (`fixtures_load_and_agree` checks it).
+
+[egress]
+network = "open"
+
+[memory]
+enabled = false
+
+# `risk_status`: a new paper account per leg, `ledger.db` under
+# <TENGU_HOME>/state/engine-matrix/. Its equity = initial_cash_usd = 86.42,
+# a number the model can only learn from the tool.
+[xmarket]
+state = "engine-matrix"
+
+[risk]
+account = "matrix"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = ["hyperliquid:xyz:TSLA"]
+instruments_deny = []
+max_order_notional_usd = 25
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 100
+max_gross_exposure_usd = 100
+max_net_exposure_usd = 100
+max_leverage = 1
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10
+max_slippage_bps = 30
+min_depth_usd = 250
+require_hedge_for = ["convergence"]
+max_skew_ms = 5000
+max_orders_per_min = 6
+max_open_orders = 4
+kill_switch_file = "/nonexistent/tengu-engine-matrix/KILL"
+allow_reduce_degraded = true
+
+[risk.max_data_age_ms]
+book = 5000
+ctx = 20000
+reference = 60000
+quote = 20000
+
+[paper]
+initial_cash_usd = 86.42
+latency_ms = 250
+latency_jitter_ms = 100
+fee_tier = 0
+staking_discount_pct = 0
+order_types = ["market", "ioc"]
+
+# Configured scopes that do NOT cover the workspace: every tool works only
+# through the workspace grant a run-agent step adds to each configured scope
+# (in the bridge too, for Claude Code) — the matrix proves that grant.
+[default_scopes.list_directory]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.read_file]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.write_file]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.hl_ctx]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.hl_book]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.risk_status]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[agents.claude]
+engine = "claude_code"
+model = "claude-haiku-4-5"
+description = "Engine-matrix fixture: Claude CLI (subscription) claude-haiku-4-5, built-ins off."
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "risk_status"]
+workspace = "${TENGU_MATRIX_WORKSPACE}"
+
+[agents.claude.claude_code]
+builtin_tools_profile = "none"
+
+[agents.claude.limits]
+max_tool_rounds = 10

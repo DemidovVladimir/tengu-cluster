@@ -97,7 +97,7 @@ base_url = "http://127.0.0.1:11434/v1"
 api_key_env = ""
 ```
 
-Live check: `x-engine-matrix-smoke` (E0, `docs/xmarket-tracker-2026-09-29.md`).
+Live check: § Engine matrix below — the local legs run against the operator's PC over the LAN, never a model on the Mac.
 
 ## Claude Code (`engine = "claude_code"`)
 
@@ -113,7 +113,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 3. Claude CLI loads its own CLAUDE.md and native tools. MCP: `--strict-mcp-config` on every run — only the `--mcp-config` servers (the tengu bridge); the operator's user / project / plugin MCP servers are never loaded (no bridge ⇒ no MCP server)
 4. Tengu tools (`EngineContext.bridge_tools`) are written to a temp `--mcp-config` that launches `tengu mcp-bridge` ([[mcp-bridge]]); each is allow-listed as `--allowedTools mcp__tengu-tools__<name>`; the sandbox's `[[mcp_servers]]` reach Claude only through the bridge
 5. Claude executes the full prompt internally (may use many tools across multiple turns)
-6. NDJSON `assistant` text → `StreamEvent::TextDelta`; `result` → `StreamEvent::Done`
+6. NDJSON `assistant` text → `StreamEvent::TextDelta`; `result` → `StreamEvent::Done`; each `tool_use` → `tool_result` pair → `StreamEvent::ToolRan` (name without `mcp__tengu-tools__`, `ok = !is_error`) — the activity record (`EngineResponse.tool_runs`, IPC `AgentIpcOutput.tools`)
 7. Tengu's outer tool loop sees no tool calls — passes through immediately
 
 ### Key properties
@@ -164,6 +164,45 @@ Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, w
 
 See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skills) are exposed to Claude.
 
+## Engine matrix (`x-engine-matrix-smoke`)
+
+One scripted `tengu run-agent` turn per engine × model × tool set (`tests/engine_matrix.rs`, fixtures `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml`, one agent per engine × model, the set via IPC `compose`). A leg passes when every tool of the set ran without error (IPC `tools`) and its result reached the answer. The fixtures' scopes exclude the workspace, so every call also proves the `run-agent` workspace grant (the bridge's for Claude Code).
+
+| Tool set | Calls | Result read = |
+|---|---|---|
+| workspace | `list_directory`, `read_file` (token file), `write_file` `answer.txt`, `read_file` (a registered secret, `TENGU_SECRETS_LOADED`) | the token in the answer and in `answer.txt`; `REDACTED` in the answer, the value nowhere in stdout / stderr; Claude Code: the bridge's result logged as `[REDACTED]` |
+| hyperliquid | `hl_ctx` `{"coins": ["xyz:TSLA"]}`, `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | a number of each stored row's headline (`mkt_ctx/1`, `hl_book/1`) |
+| xm | `risk_status` — `[xmarket]` + `[risk]` + `[paper]`, a new ledger in a temp `TENGU_HOME` | equity `86.42` (the fixtures' `initial_cash_usd`) |
+
+| Command | Runs |
+|---|---|
+| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg; one `engine_matrix \|` line each (secs, tokens, Claude CLI cost); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL` |
+| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace + xm sets), fixture checks |
+| `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
+
+Results 2026-09-30 (Mac; Claude CLI 2.1.286; OpenRouter list prices):
+
+| Engine · model | workspace | hyperliquid | xm | Cost (3 legs) |
+|---|---|---|---|---|
+| openrouter · `google/gemini-2.5-flash-lite` | ✅ 3.2 s | ✅ 3.8 s | ✅ 1.6 s | ≈ $0.001 |
+| openrouter · `anthropic/claude-haiku-4.5` | ✅ 7.0 s | ✅ 5.7 s | ✅ 4.3 s | ≈ $0.022 |
+| claude_code · `claude-haiku-4-5`, built-ins off | ✅ 17.4 s | ✅ 19.3 s | ✅ 11.2 s | subscription (CLI: $0.058 API-equivalent) |
+| local · `gemma4:latest` | — | — | — | runs on the operator's PC (below) |
+| `tengu doctor --engines` | gemini ✅ 1.7 s · haiku ✅ 3.7 s · claude ✅ 6.6 s · local (loopback) skipped | | | |
+
+| Seen | Detail |
+|---|---|
+| gemini-2.5-flash-lite flake | 1 of 26 workspace legs: first turn 472 prompt / 366 completion tokens, no text and no tool call → `status = failed`; 25 others passed. Rerun the leg |
+| Claude Code `compress_and_store` | through the bridge answers an error (known, [[mcp-bridge]] § Parity rule); the final text becomes the summary — every leg still passes |
+
+Local leg — the operator's Windows PC over the LAN:
+
+| Where | Step |
+|---|---|
+| PC | Ollama serving on the LAN with a 16k window: user env `OLLAMA_HOST=0.0.0.0:11434`, `OLLAMA_CONTEXT_LENGTH=16384`, restart Ollama; `ollama pull gemma4:latest`; allow TCP 11434 inbound on the private network |
+| Mac (matrix) | `TENGU_MATRIX_LOCAL_BASE_URL=http://<windows-pc>:11434/v1 CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 cargo test --test engine_matrix local_ -- --ignored --nocapture --test-threads 1` |
+| Mac (doctor) | `TENGU_MATRIX_LOCAL_BASE_URL=http://<windows-pc>:11434/v1 CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 cargo run -- -c tests/fixtures/engine_matrix/local.toml doctor --engines` |
+
 ## Adding a New Backend
 
 To add a new engine backend:
@@ -175,6 +214,7 @@ To add a new engine backend:
 5. Add engine name to config validation in `config.rs` `validate_agent()`
 6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`
 7. Build its HTTP client with `egress::policy().llm_api_client` (or pass `claude_cli_env()` to a subprocess) — a bare `reqwest::Client` bypasses `[egress]`
+8. Engine matrix: a fixture under `tests/fixtures/engine_matrix/` + its legs in `tests/engine_matrix.rs` (§ Engine matrix); an engine that runs tools itself emits `StreamEvent::ToolRan` per call
 
 ## Related
 - [[architecture]] — system overview

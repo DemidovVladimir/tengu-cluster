@@ -8,6 +8,9 @@
 //!
 //! The NDJSON stream yields per-turn events: system init (session_id), assistant
 //! messages (text + tool activity), and a final result with cost/usage metrics.
+//! Each `tool_use` → `tool_result` pair becomes `StreamEvent::ToolRan` (name
+//! without the `mcp__tengu-tools__` prefix, `ok = !is_error`): the harness
+//! never runs these calls, so this is its only record of them.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -294,15 +297,26 @@ fn cli_args(
     args
 }
 
+/// The tengu name of a tool the CLI called: bridged tools arrive as
+/// `mcp__tengu-tools__<name>`, built-ins (`Read`, `Bash`) as they are.
+fn tengu_tool_name(cli_name: &str) -> &str {
+    cli_name
+        .strip_prefix("mcp__tengu-tools__")
+        .unwrap_or(cli_name)
+}
+
 /// Process a single NDJSON line from the Claude CLI stream.
 ///
 /// Returns events to emit. Mutates `emitted_text` to track whether any
 /// assistant text has been sent (used to decide whether result.result
-/// needs to be emitted as a fallback).
+/// needs to be emitted as a fallback). `tool_names` maps each `tool_use` id
+/// to its tool until the matching `tool_result` turns into
+/// `StreamEvent::ToolRan` (the CLI runs the tools; this is the activity).
 fn process_ndjson_line(
     line: &str,
     emitted_text: &mut bool,
     tool_call_count: &mut u32,
+    tool_names: &mut std::collections::HashMap<String, String>,
 ) -> Vec<StreamEvent> {
     let json: serde_json::Value = match serde_json::from_str(line) {
         Ok(v) => v,
@@ -364,6 +378,10 @@ fn process_ndjson_line(
                                     .get("name")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("unknown");
+                                if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                                    tool_names
+                                        .insert(id.to_string(), tengu_tool_name(name).to_string());
+                                }
                                 let input_summary = block
                                     .get("input")
                                     .map(|v| {
@@ -503,6 +521,12 @@ fn process_ndjson_line(
                             .get("is_error")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
+                        events.push(StreamEvent::ToolRan {
+                            name: tool_names
+                                .remove(tool_id)
+                                .unwrap_or_else(|| "unknown".to_string()),
+                            ok: !is_error,
+                        });
                         let result_text = block
                             .get("content")
                             .map(|v| match v {
@@ -708,6 +732,7 @@ impl Engine for ClaudeCodeEngine {
             let mut lines = reader.lines();
             let mut emitted_text = false;
             let mut tool_call_count: u32 = 0;
+            let mut tool_names = std::collections::HashMap::new();
             let idle_timeout = Duration::from_secs(timeout_secs);
 
             let mut timed_out = false;
@@ -718,8 +743,12 @@ impl Engine for ClaudeCodeEngine {
                         if line.trim().is_empty() {
                             continue;
                         }
-                        let events =
-                            process_ndjson_line(&line, &mut emitted_text, &mut tool_call_count);
+                        let events = process_ndjson_line(
+                            &line,
+                            &mut emitted_text,
+                            &mut tool_call_count,
+                            &mut tool_names,
+                        );
                         for event in events {
                             if tx.send(event).await.is_err() {
                                 break;
@@ -880,6 +909,41 @@ mod tests {
             !no_tools.iter().any(|a| a == "--allowedTools"),
             "never bare"
         );
+    }
+
+    /// `tool_use` → `tool_result` pairs become `ToolRan` (bridge prefix
+    /// stripped, `ok = !is_error`, built-ins keep their name); a result with
+    /// no known `tool_use` is `unknown`; text still streams.
+    #[test]
+    fn tool_results_become_tool_ran_events() {
+        let lines = [
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"listing"},{"type":"tool_use","id":"toolu_1","name":"mcp__tengu-tools__list_directory","input":{"path":"."}},{"type":"tool_use","id":"toolu_2","name":"Read","input":{}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"a.txt"}]},{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"denied"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_9","is_error":false,"content":"x"}]}}"#,
+        ];
+        let (mut text, mut count, mut names) = (false, 0u32, std::collections::HashMap::new());
+        let events: Vec<StreamEvent> = lines
+            .iter()
+            .flat_map(|l| process_ndjson_line(l, &mut text, &mut count, &mut names))
+            .collect();
+        let ran: Vec<(String, bool)> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolRan { name, ok } => Some((name.clone(), *ok)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ran,
+            [
+                ("list_directory".to_string(), true),
+                ("Read".to_string(), false),
+                ("unknown".to_string(), true),
+            ]
+        );
+        assert!(matches!(&events[0], StreamEvent::TextDelta { text } if text == "listing"));
+        assert_eq!(count, 2);
+        assert!(names.is_empty(), "every tool_use was resolved: {names:?}");
     }
 
     /// The bridge env names the agent and its config file (absolute — the

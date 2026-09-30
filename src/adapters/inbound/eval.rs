@@ -1466,6 +1466,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 input_tokens_delta: 0,
                 output_tokens_delta: 0,
                 tool_outcomes: vec![],
+                tool_runs: vec![],
             },
         ),
     };

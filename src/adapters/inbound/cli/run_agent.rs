@@ -63,7 +63,9 @@ async fn try_persist_agentic_step_summary(
 ///    - empty tool_calls (model done)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
-/// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit.
+/// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
+///    per-turn `metrics` and the tool activity `tools` (every call and its
+///    outcome, bridged Claude Code calls included).
 pub(super) async fn run_agent_subprocess() -> Result<()> {
     use crate::domain::message::{Message, Role};
     use crate::ports::engine::EngineContext;
@@ -366,6 +368,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // Per-turn metrics records — shipped back to the parent in the IPC
     // output so they can be re-emitted on the parent's metrics bus.
     let mut subagent_metrics: Vec<crate::domain::metrics::MetricsRecord> = Vec::new();
+    // Tool activity in call order (IPC `tools`): calls dispatched below and
+    // the ones a Claude Code engine ran through its bridge.
+    let mut tool_runs: Vec<crate::domain::message::ToolRun> = Vec::new();
 
     for turn in 0..input.max_turns {
         // Compute the prompt size BEFORE the engine call so the metric
@@ -377,17 +382,23 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         let prompt_bytes: u32 = messages.iter().map(|m| m.content.len() as u32).sum();
         let turn_started = std::time::Instant::now();
 
-        let (text, tool_calls, input_delta, output_delta) =
-            crate::application::chat::tool_loop::run_single_engine_turn(
-                engine.as_ref(),
-                &messages,
-                &tools,
-                &context,
-                None,
-                stream_event_timeout_secs,
-            )
-            .await
-            .context("engine turn failed")?;
+        let drained = crate::application::chat::tool_loop::run_single_engine_turn(
+            engine.as_ref(),
+            &messages,
+            &tools,
+            &context,
+            None,
+            stream_event_timeout_secs,
+        )
+        .await
+        .context("engine turn failed")?;
+        tool_runs.extend(drained.engine_runs);
+        let (text, tool_calls, input_delta, output_delta) = (
+            drained.text,
+            drained.tool_calls,
+            drained.input_tokens,
+            drained.output_tokens,
+        );
 
         // Record one metric per engine turn. `input_delta`/`output_delta`
         // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
@@ -436,7 +447,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
         // Dispatch each tool call.
         for call in &tool_calls {
-            let (result, observation) = if call.name == "compress_and_store" {
+            let (result, observation, ok) = if call.name == "compress_and_store" {
                 // Out-of-band handling: capture the summary here; with
                 // `postgres_memory` it is persisted to Postgres `agentic_memory`.
                 let extracted_summary = call
@@ -457,19 +468,24 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                     )
                     .await;
                 }
-                ("stored".to_string(), None)
+                ("stored".to_string(), None, true)
             } else if let Some(ref exec) = executor {
                 use crate::ports::engine::ToolExecutor;
                 match exec.execute_typed(call, &messages).await {
-                    Ok(out) => (out.text, out.observation),
-                    Err(e) => (format!("tool error: {}", e), None),
+                    Ok(out) => (out.text, out.observation, true),
+                    Err(e) => (format!("tool error: {}", e), None, false),
                 }
             } else {
                 (
                     format!("tool '{}' is not available in this subprocess", call.name),
                     None,
+                    false,
                 )
             };
+            tool_runs.push(crate::domain::message::ToolRun {
+                name: call.name.clone(),
+                ok,
+            });
             let content = match result_cap {
                 Some(cap) => crate::application::chat::tool_loop::fit_tool_result(
                     &result,
@@ -576,6 +592,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             output,
             summary,
             metrics: subagent_metrics,
+            tools: tool_runs,
         }
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
@@ -587,6 +604,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             ),
             output,
             metrics: subagent_metrics,
+            tools: tool_runs,
         }
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
