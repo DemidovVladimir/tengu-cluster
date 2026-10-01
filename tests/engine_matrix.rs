@@ -10,7 +10,7 @@
 //!
 //! | Fixture family | Files | Sandbox | Sets |
 //! |---|---|---|---|
-//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab` |
+//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout` |
 //! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
@@ -19,6 +19,7 @@
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //! | `xlab` | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z → `backtest` the fixtures' library strategy `matrix_fade` (rule W on `xyz:TSLA`) → `backtest` an inline spec (`matrix_move`, a move trigger) over the same window — no network: the leg's warehouse (`<TENGU_HOME>/state/engine-matrix/market.db`) is seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | the answer quotes the last close (360.2), `ret_bps` (−331.2, within 0.05) and each run's research mean net bps (+76.43, −27.39, within 0.005); both run dirs under `<TENGU_HOME>/state/engine-matrix/backtests/` |
+//! | `xlab_holdout` | `backtest` `{"run_id": "20261001T182112Z-conf_rows", "view": "trades", "holdout": true}` (a stored split run's rows by id, its holdout shown: a read; first, before any other run id is in the conversation) → `matrix_move` with `split = time:2026-09-27` (the holdout hidden: the in-sample run) → the same + `holdout = true` (both halves: a second read) — the xlab warehouse + the stored run from `tests/fixtures/xlab/run_conf_rows/` seeded first; a set of its own: weak models misread five results in one turn | the answer quotes the hidden run's mean (+2.07), the holdout half's mean (−56.86) and the worst trade's gross bps (−53.02, only in the `trades` rows) within 0.005; `holdout-reads.jsonl` holds both scripted reads (`backtest` · `matrix_move`, `rows` · `conf_rows`; any order — a repeated or extra read of the split is one more line) and no read of another split |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
@@ -48,7 +49,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too) (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -104,6 +105,25 @@ const XLAB_STRATEGY: &str = "matrix_fade";
 /// `matrix_fade`, then the inline spec of [`xlab_spec`].
 const XLAB_FADE_MEAN_BPS: f64 = 76.43;
 const XLAB_MOVE_MEAN_BPS: f64 = -27.39;
+/// The xlab_holdout set's split of [`xlab_spec`], between its two trades
+/// (decided 2026-09-26T01:00Z, +2.07 net bps · 2026-09-27T23:00Z, −56.86 net
+/// bps — simple-return P&L; the stored run in the fixture was written by the log-return engine:
+/// its rows keep gross −53.02, −57.00 net): the hidden run's in-sample mean and the holdout read's
+/// holdout half.
+const XLAB_SPLIT: &str = "time:2026-09-27T00:00:00Z";
+const XLAB_IN_SAMPLE_MEAN_BPS: f64 = 2.07;
+const XLAB_HOLDOUT_MEAN_BPS: f64 = -56.86;
+/// A stored run the leg's warehouse is seeded with
+/// (`tests/fixtures/xlab/run_conf_rows/`: [`xlab_spec`]'s holdout read, made
+/// by the tool on the same dataset) — read by its id with `run_id` + `view`,
+/// its holdout rows too (a second counted read): the worst trade's gross
+/// bps, printed only by those rows.
+const XLAB_STORED_RUN: &str = "20261001T182112Z-conf_rows";
+const XLAB_STORED_RUN_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/xlab/run_conf_rows"
+);
+const XLAB_WORST_GROSS_BPS: f64 = -53.02;
 
 /// The xlab set's inline strategy spec (the Architect's level-2 capability):
 /// fade a ≥ 25 bps hourly move on `xyz:TSLA`, out after 3 bars.
@@ -202,6 +222,7 @@ enum Set {
     Hyperliquid,
     Xm,
     Xlab,
+    XlabHoldout,
     Shell,
     Memory,
     Skills,
@@ -215,11 +236,12 @@ enum Set {
 }
 
 impl Set {
-    const ALL: [Set; 14] = [
+    const ALL: [Set; 15] = [
         Set::Workspace,
         Set::Hyperliquid,
         Set::Xm,
         Set::Xlab,
+        Set::XlabHoldout,
         Set::Shell,
         Set::Memory,
         Set::Skills,
@@ -238,6 +260,7 @@ impl Set {
             Set::Hyperliquid => "hyperliquid",
             Set::Xm => "xm",
             Set::Xlab => "xlab",
+            Set::XlabHoldout => "xlab_holdout",
             Set::Shell => "shell",
             Set::Memory => "memory",
             Set::Skills => "skills",
@@ -255,7 +278,7 @@ impl Set {
     fn hardened(self) -> bool {
         matches!(
             self,
-            Set::Workspace | Set::Hyperliquid | Set::Xm | Set::Xlab
+            Set::Workspace | Set::Hyperliquid | Set::Xm | Set::Xlab | Set::XlabHoldout
         )
     }
 
@@ -283,6 +306,7 @@ impl Set {
                 "xm_weekend_fade",
             ],
             Set::Xlab => &["market_history", "backtest"],
+            Set::XlabHoldout => &["backtest"],
             Set::Shell => &["run_command", "matrix__token"],
             Set::Memory => &["memory_ingest", "memory_search", "persistent_store"],
             Set::Skills => &[
@@ -441,6 +465,28 @@ impl Set {
                     ),
                 ],
                 "the last_close= value and the ret_bps= value market_history returned, then the mean_net_bps= value each backtest call returned on its first line, exactly as printed",
+                "",
+            ),
+            // The stored run is read first: no other run id is in the
+            // conversation yet (a weak model swaps in the newest one).
+            Set::XlabHoldout => (
+                vec![
+                    call(
+                        "backtest",
+                        json!({"run_id": XLAB_STORED_RUN, "view": "trades", "holdout": true}),
+                    ),
+                    call(
+                        "backtest",
+                        json!({"spec": xlab_spec(), "from": XLAB_FROM, "to": XLAB_TO,
+                               "split": XLAB_SPLIT}),
+                    ),
+                    call(
+                        "backtest",
+                        json!({"spec": xlab_spec(), "from": XLAB_FROM, "to": XLAB_TO,
+                               "split": XLAB_SPLIT, "holdout": true}),
+                    ),
+                ],
+                "the gross_bps of the worst trade step 1 listed, then the mean_net_bps= value step 2 returned on its first line, then the holdout mean_net_bps= value step 3 printed on its `split ... research:` line, exactly as printed",
                 "",
             ),
             Set::Shell => (
@@ -643,6 +689,7 @@ live_legs! {
     openrouter_gemini_hyperliquid => GEMINI, Set::Hyperliquid;
     openrouter_gemini_xm => GEMINI, Set::Xm;
     openrouter_gemini_xlab => GEMINI, Set::Xlab;
+    openrouter_gemini_xlab_holdout => GEMINI, Set::XlabHoldout;
     openrouter_gemini_shell => GEMINI, Set::Shell;
     openrouter_gemini_memory => GEMINI, Set::Memory;
     openrouter_gemini_skills => GEMINI, Set::Skills;
@@ -657,6 +704,7 @@ live_legs! {
     openrouter_haiku_hyperliquid => HAIKU, Set::Hyperliquid;
     openrouter_haiku_xm => HAIKU, Set::Xm;
     openrouter_haiku_xlab => HAIKU, Set::Xlab;
+    openrouter_haiku_xlab_holdout => HAIKU, Set::XlabHoldout;
     openrouter_haiku_shell => HAIKU, Set::Shell;
     openrouter_haiku_memory => HAIKU, Set::Memory;
     openrouter_haiku_skills => HAIKU, Set::Skills;
@@ -671,6 +719,7 @@ live_legs! {
     claude_code_hyperliquid => CLAUDE, Set::Hyperliquid;
     claude_code_xm => CLAUDE, Set::Xm;
     claude_code_xlab => CLAUDE, Set::Xlab;
+    claude_code_xlab_holdout => CLAUDE, Set::XlabHoldout;
     claude_code_shell => CLAUDE, Set::Shell;
     claude_code_memory => CLAUDE, Set::Memory;
     claude_code_skills => CLAUDE, Set::Skills;
@@ -685,6 +734,7 @@ live_legs! {
     local_hyperliquid => GEMMA, Set::Hyperliquid;
     local_xm => GEMMA, Set::Xm;
     local_xlab => GEMMA, Set::Xlab;
+    local_xlab_holdout => GEMMA, Set::XlabHoldout;
     local_shell => GEMMA, Set::Shell;
     local_memory => GEMMA, Set::Memory;
     local_skills => GEMMA, Set::Skills;
@@ -932,6 +982,10 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
     match set {
         Set::Xm => seed_opportunity(ws),
         Set::Xlab => seed_market_history(target, ws, envs),
+        Set::XlabHoldout => {
+            seed_market_history(target, ws, envs);
+            seed_stored_run(ws);
+        }
         Set::Shell => {
             write("shell-token.txt", &ws.shell_token);
             write("skill-token.txt", &ws.skill_token);
@@ -1293,6 +1347,28 @@ fn seed_market_history(target: Target, ws: &Workspace, envs: &[(&str, String)]) 
     );
 }
 
+/// The stored run the xlab set reads by id ([`XLAB_STORED_RUN`]): its
+/// `report.json` and trade files into the leg's
+/// `<TENGU_HOME>/state/engine-matrix/backtests/<run id>/`, as the tool wrote
+/// them.
+fn seed_stored_run(ws: &Workspace) {
+    let dir = ws
+        .home
+        .join("state")
+        .join(XM_STATE)
+        .join("backtests")
+        .join(XLAB_STORED_RUN);
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in [
+        "report.json",
+        "trades-research.jsonl",
+        "trades-capped.jsonl",
+    ] {
+        std::fs::copy(Path::new(XLAB_STORED_RUN_FIXTURE).join(f), dir.join(f))
+            .unwrap_or_else(|e| panic!("seed {f}: {e}"));
+    }
+}
+
 /// One order in the leg's ledger.
 #[derive(Debug)]
 struct LedgerOrder {
@@ -1526,6 +1602,55 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
                     "{label}: no run dir of {run}: {runs:?}"
                 );
             }
+        }
+        Set::XlabHoldout => {
+            // The hidden run's in-sample mean, the read's holdout half, and
+            // the stored run's worst trade — only its `trades` rows, the
+            // holdout shown, print a gross bps.
+            for (what, bps) in [
+                ("the hidden run's in-sample mean", XLAB_IN_SAMPLE_MEAN_BPS),
+                ("the holdout half's mean", XLAB_HOLDOUT_MEAN_BPS),
+                ("the worst trade's gross_bps", XLAB_WORST_GROSS_BPS),
+            ] {
+                assert!(
+                    quotes_within(&answer, bps.abs(), 0.0051),
+                    "{label}: the answer does not quote {what} {bps:+.2}\n{}",
+                    leg.context()
+                );
+            }
+            // Both scripted holdout reads are lines of the ledger — matrix_move's
+            // run, the stored run's rows — in any order; a model may call both
+            // at once, repeat one or read more rows of the split (each one
+            // more line), never another split.
+            let ledger = std::fs::read_to_string(
+                ws.home
+                    .join("state/engine-matrix/backtests/holdout-reads.jsonl"),
+            )
+            .unwrap_or_default();
+            let reads: Vec<(String, String, String)> = ledger
+                .lines()
+                .map(|l| serde_json::from_str::<Value>(l).unwrap())
+                .map(|r| {
+                    let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                    (s("via"), s("strategy"), s("split"))
+                })
+                .collect();
+            for (via, strategy) in [("backtest", "matrix_move"), ("rows", "conf_rows")] {
+                let want = (
+                    via.to_string(),
+                    strategy.to_string(),
+                    XLAB_SPLIT.to_string(),
+                );
+                assert!(
+                    reads.contains(&want),
+                    "{label}: no holdout read {want:?} in {reads:?}\n{}",
+                    leg.context()
+                );
+            }
+            assert!(
+                reads.iter().all(|(_, _, split)| split == XLAB_SPLIT),
+                "{label}: holdout reads of another split: {reads:?}"
+            );
         }
         Set::Shell => {
             quotes("the run_command token", &ws.shell_token);
@@ -2140,7 +2265,8 @@ fn offline_local_shell() {
 /// the model whole under the 16k agent's 8 192-char cap, line 1 with the
 /// full instrument id, and the model sees only the composed set. Then
 /// `backtest` runs the library strategy and the inline spec on the same
-/// bars: each text (line 1 with the full run id, the run dir) whole too.
+/// bars: each text whole too — line 1 with the full run id, the rows hint by
+/// run id, never the run dir's path.
 #[test]
 fn offline_local_xlab() {
     let ws = workspace();
@@ -2196,9 +2322,13 @@ fn offline_local_xlab() {
             .to_string();
         let dir = ws.home.join("state/engine-matrix/backtests").join(&id);
         assert!(
-            result.ends_with(&format!("run dir: {}", dir.display())) && dir.is_dir(),
+            result.ends_with(&format!(
+                "\nrows: backtest {{\"run_id\": \"{id}\", \"view\": \"periods\"}} (or \"instruments\", \
+                 \"trades\", \"notes\") — the run's files are outside your workspace"
+            )) && dir.is_dir(),
             "{result}"
         );
+        assert!(!result.contains(&dir.display().to_string()), "{result}");
         assert!(
             result.contains("\nresearch n=") && result.contains("\ncapped n="),
             "{result}"
@@ -2237,6 +2367,88 @@ fn offline_local_xlab() {
     );
 }
 
+/// The xlab_holdout set on the local engine, scripted, through `run-agent`:
+/// the seeded stored run's trades are read by its run id, its holdout shown
+/// (a read), then a split hides the holdout (the in-sample run, `holdout
+/// hidden`) and a read shows both halves (the split's second read) — each
+/// text whole under the 16k agent's 8 192-char cap.
+#[test]
+fn offline_local_xlab_holdout() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::XlabHoldout, &ws, &[]);
+    let (leg, bodies) = offline_leg(
+        Set::XlabHoldout,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply(
+                "c1",
+                "backtest",
+                &json!({"run_id": XLAB_STORED_RUN, "view": "trades", "holdout": true}),
+            ),
+            tool_call_reply(
+                "c2",
+                "backtest",
+                &json!({"spec": xlab_spec(), "from": XLAB_FROM, "to": XLAB_TO,
+                        "split": XLAB_SPLIT}),
+            ),
+            tool_call_reply(
+                "c3",
+                "backtest",
+                &json!({"spec": xlab_spec(), "from": XLAB_FROM, "to": XLAB_TO,
+                        "split": XLAB_SPLIT, "holdout": true}),
+            ),
+            text_reply(&format!(
+                "gross_bps={XLAB_WORST_GROSS_BPS:+.2} mean_net_bps={XLAB_IN_SAMPLE_MEAN_BPS:+.2} \
+                 holdout mean_net_bps={XLAB_HOLDOUT_MEAN_BPS:+.2}"
+            )),
+        ],
+    );
+    assert_leg(MOCK, Set::XlabHoldout, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 4, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(names, ["backtest", "compress_and_store"]);
+    let latest = |i: usize| tool_messages(&bodies[i]).pop().unwrap_or_default();
+    let rows = &latest(1);
+    assert!(
+        rows.starts_with(&format!(
+            "backtest rows {XLAB_STORED_RUN} view=trades · conf_rows move_trigger 1h \
+             arm=research · 2 trade(s)"
+        )) && rows.contains(
+            "\nsplit time:2026-09-27T00:00:00Z: both halves shown (1 holdout trade(s)) · holdout \
+             read #1 for this spec · 1 read(s) of split"
+        ) && rows.contains(" gross_bps=-53.02 ")
+            && rows.contains("\nall 2 trade(s) by Σ net USD, best first:"),
+        "{rows}"
+    );
+    let hidden = &latest(2);
+    for want in [
+        " matrix_move move_trigger 1h research n=1 mean_net_bps=+2.07 ",
+        "\nholdout hidden: split time:2026-09-27T00:00:00Z — no decision at or after the split",
+    ] {
+        assert!(hidden.contains(want), "{want}: {hidden}");
+    }
+    assert!(!hidden.contains("holdout n="), "{hidden}");
+    let read = &latest(3);
+    for want in [
+        "\nsplit time:2026-09-27T00:00:00Z research: in-sample n=1 mean_net_bps=+2.07",
+        &format!("· holdout n=1 mean_net_bps={XLAB_HOLDOUT_MEAN_BPS:+.2}"),
+        "\nholdout read #1 for this spec · 2 read(s) of split time:2026-09-27T00:00:00Z",
+    ] {
+        assert!(read.contains(want), "{want}: {read}");
+    }
+    for result in [hidden, read, rows] {
+        assert!(
+            result.len() < 8_192
+                && !result.contains("bytes in observation")
+                && !result.contains("[truncated"),
+            "{} chars: {result}",
+            result.len()
+        );
+    }
+}
+
 /// Each fixture family's files share every section but `[agents.*]`; each
 /// routable agent holds its family's sets (the open agents also list the
 /// shell skill), each private `xm_*` agent the xm set; every fixture loads
@@ -2272,7 +2484,14 @@ fn fixtures_load_and_agree() {
                 let (want, routable): (Vec<&str>, bool) = if name.starts_with("xm_") {
                     (Set::Xm.tools().to_vec(), false)
                 } else {
-                    (sets.iter().flat_map(|s| s.tools()).copied().collect(), true)
+                    // Each tool once, in set order (two sets may share one).
+                    let mut tools: Vec<&str> = Vec::new();
+                    for t in sets.iter().flat_map(|s| s.tools()) {
+                        if !tools.contains(t) {
+                            tools.push(t);
+                        }
+                    }
+                    (tools, true)
                 };
                 assert_eq!(list("tools"), want, "{file}: agents.{name}.tools");
                 let skills: Vec<&str> = sets.iter().flat_map(|s| s.skills()).copied().collect();

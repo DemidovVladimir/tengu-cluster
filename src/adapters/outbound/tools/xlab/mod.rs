@@ -6,8 +6,10 @@
 //!
 //! | File | Tool |
 //! |---|---|
-//! | `history.rs` | `market_history` — `mkt_history/1:<instrument>:<interval>`: stats, a bar sample and the coverage of one instrument in a window; `fetch = true` backfills the missing part first (`outbound/backfill/`) |
-//! | `run.rs` | `backtest` — `backtest/1:<run id>`: a `[backtest.strategies]` name or an inline spec through `application/backtest/` (rules arms; no Jev gate, no network), the run dir `<state dir>/backtests/<run id>/` |
+//! | `history.rs` | `market_history` — `mkt_history/1:<instrument>:<interval>`: stats, a bar sample and the coverage of one instrument in a window, `[backtest.splits]` applied as backtests apply them; `fetch = true` backfills the missing part first (`outbound/backfill/`) |
+//! | `run.rs` | `backtest` — `backtest/1:<run id>`: a `[backtest.strategies]` name or an inline spec through `application/backtest/` (rules arms; no Jev gate, no network), the run dir `<state dir>/backtests/<run id>/`; at most `MAX_TOOL_ROWS` candidates |
+//! | `holdout.rs` | `backtest`'s holdout discipline: a split runs its in-sample half only unless `holdout: true`, and every holdout read is a line of `<state dir>/backtests/holdout-reads.jsonl` (`holdout read #n for this spec`) |
+//! | `rows.rs` | `backtest` with `run_id`: a stored run's periods / instruments / trades / notes by run id (never a path), holdout rows hidden unless read |
 //!
 //! The plugin opens the market-data store once (`open_market_data`) and the
 //! workspace observation store (`open_observation_store`: rows are recorded
@@ -24,6 +26,8 @@
 
 pub(crate) mod defs;
 pub(crate) mod history;
+pub(crate) mod holdout;
+pub(crate) mod rows;
 pub(crate) mod run;
 
 use std::sync::Arc;

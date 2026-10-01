@@ -128,6 +128,31 @@ mod tests {
         assert!(bad.validate().is_err());
     }
 
+    /// HL's 1200 weight / min per IP is shared by the sandboxes one host runs
+    /// (review finding: xlab's budget was the whole 1200 — its 1h backfill
+    /// held ≈ 1 243 / min for 27 min, so the weekend run's book reads would
+    /// get 429s). The worst 60 s window of xlab's bucket (burst +
+    /// per_minute) leaves room for xmarket-weekend's measured peak and
+    /// xmarket's steady use (`docs/runtime-2026-09-30.md`).
+    #[test]
+    fn the_xlab_hl_budget_leaves_room_for_the_xmarket_runs() {
+        const HL_PER_IP: u32 = 1_200;
+        const WEEKEND_PEAK: u32 = 190;
+        const XMARKET_STEADY: u32 = 110;
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/xlab/config.toml");
+        let c = crate::config::Config::load(&path).unwrap();
+        let hl = &c.rate_limits["hyperliquid"];
+        let window = hl.burst() + hl.per_minute;
+        assert!(
+            window + WEEKEND_PEAK + XMARKET_STEADY <= HL_PER_IP,
+            "xlab's worst minute {window} + weekend {WEEKEND_PEAK} + xmarket {XMARKET_STEADY} > \
+             {HL_PER_IP}"
+        );
+        // A page's base weight still fits the bucket (candles, funding: 20).
+        assert!(hl.burst() >= 20);
+    }
+
     #[test]
     fn rejects_unknown_keys() {
         #[derive(Debug, Deserialize)]

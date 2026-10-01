@@ -301,7 +301,12 @@ These are not preferences. They're load-bearing.
   never ln; capped admissions never read whether a later bar exists. Jev on history:
   the replay loop runs with `history = 0` and every answer is cached by the full
   sha256 of (model, state, questions) — Jev answers vary call to call, the cache
-  makes reruns identical; pin the Jev build in the gate loop.
+  makes reruns identical; pin the Jev build in the gate loop. Holdout discipline
+  (the Architect's `backtest` tool): a `split` runs its in-sample half only;
+  `holdout: true` shows both halves and appends to
+  `<state dir>/backtests/holdout-reads.jsonl` (`holdout read #n for this spec`) —
+  never show the model a holdout uncounted; its runs are read by run id
+  (`backtest` `run_id`), never by path (the state dir is outside every fs root).
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
   the Solana, Hyperliquid and xmarket families — read the list there, don't

@@ -5,7 +5,9 @@
 //! strings; a number is accepted too), string enums, limits in descriptions
 //! (enforced in code). `backtest`'s `spec` is a free-form object (no
 //! `properties`: a spec's fields depend on its kind) whose description names
-//! the format; the tool also takes it as a string holding the object.
+//! the format; the tool also takes it as a string holding the object. Its
+//! `holdout` / `run_id` / `view` / `arm` / `limit` are the holdout read and the
+//! stored-run read (`holdout.rs`, `rows.rs`).
 
 use serde_json::json;
 
@@ -37,7 +39,9 @@ fn market_history() -> ToolDef {
          warehouse (bars, and Hyperliquid funding): bar count, first / last bar, last close, \
          return, volatility and max drawdown in bps, average volume, mean funding APR, missing \
          bars (gaps), what else is stored, and a table of up to 48 evenly sampled bars (the \
-         last always included). fetch = true first backfills the part of the window not stored \
+         last always included). Bars before a share split the sandbox configures \
+         ([backtest.splits]) are split-adjusted, as a backtest reads them (a note says so). \
+         fetch = true first backfills the part of the window not stored \
          yet: Hyperliquid bars + funding for hyperliquid:<coin> ids, GeckoTerminal pool bars for \
          solana: / robinhood: ids (give pool). Typed observation \
          mkt_history/1:<instrument>:<interval>, not cached. Read-only research data: it never \
@@ -88,12 +92,14 @@ fn backtest() -> ToolDef {
          LLM): a named strategy of the sandbox's library (strategy) or your own strategy \
          spec (spec), decisions in [from, to). Fills at bar closes after taker fee, \
          half-spread, slippage and funding; arm research trades every candidate, arm capped \
-         applies the [risk] caps to the paper budget; 95 % CI by bootstrap over periods; \
-         split reports in-sample and holdout side by side. Writes a run dir (report.json, \
-         report.md, trades, candidates, skips) under the state dir's backtests/. Typed \
-         observation backtest/1:<run id> (n trades, mean / median net bps, CI, t, hit rate, \
-         USD, drawdown, Sharpe, holdout mean), not cached. Read-only research: it never \
-         trades. Missing bars: fetch them first with market_history fetch = true.",
+         applies the [risk] caps to the paper budget; 95 % CI by bootstrap over periods. With \
+         split it runs and shows the in-sample half only (the holdout stays hidden); holdout = \
+         true runs both halves — every holdout read is counted per spec. Typed observation \
+         backtest/1:<run id> (n trades, mean / median net bps, CI, t, hit rate, USD, \
+         drawdown, Sharpe), not cached. With run_id (a run id a call printed) it runs nothing \
+         and returns that run's rows: view periods, instruments, trades or notes. Read-only \
+         research: it never trades. Missing bars: fetch them first with market_history fetch \
+         = true.",
         json!({
             "type": "object",
             "properties": {
@@ -115,7 +121,28 @@ fn backtest() -> ToolDef {
                 },
                 "split": {
                     "type": "string",
-                    "description": "time:<RFC 3339 | date | ms> (holdout = decided from then) or instruments:<id,id,…> (holdout = trades on those full ids): in-sample and holdout reported side by side.",
+                    "description": "time:<RFC 3339 | date | ms> (holdout = decided from then) or instruments:<id,id,…> (holdout = trades on those full ids). Without holdout the run is the in-sample half only: a time split ends the decisions at it, an instruments split leaves those ids out. Tune on that.",
+                },
+                "holdout": {
+                    "type": "boolean",
+                    "description": "true = run both halves of split and show them side by side: a holdout read, counted per spec (holdout read #n). Read a spec's holdout once, after tuning in-sample. Needs split; with run, it shows a stored split run's holdout rows (counted too). Default false.",
+                },
+                "run_id": {
+                    "type": "string",
+                    "description": "Read a stored run instead of running one: its run id as a backtest call printed it (e.g. 20261001T171021Z-weekend_fade). Only with view, arm, limit, holdout.",
+                },
+                "view": {
+                    "type": "string",
+                    "enum": ["periods", "instruments", "trades", "notes"],
+                    "description": "With run_id: periods (default; per period n, Σ net USD, mean net bps, hit rate, share), instruments (the same per instrument), trades (each trade), notes (data notes, skips, refusals).",
+                },
+                "arm": {
+                    "type": "string",
+                    "description": "With run_id: the arm whose trades to read — research (default), capped, or another arm the run has.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "With run_id: the limit best and limit worst rows by Σ net USD, 1-25, default 10 (every row when they fit).",
                 },
             },
             "additionalProperties": false,

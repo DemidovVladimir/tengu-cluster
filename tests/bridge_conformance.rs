@@ -40,7 +40,10 @@
 //! `xyz:TSLA` candle + funding captures moved to the current hours
 //! (`recent_tsla_history`: HL's newest-5 000-bars reach), then reads them
 //! back; `backtest` runs on those bars (the side's `[backtest]` library and
-//! an inline spec) into `<TENGU_HOME>/state/conf/backtests/<run id>/`.
+//! an inline spec) into `<TENGU_HOME>/state/conf/backtests/<run id>/` — a
+//! split's holdout hidden, then read (`holdout-reads.jsonl` beside the runs);
+//! its read mode (`run_id`) reads a stored run seeded by `.home_file(..)` (a
+//! file under the side's `TENGU_HOME`) from `tests/fixtures/xlab/run_conf_rows/`.
 //! `.row(..)` seeds the workspace observation store (the opportunity row a
 //! paper entry names).
 //!
@@ -62,7 +65,8 @@
 //! Add a case: one `case("<tool>", json!({..}))` row in `cases()` plus the
 //! TOML its scope needs, `.route(..)` replies and `.ok("…")` / `.err("…")`
 //! (`docs/mcp-bridge.md` § Testing). `TENGU_CONFORMANCE_VERBOSE=1` (with
-//! `--nocapture`) prints every case's in-process text, stores and requests.
+//! `--nocapture`) prints every case's in-process text, stores and requests;
+//! `TENGU_CONFORMANCE_ONLY=<text>` runs only the cases whose name holds it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -159,6 +163,9 @@ struct Case {
     env: Vec<(String, String)>,
     /// Workspace files; `{secret}` expanded.
     files: Vec<(String, String)>,
+    /// Files under the side's `TENGU_HOME` (`.home_file(..)`: a stored
+    /// backtest run a read names), verbatim.
+    home_files: Vec<(String, String)>,
     /// Observation rows seeded into the workspace store, stamped now.
     rows: Vec<Value>,
     routes: Vec<Route>,
@@ -199,6 +206,7 @@ fn case(tool: &str, args: Value) -> Case {
         scope_env: None,
         env: Vec::new(),
         files: Vec::new(),
+        home_files: Vec::new(),
         rows: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
@@ -279,6 +287,12 @@ impl Case {
     }
     fn file(mut self, path: &str, content: &str) -> Self {
         self.files.push((path.to_string(), content.to_string()));
+        self
+    }
+    /// A file at `path` under the side's `TENGU_HOME`.
+    fn home_file(mut self, path: &str, content: &str) -> Self {
+        self.home_files
+            .push((path.to_string(), content.to_string()));
         self
     }
     /// A row in `<ws>/.tengu/observations.db` before the first step
@@ -461,6 +475,47 @@ fn market_history_hl() -> Case {
         .ok("mkt_history hyperliquid:xyz:TSLA 1h bars=67 <TIME> … <TIME> last_close=360.2 ret_bps=-331.2 | ok <AGE>s live")
 }
 
+/// `market_history` with `[backtest.splits]`: a 2-for-1 split 30 bars into
+/// the fetched `xyz:TSLA` captures reaches both sides (the sandbox's
+/// sections), the bars before it are read adjusted, as a backtest reads
+/// them, and the row says so.
+fn market_history_splits() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let at = chrono::DateTime::from_timestamp_millis(from + 30 * 3_600_000)
+        .unwrap()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let window = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                        "from": from, "to": to});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    case("market_history", fetch)
+        .named("splits")
+        .toml(XLAB_TOML)
+        .toml(&format!(
+            "[backtest]\n[backtest.splits]\n\"hyperliquid:xyz:TSLA\" = [{{ at = \"{at}\", ratio = \
+             2.0 }}]\n"
+        ))
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("market_history", window)
+        .ok(
+            "\nsplit-adjusted hyperliquid:xyz:TSLA: ratio 2 (new shares per old) at <TIME> — 30 \
+             bars before it: prices ÷ 2, volume × 2 — [backtest.splits], as a backtest reads the \
+             bars",
+        )
+}
+
 /// `market_history` on a Solana mint: GeckoTerminal pool bars through the
 /// mock (`GECKO_API_URL`), then read back.
 fn market_history_gecko() -> Case {
@@ -570,6 +625,98 @@ fn backtest_hl() -> Case {
         )
         .ok("backtest <TIME>-conf_follow conf_follow move_trigger 1h research n=2 mean_net_bps=")
         .retool("backtest")
+}
+
+/// `backtest`'s holdout on the HL captures (`backtest_hl`'s fetch): a split
+/// between the move trigger's two trades (the captures' 2026-09-27 00:00Z,
+/// moved like them) runs the in-sample half only — the first trade —; with
+/// `holdout: true` both halves run and each read is a line of
+/// `<TENGU_HOME>/state/conf/backtests/holdout-reads.jsonl` (#1 of each spec,
+/// the split's 1st then 2nd), alike on both sides. Distinct spec names: no
+/// two runs share a run id's second.
+fn backtest_holdout() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let split = format!("time:{}", from + 28 * 3_600_000);
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    let mut hidden = conf_follow_spec();
+    hidden["name"] = json!("conf_hidden");
+    hidden["direction"] = json!("fade");
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then(
+            "backtest",
+            json!({"spec": hidden, "from": from, "to": to, "split": split}),
+        )
+        .ok(
+            "\nholdout hidden: split time:<TIME> — no decision at or after the split (<TIME>): no \
+             holdout trade was simulated",
+        )
+        .then(
+            "backtest",
+            json!({"strategy": "conf_move", "from": from, "to": to, "split": split,
+                   "holdout": true}),
+        )
+        .ok("\nholdout read #1 for this spec · 1 read(s) of split time:<TIME> in this sandbox")
+        .then(
+            "backtest",
+            json!({"spec": conf_follow_spec(), "from": from, "to": to, "split": split,
+                   "holdout": true}),
+        )
+        .ok("\nholdout read #1 for this spec · 2 read(s) of split time:<TIME> in this sandbox")
+        .retool("backtest")
+        .named("holdout")
+}
+
+/// A stored run's id (`tests/fixtures/xlab/run_conf_rows/`: a holdout read
+/// of the matrix move trigger, split `time:2026-09-27`, one trade a half).
+const ROWS_RUN: &str = "20261001T182112Z-conf_rows";
+
+/// `backtest` with `run_id`: the seeded split run's rows by run id — its
+/// holdout trade hidden, then shown on purpose (a read, counted: `via =
+/// "rows"`); a path and an unknown id refused alike.
+fn backtest_rows() -> Case {
+    let dir = format!("state/conf/backtests/{ROWS_RUN}");
+    let mut c = case("backtest", json!({"run_id": ROWS_RUN, "view": "trades"}))
+        .named("rows")
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML);
+    for f in [
+        "report.json",
+        "trades-research.jsonl",
+        "trades-capped.jsonl",
+    ] {
+        c = c.home_file(
+            &format!("{dir}/{f}"),
+            &fixture(&format!("xlab/run_conf_rows/{f}")),
+        );
+    }
+    c.ok("\nsplit time:<TIME>: holdout hidden — its 1 trade(s) left out")
+        .then(
+            "backtest",
+            json!({"run_id": ROWS_RUN, "view": "periods", "holdout": true}),
+        )
+        .ok("both halves shown (1 holdout trade(s)) · holdout read #1 for this spec")
+        .then("backtest", json!({"run_id": "../conf/market.db"}))
+        .err("'run_id' `../conf/market.db` is not a run id")
+        .then(
+            "backtest",
+            json!({"run_id": "20200101T000000Z-nope", "view": "notes"}),
+        )
+        .err("no run `<TIME>-nope` in the state dir's backtests/ (the newest: <TIME>-conf_rows)")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -1095,6 +1242,7 @@ fn cases() -> Vec<Case> {
         // ── xlab research reads: `[xmarket]` → `market.db` in the state dir
         market_history_hl(),
         market_history_gecko(),
+        market_history_splits(),
         // Without `[xmarket]` there is no warehouse: refused alike.
         case(
             "market_history",
@@ -1103,6 +1251,10 @@ fn cases() -> Vec<Case> {
         .named("no_xmarket")
         .err("state_dir_missing: market data unavailable: no [xmarket] section"),
         backtest_hl(),
+        // A split's holdout hidden by default, read on purpose and counted;
+        // a stored run's rows by run id.
+        backtest_holdout(),
+        backtest_rows(),
         // A bad inline spec: refused alike, every problem named, no run dir.
         case(
             "backtest",
@@ -1451,6 +1603,11 @@ impl Side {
             let p = ws.join(path);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, content.replace("{secret}", SECRET)).unwrap();
+        }
+        for (path, content) in &case.home_files {
+            let p = root.join("home/.tengu").join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
         }
         seed_rows(&ws, &case.rows);
         let tools: Vec<String> = case
@@ -1967,9 +2124,11 @@ fn every_catalog_tool_has_a_case() {
 #[test]
 fn bridge_matches_in_process() {
     let catalog = catalog();
+    let only = std::env::var("TENGU_CONFORMANCE_ONLY").ok();
     let queue: Vec<Case> = cases()
         .into_iter()
         .filter(|c| !c.gated || catalog.contains(&c.tool))
+        .filter(|c| only.as_deref().is_none_or(|o| c.name.contains(o)))
         .collect();
     let queue = Arc::new(Mutex::new(queue));
     let failures = Arc::new(Mutex::new(Vec::<String>::new()));

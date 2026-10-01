@@ -8,9 +8,11 @@
 //! | Window | `[from, to)` of bar opens and funding times: `to` default now, `from` default `to` − 7 days; epoch ms, RFC 3339 or a UTC date |
 //! | Fetch (`fetch = true`) | before the read, the part of the window not stored yet through `outbound/backfill/` (resume, clamp and closed-bar rules there): `hyperliquid:<coin>` → HL `candleSnapshot` + `fundingHistory` (`HlInfo`; `$HL_API_URL` only through `env_reads`); `solana:` / `robinhood:` → GeckoTerminal pool OHLCV for `pool` (`$GECKO_API_URL` likewise). Every request through the egress gate and the scope's `net_hosts`, against `[rate_limits.hyperliquid]` / `[rate_limits.geckoterminal]`, retried per `Retry::TOOL`. A failure is an error field (`fetch_bars`, `fetch_funding`, `fetch`, with its class) and the read still runs |
 //! | Read | the window's bars + funding and the instrument's coverage from `market.db` — no network; a failed read ⇒ an `error` row (`market_db`) |
+//! | Share splits | the sandbox's `[backtest.splits]` applied to the window's bars before any number, exactly as a backtest applies them (`MarketData::adjust_for_splits`: bars before a split ÷ ratio, volume × ratio; funding untouched) — one row note per applied split, `splits_applied`; `market.db` keeps the raw bars |
 //! | Row | ttl 0: a history read, never cached (recorded when `[recorder]` takes `mkt_history/1`) |
-//! | Text | line 1, features and errors as `Observation::render_text` gives them (without `data`), what a fetch wrote, a table of ≤ 48 of the sampled bars, one line per stored series — ≈ 5 KB at most, inside a 16k-window local model's 8 192-char result cap |
+//! | Text | line 1, features and errors as `Observation::render_text` gives them (without `data`), what a fetch wrote, the split notes, a table of ≤ 48 of the sampled bars, one line per stored series — ≈ 5 KB at most, inside a 16k-window local model's 8 192-char result cap |
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
@@ -27,8 +29,9 @@ use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::hyperliquid::info::{self, HlInfo};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::sections::SandboxSections;
+use crate::domain::backtest::engine::MarketData;
 use crate::domain::market::{InstrumentId, HYPERLIQUID};
-use crate::domain::marketdata::{fmt_time, Interval};
+use crate::domain::marketdata::{fmt_time, Interval, StockSplit};
 use crate::domain::marketdata_stats::{sample_indices, FetchSummary, MarketHistory, StoredSeries};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
@@ -85,7 +88,8 @@ impl Tool for MarketHistoryTool {
         let client = req
             .fetch
             .then(|| fetch_client(ctx, &self.shared.sandbox, &req));
-        let row = read_history(market, &req, client, &Retry::TOOL, now).await;
+        let splits = sandbox_splits(&self.shared.sandbox);
+        let row = read_history(market, &req, client, &Retry::TOOL, &splits, now).await;
         let obs = Observation::of(names::MARKET_HISTORY, &row, now, 0, ObsSource::Live);
         store_live(self.shared.store.as_deref(), &obs).await;
         Ok(ToolOutput {
@@ -291,13 +295,24 @@ fn stored_series(r: &CoverageRow) -> StoredSeries {
     }
 }
 
+/// The sandbox's `[backtest.splits]` by full id (none without `[backtest]`).
+pub(crate) fn sandbox_splits(sandbox: &SandboxSections) -> BTreeMap<String, Vec<StockSplit>> {
+    sandbox
+        .backtest
+        .as_ref()
+        .map(|bt| bt.stock_splits())
+        .unwrap_or_default()
+}
+
 /// The module table at `now_ms`: fetch first when `client` is given (its
-/// build may have failed), then the read.
+/// build may have failed), then the read; `splits` = the sandbox's
+/// `[backtest.splits]` ([`sandbox_splits`]).
 pub(crate) async fn read_history(
     market: &dyn MarketDataStore,
     req: &HistoryArgs,
     client: Option<Result<FetchClient>>,
     retry: &Retry,
+    splits: &BTreeMap<String, Vec<StockSplit>>,
     now_ms: i64,
 ) -> MarketHistory {
     let id = req.instrument.to_string();
@@ -317,16 +332,25 @@ pub(crate) async fn read_history(
         anyhow::Ok((bars, funding))
     };
     let mut row = match read.await {
-        Ok((bars, funding)) => MarketHistory::new(
-            &id,
-            iv,
-            from,
-            to,
-            &bars.bars,
-            &funding.points,
-            req.points,
-            now_ms,
-        ),
+        Ok((bars, funding)) => {
+            // As a backtest reads them: the same adjustment, the same notes.
+            let mut md = MarketData::default();
+            md.bars.insert(id.clone(), bars);
+            let notes = md.adjust_for_splits(splits);
+            let bars = md.bars.remove(&id).map(|s| s.bars).unwrap_or_default();
+            let mut row = MarketHistory::new(
+                &id,
+                iv,
+                from,
+                to,
+                &bars,
+                &funding.points,
+                req.points,
+                now_ms,
+            );
+            row.notes = notes;
+            row
+        }
         Err(e) => {
             errors.push(ReadError::new(
                 "market_db",
@@ -387,6 +411,9 @@ pub(crate) fn render(obs: &Observation, row: &MarketHistory, now_ms: i64) -> Str
         ));
         lines.extend(f.notes.iter().map(|n| format!("fetch {n}")));
     }
+    lines.extend(row.notes.iter().map(|n| {
+        format!("{n} — [backtest.splits], as a backtest reads the bars (market.db keeps them raw)")
+    }));
     let n_bars = row.stats.as_ref().map_or(0, |s| s.n_bars);
     if row.bars.is_empty() {
         if row.status() == ObsStatus::Absent {
@@ -459,7 +486,10 @@ mod tests {
 
     const H: i64 = 3_600_000;
     const TSLA: &str = "hyperliquid:xyz:TSLA";
+    const KIOXIA: &str = "hyperliquid:xyz:KIOXIA";
     const MINT: &str = "So11111111111111111111111111111111111111112";
+    /// A sandbox without `[backtest.splits]`.
+    const NO_SPLITS: BTreeMap<String, Vec<StockSplit>> = BTreeMap::new();
     const POOL: &str = "8sLbNZoA1cfnvMJLPfp98ZLAnFSYCFApfJKMbiXNLwxj";
     /// The candle fixture: 67 hourly bars, 2026-09-25T20:00Z … 2026-09-28T14:00Z.
     const FIRST: i64 = 1_790_366_400_000;
@@ -633,7 +663,7 @@ mod tests {
     async fn a_read_reports_stats_a_sample_and_the_coverage() {
         let (_dir, store) = seeded().await;
         let req = args(json!({"instrument": TSLA, "from": 0, "to": 10 * H, "points": 4}));
-        let row = read_history(&store, &req, None, &FAST, 100 * H).await;
+        let row = read_history(&store, &req, None, &FAST, &NO_SPLITS, 100 * H).await;
         let obs = Observation::of(names::MARKET_HISTORY, &row, 100 * H, 0, ObsSource::Live);
         assert_eq!(obs.key, format!("mkt_history/1:{TSLA}:1h"));
         assert_eq!((obs.status, obs.ttl_ms), (ObsStatus::Ok, 0));
@@ -696,7 +726,7 @@ mod tests {
     async fn an_empty_window_is_absent_and_says_how_to_fill_it() {
         let (_dir, store) = seeded().await;
         let req = args(json!({"instrument": TSLA, "from": 50 * H, "to": 60 * H}));
-        let row = read_history(&store, &req, None, &FAST, 100 * H).await;
+        let row = read_history(&store, &req, None, &FAST, &NO_SPLITS, 100 * H).await;
         let obs = Observation::of(names::MARKET_HISTORY, &row, 100 * H, 0, ObsSource::Live);
         assert_eq!(obs.status, ObsStatus::Absent);
         assert_eq!(obs.features["gaps"], 10);
@@ -708,7 +738,7 @@ mod tests {
         assert!(text.contains("fetch = true backfills it"), "{text}");
         // Another instrument: nothing stored at all.
         let req = args(json!({"instrument": "hyperliquid:SOL", "from": 0, "to": 10 * H}));
-        let row = read_history(&store, &req, None, &FAST, 100 * H).await;
+        let row = read_history(&store, &req, None, &FAST, &NO_SPLITS, 100 * H).await;
         let obs = Observation::of(names::MARKET_HISTORY, &row, 100 * H, 0, ObsSource::Live);
         assert!(render(&obs, &row, 100 * H).ends_with("stored: nothing for hyperliquid:SOL"));
     }
@@ -740,7 +770,7 @@ mod tests {
             .unwrap();
         let req = args(json!({"instrument": id, "interval": "1m", "from": 0,
                               "to": 5_000 * m, "points": 200}));
-        let row = read_history(&store, &req, None, &FAST, 5_001 * m).await;
+        let row = read_history(&store, &req, None, &FAST, &NO_SPLITS, 5_001 * m).await;
         let obs = Observation::of(names::MARKET_HISTORY, &row, 5_001 * m, 0, ObsSource::Live);
         let text = render(&obs, &row, 5_001 * m);
         let cap = tool_result_char_budget(16_384);
@@ -785,7 +815,7 @@ mod tests {
         )
         .unwrap();
         let client = Some(Ok(FetchClient::Hl(hl(&base))));
-        let row = read_history(&store, &req, client, &FAST, now).await;
+        let row = read_history(&store, &req, client, &FAST, &NO_SPLITS, now).await;
         assert!(row.errors.is_empty(), "{:?}", row.errors);
         let fetch = row.fetch.clone().unwrap();
         // 67 bars; 68 funding rows served, the one at `to` outside the window.
@@ -834,7 +864,7 @@ mod tests {
         // only for the tail after its last stored row (HL settles a few ms
         // past the hour), which holds nothing new.
         let client = Some(Ok(FetchClient::Hl(hl(&base))));
-        let again = read_history(&store, &req, client, &FAST, now).await;
+        let again = read_history(&store, &req, client, &FAST, &NO_SPLITS, now).await;
         assert!(again.errors.is_empty(), "{:?}", again.errors);
         let count = |t: &str| {
             seen.lock()
@@ -881,6 +911,7 @@ mod tests {
             &req,
             Some(Ok(FetchClient::Gecko(gecko))),
             &FAST,
+            &NO_SPLITS,
             20 * H,
         )
         .await;
@@ -933,6 +964,7 @@ mod tests {
             &req,
             Some(Ok(FetchClient::Hl(hl(&base)))),
             &FAST,
+            &NO_SPLITS,
             100 * H,
         )
         .await;
@@ -969,6 +1001,7 @@ mod tests {
             &req,
             Some(Err(anyhow!("HL_API_URL is not a URL"))),
             &FAST,
+            &NO_SPLITS,
             100 * H,
         )
         .await;
@@ -979,6 +1012,118 @@ mod tests {
             ("fetch", ErrorClass::Fatal)
         );
         assert!(row.fetch.is_none());
+    }
+
+    /// `[backtest.splits]` reach `market_history` exactly as they reach a
+    /// backtest (review finding: KIOXIA's configured 3-for-1 read raw —
+    /// ret −11 178 bps, vol 713, drawdown 7 205 instead of −192 / 78 /
+    /// 1 614): the bars before the split ÷ ratio, volume × ratio, every
+    /// number and the sample of the adjusted series, the note in the row and
+    /// the text; `market.db` keeps the raw bars.
+    #[tokio::test]
+    async fn market_history_applies_the_sandboxs_share_splits() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SqliteMarketData::open(dir.path()).unwrap();
+        // 3 hourly bars near 340, the 3-for-1 split at 03:00, 3 near 115.
+        let closes = [342.0, 345.0, 340.79, 114.93, 116.0, 115.5];
+        let raw: Vec<Bar> = closes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| bar(i as i64 * H, *c))
+            .collect();
+        store
+            .put_bars(KIOXIA, Interval::H1, "hl", &raw)
+            .await
+            .unwrap();
+        let splits = r#"
+            [splits]
+            "hyperliquid:xyz:KIOXIA" = [{ at = "1970-01-01T03:00:00Z", ratio = 3.0 }]
+        "#;
+        let tool = MarketHistoryTool {
+            def: defs::def(names::MARKET_HISTORY),
+            shared: XlabShared {
+                market: Ok(Arc::new(store)),
+                store: None,
+                sandbox: Arc::new(SandboxSections {
+                    backtest: Some(toml::from_str(splits).unwrap()),
+                    ..Default::default()
+                }),
+            },
+        };
+        let h = TestHarness::new(dir.path());
+        let out = tool
+            .execute(
+                &json!({"instrument": KIOXIA, "from": 0, "to": 6 * H}),
+                &h.ctx(),
+            )
+            .await
+            .unwrap();
+        let obs = out.observation.unwrap();
+        // The series a backtest reads: the pre-split bars ÷ 3, volume × 3.
+        let adjusted: Vec<Bar> = raw
+            .iter()
+            .map(|b| match b.t_open_ms < 3 * H {
+                true => Bar {
+                    o: b.o / 3.0,
+                    h: b.h / 3.0,
+                    l: b.l / 3.0,
+                    c: b.c / 3.0,
+                    v: b.v * 3.0,
+                    ..*b
+                },
+                false => *b,
+            })
+            .collect();
+        let want = crate::domain::marketdata_stats::bar_stats(&adjusted).unwrap();
+        let row: MarketHistory = obs.typed().unwrap();
+        assert_eq!(row.stats.as_ref(), Some(&want));
+        let ret = (115.5f64 / (342.0 / 3.0)).ln() * 10_000.0;
+        assert!((obs.features["ret_bps"].as_f64().unwrap() - ret).abs() < 1e-9);
+        assert!(
+            obs.features["vol_bps"].as_f64().unwrap() < 200.0,
+            "no fake crash"
+        );
+        assert_eq!(obs.features["splits_applied"], 1);
+        assert_eq!(row.bars[0].c, 342.0 / 3.0, "the sample is adjusted");
+        let note = "split-adjusted hyperliquid:xyz:KIOXIA: ratio 3 (new shares per old) at \
+                    1970-01-01T03:00:00Z — 3 bars before it: prices ÷ 3, volume × 3";
+        assert_eq!(row.notes, vec![note.to_string()]);
+        assert!(
+            out.text.contains(&format!(
+                "\n{note} — [backtest.splits], as a backtest reads the bars (market.db keeps \
+                 them raw)\n"
+            )),
+            "{}",
+            out.text
+        );
+        // market.db keeps the raw bars; a window after the split needs no
+        // adjustment and says nothing.
+        let market = tool.shared.market().unwrap();
+        let stored = market.bars(KIOXIA, Interval::H1, 0, 6 * H).await.unwrap();
+        assert_eq!(stored.bars[0].c, 342.0);
+        let late = tool
+            .execute(
+                &json!({"instrument": KIOXIA, "from": 3 * H, "to": 6 * H}),
+                &h.ctx(),
+            )
+            .await
+            .unwrap();
+        let late = late.observation.unwrap();
+        assert!(!late.features.contains_key("splits_applied"));
+        // Without the section the raw jump shows (what the backtest would
+        // book unconfigured).
+        let raw_row = read_history(
+            market,
+            &args(json!({"instrument": KIOXIA, "from": 0, "to": 6 * H})),
+            None,
+            &FAST,
+            &NO_SPLITS,
+            100 * H,
+        )
+        .await;
+        let raw_ret = (115.5f64 / 342.0).ln() * 10_000.0;
+        assert!((raw_row.stats.unwrap().ret_bps.unwrap() - raw_ret).abs() < 1e-9);
+        assert!(raw_row.notes.is_empty());
     }
 
     #[tokio::test]

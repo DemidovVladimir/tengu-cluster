@@ -196,8 +196,8 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 
 | Command | Runs |
 |---|---|
-| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (56: 14 sets × 4 targets); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it in chunks of ≤ 14 legs (e.g. the `openrouter_gemini_` filter) to stay under a 10-minute call |
-| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace, shell and xlab sets via `run-agent` — xlab: the `market_history` text and both `backtest` texts whole under the 16k cap; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
+| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (60: 15 sets × 4 targets); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it in chunks of ≤ 14 legs (e.g. the `openrouter_gemini_` filter) to stay under a 10-minute call |
+| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace, shell, xlab and xlab_holdout sets via `run-agent` — xlab: the `market_history` text and both `backtest` texts whole under the 16k cap; xlab_holdout: a stored run's rows, a hidden split and a holdout read, each whole; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
 | `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
 
 Results 2026-10-01, final pass of `x-engine-parity-audit` (Mac; Claude CLI 2.1.286; OpenRouter list prices; secs per leg):
@@ -223,6 +223,7 @@ Results 2026-10-01, final pass of `x-engine-parity-audit` (Mac; Claude CLI 2.1.2
 |---|---|
 | xlab set (2026-10-01, `xlab-tools`, after that pass) | gemini-2.5-flash-lite ✅ 4.3 s (5 447 / 571 tokens) · claude-haiku-4.5 ✅ 3.4 s (5 051 / 226) · Claude CLI `claude-haiku-4-5` ✅ 7.7 s; local skipped (offline `offline_local_xlab` passes) |
 | xlab set + `backtest` (2026-10-01, `xlab-backtest-tool`: library strategy + inline spec object) | gemini-2.5-flash-lite ✅ 3.6 s (9 281 / 510 tokens) · claude-haiku-4.5 ✅ 15.2 s (13 175 / 605) · Claude CLI `claude-haiku-4-5` ✅ 21.4 s; the free-form `spec` object accepted by all three; local skipped (offline `offline_local_xlab` passes) |
+| xlab + xlab_holdout sets (2026-10-01 evening, `xlab-fix-tools`: hidden split, `holdout: true`, `run_id` + `view` read) | claude-haiku-4.5 ✅ both · Claude CLI `claude-haiku-4-5` ✅ both (17.0 s, 21.2 s) · gemini-2.5-flash-lite: every call runs, but its answers misquote numbers this evening (`xlab` ≈ 1 in 3, `xlab_holdout` 0 of ~10; the unchanged `hyperliquid` set failed too, `xlab` was 3 / 3 at 18:37 UTC) — re-run; local skipped (offline `offline_local_xlab`, `offline_local_xlab_holdout` pass) |
 | local · `gemma4:latest` | 14 legs skipped (`TENGU_MATRIX_LOCAL_BASE_URL` not set) — run on the operator's PC (below); offline mock legs pass |
 | `tengu doctor --engines` | `claude_code.toml`: claude ✅ 5.6 s, xm_claude ✅ 6.2 s (bridge grant via `StepOpts`, no process-wide env); `openrouter.toml`: gemini ✅ 1.8 s, haiku ✅ 4.9 s, xm_gemini ✅ 1.5 s, xm_haiku ✅ 3.3 s |
 

@@ -14,6 +14,7 @@
 //! | `funding_mean_apr_pct` | mean `rate_1h` × 24 × 365 × 100 — ≥ 1 funding row |
 //! | `gaps` | interval grid slots in the window with a closed bar time and no stored bar ([`gap_count`]): no-trade hours (HL skips them), an unfilled head or tail, the time before a listing |
 //! | sample | [`sample_indices`]: `points` stored bars evenly by index, the first and the last included — bars as stored, never re-aggregated; every stat uses every bar |
+//! | share splits | the reader adjusts the bars first (`[backtest.splits]`, as backtests read them: `MarketData::adjust_for_splits`); every number and the sample are of the adjusted bars; one `notes` line per applied split, `splits_applied` counts them |
 //!
 //! | `mkt_history/1` status | When |
 //! |---|---|
@@ -228,6 +229,10 @@ pub struct MarketHistory {
     pub bars: Vec<Bar>,
     /// Every series the store holds for the instrument.
     pub coverage: Vec<StoredSeries>,
+    /// One line per share split applied to the bars (module table), ids in
+    /// full.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<ReadError>,
 }
@@ -263,6 +268,7 @@ impl MarketHistory {
             fetch: None,
             bars: sample_bars(bars, points),
             coverage: Vec::new(),
+            notes: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -287,6 +293,7 @@ impl MarketHistory {
             fetch: None,
             bars: Vec::new(),
             coverage: Vec::new(),
+            notes: Vec::new(),
             errors,
         }
     }
@@ -354,6 +361,9 @@ impl Observed for MarketHistory {
         if let Some(fetch) = &self.fetch {
             set_int(&mut f, "fetched_bars", count(fetch.bars));
             set_int(&mut f, "fetched_funding", fetch.funding.and_then(count));
+        }
+        if !self.notes.is_empty() {
+            set_int(&mut f, "splits_applied", count(self.notes.len()));
         }
         f
     }

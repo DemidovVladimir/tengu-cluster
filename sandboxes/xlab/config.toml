@@ -10,10 +10,14 @@
 #   1. data      tengu history backfill --sandbox xlab --instruments @xyz_stocks --interval 1h --from 2026-03-01 --funding
 #                tengu history backfill --sandbox xlab --instruments @crypto --interval 1h --from 2026-03-01 --funding
 #                tengu history coverage --sandbox xlab
+#                (≈ 1 h for the 75 names: [rate_limits.hyperliquid] leaves room for a
+#                weekend run on the same IP — see the budget note at the end)
 #   2. rules     tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 #   3. + Jev     tengu backtest --sandbox xlab --strategy weekend_fade_top4 --gate --max-decisions 200
 #                (rerun with --offline: the same decisions from the cache, nothing called)
 #   4. Architect tengu chat --sandbox xlab      ("test a weekend follow placebo on the holdout split")
+#                (its backtest calls show the in-sample half of a split; a holdout
+#                read is "holdout": true, counted in backtests/holdout-reads.jsonl)
 # State: ~/.tengu/state/xlab/ (market.db, backtests/<run>/, ledger.db, KILL = halt);
 # workspace ~/xlab-ws (only .tengu/observations.db).
 
@@ -316,8 +320,10 @@ order_types = ["market", "ioc"]
 # --- Agents --------------------------------------------------------------------
 # The Architect (PRD §4): researcher, analyst, strategist, critic — on history.
 # Default chat agent (no orchestrator: `tengu chat --sandbox xlab` talks to it).
-# Tools: market_history (history + fetch) and backtest (rules arms on a named or
-# inline spec). It has no order tool and cannot move money.
+# Tools: market_history (history + fetch, [backtest.splits] applied) and backtest
+# (rules arms on a named or inline spec; a split's holdout hidden until read with
+# "holdout": true, every read counted; a stored run's rows by run id). It has no
+# order tool and cannot move money.
 [agents.xl_architect]
 default = true
 engine = "openrouter"
@@ -396,8 +402,17 @@ env_reads = ["HL_API_URL", "GECKO_API_URL"]
 fs_roots = ["~/xlab-ws"]
 
 # --- Request budgets ---------------------------------------------------------
+# HL allows 1200 weight / min per IP, shared with xmarket-weekend (peaks near
+# 190 / min) and xmarket (≈ 110 / min) when they run on this host. A 1h backfill
+# of the 75 xyz names asks ≈ 34 000 weight (candles 20 + 1 per 60 bars, funding
+# 20 a page): at 1200 / min it took HL's whole per-IP budget for 27 min (the
+# weekend run's book reads would get 429s); at 600 / min it takes ≈ 1 h. burst
+# 200: no 60 s window passes 800 (200 + 600), so 800 + 190 + 110 < 1200 even with
+# both xmarket sandboxes up. Budgets are per process: one HL-heavy xlab process
+# (backfill, backtest --fetch, an Architect fetching) at a time.
 [rate_limits.hyperliquid]
-per_minute = 1200                # HL: 1200 weight / min / IP (candles: 20 + 1 per 60 bars)
+per_minute = 600
+burst = 200
 
 [rate_limits.geckoterminal]
 per_minute = 25                  # free API: ~30 calls / min
