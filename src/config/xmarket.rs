@@ -65,6 +65,10 @@ pub(crate) const LEDGER_DB: &str = "ledger.db";
 pub(crate) const RUNTIME_DB: &str = "runtime.db";
 /// The recorder's `<YYYYMMDD>.db` day files (`outbound/history_sqlite.rs`).
 pub(crate) const HISTORY_DIR: &str = "history";
+/// The market-data warehouse: bars, funding, contexts (`outbound/market_data.rs`, xlab).
+pub(crate) const MARKET_DB: &str = "market.db";
+/// Backtest run dirs + the decision cache (`application/backtest/`, xlab).
+pub(crate) const BACKTESTS_DIR: &str = "backtests";
 /// Reserved: instruments, edges, lifecycle, approvals (`kg-catalog-store`).
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const CATALOG_DB: &str = "catalog.db";
@@ -92,6 +96,16 @@ pub(crate) fn runtime_db(state_dir: &Path) -> PathBuf {
 /// `<state_dir>/history`.
 pub(crate) fn history_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(HISTORY_DIR)
+}
+
+/// `<state_dir>/market.db`.
+pub(crate) fn market_db(state_dir: &Path) -> PathBuf {
+    state_dir.join(MARKET_DB)
+}
+
+/// `<state_dir>/backtests`.
+pub(crate) fn backtests_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(BACKTESTS_DIR)
 }
 
 /// `[xmarket]` section.

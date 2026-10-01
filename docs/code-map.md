@@ -231,12 +231,14 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (45 files)
+### domain — data + pure policy (48 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
+| `src/domain/backtest/mod.rs` | 10 | Backtests (xlab) — pure: specs, simulator, costs, features, stats, report; module table. |
+| `src/domain/backtest/costs.rs` | 195 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
 | `src/domain/decision.rs` | 192 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate). |
@@ -255,6 +257,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/lp/snapshot.rs` | 4837 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders. |
 | `src/domain/lp/wallet.rs` | 1977 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
 | `src/domain/market.rs` | 1289 | Cross-venue market rows keyed by instrument id (`<venue>:<native id>`): `mkt_instrument/1` + `mkt_ctx/1` (`Observed`), normalisers. |
+| `src/domain/marketdata.rs` | 441 | Market data for history-first research (xlab): `Interval`, `Bar`, `FundingPoint`, `CtxPoint`, `BarSeries` / `FundingSeries` / `CtxSeries` (a bar observable only at its close: `close_at`, `observable_at`), `parse_time` / `fmt_time`. |
 | `src/domain/message.rs` | 209 | Messages, tool calls/definitions, stream events, and the precision `Lens` |
 | `src/domain/metrics.rs` | 298 | Metrics — context/token consumption telemetry. |
 | `src/domain/mod.rs` | 18 | Domain — plain data and pure policy. Imports nothing from the rest of the |
@@ -282,12 +285,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/weekend_fade.rs` | 1958 | Weekend-fade rule W (pure): the Sat + Sun window (`fade_window`, DST-safe, a mid-week holiday skipped), `mkt_ctx/1` mid-else-mark prices, signal / fade side / eligibility, `select_capped`, the order ids, the 5 m candle `replay` (golden in `tests/fixtures/xmarket/`; test module `golden` shared with the weekend sandbox test), rows `xm_weekend/1:<anchor date>` (phases, snapshot, P&L once flat with funding booked) and `xm_weekend_signal/1:<anchor date>:<id>`. |
 | `src/domain/xm/risk_state.rs` | 671 | Account risk state (pure): halts (`daily_loss` clears 00:00 UTC; `total_loss` / `operator` / `file` only by resume), UTC day roll + day-start equity, `valuation_trips`, `RiskStatus` → `risk_state/1:<account>`. |
 
-### ports — traits (17 files)
+### ports — traits (18 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
+| `src/ports/market_data.rs` | 81 | `MarketDataStore` — the market-data warehouse (bars, funding, contexts per full instrument id; `coverage`); impl `outbound/market_data.rs` (`<state dir>/market.db`). |
 | `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
 | `src/ports/clock.rs` | 75 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `ManualClock` test double. |
 | `src/ports/book.rs` | 188 | `BookSource` — a fresh L2 book per instrument (`BookRead`), live or replayed; `ScriptedBooks` test fake. |
@@ -304,10 +308,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (14 files)
+### config — TOML schema (15 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/config/backtest.rs` | 212 | `[backtest]` — history-first research knobs (xlab): `notional_usd`, `bootstrap`, `seed`, `costs."<prefix>"`, `universes`, `strategies` (raw specs), `gate`; needs `[xmarket]`. |
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
 | `src/config/decision_loop.rs` | 401 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, slots (static / history / observation), caps, reducers, `dry_run`, `world`, `requires`. |
 | `src/config/feeds.rs` | 743 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |

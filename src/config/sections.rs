@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
+use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
 use super::xmarket::WeekendFadeConfig;
@@ -51,6 +52,9 @@ pub struct SandboxSections {
     /// `[xmarket.weekend_fade]` (`xm_weekend_fade`); its `calendar` is one
     /// of `calendars`.
     pub weekend_fade: Option<WeekendFadeConfig>,
+    /// `[backtest]` (`config/backtest.rs`): what `tengu backtest` and the
+    /// `backtest` / `market_history` tools read (xlab).
+    pub backtest: Option<BacktestConfig>,
 }
 
 impl SandboxSections {

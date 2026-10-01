@@ -2,6 +2,7 @@
 //! validation, and path resolution. Imports only `domain` (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod backtest;
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod feeds;
@@ -225,6 +226,11 @@ pub struct Config {
     /// `<TENGU_HOME>/state/<xmarket.state>/history/`. Default: off.
     #[serde(default)]
     pub recorder: recorder::RecorderConfig,
+    /// `[backtest]` — history-first research (`config/backtest.rs`): costs per
+    /// venue prefix, universes, strategy specs, the Jev gate loop. Needs
+    /// `[xmarket]`. Absent = no backtests.
+    #[serde(default)]
+    pub backtest: Option<backtest::BacktestConfig>,
     /// `[feeds.<name>]` — scheduled work of `tengu run` (`config/feeds.rs`):
     /// `kind = "tool"` calls a tool of an agent, `kind = "tick"` sends a
     /// decision-loop event, on `every_secs` / `windows` / `at` clock ticks.
@@ -1206,6 +1212,7 @@ impl Config {
                 .filter(|_| self.recorder.enabled)
                 .map(|x| x.history_dir(&home)),
             weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
+            backtest: self.backtest.clone(),
         }
     }
 
@@ -1334,6 +1341,12 @@ impl Config {
         }
         for issue in self.recorder.validation_errors(self.xmarket.is_some()) {
             errors.push(issue);
+        }
+        if let Some(bt) = &self.backtest {
+            let loops: Vec<&str> = self.decision_loops.keys().map(String::as_str).collect();
+            for issue in bt.validation_errors(self.xmarket.is_some(), &loops) {
+                errors.push(issue);
+            }
         }
         for issue in feeds::validation_errors(self) {
             errors.push(issue);
@@ -1610,6 +1623,7 @@ impl Default for Config {
             rate_limits: HashMap::new(),
             runtime: Default::default(),
             recorder: recorder::RecorderConfig::default(),
+            backtest: None,
             feeds: Default::default(),
             skill_lifecycle: None,
             sandbox_name: None,
