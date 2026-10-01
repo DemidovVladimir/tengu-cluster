@@ -24,9 +24,6 @@
 //! | `capped` arm ([`RiskCaps`]) | in time order; positions open until their exit, exits at an instant before entries; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed |
 //! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no exit bar: the trade is dropped) · future_data |
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -172,6 +169,7 @@ impl SkipReason {
     }
 
     /// A data gap (the report flags them), not a rule's choice.
+    #[cfg_attr(not(test), allow(dead_code))] // the report reads `missing_*` keys; tools may ask
     pub fn is_missing_data(self) -> bool {
         matches!(
             self,

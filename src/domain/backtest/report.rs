@@ -12,9 +12,6 @@
 //! | [`render_markdown`](BacktestReport::render_markdown) | `report.md`: run table, summary per arm, split comparison, per-instrument top / bottom 10, refusals and skips, Jev vs rules, calibration, data notes, limits (§ 11) |
 //! | [`render_compact`](BacktestReport::render_compact) | CLI / tool text ≤ [`COMPACT_MAX_CHARS`]: line 1, one line per arm, the split, the best and worst instruments, skips |
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 

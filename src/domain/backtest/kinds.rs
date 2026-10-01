@@ -10,9 +10,6 @@
 //! | A candidate | legs, side, signal, exit plan, period; the first leg's features as-of the decision (`features.rs`, with the cost model's half-spread at t); `data_asof_ms` = the latest observation read |
 //! | Skips | per window and name (window / event kinds), per instrument (excluded, no costs) for the bar kinds; an instrument without bars or funding rows is a data note |
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeSet;
 
 use chrono::{Datelike, NaiveDate, Weekday};

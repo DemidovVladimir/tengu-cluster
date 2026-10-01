@@ -173,7 +173,6 @@ pub struct CtxPoint {
     pub premium: Option<f64>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest cost model (xlab)
 impl CtxPoint {
     /// Half the impact spread in bps of the mid (else of the mark):
     /// `(impact_ask − impact_bid) / 2 / mid × 10⁴`; `None` without the
@@ -193,7 +192,6 @@ pub struct BarSeries {
     pub bars: Vec<Bar>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl BarSeries {
     /// Sorts by `t_open_ms`; a repeated open time keeps the last bar given.
     pub fn new(instrument: impl Into<String>, interval: Interval, mut bars: Vec<Bar>) -> Self {
@@ -229,6 +227,7 @@ impl BarSeries {
     }
 
     /// The latest bar observable at `t_ms`.
+    #[cfg_attr(not(test), allow(dead_code))] // readers: the `market_history` tool (xlab)
     pub fn last_at(&self, t_ms: i64) -> Option<&Bar> {
         self.observable_at(t_ms).last()
     }
@@ -241,7 +240,6 @@ pub struct FundingSeries {
     pub points: Vec<FundingPoint>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl FundingSeries {
     /// Sorts by `t_ms`; a repeated time keeps the last point given.
     pub fn new(instrument: impl Into<String>, mut points: Vec<FundingPoint>) -> Self {
@@ -276,7 +274,6 @@ pub struct CtxSeries {
     pub points: Vec<CtxPoint>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl CtxSeries {
     /// Sorts by `t_ms`; a repeated time keeps the last point given.
     pub fn new(instrument: impl Into<String>, mut points: Vec<CtxPoint>) -> Self {

@@ -182,10 +182,10 @@ min_apr_pct = 30
 exit_apr_pct = 10
 hold_hours = 72
 
-# Convergence: SOL vs ETH log spread, 1 week z-score.
+# Convergence: SOL vs ETH log spread, 1 week z-score (a pair names its legs:
+# no universe).
 [backtest.strategies.sol_eth_spread]
 kind = "pair_spread"
-universe = ["hyperliquid:SOL", "hyperliquid:ETH"]
 legs = ["hyperliquid:SOL", "hyperliquid:ETH"]
 interval = "1h"
 lookback_bars = 168

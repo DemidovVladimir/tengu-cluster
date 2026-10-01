@@ -497,6 +497,37 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # min_interval_secs = { "hl_book/1" = 60 }   # at most one row per key per interval
 # retention_days = 30                        # older day files deleted (0 = keep all)
 
+# --- Backtests (xlab; needs [xmarket]) ---
+# `tengu backtest --sandbox <s> --strategy <name>` (or `--spec <file.json>`) runs a
+# strategy spec on <TENGU_HOME>/state/<xmarket.state>/market.db (filled by `tengu
+# history backfill`) and writes <state dir>/backtests/<run id>/. Every strategy
+# is parsed at load: kind and fields, its @universe, an exchange calendar, a
+# costs prefix for every id it trades (src/config/backtest.rs). Specs, kinds,
+# costs: docs/xlab-2026-10-01.md § 5–6; full library: sandboxes/xlab/config.toml.
+# [backtest]
+# notional_usd = 100                        # per trade when a spec sets none (research arm)
+# bootstrap = 2000                          # resamples per 95 % CI (100–100000)
+# seed = 7                                  # bootstrap seed: a rerun prints the same numbers
+# gate = "xl_gate"                          # the [decision_loops.<name>] the Jev gate arm runs
+#
+# [backtest.costs."hyperliquid:xyz:"]       # per side; the longest id prefix wins
+# taker_fee_bps = 0.9
+# half_spread = { model = "fixed", bps = 1.0 }   # or { model = "abdi_ranaldo", window_bars = 48, floor_bps = 2.0 } / { model = "ctx", fallback_bps = 1.0 }
+# slippage_bps = 0
+# funding = true                            # book funding over the hold
+#
+# [backtest.universes]
+# xyz_stocks = ["hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]   # the xlab sandbox lists 75
+#
+# [backtest.strategies.weekend_fade]        # rule W: Sun 18:00 NY fade the move since Fri 20:00, exit Mon 09:00
+# kind = "weekend_window"                   # | daily_window | move_trigger | funding_carry | pair_spread | event_window
+# universe = "@xyz_stocks"
+# interval = "1h"
+# calendar = "us_equity"                    # an exchange [xmarket.calendars.<id>]
+# direction = "fade"                        # | follow
+# min_abs_signal_bps = 0
+# top_n = 4                                 # optional: the 4 largest |s| per window
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in

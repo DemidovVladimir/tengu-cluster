@@ -16,15 +16,13 @@
 //! The windows run back from the last bar observable (its close may be
 //! before t when bars are missing — the as-of view, not a guess).
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 
 use crate::domain::backtest::fills::ln_bps;
 use crate::domain::marketdata::{Bar, BarSeries, CtxSeries, FundingSeries};
 
 /// Every key [`features_asof`] may set.
+#[cfg_attr(not(test), allow(dead_code))] // readers: the Jev gate arm (`application/backtest/gate.rs`)
 pub const FEATURE_KEYS: [&str; 9] = [
     "ret_1h_bps",
     "ret_24h_bps",
@@ -52,6 +50,7 @@ pub(crate) struct AsOf {
 
 /// The module table's features of `bars` (+ `funding`, `ctx`) at `t_ms`;
 /// `half_spread_bps` = the cost model's estimate at t, when known.
+#[cfg_attr(not(test), allow(dead_code))] // the engine uses `features_traced`; readers: tools (xlab)
 pub fn features_asof(
     bars: &BarSeries,
     funding: Option<&FundingSeries>,

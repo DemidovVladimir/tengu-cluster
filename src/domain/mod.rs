@@ -6,6 +6,7 @@ pub(crate) mod backoff;
 pub(crate) mod backtest;
 pub(crate) mod book;
 pub(crate) mod calendar;
+pub(crate) mod canonical;
 pub(crate) mod decision;
 pub(crate) mod engine_smoke;
 pub(crate) mod hl;

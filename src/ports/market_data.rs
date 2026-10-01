@@ -42,7 +42,6 @@ pub(crate) trait MarketDataStore: Send + Sync {
         bars: &[Bar],
     ) -> anyhow::Result<usize>;
     /// Bars with `from_ms <= t_open_ms < to_ms`, ascending.
-    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn bars(
         &self,
         instrument: &str,
@@ -58,7 +57,6 @@ pub(crate) trait MarketDataStore: Send + Sync {
         points: &[FundingPoint],
     ) -> anyhow::Result<usize>;
     /// Funding with `from_ms <= t_ms < to_ms`, ascending.
-    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn funding(
         &self,
         instrument: &str,
@@ -73,7 +71,6 @@ pub(crate) trait MarketDataStore: Send + Sync {
         points: &[CtxPoint],
     ) -> anyhow::Result<usize>;
     /// Context samples with `from_ms <= t_ms < to_ms`, ascending.
-    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn ctx(&self, instrument: &str, from_ms: i64, to_ms: i64) -> anyhow::Result<CtxSeries>;
     /// Coverage rows, one per (instrument, kind, interval); `instrument`
     /// filters to one id. Sorted by instrument, kind, interval.

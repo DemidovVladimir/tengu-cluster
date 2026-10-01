@@ -12,9 +12,6 @@
 //! | `funding_carry` exit ([`walk_funding_exit`]) | the first settlement after the entry with \|rate\| APR < `exit_apr_pct` → the next bar close, else `hold_hours` |
 //! | `pair_spread` ([`spread_points`], [`walk_spread_exit`]) | s = ln(a / b) at every close both legs have; z against the mean and sample sd of the `lookback_bars` previous points (sd ≈ 0 ⇒ no z); exit at the first point with \|z\| ≤ `exit_z`, else `max_hold_bars` |
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +44,7 @@ pub enum ExitReason {
 }
 
 impl ExitReason {
+    #[cfg_attr(not(test), allow(dead_code))] // serde names it in the run dir; text renderers may
     pub fn as_str(self) -> &'static str {
         match self {
             ExitReason::Window => "window",

@@ -20,9 +20,6 @@
 //! A figure that cannot be computed (too few trades / periods, sd 0) is
 //! left out, never 0.
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +51,7 @@ impl PeriodKind {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // serde names it in report.json; text renderers may
     pub fn as_str(self) -> &'static str {
         match self {
             PeriodKind::Weekend => "weekend",
@@ -89,6 +87,7 @@ impl SplitMix64 {
     }
 
     /// Uniform in `[0, 1)`, 53 bits.
+    #[cfg_attr(not(test), allow(dead_code))] // readers: the test fixtures (`testkit::random_market`)
     pub fn unit(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
     }
@@ -411,6 +410,7 @@ pub struct Calibration {
 
 /// `points` = (p, won) per decision; `bins` equal-width bins over [0, 1]
 /// (at least 1); p is clamped to [0, 1], a non-finite p is left out.
+#[cfg_attr(not(test), allow(dead_code))] // readers: the Jev gate arm (`application/backtest/gate.rs`)
 pub fn calibration(points: &[(f64, bool)], bins: usize) -> Calibration {
     let k = bins.max(1);
     let mut acc = vec![(0usize, 0.0f64, 0usize); k];

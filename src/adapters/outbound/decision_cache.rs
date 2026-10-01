@@ -7,7 +7,7 @@
 //!
 //! | Rule | How |
 //! |---|---|
-//! | Key | sha256, 64 lowercase hex chars (never shortened), of the canonical JSON `{"model","state","questions"}` ([`request_key`]): object keys sorted at every depth, so the key never depends on map insertion order (serde_json's `preserve_order` is off in `Cargo.lock` today; the key does not rely on that) |
+//! | Key | sha256, 64 lowercase hex chars (never shortened), of the canonical JSON `{"model","state","questions"}` ([`request_key`], `domain/canonical.rs`): object keys sorted at every depth, so the key never depends on map insertion order (serde_json's `preserve_order` is off in `Cargo.lock` today; the key does not rely on that) |
 //! | Hit | the stored `Decision`, verbatim — its `usage` is the original call's; spend comes from the counters |
 //! | Miss, online | `inner.decide`, then `INSERT OR IGNORE` + read back: every caller gets the stored row (concurrent identical misses converge; a rerun returns the same parse of the same text) |
 //! | Miss, offline (`inner = None`) | an error naming the key in full and the file |
@@ -24,8 +24,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
+/// Keys sort at every depth (`domain/canonical.rs`, shared with the
+/// backtest run's `spec_sha256`).
+pub(crate) use crate::domain::canonical::canonical_json;
+use crate::domain::canonical::sha256_hex;
 use crate::domain::decision::{Decision, Question};
 use crate::domain::observation::now_ms;
 use crate::ports::decision::{CacheStats, DecisionEngine};
@@ -176,44 +179,6 @@ fn parse_row(key: &str, text: &str) -> Result<Decision> {
     serde_json::from_str(text).with_context(|| format!("decision cache row {key} does not parse"))
 }
 
-/// `v` as JSON text with object keys sorted at every depth; arrays keep
-/// their order, scalars print as serde_json prints them.
-pub(crate) fn canonical_json(v: &Value) -> String {
-    let mut out = String::new();
-    write_canonical(v, &mut out);
-    out
-}
-
-fn write_canonical(v: &Value, out: &mut String) {
-    match v {
-        Value::Object(o) => {
-            let mut keys: Vec<&String> = o.keys().collect();
-            keys.sort();
-            out.push('{');
-            for (i, k) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                out.push_str(&Value::String(k.clone()).to_string());
-                out.push(':');
-                write_canonical(&o[k.as_str()], out);
-            }
-            out.push('}');
-        }
-        Value::Array(a) => {
-            out.push('[');
-            for (i, x) in a.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_canonical(x, out);
-            }
-            out.push(']');
-        }
-        scalar => out.push_str(&scalar.to_string()),
-    }
-}
-
 /// The cache key of one decisions request — sha256 hex (64 chars) of the
 /// canonical `{"model","state","questions"}` — and that canonical text.
 pub(crate) fn request_key(
@@ -226,7 +191,7 @@ pub(crate) fn request_key(
         "state": state,
         "questions": questions,
     }));
-    (format!("{:x}", Sha256::digest(request.as_bytes())), request)
+    (sha256_hex(&request), request)
 }
 
 #[async_trait]

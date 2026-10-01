@@ -1344,7 +1344,14 @@ impl Config {
         }
         if let Some(bt) = &self.backtest {
             let loops: Vec<&str> = self.decision_loops.keys().map(String::as_str).collect();
-            for issue in bt.validation_errors(self.xmarket.is_some(), &loops) {
+            let exchange_calendars: Vec<&str> = self
+                .xmarket
+                .iter()
+                .flat_map(|x| &x.calendars)
+                .filter(|(_, c)| c.kind == xmarket::CalendarKind::Exchange)
+                .map(|(id, _)| id.as_str())
+                .collect();
+            for issue in bt.validation_errors(self.xmarket.is_some(), &loops, &exchange_calendars) {
                 errors.push(issue);
             }
         }

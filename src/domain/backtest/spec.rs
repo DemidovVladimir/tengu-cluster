@@ -29,9 +29,6 @@
 //! | `time:<RFC 3339 \| date \| ms>` | decided at or after the instant (in-sample: before) |
 //! | `instruments:<id,id,…>` | trades on a listed id (any leg) |
 
-// Consumers land with the xlab application wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -112,6 +109,7 @@ impl Direction {
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // serde names it in the spec JSON; text renderers may
     pub fn as_str(self) -> &'static str {
         match self {
             Direction::Fade => "fade",
@@ -390,7 +388,8 @@ pub struct StrategySpec {
     pub kind: StrategyKind,
 }
 
-/// `[a-z0-9_]{1,48}` — strategy and universe names (`config::backtest::valid_name`).
+/// `[a-z0-9_]{1,48}` — strategy, universe and arm names (`config/backtest.rs`,
+/// `application/backtest/`).
 pub fn valid_name(name: &str) -> bool {
     (1..=48).contains(&name.len())
         && name

@@ -228,7 +228,7 @@ fn recorder(config: &Config) -> Result<(SqliteHistoryStore, PathBuf)> {
 }
 
 /// The sandbox sections every agent of `config` shares (`Config::load`).
-fn sections(config: &Config) -> Arc<SandboxSections> {
+pub(super) fn sections(config: &Config) -> Arc<SandboxSections> {
     config
         .agents
         .values()
@@ -250,19 +250,19 @@ fn finish(report: BackfillReport) -> Result<()> {
     }
 }
 
-/// The parsed `backfill` flags.
+/// The parsed `backfill` flags (`tengu backtest --fetch` builds them too).
 #[derive(Debug, Clone, PartialEq)]
-struct BackfillArgs {
-    source: BackfillSource,
-    interval: Interval,
-    from_ms: i64,
-    to_ms: i64,
-    bars: bool,
-    funding: bool,
+pub(super) struct BackfillArgs {
+    pub(super) source: BackfillSource,
+    pub(super) interval: Interval,
+    pub(super) from_ms: i64,
+    pub(super) to_ms: i64,
+    pub(super) bars: bool,
+    pub(super) funding: bool,
 }
 
 impl BackfillArgs {
-    fn check(&self) -> Result<()> {
+    pub(super) fn check(&self) -> Result<()> {
         if self.from_ms >= self.to_ms {
             bail!(
                 "--from {} is not before --to {}",
@@ -282,9 +282,9 @@ impl BackfillArgs {
 
 /// One backfill target: a full id, and its pool for Gecko.
 #[derive(Debug, Clone, PartialEq)]
-struct Target {
-    instrument: String,
-    pool: Option<String>,
+pub(super) struct Target {
+    pub(super) instrument: String,
+    pub(super) pool: Option<String>,
 }
 
 /// `--instruments` → targets, in order, without repeats; universes
@@ -340,7 +340,9 @@ fn targets(
     Ok(out)
 }
 
-async fn backfill(
+/// Fill `market.db` for `targets` per `req` (module table); also `tengu
+/// backtest --fetch`'s.
+pub(super) async fn backfill(
     sections: &SandboxSections,
     req: &BackfillArgs,
     targets: &[Target],
