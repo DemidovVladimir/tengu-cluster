@@ -5,7 +5,7 @@
 //!
 //! | Rule | How |
 //! |---|---|
-//! | when | `next_fire(schedule, max(now, park gate), last slot)`; a grid fire starts up to `jitter_pct` % of its interval late, an at-tick exactly; sleeps on the `Clock` in naps of ≤ 60 s, so a wall-clock jump shows within a minute |
+//! | when | `next_fire(schedule, max(now, park gate), last slot)`; a grid fire starts up to `jitter_pct` % of its interval late, an at-tick exactly; sleeps on the `Clock` in naps of ≤ 60 s, so a wall-clock jump shows within a minute; a last slot more than 1 s ahead of the clock (a backward step) counts as now — no stall |
 //! | one run in flight | a tool run is awaited before the next fire is computed; a tick is not sent while this feed's previous event is still queued or running (counted `dropped`) |
 //! | missed slots | never replayed: the next fire is computed when a run ends; a slot reached later than `late_grace_ms` after its time (system sleep) is skipped (`dropped`) |
 //! | tool run | one call per fan-out entry, `concurrency` at a time, started in order; `ToolCall.id` = `feed:<name>:<slot ms>:<i>` (→ `ToolCtx.call_id`) |

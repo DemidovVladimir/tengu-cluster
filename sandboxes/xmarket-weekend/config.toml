@@ -15,15 +15,25 @@
 #   build  CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release
 #          T=$HOME/.cache/tengu-xm.noindex/main/release/tengu        (default features suffice)
 #   start  tmux new -s xmw      (survives a closed terminal; detach Ctrl-b d, back: tmux attach -t xmw)
-#          cd ~/development/tengu-cluster && nice -n 10 ~/.cache/tengu-xm.noindex/main/release/tengu run --sandbox xmarket-weekend
+#          T=$HOME/.cache/tengu-xm.noindex/main/release/tengu; cd ~/development/tengu-cluster
+#          caffeinate -i -s nice -n 10 "$T" run --sandbox xmarket-weekend
+#          caffeinate holds the Mac awake (on power, lid open, online) exactly while the run lives,
+#          a restart in the pane included — no separate `caffeinate -w <pid>`
 #          logs: the pane + ~/.tengu/logs/tengu.log; a second start exits 1 (lease runtime:xmarket-weekend)
-#   awake  caffeinate -i -s -w "$(jq .pid ~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json)" &   (on power, lid open, online)
-#   check  "$T" doctor --sandbox xmarket-weekend --live      exit 0 = heartbeat fresh, every required feed live
+#   check  "$T" doctor --sandbox xmarket-weekend --live      exit 0 = heartbeat fresh, every required feed live —
+#          not proof of fills: a fade row other than `error` counts as live even when every fade failed
 #          "$T" risk status --sandbox xmarket-weekend        capped ledger: equity, positions, halts
 #          "$T" history range --sandbox xmarket-weekend mkt_ctx/1:hyperliquid:xyz:TSLA --from 2026-10-02T19:55:00-04:00 --to 2026-10-02T20:05:00-04:00
 #          "$T" tool call --sandbox xmarket-weekend --agent xm_weekend --tool xm_weekend_fade --args '{}'
 #              → xm_weekend/1:2026-10-02, phase waiting (next_entry_s) → entered → closing → closed (P&L)
 #          "$T" tool call --sandbox xmarket-weekend --agent xm_weekend --tool paper_positions --args '{"account":"xmarket-weekend-shadow"}'
+#   entry  Sun 2026-10-04 18:11 New York: the xm_weekend_fade tool call above (phase entered,
+#          n_capped_filled / n_shadow_filled, every fade not filled named in its errors) or risk status.
+#          A capped pick whose book fails the gate (30 bps slippage, $250 depth) is denied and not
+#          replaced: the risk policy, kept — the shadow ledger measures every name at the 100 bps IOC
+#          bound. Until 18:10 a fill rejection that may pass later (no mid, no liquidity, a stale book,
+#          missing data) is placed again as <id>:2, <id>:3 …; an unknown OI-cap state is denied and
+#          judged again (rule W: docs/xmarket-risk-paper-2026-09-30.md § Weekend fade)
 #   stop   Ctrl-C in the pane (or kill -TERM <pid>): drains ≤ 20 s, exit 0, lease released,
 #          ~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json state "stopped"
 #   P&L    sqlite3 ~/xmarket-weekend-ws/.tengu/observations.db "select body from observations where key = 'xm_weekend/1:2026-10-02'" | jq .features

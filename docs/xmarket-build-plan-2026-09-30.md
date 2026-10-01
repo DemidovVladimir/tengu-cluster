@@ -55,7 +55,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Part | Spec |
 |---|---|
 | Purpose | First out-of-time evidence for the weekend fade (W) at executable prices; a real run of the new runtime |
-| Process | `tengu run --sandbox xmarket-weekend` on this Mac (kept awake with `caffeinate -i -s -w <pid>`), state in `<TENGU_HOME>/state/xmarket-weekend/` |
+| Process | `tengu run --sandbox xmarket-weekend` on this Mac, started under `caffeinate -i -s` (awake while the run lives; runbook in the sandbox file), state in `<TENGU_HOME>/state/xmarket-weekend/` |
 | Feeds | `hl_ctx` for every listed xyz market every 60 s; `hl_book` for every listed xyz single-stock perp every 5 min (every 60 s from Sun 17:00 to 19:00 ET and Mon 08:30 to 09:30 ET); recorder on for both |
 | Strategy | `x-weekend-fade-strategy`: at Sun 18:00 ET (last closed day before a trading day) compute s = ln(HL at 18:00 / HL at Fri 20:00 ET) per name; paper-fade every eligible name in a shadow ledger (no cap, depth-walk fills) and the top 4 with \|s\| ≥ 50 bps at $25 each in the `[risk]`-capped ledger; exit both at Mon 09:00 ET |
 | Cost profile | Floor: no LLM, no X, Jev off; network `open` |

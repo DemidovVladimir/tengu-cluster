@@ -71,13 +71,13 @@ Every row: `latency_ms`, `book_age_ms`, `position_qty_after`, `equity_usd_after`
 | `daily_loss_limit_usd`, `total_loss_limit_usd` | `daily_loss`, `total_loss` — a breach trips the halt | not gated (still trips) |
 | `max_orders_per_min`, `max_open_orders` | `order_rate`, `open_orders` | same |
 | `max_data_age_ms.book` / `.ctx` | `book_age`, `ctx_age` | waived |
-| — | `market_status` (listed, a book; at the OI cap only if not growing) | skipped |
+| — | `market_status` (listed, a book; at the OI cap only if not growing; a Hyperliquid row without `at_oi_cap` — the cap read failed — only if not growing, else `missing:at_oi_cap`, judged again next call instead of a stored fill refusal) | skipped |
 | `min_edge_bps` | `min_edge`: `edge_after_costs_bps` of the order's opportunity row (key names the instrument, within its TTL) | skipped |
 | `max_slippage_bps`, `min_depth_usd` | `depth`, `slippage` | skipped |
 | `max_order_notional_usd` … `max_net_exposure_usd`, `max_leverage` | `order_notional`, `position_notional`, `asset_exposure`, `venue_exposure`, `gross_exposure`, `net_exposure`, `leverage` — after the fill | skipped |
 | `require_hedge_for`, `max_skew_ms` | `hedge`, `skew` | skipped |
 
-Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `edge_after_costs_bps`, `lifecycle`, `hedge_book`, `hedge_ctx`). At the limit passes; limit + 1e-6 fails. A waived exit is allowed with rule `allow_reduce_degraded` (§ 7 #7).
+Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `at_oi_cap`, `edge_after_costs_bps`, `lifecycle`, `hedge_book`, `hedge_ctx`). At the limit passes; limit + 1e-6 fails. A waived exit is allowed with rule `allow_reduce_degraded` (§ 7 #7).
 
 ## Ledger — `<TENGU_HOME>/state/<xmarket.state>/ledger.db`
 
@@ -145,14 +145,25 @@ Rule W, fixed before the data ([`xmarket-feasibility-2026-09-30.md`](xmarket-fea
 | Ledger | Gate | Entry id | Exit |
 |---|---|---|---|
 | capped | the `[risk]` gate, every rule; opportunity = the name's `xm_weekend_signal/1` row (`edge_after_costs_bps` = `expected_edge_bps`, example 23 = half the in-sample +46), strategy `overreaction` | `fade:<account>:<full id>:<anchor date>` | `xm_exits`, reason `deadline` (the position's `exit_at_ms`) — never this tool |
-| shadow | `risk::evaluate_shadow`: intent, account, kill switch, halt, reduce-only, venue, book age as the gate; every budget rule `Skipped` "shadow: measurement only"; no trips (the kill-switch file denies entries while present, leaves no sticky halt) | `fade-shadow:<shadow account>:<full id>:<anchor date>` | this tool after the exit: reduce-only IOC, `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` after a stored rejected / partial attempt) |
+| shadow | `risk::evaluate_shadow`: intent, account, kill switch, halt, reduce-only, venue, book age as the gate; an entry on an unknown OI-cap state denied `missing:at_oi_cap`; every budget rule `Skipped` "shadow: measurement only"; no trips (the kill-switch file denies entries while present, leaves no sticky halt) | `fade-shadow:<shadow account>:<full id>:<anchor date>` | this tool after the exit: reduce-only IOC, `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` after a stored rejected / partial attempt) |
 
-Both: market IOC bound `max_slippage_bps`, `exit_at_ms` = the exit, the fill on the post-latency live book, one `place()` per order (verdict row + `risk.jsonl` line, tool `xm_weekend_fade`, the feed's call id). Anchor date = the window's last trading day (`YYYY-MM-DD`, New York).
+Both: market IOC bound `max_slippage_bps`, `exit_at_ms` = the exit, the fill on the post-latency live book, one `place()` per order (verdict row + `risk.jsonl` line, tool `xm_weekend_fade`, the feed's call id). Anchor date = the window's last trading day (`YYYY-MM-DD`, New York). A capped pick whose book fails the gate (`[risk] max_slippage_bps`, `min_depth_usd`) is denied and not replaced by the next name — the risk policy; the shadow ledger measures every eligible name at the `max_slippage_bps` IOC bound.
+
+| Entry attempts (both ledgers) | Rule |
+|---|---|
+| Ids | attempt 1 = the entry id above; attempt n ≥ 2 = `<entry id>:<n>` (`weekend_fade::fade_attempt_id`, the exits' numbering) |
+| Latest attempt | found in the ledger by scanning the ids (`exits::first_unstored`); it is the fade's outcome in the row |
+| Never placed again | a fill or a partial fill; a final rejection: size, lot and tick rules (`MinTradeNtl`, `Tick`, `ReduceOnly`), `invalid_order`, `order_type`, `delisted` |
+| Placed again as the next attempt, while now < entry + `entry_lateness_max_secs` | a transient rejection (`FillReason::is_transient`, one list in `domain/xm/paper.rs`): missing data (`missing:mid` — a one-sided book —, `missing:oracle`, `missing:at_oi_cap`, `bad_book`), book age (`stale_book`), liquidity (`MarketOrderNoLiquidity`, `IocCancel`), a price bound (`Oracle`), a venue state (the OI cap, `market_halted`, `market_closed`); after the lateness it stays the outcome |
+| Gate denial | stores nothing: the same attempt id is judged again next call (within the lateness) |
+| `position_open` | only for a position the fade's ids did not open (the account holds the name, no fill under its attempts): not faded |
+| Idempotency | two callers place the same attempt id; the ledger keeps one (`UNIQUE (account, client_order_id)` inside one `BEGIN IMMEDIATE`), the other replays it; attempt n + 1 only follows a stored rejection of n, so at most one attempt per fade fills |
+| Outcomes from the ledger | every call reads the fades not filled in the row from the ledger — inside the lateness, after it and in the previous window's row — so a row save lost to a crash or a concurrent call still counts the fills, closes and P&L |
 
 | Phase (`xm_weekend/1:<anchor date>`) | When | The call |
 |---|---|---|
 | `waiting` | before the entry | reports `next_entry_s` |
-| `entered` | entry ≤ now < exit, snapshot kept | first call: the snapshot (prices, signals, the capped set, each name's ledger bases) kept in the store by compare-and-swap before any order (one per window across processes; never recomputed), then the capped fades (largest \|s\| first), then the shadow fades (4 at a time); later calls within `entry_lateness_max_secs` place again what the ledger does not hold (a denial stores nothing); a name the account already holds is not faded (`position_open`); no eligible name ⇒ an `error` row, nothing kept, the next call tries again |
+| `entered` | entry ≤ now < exit, snapshot kept | first call: the snapshot (prices, signals, the capped set, each name's ledger bases) kept in the store by compare-and-swap before any order (one per window across processes; never recomputed), then the capped fades (largest \|s\| first), then the shadow fades (4 at a time); later calls within `entry_lateness_max_secs` place the next attempt where the table above says so; no eligible name ⇒ an `error` row, nothing kept, the next call tries again. Kept only complete: while a name (not excluded, with an anchor) has no entry row fresher than `entry_max_age_secs` (none, or older: a restart), until entry + 120 s (at most half the lateness), the call keeps nothing (an `error` row) and the next one reads again; from then on those names are left out `stale` (`n_stale`). A fresh row without a usable price is `missing_entry` and holds nothing back |
 | `missed_entry` | no snapshot by entry + `entry_lateness_max_secs` | nothing: no late entry |
 | `closing` | after the exit, a filled name still open | closes the due shadow positions; the capped ones wait for `xm_exits` |
 | `closed` | every filled name flat | P&L per name and ledger = (realized − fees − funding) now − the base before the entry, USD and bps of the entry notional; `shadow_pnl_usd`, `shadow_mean_net_bps`, `capped_pnl_usd`, `capped_mean_net_bps` |

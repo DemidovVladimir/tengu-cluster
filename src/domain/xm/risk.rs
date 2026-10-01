@@ -22,7 +22,7 @@
 //! | `daily_loss` · `total_loss` | day-start equity − equity ≤ limit · initial cash − equity ≤ limit; a breach trips the halt (exits too) | not gated |
 //! | `order_rate` · `open_orders` | accepted orders in the last 60 s + 1 ≤ max · resting orders + 1 ≤ max | same |
 //! | `book_age` · `ctx_age` | row age ≤ `max_data_age_ms.book` / `.ctx`; a book is as old as the older of its row and venue time | waived |
-//! | `market_status` | `mkt_ctx` listed with a book, not halted; at the OI cap only if the position does not grow; the growth ≤ `oi_cap_usd − oi_usd` when the row has both | skipped |
+//! | `market_status` | `mkt_ctx` listed with a book, not halted; at the OI cap only if the position does not grow; the growth ≤ `oi_cap_usd − oi_usd` when the row has both; a Hyperliquid row without `at_oi_cap` (the `perpsAtOpenInterestCap` read failed) only if the position does not grow, else `missing:at_oi_cap` — the fill would refuse it and store the refusal | skipped |
 //! | `min_edge` | `edge_after_costs_bps` of the `opportunity_key` row — its key names the order's instrument as whole `:` segments, any schema with that feature, within the row TTL — ≥ `min_edge_bps` | skipped |
 //! | `depth` · `slippage` | taker-side depth within `max_slippage_bps` of mid ≥ `min_depth_usd` · the walk of `notional_usd` fills fully, VWAP ≤ `max_slippage_bps` from mid | skipped |
 //! | `order_notional` · `position_notional` · `asset_exposure` · `venue_exposure` · `gross_exposure` · `net_exposure` | after the fill ≤ cap: the order · \|position\| · \|net per underlying\| · gross per venue · gross · \|net\| | skipped |
@@ -31,13 +31,13 @@
 //!
 //! | Detail | Rule |
 //! |---|---|
-//! | Missing input (`Absent` / `Error`) | the check fails `missing:<field>`: `kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `edge_after_costs_bps`, `lifecycle`, `hedge_book`, `hedge_ctx` |
+//! | Missing input (`Absent` / `Error`) | the check fails `missing:<field>`: `kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `at_oi_cap`, `edge_after_costs_bps`, `lifecycle`, `hedge_book`, `hedge_ctx` |
 //! | After-fill values | existing positions and the order's delta at mark; a new position at the order leg's book mid (no book: `notional_usd / qty`); `order_notional` takes the larger of `notional_usd` and qty × that price — an intent never understates its size |
 //! | Comparison | 1e-12 relative tolerance: at the limit passes, limit + 1e-6 fails |
 //! | Verdict `rule` | the first failing check in table order; else `allow_reduce_degraded` when a check was waived; else `ok` |
 //! | `trips` | halts the state should record (`risk_state.rs` keeps them): `file`, `total_loss`, `daily_loss` |
 //! | Ids | full, in every detail (`hyperliquid:xyz:TSLA`) — never shortened |
-//! | Shadow ledger ([`evaluate_shadow`], [`GateKind::Shadow`]) | a measurement account (the weekend fade's): `intent`, `account`, `kill_switch`, `halted`, `reduce_only`, `venue`, `book_age` as above; every other rule skipped (`shadow: measurement only`); no trips |
+//! | Shadow ledger ([`evaluate_shadow`], [`GateKind::Shadow`]) | a measurement account (the weekend fade's): `intent`, `account`, `kill_switch`, `halted`, `reduce_only`, `venue`, `book_age` as above; `market_status` only for an unknown OI-cap state (`missing:at_oi_cap`, as above); every other rule skipped (`shadow: measurement only`); no trips |
 
 // Consumers land in wave W1 (`risk-paper-ledger-store`, `risk-kill-switch`,
 // `risk-gate-enforcement`).
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::book::{depth_within, L2Book, Side, WalkTarget};
-use crate::domain::market::{Listing, MarketCtx};
+use crate::domain::market::{Listing, MarketCtx, HYPERLIQUID};
 use crate::domain::observation::{ErrorClass, Field, ObsStatus, Observation, ReadError};
 use crate::domain::xm::ledger::{Exposure, GroupExposure, PaperPositions};
 
@@ -276,6 +276,10 @@ pub enum MarketStatus {
     Open,
     /// At the venue's open-interest cap: orders that grow OI are rejected.
     AtOiCap,
+    /// A Hyperliquid market whose OI-cap state is unknown (the row has no
+    /// `at_oi_cap`: the `perpsAtOpenInterestCap` read failed) — judged as
+    /// at the cap, and the fill engine refuses growth `missing:at_oi_cap`.
+    OiCapUnknown,
     /// Listed without a book (HL: null `midPx` / `impactPxs`).
     NoBook,
     /// Trading halted (a `us_halt/1` row, M2).
@@ -289,12 +293,14 @@ impl MarketStatus {
         match self {
             MarketStatus::Open => "open",
             MarketStatus::AtOiCap => "at_oi_cap",
+            MarketStatus::OiCapUnknown => "oi_cap_unknown",
             MarketStatus::NoBook => "no_book",
             MarketStatus::Halted => "halted",
             MarketStatus::Delisted => "delisted",
         }
     }
 
+    /// OI caps are Hyperliquid's: another venue's row never carries one.
     pub fn of_ctx(ctx: &MarketCtx) -> Self {
         if ctx.listing != Listing::Listed {
             MarketStatus::Delisted
@@ -302,6 +308,8 @@ impl MarketStatus {
             MarketStatus::NoBook
         } else if ctx.at_oi_cap == Some(true) {
             MarketStatus::AtOiCap
+        } else if ctx.at_oi_cap.is_none() && ctx.id.venue() == HYPERLIQUID {
+            MarketStatus::OiCapUnknown
         } else {
             MarketStatus::Open
         }
@@ -662,6 +670,20 @@ fn at_least(value: f64, min: f64) -> bool {
 
 fn missing(field: &str) -> String {
     format!("{}{field}", rules::MISSING)
+}
+
+/// The order grows the position (`growth_usd` > 0), or nobody knows.
+fn grows(growth_usd: Option<f64>) -> bool {
+    growth_usd.is_none_or(|g| g > 0.0)
+}
+
+/// Detail of `missing:at_oi_cap`.
+fn oi_cap_unknown(id: &str) -> String {
+    format!(
+        "{id} {}: the row has no at_oi_cap (the perpsAtOpenInterestCap read failed) — an \
+         order that grows the position waits for a known state",
+        MarketStatus::OiCapUnknown.as_str()
+    )
 }
 
 /// `missing:<field>` for a failed input, the field up to its first `:`
@@ -1106,11 +1128,17 @@ impl Gate<'_> {
             .map(|l| l.ctx.clone())
             .unwrap_or(Field::Absent);
         match &ctx {
+            Field::Ok { value: c }
+                if c.status == MarketStatus::OiCapUnknown && grows(growth_usd) =>
+            {
+                self.fail(missing("at_oi_cap"), oi_cap_unknown(&id));
+            }
             Field::Ok { value: c } => {
                 let s = c.status;
-                let grows = growth_usd.is_none_or(|g| g > 0.0);
+                let grows = grows(growth_usd);
                 let mut detail = format!("{id} {}", s.as_str());
-                let mut ok = s == MarketStatus::Open || (s == MarketStatus::AtOiCap && !grows);
+                let at_cap = matches!(s, MarketStatus::AtOiCap | MarketStatus::OiCapUnknown);
+                let mut ok = s == MarketStatus::Open || (at_cap && !grows);
                 if let (true, true, Some(room)) = (ok, grows, c.oi_cap_headroom_usd) {
                     match growth_usd {
                         Some(g) => {
@@ -1135,6 +1163,22 @@ impl Gate<'_> {
                 let e = read_error(other, "ctx");
                 self.fail(missing("ctx"), format!("{id}: {}", describe(&e)));
             }
+        }
+    }
+
+    /// The shadow gate's `market_status`: an entry that grows the position
+    /// on an unknown OI-cap state fails `missing:at_oi_cap` (the fill would
+    /// refuse it and store the refusal); every other state the fill decides.
+    fn check_shadow_market_status(&mut self, growth_usd: Option<f64>) {
+        let id = self.intent.instrument.clone();
+        let unknown = matches!(
+            self.leg(&id).map(|l| &l.ctx),
+            Some(Field::Ok { value: c }) if c.status == MarketStatus::OiCapUnknown
+        );
+        if !self.is_exit() && unknown && grows(growth_usd) {
+            self.fail(missing("at_oi_cap"), oi_cap_unknown(&id));
+        } else {
+            self.skip(rules::MARKET_STATUS, SHADOW_SKIPPED);
         }
     }
 
@@ -1753,7 +1797,8 @@ pub fn evaluate(
 /// | `intent`, `account`, `reduce_only` | as [`evaluate`] |
 /// | `kill_switch`, `halted`, `book_age` / `missing:book` | as [`evaluate`] — an exit waives them under `allow_reduce_degraded` |
 /// | `venue` | entries: as [`evaluate`]; exits pass |
-/// | every other rule | skipped, detail [`SHADOW_SKIPPED`] (market status, depth and slippage: the fill decides) |
+/// | `market_status` | an entry that grows the position on an unknown OI-cap state ([`MarketStatus::OiCapUnknown`]) fails `missing:at_oi_cap`, so it is judged again next call instead of stored as the fill's refusal; else skipped (the fill decides) |
+/// | every other rule | skipped, detail [`SHADOW_SKIPPED`] (depth and slippage: the fill decides) |
 /// | trips | none: the kill-switch file denies entries while it exists but leaves no sticky halt on a measurement account |
 pub fn evaluate_shadow(
     intent: &OrderIntent,
@@ -1783,9 +1828,13 @@ pub fn evaluate_shadow(
         g.skip(rule, SHADOW_SKIPPED);
     }
     g.check_book_age();
+    g.skip(rules::CTX_AGE, SHADOW_SKIPPED);
+    let growth_usd = g
+        .after()
+        .ok()
+        .map(|a| a.pos_after.abs() - a.pos_before.abs());
+    g.check_shadow_market_status(growth_usd);
     for rule in [
-        rules::CTX_AGE,
-        rules::MARKET_STATUS,
         rules::MIN_EDGE,
         rules::DEPTH,
         rules::SLIPPAGE,
@@ -2257,6 +2306,7 @@ mod tests {
             (MarketStatus::Delisted, false),
             (MarketStatus::Halted, false),
             (MarketStatus::AtOiCap, false),
+            (MarketStatus::OiCapUnknown, false),
             (MarketStatus::Open, true),
         ] {
             let mut c = Case::entry();
@@ -2269,7 +2319,9 @@ mod tests {
             }
             let v = c.run();
             assert_eq!(v.allow, want, "{status:?}: {:?}", v.failed());
-            if !want {
+            if status == MarketStatus::OiCapUnknown {
+                assert_eq!(v.rule, "missing:at_oi_cap");
+            } else if !want {
                 assert_eq!(v.rule, rules::MARKET_STATUS);
             }
         }
@@ -2308,42 +2360,76 @@ mod tests {
         }
     }
 
+    /// At the OI cap, or with its state unknown (`missing:at_oi_cap`): an
+    /// order that grows the position is denied, one that shrinks it passes.
+    /// The shadow gate denies growth on an unknown state only (a known cap:
+    /// the fill decides).
     #[test]
     fn oi_cap_blocks_growth_only() {
-        let mut c = Case::entry();
-        c.intent.instrument = NVDA.into();
-        c.intent.underlying = NVIDIA.into();
-        c.intent.side = Side::Sell;
-        c.intent.qty = 0.125;
-        c.intent.notional_usd = 12.5;
-        let nvda = L2Book::new(
-            vec![L2Level {
-                px: 99.9,
-                sz: 10.0,
-                n: 1,
-            }],
-            vec![L2Level {
-                px: 100.1,
-                sz: 10.0,
-                n: 1,
-            }],
-            NOW - 1_000,
-        )
-        .unwrap();
-        c.ctx.legs.insert(
-            NVDA.into(),
-            leg(NVDA, nvda, NOW - 1_000, NOW - 1_000, MarketStatus::AtOiCap),
-        );
-        c.limits.min_depth_usd = 100.0;
-        // Selling half of the long does not grow OI: passes.
-        let v = c.run();
-        assert_eq!(
-            v.check(rules::MARKET_STATUS).unwrap().status,
-            CheckStatus::Pass
-        );
-        // Buying more does.
-        c.intent.side = Side::Buy;
-        assert_deny(&c.run(), rules::MARKET_STATUS);
+        for (status, rule) in [
+            (MarketStatus::AtOiCap, rules::MARKET_STATUS),
+            (MarketStatus::OiCapUnknown, "missing:at_oi_cap"),
+        ] {
+            let mut c = Case::entry();
+            c.intent.instrument = NVDA.into();
+            c.intent.underlying = NVIDIA.into();
+            c.intent.side = Side::Sell;
+            c.intent.qty = 0.125;
+            c.intent.notional_usd = 12.5;
+            let nvda = L2Book::new(
+                vec![L2Level {
+                    px: 99.9,
+                    sz: 10.0,
+                    n: 1,
+                }],
+                vec![L2Level {
+                    px: 100.1,
+                    sz: 10.0,
+                    n: 1,
+                }],
+                NOW - 1_000,
+            )
+            .unwrap();
+            c.ctx.legs.insert(
+                NVDA.into(),
+                leg(NVDA, nvda, NOW - 1_000, NOW - 1_000, status),
+            );
+            c.limits.min_depth_usd = 100.0;
+            // Selling half of the long does not grow OI: passes.
+            let v = c.run();
+            assert_eq!(
+                v.check(rules::MARKET_STATUS).unwrap().status,
+                CheckStatus::Pass,
+                "{status:?}"
+            );
+            assert_allow(&shadow(&c));
+            // Buying more does.
+            c.intent.side = Side::Buy;
+            let v = c.run();
+            assert_deny(&v, rule);
+            assert!(
+                v.failed().unwrap().detail.contains(status.as_str()),
+                "{:?}",
+                v.failed()
+            );
+            let s = shadow(&c);
+            if status == MarketStatus::OiCapUnknown {
+                assert_deny(&s, rule);
+            } else {
+                assert_allow(&s);
+            }
+            // A reduce-only exit passes either way.
+            let mut exit = Case::exit();
+            if let Some(LegMarket {
+                ctx: Field::Ok { value },
+                ..
+            }) = exit.ctx.legs.get_mut(NVDA)
+            {
+                value.status = status;
+            }
+            assert_allow(&exit.run());
+            assert_allow(&shadow(&exit));
+        }
     }
 
     /// An open market with a known OI cap: the order may grow the position by
@@ -2468,6 +2554,15 @@ mod tests {
             k("missing:ctx", |c| {
                 if let Some(l) = tsla_leg(c) {
                     l.ctx = Field::err(err("mkt_ctx"));
+                }
+            }),
+            k("missing:at_oi_cap", |c| {
+                if let Some(LegMarket {
+                    ctx: Field::Ok { value },
+                    ..
+                }) = tsla_leg(c)
+                {
+                    value.status = MarketStatus::OiCapUnknown;
                 }
             }),
             k("missing:edge_after_costs_bps", |c| {
@@ -2783,16 +2878,23 @@ mod tests {
         let id = InstrumentId::parse(TSLA).unwrap();
         let mut ctx = MarketCtx::new(id.clone(), NOW);
         ctx.mark = Field::ok(400.0);
+        ctx.at_oi_cap = Some(false);
         let obs = Observation::of("hl_ctx", &ctx, NOW - 100, 15_000, ObsSource::Live);
         let c = CtxInput::from_row(&obs);
         assert_eq!(c.value().unwrap().status, MarketStatus::Open);
         assert_eq!(c.value().unwrap().key, format!("mkt_ctx/1:{TSLA}"));
+        let status = |ctx: &MarketCtx| {
+            let row = Observation::of("hl_ctx", ctx, NOW, 15_000, ObsSource::Live);
+            CtxInput::from_row(&row).value().unwrap().status
+        };
         ctx.at_oi_cap = Some(true);
-        let at_cap = Observation::of("hl_ctx", &ctx, NOW, 15_000, ObsSource::Live);
-        assert_eq!(
-            CtxInput::from_row(&at_cap).value().unwrap().status,
-            MarketStatus::AtOiCap
-        );
+        assert_eq!(status(&ctx), MarketStatus::AtOiCap);
+        // The perpsAtOpenInterestCap read failed: unknown on Hyperliquid; a
+        // venue without OI caps never carries the field.
+        ctx.at_oi_cap = None;
+        assert_eq!(status(&ctx), MarketStatus::OiCapUnknown);
+        let rh = MarketCtx::new(InstrumentId::parse(TSLA_RH).unwrap(), NOW);
+        assert_eq!(status(&rh), MarketStatus::Open);
         let gone = MarketCtx::not_found(id, NOW);
         let gone = Observation::of("hl_ctx", &gone, NOW, 15_000, ObsSource::Live);
         assert_eq!(gone.schema, MarketCtx::SCHEMA);

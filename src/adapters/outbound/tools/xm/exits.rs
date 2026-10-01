@@ -232,7 +232,7 @@ fn record(check: &mut ExitCheck, obs: &Observation) {
 /// Attempts are placed in order and a denied one stores nothing, so the
 /// stored ones are 1..k: a galloping then binary search reads O(log k) of
 /// them, and the attempt returned was read unstored. Also the weekend
-/// fade's shadow exits (`weekend_fade.rs`).
+/// fade's shadow exits and entry attempts (`weekend_fade.rs`).
 pub(crate) async fn first_unstored<F, Fut>(stored: F) -> Result<u32>
 where
     F: Fn(u32) -> Fut,

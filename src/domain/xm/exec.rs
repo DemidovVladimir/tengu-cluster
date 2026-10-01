@@ -323,15 +323,21 @@ impl Observed for PaperFillRow {
             Some(f) if f.status == FillStatus::Rejected => vec![ReadError::new(
                 "fill",
                 ErrorClass::NotApplicable,
-                format!(
-                    "rejected {}: {}",
-                    f.reason.map_or("-", |r| r.as_str()),
-                    f.message.as_deref().unwrap_or("")
-                ),
+                rejected_message(f),
             )],
             _ => Vec::new(),
         }
     }
+}
+
+/// `rejected <reason>: <message>` — a venue rejection as the row's error
+/// reads it (the weekend fade reads stored attempts the same way).
+pub(crate) fn rejected_message(f: &FillResult) -> String {
+    format!(
+        "rejected {}: {}",
+        f.reason.map_or("-", |r| r.as_str()),
+        f.message.as_deref().unwrap_or("")
+    )
 }
 
 /// One order of a `paper_close` with `all = true`.

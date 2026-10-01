@@ -13,9 +13,11 @@
 //! | Price | live: a `mkt_ctx/1` row's `mid`, else `mark` ([`price_point`]) — the anchor from the history as of the anchor (≤ `anchor_max_age_secs` old), the entry from the store (≤ `entry_max_age_secs` old at the call); replay: the close of the 5 m candle ending at the instant ([`close_at`], `t` = instant − 300 000) |
 //! | Signal ([`signal_of`]) | s = ln(P_entry / P_anchor), bps; fade = −sign(s): sell after a rise, buy after a fall |
 //! | Eligible | not in `exclude`, both prices present, fresh and > 0, s ≠ 0 (s = 0 ⇒ `flat`, no order) |
+//! | Complete snapshot ([`WeekendFade::complete`]) | kept only when every name not excluded and with an anchor has an entry row fresher than `entry_max_age_secs` (a missing or older one: `stale`); taken before [`snapshot_deadline_ms`] = entry + [`ENTRY_WAIT_MS`] (≤ half the lateness) with a `stale` name, the call keeps nothing (an `error` row) and the next one reads again; from the deadline on the `stale` names are left out for the window. A fresh row without a usable price is `missing_entry` and waits for nothing |
 //! | Shadow ledger | every eligible name, `shadow_notional_usd` each, the shadow gate (`risk::evaluate_shadow`), no caps |
 //! | Capped ledger ([`select_capped`]) | the `capped_top_n` largest \|s\| with \|s\| ≥ `min_abs_signal_bps`, ties by full id; `capped_notional_usd` each through the `[risk]` gate |
-//! | Ids | anchor date = the last trading day (local `YYYY-MM-DD`); capped `fade:<account>:<full id>:<anchor date>`, shadow `fade-shadow:<shadow account>:<full id>:<anchor date>` ([`capped_order_id`], [`shadow_order_id`]) |
+//! | Ids | anchor date = the last trading day (local `YYYY-MM-DD`); capped `fade:<account>:<full id>:<anchor date>`, shadow `fade-shadow:<shadow account>:<full id>:<anchor date>` ([`capped_order_id`], [`shadow_order_id`]); attempt n ≥ 2 of either `<id>:<n>` ([`fade_attempt_id`], the exits' numbering) |
+//! | Attempts | the first keeps the id; a stored rejection the next attempt may not meet (`FillReason::is_transient`: missing data, book age, liquidity, a price bound, a venue state) is placed again as the next attempt within `entry_lateness_max_secs`; a fill or a partial fill is never placed again; a final rejection (size, lot and tick rules, delisting, a bad order) is the outcome; a gate denial stores nothing and is judged again under the same id |
 //! | P&L ([`WeekendFade::refresh`]) | per name and ledger, once flat after the exit: (realized − fees − funding) now minus the same before the entry, USD, and bps of the filled entry notional |
 //! | Replay ([`replay`]) | per eligible name with an exit price: gross = dir × ln(P_exit / P_entry) bps, net = gross − the round-trip cost; the mean over names in id order, positives, the capped set |
 //!
@@ -46,6 +48,10 @@ pub const CANDLE_MS: i64 = 300_000;
 /// weekend overshoot is an overreaction.
 pub const FADE_STRATEGY: &str = "overreaction";
 const DAY_MS: i64 = 86_400_000;
+/// How long after the entry instant the snapshot waits for every name's
+/// fresh entry row before it is kept without the stale ones (at most half
+/// of `entry_lateness_max_secs`).
+pub const ENTRY_WAIT_MS: i64 = 120_000;
 /// Breaks [`fade_window`] skips (single mid-week holidays) before giving up.
 const MAX_SKIPPED_BREAKS: usize = 8;
 /// How far back [`previous_fade_window`] looks.
@@ -119,6 +125,24 @@ pub fn capped_order_id(account: &str, instrument: &str, anchor_date: &str) -> St
 /// `fade-shadow:<shadow account>:<full id>:<anchor date>`.
 pub fn shadow_order_id(shadow_account: &str, instrument: &str, anchor_date: &str) -> String {
     format!("fade-shadow:{shadow_account}:{instrument}:{anchor_date}")
+}
+
+/// Attempt `attempt` of fade `id`: the id itself for the first, else
+/// `<id>:<attempt>` (2, 3, …) — `exits::exit_client_order_id`'s numbering.
+/// An anchor date never ends in `:<n>`, so no attempt is another name's id.
+pub fn fade_attempt_id(id: &str, attempt: u32) -> String {
+    if attempt <= 1 {
+        id.to_string()
+    } else {
+        format!("{id}:{attempt}")
+    }
+}
+
+/// Until when the snapshot waits for every fresh entry row (module table):
+/// entry + [`ENTRY_WAIT_MS`], at most half the lateness.
+pub fn snapshot_deadline_ms(w: &WeekendWindow, lateness_ms: u64) -> i64 {
+    let half = i64::try_from(lateness_ms / 2).unwrap_or(i64::MAX);
+    w.entry_ms.saturating_add(ENTRY_WAIT_MS.min(half))
 }
 
 // ── Prices ──────────────────────────────────────────────────────────
@@ -230,6 +254,10 @@ pub enum Skip {
     MissingAnchor,
     /// No fresh entry price.
     MissingEntry,
+    /// No entry row fresher than `entry_max_age_secs` (none, or too old —
+    /// a restart): the snapshot waits for it until [`snapshot_deadline_ms`]
+    /// ([`WeekendFade::complete`]), then the name is left out of the window.
+    Stale,
     /// Replay only: no exit price.
     MissingExit,
     /// s = 0: nothing to fade.
@@ -511,14 +539,16 @@ impl FadePhase {
     }
 }
 
-/// One order a fade placed, from its `paper_fill/1` row (or why it was not
-/// placed); ids in full.
+/// One order a fade placed — its latest attempt, from its `paper_fill/1`
+/// row or the ledger — or why it was not placed; ids in full.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FadeOrder {
     pub instrument: String,
+    /// The attempt's id ([`fade_attempt_id`]).
     pub client_order_id: String,
     /// `filled` · `partial` · `rejected` (venue) · `denied` (gate) · `error`
-    /// (not placed) · `flat` (a close found nothing open).
+    /// (not placed: `position_open`, a refusal) · `flat` (a close found
+    /// nothing open).
     pub status: String,
     /// The gate's rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -537,13 +567,8 @@ pub struct FadeOrder {
 }
 
 impl FadeOrder {
-    /// The ledger holds it (a retry would replay it): filled, partial or
-    /// rejected. A denial or a refusal stores nothing.
-    pub fn stored(&self) -> bool {
-        matches!(self.status.as_str(), "filled" | "partial" | "rejected")
-    }
-
-    /// Something filled.
+    /// Something filled (`filled`, `partial`): the fade is never placed
+    /// again.
     pub fn filled(&self) -> bool {
         self.filled_qty.is_some_and(|q| q > 0.0)
     }
@@ -735,6 +760,13 @@ impl WeekendFade {
         self.count(|n| n.skip.is_none())
     }
 
+    /// The snapshot may be kept: no name is `stale`, or it was taken at or
+    /// after [`snapshot_deadline_ms`] (the stale names are then left out).
+    pub fn complete(&self) -> bool {
+        let deadline = snapshot_deadline_ms(&self.window, self.lateness_max_s.saturating_mul(1000));
+        self.skipped(Skip::Stale) == 0 || self.entered_at_ms.is_some_and(|t| t >= deadline)
+    }
+
     pub fn n_capped(&self) -> usize {
         self.count(|n| n.capped)
     }
@@ -882,7 +914,7 @@ impl Observed for WeekendFade {
                 self.n_universe
             ),
             FadePhase::Entered => {
-                let h = format!(
+                let mut h = format!(
                     "{base} eligible={}/{} shadow={} capped={}/{} missing_anchor={} missing_entry={}",
                     self.n_eligible(),
                     self.names.len(),
@@ -892,6 +924,10 @@ impl Observed for WeekendFade {
                     self.skipped(Skip::MissingAnchor),
                     self.skipped(Skip::MissingEntry)
                 );
+                let stale = self.skipped(Skip::Stale);
+                if stale > 0 {
+                    h.push_str(&format!(" stale={stale}"));
+                }
                 let capped: String = self
                     .ids_of(|n| n.capped)
                     .iter()
@@ -945,6 +981,7 @@ impl Observed for WeekendFade {
                 ("n_eligible", self.n_eligible()),
                 ("n_missing_anchor", self.skipped(Skip::MissingAnchor)),
                 ("n_missing_entry", self.skipped(Skip::MissingEntry)),
+                ("n_stale", self.skipped(Skip::Stale)),
                 ("n_flat", self.skipped(Skip::Flat)),
                 ("n_capped", self.n_capped()),
                 ("n_capped_filled", self.n_filled(true)),
@@ -977,10 +1014,13 @@ impl Observed for WeekendFade {
         f
     }
 
-    /// `error`: an entry with no eligible name (no snapshot is kept);
-    /// `partial`: any error below; else `ok`.
+    /// `error`: an entry with no eligible name, or not [`complete`] (no
+    /// snapshot is kept: the store keeps no `error` row); `partial`: any
+    /// error below; else `ok`.
+    ///
+    /// [`complete`]: WeekendFade::complete
     fn status(&self) -> ObsStatus {
-        if self.phase == FadePhase::Entered && self.n_eligible() == 0 {
+        if self.phase == FadePhase::Entered && (self.n_eligible() == 0 || !self.complete()) {
             ObsStatus::Error
         } else if self.errors().is_empty() {
             ObsStatus::Ok
@@ -990,7 +1030,8 @@ impl Observed for WeekendFade {
     }
 
     /// One error per kind, naming every id in full: a missed entry, names
-    /// without an anchor / entry price, fades and shadow exits not filled.
+    /// without an anchor / entry price, stale names, fades and shadow exits
+    /// not filled.
     fn errors(&self) -> Vec<ReadError> {
         let mut out = Vec::new();
         if self.phase == FadePhase::MissedEntry {
@@ -1006,6 +1047,18 @@ impl Observed for WeekendFade {
                 ),
             ));
         }
+        let stale = if self.complete() {
+            (
+                ErrorClass::NotApplicable,
+                "left out stale (no fresh entry row by the snapshot's deadline)",
+            )
+        } else {
+            (
+                ErrorClass::Transient,
+                "without a fresh entry row yet (no snapshot kept until they have one, or the \
+                 deadline)",
+            )
+        };
         for (skip, field, class, what) in [
             (
                 Skip::MissingAnchor,
@@ -1019,6 +1072,7 @@ impl Observed for WeekendFade {
                 ErrorClass::Transient,
                 "without a fresh entry price",
             ),
+            (Skip::Stale, "entry", stale.0, stale.1),
         ] {
             let ids = self.ids_of(|n| n.skip == Some(skip));
             if !ids.is_empty() {
@@ -1552,6 +1606,13 @@ mod tests {
             shadow_order_id("xmarket-weekend-shadow", TSLA, "2026-10-02"),
             "fade-shadow:xmarket-weekend-shadow:hyperliquid:xyz:TSLA:2026-10-02"
         );
+        // Attempts: the first keeps the id, a retry counts from 2.
+        let id = capped_order_id("xmarket-weekend", TSLA, "2026-10-02");
+        assert_eq!(fade_attempt_id(&id, 1), id);
+        assert_eq!(
+            fade_attempt_id(&id, 2),
+            "fade:xmarket-weekend:hyperliquid:xyz:TSLA:2026-10-02:2"
+        );
         let sig = FadeSignal {
             anchor_date: "2026-10-02".into(),
             instrument: TSLA.into(),
@@ -1667,9 +1728,58 @@ mod tests {
             ("n_shadow_filled", 2),
             ("n_capped_filled", 1),
             ("n_missing_entry", 1),
+            ("n_stale", 0),
         ] {
             assert_eq!(o.features[k], v, "{k}");
         }
+
+        // AMD without a fresh entry row (`stale`): taken before the deadline
+        // the snapshot is incomplete — an `error` row, never kept; from the
+        // deadline on AMD is left out.
+        let deadline = snapshot_deadline_ms(&w, 600_000);
+        assert_eq!(deadline, w.entry_ms + ENTRY_WAIT_MS);
+        assert_eq!(snapshot_deadline_ms(&w, 60_000), w.entry_ms + 30_000);
+        let mut early = row.clone();
+        early.names[2].skip = Some(Skip::Stale);
+        early.entered_at_ms = Some(deadline - 1);
+        assert!(!early.complete());
+        let o = Observation::of(
+            "xm_weekend_fade",
+            &early,
+            early.ts_ms,
+            120_000,
+            ObsSource::Live,
+        );
+        assert_eq!(o.status, ObsStatus::Error, "{:?}", o.errors);
+        assert_eq!(o.errors[0].class, ErrorClass::Transient);
+        assert!(
+            o.errors[0]
+                .message
+                .starts_with("1 names without a fresh entry row yet"),
+            "{:?}",
+            o.errors
+        );
+        early.entered_at_ms = Some(deadline);
+        assert!(early.complete());
+        let o = Observation::of(
+            "xm_weekend_fade",
+            &early,
+            early.ts_ms,
+            120_000,
+            ObsSource::Live,
+        );
+        assert_eq!(o.status, ObsStatus::Partial, "{:?}", o.errors);
+        assert_eq!(
+            o.headline,
+            "xm_weekend 2026-10-02 entered eligible=2/3 shadow=2 capped=1/1 missing_anchor=0 \
+             missing_entry=0 stale=1 capped: hyperliquid:xyz:TSLA"
+        );
+        assert_eq!(
+            o.errors[0].message,
+            "1 names left out stale (no fresh entry row by the snapshot's deadline): \
+             hyperliquid:xyz:AMD"
+        );
+        assert_eq!(o.features["n_stale"], 1);
 
         // After the exit: the shadow ledger is flat, the capped TSLA short
         // still open ⇒ closing, no P&L yet.

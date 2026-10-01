@@ -304,6 +304,46 @@ impl FillReason {
         }
     }
 
+    /// A refusal the next attempt may not meet — the market or the data, not
+    /// the order, decided it. The weekend fade retries an entry rejected for
+    /// one of these within its lateness (`tools/xm/weekend_fade.rs`); a final
+    /// one is its outcome.
+    ///
+    /// | Class | Reasons |
+    /// |---|---|
+    /// | transient: missing data | `missing:mid`, `missing:oracle`, `missing:at_oi_cap`, `bad_book` |
+    /// | transient: book age | `stale_book` |
+    /// | transient: liquidity | `MarketOrderNoLiquidity`, `IocCancel`, `bound`, `depth` |
+    /// | transient: price bound | `Oracle` |
+    /// | transient: venue state | `PositionIncreaseAtOpenInterestCap`, `PositionFlipAtOpenInterestCap`, `market_halted`, `market_closed` |
+    /// | final: size, lot and tick rules | `MinTradeNtl`, `Tick`, `ReduceOnly` |
+    /// | final: the order itself | `invalid_order`, `order_type` |
+    /// | final: listing | `delisted` |
+    pub(crate) fn is_transient(self) -> bool {
+        match self {
+            FillReason::MissingMid
+            | FillReason::MissingOracle
+            | FillReason::MissingOiCap
+            | FillReason::BadBook
+            | FillReason::StaleBook
+            | FillReason::MarketOrderNoLiquidity
+            | FillReason::IocCancel
+            | FillReason::Bound
+            | FillReason::Depth
+            | FillReason::Oracle
+            | FillReason::PositionIncreaseAtOpenInterestCap
+            | FillReason::PositionFlipAtOpenInterestCap
+            | FillReason::MarketHalted
+            | FillReason::MarketClosed => true,
+            FillReason::MinTradeNtl
+            | FillReason::Tick
+            | FillReason::ReduceOnly
+            | FillReason::InvalidOrder
+            | FillReason::OrderType
+            | FillReason::Delisted => false,
+        }
+    }
+
     /// HL's documented error string for a venue code; `None` for the
     /// engine's own reasons.
     pub(crate) fn hl_error(self) -> Option<&'static str> {
@@ -1367,6 +1407,46 @@ mod tests {
         assert_eq!(v["status"], "rejected");
         assert_eq!(v["instrument"], TSLA);
         assert_eq!(serde_json::from_value::<FillResult>(v).unwrap(), r);
+    }
+
+    /// Missing data, book age, liquidity and price bounds are transient;
+    /// size / lot rules, a bad order and delisting are final.
+    #[test]
+    fn reasons_split_into_transient_and_final() {
+        let transient: Vec<&str> = FillReason::ALL
+            .into_iter()
+            .filter(|r| r.is_transient())
+            .map(FillReason::as_str)
+            .collect();
+        assert_eq!(
+            transient,
+            [
+                "IocCancel",
+                "MarketOrderNoLiquidity",
+                "Oracle",
+                "PositionIncreaseAtOpenInterestCap",
+                "PositionFlipAtOpenInterestCap",
+                "market_halted",
+                "market_closed",
+                "stale_book",
+                "bad_book",
+                "missing:mid",
+                "missing:oracle",
+                "missing:at_oi_cap",
+                "bound",
+                "depth"
+            ]
+        );
+        for r in [
+            FillReason::MinTradeNtl,
+            FillReason::Tick,
+            FillReason::ReduceOnly,
+            FillReason::InvalidOrder,
+            FillReason::OrderType,
+            FillReason::Delisted,
+        ] {
+            assert!(!r.is_transient(), "{r:?}");
+        }
     }
 
     #[test]

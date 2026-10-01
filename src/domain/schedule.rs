@@ -12,7 +12,11 @@
 //! [`next_fire`] = the earliest fire at or after `now_ms` and strictly after
 //! `last_fire_ms`: a slot in the past is skipped, never replayed. Ties go to
 //! the at-tick (never jittered), then the finer grid. Overlapping windows
-//! fire on the union of their grids.
+//! fire on the union of their grids. A `last_fire_ms` more than
+//! [`CLOCK_STEP_GRACE_MS`] after `now_ms` means the wall clock stepped back:
+//! it is clamped to `now_ms`, so the feed fires on the new clock's grid
+//! instead of stalling for the step (a slot before the step may fire again
+//! under its call ids — exec tools deduplicate).
 //!
 //! DST (`Zone::to_utc_ms`): a wall time in the spring-forward gap reads with
 //! the standard offset (02:30 → 03:30 EDT); one in the fall-back overlap is
@@ -36,6 +40,9 @@ const DAY_MS: i64 = 86_400_000;
 const MAX_BASE_STEPS: usize = 1_000;
 /// Shortest grace of a late fire ([`late_grace_ms`]).
 const MIN_GRACE_MS: i64 = 60_000;
+/// How far the last fire may sit after `now_ms` before [`next_fire`] reads
+/// it as a backward step of the wall clock.
+pub const CLOCK_STEP_GRACE_MS: i64 = 1_000;
 /// Largest `jitter_pct`.
 pub const MAX_JITTER_PCT: u32 = 50;
 /// Longest interval: fires are looked up at most [`SCAN_AHEAD_DAYS`] ahead.
@@ -127,10 +134,15 @@ pub struct Fire {
 }
 
 /// The earliest fire at or after `now_ms` and strictly after `last_fire_ms`
-/// (see the module doc); `None` only for an empty schedule.
+/// (see the module doc: a last fire past the clock-step grace counts as
+/// `now_ms`); `None` only for an empty schedule.
 pub fn next_fire(s: &Schedule, now_ms: i64, last_fire_ms: Option<i64>) -> Option<Fire> {
     let t = match last_fire_ms {
-        Some(last) => now_ms.max(last.saturating_add(1)),
+        Some(last) => {
+            let stepped_back = last > now_ms.saturating_add(CLOCK_STEP_GRACE_MS);
+            let last = if stepped_back { now_ms } else { last };
+            now_ms.max(last.saturating_add(1))
+        }
         None => now_ms,
     };
     let mut best = None;
@@ -731,10 +743,50 @@ mod tests {
             fire(et("2026-10-04 18:00"), None)
         );
         assert_eq!(
-            next_fire(&mixed, et("2026-10-04 17:58"), Some(et("2026-10-04 18:00"))),
+            next_fire(&mixed, et("2026-10-04 18:00"), Some(et("2026-10-04 18:00"))),
             fire(et("2026-10-04 18:05"), Some(5 * MIN))
         );
         assert_eq!(weekend_book().longest_interval_ms(), Some(5 * MIN));
+    }
+
+    /// The wall clock steps back X after a fire: the next fire comes on the
+    /// new clock's grid, not X later; a step within the grace keeps the
+    /// order (the last slot never fires twice).
+    #[test]
+    fn a_backward_clock_step_does_not_stall_the_feed() {
+        let s = Schedule {
+            zone: Zone::Utc,
+            every_ms: Some(MIN),
+            windows: vec![],
+            at: vec![],
+        };
+        let t = utc("2026-10-04 22:00");
+        for (now, want) in [
+            // Stepped back 10 min right after the 22:00 fire: 21:51, not 22:01.
+            (t - 10 * MIN as i64 + 30_000, t - 9 * MIN as i64),
+            // Back 90 s: 21:59, then the 22:00 slot again on the new clock.
+            (t - 90_000, t - MIN as i64),
+            // Within the grace: still strictly after the last fire.
+            (t - CLOCK_STEP_GRACE_MS, t + MIN as i64),
+            (t - 400, t + MIN as i64),
+        ] {
+            assert_eq!(
+                next_fire(&s, now, Some(t)),
+                fire(want, Some(MIN)),
+                "now {now}"
+            );
+        }
+        // At-ticks too: back across the tick, it fires on the new clock.
+        let tick = at_ticks(&["Sun 18:00"]);
+        let at = et("2026-10-04 18:00");
+        assert_eq!(
+            next_fire(&tick, at - 5 * MIN as i64, Some(at)),
+            fire(at, None)
+        );
+        assert_eq!(
+            next_fire(&tick, at + 1, Some(at)),
+            fire(et("2026-10-11 18:00"), None)
+        );
     }
 
     #[test]

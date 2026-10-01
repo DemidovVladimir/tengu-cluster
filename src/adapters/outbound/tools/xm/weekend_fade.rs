@@ -10,10 +10,11 @@
 //! | Refuse | no `[risk]` / `[paper]` / ledger (`risk_config_missing` · `state_dir_missing` · `ledger_unavailable`); no `[xmarket.weekend_fade]` or its calendar not an `exchange` row (`weekend_fade_config_missing`); a caller that is not a private agent (`exec_agent_not_private`); any argument |
 //! | Funding | both accounts (`[risk] account`, `shadow_account`) book the hourly funding their open positions owe, at a fresh `mkt_ctx/1` rate + oracle |
 //! | Shadow exits | every open shadow position whose `exit_at_ms` passed, 4 at a time: a reduce-only market IOC of the whole position through the shadow gate (`risk::evaluate_shadow`), IOC bound `max_slippage_bps`, id `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` once a rejected / partial attempt is stored). The capped positions close through `xm_exits` (reason `deadline`) — never here |
-//! | Previous window | its `xm_weekend/1` row, still `entered` / `closing`: open quantities from both ledgers; once every filled name is flat, `closed` with the P&L |
+//! | Previous window | its `xm_weekend/1` row, still `entered` / `closing`: each fade not filled in the row read from the ledger (below); open quantities from both ledgers; once every filled name is flat, `closed` with the P&L |
 //! | Current window, before the entry | `waiting` (`next_entry_s`) |
-//! | … entry ≤ now < entry + `entry_lateness_max_secs`, no snapshot | the snapshot: anchor prices from the history as of the anchor (`mkt_ctx/1` mid, else mark, ≤ `anchor_max_age_secs` old), entry prices from the store (≤ `entry_max_age_secs` old), signals, the capped set, each name's ledger bases — kept in the store first (compare-and-swap: one snapshot per window, across processes); an entry with no eligible name keeps nothing (an `error` row) and the next call tries again |
-//! | … then, and on later calls within the lateness | a `xm_weekend_signal/1` row per name placed (the opportunity row, stamped at the snapshot, TTL = the lateness); the capped fades, largest \|s\| first (`run_exec`, the `[risk]` gate, `capped_notional_usd`, id `fade:<account>:<full id>:<anchor date>`, `exit_at_ms` = the exit, strategy `overreaction`), then the shadow fades of every eligible name, 4 at a time (the shadow gate, `shadow_notional_usd`, id `fade-shadow:<shadow account>:<full id>:<anchor date>`). A stored order is never placed again (a retry replays it); a denial or a refusal stores nothing and is placed again next call; a name the account already holds is not faded (`position_open`) |
+//! | … entry ≤ now < entry + `entry_lateness_max_secs`, no snapshot | the snapshot: anchor prices from the history as of the anchor (`mkt_ctx/1` mid, else mark, ≤ `anchor_max_age_secs` old), entry prices from the store (≤ `entry_max_age_secs` old), signals, the capped set, each name's ledger bases — kept in the store first (compare-and-swap: one snapshot per window, across processes). Kept only complete (`WeekendFade::complete`): while a name (not excluded, with an anchor) has no entry row fresher than `entry_max_age_secs` (`stale`) and now < entry + 120 s (≤ half the lateness, `weekend_fade::snapshot_deadline_ms`), or no name is eligible, nothing is kept (an `error` row) and the next call reads again; from that deadline the `stale` names are left out. A fresh row without a usable price (`missing_entry`) holds nothing back |
+//! | … then, and on later calls within the lateness | per fade not filled in the row, its attempts in the ledger (`fade_attempt_id`: the id, then `<id>:2`, `<id>:3` …): the latest stored one is its outcome — a fill or a partial fill is never placed again, a final rejection stays; with none, or a transient rejection (`FillReason::is_transient`), the next attempt is placed — unless the account holds the name with no fill under those ids (`position_open`, not faded). Placing writes the name's `xm_weekend_signal/1` row (the opportunity row, stamped at the snapshot, TTL = the lateness), then the capped fades, largest \|s\| first (`run_exec`, the `[risk]` gate, `capped_notional_usd`, id `fade:<account>:<full id>:<anchor date>`, `exit_at_ms` = the exit, strategy `overreaction`), then the shadow fades of every eligible name, 4 at a time (the shadow gate, `shadow_notional_usd`, id `fade-shadow:<shadow account>:<full id>:<anchor date>`). A denial or a refusal stores nothing: the same attempt is judged again next call. Two callers place the same attempt id: the ledger keeps one (`UNIQUE (account, client_order_id)` in one `BEGIN IMMEDIATE`), the other replays it |
+//! | … after the lateness, with a snapshot | no placement; each fade not filled in the row is read from the ledger (a row save lost to a crash or a concurrent call still counts its fills, P&L and closes) |
 //! | … entry + lateness ≤ now, no snapshot | `missed_entry`: no late entry |
 //! | Row | `xm_weekend/1:<anchor date>` (TTL 120 s): the previous window's while it closes and the current one waits, else the current one; both are stored |
 //!
@@ -46,20 +47,20 @@ use crate::domain::market::{InstrumentId, MarketCtx};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{ErrorClass, Field, ObsSource, Observation, Observed, ReadError};
 use crate::domain::tools as names;
-use crate::domain::xm::exec::PaperFillRow;
+use crate::domain::xm::exec::{rejected_message, PaperFillRow};
 use crate::domain::xm::exits::{exit_client_order_id, ExitReason};
 use crate::domain::xm::ledger::{PaperAccount, Position};
-use crate::domain::xm::paper::OrderKind;
+use crate::domain::xm::paper::{FillReason, FillResult, FillStatus, OrderKind};
 use crate::domain::xm::risk::RiskLimits;
 use crate::domain::xm::weekend_fade::{
-    anchor_date, capped_order_id, fade_window, position_net_usd, previous_fade_window, price_point,
-    select_capped, shadow_order_id, CtxRow, FadeName, FadeOrder, FadePhase, FadeSignal, PricePoint,
-    Signal, WeekendFade, FADE_STRATEGY,
+    anchor_date, capped_order_id, fade_attempt_id, fade_window, position_net_usd,
+    previous_fade_window, price_point, select_capped, shadow_order_id, CtxRow, FadeName, FadeOrder,
+    FadePhase, FadeSignal, PricePoint, Signal, Skip, WeekendFade, FADE_STRATEGY,
 };
 use crate::ports::clock::Clock;
 use crate::ports::history::HistoryStore;
 use crate::ports::observation::ObservationStore;
-use crate::ports::paper::PaperLedger;
+use crate::ports::paper::{PaperLedger, Placement};
 use crate::ports::tool::{Tool, ToolCtx, ToolOutput};
 
 /// Refusal: no `[xmarket.weekend_fade]`, or its calendar is unusable.
@@ -172,7 +173,7 @@ impl XmWeekendFadeTool {
             book_funding(&env, account, now).await?;
         }
         let exits = self.close_due_shadow(&env, ctx, io).await?;
-        let mut prev = previous(&env, io).await?;
+        let mut prev = self.previous(&env, io).await?;
         let mut cur = self.current(&env, ctx, io).await?;
         let shown = match prev.as_mut() {
             Some(p) if cur.phase == FadePhase::Waiting => p,
@@ -300,14 +301,12 @@ impl XmWeekendFadeTool {
         if now < w.entry_ms {
             return Ok(new_row(FadePhase::Waiting));
         }
-        let entry_open = now
-            < w.entry_ms
-                .saturating_add(ms_i64(secs_ms(cfg.entry_lateness_max_secs)));
+        let lateness_ms = secs_ms(cfg.entry_lateness_max_secs);
+        let entry_open = now < w.entry_ms.saturating_add(ms_i64(lateness_ms));
         match read_row(env.store, &env.row_key(&w)).await? {
             Some((mut row, _)) if row.phase.has_snapshot() => {
-                if entry_open {
-                    self.place(env, ctx, io, &mut row).await?;
-                }
+                let place = entry_open.then_some((ctx, io));
+                self.settle(env, &mut row, place).await?;
                 refresh(env, &mut row, io.clock.now_ms()).await?;
                 Ok(row)
             }
@@ -323,31 +322,63 @@ impl XmWeekendFadeTool {
             }
             stored => {
                 let mut row = snapshot(env, &w, now).await?;
-                if row.n_eligible() == 0 {
+                if row.n_eligible() == 0 || !row.complete() {
+                    // An `error` row: nothing kept, the next call reads again.
                     return Ok(row);
                 }
                 claim(env, &mut row, stored.map(|(_, at)| at)).await?;
-                self.place(env, ctx, io, &mut row).await?;
+                self.settle(env, &mut row, Some((ctx, io))).await?;
                 refresh(env, &mut row, io.clock.now_ms()).await?;
                 Ok(row)
             }
         }
     }
 
-    /// Place every fade of `row` the ledgers do not hold yet (module table).
-    async fn place(
+    /// The previous window's row while it still closes: its fades read from
+    /// the ledger, refreshed.
+    async fn previous(&self, env: &Env<'_>, io: &ExecIo<'_>) -> Result<Option<WeekendFade>> {
+        let now = io.clock.now_ms();
+        let Some(w) = previous_fade_window(env.cal, now) else {
+            return Ok(None);
+        };
+        let Some((mut row, _)) = read_row(env.store, &env.row_key(&w)).await? else {
+            return Ok(None);
+        };
+        if !matches!(row.phase, FadePhase::Entered | FadePhase::Closing) {
+            return Ok(None);
+        }
+        self.settle(env, &mut row, None).await?;
+        refresh(env, &mut row, now).await?;
+        Ok(Some(row))
+    }
+
+    /// Settle every fade of `row` not filled in it with the ledgers (module
+    /// table): its latest stored attempt is its outcome; with `place`
+    /// (inside the lateness) the next attempt is placed when none is stored
+    /// or the latest is a transient rejection — unless the account holds
+    /// the name with no fill under the fade's ids (`position_open`).
+    async fn settle(
         &self,
         env: &Env<'_>,
-        ctx: &ToolCtx<'_>,
-        io: &ExecIo<'_>,
         row: &mut WeekendFade,
+        place: Option<(&ToolCtx<'_>, &ExecIo<'_>)>,
     ) -> Result<()> {
         let cfg = env.cfg;
-        let now = io.clock.now_ms();
-        let stamp = row.entered_at_ms.unwrap_or(now);
         let exit_at_ms = row.window.exit_ms;
-        let shadow_held = env.ledger.snapshot(&cfg.shadow_account, now).await?;
-        let capped_held = env.ledger.snapshot(&env.risk.account, now).await?;
+        // Signal rows are stamped at the snapshot.
+        let stamp = row.entered_at_ms.unwrap_or(row.ts_ms);
+        // Both accounts (shadow, capped) read before any attempt: a fill
+        // landing in between is then a stored attempt, never a position
+        // someone else opened.
+        let held = match place {
+            Some((_, io)) => {
+                let now = io.clock.now_ms();
+                let shadow = env.ledger.snapshot(&cfg.shadow_account, now).await?;
+                let capped = env.ledger.snapshot(&env.risk.account, now).await?;
+                Some((shadow.account, capped.account))
+            }
+            None => None,
+        };
 
         // Capped: the snapshot's set, largest |s| first, ties by id.
         let mut picks: Vec<(usize, Signal)> = row
@@ -363,18 +394,26 @@ impl XmWeekendFadeTool {
                 .total_cmp(&a.s_bps.abs())
                 .then_with(|| a.instrument.cmp(&b.instrument))
         });
+        let account = env.risk.account.as_str();
         for (i, signal) in picks {
             if row.names[i]
                 .capped_order
                 .as_ref()
-                .is_some_and(FadeOrder::stored)
+                .is_some_and(FadeOrder::filled)
             {
                 continue;
             }
             let id = signal.instrument.clone();
-            let coid = capped_order_id(&env.risk.account, &id, &row.anchor_date);
-            let outcome = if holds(&capped_held.account, &id) {
-                position_open(&id, &coid, &env.risk.account)
+            let base = capped_order_id(account, &id, &row.anchor_date);
+            let a = attempts(env, account, &base, &id).await?;
+            let (Some(coid), Some((ctx, io)), Some((_, capped))) = (a.next, place, &held) else {
+                if let Some(o) = a.latest {
+                    row.names[i].capped_order = Some(o);
+                }
+                continue;
+            };
+            let outcome = if holds(capped, &id) {
+                position_open(&id, &coid, account)
             } else {
                 let key = write_signal(env, &row.anchor_date, &signal, true, stamp).await;
                 let order = FadeEntry {
@@ -395,22 +434,31 @@ impl XmWeekendFadeTool {
         }
 
         // Shadow: every eligible name, a few at a time.
+        let account = cfg.shadow_account.as_str();
         let mut todo: Vec<(usize, String, ExecOrder)> = Vec::new();
         for i in 0..row.names.len() {
             let n = &row.names[i];
-            if n.shadow.as_ref().is_some_and(FadeOrder::stored) {
+            if n.shadow.as_ref().is_some_and(FadeOrder::filled) {
                 continue;
             }
             let Some(signal) = n.signal() else {
                 continue;
             };
+            let capped = n.capped;
             let id = signal.instrument.clone();
-            let coid = shadow_order_id(&cfg.shadow_account, &id, &row.anchor_date);
-            if holds(&shadow_held.account, &id) {
-                row.names[i].shadow = Some(position_open(&id, &coid, &cfg.shadow_account));
+            let base = shadow_order_id(account, &id, &row.anchor_date);
+            let a = attempts(env, account, &base, &id).await?;
+            let (Some(coid), Some((shadow, _))) = (a.next, &held) else {
+                if let Some(o) = a.latest {
+                    row.names[i].shadow = Some(o);
+                }
+                continue;
+            };
+            if holds(shadow, &id) {
+                row.names[i].shadow = Some(position_open(&id, &coid, account));
                 continue;
             }
-            let key = write_signal(env, &row.anchor_date, &signal, n.capped, stamp).await;
+            let key = write_signal(env, &row.anchor_date, &signal, capped, stamp).await;
             let order = FadeEntry {
                 gate: env.shadow_gate(),
                 limits: env.shadow_limits(),
@@ -423,6 +471,9 @@ impl XmWeekendFadeTool {
                 Err(e) => row.names[i].shadow = Some(not_placed(&id, &coid, e)),
             }
         }
+        let Some((ctx, io)) = place else {
+            return Ok(());
+        };
         let placed: Vec<(usize, String, Result<Observation>)> = futures::stream::iter(todo)
             .map(|(i, coid, order)| async move {
                 (i, coid, run_exec(&self.shared, ctx, io, order).await)
@@ -436,6 +487,45 @@ impl XmWeekendFadeTool {
         }
         Ok(())
     }
+}
+
+/// One fade's attempts in its ledger (one name, one account).
+struct Attempts {
+    /// The latest stored attempt, as its outcome.
+    latest: Option<FadeOrder>,
+    /// The attempt to place next: the id when none is stored, the next
+    /// `<id>:<n>` after a transient rejection; `None` once the latest is a
+    /// fill, a partial fill or a final rejection.
+    next: Option<String>,
+}
+
+/// The attempts of fade `id` (of `instrument`) stored in `account`'s ledger.
+/// Attempts are placed in order and a denied one stores nothing, so the
+/// stored ones are 1..k (`first_unstored`).
+async fn attempts(env: &Env<'_>, account: &str, id: &str, instrument: &str) -> Result<Attempts> {
+    let n = first_unstored(|n| {
+        let coid = fade_attempt_id(id, n);
+        async move { Ok(env.ledger.order(account, &coid).await?.is_some()) }
+    })
+    .await?;
+    if n <= 1 {
+        return Ok(Attempts {
+            latest: None,
+            next: Some(id.to_string()),
+        });
+    }
+    let coid = fade_attempt_id(id, n - 1);
+    let Some(p) = env.ledger.stored(account, &coid).await? else {
+        bail!("order {coid} of account {account} was stored, then not found in the ledger");
+    };
+    let retry = p.order.as_ref().is_some_and(|o| {
+        o.result.status == FillStatus::Rejected
+            && o.result.reason.is_some_and(FillReason::is_transient)
+    });
+    Ok(Attempts {
+        latest: Some(stored_order(instrument, &coid, &p)),
+        next: retry.then(|| fade_attempt_id(id, n)),
+    })
 }
 
 /// One ledger's fade entry: a market IOC of `notional_usd` on the fade's
@@ -546,21 +636,43 @@ fn fade_order(instrument: &str, coid: &str, placed: Result<Observation>) -> Fade
     let Ok(row) = obs.typed::<PaperFillRow>() else {
         return not_placed(instrument, coid, anyhow!("unexpected row {}", obs.key));
     };
-    let fill = row.fill.as_ref();
-    let status = row.status_word();
+    let error = obs.errors.first().map(|e| e.message.clone());
+    outcome(instrument, coid, &row.gate.rule, row.fill.as_ref(), error)
+}
+
+/// A stored attempt's outcome, read from the ledger: what a replay's
+/// `paper_fill/1` row would say.
+fn stored_order(instrument: &str, coid: &str, p: &Placement) -> FadeOrder {
+    let fill = p.order.as_ref().map(|o| &o.result);
+    let error = fill
+        .filter(|f| f.status == FillStatus::Rejected)
+        .map(rejected_message);
+    outcome(instrument, coid, &p.decision.verdict.rule, fill, error)
+}
+
+/// An order's outcome: the gate's rule, the fill (`None` = denied) and,
+/// when it did not fill in full, why (`error`: the row's first error).
+fn outcome(
+    instrument: &str,
+    coid: &str,
+    rule: &str,
+    fill: Option<&FillResult>,
+    error: Option<String>,
+) -> FadeOrder {
+    let status = fill.map_or("denied", |f| f.status.as_str());
     let error = match fill {
-        Some(f) if status == "partial" => Some(format!(
+        Some(f) if f.status == FillStatus::Partial => Some(format!(
             "partial fill, the rest canceled: {}",
             f.reason.map_or("-", |r| r.as_str())
         )),
-        _ if status != "filled" => obs.errors.first().map(|e| e.message.clone()),
+        _ if status != "filled" => error,
         _ => None,
     };
     FadeOrder {
         instrument: instrument.to_string(),
         client_order_id: coid.to_string(),
         status: status.to_string(),
-        rule: Some(row.gate.rule.clone()),
+        rule: Some(rule.to_string()),
         filled_qty: fill.map(|f| f.filled_qty),
         avg_px: fill.and_then(|f| f.avg_px),
         notional_usd: fill.map(|f| f.filled_notional_usd),
@@ -590,22 +702,6 @@ async fn book_funding(env: &Env<'_>, account: &str, now: i64) -> Result<()> {
     )
     .await?;
     Ok(())
-}
-
-/// The previous window's row while it still closes, refreshed.
-async fn previous(env: &Env<'_>, io: &ExecIo<'_>) -> Result<Option<WeekendFade>> {
-    let now = io.clock.now_ms();
-    let Some(w) = previous_fade_window(env.cal, now) else {
-        return Ok(None);
-    };
-    let Some((mut row, _)) = read_row(env.store, &env.row_key(&w)).await? else {
-        return Ok(None);
-    };
-    if !matches!(row.phase, FadePhase::Entered | FadePhase::Closing) {
-        return Ok(None);
-    }
-    refresh(env, &mut row, now).await?;
-    Ok(Some(row))
 }
 
 /// A window row and the stored row's `observed_at_ms`; a row that does not
@@ -694,11 +790,18 @@ async fn snapshot(env: &Env<'_>, w: &WeekendWindow, now: i64) -> Result<WeekendF
             ),
         },
     };
-    let entries = match env.store {
-        None => every(
-            "entry",
-            ErrorClass::NotApplicable,
-            "no observation store".into(),
+    // Per name, whether the store holds no entry row or only one older than
+    // `entry_max_age_secs` (a restart): `stale`, waited for. A failed read
+    // is no answer either way.
+    let no_answer = vec![false; cfg.universe.len()];
+    let (entries, stale): (Vec<Field<PricePoint>>, Vec<bool>) = match env.store {
+        None => (
+            every(
+                "entry",
+                ErrorClass::NotApplicable,
+                "no observation store".into(),
+            ),
+            no_answer,
         ),
         Some(s) => match s.get_many(&keys).await {
             Ok(rows) => rows
@@ -711,13 +814,22 @@ async fn snapshot(env: &Env<'_>, w: &WeekendWindow, now: i64) -> Result<WeekendF
                         features: &o.features,
                         error: o.errors.first(),
                     });
-                    price_point("entry", id, row, now, entry_age, ErrorClass::Transient)
+                    let stale = r.as_ref().is_none_or(|o| {
+                        now.saturating_sub(o.observed_at_ms).max(0) as u64 > entry_age
+                    });
+                    (
+                        price_point("entry", id, row, now, entry_age, ErrorClass::Transient),
+                        stale,
+                    )
                 })
-                .collect(),
-            Err(e) => every(
-                "entry",
-                ErrorClass::Transient,
-                format!("store read failed: {e:#}"),
+                .unzip(),
+            Err(e) => (
+                every(
+                    "entry",
+                    ErrorClass::Transient,
+                    format!("store read failed: {e:#}"),
+                ),
+                no_answer,
             ),
         },
     };
@@ -727,7 +839,14 @@ async fn snapshot(env: &Env<'_>, w: &WeekendWindow, now: i64) -> Result<WeekendF
         .iter()
         .zip(anchors)
         .zip(entries)
-        .map(|((id, a), e)| FadeName::at_entry(id, excluded.contains(id.as_str()), a, e))
+        .zip(stale)
+        .map(|(((id, a), e), stale)| {
+            let mut n = FadeName::at_entry(id, excluded.contains(id.as_str()), a, e);
+            if stale && n.skip == Some(Skip::MissingEntry) {
+                n.skip = Some(Skip::Stale);
+            }
+            n
+        })
         .collect();
     let signals: Vec<Signal> = names.iter().filter_map(FadeName::signal).collect();
     let capped: BTreeSet<String> = select_capped(&signals, &cfg.rule()).into_iter().collect();
@@ -819,7 +938,7 @@ mod tests {
     use crate::domain::book::{L2Book, L2Level};
     use crate::domain::market::{InstrumentKind, Listing, MarketInstrument, QuoteCcy};
     use crate::domain::observation::{ObsStatus, ReadError};
-    use crate::domain::xm::weekend_fade::{PriceSource, Skip};
+    use crate::domain::xm::weekend_fade::{PriceSource, ENTRY_WAIT_MS};
     use crate::ports::book::{BookRead, BookSource};
     use crate::ports::history::HistoryRow;
 
@@ -911,11 +1030,12 @@ max_slippage_bps = 50
     }
 
     /// A book 0.05 either side of the mid, 1 000 deep, stamped now; a
-    /// failing id answers a timeout.
+    /// failing id answers a timeout, a one-sided id has bids only.
     struct FadeBooks {
         clock: Arc<crate::ports::clock::ManualClock>,
         mids: Mutex<BTreeMap<String, f64>>,
         failing: Mutex<BTreeSet<String>>,
+        one_sided: Mutex<BTreeSet<String>>,
         reads: Mutex<Vec<String>>,
     }
 
@@ -940,8 +1060,13 @@ max_slippage_bps = 50
                 sz: 1_000.0,
                 n: 1,
             };
+            let asks = if self.one_sided.lock().unwrap().contains(&key) {
+                vec![]
+            } else {
+                vec![level(mid + 0.05)]
+            };
             Ok(BookRead {
-                book: L2Book::new(vec![level(mid - 0.05)], vec![level(mid + 0.05)], now).unwrap(),
+                book: L2Book::new(vec![level(mid - 0.05)], asks, now).unwrap(),
                 observed_at_ms: now,
             })
         }
@@ -949,19 +1074,31 @@ max_slippage_bps = 50
 
     /// `mkt_ctx/1` (mid = mark = oracle = `px`) + `mkt_instrument/1` of `id`.
     fn ctx_rows(id: &str, px: f64, at_ms: i64) -> Vec<Observation> {
+        rows_with(id, px, at_ms, Some(false), 3)
+    }
+
+    /// [`ctx_rows`] with the OI-cap state as `hl_ctx` wrote it (`None`: the
+    /// `perpsAtOpenInterestCap` read failed) and the lot size.
+    fn rows_with(
+        id: &str,
+        px: f64,
+        at_ms: i64,
+        at_oi_cap: Option<bool>,
+        sz_decimals: u32,
+    ) -> Vec<Observation> {
         let iid = InstrumentId::parse(id).unwrap();
         let mut c = MarketCtx::new(iid.clone(), at_ms);
         c.mark = Field::ok(px);
         c.oracle = Field::ok(px);
         c.mid = Field::ok(px);
         c.funding_1h = Field::ok(0.0001);
-        c.at_oi_cap = Some(false);
+        c.at_oi_cap = at_oi_cap;
         let mut i = MarketInstrument::new(iid, InstrumentKind::Perp, Listing::Listed);
-        i.sz_decimals = Some(3);
+        i.sz_decimals = Some(sz_decimals);
         i.quote_ccy = Some(QuoteCcy::Usdc);
         i.deployer_fee_scale = Some(1.0);
         i.growth_mode = Some(true);
-        i.at_oi_cap = Some(false);
+        i.at_oi_cap = at_oi_cap;
         vec![
             Observation::of(names::HL_CTX, &c, at_ms, 5_000, ObsSource::Live),
             Observation::of(names::HL_CTX, &i, at_ms, 60_000, ObsSource::Live),
@@ -998,6 +1135,7 @@ max_slippage_bps = 50
                 clock: rig.clock.clone(),
                 mids: Mutex::new(BTreeMap::new()),
                 failing: Mutex::new(BTreeSet::new()),
+                one_sided: Mutex::new(BTreeSet::new()),
                 reads: Mutex::new(Vec::new()),
             };
             let tool = XmWeekendFadeTool {
@@ -1029,10 +1167,75 @@ max_slippage_bps = 50
 
         /// Fresh rows and the book of `id` at `px`.
         async fn prices(&self, id: &str, px: f64, at_ms: i64) {
-            for row in ctx_rows(id, px, at_ms) {
+            self.put(ctx_rows(id, px, at_ms)).await;
+            self.books.mids.lock().unwrap().insert(id.to_string(), px);
+        }
+
+        async fn put(&self, rows: Vec<Observation>) {
+            for row in rows {
                 self.rig.store.put(&row).await.unwrap();
             }
-            self.books.mids.lock().unwrap().insert(id.to_string(), px);
+        }
+
+        /// The stored window row becomes `row` without its order outcomes:
+        /// the snapshot as claimed — a crash after the fills but before the
+        /// final save, or a concurrent call that saved last.
+        async fn lose_outcomes(&self, row: &WeekendFade) {
+            let mut claimed = row.clone();
+            for n in &mut claimed.names {
+                n.capped_order = None;
+                n.shadow = None;
+                n.capped_qty = None;
+                n.shadow_qty = None;
+            }
+            let obs = Observation::of(
+                names::XM_WEEKEND_FADE,
+                &claimed,
+                claimed.ts_ms,
+                WINDOW_TTL_MS,
+                ObsSource::Live,
+            );
+            self.rig.store.put(&obs).await.unwrap();
+        }
+
+        /// `xm_exits`' deadline close of every open capped position.
+        async fn close_capped(&self, call: &str) {
+            let now = self.rig.clock.now_ms();
+            let snap = self.rig.ledger.snapshot(ACCOUNT, now).await.unwrap();
+            for p in snap.account.open_positions() {
+                let opened = p.opened_ms.unwrap();
+                let order = ExecOrder {
+                    tool: names::XM_EXITS,
+                    gate: ExecGate::Risk,
+                    limits: self.rig.shared.risk.as_ref().unwrap().limits(),
+                    instrument: InstrumentId::parse(&p.instrument).unwrap(),
+                    side: Side::Sell,
+                    size: ExecSize::Close,
+                    kind: OrderKind::Market,
+                    limit_px: None,
+                    reduce_only: true,
+                    max_slippage_bps: 50.0,
+                    strategy: None,
+                    hedge_instrument: None,
+                    opportunity_key: None,
+                    client_order_id: Some(exit_client_order_id(
+                        ACCOUNT,
+                        &p.instrument,
+                        ExitReason::Deadline,
+                        opened,
+                        1,
+                    )),
+                    exit_at_ms: None,
+                };
+                let io = ExecIo {
+                    clock: self.rig.clock.as_ref(),
+                    books: &self.books,
+                    rand01: 0.5,
+                };
+                run_exec(&self.rig.shared, &self.rig.ctx(Some(call)), &io, order)
+                    .await
+                    .unwrap();
+            }
         }
 
         async fn step(&self, call: &str) -> Result<Observation> {
@@ -1259,46 +1462,7 @@ max_slippage_bps = 50
         assert_eq!(capped_open, 0, "never closes the capped ledger");
 
         // xm_exits closes the capped two (deadline): closed, with the P&L.
-        let snap = f.rig.ledger.snapshot(ACCOUNT, EXIT + 10_000).await.unwrap();
-        for p in snap.account.open_positions() {
-            let opened = p.opened_ms.unwrap();
-            let order = ExecOrder {
-                tool: names::XM_EXITS,
-                gate: ExecGate::Risk,
-                limits: f.rig.shared.risk.as_ref().unwrap().limits(),
-                instrument: InstrumentId::parse(&p.instrument).unwrap(),
-                side: Side::Sell,
-                size: ExecSize::Close,
-                kind: OrderKind::Market,
-                limit_px: None,
-                reduce_only: true,
-                max_slippage_bps: 50.0,
-                strategy: None,
-                hedge_instrument: None,
-                opportunity_key: None,
-                client_order_id: Some(exit_client_order_id(
-                    ACCOUNT,
-                    &p.instrument,
-                    ExitReason::Deadline,
-                    opened,
-                    1,
-                )),
-                exit_at_ms: None,
-            };
-            let io = ExecIo {
-                clock: f.rig.clock.as_ref(),
-                books: &f.books,
-                rand01: 0.5,
-            };
-            run_exec(
-                &f.rig.shared,
-                &f.rig.ctx(Some("feed:xm_exits:1:0")),
-                &io,
-                order,
-            )
-            .await
-            .unwrap();
-        }
+        f.close_capped("feed:xm_exits:1:0").await;
         let o = f.step("feed:xm_weekend_fade:6:0").await.unwrap();
         let row = fade_row(&o);
         assert_eq!(row.phase, FadePhase::Closed, "{}", o.render_text(0));
@@ -1449,6 +1613,364 @@ max_slippage_bps = 50
             ]
         );
         assert_eq!(orders[0].2, "buy", "their signal: TSLA fell");
+    }
+
+    /// Review #1: the `perpsAtOpenInterestCap` read fails at the entry, so
+    /// every row has `at_oi_cap` unknown. Both gates deny every fade
+    /// `missing:at_oi_cap` (verdicts only, nothing stored); the next call,
+    /// on known rows, places every eligible fade under its first id.
+    #[tokio::test]
+    async fn an_unknown_oi_cap_at_entry_is_denied_then_placed_next_call() {
+        let f = Fade::new(ENTRY + 30_000).await;
+        f.market(&PRICES, ENTRY + 20_000).await;
+        for (id, _, px) in PRICES {
+            f.put(rows_with(id, px, ENTRY + 25_000, None, 3)).await;
+        }
+        let o = f.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(row.phase, FadePhase::Entered, "the snapshot is kept");
+        assert!(f.orders().is_empty(), "nothing stored: {:?}", f.orders());
+        let denied = |o: &Option<FadeOrder>| {
+            let o = o.clone().unwrap();
+            (o.status, o.rule)
+        };
+        let want = ("denied".to_string(), Some("missing:at_oi_cap".to_string()));
+        for id in [TSLA, NVDA] {
+            assert_eq!(denied(&name(&row, id).capped_order), want, "{id}");
+        }
+        for id in [TSLA, NVDA, AAPL] {
+            assert_eq!(denied(&name(&row, id).shadow), want, "{id}");
+        }
+        assert_eq!(f.rig.risk_lines().len(), 5, "2 capped + 3 shadow verdicts");
+
+        // The next hl_ctx run reads the cap list again.
+        f.rig.clock.set(ENTRY + 90_000);
+        for (id, _, px) in PRICES {
+            f.prices(id, px, ENTRY + 85_000).await;
+        }
+        let o = f.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let orders = f.orders();
+        assert_eq!(orders.len(), 5, "{orders:?}");
+        assert!(orders.iter().all(|o| o.3 == "filled"), "{orders:?}");
+        assert_eq!(
+            (
+                o.features["n_capped_filled"].clone(),
+                o.features["n_shadow_filled"].clone()
+            ),
+            (json!(2), json!(3))
+        );
+        let ids: BTreeSet<&str> = orders.iter().map(|o| o.1.as_str()).collect();
+        for id in [
+            format!("fade:{ACCOUNT}:{TSLA}:{DATE}"),
+            format!("fade:{ACCOUNT}:{NVDA}:{DATE}"),
+            format!("fade-shadow:{SHADOW}:{AAPL}:{DATE}"),
+        ] {
+            assert!(ids.contains(id.as_str()), "{id} in {ids:?}");
+        }
+    }
+
+    /// Review #5: a stored rejection the next attempt may not meet (AAPL's
+    /// one-sided book: `missing:mid`) is placed again as `<id>:2` within the
+    /// lateness; a final one (NVDA in whole lots: $20 and $100 at 198 round
+    /// to 0, `MinTradeNtl`) and a fill never are; after the lateness nothing
+    /// is.
+    #[tokio::test]
+    async fn transient_entry_rejections_are_retried_within_the_lateness() {
+        let f = Fade::new(ENTRY + 30_000).await;
+        f.market(&PRICES, ENTRY + 20_000).await;
+        f.put(rows_with(NVDA, 198.0, ENTRY + 20_000, Some(false), 0))
+            .await;
+        f.books.one_sided.lock().unwrap().insert(AAPL.into());
+        let o = f.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        let row = fade_row(&o);
+        let aapl = name(&row, AAPL).shadow.clone().unwrap();
+        assert_eq!(aapl.status, "rejected");
+        assert!(
+            aapl.error
+                .as_deref()
+                .unwrap()
+                .starts_with("rejected missing:mid"),
+            "{aapl:?}"
+        );
+        let nvda = name(&row, NVDA);
+        for o in [&nvda.capped_order, &nvda.shadow] {
+            let o = o.clone().unwrap();
+            assert_eq!(o.status, "rejected");
+            assert!(
+                o.error
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("rejected MinTradeNtl"),
+                "{o:?}"
+            );
+        }
+        assert_eq!(f.orders().len(), 5, "every fade stored once");
+
+        // Next call, AAPL's book whole again: its attempt 2 fills; NVDA's
+        // final rejections and TSLA's fills stay.
+        f.books.one_sided.lock().unwrap().clear();
+        f.rig.clock.set(ENTRY + 90_000);
+        let o = f.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let row = fade_row(&o);
+        let shadow_aapl = format!("fade-shadow:{SHADOW}:{AAPL}:{DATE}");
+        let aapl = name(&row, AAPL).shadow.clone().unwrap();
+        assert_eq!(
+            (aapl.status.as_str(), aapl.client_order_id.as_str()),
+            ("filled", format!("{shadow_aapl}:2").as_str())
+        );
+        let orders = f.orders();
+        assert_eq!(orders.len(), 6, "{orders:?}");
+        assert_eq!(
+            (orders[5].1.as_str(), orders[5].3.as_str()),
+            (format!("{shadow_aapl}:2").as_str(), "filled")
+        );
+        let nvda = name(&row, NVDA).capped_order.clone().unwrap();
+        assert_eq!(
+            (nvda.status.as_str(), nvda.client_order_id.as_str()),
+            ("rejected", format!("fade:{ACCOUNT}:{NVDA}:{DATE}").as_str())
+        );
+        assert_eq!(o.features["n_shadow_filled"], 2);
+        // And again: nothing to place.
+        f.rig.clock.set(ENTRY + 150_000);
+        f.step("feed:xm_weekend_fade:3:0").await.unwrap();
+        assert_eq!(f.orders().len(), 6);
+
+        // The same rejection with the lateness over: it stays the outcome.
+        let g = Fade::new(ENTRY + 30_000).await;
+        g.market(&PRICES, ENTRY + 20_000).await;
+        g.books.one_sided.lock().unwrap().insert(AAPL.into());
+        g.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        assert_eq!(g.orders().len(), 5);
+        g.books.one_sided.lock().unwrap().clear();
+        g.rig.clock.set(ENTRY + 600_000);
+        for (id, _, px) in PRICES {
+            g.prices(id, px, ENTRY + 595_000).await;
+        }
+        let o = g.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        assert_eq!(g.orders().len(), 5, "no attempt after the lateness");
+        let aapl = name(&fade_row(&o), AAPL).shadow.clone().unwrap();
+        assert_eq!(
+            (aapl.status.as_str(), aapl.client_order_id.as_str()),
+            ("rejected", shadow_aapl.as_str())
+        );
+    }
+
+    /// Review #3: the window row is saved without the order outcomes (a
+    /// crash after the fills, or a concurrent `tool call` that saved the
+    /// claimed snapshot last). The next call reads each fade's outcome from
+    /// the ledger — inside the lateness or after the exit — with no double
+    /// entry, and the fills, closes and P&L of both ledgers count. A
+    /// position the fade did not open stays `position_open`.
+    #[tokio::test]
+    async fn a_lost_row_save_recovers_the_outcomes_from_the_ledger() {
+        let f = Fade::new(ENTRY + 30_000).await;
+        f.market(&PRICES, ENTRY + 20_000).await;
+        let o = f.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        assert_eq!(o.features["n_capped_filled"], 2);
+        let placed = fade_row(&o);
+        let n_orders = f.orders().len();
+        f.lose_outcomes(&placed).await;
+        f.rig.clock.set(ENTRY + 90_000);
+        let o = f.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(f.orders().len(), n_orders, "no double entry");
+        for n in &placed.names {
+            let got = name(&row, &n.instrument);
+            assert_eq!(
+                (&got.capped_order, &got.shadow),
+                (&n.capped_order, &n.shadow),
+                "{} read back from the ledger",
+                n.instrument
+            );
+        }
+        assert_eq!(
+            (
+                o.features["n_capped_filled"].clone(),
+                o.features["n_shadow_filled"].clone()
+            ),
+            (json!(2), json!(3))
+        );
+
+        // The exit: the shadow closes here, the capped two by xm_exits; the
+        // row closes with both ledgers' P&L.
+        f.rig.clock.set(EXIT + 10_000);
+        for (id, px) in [(TSLA, 101.0), (NVDA, 199.0), (AAPL, 50.0)] {
+            f.prices(id, px, EXIT + 5_000).await;
+        }
+        f.close_capped("feed:xm_exits:1:0").await;
+        let o = f.step("feed:xm_weekend_fade:3:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(row.phase, FadePhase::Closed, "{}", o.render_text(0));
+        assert_eq!(row.shadow_exits.len(), 3, "the shadow closed here");
+        let now = f.rig.clock.now_ms();
+        let shadow = f.rig.ledger.snapshot(SHADOW, now).await.unwrap().account;
+        let capped = f.rig.ledger.snapshot(ACCOUNT, now).await.unwrap().account;
+        for id in [TSLA, NVDA, AAPL] {
+            let n = name(&row, id);
+            let net = position_net_usd(shadow.positions.get(id)) - n.shadow_base_usd;
+            assert_eq!(n.shadow_pnl_usd, Some(net), "{id}");
+        }
+        for id in [TSLA, NVDA] {
+            let n = name(&row, id);
+            let net = position_net_usd(capped.positions.get(id)) - n.capped_base_usd;
+            assert_eq!(n.capped_pnl_usd, Some(net), "{id}");
+        }
+        assert!(
+            o.features.contains_key("capped_pnl_usd"),
+            "{:?}",
+            o.features
+        );
+        assert!(o.features.contains_key("shadow_pnl_usd"));
+
+        // Lost again, found only after the exit (the previous window's row).
+        let g = Fade::new(ENTRY + 30_000).await;
+        g.market(&PRICES, ENTRY + 20_000).await;
+        let o = g.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        g.lose_outcomes(&fade_row(&o)).await;
+        g.rig.clock.set(EXIT + 10_000);
+        for (id, px) in [(TSLA, 101.0), (NVDA, 199.0), (AAPL, 50.0)] {
+            g.prices(id, px, EXIT + 5_000).await;
+        }
+        let o = g.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(row.phase, FadePhase::Closing, "the capped two still open");
+        assert_eq!(o.features["n_capped_open"], 2);
+        g.close_capped("feed:xm_exits:1:0").await;
+        let o = g.step("feed:xm_weekend_fade:3:0").await.unwrap();
+        assert_eq!(fade_row(&o).phase, FadePhase::Closed);
+        assert!(
+            o.features.contains_key("capped_pnl_usd"),
+            "{:?}",
+            o.features
+        );
+        assert_eq!(g.orders().len(), 5 + 5, "5 entries, 5 closes");
+
+        // A shadow position opened by hand before the entry: not faded.
+        let h = Fade::new(ENTRY - 60_000).await;
+        h.market(&PRICES, ENTRY - 70_000).await;
+        let risk = h.rig.shared.risk.clone().unwrap();
+        let by_hand = ExecOrder {
+            tool: names::PAPER_ORDER,
+            gate: ExecGate::Shadow {
+                initial_cash_usd: 10_000.0,
+            },
+            limits: RiskLimits {
+                account: SHADOW.into(),
+                ..risk.limits()
+            },
+            instrument: InstrumentId::parse(NVDA).unwrap(),
+            side: Side::Buy,
+            size: ExecSize::NotionalUsd(50.0),
+            kind: OrderKind::Market,
+            limit_px: None,
+            reduce_only: false,
+            max_slippage_bps: 50.0,
+            strategy: None,
+            hedge_instrument: None,
+            opportunity_key: None,
+            client_order_id: Some("manual:nvda:1".into()),
+            exit_at_ms: None,
+        };
+        let io = ExecIo {
+            clock: h.rig.clock.as_ref(),
+            books: &h.books,
+            rand01: 0.5,
+        };
+        let o = run_exec(&h.rig.shared, &h.rig.ctx(Some("manual:1")), &io, by_hand)
+            .await
+            .unwrap();
+        assert_eq!(o.status, ObsStatus::Ok, "{}", o.render_text(0));
+        h.rig.clock.set(ENTRY + 30_000);
+        h.market(&PRICES, ENTRY + 20_000).await;
+        let o = h.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        let row = fade_row(&o);
+        let nvda = name(&row, NVDA).shadow.clone().unwrap();
+        assert_eq!(nvda.status, "error");
+        assert!(
+            nvda.error.as_deref().unwrap().starts_with("position_open"),
+            "{nvda:?}"
+        );
+        assert_eq!(
+            name(&row, NVDA).capped_order.as_ref().unwrap().status,
+            "filled",
+            "the capped ledger holds no NVDA"
+        );
+    }
+
+    /// Review #4: a restart near the entry finds some entry rows stale. The
+    /// snapshot is kept only complete: until entry + 120 s an incomplete
+    /// read keeps nothing (an `error` row); from then on the stale names are
+    /// left out `stale` for the window. A fresh row without a usable price
+    /// holds nothing back.
+    #[tokio::test]
+    async fn the_snapshot_waits_for_every_fresh_entry_row() {
+        let f = Fade::new(ENTRY + 30_000).await;
+        f.market(&PRICES, ENTRY - 300_000).await;
+        f.market(&PRICES[..2], ENTRY + 20_000).await;
+        let o = f.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        assert_eq!(o.status, ObsStatus::Error, "{}", o.render_text(0));
+        let row = fade_row(&o);
+        assert_eq!(name(&row, AAPL).skip, Some(Skip::Stale));
+        assert_eq!(
+            name(&row, AMD).skip,
+            Some(Skip::MissingAnchor),
+            "no anchor: never waited for"
+        );
+        assert!(
+            f.rig.store.get(&o.key).await.unwrap().is_none(),
+            "nothing kept"
+        );
+        assert!(f.orders().is_empty());
+        // AAPL's row arrives: the whole snapshot.
+        f.rig.clock.set(ENTRY + 60_000);
+        f.prices(AAPL, 50.1, ENTRY + 55_000).await;
+        let o = f.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!((row.phase, row.n_eligible()), (FadePhase::Entered, 3));
+        assert_eq!(f.orders().len(), 5);
+
+        // AAPL never refreshes: kept without it from entry + 120 s.
+        let g = Fade::new(ENTRY + 30_000).await;
+        g.market(&PRICES, ENTRY - 300_000).await;
+        g.market(&PRICES[..2], ENTRY + 20_000).await;
+        g.rig.clock.set(ENTRY + ENTRY_WAIT_MS - 1);
+        g.market(&PRICES[..2], ENTRY + 110_000).await;
+        let o = g.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        assert_eq!(o.status, ObsStatus::Error, "still waiting");
+        g.rig.clock.set(ENTRY + ENTRY_WAIT_MS);
+        let o = g.step("feed:xm_weekend_fade:2:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(row.phase, FadePhase::Entered);
+        assert_eq!(name(&row, AAPL).skip, Some(Skip::Stale));
+        assert_eq!(o.features["n_stale"], 1);
+        assert!(o.headline.contains(" stale=1 "), "{}", o.headline);
+        assert!(g.rig.store.get(&o.key).await.unwrap().is_some(), "kept");
+        assert_eq!(g.orders().len(), 4, "2 capped + 2 shadow");
+        // A fresh AAPL row later changes nothing.
+        g.rig.clock.set(ENTRY + 180_000);
+        g.prices(AAPL, 50.1, ENTRY + 175_000).await;
+        g.step("feed:xm_weekend_fade:3:0").await.unwrap();
+        assert_eq!(g.orders().len(), 4);
+
+        // AAPL's row is fresh but has no price: `missing_entry`, kept at once.
+        let h = Fade::new(ENTRY + 30_000).await;
+        h.market(&PRICES, ENTRY + 20_000).await;
+        let mut no_px = MarketCtx::new(InstrumentId::parse(AAPL).unwrap(), ENTRY + 25_000);
+        no_px.at_oi_cap = Some(false);
+        let row = Observation::of(
+            names::HL_CTX,
+            &no_px,
+            ENTRY + 25_000,
+            5_000,
+            ObsSource::Live,
+        );
+        h.put(vec![row]).await;
+        let o = h.step("feed:xm_weekend_fade:1:0").await.unwrap();
+        let row = fade_row(&o);
+        assert_eq!(row.phase, FadePhase::Entered, "{}", o.render_text(0));
+        assert_eq!(name(&row, AAPL).skip, Some(Skip::MissingEntry));
+        assert!(h.rig.store.get(&o.key).await.unwrap().is_some(), "kept");
+        assert_eq!(h.orders().len(), 4, "2 capped + 2 shadow");
     }
 
     #[tokio::test]
