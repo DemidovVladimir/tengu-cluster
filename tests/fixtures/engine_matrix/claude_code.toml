@@ -119,6 +119,26 @@ fee_tier = 0
 staking_discount_pct = 0
 order_types = ["market", "ioc"]
 
+# The xlab set's `backtest`: xyz costs, a one-name universe and rule W on it
+# (`matrix_fade`: one trade over the seeded weekend); the goal's inline spec
+# needs nothing more. Run dirs: <TENGU_HOME>/state/engine-matrix/backtests/.
+[backtest]
+bootstrap = 500
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+matrix = ["hyperliquid:xyz:TSLA"]
+
+[backtest.strategies.matrix_fade]
+kind = "weekend_window"
+universe = "@matrix"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+
 # [risk] turns Privy signing off: both signing tools need an explicit scope
 # without wallets (src/config/risk.rs).
 [default_scopes.sign_and_send_transaction]
@@ -155,6 +175,11 @@ fs_roots = ["/nonexistent/tengu-engine-matrix"]
 net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]
 env_reads = ["HL_API_URL", "GECKO_API_URL"]
 
+# `backtest` reads the same market.db and writes a run dir in the state dir:
+# no network, no env.
+[default_scopes.backtest]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
 # The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
 # require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
 # workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
@@ -189,7 +214,7 @@ env_reads = ["HL_API_URL"]
 engine = "claude_code"
 model = "claude-haiku-4-5"
 description = "Engine-matrix fixture: Claude CLI (subscription) claude-haiku-4-5, built-ins off."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.claude.claude_code]

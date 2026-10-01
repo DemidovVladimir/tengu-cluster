@@ -205,6 +205,20 @@ Tool `market_history` (opt-in, `xlab` plugin, `adapters/outbound/tools/xlab/`); 
 
 Text: line 1, features and errors as `render_text` gives them but without `data` (200 bars would not fit a small window); then what a fetch wrote, a table of ≤ 48 of the sampled bars (numbers as stored, ≤ 8 significant digits), one line per stored series — ≈ 5 KB at most, whole under a 16k local window's 8 192-char cap (`engine_matrix::offline_local_xlab`). No `[xmarket]` ⇒ refused `state_dir_missing`. Scope: `fs_roots` = the workspace; a fetch: `net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, `env_reads = ["HL_API_URL", "GECKO_API_URL"]` (unset = the public hosts).
 
+## Backtest (xlab, 2026-10-01)
+
+Tool `backtest` (opt-in, `xlab` plugin, `adapters/outbound/tools/xlab/run.rs`); row = the report `domain/backtest/report.rs::BacktestReport`; the run is `application/backtest/` (`docs/xlab-2026-10-01.md` § 6, § 8). Reads `market.db`, writes a run dir; never trades, no network, no Jev gate (it spends: `tengu backtest --gate`).
+
+| Key | TTL | Row | Status |
+|---|---|---|---|
+| `backtest/1:<run id>` (full: `backtest/1:20261001T165153Z-weekend_fade_top4`; run id = `<YYYYMMDDTHHMMSSZ>-<strategy>[-N]`, the call's UTC second) | 0 — every call is a new run, never cached; recorded when `[recorder]` takes `backtest/1` | ≤ 32 features of the primary arm `research`: `kind`, `interval`, `n_candidates`, `n_skipped`, `n_trades`, `n_periods`, `mean_net_bps`, `median_net_bps`, `sd_net_bps`, `ci95_lo_bps` / `ci95_hi_bps`, `t_stat`, `hit_rate`, `net_usd`, `costs_usd`, `funding_usd`, `max_drawdown_usd` / `max_drawdown_pct`, `sharpe`, `mean_ex_best5_bps`, `best2_periods_share`; with a split `in_sample_mean_net_bps`, `holdout_mean_net_bps`, `holdout_n`; with `[risk]` + `[paper]` `capped_n`, `capped_mean_net_bps`, `capped_net_usd`, `capped_max_drawdown_usd`, `capped_refusals` — a statistic too few trades cannot give is omitted, never 0; `data` = the report (`report.json`: spec + `spec_sha256`, window, arms, split halves, skips by reason, data notes) | `ok` · `partial`: one `not_applicable` error per data-gap kind — `prices` (`missing_*` skips), `<arm>.exits` (no exit bar), `<arm>.funding` (an hour held without a funding row) |
+
+| Tool | Args | Reads | Writes |
+|---|---|---|---|
+| `backtest` | `strategy` (a `[backtest.strategies]` name) xor `spec` (an object, or a string holding one; named by its `name`, else `architect_spec`), `from` / `to` (epoch ms, RFC 3339 or `YYYY-MM-DD`; default the earliest stored bar of the run's instruments / now), `split` (`time:<t>` \| `instruments:<id,…>`) — strict | `market.db`: bars at the spec's interval, funding when the cost books it, ctx for `half_spread = ctx` | `<state dir>/backtests/<run id>/`: `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` |
+
+Text: line 1, features and errors as `render_text` gives them (without `data`), `render_compact`'s arm / split / best-worst / skip lines, the decision window, the run's ids without a cost entry (`no_costs`: full ids up to 1 200 chars, then a count — they never trade), `spec_sha256`, the run dir — ≈ 2 KB on the 75-name library, ≈ 4.5 KB crowded, whole under a 16k local window's 8 192-char cap (`engine_matrix::offline_local_xlab`, `run.rs` tests). Refused: no `[xmarket]` ⇒ `state_dir_missing`; no `[backtest]` ⇒ `backtest_config_missing`; a spec that does not parse or validate, an unknown `@universe`, a calendar that is no exchange row ⇒ one error listing every problem. Scope: `fs_roots` = the workspace; no host, no env.
+
 ## Risk + paper rows (xmarket, 2026-09-30)
 
 Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) (gate rules, ledger, halts, `tengu risk`). Subject = the ledger account (`[risk] account`, `[A-Za-z0-9._-]`), in full.

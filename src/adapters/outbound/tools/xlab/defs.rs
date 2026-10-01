@@ -3,7 +3,9 @@
 //! catalog rows advertise [`defs_named`]. Schemas stay in the subset every
 //! engine accepts (`tools/schema_lint.rs`): one type per field (times are
 //! strings; a number is accepted too), string enums, limits in descriptions
-//! (enforced in code).
+//! (enforced in code). `backtest`'s `spec` is a free-form object (no
+//! `properties`: a spec's fields depend on its kind) whose description names
+//! the format; the tool also takes it as a string holding the object.
 
 use serde_json::json;
 
@@ -12,7 +14,7 @@ use crate::domain::tools as names;
 
 /// Every xlab tool definition, in catalog order.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    vec![market_history()]
+    vec![market_history(), backtest()]
 }
 
 /// The definition named `name` as a one-element vec (catalog rows); empty
@@ -74,6 +76,48 @@ fn market_history() -> ToolDef {
                 },
             },
             "required": ["instrument"],
+            "additionalProperties": false,
+        }),
+    )
+}
+
+fn backtest() -> ToolDef {
+    ToolDef::new(
+        names::BACKTEST,
+        "Backtest a trading rule on the sandbox's stored market history (no network, no \
+         LLM): a named strategy of the sandbox's library (strategy) or your own strategy \
+         spec (spec), decisions in [from, to). Fills at bar closes after taker fee, \
+         half-spread, slippage and funding; arm research trades every candidate, arm capped \
+         applies the [risk] caps to the paper budget; 95 % CI by bootstrap over periods; \
+         split reports in-sample and holdout side by side. Writes a run dir (report.json, \
+         report.md, trades, candidates, skips) under the state dir's backtests/. Typed \
+         observation backtest/1:<run id> (n trades, mean / median net bps, CI, t, hit rate, \
+         USD, drawdown, Sharpe, holdout mean), not cached. Read-only research: it never \
+         trades. Missing bars: fetch them first with market_history fetch = true.",
+        json!({
+            "type": "object",
+            "properties": {
+                "strategy": {
+                    "type": "string",
+                    "description": "A [backtest.strategies] name of the sandbox's library, e.g. weekend_fade. Give strategy or spec, not both.",
+                },
+                "spec": {
+                    "type": "object",
+                    "description": "Your own strategy spec instead of strategy (JSON object): name ([a-z0-9_], default architect_spec), kind (weekend_window, daily_window, move_trigger, funding_carry, pair_spread, event_window), universe (\"@<name>\" or full ids; pair_spread / event_window name theirs), interval (1m 5m 15m 1h 4h 1d), the kind's parameters (move_trigger: lookback_bars, threshold_bps, direction fade|follow, hold_bars), optional notional_usd, exclude, costs. Unknown fields are refused; each error names its field.",
+                },
+                "from": {
+                    "type": "string",
+                    "description": "First decision, inclusive: epoch ms, RFC 3339 (2026-07-01T00:00:00Z) or a UTC date (2026-07-01). Default: the earliest stored bar of the run's instruments.",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "End of decisions, exclusive, in the same forms. Default: now.",
+                },
+                "split": {
+                    "type": "string",
+                    "description": "time:<RFC 3339 | date | ms> (holdout = decided from then) or instruments:<id,id,…> (holdout = trades on those full ids): in-sample and holdout reported side by side.",
+                },
+            },
             "additionalProperties": false,
         }),
     )

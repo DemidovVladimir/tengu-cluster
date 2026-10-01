@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
 use async_trait::async_trait;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use super::{defs, XlabShared};
+use super::{defs, field, object_args, opt_str, opt_time, whole, XlabShared};
 use crate::adapters::outbound::backfill::gecko::{
     self, gecko_bars, network_of, GeckoClient, GeckoPlan,
 };
@@ -28,7 +28,7 @@ use crate::adapters::outbound::hyperliquid::info::{self, HlInfo};
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::config::sections::SandboxSections;
 use crate::domain::market::{InstrumentId, HYPERLIQUID};
-use crate::domain::marketdata::{fmt_time, parse_time, Interval};
+use crate::domain::marketdata::{fmt_time, Interval};
 use crate::domain::marketdata_stats::{sample_indices, FetchSummary, MarketHistory, StoredSeries};
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{
@@ -110,71 +110,22 @@ pub(crate) struct HistoryArgs {
     pub points: usize,
 }
 
-fn field<'a>(o: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
-    o.get(key).filter(|v| !v.is_null())
-}
-
-fn opt_str<'a>(o: &'a Map<String, Value>, key: &str) -> Result<Option<&'a str>> {
-    let tool = names::MARKET_HISTORY;
-    match field(o, key) {
-        None => Ok(None),
-        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.trim())),
-        Some(v) => bail!("{tool}: '{key}' must be a non-empty string, got {v}"),
-    }
-}
-
-/// A whole number from a JSON integer or an integral float.
-fn whole(v: &Value) -> Option<i64> {
-    v.as_i64().or_else(|| {
-        v.as_f64()
-            .filter(|x| x.is_finite() && x.fract() == 0.0 && x.abs() < 9.0e15)
-            .map(|x| x as i64)
-    })
-}
-
-/// `from` / `to`: a time string (`parse_time`) or an epoch-ms number.
-fn opt_time(o: &Map<String, Value>, key: &str) -> Result<Option<i64>> {
-    let tool = names::MARKET_HISTORY;
-    match field(o, key) {
-        None => Ok(None),
-        Some(Value::String(s)) => parse_time(s)
-            .map(Some)
-            .map_err(|e| anyhow!("{tool}: '{key}': {e}")),
-        Some(v) => whole(v).map(Some).ok_or_else(|| {
-            anyhow!("{tool}: '{key}' must be epoch ms, RFC 3339 or a date (2026-09-25), got {v}")
-        }),
-    }
-}
-
 impl HistoryArgs {
     /// `args` at `now_ms` (defaults and refusals: module table).
     pub(crate) fn parse(args: &Value, now_ms: i64) -> Result<Self> {
         let tool = names::MARKET_HISTORY;
-        let o = args
-            .as_object()
-            .ok_or_else(|| anyhow!("{tool}: arguments must be a JSON object"))?;
-        let unknown: Vec<&str> = o
-            .keys()
-            .map(String::as_str)
-            .filter(|k| !ARGS.contains(k))
-            .collect();
-        if !unknown.is_empty() {
-            bail!(
-                "{tool}: unknown argument(s) {unknown:?} (allowed: {})",
-                ARGS.join(", ")
-            );
-        }
-        let id = opt_str(o, "instrument")?.ok_or_else(|| {
+        let o = object_args(tool, args, ARGS)?;
+        let id = opt_str(tool, o, "instrument")?.ok_or_else(|| {
             anyhow!("{tool}: 'instrument' is required (a full id such as hyperliquid:xyz:TSLA)")
         })?;
         let instrument =
             InstrumentId::parse(id).map_err(|e| anyhow!("{tool}: 'instrument': {e}"))?;
-        let interval = match opt_str(o, "interval")? {
+        let interval = match opt_str(tool, o, "interval")? {
             None => Interval::H1,
             Some(s) => Interval::parse(s).map_err(|e| anyhow!("{tool}: 'interval': {e}"))?,
         };
-        let to_ms = opt_time(o, "to")?.unwrap_or(now_ms);
-        let from_ms = match opt_time(o, "from")? {
+        let to_ms = opt_time(tool, o, "to")?.unwrap_or(now_ms);
+        let from_ms = match opt_time(tool, o, "from")? {
             Some(t) => t,
             None => to_ms.saturating_sub(DEFAULT_WINDOW_MS),
         };
@@ -197,7 +148,7 @@ impl HistoryArgs {
             Some(Value::Bool(b)) => *b,
             Some(v) => bail!("{tool}: 'fetch' must be a boolean, got {v}"),
         };
-        let pool = opt_str(o, "pool")?.map(str::to_string);
+        let pool = opt_str(tool, o, "pool")?.map(str::to_string);
         let points = match field(o, "points") {
             None => DEFAULT_POINTS,
             Some(v) => match whole(v).filter(|p| (1..=MAX_POINTS as i64).contains(p)) {

@@ -39,8 +39,10 @@
 //! side's `<TENGU_HOME>/state/conf/market.db`: its HL case replays the
 //! `xyz:TSLA` candle + funding captures moved to the current hours
 //! (`recent_tsla_history`: HL's newest-5 000-bars reach), then reads them
-//! back. `.row(..)` seeds the workspace observation store (the opportunity
-//! row a paper entry names).
+//! back; `backtest` runs on those bars (the side's `[backtest]` library and
+//! an inline spec) into `<TENGU_HOME>/state/conf/backtests/<run id>/`.
+//! `.row(..)` seeds the workspace observation store (the opportunity row a
+//! paper entry names).
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -51,7 +53,7 @@
 //! | observation age after its status (`\| ok 3s`; line-start `ok 3s`) | `<AGE>s` |
 //! | `*age_s` / `*age_ms` / `*age_secs` values (ages at read time; `max_*` / `min_*` limits kept) | `<AGE>` |
 //! | `next_*_s` values (countdowns at read time: `next_funding_s`) | `<COUNTDOWN>` |
-//! | ISO-8601 timestamps | `<TIME>` |
+//! | ISO-8601 timestamps, extended and basic (`20261001T120034Z`: a backtest run id's stamp, in its text, run-dir path and files) | `<TIME>` |
 //! | history day files `YYYYMMDD.db` | `<DAY>.db` |
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
 //! | JSON-RPC `"id":<n>` (request bodies) | `"id":<N>` |
@@ -500,6 +502,74 @@ fn market_history_gecko() -> Case {
         .ok(&format!(
             "mkt_history {id} 1h bars=3 <TIME> … <TIME> last_close=117.66 ret_bps=11.9"
         ))
+}
+
+/// `[backtest]` over the `xyz:TSLA` captures: xyz costs, a one-name
+/// universe and a move trigger — a kind without wall-clock instants, so
+/// the captures at the current hours trade the same bars whenever it runs.
+const BACKTEST_TOML: &str = r#"
+[backtest]
+bootstrap = 200
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+conf = ["hyperliquid:xyz:TSLA"]
+
+[backtest.strategies.conf_move]
+kind = "move_trigger"
+universe = "@conf"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+"#;
+
+/// The inline spec of the `backtest` case: the library move trigger's
+/// placebo (follow), named.
+fn conf_follow_spec() -> Value {
+    json!({"name": "conf_follow", "kind": "move_trigger", "universe": "@conf",
+           "interval": "1h", "lookback_bars": 1, "threshold_bps": 25,
+           "direction": "follow", "hold_bars": 3})
+}
+
+/// `backtest` on the bars `market_history` fetched through the mock (the HL
+/// captures of `market_history_hl`): the library strategy, then an inline
+/// spec — rules arms, a run dir each under the side's state dir (its run
+/// id's stamp normalised to `<TIME>`).
+fn backtest_hl() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then(
+            "backtest",
+            json!({"strategy": "conf_move", "from": from, "to": to}),
+        )
+        .ok("backtest <TIME>-conf_move conf_move move_trigger 1h research n=2 mean_net_bps=-27.47")
+        .then(
+            "backtest",
+            json!({"spec": conf_follow_spec(), "from": from, "to": to}),
+        )
+        .ok("backtest <TIME>-conf_follow conf_follow move_trigger 1h research n=2 mean_net_bps=")
+        .retool("backtest")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -1032,6 +1102,28 @@ fn cases() -> Vec<Case> {
         )
         .named("no_xmarket")
         .err("state_dir_missing: market data unavailable: no [xmarket] section"),
+        backtest_hl(),
+        // A bad inline spec: refused alike, every problem named, no run dir.
+        case(
+            "backtest",
+            json!({"spec": {"kind": "move_trigger", "universe": "@conf", "interval": "1h",
+                            "lookback_bars": 0, "threshold_bps": 0, "direction": "fade",
+                            "hold_bars": 0}}),
+        )
+        .named("bad_spec")
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .err(
+            "backtest: spec refused — 3 problem(s), fix each and call again:\n\
+             strategy `architect_spec`: lookback_bars must be within 1..=10000\n\
+             strategy `architect_spec`: threshold_bps must be finite, > 0 and ≤ 10000\n\
+             strategy `architect_spec`: hold_bars must be within 1..=10000",
+        ),
+        // `[xmarket]` without `[backtest]`: refused alike.
+        case("backtest", json!({"strategy": "conf_move"}))
+            .named("no_backtest")
+            .toml(XLAB_TOML)
+            .err("backtest_config_missing: backtests unavailable: no [backtest] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -1601,6 +1693,8 @@ fn normalize(s: &str, roots: &[String]) -> String {
                 r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?",
                 "<TIME>",
             ),
+            // Basic format: the UTC second a backtest run id embeds.
+            (r"\b\d{8}T\d{6}Z\b", "<TIME>"),
             (r"\b20\d{6}\.db\b", "<DAY>.db"),
             (r#""id":\d+"#, r#""id":<N>"#),
             (r"\bmcp:[0-9a-f]{32}:", "mcp:<NONCE>:"),

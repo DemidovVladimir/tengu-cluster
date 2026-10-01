@@ -3,11 +3,12 @@
 //! (`ports::market_data`) → the pure engine (`domain/backtest/`) → a run
 //! dir. IO is injected ([`BacktestEnv`]: the store, the sandbox sections,
 //! the run-dir root, now), so tests run on a temp store. Callers: `tengu
-//! backtest` (`adapters/inbound/cli/backtest.rs`), the `backtest` tool.
+//! backtest` (`adapters/inbound/cli/backtest.rs`), the `backtest` tool
+//! (`adapters/outbound/tools/xlab/run.rs`: the rules arms, no gate).
 //!
 //! | Step | Call | Rule |
 //! |---|---|---|
-//! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated; universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
+//! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
 //! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `RunParams` from `[backtest]`, `[xmarket.calendars]`, `[paper]`; `engine::candidates`; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: reads [`Prepared::set`] (candidates in decision order, features as-of) and picks the ones Jev takes |
 //! | 3 | [`evaluate`] | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` — **the gate arm's entry point** — simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split |
@@ -166,9 +167,12 @@ fn backtest_config(sections: &SandboxSections) -> BacktestConfig {
     sections.backtest.clone().unwrap_or_default()
 }
 
-/// Step 1 (module table): the spec of `src` against `bt`.
-pub(crate) fn resolve(bt: &BacktestConfig, src: &SpecSource) -> Result<Resolved> {
-    let spec = match src {
+/// The spec of `src` parsed and validated against `bt` — every problem, one
+/// per entry (`StrategySpec::from_value`; an unknown strategy lists the
+/// library). The first half of [`resolve`]; the `backtest` tool reports an
+/// `Err` as the spec's problems before any read.
+pub(crate) fn spec_of(bt: &BacktestConfig, src: &SpecSource) -> Result<StrategySpec, Vec<String>> {
+    match src {
         SpecSource::Strategy(name) => bt.strategy(name),
         SpecSource::Json {
             value,
@@ -183,7 +187,11 @@ pub(crate) fn resolve(bt: &BacktestConfig, src: &SpecSource) -> Result<Resolved>
             StrategySpec::from_value(name, value)
         }
     }
-    .map_err(|errors| anyhow!("{}", errors.join("\n")))?;
+}
+
+/// Step 1 (module table): the spec of `src` against `bt`.
+pub(crate) fn resolve(bt: &BacktestConfig, src: &SpecSource) -> Result<Resolved> {
+    let spec = spec_of(bt, src).map_err(|errors| anyhow!("{}", errors.join("\n")))?;
     let all = bt
         .spec_instruments(&spec)
         .map_err(|e| anyhow!("strategy `{}`: universe: {e}", spec.name))?;

@@ -312,6 +312,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || xlab::defs_named(names::MARKET_HISTORY),
             plugin: |_| Box::new(xlab::XlabPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::BACKTEST),
+            needs_memory: false,
+            defs: || xlab::defs_named(names::BACKTEST),
+            plugin: |_| Box::new(xlab::XlabPlugin),
+        },
     ]);
     rows
 }

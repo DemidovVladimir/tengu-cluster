@@ -42,8 +42,10 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 // rows over the sandbox's market-data warehouse (`<state dir>/market.db`);
 // one `xlab` plugin serves all of them. Not in `XM_TOOLS`: their rows are
 // never cached in a workspace store (ttl 0) and their state is the state
-// dir's, so their holders need not share the xmarket workspace.
+// dir's (`market.db`, `backtests/`), so their holders need not share the
+// xmarket workspace.
 pub(crate) const MARKET_HISTORY: &str = "market_history";
+pub(crate) const BACKTEST: &str = "backtest";
 
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
@@ -108,6 +110,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_EXITS,
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
+    BACKTEST,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
