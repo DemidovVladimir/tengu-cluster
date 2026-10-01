@@ -1378,6 +1378,109 @@ tools = ["xm_weekend_fade"]
         assert_eq!(fade.expected_edge_bps, 23.0);
     }
 
+    /// `sandboxes/xmarket-weekend/config.toml` (`x-weekend-sandbox`) trades
+    /// rule W as the replay golden computed it: the 75 names with the
+    /// golden's knobs, books of exactly those names, and the replay of the
+    /// 2026-09-26 → 09-28 weekend through its own calendar, universe and
+    /// rule reproduces the golden bit for bit (KIOXIA excluded here, as the
+    /// fixture's provenance says: split halt). Also what rule W needs from
+    /// the rest of the file, and its first window = the runbook's.
+    #[test]
+    fn weekend_sandbox_replays_the_golden() {
+        use crate::domain::xm::weekend_fade::{fade_window, golden, replay};
+
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("sandboxes")
+            .join("xmarket-weekend")
+            .join("config.toml");
+        let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        let x = cfg.xmarket.as_ref().unwrap();
+        assert_eq!(x.state, "xmarket-weekend");
+        let fade = x.weekend_fade.as_ref().unwrap();
+        let candles = golden::candles();
+        assert_eq!(candles.len(), 75);
+        let missing: Vec<&String> = candles
+            .keys()
+            .filter(|id| !fade.universe.contains(id))
+            .collect();
+        assert!(missing.is_empty(), "universe lacks {missing:?}");
+        assert_eq!(
+            (
+                fade.capped_top_n,
+                fade.min_abs_signal_bps,
+                fade.capped_notional_usd
+            ),
+            (4, 50.0, 25.0)
+        );
+        let coins: Vec<&str> = fade
+            .universe
+            .iter()
+            .map(|id| id.strip_prefix("hyperliquid:").unwrap())
+            .collect();
+        let books: Vec<&str> = cfg.feeds["hl_book"].each["coin"]
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(books, coins);
+
+        let Some(Calendar::Exchange(cal)) = x.calendars().remove(&fade.calendar) else {
+            panic!("calendar `{}` is not an exchange row", fade.calendar)
+        };
+        let w = fade_window(&cal, et("2026-09-25 12:00")).unwrap();
+        assert_eq!(
+            (w.anchor_ms, w.entry_ms, w.exit_ms),
+            (
+                utc("2026-09-26 00:00"),
+                utc("2026-09-27 22:00"),
+                utc("2026-09-28 13:00")
+            )
+        );
+        let universe: BTreeMap<_, _> = candles
+            .into_iter()
+            .filter(|(id, _)| fade.universe.contains(id))
+            .collect();
+        let mut exclude: BTreeSet<String> = fade.exclude.iter().cloned().collect();
+        exclude.insert("hyperliquid:xyz:KIOXIA".to_string());
+        assert_eq!(exclude, golden::excluded());
+        let r = replay(&universe, &w, &exclude, golden::cost_rt_bps(), &fade.rule());
+        golden::assert_replay(&r);
+
+        // Rule W's needs beyond the load rules (wave D notes).
+        let (risk, paper) = (cfg.risk.as_ref().unwrap(), cfg.paper.as_ref().unwrap());
+        let capped_usd = fade.capped_top_n as f64 * fade.capped_notional_usd;
+        assert!(risk.max_leverage * paper.initial_cash_usd > capped_usd);
+        assert!(risk.max_net_exposure_usd >= capped_usd);
+        assert!(risk.max_orders_per_min as usize >= 2 * fade.capped_top_n);
+        assert!(risk.exits.max_hold_secs > 15 * 3600);
+        let every = |f: &str| cfg.feeds[f].every_secs;
+        assert_eq!(
+            (every("hl_ctx"), every("xm_weekend_fade"), every("xm_exits")),
+            (Some(60), Some(60), Some(15))
+        );
+        let ctx = &cfg.feeds["hl_ctx"];
+        assert_eq!(ctx.args["dex"], "xyz");
+        let ctx_late_ms = ctx.every_secs.unwrap() * 1000 * (100 + u64::from(ctx.jitter_pct)) / 100;
+        assert!(risk.max_data_age_ms.ctx >= ctx_late_ms);
+        assert!(fade.entry_max_age_secs * 1000 >= ctx_late_ms);
+        for schema in ["mkt_ctx/1", "hl_book/1", "mkt_instrument/1"] {
+            assert!(cfg.recorder.records(schema), "{schema}");
+        }
+        assert!(cfg.recorder.retention_days == 0 || cfg.recorder.retention_days >= 30);
+
+        // This weekend: anchor Fri 2026-10-02 20:00, entry Sun 18:00, exit
+        // Mon 09:00 New York (the runbook's timeline).
+        let first = fade_window(&cal, et("2026-10-01 12:00")).unwrap();
+        assert_eq!(
+            (first.anchor_ms, first.entry_ms, first.exit_ms),
+            (
+                et("2026-10-02 20:00"),
+                et("2026-10-04 18:00"),
+                et("2026-10-05 09:00")
+            )
+        );
+        assert_eq!(first.entry_ms, utc("2026-10-04 22:00"));
+    }
+
     /// The rules run inside `Config::validate` (and so `Config::load`).
     #[test]
     fn validate_runs_the_rules() {

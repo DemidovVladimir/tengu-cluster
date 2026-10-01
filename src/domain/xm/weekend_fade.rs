@@ -1067,19 +1067,18 @@ impl Observed for WeekendFade {
     }
 }
 
+/// The replay golden of the 2026-09-26 → 09-28 weekend
+/// (`tests/fixtures/xmarket/weekend_2026-09-26_*.json`, produced outside the
+/// repo; provenance in `meta.json`): its candles and a bit-for-bit check of
+/// a [`Replay`]. Shared by the rule's test below and the weekend sandbox's
+/// (`config/xmarket.rs`).
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
+pub(crate) mod golden {
+    use std::collections::{BTreeMap, BTreeSet};
 
-    use chrono::{NaiveDate, NaiveDateTime};
-    use serde_json::json;
+    use serde_json::Value;
 
-    use super::*;
-    use crate::domain::calendar::parse_date;
-    use crate::domain::observation::{assert_features_ok, ObsSource, Observation};
-    use crate::domain::tz::Zone;
-    use crate::domain::xm::ledger::Fill;
-    use crate::domain::xm::risk::key_names;
+    use super::{Candle, Replay, Skip};
 
     const CANDLES: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1089,48 +1088,14 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/xmarket/weekend_2026-09-26_golden.json"
     ));
-    const TSLA: &str = "hyperliquid:xyz:TSLA";
-    const NVDA: &str = "hyperliquid:xyz:NVDA";
 
-    fn utc(s: &str) -> i64 {
-        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M")
-            .unwrap()
-            .and_utc()
-            .timestamp_millis()
-    }
-
-    fn et(s: &str) -> i64 {
-        Zone::NewYork.to_utc_ms(NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap())
-    }
-
-    fn date(s: &str) -> NaiveDate {
-        parse_date(s).unwrap()
-    }
-
-    /// NYSE with the holidays these tests touch (the full list: the
-    /// `tests/fixtures/xmarket/calendars.toml` row).
-    fn nyse() -> ExchangeCalendar {
-        let hm = |h: u32, m: u32| h * 60 + m;
-        ExchangeCalendar {
-            zone: Zone::NewYork,
-            open: hm(9, 30),
-            close: hm(16, 0),
-            pre: Some(hm(4, 0)),
-            post: Some(hm(20, 0)),
-            overnight: true,
-            early_close: Some(hm(13, 0)),
-            early_post: Some(hm(17, 0)),
-            holidays: ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18"]
-                .into_iter()
-                .map(date)
-                .collect(),
-            early_closes: ["2026-11-27", "2026-12-24"].into_iter().map(date).collect(),
-        }
+    fn golden() -> Value {
+        serde_json::from_str(GOLDEN).unwrap()
     }
 
     /// The candles of every universe name, by full id (`hyperliquid:` +
     /// the fixture's coin).
-    fn candles() -> BTreeMap<String, Vec<Candle>> {
+    pub(crate) fn candles() -> BTreeMap<String, Vec<Candle>> {
         let raw: BTreeMap<String, Vec<Value>> = serde_json::from_str(CANDLES).unwrap();
         raw.into_iter()
             .map(|(coin, rows)| {
@@ -1150,10 +1115,20 @@ mod tests {
             .collect()
     }
 
-    const RULE: FadeRule = FadeRule {
-        capped_top_n: 4,
-        min_abs_signal_bps: 50.0,
-    };
+    /// The golden's `excluded` names, full ids.
+    pub(crate) fn excluded() -> BTreeSet<String> {
+        golden()["excluded"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|coin| format!("hyperliquid:{coin}"))
+            .collect()
+    }
+
+    /// The golden's round-trip cost, bps.
+    pub(crate) fn cost_rt_bps() -> f64 {
+        golden()["cost_rt_bps"].as_f64().unwrap()
+    }
 
     /// The golden's `rows` and `summary` as written, `key → value text`
     /// (jq prints one key per line): `str::parse` rounds the text correctly,
@@ -1192,38 +1167,12 @@ mod tests {
         (rows, summary)
     }
 
-    /// The replay of the 2026-09-26 → 09-28 weekend reproduces the jq golden
-    /// bit for bit: the window from the calendar, KIOXIA excluded (split
-    /// halt), 74 rows, mean net +95.4585 bps, 53 positive, the capped four.
-    #[test]
-    fn golden_replay_2026_09_26() {
-        let golden: Value = serde_json::from_str(GOLDEN).unwrap();
-        let w = fade_window(&nyse(), et("2026-09-25 12:00")).unwrap();
-        assert_eq!(
-            (w.anchor_ms, w.entry_ms, w.exit_ms),
-            (
-                utc("2026-09-26 00:00"),
-                utc("2026-09-27 22:00"),
-                utc("2026-09-28 13:00")
-            )
-        );
-        assert_eq!(anchor_date(&w), "2026-09-25");
-        let exclude: BTreeSet<String> = golden["excluded"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(|coin| format!("hyperliquid:{coin}"))
-            .collect();
-        assert_eq!(
-            exclude,
-            BTreeSet::from(["hyperliquid:xyz:KIOXIA".to_string()])
-        );
-        let cost = golden["cost_rt_bps"].as_f64().unwrap();
-        assert_eq!(cost, 3.8);
-        let candles = candles();
-        assert_eq!(candles.len(), 75);
-        let r = replay(&candles, &w, &exclude, cost, &RULE);
-
+    /// `r` is the golden bit for bit: 74 rows (id, prices, s, dir, gross,
+    /// net — the shortest text of each net is the golden's), mean net
+    /// +95.4585 bps, 53 positive, the capped four, only the excluded names
+    /// skipped.
+    pub(crate) fn assert_replay(r: &Replay) {
+        let golden = golden();
         let (want, summary) = golden_text();
         assert_eq!(want.len(), golden["rows"].as_array().unwrap().len());
         assert_eq!(r.rows.len(), want.len());
@@ -1267,6 +1216,97 @@ mod tests {
                 "hyperliquid:xyz:MSTR"
             ]
         );
+        let skipped: BTreeMap<String, Skip> = excluded()
+            .into_iter()
+            .map(|id| (id, Skip::Excluded))
+            .collect();
+        assert_eq!(r.skipped, skipped);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use chrono::{NaiveDate, NaiveDateTime};
+    use serde_json::json;
+
+    use super::*;
+    use crate::domain::calendar::parse_date;
+    use crate::domain::observation::{assert_features_ok, ObsSource, Observation};
+    use crate::domain::tz::Zone;
+    use crate::domain::xm::ledger::Fill;
+    use crate::domain::xm::risk::key_names;
+
+    const TSLA: &str = "hyperliquid:xyz:TSLA";
+    const NVDA: &str = "hyperliquid:xyz:NVDA";
+
+    fn utc(s: &str) -> i64 {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M")
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
+    }
+
+    fn et(s: &str) -> i64 {
+        Zone::NewYork.to_utc_ms(NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap())
+    }
+
+    fn date(s: &str) -> NaiveDate {
+        parse_date(s).unwrap()
+    }
+
+    /// NYSE with the holidays these tests touch (the full list: the
+    /// `tests/fixtures/xmarket/calendars.toml` row).
+    fn nyse() -> ExchangeCalendar {
+        let hm = |h: u32, m: u32| h * 60 + m;
+        ExchangeCalendar {
+            zone: Zone::NewYork,
+            open: hm(9, 30),
+            close: hm(16, 0),
+            pre: Some(hm(4, 0)),
+            post: Some(hm(20, 0)),
+            overnight: true,
+            early_close: Some(hm(13, 0)),
+            early_post: Some(hm(17, 0)),
+            holidays: ["2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18"]
+                .into_iter()
+                .map(date)
+                .collect(),
+            early_closes: ["2026-11-27", "2026-12-24"].into_iter().map(date).collect(),
+        }
+    }
+
+    const RULE: FadeRule = FadeRule {
+        capped_top_n: 4,
+        min_abs_signal_bps: 50.0,
+    };
+
+    /// The replay of the 2026-09-26 → 09-28 weekend reproduces the jq golden
+    /// bit for bit: the window from the calendar, KIOXIA excluded (split
+    /// halt), 74 rows, mean net +95.4585 bps, 53 positive, the capped four.
+    #[test]
+    fn golden_replay_2026_09_26() {
+        let w = fade_window(&nyse(), et("2026-09-25 12:00")).unwrap();
+        assert_eq!(
+            (w.anchor_ms, w.entry_ms, w.exit_ms),
+            (
+                utc("2026-09-26 00:00"),
+                utc("2026-09-27 22:00"),
+                utc("2026-09-28 13:00")
+            )
+        );
+        assert_eq!(anchor_date(&w), "2026-09-25");
+        let exclude = golden::excluded();
+        assert_eq!(
+            exclude,
+            BTreeSet::from(["hyperliquid:xyz:KIOXIA".to_string()])
+        );
+        assert_eq!(golden::cost_rt_bps(), 3.8);
+        let candles = golden::candles();
+        assert_eq!(candles.len(), 75);
+        let r = replay(&candles, &w, &exclude, golden::cost_rt_bps(), &RULE);
+        golden::assert_replay(&r);
         assert_eq!(
             r.skipped,
             BTreeMap::from([("hyperliquid:xyz:KIOXIA".to_string(), Skip::Excluded)])
