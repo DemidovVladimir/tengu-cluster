@@ -87,6 +87,7 @@ caps  = { size_sol = 2.0 }
 | `dry_run` | non-`read_only` actions are logged, not executed |
 | Escalation | reuse `webhooks::run_one_shot` path: state JSON as the user message, session `decide-<loop>-<uuid>` |
 | Jev call failures (`outbound/decisions.rs`, 2026-09-30) | HTTP 429 / 5xx / connect error ⇒ one retry after 0.5–1 s (`Retry-After` ≤ 5 s honoured, longer ⇒ no retry; `domain/backoff.rs::next_delay`); timeout / other 4xx / unparseable ⇒ no retry; 3 consecutive failed calls open a 30 s circuit (fail fast, no request), then calls pass again |
+| Clock + replay (2026-10-01, xlab gate arm — `docs/xlab-2026-10-01.md` § 7) | `DecisionLoop::with_clock`: `world` / typed-result ages, audit `ts` / `ts_ms` and metrics time from a `Clock` (none = wall; `latency_ms` stays real). `bootstrap::decision::build_replay_loop`: terminal actions only (a tool action or `world` is refused), no tools / store / escalator (`escalate = false`), a `SimClock` set to each decision instant, audit to the run's `decisions.jsonl` (`trigger = "backtest"`); `decide_terminal` → `Verdict` (action, confidence, p per action, below `act_at`, outcome); Jev via `CachedDecisionEngine` (`<state dir>/backtests/decision-cache.db`, key = sha256 of the canonical request; offline = a miss fails) |
 
 ## Phases (one branch, `feature/decision-loop`)
 

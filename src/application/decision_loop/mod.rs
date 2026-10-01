@@ -34,6 +34,16 @@
 //! too (`ledger.db` `risk_decisions`, `<TENGU_HOME>/logs/risk.jsonl`).
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
+//!
+//! | Time | Source |
+//! |---|---|
+//! | `world` freshness, typed-result ages, audit `ts` / `ts_ms`, metrics `ts_unix` | the loop's `Clock` ([`DecisionLoop::with_clock`]); none = the wall clock |
+//! | `latency_ms` | real (`Instant`), also in replay |
+//!
+//! Replay (`bootstrap::decision::build_replay_loop`, the backtest gate arm):
+//! the real loop on a `SimClock` set to each decision instant, terminal
+//! actions only, no tools; [`DecisionLoop::decide_terminal`] returns the
+//! one decision's `Verdict`.
 
 pub(crate) mod reduce;
 pub(crate) mod slots;
@@ -45,16 +55,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::decision_loop::DecisionLoopConfig;
-use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome};
+use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome, Verdict};
 use crate::domain::message::ToolCall;
-use crate::domain::metrics::{now_unix, MetricsKind, MetricsRecord};
+use crate::domain::metrics::{MetricsKind, MetricsRecord};
 use crate::domain::observation::{now_ms, Observation};
+use crate::ports::clock::Clock;
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
@@ -72,15 +83,22 @@ pub(crate) struct DecisionLoop {
     observations: Option<Arc<dyn ObservationStore>>,
     escalator: Option<Arc<dyn Escalator>>,
     audit: Option<AuditLog>,
+    /// Time source ([`DecisionLoop::with_clock`]); `None` = the wall clock.
+    clock: Option<Arc<dyn Clock>>,
     state: Mutex<LoopState>,
 }
 
-/// Where the decision audit goes (`<TENGU_HOME>/logs/decisions.jsonl`) and
-/// the sandbox name (`Config::sandbox_name`) every line carries.
+/// Where the decision audit goes (`<TENGU_HOME>/logs/decisions.jsonl`; a
+/// replay: the backtest run's `decisions.jsonl`) and what every line
+/// carries besides the decision.
 #[derive(Debug, Clone)]
 pub(crate) struct AuditLog {
     pub path: PathBuf,
+    /// `Config::sandbox_name`.
     pub sandbox: Option<String>,
+    /// `trigger` on every line when set (`backtest` for replay); `None` =
+    /// no `trigger` key (live lines keep their shape).
+    pub trigger: Option<String>,
 }
 
 #[derive(Default)]
@@ -112,8 +130,22 @@ impl DecisionLoop {
             observations,
             escalator,
             audit,
+            clock: None,
             state: Mutex::new(LoopState::default()),
         }
+    }
+
+    /// Read time from `clock` instead of the wall clock: `world` freshness,
+    /// typed-result ages, the audit line's `ts` / `ts_ms` and the metrics
+    /// timestamp. Replay sets a `SimClock` to each decision instant;
+    /// `latency_ms` stays real.
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    fn now_ms(&self) -> i64 {
+        self.clock.as_ref().map_or_else(now_ms, |c| c.now_ms())
     }
 
     /// Run the loop for one event. Returns what each step did.
@@ -122,22 +154,62 @@ impl DecisionLoop {
         event: &Value,
         session_id: &str,
     ) -> Result<Vec<StepOutcome>> {
+        let steps = self.run_event(event, session_id).await?;
+        Ok(steps.into_iter().map(|(outcome, _)| outcome).collect())
+    }
+
+    /// One event through a terminal-only loop (no action has a `tool`:
+    /// `bootstrap::decision::build_replay_loop`). It stops after its first
+    /// decision, whose `Verdict` this is: the chosen action, its confidence,
+    /// p of each action, whether it was below `act_at`, and the outcome
+    /// (`Stopped` / `Escalated` / `Rejected`). A failed decisions call
+    /// (offline cache miss, Jev error) is audited, then returned as the
+    /// error. A loop with a tool action is refused before any call.
+    #[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm calls it (xlab)
+    pub(crate) async fn decide_terminal(&self, event: &Value, session_id: &str) -> Result<Verdict> {
+        if let Some((an, _)) = self.cfg.actions.iter().find(|(_, a)| a.tool.is_some()) {
+            bail!(
+                "decision loop `{}`: action `{an}` runs a tool — decide_terminal needs a \
+                 terminal-only loop",
+                self.name
+            );
+        }
+        let (outcome, decision) = self
+            .run_event(event, session_id)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("decision loop `{}` took no step", self.name))?;
+        Ok(Verdict::of(
+            outcome,
+            decision.answers.get(NEXT_ACTION),
+            self.cfg.act_at,
+        ))
+    }
+
+    /// Up to `max_steps` steps for one event, each with the decision it
+    /// acted on; stops after a step that did not run a tool.
+    async fn run_event(
+        &self,
+        event: &Value,
+        session_id: &str,
+    ) -> Result<Vec<(StepOutcome, Decision)>> {
         let mut st = self.state.lock().await;
         st.event_start = st.t;
         let event = reduce::reduce(event, &self.cfg.event_reduce);
-        let mut outcomes = Vec::new();
+        let mut steps = Vec::new();
         for step in 0..self.cfg.max_steps {
-            let outcome = self.step(&mut st, &event, step, session_id).await?;
+            let (outcome, decision) = self.step(&mut st, &event, step, session_id).await?;
             let stop = !matches!(
                 outcome,
                 StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
             );
-            outcomes.push(outcome);
+            steps.push((outcome, decision));
             if stop {
                 break;
             }
         }
-        Ok(outcomes)
+        Ok(steps)
     }
 
     /// The history ring buffer, oldest first — what each step ran with and
@@ -152,9 +224,9 @@ impl DecisionLoop {
         event: &Value,
         step: u32,
         session_id: &str,
-    ) -> Result<StepOutcome> {
+    ) -> Result<(StepOutcome, Decision)> {
         // 1. World, legal actions + their slot candidates.
-        let world = World::read(self.observations.as_deref(), &self.cfg, now_ms()).await;
+        let world = World::read(self.observations.as_deref(), &self.cfg, self.now_ms()).await;
         let mut legal: BTreeMap<&str, BTreeMap<&str, Vec<Candidate>>> = BTreeMap::new();
         for (an, action) in &self.cfg.actions {
             if !world.satisfies(&action.requires) {
@@ -251,7 +323,7 @@ impl DecisionLoop {
             outcome = ?outcome,
             "decision loop step"
         );
-        Ok(outcome)
+        Ok((outcome, decision))
     }
 
     async fn apply(
@@ -362,7 +434,7 @@ impl DecisionLoop {
             name: tool.clone(),
             arguments: args.clone(),
         };
-        let now = now_ms();
+        let now = self.now_ms();
         let mut refused = None;
         let (ok, result, obs) = match self.tools.execute_typed(&call, &[]).await {
             // Typed: features (or the reducer over `{.., features, data}`);
@@ -429,7 +501,13 @@ impl DecisionLoop {
         confidence: f64,
         state: &Value,
     ) {
-        let Some(escalator) = self.escalator.as_ref().filter(|_| self.cfg.escalate) else {
+        if !self.cfg.escalate {
+            // Configured not to escalate (and every replay): the audit line
+            // records `escalated`; nothing is wrong.
+            debug!(decision_loop = %self.name, action, confidence, "low confidence; escalate = false — stopping");
+            return;
+        }
+        let Some(escalator) = self.escalator.as_ref() else {
             warn!(decision_loop = %self.name, action, confidence, "low confidence; escalation unavailable — stopping");
             return;
         };
@@ -447,7 +525,7 @@ impl DecisionLoop {
     fn record_metrics(&self, session_id: &str, state: &Value, d: &Decision, latency_ms: u64) {
         let prompt = state.to_string();
         crate::application::metrics::record(MetricsRecord {
-            ts_unix: now_unix(),
+            ts_unix: unix_secs(self.now_ms()),
             session_id: session_id.to_string(),
             kind: MetricsKind::Decision,
             agent: self.name.clone(),
@@ -472,8 +550,9 @@ impl DecisionLoop {
     /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
     /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
     /// `act_at` join it; `call_id` when the step ran a tool (`Executed` /
-    /// `Refused`) — the key its risk verdict carries. Fail-soft: audit
-    /// errors only warn.
+    /// `Refused`) — the key its risk verdict carries; `trigger` when the
+    /// `AuditLog` sets one. `ts` / `ts_ms` come from the loop's clock.
+    /// Fail-soft: audit errors only warn.
     fn audit(
         &self,
         session_id: &str,
@@ -488,9 +567,10 @@ impl DecisionLoop {
             outcome,
             StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
         );
-        let line = json!({
-            "ts": now_unix(),
-            "ts_ms": now_ms(),
+        let now = self.now_ms();
+        let mut line = json!({
+            "ts": unix_secs(now),
+            "ts_ms": now,
             "loop": self.name,
             "sandbox": audit.sandbox,
             "session_id": session_id,
@@ -511,6 +591,9 @@ impl DecisionLoop {
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
+        if let (Some(trigger), Value::Object(o)) = (&audit.trigger, &mut line) {
+            o.insert("trigger".into(), json!(trigger));
+        }
         if let Err(e) = append_line(&audit.path, &format!("{line}\n")) {
             warn!(path = %audit.path.display(), error = %e, "decision audit write failed");
         }
@@ -535,6 +618,12 @@ pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
 
 fn slot_key(action: &str, slot: &str) -> String {
     format!("{action}__{slot}")
+}
+
+/// Whole seconds of `ms` since the epoch, 0 before it (as
+/// `metrics::now_unix` floors the wall clock).
+fn unix_secs(ms: i64) -> u64 {
+    u64::try_from(ms.div_euclid(1000)).unwrap_or(0)
 }
 
 /// `Some(rule)` when a typed result says the `[risk]` gate refused the
@@ -1241,6 +1330,7 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
             Some(AuditLog {
                 path: path.to_path_buf(),
                 sandbox: Some("xmarket".into()),
+                trigger: None,
             }),
         )
     }
@@ -1465,6 +1555,7 @@ args = {}
             Some(AuditLog {
                 path: path.clone(),
                 sandbox: None,
+                trigger: None,
             }),
         );
         let out = l.handle_event(&json!({}), "s").await.unwrap();
@@ -1549,6 +1640,7 @@ args = {}
             Some(AuditLog {
                 path: path.clone(),
                 sandbox: Some("xmarket".into()),
+                trigger: None,
             }),
         );
         let out = l
@@ -1666,5 +1758,243 @@ args = {}
             .unwrap()
             .ends_with("rejected: not a legal action this step"));
         assert!(render_audit(&json!({"loop": "l"})).is_none());
+    }
+
+    // ── clock + replay ────────────────────────────────────────────────
+
+    use crate::ports::clock::SimClock;
+
+    /// 2026-09-21 — ten days before these tests were written: on the wall
+    /// clock every row observed then is long stale.
+    const T0: i64 = 1_790_000_000_000;
+
+    /// `world` ages follow the loop's clock, not the wall: rows observed at
+    /// `T0` are fresh at `T0 + 20 s` and stale at `T0 + 40 s`
+    /// (`world_max_age_secs` 30; `open` requires `price` ≤ 30 s old).
+    #[tokio::test]
+    async fn world_freshness_follows_the_loop_clock() {
+        let store = Arc::new(MemStore::default());
+        store.put(&price_obs(T0, ObsStatus::Ok)).await.unwrap();
+        store.put(&pools_obs(T0)).await.unwrap();
+        let clock = Arc::new(SimClock::at(T0 + 20_000));
+        let (l, engine, _) = build_typed(
+            vec![
+                pick(&[("next_action", "hold", 0.99)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+            ObsStatus::Ok,
+            Some(store),
+        );
+        let l = l.with_clock(clock.clone());
+        l.handle_event(&json!({}), "s").await.unwrap();
+        clock.set(T0 + 40_000);
+        l.handle_event(&json!({}), "s").await.unwrap();
+
+        assert!(legal_actions(&engine, 0).contains(&"open".to_string()));
+        assert!(!legal_actions(&engine, 1).contains(&"open".to_string()));
+        let states = engine.states.lock().unwrap();
+        assert_eq!(states[0]["world"]["price"]["age_s"], json!(20.0));
+        assert_eq!(
+            states[0]["world"]["price"]["features"]["usd"],
+            json!(150.25)
+        );
+        assert_eq!(
+            states[1]["world"]["price"],
+            json!({"status": "stale", "age_s": 40.0})
+        );
+    }
+
+    /// `ts` / `ts_ms` are the clock's; `trigger` only when the `AuditLog`
+    /// sets one.
+    #[tokio::test]
+    async fn audit_lines_carry_the_clock_time_and_the_trigger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let clock = Arc::new(SimClock::at(T0 + 20_500));
+        let engine = Arc::new(Scripted::new(vec![
+            pick(&[("next_action", "hold", 0.99)]),
+            pick(&[("next_action", "hold", 0.99)]),
+        ]));
+        let replayed = DecisionLoop::new(
+            "t",
+            cfg(false),
+            engine.clone(),
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: Some("xlab".into()),
+                trigger: Some("backtest".into()),
+            }),
+        )
+        .with_clock(clock);
+        replayed.handle_event(&json!({}), "s1").await.unwrap();
+        let before = now_ms();
+        audited("t", engine, &path)
+            .handle_event(&json!({}), "s2")
+            .await
+            .unwrap();
+        let after = now_ms();
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["ts_ms"], json!(T0 + 20_500));
+        assert_eq!(lines[0]["ts"], json!((T0 + 20_500) / 1000));
+        assert_eq!(lines[0]["trigger"], json!("backtest"));
+        assert_eq!(lines[0]["sandbox"], json!("xlab"));
+        assert!(lines[0]["latency_ms"].is_u64(), "latency stays real");
+        // No clock: the wall; no trigger: no key.
+        let wall = lines[1]["ts_ms"].as_i64().unwrap();
+        assert!((before..=after).contains(&wall), "{wall}");
+        assert!(lines[1].get("trigger").is_none(), "{}", lines[1]);
+    }
+
+    fn gate_cfg() -> DecisionLoopConfig {
+        let mut c: DecisionLoopConfig = toml::from_str(
+            r#"
+goal = "Take a weekend-fade candidate only when its move looks like noise"
+agent = "xl_jev"
+act_at = 0.7
+[actions.take]
+description = "Trade this candidate"
+[actions.skip]
+description = "Do not trade it"
+[actions.ask_architect]
+description = "Unsure: hand it to the architect"
+"#,
+        )
+        .unwrap();
+        c.escalate = false;
+        c
+    }
+
+    fn gate_pick(choice: &str, confidence: f64, p: [(&str, f64); 3]) -> Decision {
+        Decision {
+            id: format!("gen-dec-{choice}"),
+            answers: BTreeMap::from([(
+                NEXT_ACTION.to_string(),
+                Answer {
+                    kind: "choice".into(),
+                    choice: Some(choice.into()),
+                    probabilities: p.iter().map(|(k, v)| (k.to_string(), *v)).collect(),
+                    confidence: Some(confidence),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    /// The gate arm's view of one candidate: a confident pick is `Stopped`
+    /// with its confidence and p per action; one below `act_at` is
+    /// `Escalated` (no history entry). One decision per event, every action
+    /// offered, the event reaches the engine whole.
+    #[tokio::test]
+    async fn terminal_only_loop_returns_the_verdict() {
+        let engine = Arc::new(Scripted::new(vec![
+            gate_pick(
+                "take",
+                0.74,
+                [("take", 0.83), ("skip", 0.15), ("ask_architect", 0.02)],
+            ),
+            gate_pick(
+                "skip",
+                0.55,
+                [("take", 0.40), ("skip", 0.55), ("ask_architect", 0.05)],
+            ),
+        ]));
+        let clock = Arc::new(SimClock::at(T0));
+        let l = DecisionLoop::new(
+            "xl_gate",
+            gate_cfg(),
+            engine.clone(),
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            None,
+        )
+        .with_clock(clock.clone());
+        let event = json!({
+            "strategy": "weekend_fade", "instrument": TSLA, "side": "sell",
+            "signal_bps": -182.5, "decided_at": "2026-09-27T22:00:00Z",
+            "features": {"ret_24h_bps": -150.0, "hour_of_week": 166}
+        });
+        let take = l.decide_terminal(&event, "backtest:r1:0").await.unwrap();
+        assert_eq!(
+            take,
+            Verdict {
+                action: "take".into(),
+                confidence: 0.74,
+                probabilities: BTreeMap::from([
+                    ("ask_architect".into(), 0.02),
+                    ("skip".into(), 0.15),
+                    ("take".into(), 0.83),
+                ]),
+                below_act_at: false,
+                outcome: StepOutcome::Stopped {
+                    action: "take".into()
+                },
+            }
+        );
+        clock.advance(3_600_000);
+        let unsure = l.decide_terminal(&event, "backtest:r1:1").await.unwrap();
+        assert!(unsure.below_act_at);
+        assert_eq!(unsure.action, "skip");
+        assert_eq!(unsure.probabilities["take"], 0.40);
+        assert_eq!(
+            unsure.outcome,
+            StepOutcome::Escalated {
+                action: "skip".into(),
+                confidence: 0.55
+            }
+        );
+
+        assert_eq!(legal_actions(&engine, 0), ["ask_architect", "skip", "take"]);
+        // The confident pick is the next event's history; the escalated one is not.
+        assert_eq!(l.history().await.len(), 1);
+        let states = engine.states.lock().unwrap();
+        assert_eq!(states.len(), 2, "one decision per event");
+        assert_eq!(states[0]["event"], event);
+        assert_eq!(states[1]["history"], json!([{"t": 1, "action": "take"}]));
+    }
+
+    #[tokio::test]
+    async fn decide_terminal_refuses_a_loop_with_tools_before_any_call() {
+        let (l, engine, tools, _) = build(false, vec![]);
+        let err = l.decide_terminal(&json!({}), "s").await.unwrap_err();
+        assert!(format!("{err}").contains("terminal-only"), "{err}");
+        assert!(engine.states.lock().unwrap().is_empty());
+        assert!(tools.0.lock().unwrap().is_empty());
+    }
+
+    /// A failed decisions call (an offline cache miss) is audited, then
+    /// returned as the error.
+    #[tokio::test]
+    async fn decide_terminal_returns_the_engine_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let l = DecisionLoop::new(
+            "xl_gate",
+            gate_cfg(),
+            Arc::new(Failing),
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: None,
+                trigger: Some("backtest".into()),
+            }),
+        )
+        .with_clock(Arc::new(SimClock::at(T0)));
+        let err = l.decide_terminal(&json!({}), "s").await.unwrap_err();
+        assert!(format!("{err:#}").contains("402"), "{err:#}");
+        let line: Value =
+            serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
+        assert_eq!(line["result"]["outcome"], json!("error"));
+        assert_eq!(line["ts_ms"], json!(T0));
     }
 }

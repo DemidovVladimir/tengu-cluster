@@ -3,6 +3,7 @@
 
 pub(crate) mod bridge_env;
 pub(crate) mod clock;
+pub(crate) mod decision_cache;
 pub(crate) mod decisions;
 pub(crate) mod egress;
 pub(crate) mod engines;

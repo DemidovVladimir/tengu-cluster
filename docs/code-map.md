@@ -62,7 +62,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Skills registry / lifecycle | `src/application/skills/registry.rs` / `src/application/skills/lifecycle/` |
 | Secrets vault / redaction | `src/adapters/outbound/secrets.rs` / `src/domain/secrets.rs` |
 | Metrics records / bus | `src/domain/metrics.rs` / `src/application/metrics.rs` |
-| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` |
+| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` · replay (`SimClock`, terminal-only loop, `Verdict`) + decision cache `src/adapters/outbound/decision_cache.rs` |
 | Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
 | Solana LP tools (`sol_price` … `lp_decide`; writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
 | `tengu run` (loops, feeds, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health,feeds}.rs` · `src/domain/runtime.rs` · fire times `src/domain/schedule.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · `[feeds.<n>]` `src/config/feeds.rs` · doc `docs/runtime-2026-09-30.md` |
@@ -186,6 +186,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit; `agent` / `session` / `call_id` of the call (a `tengu run` feed or loop call: `AttributedExecutor`) |
 | `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it) |
+| `<state dir>/backtests/decision-cache.db` | `outbound/decision_cache.rs` | replay-deterministic Jev answers (key = sha256 hex of the canonical `{model, state, questions}`); only misses call Jev. A replay's audit lines go to the run's `decisions.jsonl` (`trigger = "backtest"`, `ts_ms` = the simulated decision time), never `logs/decisions.jsonl` |
 | `<TENGU_HOME>/logs/risk.jsonl` | `outbound/paper_store.rs` | one line per risk verdict — mirror of `ledger.db` `risk_decisions` (canonical); joins `decisions.jsonl` by `call_id` (`docs/xmarket-risk-paper-2026-09-30.md` § Audit) |
 | `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (leases `runtime:<sandbox>` + `state:<dir>`), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `catalog` / `events` / `audit` / `spend` `.db` reserved — layout + load rules in `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout; `tengu prune` never deletes it; `<TENGU_HOME>/state/` without `[xmarket]` |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
@@ -241,7 +242,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/backtest/costs.rs` | 195 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
-| `src/domain/decision.rs` | 192 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate). |
+| `src/domain/decision.rs` | 282 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape, round-trips through JSON), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate), `Verdict` (a terminal-only loop's decision: action, confidence, p per action, below `act_at`). |
 | `src/domain/engine_smoke.rs` | 221 | `tengu doctor --engines` smoke turn (pure): prompt, `SMOKE_TOOLS`, verdict (every tool called, none failed, token in the answer), "tools called" cell. |
 | `src/domain/hl/book.rs` | 608 | `hl_book` decoders (pure): `l2Book` (≤ 20 levels a side, validated) + `recentTrades` → `hl_book/1` (touch, spread, depth 10 / 50 bps, imbalance, slippage vs mid per notional via `domain/book.rs`, last trade). |
 | `src/domain/hl/ctx.rs` | 1426 | `hl_ctx` decoders (pure): `metaAndAssetCtxs` / `spotMetaAndAssetCtxs` / `perpDexs` / `perpCategories` / `perpsAtOpenInterestCap` → `mkt_ctx/1` + `mkt_instrument/1` rows, side rows `hl_perp_meta/1`, `hl_at_oi_cap/1`, summary `hl_sweep/1`. |
@@ -292,8 +293,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
 | `src/ports/market_data.rs` | 81 | `MarketDataStore` — the market-data warehouse (bars, funding, contexts per full instrument id; `coverage`); impl `outbound/market_data.rs` (`<state dir>/market.db`). |
-| `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
-| `src/ports/clock.rs` | 75 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `ManualClock` test double. |
+| `src/ports/decision.rs` | 53 | Decision-loop ports — `DecisionEngine` (Jev; `cache_stats` → `CacheStats` for a caching engine), `Escalator` (low confidence → orchestrator). |
+| `src/ports/clock.rs` | 94 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `SimClock` settable time (the decision loop's replay clock; `ManualClock` in tests). |
 | `src/ports/book.rs` | 188 | `BookSource` — a fresh L2 book per instrument (`BookRead`), live or replayed; `ScriptedBooks` test fake. |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
@@ -343,7 +344,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 1670 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`). |
+| `src/application/decision_loop/mod.rs` | 2000 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 314 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
@@ -389,14 +390,14 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
-| `src/bootstrap/decision.rs` | 120 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. |
+| `src/bootstrap/decision.rs` | 369 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. Replay: `build_replay_loop` (terminal-only, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline). |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
 | `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the leases (`LeasePlan` / `OwnerLeases`: `runtime:<sandbox>` + `state:<dir>` for an `[xmarket]` state dir; `tengu webhooks` takes the same), every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`, executors under `egress::AttributedExecutor`), webhook routes via `Runtime::spawn`. |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (98 files)
+### adapters/outbound — driven adapters (99 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -407,7 +408,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/history_sqlite.rs` | 531 | `SqliteHistoryStore` — `<state dir>/history/<YYYYMMDD>.db` UTC day files (WAL), range / asof across days, retention sweeper. |
 | `src/adapters/outbound/hyperliquid/mod.rs` | 6 | Hyperliquid outbound — the `POST /info` client (`info.rs`). |
 | `src/adapters/outbound/hyperliquid/info.rs` | 833 | `HlInfo` — Hyperliquid `POST /info` over the scoped egress client, request weights from `[rate_limits.hyperliquid]`, HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF); a keyed `HL_API_URL` path never renders (`redacted_path`, `Scrubber::for_keyed_path`). |
-| `src/adapters/outbound/decisions.rs` | 130 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
+| `src/adapters/outbound/decision_cache.rs` | 474 | `CachedDecisionEngine` — replay-deterministic `DecisionEngine` over SQLite (`<state dir>/backtests/decision-cache.db`, WAL): key = sha256 hex of the canonical `{model, state, questions}` (keys sorted at every depth), hit = the stored `Decision`, miss = inner call + store, offline miss = error naming the key; `CacheStats` hits / misses / errors. |
+| `src/adapters/outbound/decisions.rs` | 363 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
 | `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |
 | `src/adapters/outbound/engines/local.rs` | 448 | Local engine — Unsloth / Ollama / llama.cpp via OpenAI-compatible `/v1/chat/completions`, direct (no proxy) |
@@ -420,7 +422,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/memory/disk_vector.rs` | 372 | Disk-backed `VectorStore` — bincode file at `<workspace>/.tengu/memory.bin`. |
 | `src/adapters/outbound/memory/embedder.rs` | 220 | Text embedding client. |
 | `src/adapters/outbound/memory/mod.rs` | 9 | Memory adapters — `BuiltinMemoryProvider` (MEMORY.md, identity files, |
-| `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
+| `src/adapters/outbound/mod.rs` | 26 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/paper_store.rs` | 2658 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline, kept venue facts, fired TP / SL), orders `UNIQUE(account, client_order_id)` + request `fingerprint` (a replay asking for another order is refused), the order rate counting entries only, fills, funding + `funding_owed` (settled before every fill at the size held), `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns and tables on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); `accounts.sandbox` = the owner (every write claims an unowned account, refuses another sandbox's: `account_owner_mismatch`); refused without `[xmarket]`. |
