@@ -2,10 +2,14 @@
 //! through a `ToolExecutor`, feed results back, until a final answer.
 //! See `docs/context-management-2026-04-27.md` Layer 3.
 //!
-//! | Engine | Tool result entering the context |
+//! | Engine | Tool result entering the context (`tool_result_content`) |
 //! |---|---|
 //! | `tool_result_char_cap() = None` (OpenRouter, Claude Code) | text capped at `limits.max_tool_result_chars` |
 //! | `Some(cap)` (local) | `fit_tool_result`, ≤ `min(cap, max_tool_result_chars)` footer included: a result that fits stays whole; above it a typed row's `data` → store-key pointer, then the cut |
+//!
+//! Older rounds (from round 1 on): every earlier tool result keeps its
+//! first line, ≤ `limits.compact_result_limit` (`compact_older_tool_results`).
+//! `run-agent` applies both rules the same way, for every engine.
 //!
 //! Activity: `EngineResponse.tool_runs` lists every call with its outcome —
 //! the ones run here and the ones the engine ran itself
@@ -204,12 +208,12 @@ pub async fn collect_engine_response(
                 observer(tc, &result);
             }
             tool_outcomes.push((tc.name.clone(), result.clone()));
-            let content = match engine_result_cap {
-                Some(cap) => {
-                    fit_tool_result(&result, observation.as_ref(), cap.min(result_chars_limit))
-                }
-                None => truncate_tool_result(&result, result_chars_limit),
-            };
+            let content = tool_result_content(
+                &result,
+                observation.as_ref(),
+                engine_result_cap,
+                result_chars_limit,
+            );
             messages.push(Message {
                 role: Role::Tool,
                 content,
@@ -380,8 +384,8 @@ fn chat_call_id(turn_nonce: &str, round: usize, index: usize, provider_id: &str)
 /// Compact old tool results to manage context size: every `Role::Tool`
 /// message in `older` (the rounds before the current one) keeps a short
 /// summary instead of "ok" so the model remembers what happened (hashes,
-/// IDs, status) and doesn't repeat steps. `run-agent` calls it for local
-/// engines too.
+/// IDs, status) and doesn't repeat steps. `run-agent` calls it the same way
+/// (from turn 1 on, every engine).
 pub(crate) fn compact_older_tool_results(older: &mut [Message], limit: usize) {
     for msg in older {
         if matches!(msg.role, Role::Tool) {
@@ -390,6 +394,24 @@ pub(crate) fn compact_older_tool_results(older: &mut [Message], limit: usize) {
                 msg.content = compacted;
             }
         }
+    }
+}
+
+/// Context text of one tool result as every tool loop feeds it back
+/// (`collect_engine_response` and `run-agent`, module table): an engine
+/// with a per-result cap (`engine_cap`, local models) gets
+/// [`fit_tool_result`] within `min(cap, max_chars)`; any other engine the
+/// text cut at `max_chars` (`limits.max_tool_result_chars`), footer after
+/// the cut.
+pub(crate) fn tool_result_content(
+    result: &str,
+    observation: Option<&Observation>,
+    engine_cap: Option<usize>,
+    max_chars: usize,
+) -> String {
+    match engine_cap {
+        Some(cap) => fit_tool_result(result, observation, cap.min(max_chars)),
+        None => truncate_tool_result(result, max_chars),
     }
 }
 
@@ -974,6 +996,34 @@ mod tests {
         // Exactly at the cap is still a fit.
         let fitted = fit_tool_result(&text, Some(&large), text.len());
         assert_eq!(fitted, text);
+    }
+
+    /// A 2 MB result never enters any engine's context whole
+    /// (`tool_result_content`, both tool loops): uncapped engines get
+    /// `max_tool_result_chars` + the footer, capped ones fit
+    /// `min(cap, max)` footer included.
+    #[test]
+    fn tool_result_content_caps_every_engine() {
+        let big = "z".repeat(2_000_000);
+        let uncapped = tool_result_content(&big, None, None, 1_000);
+        assert!(uncapped.starts_with(&"z".repeat(1_000)));
+        assert!(
+            uncapped.ends_with("[truncated — showing 1000 of 2000000 chars]"),
+            "{}",
+            &uncapped[1_000..]
+        );
+        assert!(uncapped.len() < 1_100, "{} bytes", uncapped.len());
+        for (cap, limit) in [(8_192, 1_000), (500, 1_000)] {
+            let fitted = tool_result_content(&big, None, Some(cap), limit);
+            assert!(fitted.len() <= cap.min(limit), "{} bytes", fitted.len());
+        }
+        assert_eq!(tool_result_content("short", None, None, 1_000), "short");
+        let typed = typed_obs().render_text(0);
+        assert_eq!(
+            tool_result_content(&typed, Some(&typed_obs()), None, 300_000),
+            typed,
+            "uncapped engines see the whole row"
+        );
     }
 
     #[test]

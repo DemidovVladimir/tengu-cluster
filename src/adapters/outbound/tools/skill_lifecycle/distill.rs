@@ -121,8 +121,17 @@ impl Tool for SkillDistillTool {
         // being created by this very call).
         validate_metrics_structural(&args.metrics)?;
 
-        // Transcript slice
+        // Transcript slice. No conversation at all: the surface passes none
+        // (a bridge without the engine's transcript, `tengu tool call`
+        // without `--transcript`) — refuse rather than write `fixtures: []`.
         let conv_len = ctx.conversation.len();
+        if conv_len == 0 {
+            bail!(
+                "skill_distill: no conversation to distill — this call came with none (tengu \
+                 mcp-bridge without TENGU_BRIDGE_TRANSCRIPT_FILE, or tengu tool call without \
+                 --transcript); nothing was written"
+            );
+        }
         if args.from_message_index > conv_len {
             return Ok(err_payload(
                 "InvalidTranscriptRange",
@@ -636,6 +645,41 @@ mod tests {
             )
             .await;
         assert!(err.is_err(), "expected invalid-name error");
+    }
+
+    /// No conversation (a surface that passes none): refused, nothing
+    /// written — never a skill with `fixtures: []`.
+    #[tokio::test]
+    async fn refuses_without_a_conversation() {
+        let ws = TempDir::new().unwrap();
+        let scope = permissive_scope(ws.path());
+        let shell = NoShell;
+        let http = reqwest::Client::new();
+        let secrets = SecretRegistry::new();
+        let activity = NoActivity;
+
+        let tool = SkillDistillTool::new();
+        let args = json!({
+            "name": "from-nothing",
+            "description": "x",
+            "body_markdown": "y",
+            "metrics": [],
+            "from_message_index": 0
+        });
+        let err = tool
+            .execute(
+                &args,
+                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &activity, &[]),
+            )
+            .await
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("no conversation"), "{err}");
+        assert!(!ws.path().join("skills/from-nothing").exists());
+        assert!(
+            !ws.path().join("skills").exists(),
+            "no temp dir left either"
+        );
     }
 
     #[tokio::test]

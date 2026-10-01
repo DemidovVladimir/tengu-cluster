@@ -4,7 +4,6 @@
 //! `SubprocessRunner`.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::default_config_path;
@@ -51,6 +50,9 @@ async fn try_persist_agentic_step_summary(
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
 /// 3. Loads the parent's config (sandbox via IPC, else the default config) and
 ///    takes `[agents.<name>]` from it — model, engine, tools, skills, limits.
+///    Its workspace (`bootstrap::tools::workspace_or_temp`): the agent's,
+///    else a temp dir for this step — the executor's and the engine's (a
+///    Claude Code CLI's cwd, its bridge).
 /// 4. Composes the system prompt: base template + skill bodies (three-tier
 ///    loader) + mandatory `compress_and_store` suffix.
 /// 5. Builds the engine (`engine` = `openrouter` | `local` | `claude_code`) for
@@ -61,10 +63,12 @@ async fn try_persist_agentic_step_summary(
 ///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
 /// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
 ///    dispatch each → append assistant + tool messages → repeat. Results
-///    enter as returned, except on engines with a per-result cap (local:
-///    `tool_loop::fit_tool_result`, older rounds compacted to line 1). Stop on:
+///    enter as in-process chat feeds them (`tool_loop::tool_result_content`:
+///    `limits.max_tool_result_chars`, local models fitted to the window),
+///    older rounds compacted to line 1 from turn 1 on. Stop on:
 ///    - empty tool_calls (model done; a Claude Code turn ends here — its
-///      bridged `compress_and_store` summary is read from the summary file)
+///      bridged `compress_and_store` summary is read from the summary file,
+///      and the engine ends the CLI run right after that call)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
@@ -185,12 +189,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 known
             )
         })?;
-    // `~` in `workspace` is expanded by every in-process consumer; do the
-    // same here so scopes / memory / the engine agree on one absolute path.
-    spec.workspace = spec
-        .workspace
-        .as_ref()
-        .map(|p| crate::config::paths::expand_tilde(p));
     if let Some(c) = compose_override {
         spec = crate::bootstrap::tools::compose_agent(
             &spec_load_name,
@@ -199,6 +197,22 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             crate::config::hardening::requires_hardened_claude_code(&parent_config),
             parent_config.memory.enabled,
         )?;
+    }
+    // The step's one workspace (`workspace_or_temp`): the executor, the memory
+    // store and the engine — a Claude Code CLI's cwd and its bridge — all
+    // use it. `step_dir` (an agent without `workspace`) is removed when the
+    // step ends.
+    let configured_workspace = spec.workspace.is_some();
+    let (workspace, step_dir) =
+        crate::bootstrap::tools::workspace_or_temp(spec.workspace.as_deref(), "tengu-step-")
+            .context("run-agent: the step's workspace")?;
+    spec.workspace = Some(workspace.clone());
+    if let Some(dir) = &step_dir {
+        tracing::info!(
+            workspace = %workspace.display(),
+            temp_dir = %dir.path().display(),
+            "run-agent: the agent has no `workspace` — this step runs in a temp dir"
+        );
     }
     // Resolved agent name (the base for composed agents) — exposed like
     // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.
@@ -244,10 +258,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     system_prompt.push_str(MANDATORY_SUFFIX);
 
     // ----- Build engine (Phase 7.3 — honour the agent's engine) -----
-    let workspace = spec
-        .workspace
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let mut agent_cfg_for_engine = crate::bootstrap::tools::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
@@ -285,12 +295,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "subprocess engine built"
     );
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
-    // Local models (`Engine::tool_result_char_cap`): each result fitted to
-    // the window, older rounds compacted — as `collect_engine_response`
-    // does in-process. Other engines: results enter unchanged.
-    let result_cap = engine
-        .tool_result_char_cap()
-        .map(|cap| cap.min(spec.limits.max_tool_result_chars as usize));
+    // Every result enters capped and older rounds are compacted to line 1,
+    // as `collect_engine_response` does in-process (`tool_loop` module
+    // table): `limits.max_tool_result_chars`, and for local models
+    // (`Engine::tool_result_char_cap`) the window fit.
+    let engine_result_cap = engine.tool_result_char_cap();
+    let max_tool_result_chars = spec.limits.max_tool_result_chars as usize;
 
     // ----- Build tool stack (Phase 5b) -----
     // The parent's vault values (inherited, never prompts): tool output is
@@ -306,11 +316,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // MCP-routed Claude Code calls to those tools fail with
     // "Tool 'X' is not available to this agent" even though the tool def is
     // in the advertised list.
+    // The store sits in the agent's own workspace, else at `[memory]
+    // store_path` (as in-process chat and the bridge): never in a step's
+    // temp dir, which goes when the step ends.
     let memory_manager = if parent_config.memory.enabled {
         Some(
             crate::bootstrap::memory::build_memory_manager_async(
                 &parent_config.memory,
-                Some(&workspace),
+                configured_workspace.then_some(workspace.as_path()),
             )
             .await,
         )
@@ -378,7 +391,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             None
         };
     let context = EngineContext {
-        workspace: spec.workspace.clone(),
+        // Always set: a Claude Code engine starts its bridge (and runs the
+        // CLI) only in a workspace.
+        workspace: Some(workspace.clone()),
         system_prompt: Some(system_prompt),
         bridge_tools: bridge_tools_for_ctx,
         max_tool_rounds: Some(input.max_turns),
@@ -521,14 +536,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 name: call.name.clone(),
                 ok,
             });
-            let content = match result_cap {
-                Some(cap) => crate::application::chat::tool_loop::fit_tool_result(
-                    &result,
-                    observation.as_ref(),
-                    cap,
-                ),
-                None => result,
-            };
+            let content = crate::application::chat::tool_loop::tool_result_content(
+                &result,
+                observation.as_ref(),
+                engine_result_cap,
+                max_tool_result_chars,
+            );
 
             messages.push(Message {
                 role: Role::Tool,
@@ -537,7 +550,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 tool_calls: None,
             });
         }
-        if result_cap.is_some() && turn >= 1 {
+        if turn >= 1 {
             crate::application::chat::tool_loop::compact_older_tool_results(
                 &mut messages[..compact_cutoff],
                 spec.limits.compact_result_limit as usize,
@@ -668,6 +681,8 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
+    // The temp workspace of a step without one goes now, not earlier.
+    drop(step_dir);
     Ok(())
 }
 

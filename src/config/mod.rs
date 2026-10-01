@@ -503,6 +503,12 @@ pub struct LimitsConfig {
     pub context_window: u32,
     #[serde(default)]
     pub max_output_tokens_per_turn: Option<u32>,
+    /// Tool cap per turn (chat) or plan step (`run-agent`; default 70).
+    ///
+    /// | Engine | Counts |
+    /// |---|---|
+    /// | `openrouter`, `local` | engine turns (rounds; one may call several tools) — chat then forces one answer without tools, a `run-agent` step just ends |
+    /// | `claude_code` | tool calls (`tool_use` blocks) of the CLI run — bridged and built-in; past the cap the run is killed with an error |
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: u32,
     #[serde(default = "default_max_tool_result_chars")]
@@ -553,6 +559,16 @@ impl Default for LimitsConfig {
 fn default_context_window() -> u32 {
     1_000_000
 }
+
+/// Tools whose output lives in the agent's workspace (files, skills): a load
+/// warning names them for a routable agent without `workspace`, whose plan
+/// steps run in a temp dir removed after each (`validation_warnings`).
+const STEP_WORKSPACE_WRITERS: &[&str] = &[
+    "write_file",
+    "manage_skill",
+    "skill_distill",
+    "apply_improver_proposal",
+];
 fn default_max_tool_rounds() -> u32 {
     70
 }
@@ -1172,6 +1188,29 @@ impl Config {
                     "agents.{id}.limits.context_window is the {default} default; set the local \
                      server's real window (Ollama: num_ctx) — docs/engine-backends.md § Local"
                 ));
+            }
+            // A routable agent without `workspace` runs each plan step in a
+            // temp dir removed after it (`bootstrap::tools::workspace_or_temp`).
+            if agent.description.is_some() && agent.workspace.is_none() {
+                // Listed in `tools` or opted in; `write_file` is a base tool
+                // (an empty `tools` = every base tool).
+                let has = |t: &str| {
+                    agent.tools.iter().any(|x| x == t)
+                        || agent.workspace_tools.iter().any(|x| x == t)
+                        || (agent.tools.is_empty() && t == "write_file")
+                };
+                let writers: Vec<&str> = STEP_WORKSPACE_WRITERS
+                    .iter()
+                    .copied()
+                    .filter(|t| has(t))
+                    .collect();
+                if !writers.is_empty() {
+                    out.push(format!(
+                        "agents.{id} has no `workspace`: each plan step (and webhook turn) runs in a temp \
+                         dir removed after it, and what {writers:?} write there goes with it — set \
+                         `workspace` to keep it"
+                    ));
+                }
             }
         }
         out.sort();
@@ -2038,6 +2077,39 @@ ttl_days = 7
             warnings[0].starts_with("agents.gemma.limits.context_window is the 1000000 default"),
             "{}",
             warnings[0]
+        );
+    }
+
+    /// A routable agent without `workspace` whose tools write into it (files,
+    /// skills) is warned about: its plan steps run in a temp dir removed
+    /// after each. Read-only tools, a pinned workspace or no `description`
+    /// (never a plan step): no warning.
+    #[test]
+    fn routable_agent_writing_into_a_step_temp_dir_warns() {
+        let cfg: Config = toml::from_str(
+            "[agents.learner]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"view_skill\", \"manage_skill\", \"read_file\"]\n\
+             [agents.reader]\nengine = \"claude_code\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"http_request\", \"read_file\"]\n\
+             [agents.everything]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             [agents.pinned]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"manage_skill\"]\nworkspace = \"/srv/ws\"\n\
+             [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\ntools = [\"write_file\"]\n",
+        )
+        .unwrap();
+        let warnings = cfg.validation_warnings();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("agents.everything has no `workspace`")
+                && warnings[0].contains("[\"write_file\"]"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[1].starts_with("agents.learner has no `workspace`")
+                && warnings[1].contains("[\"manage_skill\"]"),
+            "{}",
+            warnings[1]
         );
     }
 }

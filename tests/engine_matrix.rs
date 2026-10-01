@@ -20,7 +20,7 @@
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
-//! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, `matrix-doc` holds the improved body |
+//! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
 //! | `util` | `shared_cache` `put` + `get` → `http_request` GET a loopback endpoint → `abi_encode` → `hex_to_uint256` | the answer holds the endpoint's token and the decimal of a random hex; the endpoint was hit |
 //! | `privy_off` | `sign_message`, `sign_and_send_transaction` — scopes without wallets (Privy signing off) | both calls refused (`ok = false`) before any env read or request; the answer quotes the refusal (`wallet`). Nothing is ever signed |
 //! | `privy` | `get_wallet_address` (a read) — needs `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` (env or the repo's `.env`), else skipped | the answer holds the address (`PRIVY_WALLET_ADDRESS` when known); the app secret (registered) nowhere in the child's output |
@@ -432,7 +432,7 @@ impl Set {
                         "skill_distill",
                         json!({"name": "matrix-distilled", "description": "Distilled by the engine matrix.",
                                "body_markdown": "# matrix-distilled\n\nBody.\n", "metrics": [],
-                               "from_message_index": 0, "tier": "workspace"}),
+                               "from_message_index": 1, "tier": "workspace"}),
                     ),
                     call(
                         "apply_improver_proposal",
@@ -1415,6 +1415,18 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
                 let file = ws.path.join(".tengu/skills").join(made).join("SKILL.md");
                 assert!(file.is_file(), "{label}: {} missing", file.display());
             }
+            // Fixtures from the step's conversation (message 1 on: the
+            // goal) — the run-agent loop's messages, or the Claude Code
+            // engine's transcript through the bridge.
+            let prompts = std::fs::read_to_string(
+                ws.path
+                    .join(".tengu/skills/matrix-distilled/evals/prompts.yaml"),
+            )
+            .unwrap_or_default();
+            assert!(
+                prompts.contains("id: f1") && prompts.contains("Scripted tool test"),
+                "{label}: skill_distill seeded no fixture from the conversation:\n{prompts}"
+            );
             let doc = std::fs::read_to_string(ws.path.join("skills/matrix-doc/SKILL.md"))
                 .unwrap_or_default();
             assert!(

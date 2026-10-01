@@ -229,8 +229,9 @@ Each tool result char-capped at `max_tool_result_chars` (default
 8 192 chars) stays whole; above it a typed row's `data` line becomes
 `data: <n> bytes in observation <key>` (`Observation::compact_text`), then the
 result, footer included, is cut to fit. `run-agent` applies the
-same fit plus `compact_tool_result` of older rounds for local agents only
-(other engines: results enter as returned there).
+same rules for every engine (`tool_loop::tool_result_content` + `compact_tool_result`
+of older rounds — before 2026-10-01 only for local agents; an OpenRouter step
+resent a 2 MB result on every turn).
 
 ### 10. `compact_tool_result` mid-loop (`adapters/outbound/engines/mod.rs:921`)  — *the closest to /compact*
 
@@ -312,8 +313,9 @@ with embeddings when available and text-only fallback otherwise
 
 | Path | Trigger |
 |---|---|
-| **A — Out-of-band** | OpenRouter subagents — `main.rs:971` intercepts the call before the executor runs |
-| **B — Backstop** | Claude Code subagents — no bridge handler (`CompressAndStoreTool` removed in Phase 6); the model usually just stops, `compress_called` stays false, and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
+| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs` intercepts the call before the executor runs, then ends the loop after that round |
+| **B — Bridge** | Claude Code subagents — the step's bridge writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary |
+| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
 
 ### 17. Phase 5c middle-ground protocol (`main.rs:1075`)
 
@@ -328,7 +330,9 @@ with embeddings when available and text-only fallback otherwise
 `AgentIpcInput.max_turns`, set by `SubprocessRunner::run_step` from the agent
 block's `limits.max_tool_rounds` (the serde default 20 only applies to payloads
 without the field). Hard cap on the subagent's mini-loop; hits the
-`compress_and_store` warn path on exhaust. Wall clock per step:
+`compress_and_store` warn path on exhaust. It counts engine turns on
+OpenRouter / local, but **tool calls** of the one CLI run on Claude Code
+(`EngineContext.max_tool_rounds`: the CLI is killed past it). Wall clock per step:
 `limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout`.
 
 ### 19. Cross-plan recall (planner replan side)

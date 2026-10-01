@@ -541,14 +541,18 @@ impl Engine for OpenRouterEngine {
 // Message conversion helpers (OpenAI-compatible format)
 // ---------------------------------------------------------------------------
 
-/// Convert runtime messages to an OpenAI-compatible JSON message array.
+/// Convert runtime messages to an OpenAI-compatible JSON message array. A
+/// system message equal to `system_prompt` is skipped: `run-agent`, `tengu
+/// tool turn`, the doctor and webhooks send the prompt both ways, and it
+/// would be paid for twice per turn (as `engines/local.rs` does).
 fn convert_messages_openai_compatible(
     messages: &[Message],
     system_prompt: Option<&str>,
 ) -> Vec<serde_json::Value> {
     let mut result: Vec<serde_json::Value> = Vec::new();
 
-    if let Some(prompt) = system_prompt.filter(|s| !s.trim().is_empty()) {
+    let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
+    if let Some(prompt) = system_prompt {
         result.push(serde_json::json!({
             "role": "system",
             "content": prompt
@@ -556,6 +560,9 @@ fn convert_messages_openai_compatible(
     }
 
     for m in messages {
+        if matches!(m.role, Role::System) && Some(m.content.as_str()) == system_prompt {
+            continue;
+        }
         match m.role {
             Role::Tool => {
                 let mut msg = serde_json::json!({
@@ -876,5 +883,42 @@ mod tests {
         // Unset falls back to the context-scaled reservation estimate.
         let unset = OpenRouterEngine::new("http://x", "m", "k", 1_000_000, 600, None).unwrap();
         assert_eq!(unset.max_output_tokens_per_turn(), 16_384);
+    }
+
+    /// A system message equal to the context's `system_prompt` (run-agent,
+    /// `tool turn`, doctor, webhooks send it both ways) goes out once; other
+    /// system messages stay, and without a context prompt every one does.
+    #[test]
+    fn system_prompt_is_sent_once() {
+        let msg = |role, content: &str| Message {
+            role,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let messages = vec![
+            msg(Role::System, "SYS"),
+            msg(Role::User, "goal"),
+            msg(Role::System, "memory block"),
+        ];
+        let out = convert_messages_openai_compatible(&messages, Some("SYS"));
+        let roles: Vec<(&str, &str)> = out
+            .iter()
+            .map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                ("system", "SYS"),
+                ("user", "goal"),
+                ("system", "memory block")
+            ]
+        );
+        assert_eq!(convert_messages_openai_compatible(&messages, None).len(), 3);
+        assert_eq!(
+            convert_messages_openai_compatible(&messages, Some("  ")).len(),
+            3,
+            "a blank context prompt is no prompt"
+        );
     }
 }

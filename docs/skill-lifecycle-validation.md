@@ -520,7 +520,7 @@ Expected:
 
 ### 9.3 Known limitation
 
-`PluginToolExecutor` threads the live message slice into `ConversationView` via the `ToolExecutor::execute` trait (commit `e243468`). If you see `from_message_index` errors or an empty fixtures.yaml, the engine dispatch path may not be passing `messages` correctly — file a bug.
+`PluginToolExecutor` threads the live message slice into `ConversationView` via the `ToolExecutor::execute` trait (commit `e243468`). Under Claude Code the bridge builds it from the engine's transcript of the run (`TENGU_BRIDGE_TRANSCRIPT_FILE`, `docs/mcp-bridge.md` § Dispatch); `tengu tool call` from `--transcript`. A call with no conversation at all is refused ("no conversation to distill") instead of writing `fixtures: []`. If you see `from_message_index` errors or an empty fixtures.yaml otherwise, the engine dispatch path may not be passing `messages` correctly — file a bug.
 
 ---
 

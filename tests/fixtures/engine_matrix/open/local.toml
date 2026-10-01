@@ -24,8 +24,8 @@ enabled = true
 
 # The shell set's [[mcp_servers]] proxy `matrix__token`. `$VAR` stays literal
 # here and is resolved by whoever spawns the server — the run-agent child, or a
-# Claude Code step's bridge from its inherited env (no value in the CLI's
-# temp --mcp-config).
+# Claude Code step's bridge (it takes the server from this file, named in
+# the CLI's temp --mcp-config: no value there) from its inherited env.
 [[mcp_servers]]
 name = "matrix"
 transport = "stdio"

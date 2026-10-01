@@ -1,10 +1,11 @@
 //! Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool
 //! catalog (`adapters/outbound/tools`), shell skills, `[[mcp_servers]]`, and
-//! the per-tool scope map. Also the `run-agent` subagent variant and the
-//! Claude Code bridge tool list.
+//! the per-tool scope map. Also the `run-agent` subagent variant, the
+//! Claude Code bridge tool list and a step / one-shot turn's workspace
+//! (`workspace_or_temp`).
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::{AgentConfig, Config, McpServerConfig};
@@ -258,6 +259,41 @@ pub(crate) fn grant_workspace_root(scopes: &mut HashMap<String, ToolScope>, work
             scope.fs_roots.push(workspace.to_path_buf());
         }
     }
+}
+
+/// The workspace of one `run-agent` step or one-shot turn (webhooks, `tengu
+/// tool turn` / `call`) — the executor's and the engine's (a Claude Code
+/// CLI's cwd, its bridge). Callers keep the memory store at `[memory]
+/// store_path` when it is a temp dir.
+///
+/// | `[agents.<a>] workspace` | Workspace |
+/// |---|---|
+/// | set | it, `~` expanded; a relative path made absolute against this process's cwd — one path for the executor, the engine and the bridge |
+/// | unset | a fresh `<prefix>*` temp dir (canonical), returned too: removed when it drops at the end of the step / turn |
+///
+/// Never the bare cwd: a Claude Code CLI runs there with its built-ins, and
+/// the permissive fallback scope (`permissive_scope`) roots every tool in it.
+pub(crate) fn workspace_or_temp(
+    configured: Option<&Path>,
+    prefix: &str,
+) -> anyhow::Result<(PathBuf, Option<tempfile::TempDir>)> {
+    use anyhow::Context;
+    if let Some(path) = configured {
+        let path = crate::config::paths::expand_tilde(path);
+        let path = if path.is_relative() {
+            crate::config::paths::absolute_path(&path)
+        } else {
+            path
+        };
+        return Ok((path, None));
+    }
+    let dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .context("create a temp workspace")?;
+    // Canonical: scope checks compare resolved paths (macOS /var → /private/var).
+    let path = std::fs::canonicalize(dir.path()).context("temp workspace")?;
+    Ok((path, Some(dir)))
 }
 
 /// Build the fallback `ToolScope` for tools with no configured entry:
@@ -546,6 +582,41 @@ mod golden_tests {
     struct StubActivity;
     impl ToolActivityPort for StubActivity {
         fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    /// No `workspace`: a fresh temp dir (canonical, named by the prefix,
+    /// removed when it drops) — never the cwd; a configured one as given,
+    /// `~` expanded, a relative one made absolute.
+    #[test]
+    fn workspace_or_temp_is_the_agents_or_a_temp_dir() {
+        let (ws, dir) = workspace_or_temp(None, "tengu-step-").unwrap();
+        let dir = dir.expect("a temp dir for an agent without workspace");
+        assert!(ws.is_absolute() && ws.is_dir(), "{}", ws.display());
+        assert_eq!(ws, std::fs::canonicalize(dir.path()).unwrap());
+        assert!(
+            ws.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tengu-step-"),
+            "{}",
+            ws.display()
+        );
+        assert_ne!(ws, std::env::current_dir().unwrap());
+        drop(dir);
+        assert!(!ws.exists(), "removed when dropped: {}", ws.display());
+
+        let pinned = TempDir::new().unwrap();
+        let (ws, dir) = workspace_or_temp(Some(pinned.path()), "x-").unwrap();
+        assert_eq!(ws, pinned.path());
+        assert!(dir.is_none(), "a configured workspace is never removed");
+        let (ws, _) = workspace_or_temp(Some(Path::new(".")), "x-").unwrap();
+        assert_eq!(ws, std::fs::canonicalize(".").unwrap());
+        let (ws, _) = workspace_or_temp(Some(Path::new("~/tengu-ws-x")), "x-").unwrap();
+        assert!(
+            ws.is_absolute() && ws.ends_with("tengu-ws-x"),
+            "{}",
+            ws.display()
+        );
     }
 
     /// A `[solana]` signing sandbox: the fallback runs no shell (a shell

@@ -39,13 +39,13 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Concern | File(s) |
 |---|---|
 | CLI subcommands (`chat status doctor telegram webhooks run decide history risk eval secret prune mcp-bridge agentic-memory-server skill run-agent`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor}.rs` |
-| Hidden test commands `tengu tool list` (catalog names) · `tengu tool call` (one or a `--batch` of calls through the executor a `run-agent` child builds: bridge conformance) · `tengu tool turn` (one engine turn as any agent, private exec agents included — the `@<agent>` chat path; Claude Code tools through the real bridge: engine-matrix xm legs) | `src/adapters/inbound/cli/tool.rs` |
+| Hidden test commands `tengu tool list` (catalog names) · `tengu tool call` (one or a `--batch` of calls through the executor a `run-agent` child builds, `--transcript` = the conversation: bridge conformance) · `tengu tool turn` (one engine turn as any agent, private exec agents included — the `@<agent>` chat path; Claude Code tools through the real bridge: engine-matrix xm legs) | `src/adapters/inbound/cli/tool.rs` |
 | Config schema, defaults, validation, loading | `src/config/mod.rs` (`Config`, `AgentConfig`, `impl Default for Config`, `default_*` fns, `validation_errors`, `validate_agent`, `Config::load`) |
 | `[egress]` schema / runtime policy | `src/config/egress.rs` / `src/adapters/outbound/egress.rs` |
 | Config file resolution + `TENGU_HOME` | `src/config/paths.rs`, `src/bootstrap/sandbox.rs`, `cli/mod.rs::run` |
 | Tool trait, contexts | `src/ports/tool.rs` (`Tool`, `ToolPlugin`, `ToolCtx`, `PluginCtx`, `ToolDirectory`) |
 | Tool catalog (every built-in tool) | `src/adapters/outbound/tools/mod.rs` (`catalog`, `register_catalog`, `advertised_defs`) |
-| Tool permissions | `src/domain/scope.rs` (`ToolScope`, `resolve_path`, `protected_write` — what writers refuse), `src/bootstrap/tools.rs` (`resolve_tool_scopes`, `permissive_scope`, `grant_workspace_root`, `compose_agent`) |
+| Tool permissions | `src/domain/scope.rs` (`ToolScope`, `resolve_path`, `protected_write` — what writers refuse), `src/bootstrap/tools.rs` (`resolve_tool_scopes`, `permissive_scope`, `grant_workspace_root`, `compose_agent`, `workspace_or_temp` — a step / one-shot turn without `workspace` runs in a temp dir) |
 | Opt-in tool names | `src/domain/tools.rs` (`WORKSPACE_TOOLS`) |
 | Tool dispatch | `src/application/tools/registry.rs` (`ToolRegistry`, `PluginToolExecutor`) |
 | Executor wiring (catalog + skills + MCP + scopes) | `src/bootstrap/tools.rs` |
@@ -202,7 +202,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `TENGU_TOR_PROXY` | Tor proxy when `[egress].proxy` unset |
 | `TENGU_EGRESS` | resolved egress policy handed to children (wins over their config) |
 | `TENGU_SESSION_ID`, `TENGU_AGENT_NAME`, `TENGU_AGENT_IPC` | set for `run-agent` children (session key, agent, IPC mode) |
-| `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS`, `TENGU_BRIDGE_MAX_RESULT_CHARS`, `TENGU_BRIDGE_SCOPES`, `TENGU_BRIDGE_MCP_SERVERS`, `TENGU_BRIDGE_AGENT` (+ `TENGU_CONFIG`, absolute) | Claude Code engine → `tengu mcp-bridge` contract |
+| `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS`, `TENGU_BRIDGE_MAX_RESULT_CHARS`, `TENGU_BRIDGE_SCOPES`, `TENGU_BRIDGE_MCP_SERVERS` (server names), `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE`, `TENGU_BRIDGE_SUMMARY_FILE`, `TENGU_BRIDGE_TRANSCRIPT_FILE` (the run's conversation) (+ `TENGU_CONFIG`, absolute) | Claude Code engine → `tengu mcp-bridge` contract (`src/adapters/outbound/bridge_env.rs`) |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | forwarded to the bridge |
 | `TELEGRAM_BOT_TOKEN`, `TENGU_TELEGRAM_ALLOWED_USERS` | Telegram channel |
 | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` | crypto tools |
@@ -506,12 +506,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/cli/history.rs` | 107 | `tengu history range|asof <key>` — read the recorder day files (no LLM). |
 | `src/adapters/inbound/cli/risk.rs` | 642 | `tengu risk status|halt|resume` — ledger risk state (no LLM; verdict lines name the exec tool and call id; positions with a fired TP / SL; funding owed); halt / resume only at a TTY and never under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME`; resume asks for the account name, refused while the kill-switch file exists. |
 | `src/adapters/inbound/cli/mod.rs` | 682 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
-| `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from |
+| `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from stdin; one workspace per step (the agent's, else a temp dir: `bootstrap::tools::workspace_or_temp`); results capped / compacted as in chat |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
-| `src/adapters/inbound/cli/tool.rs` | 394 | Hidden `tengu tool list|call|turn` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds (bridge conformance harness); one engine turn as any agent, private ones included (engine matrix xm set). |
+| `src/adapters/inbound/cli/tool.rs` | 394 | Hidden `tengu tool list|call|turn` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds, `--transcript` the conversation (bridge conformance harness); one engine turn as any agent, private ones included (engine matrix xm set). |
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
-| `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol. |
+| `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol; each call gets the run's conversation (`call_conversation`), `[[mcp_servers]]` by name from the loaded config. |
 | `src/adapters/inbound/run.rs` | 178 | `tengu run [--sandbox <s>]` — the long-running process: loops, feeds, webhook routes (feature `webhooks`), lease, graceful shutdown; file + stderr logs. |
 | `src/adapters/inbound/mod.rs` | 15 | Inbound (driving) adapters — what turns outside input into use-case calls |
 | `src/adapters/inbound/telegram.rs` | 2079 | Telegram adapter — pipe, commands, and runtime in one module. |

@@ -49,8 +49,16 @@ The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::reg
 |---|---|
 | Catalog rows | `register_catalog`, as in-process |
 | Shell skills | `bootstrap::tools::agent_skill_registry` over `TENGU_BRIDGE_WORKSPACE`, as `run-agent` loads them: `skill_packages` of the agent **plus every requested name** (a composed plan step's `skills` reach the bridge only through its parent's tool list); none when the agent runs no shell (`no_shell_fallback`: a `[risk]` / signer sandbox) |
-| `[[mcp_servers]]` | only the servers the Claude Code engine passes in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names in the allow-list); a standalone bridge proxies none. The CLI runs with `--strict-mcp-config`, so the bridge is its only MCP server |
-| `compress_and_store` | `StepSummary` (no plugin): with `TENGU_BRIDGE_SUMMARY_FILE` (a `run-agent` step) the `summary` is written there → `stored`, and the step uses it as its IPC summary (+ the `agentic_memory` write); without it the call is refused naming why ("give your summary as plain text") |
+| `[[mcp_servers]]` | only the servers the Claude Code engine names in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names in the allow-list), each taken from the loaded config's `[[mcp_servers]]` (`resolve_mcp_servers`; a whole server object is accepted too — standalone, tests); a standalone bridge proxies none. The CLI runs with `--strict-mcp-config`, so the bridge is its only MCP server |
+| `compress_and_store` | `StepSummary` (no plugin): with `TENGU_BRIDGE_SUMMARY_FILE` (a `run-agent` step) the `summary` is written there → `stored — stop now`, and the step uses it as its IPC summary (+ the `agentic_memory` write); the engine then ends the CLI run once the round's other calls are answered (`claude_code.rs`); without the file the call is refused naming why ("give your summary as plain text") |
+
+Every call gets the run's conversation as `ToolCtx.conversation` (`call_conversation`) — what in-process tools get from their loop and `skill_distill` seeds fixtures from:
+
+| `TENGU_BRIDGE_TRANSCRIPT_FILE` | Conversation |
+|---|---|
+| its last assistant message holds this call, unanswered | as read (the engine rewrites the file after every stream line) |
+| otherwise (the engine has not read that line yet; a static file) | as read + an assistant message with this call |
+| unset or unreadable (warned) | empty — `skill_distill` refuses ("no conversation to distill"), never a skill with `fixtures: []` |
 
 ## Configuration
 
@@ -64,12 +72,13 @@ Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_j
 | `TENGU_BRIDGE_TOOLS` | JSON array of `ToolDef` objects to expose (the allow-list) |
 | `TENGU_BRIDGE_MAX_RESULT_CHARS` | Result cap per call (`[limits] max_mcp_result_chars`, default 50 000) |
 | `TENGU_BRIDGE_SCOPES` | JSON `HashMap<String, ToolScope>` — the agent's scope map; used only by the fallback below (missing/unparsable → all permissive with a warn) |
-| `TENGU_BRIDGE_MCP_SERVERS` | The `[[mcp_servers]]` behind requested `{server}__{tool}` names — their `$VAR` references as written, resolved by the bridge from its inherited env |
+| `TENGU_BRIDGE_MCP_SERVERS` | The NAMES of the `[[mcp_servers]]` behind requested `{server}__{tool}` names (JSON array); the bridge takes each from the config it loads (`Config::load` expands `${VAR}` there, `$VAR` resolves at connect time — both from its inherited env), so no server value — a `${VAR}`-expanded token included — is in the file |
+| `TENGU_BRIDGE_TRANSCRIPT_FILE` | The run's conversation (JSON array of `Message`, mode 0600, removed with the run): the messages the engine was given, then each streamed assistant message (tengu tool names) and tool result — read per call (§ Dispatch) |
 | `TENGU_BRIDGE_GRANT_WORKSPACE` | `1` = a `run-agent` step's bridge (and the doctor's smoke turn): every configured scope also gets the workspace as an fs root, like the step's executor — but a deny-all scope (every field empty) stays a deny. Set by the engine (`engines::build_step_engine` → `StepBridge`), never read from an inherited `TENGU_AGENT_IPC` |
 | `TENGU_BRIDGE_SUMMARY_FILE` | A `run-agent` step's summary file: `compress_and_store` writes there (§ Dispatch) |
 | `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over the loaded config's `[egress]` |
 | `TENGU_SECRETS_LOADED` | Names of the vault vars the parent loaded (names only); the bridge registers their inherited values for redaction |
-| `TENGU_SESSION_ID`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set. No secret value is ever written (`OPENROUTER_API_KEY`, vault values, `$VAR` values arrive by inheritance; unit test: the file's keys ⊆ this table) |
+| `TENGU_SESSION_ID`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set. No secret value is ever written (`OPENROUTER_API_KEY`, vault values, `$VAR` / `${VAR}` values arrive by inheritance; unit test: the file's keys ⊆ this table, no `${VAR}`-expanded value anywhere in it) |
 
 Shape of the temp `--mcp-config` file:
 
@@ -77,7 +86,7 @@ Shape of the temp `--mcp-config` file:
 { "mcpServers": { "tengu-tools": {
     "command": "<path to current tengu binary>",
     "args": ["mcp-bridge"],
-    "env": { "TENGU_CONFIG": "/abs/sandboxes/<name>/config.toml", "TENGU_BRIDGE_AGENT": "<agent>", "TENGU_BRIDGE_WORKSPACE": "/path", "TENGU_BRIDGE_TOOLS": "[...]", "TENGU_BRIDGE_SCOPES": "{...}", "TENGU_EGRESS": "{...}" }
+    "env": { "TENGU_CONFIG": "/abs/sandboxes/<name>/config.toml", "TENGU_BRIDGE_AGENT": "<agent>", "TENGU_BRIDGE_WORKSPACE": "/path", "TENGU_BRIDGE_TOOLS": "[...]", "TENGU_BRIDGE_SCOPES": "{...}", "TENGU_BRIDGE_TRANSCRIPT_FILE": "/tmp/tengu-transcript-…", "TENGU_BRIDGE_MCP_SERVERS": "[\"github\"]", "TENGU_EGRESS": "{...}" }
 } } }
 ```
 
@@ -109,6 +118,9 @@ Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `wor
 | Scopes | `resolve_tool_scopes(workspace, agent.scopes, …, agent.no_shell_fallback)` — the in-process call |
 | `no_shell` | from the agent (`no_shell_fallback`: a signer or `[risk]` sandbox); the permissive fallback then has no `shell_bins` and no shell skill loads |
 | Tools list | `TENGU_BRIDGE_TOOLS` = what the parent advertised, which follows the agent's `tools` on every surface (`bootstrap::tools::agent_base_tools`; `[[mcp_servers]]` tools too) — a tool outside it runs nowhere |
+| Conversation | the run's transcript ending in the call (§ Dispatch) — in-process: the loop's messages |
+| Workspace | `TENGU_BRIDGE_WORKSPACE`; a `run-agent` step always sends one — the agent's, else the step's temp dir (the executor's too) |
+| Step end | `compress_and_store` stored → the engine ends the run after the round — in-process: the loop stops after the round |
 | Secrets + redaction | `process_secret_registry(None)`: values named in `TENGU_SECRETS_LOADED` + `TENGU_MASTER_PASSWORD` + every inherited env credential (`*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_PRIVATE_KEY` — `.env` too; `domain::secrets::is_env_secret`: ≥ 8 chars, no placeholder, never a public on-chain id), never prompts (same function as the CLI and `run-agent`); `SanitizedToolExecutor` redacts text, typed observations and errors — the same wrapper in-process (chat, `run-agent`, webhooks, eval), so an error text reaches no model unredacted |
 | Call id | `ToolCall.id` = `mcp:<process nonce>:<JSON-RPC tools/call id>` (the id a string verbatim, a number in decimal; none → no id) → `ToolCtx.call_id`. The nonce (a uuid, 32 hex digits, `mcp_bridge::call_nonce`) is minted once per bridge process: JSON-RPC ids restart with every Claude CLI session, and every turn or plan step starts a new CLI + bridge — without it an exec tool's idempotency key (`client_order_id` = call id) would replay an earlier session's order. `tengu tool call` maps `--call-id` / batch `call_id` the same way (its own nonce) |
 | Egress | the loaded config's `[egress]`, overridden by `TENGU_EGRESS` |
@@ -167,12 +179,13 @@ server starts even without these — tool calls just error or degrade.
 
 | Test | Covers |
 |---|---|
-| `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant with `TENGU_BRIDGE_GRANT_WORKSPACE`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` (`mcp:<nonce>:<id>`), shell skills (`skill_packages`, a requested name, none without a shell), `compress_and_store` into the summary file or refused |
-| `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`, the step options, no secret value (keys ⊆ the contract); `tool_use` → `tool_result` pairs become `StreamEvent::ToolRan`; the parent session env it strips; the profile parse |
+| `cargo test --bin tengu mcp_bridge` | agent config from a fixture sandbox file (scopes, `xm_state_dir`, workspace grant with `TENGU_BRIDGE_GRANT_WORKSPACE`), fallback to `TENGU_BRIDGE_SCOPES`, `no_shell`, redaction of text and errors, request id → `ToolCtx.call_id` (`mcp:<nonce>:<id>`), shell skills (`skill_packages`, a requested name, none without a shell), `compress_and_store` into the summary file (`stored — stop now`) or refused, the call's conversation from the transcript (`call_conversation_ends_in_the_call`; `skill_distill_reads_the_runs_transcript`: index 1, two fixtures; none → refused), servers by name from the config |
+| `cargo test --bin tengu --features claude_code engines::claude_code` | the engine writes `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`, the step options, the transcript file, server names and no secret value — `$VAR` or `${VAR}`-expanded (keys ⊆ the contract); the system prompt once; the transcript follows the stream (0600, rewritten, removed); a stored summary ends the run after its round (stub CLI); `tool_use` → `tool_result` pairs become `StreamEvent::ToolRan`; the parent session env it strips; the profile parse |
+| `cargo test --features claude_code --test run_agent_ipc claude_code_step_without_workspace` | a `claude_code` step without `workspace` (aura's `researcher`), stand-in CLI: `--mcp-config` + every tool in `--allowedTools`, cwd = the step's temp dir (gone after), system prompt only in `--system-prompt`, the transcript, the run ends at the stored summary |
 | `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]`, runs tools as the configured agent; two bridge processes give the same JSON-RPC id two call ids (`mcp:<nonce>:<id>`) |
 | `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20); two bridge sessions on one sandbox place two paper orders with the same JSON-RPC id (`two_bridge_sessions_place_two_orders`) |
 | `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs every tool set through `run-agent` + a real bridge (workspace grant, a registered secret back as `[REDACTED]`, the shell skill and the `[[mcp_servers]]` proxy, `compress_and_store` served) and the xm set through `tengu tool turn` on the private `xm_claude` agent (`docs/engine-backends.md` § Engine matrix) |
-| `tengu tool call --agent <a> (--tool <t> --args '<json>' [--call-id <id>] \| --batch)` (hidden) | in-process half of the conformance harness: the executor a `run-agent` child or a decision loop builds (`build_subprocess_tool_executor` + `SanitizedToolExecutor`); call ids mapped like the bridge's (`mcp:<process nonce>:<id>`); prints `{text, observation, is_error}` per call |
+| `tengu tool call --agent <a> (--tool <t> --args '<json>' [--call-id <id>] \| --batch) [--transcript <file>]` (hidden) | in-process half of the conformance harness: the executor a `run-agent` child or a decision loop builds (`build_subprocess_tool_executor` + `SanitizedToolExecutor`); call ids mapped like the bridge's (`mcp:<process nonce>:<id>`); `--transcript` = the conversation, built like the bridge's (`call_conversation`); prints `{text, observation, is_error}` per call |
 | `tengu tool turn --agent <a> --goal <text>` (hidden) | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path, so a private agent (no `description`, the only kind that may hold exec tools) runs too; its configured scopes as they are (no workspace grant); `claude_code` tools through the real bridge (`TENGU_BRIDGE_AGENT` = that agent); prints `{status, output, tools, metrics}` (the `run-agent` IPC fields). The engine matrix's xm legs (`src/adapters/inbound/cli/tool.rs`) |
 
 Manual test with stdin:
@@ -182,7 +195,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ### Conformance harness (`x-bridge-conformance-test`)
 
-`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 57 cases on 8 threads, < 10 s — besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool and one outside the agent's `tools`, the Privy egress / scope gate.
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 60 cases (default features) on 8 threads, < 10 s — besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
 
 | Must match (both sides normalised) | How |
 |---|---|

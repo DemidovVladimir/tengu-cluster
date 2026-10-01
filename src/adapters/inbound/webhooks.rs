@@ -734,20 +734,14 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let engine_box = build_engine(agent_name, agent, self.cfg.claude_code.as_ref())?;
         let engine: Arc<dyn Engine> = Arc::from(engine_box);
 
-        // Workspace fallback: when the agent has none of its own (rare in
-        // production sandboxes), use cwd so file tools have a root.
-        //
-        // Tilde expansion is essential — sandbox configs ship with paths
-        // like `workspace = "~/aura-workspace"`. Without `expand_tilde`
-        // the literal `~` is joined into runtime paths (e.g. by the cache
-        // plugin's `<workspace>/.tengu/cache.db`), creating a `~` directory
-        // at CWD that pollutes the repo. Mirrors `inbound/telegram.rs`'s
-        // pattern at the `let workspace: Option<PathBuf>` site.
-        let workspace_path: PathBuf = agent
-            .workspace
-            .as_ref()
-            .map(|p| crate::config::paths::expand_tilde(p))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        // The turn's one workspace — executor, skills and engine (a Claude
+        // Code CLI's cwd, its bridge): the agent's (`~` expanded — a literal
+        // `~` would be joined into runtime paths like
+        // `<workspace>/.tengu/cache.db`), else a temp dir for this turn,
+        // removed after it (`_turn_dir`), as a `run-agent` step — never the
+        // server's cwd.
+        let (workspace_path, _turn_dir): (PathBuf, _) =
+            crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-turn-")?;
 
         // The process's vault values (never prompts): tool output reaches the
         // model redacted, as in chat, `run-agent` and the bridge.

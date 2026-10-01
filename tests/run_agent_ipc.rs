@@ -13,6 +13,8 @@
 //! | no agent | valid input, `agent_name = "__no_such_agent__"` | exit != 0, stderr: "no agent `__no_such_agent__` in the active config", stdout empty |
 //! | widening compose | hardened sandbox (a `[solana]` signer), `compose.tools` adds `write_file` to a base listing `read_file` | exit != 0 before the engine is built, stderr: "compose would widen agent `arch` in a hardened sandbox", stdout empty; the same compose without the signer offers `write_file` to a loopback model, exit 0 |
 //! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr |
+//! | OpenRouter caps | `OPENROUTER_BASE_URL` = a loopback fake, `max_tool_result_chars = 2000`, `compact_result_limit = 50`, `read_file` of 100 011 bytes, then a small file | round 0's result capped (+ footer); in the next request it is line 1 only; one system message per request |
+//! | Claude Code, no workspace (`--features claude_code`) | `[claude_code] cli_path` = a stand-in that logs argv, cwd and stdin, streams a `compress_and_store` call, writes the step's summary file, then sleeps 30 s | `--mcp-config` + every tool in `--allowedTools`; cwd = a `tengu-step-*` temp dir, gone after the step; the system prompt only in `--system-prompt`; the bridge transcript = system, goal, the call; the run ends at the stored summary (< 15 s), IPC `summary` = the stub's |
 //!
 //! None of the failure paths emit an `AgentIpcOutput` — every failure before
 //! the tool loop propagates as `anyhow::Error` out of `main`, and the parent
@@ -426,6 +428,256 @@ fn local_engine_child_fits_tool_results_to_the_window() {
             .contains("agents.unsized.limits.context_window is the 1000000 default"),
         "load warning missing:\n{}",
         run.stderr
+    );
+}
+
+/// W1-gate parity: a run-agent step on OpenRouter gets every tool result
+/// capped at `limits.max_tool_result_chars` and older rounds compacted to
+/// line 1 (`compact_result_limit`), as in-process chat does — a 100 KB file
+/// is not resent whole on every later turn; the system prompt goes out once.
+#[test]
+fn openrouter_step_caps_results_and_compacts_older_rounds() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::write(
+        workspace.path().join("big.txt"),
+        format!("first line\n{}", "z".repeat(100_000)),
+    )
+    .unwrap();
+    std::fs::write(workspace.path().join("small.txt"), "small").unwrap();
+    let (port, server) = fake_local_server(vec![
+        r#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"big.txt\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        r#"{"choices":[{"message":{"content":null,"tool_calls":[{"id":"c2","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"small.txt\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+        r#"{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}"#,
+    ]);
+    let config = format!(
+        "[egress]\nnetwork = \"open\"\n\n[memory]\nenabled = false\n\n\
+         [agents.capped]\nengine = \"openrouter\"\nmodel = \"test/model\"\n\
+         description = \"fixture: result caps\"\ntools = [\"read_file\"]\n\
+         workspace = \"{workspace}\"\n\n\
+         [agents.capped.limits]\nmax_tool_result_chars = 2000\ncompact_result_limit = 50\n",
+        workspace = workspace.path().display()
+    );
+    let config_path = workspace.path().join("config.toml");
+    std::fs::write(&config_path, config).unwrap();
+    let input = serde_json::json!({
+        "goal": "read big.txt then small.txt",
+        "agent_name": "capped",
+        "model": "",
+        "max_turns": 4,
+        "session_id": "test-session-openrouter-caps",
+        "step_id": "step-1"
+    })
+    .to_string();
+
+    let run = run_agent_with(
+        Some("1"),
+        &input,
+        &[
+            ("TENGU_CONFIG", config_path.to_str().unwrap()),
+            ("OPENROUTER_API_KEY", "test-key"),
+            ("OPENROUTER_BASE_URL", &format!("http://127.0.0.1:{port}")),
+        ],
+        Duration::from_secs(20),
+    );
+    let bodies = server.join().expect("fake server");
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(bodies.len(), 3, "stderr:\n{}", run.stderr);
+    let requests: Vec<serde_json::Value> = bodies
+        .iter()
+        .map(|b| serde_json::from_str(b).expect("request JSON"))
+        .collect();
+    for (i, r) in requests.iter().enumerate() {
+        let systems = r["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "system")
+            .count();
+        assert_eq!(systems, 1, "request {i}: the system prompt goes out once");
+    }
+    let tools = |r: &serde_json::Value| -> Vec<String> {
+        r["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["role"] == "tool")
+            .map(|m| m["content"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let second = tools(&requests[1]);
+    assert!(
+        second[0].starts_with("first line\nzzz")
+            && second[0].ends_with("[truncated — showing 2000 of 100011 chars]"),
+        "round 0's result capped: {} bytes, tail {:?}",
+        second[0].len(),
+        &second[0][second[0].len().saturating_sub(60)..]
+    );
+    assert!(second[0].len() < 2_100, "{} bytes", second[0].len());
+    let third = tools(&requests[2]);
+    assert_eq!(
+        third,
+        ["first line", "small"],
+        "an older round keeps line 1, the latest stays"
+    );
+}
+
+/// W1-gate parity: a `claude_code` plan step whose agent has no `workspace`
+/// (aura's `researcher`) runs in a temp dir of its own — the CLI's cwd and
+/// the bridge's workspace — and gets the bridge (`--mcp-config`, its tools
+/// in `--allowedTools`, `compress_and_store` included); the system prompt
+/// rides on `--system-prompt` only; the bridge's transcript holds the
+/// step's messages and the streamed call; a stored summary ends the CLI run
+/// (the stand-in would sleep 30 s); the temp dir goes with the step.
+#[cfg(feature = "claude_code")]
+#[test]
+fn claude_code_step_without_workspace_runs_in_a_temp_dir_with_the_bridge() {
+    let dir = tempfile::tempdir().expect("stub dir");
+    let log = dir.path().join("log");
+    let stub = dir.path().join("claude");
+    std::fs::write(
+        &stub,
+        r#"#!/bin/sh
+LOG="$TENGU_IPC_STUB_LOG"
+{ echo "cwd=$(pwd -P)"; for a in "$@"; do echo "arg=$a"; done; } > "$LOG.args"
+cat > "$LOG.prompt"
+CFG=""; prev=""
+for a in "$@"; do [ "$prev" = "--mcp-config" ] && CFG="$a"; prev="$a"; done
+cp "$CFG" "$LOG.mcp"
+TRANSCRIPT=$(sed -n 's/.*"TENGU_BRIDGE_TRANSCRIPT_FILE":"\([^"]*\)".*/\1/p' "$CFG")
+SUMMARY=$(sed -n 's/.*"TENGU_BRIDGE_SUMMARY_FILE":"\([^"]*\)".*/\1/p' "$CFG")
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"stub summary"}}]}}'
+sleep 0.5
+cp "$TRANSCRIPT" "$LOG.transcript"
+printf 'stub summary' > "$SUMMARY"
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"stored — stop now"}]}}'
+exec sleep 30
+"#,
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let config = format!(
+        "[egress]\nnetwork = \"open\"\n\n[memory]\nenabled = false\n\n\
+         [claude_code]\ncli_path = \"{stub}\"\n\n\
+         [agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"x/y\"\n\n\
+         [agents.researcher]\nengine = \"claude_code\"\nmodel = \"claude-haiku-4-5\"\n\
+         tools = [\"http_request\", \"read_file\", \"list_directory\"]\n\
+         description = \"fixture: no workspace\"\n",
+        stub = stub.display()
+    );
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(&config_path, config).unwrap();
+    let goal = "what is the BTC price?";
+    let input = serde_json::json!({
+        "goal": goal,
+        "agent_name": "researcher",
+        "model": "",
+        "max_turns": 3,
+        "session_id": "test-session-cc-no-workspace",
+        "step_id": "step-1"
+    })
+    .to_string();
+
+    let started = Instant::now();
+    let run = run_agent_with(
+        Some("1"),
+        &input,
+        &[
+            ("TENGU_CONFIG", config_path.to_str().unwrap()),
+            ("TENGU_IPC_STUB_LOG", log.to_str().unwrap()),
+        ],
+        Duration::from_secs(25),
+    );
+    let took = started.elapsed();
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        took < Duration::from_secs(15),
+        "the stored summary ended the run: {took:?}"
+    );
+    let out: serde_json::Value = serde_json::from_str(
+        run.stdout
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_default(),
+    )
+    .expect("IPC output JSON");
+    assert_eq!(out["status"], "ok", "{out}");
+    assert_eq!(out["summary"], "stub summary", "{out}");
+
+    let read = |suffix: &str| {
+        std::fs::read_to_string(format!("{}{suffix}", log.display()))
+            .unwrap_or_else(|e| panic!("{suffix}: {e}; stderr:\n{}", run.stderr))
+    };
+    let args = read(".args");
+    for flag in [
+        "arg=--mcp-config",
+        "arg=--allowedTools",
+        "arg=mcp__tengu-tools__http_request",
+        "arg=mcp__tengu-tools__read_file",
+        "arg=mcp__tengu-tools__list_directory",
+        "arg=mcp__tengu-tools__compress_and_store",
+        "arg=--system-prompt",
+    ] {
+        assert!(args.lines().any(|l| l == flag), "{flag} missing:\n{args}");
+    }
+    let cwd = args
+        .lines()
+        .find_map(|l| l.strip_prefix("cwd="))
+        .expect("cwd logged");
+    let temp_root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert!(
+        std::path::Path::new(cwd).starts_with(&temp_root)
+            && std::path::Path::new(cwd)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tengu-step-"),
+        "the CLI runs in the step's temp dir, not {cwd}"
+    );
+    assert!(
+        !std::path::Path::new(cwd).exists(),
+        "the step's temp dir goes with the step: {cwd}"
+    );
+    let mcp: serde_json::Value = serde_json::from_str(&read(".mcp")).unwrap();
+    let env = &mcp["mcpServers"]["tengu-tools"]["env"];
+    assert_eq!(env["TENGU_BRIDGE_WORKSPACE"], cwd, "{env}");
+    assert_eq!(env["TENGU_BRIDGE_AGENT"], "researcher");
+
+    let prompt = read(".prompt");
+    assert!(prompt.contains(goal), "{prompt}");
+    assert!(
+        !prompt.contains("You are a focused subagent"),
+        "the system prompt rides on --system-prompt only:\n{prompt}"
+    );
+    let transcript: Vec<serde_json::Value> =
+        serde_json::from_str(&read(".transcript")).expect("transcript JSON");
+    assert_eq!(transcript.len(), 3, "{transcript:?}");
+    assert_eq!(transcript[0]["role"], "system");
+    assert_eq!(
+        (
+            transcript[1]["role"].as_str(),
+            transcript[1]["content"].as_str()
+        ),
+        (Some("user"), Some(goal))
+    );
+    assert_eq!(
+        transcript[2]["tool_calls"][0]["name"], "compress_and_store",
+        "{transcript:?}"
     );
 }
 

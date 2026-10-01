@@ -442,7 +442,8 @@ These are not preferences. They're load-bearing.
   `domain/tools.rs::WORKSPACE_TOOLS` (config validation + `subagent_config` +
   bridge filter). `SkillPlugin` / `McpPlugin` are registered outside the
   catalog; the bridge registers `McpPlugin` only for servers the Claude Code
-  engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
+  engine names (`TENGU_BRIDGE_MCP_SERVERS`: names only, each taken from the
+  bridge's loaded config — no `${VAR}`-expanded value in the temp file).
 - **`[[mcp_servers]]` tools are named `{server}__{tool}` (2026-09-23)** — was
   `{server}.{tool}`; model APIs reject `.`. They reach plan-step subagents
   (both engines), in-process TUI/Telegram agents, webhook and eval agents. A
@@ -457,7 +458,9 @@ These are not preferences. They're load-bearing.
 - **`compress_and_store` with Claude Code subagents** — served through the
   bridge since 2026-10-01: a `run-agent` step's bridge writes the `summary`
   to the step's `TENGU_BRIDGE_SUMMARY_FILE`, read back as the IPC summary
-  (+ the `agentic_memory` write with `postgres_memory`). A subagent that just
+  (+ the `agentic_memory` write with `postgres_memory`), and answers
+  `stored — stop now`; the engine then ends the CLI run once that round's
+  calls are answered (as the in-process loop stops after its round). A subagent that just
   stops still passes: the Phase 5c middle-ground protocol makes the final
   assistant text the IPC summary, the `run-agent` backstop
   (`try_persist_agentic_step_summary`) captures it into Postgres
@@ -518,8 +521,17 @@ These are not preferences. They're load-bearing.
   (`engines::build_step_engine`) writes `TENGU_BRIDGE_GRANT_WORKSPACE=1` +
   `TENGU_BRIDGE_SUMMARY_FILE` into the bridge env: the workspace grant, and
   `compress_and_store` served into that file (the step's IPC summary);
-  elsewhere the bridge refuses it with the reason. The temp `--mcp-config`
-  holds no secret value — the CLI merges its `env` over the inherited env
+  elsewhere the bridge refuses it with the reason. Each bridged call gets the
+  run's conversation (`TENGU_BRIDGE_TRANSCRIPT_FILE`, the engine's 0600
+  transcript; `tengu tool call --transcript`) — `skill_distill` refuses a call
+  with none. A `run-agent` step always has a workspace — the agent's, else a
+  temp dir per step (webhook / `tool turn` one-shots: per turn;
+  `bootstrap::tools::workspace_or_temp`) — for its executor, the CLI's cwd
+  and the bridge; its
+  results are capped and older rounds compacted as in chat, every engine;
+  `limits.max_tool_rounds` counts tool calls on `claude_code`, engine turns
+  elsewhere. The temp `--mcp-config`
+  holds no secret value (`[[mcp_servers]]` by name) — the CLI merges its `env` over the inherited env
   (`docs/mcp-bridge.md` § Env); the engine strips a parent Claude Code
   session's env (`CLAUDECODE`, `CLAUDE_CODE_*` but auth / provider,
   `CLAUDE_PID`, `CLAUDE_EFFORT`) and passes `--strict-mcp-config`. Every

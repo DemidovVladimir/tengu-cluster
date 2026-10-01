@@ -15,14 +15,19 @@
 //! someone's own Claude Code) it falls back to `Config::default()`'s `main`
 //! agent + `TENGU_BRIDGE_SCOPES`, with a warn. A `run-agent` step's bridge
 //! (`TENGU_BRIDGE_SUMMARY_FILE`) serves `compress_and_store` into the step's
-//! summary file; any other bridge refuses it with the reason.
+//! summary file and answers `stored — stop now`; any other bridge refuses it
+//! with the reason. Each tool gets the run's conversation
+//! (`call_conversation`: the engine's `TENGU_BRIDGE_TRANSCRIPT_FILE`, ending
+//! in the call), as in-process tools get the loop's messages; the
+//! `[[mcp_servers]]` it proxies are the ones `TENGU_BRIDGE_MCP_SERVERS`
+//! names, from the loaded config.
 //! Env contract: `adapters/outbound/bridge_env.rs`; doc: `docs/mcp-bridge.md`.
 //!
 //! Protocol: JSON-RPC 2.0 over stdin/stdout (newline-delimited).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,7 +37,7 @@ use tracing::{info, warn};
 
 use crate::adapters::outbound::bridge_env::{
     TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_MCP_SERVERS_ENV,
-    TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV,
+    TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV, TENGU_BRIDGE_TRANSCRIPT_FILE_ENV,
 };
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
@@ -47,7 +52,7 @@ use crate::ports::memory::VectorStore;
 use crate::adapters::inbound::activity::build_tool_activity_text;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
-use crate::domain::message::{ToolCall, ToolDef};
+use crate::domain::message::{Message, Role, ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::tool::PluginCtx;
@@ -157,14 +162,18 @@ struct BridgeSetup {
     /// `TENGU_BRIDGE_SUMMARY_FILE`: where `compress_and_store` writes the
     /// step's summary (`StepSummary`); `None` = refused with the reason.
     summary_file: Option<PathBuf>,
+    /// `TENGU_BRIDGE_TRANSCRIPT_FILE`: the run's conversation, read per call
+    /// (`call_conversation`); `None` = none.
+    transcript_file: Option<PathBuf>,
     /// `TENGU_BRIDGE_SCOPES` — used only by the default-`main` fallback.
     env_scopes: HashMap<String, ToolScope>,
-    /// `TENGU_BRIDGE_MCP_SERVERS`.
+    /// `TENGU_BRIDGE_MCP_SERVERS`, names resolved against `config`.
     mcp_servers: Vec<McpServerConfig>,
 }
 
 impl BridgeSetup {
     fn from_env(tools: Vec<ToolDef>, config: Option<Config>) -> Self {
+        let mcp_servers = bridge_mcp_servers_from_env(config.as_ref());
         Self {
             workspace: std::env::var("TENGU_BRIDGE_WORKSPACE")
                 .map(PathBuf::from)
@@ -179,8 +188,11 @@ impl BridgeSetup {
             summary_file: std::env::var_os(TENGU_BRIDGE_SUMMARY_FILE_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
+            transcript_file: std::env::var_os(TENGU_BRIDGE_TRANSCRIPT_FILE_ENV)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
             env_scopes: bridge_scopes_from_env(),
-            mcp_servers: bridge_mcp_servers_from_env(),
+            mcp_servers,
         }
     }
 }
@@ -325,6 +337,7 @@ async fn serve_mcp_stdio(
                     executor.as_ref(),
                     max_result_chars,
                     &secrets,
+                    setup.transcript_file.as_deref(),
                 )
                 .await
             }
@@ -349,14 +362,20 @@ fn sanitized(executor: PluginToolExecutor, secrets: &Arc<SecretRegistry>) -> Arc
 }
 
 /// The `run-agent` step protocol tool (`skill_lifecycle::compress_and_store`).
-const COMPRESS_AND_STORE: &str = "compress_and_store";
+const COMPRESS_AND_STORE: &str =
+    crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::NAME;
+
+/// The reply to a stored step summary: the step is over. The Claude Code
+/// engine ends the CLI run after this call (once the round's other calls
+/// are answered), as the in-process loop stops after its round.
+const STORED_STOP_NOW: &str = "stored — stop now";
 
 /// `compress_and_store` through the bridge — what the `run-agent` loop does
 /// for in-process engines (`cli/run_agent.rs`), for a Claude Code step:
 ///
 /// | `file` (`TENGU_BRIDGE_SUMMARY_FILE`) | Call |
 /// |---|---|
-/// | set (a `run-agent` step) | `summary` written to it (replacing an earlier one) → `stored`; the step reads it back as its IPC summary |
+/// | set (a `run-agent` step) | `summary` written to it (replacing an earlier one) → `stored — stop now`; the step reads it back as its IPC summary |
 /// | unset | error naming why: no step takes a summary here — answer in plain text |
 ///
 /// Every other tool goes to `inner`.
@@ -386,7 +405,7 @@ impl StepSummary {
             chars = summary.chars().count(),
             "compress_and_store: step summary stored"
         );
-        Ok("stored".to_string())
+        Ok(STORED_STOP_NOW.to_string())
     }
 }
 
@@ -472,12 +491,71 @@ pub(crate) fn call_id(id: &serde_json::Value) -> String {
     format!("mcp:{}:{raw}", call_nonce())
 }
 
+/// The conversation a tool call sees (`ToolCtx.conversation` — what
+/// `skill_distill` seeds fixtures from), as the in-process loops hand over
+/// their messages: the transcript (`TENGU_BRIDGE_TRANSCRIPT_FILE`, a JSON
+/// array of `Message`, or `tengu tool call --transcript`) ending in an
+/// assistant message that holds this call.
+///
+/// | Transcript | Conversation |
+/// |---|---|
+/// | its last assistant message holds the call, unanswered (only tool messages after it) | as read |
+/// | otherwise — the engine had not read that stream line yet, or the file is static | as read + an assistant message with the call |
+/// | none, or unreadable (warned) | empty: a tool that needs one refuses |
+pub(crate) fn call_conversation(transcript: Option<&Path>, call: &ToolCall) -> Vec<Message> {
+    let Some(path) = transcript else {
+        return Vec::new();
+    };
+    let read = std::fs::read(path)
+        .map_err(anyhow::Error::from)
+        .and_then(|bytes| serde_json::from_slice::<Vec<Message>>(&bytes).map_err(Into::into));
+    let mut messages = match read {
+        Ok(messages) => messages,
+        Err(e) => {
+            warn!(file = %path.display(), error = %e, "transcript unreadable — the call gets no conversation");
+            return Vec::new();
+        }
+    };
+    if !ends_in_call(&messages, call) {
+        messages.push(Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(vec![call.clone()]),
+        });
+    }
+    messages
+}
+
+/// The last assistant message of `messages` holds `call` (same name and
+/// arguments), only tool messages follow it, and none answers that call.
+fn ends_in_call(messages: &[Message], call: &ToolCall) -> bool {
+    let Some(i) = messages
+        .iter()
+        .rposition(|m| matches!(m.role, Role::Assistant))
+    else {
+        return false;
+    };
+    let after = &messages[i + 1..];
+    if !after.iter().all(|m| matches!(m.role, Role::Tool)) {
+        return false;
+    }
+    let answered: HashSet<&str> = after
+        .iter()
+        .filter_map(|m| m.tool_call_id.as_deref())
+        .collect();
+    messages[i].tool_calls.iter().flatten().any(|c| {
+        c.name == call.name && c.arguments == call.arguments && !answered.contains(c.id.as_str())
+    })
+}
+
 async fn handle_tools_call(
     id: serde_json::Value,
     params: &serde_json::Value,
     executor: &dyn ToolExecutor,
     max_result_chars: usize,
     secrets: &SecretRegistry,
+    transcript: Option<&Path>,
 ) -> JsonRpcResponse {
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params
@@ -490,6 +568,7 @@ async fn handle_tools_call(
         name: tool_name.to_string(),
         arguments,
     };
+    let conversation = call_conversation(transcript, &call);
 
     let (title, detail) = build_tool_activity_text(&call);
     let started_at = std::time::Instant::now();
@@ -501,7 +580,7 @@ async fn handle_tools_call(
         "MCP tool call started"
     );
 
-    match executor.execute(&call, &[]).await {
+    match executor.execute(&call, &conversation).await {
         Ok(result) => {
             let truncated = truncate_mcp_result(&result, max_result_chars);
             info!(
@@ -586,15 +665,53 @@ fn bridge_scopes_from_env() -> HashMap<String, ToolScope> {
 }
 
 /// `[[mcp_servers]]` passed by the Claude Code engine as
-/// `TENGU_BRIDGE_MCP_SERVERS`. Absent or unparsable = none (warns on the latter).
-fn bridge_mcp_servers_from_env() -> Vec<McpServerConfig> {
+/// `TENGU_BRIDGE_MCP_SERVERS` (`resolve_mcp_servers`). Absent = none.
+fn bridge_mcp_servers_from_env(config: Option<&Config>) -> Vec<McpServerConfig> {
     match std::env::var(TENGU_BRIDGE_MCP_SERVERS_ENV) {
-        Ok(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
-            warn!(error = %e, "bridge: unparsable {TENGU_BRIDGE_MCP_SERVERS_ENV}; no external MCP tools");
-            Vec::new()
-        }),
+        Ok(json) => resolve_mcp_servers(&json, config),
         Err(_) => Vec::new(),
     }
+}
+
+/// One `TENGU_BRIDGE_MCP_SERVERS` entry: a server name (what the Claude
+/// Code engine writes) or a whole server config (a standalone bridge, tests).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ServerRef {
+    Name(String),
+    Config(McpServerConfig),
+}
+
+/// The servers `json` names: a name is taken from `config`'s
+/// `[[mcp_servers]]` (`Config::load`: its `${VAR}`s expanded here, from the
+/// env this bridge inherited), an object as given. Unparsable `json`, or a
+/// name the config lacks, warns and leaves those tools unavailable.
+fn resolve_mcp_servers(json: &str, config: Option<&Config>) -> Vec<McpServerConfig> {
+    let refs: Vec<ServerRef> = match serde_json::from_str(json) {
+        Ok(refs) => refs,
+        Err(e) => {
+            warn!(error = %e, "bridge: unparsable {TENGU_BRIDGE_MCP_SERVERS_ENV}; no external MCP tools");
+            return Vec::new();
+        }
+    };
+    refs.into_iter()
+        .filter_map(|r| match r {
+            ServerRef::Config(server) => Some(server),
+            ServerRef::Name(name) => {
+                let found = config
+                    .and_then(|c| c.mcp_servers.iter().find(|s| s.name == name))
+                    .cloned();
+                if found.is_none() {
+                    warn!(
+                        server = %name,
+                        config_loaded = config.is_some(),
+                        "bridge: [[mcp_servers]] `{name}` is not in the loaded config — its tools are unavailable"
+                    );
+                }
+                found
+            }
+        })
+        .collect()
 }
 
 /// The agent the bridge runs tools as.
@@ -855,6 +972,7 @@ net_hosts = ["api.hyperliquid.xyz"]
             agent: agent.map(str::to_string),
             grant_workspace: false,
             summary_file: None,
+            transcript_file: None,
             env_scopes: HashMap::new(),
             mcp_servers: Vec::new(),
         }
@@ -890,12 +1008,24 @@ net_hosts = ["api.hyperliquid.xyz"]
     }
 
     async fn call(exec: &dyn ToolExecutor, id: Value, tool: &str, args: Value) -> Value {
+        call_with(exec, id, tool, args, None).await
+    }
+
+    /// [`call`] with the run's transcript file.
+    async fn call_with(
+        exec: &dyn ToolExecutor,
+        id: Value,
+        tool: &str,
+        args: Value,
+        transcript: Option<&Path>,
+    ) -> Value {
         let resp = handle_tools_call(
             id,
             &json!({"name": tool, "arguments": args}),
             exec,
             MAX_MCP_RESULT_CHARS,
             &SecretRegistry::new(),
+            transcript,
         )
         .await;
         serde_json::to_value(&resp).unwrap()["result"].clone()
@@ -1023,6 +1153,7 @@ net_hosts = ["api.hyperliquid.xyz"]
                     exec.as_ref(),
                     MAX_MCP_RESULT_CHARS,
                     &secrets,
+                    None,
                 )
                 .await;
                 serde_json::to_value(&resp).unwrap()["result"].clone()
@@ -1148,8 +1279,8 @@ net_hosts = ["api.hyperliquid.xyz"]
     }
 
     /// `compress_and_store`: a `run-agent` step's bridge writes the summary
-    /// to the step's file (the last call wins); any other bridge refuses it
-    /// with the reason; other tools pass through.
+    /// to the step's file (the last call wins) and says the step is over;
+    /// any other bridge refuses it with the reason; other tools pass through.
     #[tokio::test]
     async fn compress_and_store_writes_the_step_summary_or_says_why_not() {
         let ws = TempDir::new().unwrap();
@@ -1172,7 +1303,10 @@ net_hosts = ["api.hyperliquid.xyz"]
                 json!({"summary": words}),
             )
             .await;
-            assert_eq!((r["isError"].clone(), text(&r)), (json!(false), "stored"));
+            assert_eq!(
+                (r["isError"].clone(), text(&r)),
+                (json!(false), "stored — stop now")
+            );
         }
         assert_eq!(std::fs::read_to_string(&summary).unwrap(), "done: 42");
         let r = call(&step, json!(3), "compress_and_store", json!({})).await;
@@ -1193,5 +1327,190 @@ net_hosts = ["api.hyperliquid.xyz"]
         .await;
         assert_eq!(r["isError"], true);
         assert!(text(&r).contains("plain text"), "{r}");
+    }
+
+    fn msg(role: Role, content: &str) -> Message {
+        Message {
+            role,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn tool_call(id: &str, name: &str, args: Value) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: args,
+        }
+    }
+
+    fn assistant_calling(calls: Vec<ToolCall>) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: Some(calls),
+        }
+    }
+
+    fn write_transcript(dir: &Path, messages: &[Message]) -> PathBuf {
+        let file = dir.join("transcript.json");
+        std::fs::write(&file, serde_json::to_vec(messages).unwrap()).unwrap();
+        file
+    }
+
+    /// The call's conversation: the transcript as read when it already ends
+    /// in this call (the engine wrote the stream line), else with the call
+    /// appended; no transcript or an unreadable one = none.
+    #[test]
+    fn call_conversation_ends_in_the_call() {
+        let dir = TempDir::new().unwrap();
+        let call = tool_call("mcp:n:7", "skill_distill", json!({"from_message_index": 1}));
+        assert!(call_conversation(None, &call).is_empty());
+        let missing = dir.path().join("nope.json");
+        assert!(call_conversation(Some(&missing), &call).is_empty());
+        std::fs::write(dir.path().join("bad.json"), "{").unwrap();
+        assert!(call_conversation(Some(&dir.path().join("bad.json")), &call).is_empty());
+
+        let base = vec![msg(Role::System, "sys"), msg(Role::User, "goal")];
+        let file = write_transcript(dir.path(), &base);
+        let conv = call_conversation(Some(&file), &call);
+        assert_eq!(conv.len(), 3, "the call appended");
+        let last = conv[2].tool_calls.as_ref().unwrap();
+        assert_eq!(
+            (last[0].id.as_str(), last[0].name.as_str()),
+            ("mcp:n:7", "skill_distill")
+        );
+
+        // Written by the engine already (its id, a sibling call answered).
+        let mut streamed = base.clone();
+        streamed.push(assistant_calling(vec![
+            tool_call("toolu_a", "read_file", json!({"path": "a"})),
+            tool_call("toolu_b", "skill_distill", json!({"from_message_index": 1})),
+        ]));
+        streamed.push(Message {
+            tool_call_id: Some("toolu_a".into()),
+            ..msg(Role::Tool, "alpha")
+        });
+        let file = write_transcript(dir.path(), &streamed);
+        let conv = call_conversation(Some(&file), &call);
+        assert_eq!(conv.len(), streamed.len(), "as read");
+
+        // The same call answered earlier, or other arguments: appended.
+        let mut answered = streamed.clone();
+        answered.push(Message {
+            tool_call_id: Some("toolu_b".into()),
+            ..msg(Role::Tool, "made")
+        });
+        let file = write_transcript(dir.path(), &answered);
+        assert_eq!(
+            call_conversation(Some(&file), &call).len(),
+            answered.len() + 1
+        );
+        let other = tool_call("mcp:n:8", "skill_distill", json!({"from_message_index": 0}));
+        let file = write_transcript(dir.path(), &streamed);
+        assert_eq!(
+            call_conversation(Some(&file), &other).len(),
+            streamed.len() + 1
+        );
+    }
+
+    /// `skill_distill` through the bridge seeds fixtures from the run's
+    /// transcript, `from_message_index ≥ 1` included — as in-process; with
+    /// no transcript it refuses (never a silent `fixtures: []`).
+    #[tokio::test]
+    async fn skill_distill_reads_the_runs_transcript() {
+        let ws = TempDir::new().unwrap();
+        let s = setup(ws.path(), &["skill_distill"], None, None);
+        let exec = sanitized(
+            build_bridge_executor(&s, &no_secrets()).await.unwrap(),
+            &no_secrets(),
+        );
+        let args = |name: &str| {
+            json!({"name": name, "description": "From the bridge.",
+                   "body_markdown": "# x\n\nBody.\n", "metrics": [],
+                   "from_message_index": 1, "tier": "workspace"})
+        };
+        let transcript = write_transcript(
+            ws.path(),
+            &[
+                msg(Role::System, "sys"),
+                msg(Role::User, "list the files"),
+                assistant_calling(vec![tool_call(
+                    "toolu_1",
+                    "list_directory",
+                    json!({"path": "."}),
+                )]),
+                Message {
+                    tool_call_id: Some("toolu_1".into()),
+                    ..msg(Role::Tool, "a.txt")
+                },
+                msg(Role::User, "save this as a skill"),
+            ],
+        );
+        let r = call_with(
+            exec.as_ref(),
+            json!(1),
+            "skill_distill",
+            args("from-bridge"),
+            Some(&transcript),
+        )
+        .await;
+        assert_eq!(r["isError"], false, "{r}");
+        let out: Value = serde_json::from_str(text(&r)).unwrap();
+        assert_eq!(out["fixtures_created"], 2, "{out}");
+        let prompts = std::fs::read_to_string(
+            ws.path()
+                .join(".tengu/skills/from-bridge/evals/prompts.yaml"),
+        )
+        .unwrap();
+        assert!(
+            prompts.contains("list the files") && prompts.contains("list_directory"),
+            "{prompts}"
+        );
+
+        let r = call(
+            exec.as_ref(),
+            json!(2),
+            "skill_distill",
+            args("no-transcript"),
+        )
+        .await;
+        assert_eq!(r["isError"], true, "{r}");
+        assert!(text(&r).contains("no conversation"), "{r}");
+        assert!(!ws.path().join(".tengu/skills/no-transcript").exists());
+    }
+
+    /// `TENGU_BRIDGE_MCP_SERVERS` names are taken from the loaded config
+    /// (`${VAR}` expanded by this process's `Config::load`), objects as
+    /// given; an unknown name or garbage leaves those tools out.
+    #[test]
+    fn mcp_servers_are_named_and_taken_from_the_config() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\n\
+             [[mcp_servers]]\nname = \"fake\"\ntransport = \"stdio\"\ncommand = [\"sh\", \"fake.sh\"]\n\
+             env = { TOKEN = \"$FAKE_TOKEN\" }\n",
+        )
+        .unwrap();
+        let config = Config::load(&file).unwrap();
+        let servers = resolve_mcp_servers(r#"["fake", "ghost"]"#, Some(&config));
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].command, ["sh", "fake.sh"]);
+        assert_eq!(servers[0].env["TOKEN"], "$FAKE_TOKEN");
+        assert!(
+            resolve_mcp_servers(r#"["fake"]"#, None).is_empty(),
+            "no config"
+        );
+        let given = resolve_mcp_servers(
+            r#"[{"name": "inline", "transport": "stdio", "command": ["true"]}]"#,
+            None,
+        );
+        assert_eq!(given[0].name, "inline");
+        assert!(resolve_mcp_servers("not json", Some(&config)).is_empty());
     }
 }

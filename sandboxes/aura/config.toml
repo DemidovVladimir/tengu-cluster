@@ -164,7 +164,9 @@ For general user questions that fall outside the DeSci pipeline — looking up p
 [agents.researcher]
 engine = "claude_code"
 model = "claude-sonnet-4-6"
-# Stateless — the runner creates a temp dir per step. Set `workspace` to pin one.
+# Stateless — the runner creates a temp dir per step (the CLI's cwd and its
+# bridge's workspace; removed after the step; `memory_ingest` still lands in
+# `[memory] store_path`). Set `workspace` to pin one.
 tools = ["http_request", "read_file", "list_directory", "memory_ingest"]
 description = """
 Generic research and live-data agent. Fetches information from the public web \
@@ -204,6 +206,10 @@ step_timeout_secs = 180
 # "Lifecycle verbs" + docs/skill-redesign-2026-04-29.md.
 engine = "openrouter"
 model = "anthropic/claude-opus-4-7"
+# No `workspace`: since 2026-10-01 each plan step runs in a temp dir removed
+# after it, so `manage_skill` writes go with it (load warns; `view_skill`
+# reads the launch dir). OPERATOR: pin a dedicated dir to keep them — not
+# `.`: `tengu prune --sandbox aura --hard` empties every workspace root.
 # `manage_skill` is a workspace-tool-allowlist name — listing it in `tools`
 # opts it in (same as `workspace_tools`). `view_skill` is a regular core tool.
 tools = ["view_skill", "manage_skill", "http_request", "read_file", "list_directory"]

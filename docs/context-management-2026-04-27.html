@@ -550,7 +550,7 @@ const MECHS = [
 
   // Layer 3
   { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs",
-    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it a typed row's <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then the cut, footer included; <code>run-agent</code> does the same (+ older rounds cut to line 1) for local agents only.",
+    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it a typed row's <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then the cut, footer included; <code>run-agent</code> applies the same rules (<code>tool_result_content</code> + older rounds cut to line 1) for every engine.",
     pills: ["max_tool_result_chars = 300_000", "local: window / 8 × 4 chars"], tags: ["truncate", "tool", "result", "char", "local", "compact"] },
   { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "adapters/outbound/engines/mod.rs:921",
     star: true,
@@ -578,7 +578,7 @@ const MECHS = [
 
   // Layer 4
   { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "adapters/outbound/engines/claude_code.rs:551",
-    body: "Caps each tool result returned to the Claude Code CLI through the MCP bridge. <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire on OpenRouter.",
+    body: "Caps each tool result returned to the Claude Code CLI through the MCP bridge. <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire in-process (OpenRouter, local: chat and <code>run-agent</code>).",
     pills: ["50_000 chars", "TENGU_BRIDGE_MAX_RESULT_CHARS"], tags: ["mcp", "bridge", "claude-code", "cap"] },
 
   // Layer 5
@@ -587,13 +587,13 @@ const MECHS = [
     pills: ["IPC over JSON stdin/stdout"], tags: ["subprocess", "ipc", "fresh", "isolation"] },
   { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "outbound/tools/skill_lifecycle/compress_and_store.rs (def) · main.rs:971 (intercept)",
     star: true,
-    body: "Implicitly appended to every subagent's tools (definition only — no plugin handler). OpenRouter: <code>run-agent</code> intercepts the call out-of-band. Claude Code: no bridge handler, the model usually just stops and the backstop writes the final text. <code>postgres_memory</code> persists the summary to Postgres <code>agentic_memory</code> (<code>try_persist_agentic_step_summary</code>), embeddings when available.",
+    body: "Implicitly appended to every subagent's tools (definition only — no plugin handler). OpenRouter / local: <code>run-agent</code> intercepts the call out-of-band and ends the loop after the round. Claude Code: the step's bridge writes the summary file and answers <code>stored — stop now</code>; the engine ends the CLI run after the round. A model that just stops: the backstop writes the final text. <code>postgres_memory</code> persists the summary to Postgres <code>agentic_memory</code> (<code>try_persist_agentic_step_summary</code>), embeddings when available.",
     pills: ["implicit append", "Open Brain memory", "backstop"], tags: ["compress", "summary", "subagent", "postgres", "step"] },
   { n: 22, layer: 5, title: "Phase 5c middle-ground protocol", where: "main.rs:1075",
     body: "Three-row verdict table: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed. Graceful degradation lets non-protocol-respecting models still succeed if they produce text.",
     pills: ["3 rows", "graceful degradation"], tags: ["protocol", "verdict", "ipc", "phase-5c"] },
   { n: 23, layer: 5, title: "Subprocess max_turns", where: "subprocess_runner.rs:43 · run_step",
-    body: "Hard cap on the subagent mini-loop = the agent block's <code>limits.max_tool_rounds</code> (serde default 20 only for payloads without the field). Hits the compress_and_store warn path on exhaust. Wall clock per step: <code>limits.step_timeout_secs</code> via <code>run_with_timeout</code>.",
+    body: "Hard cap on the subagent mini-loop = the agent block's <code>limits.max_tool_rounds</code> (serde default 20 only for payloads without the field) — engine turns on OpenRouter / local, <strong>tool calls</strong> of the one CLI run on Claude Code. Hits the compress_and_store warn path on exhaust. Wall clock per step: <code>limits.step_timeout_secs</code> via <code>run_with_timeout</code>.",
     pills: ["max_tool_rounds = 70", "step_timeout_secs = 600"], tags: ["subagent", "turns", "limit", "timeout"] },
 
   // Layer 6

@@ -15,7 +15,12 @@
 //! | Side | Process (cwd = its workspace) | Env (after `env_clear`) |
 //! |---|---|---|
 //! | in-process | one `tengu tool call -c <root>/config.toml --agent conf --batch`: a `{"tool", "args", "call_id": <n>}` line per step, one executor | `PATH`, `TMPDIR`, `HOME` + `TENGU_HOME` under the side root, `TENGU_SECRETS_LOADED` naming `XM_CONFORMANCE_SECRET`, the case env |
-//! | bridge | one `tengu mcp-bridge`: `initialize`, then a `tools/call` per step with JSON-RPC id `<n>` | the same + `TENGU_CONFIG`, `TENGU_BRIDGE_AGENT=conf`, `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS` (the agent's tools), `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's bridge: workspace root granted like in-process), `TENGU_BRIDGE_MCP_SERVERS` in `[[mcp_servers]]` cases |
+//! | bridge | one `tengu mcp-bridge`: `initialize`, then a `tools/call` per step with JSON-RPC id `<n>` | the same + `TENGU_CONFIG`, `TENGU_BRIDGE_AGENT=conf`, `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS` (the agent's tools), `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's bridge: workspace root granted like in-process), `TENGU_BRIDGE_MCP_SERVERS` (server names, as the engine writes them) in `[[mcp_servers]]` cases |
+//!
+//! A `.transcript(..)` case hands both sides the same conversation (a JSON
+//! array of messages in `<root>/transcript.json`): `--transcript` in-process,
+//! `TENGU_BRIDGE_TRANSCRIPT_FILE` for the bridge — what a Claude Code run
+//! gives its bridge. Without one, no tool sees a conversation.
 //!
 //! Fixture sandbox (`BASE_TOML` + the case's TOML): `[egress] network =
 //! "open"`, `allow_hosts = ["127.0.0.1"]` (a hard-coded upstream host is
@@ -151,8 +156,15 @@ struct Case {
     /// Observation rows seeded into the workspace store, stamped now.
     rows: Vec<Value>,
     routes: Vec<Route>,
-    /// `[[mcp_servers]]` JSON handed to the bridge (`TENGU_BRIDGE_MCP_SERVERS`).
+    /// `TENGU_BRIDGE_MCP_SERVERS` handed to the bridge — server names, as
+    /// the Claude Code engine writes them (the bridge takes each from the
+    /// side's config, like the in-process side).
     mcp_servers: Option<Value>,
+    /// The conversation every call sees (`.transcript(..)`): a JSON array
+    /// of messages in `<root>/transcript.json` — `--transcript` in-process,
+    /// `TENGU_BRIDGE_TRANSCRIPT_FILE` for the bridge, as a Claude Code run
+    /// hands its bridge.
+    transcript: Option<Value>,
     /// The tool may be absent from this build (cargo feature): skipped then.
     gated: bool,
     /// Not a catalog tool (an `[[mcp_servers]]` proxy tool).
@@ -184,6 +196,7 @@ fn case(tool: &str, args: Value) -> Case {
         rows: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
+        transcript: None,
         gated: false,
         extra: false,
     }
@@ -270,6 +283,11 @@ impl Case {
     }
     fn route(mut self, r: Route) -> Self {
         self.routes.push(r);
+        self
+    }
+    /// The conversation both sides hand every call (`Case::transcript`).
+    fn transcript(mut self, messages: Value) -> Self {
+        self.transcript = Some(messages);
         self
     }
     fn gated(mut self) -> Self {
@@ -587,14 +605,38 @@ fn cases() -> Vec<Case> {
         )
         .then("view_skill", json!({"action": "read", "skill": "made-here"}))
         .ok("Made by the conformance test."),
+        // The run's conversation (a Claude Code run's transcript, `tengu
+        // tool call --transcript`), from message 1 on: two fixtures — the
+        // first ask with its `list_directory`, the save request with the
+        // `skill_distill` call itself — in `evals/prompts.yaml` on both sides.
+        case(
+            "skill_distill",
+            json!({"name": "distilled", "description": "Distilled by the conformance test.",
+                   "body_markdown": "# distilled\n\nBody.\n", "metrics": [],
+                   "from_message_index": 1, "tier": "workspace"}),
+        )
+        .transcript(json!([
+            {"role": "system", "content": "You are under test."},
+            {"role": "user", "content": "list the workspace"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "toolu_1", "name": "list_directory", "arguments": {"path": "."}}]},
+            {"role": "tool", "content": "skills/", "tool_call_id": "toolu_1"},
+            {"role": "assistant", "content": "One directory: skills/."},
+            {"role": "user", "content": "save this dialog as a skill"}
+        ]))
+        .ok("\"fixtures_created\":2")
+        .then("view_skill", json!({"action": "read", "skill": "distilled"}))
+        .ok("Distilled by the conformance test."),
+        // No conversation handed over: refused on both sides, nothing written
+        // (never a skill with `fixtures: []`).
         case(
             "skill_distill",
             json!({"name": "distilled", "description": "Distilled by the conformance test.",
                    "body_markdown": "# distilled\n\nBody.\n", "metrics": [],
                    "from_message_index": 0, "tier": "workspace"}),
         )
-        .then("view_skill", json!({"action": "read", "skill": "distilled"}))
-        .ok("Distilled by the conformance test."),
+        .named("no_conversation")
+        .err("no conversation to distill"),
         case(
             "apply_improver_proposal",
             json!({"skill": "demo", "body_markdown": "# demo\n\nImproved body.\n",
@@ -864,9 +906,9 @@ fn cases() -> Vec<Case> {
         ))
         .ok("pong");
     proxy.extra = true;
-    proxy.mcp_servers = Some(json!([{
-        "name": "fake", "transport": "stdio", "command": ["sh", &fake_server]
-    }]));
+    // Names only, as the Claude Code engine writes them: the bridge takes
+    // the server from the side's config.
+    proxy.mcp_servers = Some(json!(["fake"]));
     cases.push(proxy);
     // A server tool outside the agent's `tools` runs on neither side.
     let mut unlisted = case("fake__echo", json!({}))
@@ -877,9 +919,7 @@ fn cases() -> Vec<Case> {
         ))
         .err("not available to this agent");
     unlisted.extra = true;
-    unlisted.mcp_servers = Some(json!([{
-        "name": "fake", "transport": "stdio", "command": ["sh", &fake_server]
-    }]));
+    unlisted.mcp_servers = Some(json!(["fake"]));
     cases.push(unlisted);
     // ── shell skill (not a catalog row): `skill_packages` loads it on both
     //    sides (`tests/fixtures/skills/matrix_cat`); output redacted alike
@@ -1198,6 +1238,9 @@ impl Side {
             .replace("{skills}", &skills.join(", "));
         let config = root.join("config.toml");
         std::fs::write(&config, expand(&toml, &root, &ws, mock)).unwrap();
+        if let Some(messages) = &case.transcript {
+            std::fs::write(root.join("transcript.json"), messages.to_string()).unwrap();
+        }
         let mut roots = vec![root.display().to_string()];
         let given = dir.path().display().to_string();
         if given != roots[0] {
@@ -1302,6 +1345,10 @@ fn run_in_process(side: &Side, case: &Case, mock: &str) -> Result<Vec<Answer>, S
     cmd.args(["tool", "call", "-c"])
         .arg(&side.config)
         .args(["--agent", AGENT, "--batch"]);
+    if case.transcript.is_some() {
+        cmd.arg("--transcript")
+            .arg(side.root.join("transcript.json"));
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn tengu tool call: {e}"))?;
@@ -1350,6 +1397,12 @@ fn run_bridge(side: &Side, case: &Case, mock: &str) -> Result<Vec<Answer>, Strin
         .env("TENGU_BRIDGE_GRANT_WORKSPACE", "1");
     if let Some(servers) = &case.mcp_servers {
         cmd.env("TENGU_BRIDGE_MCP_SERVERS", servers.to_string());
+    }
+    if case.transcript.is_some() {
+        cmd.env(
+            "TENGU_BRIDGE_TRANSCRIPT_FILE",
+            side.root.join("transcript.json"),
+        );
     }
     let mut child = cmd
         .spawn()

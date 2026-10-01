@@ -6,7 +6,7 @@
 //! | Command | stdout (logs go to stderr) |
 //! |---|---|
 //! | `tengu tool list` | every catalog tool name, all opt-ins included (the harness's completeness source), one JSON array |
-//! | `tengu tool call --agent <a> --tool <t> [--args '<json>'] [--call-id <id>] [--sandbox <s>] [-c <file>]` | one `{"text", "observation", "is_error"}` |
+//! | `tengu tool call --agent <a> --tool <t> [--args '<json>'] [--call-id <id>] [--transcript <file>] [--sandbox <s>] [-c <file>]` | one `{"text", "observation", "is_error"}` |
 //! | `tengu tool call --agent <a> --batch …` | stdin: one `{"tool", "args", "call_id"}` per line, all through ONE executor (like a `run-agent` step or a bridge session); stdout: one result object per line |
 //! | `tengu tool turn --agent <a> --goal <text> [--sandbox <s>] [-c <file>]` | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path (`chat/tool_loop.rs`: `chat:` call ids), so a private agent (no `description`: exec tools) runs too; its `tools` (`agent_base_tools`), shell skills (`skill_packages`) and `[[mcp_servers]]` tools, configured scopes as they are (no workspace grant), the bridge for `claude_code`; one `{"status", "output", "tools": [{name, ok}], "metrics"}` (the `run-agent` IPC fields the engine matrix reads) |
 //!
@@ -16,10 +16,11 @@
 //! |---|---|
 //! | Config | `--sandbox` (`sandboxes/<s>/config.toml`) > `-c` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`; built-in defaults when absent |
 //! | Agent | `[agents.<a>]` (no `description` needed) → `build_subprocess_tool_executor`: `subagent_config`, workspace root granted to every configured scope, `resolve_tool_scopes` with `no_shell_fallback`, `[[mcp_servers]]`, shell skills (`skill_packages`, none without a shell), the agent's `tools` allow-list |
-//! | Workspace | the agent's `workspace` (`~` expanded), else the cwd |
+//! | Workspace | the agent's `workspace` (`~` expanded), else a temp dir for this process — `run-agent`'s rule (`bootstrap::tools::workspace_or_temp`); `turn` too |
 //! | Memory | `[memory] enabled` → `build_memory_manager_async` (as `run-agent`) |
 //! | Secrets | `process_secret_registry` (inherited `TENGU_SECRETS_LOADED`, else the vault) + `SanitizedToolExecutor` |
 //! | Call id | `--call-id` / a line's `call_id` → `ToolCtx.call_id`, mapped like the bridge's JSON-RPC id (`mcp_bridge::call_id`: `mcp:<process nonce>:<id>`, the id a string verbatim, a number in decimal); absent = none |
+//! | Conversation | `--transcript <file>` (a JSON array of `Message`) → `ToolCtx.conversation` ending in the call, as the bridge builds it from `TENGU_BRIDGE_TRANSCRIPT_FILE` (`mcp_bridge::call_conversation`); absent = none (`skill_distill` refuses) |
 //! | Egress | the config's `[egress]`; `TENGU_EGRESS` wins |
 //!
 //! A failed call prints `is_error: true` and `text` = `ERROR: <error>`,
@@ -60,6 +61,10 @@ pub(super) enum ToolAction {
         /// `ToolCtx.call_id` (none when absent).
         #[arg(long)]
         call_id: Option<String>,
+        /// The conversation the tools see: a JSON array of messages, as a
+        /// Claude Code run hands its bridge (none when absent).
+        #[arg(long)]
+        transcript: Option<PathBuf>,
         /// Read `{"tool", "args", "call_id"}` lines from stdin; one executor
         /// for all; one result line each.
         #[arg(long, conflicts_with_all = ["tool", "call_id"])]
@@ -103,12 +108,14 @@ pub(super) async fn run_tool_command(
             tool,
             args,
             call_id,
+            transcript,
             batch,
             sandbox,
             config,
         } => {
             let config = load_config(config.or(top_config), sandbox)?;
-            let tools = AgentTools::build(&config, &agent).await?;
+            let mut tools = AgentTools::build(&config, &agent).await?;
+            tools.transcript = transcript;
             if batch {
                 return run_batch(&tools).await;
             }
@@ -154,14 +161,12 @@ async fn run_turn(config: &Config, agent_name: &str, goal: &str) -> Result<Value
         .get(agent_name)
         .cloned()
         .with_context(|| format!("no [agents.{agent_name}] in the config"))?;
-    agent.workspace = agent
-        .workspace
-        .as_ref()
-        .map(|p| crate::config::paths::expand_tilde(p));
-    let workspace = agent
-        .workspace
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // The agent's workspace, else a temp dir for this turn (`_turn_dir`,
+    // removed after it) — as a `run-agent` step.
+    let configured_workspace = agent.workspace.is_some();
+    let (workspace, _turn_dir) =
+        crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-turn-")?;
+    agent.workspace = Some(workspace.clone());
     let secrets = Arc::new(process_secret_registry(Some(&secrets_file_path(
         &resolve_tengu_home(),
     ))));
@@ -174,8 +179,11 @@ async fn run_turn(config: &Config, agent_name: &str, goal: &str) -> Result<Value
     tools.extend(skills.active_tools());
     let memory = if config.memory.enabled {
         Some(
-            crate::bootstrap::memory::build_memory_manager_async(&config.memory, Some(&workspace))
-                .await,
+            crate::bootstrap::memory::build_memory_manager_async(
+                &config.memory,
+                configured_workspace.then_some(workspace.as_path()),
+            )
+            .await,
         )
     } else {
         None
@@ -276,6 +284,10 @@ fn load_config(path: Option<PathBuf>, sandbox: Option<String>) -> Result<Config>
 struct AgentTools {
     executor: SanitizedToolExecutor,
     secrets: Arc<SecretRegistry>,
+    /// `--transcript`: the conversation every call sees.
+    transcript: Option<PathBuf>,
+    /// The temp workspace of an agent without one, kept while this runs.
+    _workspace_dir: Option<tempfile::TempDir>,
 }
 
 impl AgentTools {
@@ -285,14 +297,12 @@ impl AgentTools {
             .get(agent_name)
             .cloned()
             .with_context(|| format!("no [agents.{agent_name}] in the config"))?;
-        agent.workspace = agent
-            .workspace
-            .as_ref()
-            .map(|p| crate::config::paths::expand_tilde(p));
-        let workspace = agent
-            .workspace
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        // As a `run-agent` step: the agent's workspace, else a temp dir kept
+        // for this process (`workspace_dir`).
+        let configured_workspace = agent.workspace.is_some();
+        let (workspace, workspace_dir) =
+            crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-step-")?;
+        agent.workspace = Some(workspace.clone());
 
         let secrets = Arc::new(process_secret_registry(Some(&secrets_file_path(
             &resolve_tengu_home(),
@@ -301,7 +311,7 @@ impl AgentTools {
             Some(
                 crate::bootstrap::memory::build_memory_manager_async(
                     &config.memory,
-                    Some(&workspace),
+                    configured_workspace.then_some(workspace.as_path()),
                 )
                 .await,
             )
@@ -320,6 +330,8 @@ impl AgentTools {
         Ok(Self {
             executor: SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(&secrets)),
             secrets,
+            transcript: None,
+            _workspace_dir: workspace_dir,
         })
     }
 
@@ -330,7 +342,11 @@ impl AgentTools {
             name: tool.to_string(),
             arguments: args,
         };
-        match self.executor.execute_typed(&call, &[]).await {
+        let conversation = crate::adapters::inbound::mcp_bridge::call_conversation(
+            self.transcript.as_deref(),
+            &call,
+        );
+        match self.executor.execute_typed(&call, &conversation).await {
             Ok(out) => json!({
                 "text": out.text,
                 "observation": out.observation,

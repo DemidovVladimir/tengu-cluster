@@ -13,18 +13,27 @@
 //! Each `tool_use` → `tool_result` pair becomes `StreamEvent::ToolRan` (name
 //! without the `mcp__tengu-tools__` prefix, `ok = !is_error`): the harness
 //! never runs these calls, so this is its only record of them.
+//!
+//! | Run with a bridge | Handling |
+//! |---|---|
+//! | the system prompt | `--system-prompt` only — a system message equal to it is not repeated in the stdin prompt (`format_prompt`) |
+//! | a bridged tool's conversation (`ToolCtx.conversation`, what `skill_distill` reads) | [`Transcript`]: the run's messages + every streamed assistant message and tool result, in a 0600 temp file the bridge reads per call (`TENGU_BRIDGE_TRANSCRIPT_FILE`) |
+//! | `[[mcp_servers]]` behind `{server}__{tool}` bridge tools | their names only (`TENGU_BRIDGE_MCP_SERVERS`): the bridge takes each from the config it loads — no value of the config (a `${VAR}`-expanded secret) is written to the temp `--mcp-config` |
+//! | `compress_and_store` succeeded (a `run-agent` step) | the run ends once the round's other calls are answered — the CLI is stopped, as the in-process loop stops after its round; the run's usage so far is reported as the `result` line would (`RunUsage`) |
+//! | `max_tool_rounds` | counts tool calls (`tool_use` blocks) of the run, not rounds: past it the CLI is killed with an error |
 
 use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
-use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolDef};
+use crate::adapters::outbound::tools::skill_lifecycle::compress_and_store;
+use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
 use crate::ports::engine::EngineContext;
 use crate::ports::engine::{Engine, EngineDiagnostics};
 
@@ -161,10 +170,17 @@ impl ClaudeCodeEngine {
     }
 
     /// Format conversation history into a prompt string for one-shot queries.
-    fn format_prompt(messages: &[Message]) -> String {
+    /// A system message equal to `system_prompt` is left out: the CLI gets
+    /// that one as `--system-prompt` (`run-agent`, `tengu tool turn`, the
+    /// doctor and webhooks send it both ways).
+    fn format_prompt(messages: &[Message], system_prompt: Option<&str>) -> String {
         let mut parts = Vec::new();
+        let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
 
         for msg in messages {
+            if matches!(msg.role, Role::System) && Some(msg.content.as_str()) == system_prompt {
+                continue;
+            }
             match msg.role {
                 Role::User => {
                     parts.push(format!("User: {}", msg.content));
@@ -186,7 +202,8 @@ impl ClaudeCodeEngine {
         parts.join("\n\n")
     }
 
-    /// Build MCP config JSON for the tengu-tools bridge server.
+    /// Build MCP config JSON for the tengu-tools bridge server. `transcript`:
+    /// the run's [`Transcript`] file (`TENGU_BRIDGE_TRANSCRIPT_FILE`).
     fn build_mcp_config_json(
         &self,
         tengu_bin: &str,
@@ -194,6 +211,7 @@ impl ClaudeCodeEngine {
         bridge_tools: &[ToolDef],
         max_mcp_result_chars: u32,
         mcp_servers: &[crate::config::McpServerConfig],
+        transcript: Option<&Path>,
     ) -> serde_json::Value {
         let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
         // Per-tool scopes cross the process boundary as JSON — the bridge's
@@ -222,6 +240,10 @@ impl ClaudeCodeEngine {
             env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SUMMARY_FILE_ENV] =
                 serde_json::Value::String(file.to_string_lossy().into_owned());
         }
+        if let Some(file) = transcript {
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_TRANSCRIPT_FILE_ENV] =
+                serde_json::Value::String(file.to_string_lossy().into_owned());
+        }
         // The CLI merges this `env` over its own inherited env (verified with
         // CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the bridge inherits
         // this process's env — vault secrets, `OPENROUTER_API_KEY` and the
@@ -229,17 +251,21 @@ impl ClaudeCodeEngine {
         // written into this file (it sits on disk for the whole run).
         //
         // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
-        // `bridge_tools`: the bridge reconnects to them and proxies the calls
-        // under its egress policy, resolving their `$VAR` references from
-        // that inherited env.
+        // `bridge_tools`: their NAMES only — the bridge takes each server
+        // from the config it loads (`TENGU_CONFIG`, `Config::load`: `${VAR}`
+        // expanded there, from the same inherited env), reconnects and
+        // proxies the calls under its egress policy, resolving `$VAR`
+        // references from that env. A `${VAR}` value `Config::load` already
+        // expanded here never reaches the file.
         use crate::adapters::outbound::mcp_client::is_server_tool;
-        let servers: Vec<&crate::config::McpServerConfig> = mcp_servers
+        let servers: Vec<&str> = mcp_servers
             .iter()
             .filter(|s| {
                 bridge_tools
                     .iter()
                     .any(|t| is_server_tool(&s.name, &t.name))
             })
+            .map(|s| s.name.as_str())
             .collect();
         if !servers.is_empty() {
             env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV] =
@@ -386,6 +412,196 @@ fn tengu_tool_name(cli_name: &str) -> &str {
     cli_name
         .strip_prefix("mcp__tengu-tools__")
         .unwrap_or(cli_name)
+}
+
+/// The conversation a bridged tool sees (`ToolCtx.conversation` — what
+/// `skill_distill` seeds fixtures from), kept for the bridge in a temp file
+/// (`TENGU_BRIDGE_TRANSCRIPT_FILE`; mode 0600, removed when the run ends):
+/// the messages this run was given — what an in-process engine's tools see —
+/// then each streamed assistant message (text, `tool_use` → `tool_calls`
+/// under the tengu name) and `tool_result` (→ a tool message). Rewritten
+/// after every line that changes it, atomically (a sibling file renamed
+/// over it): the bridge reads it per call and never sees half a write.
+struct Transcript {
+    path: tempfile::TempPath,
+    messages: Vec<Message>,
+    /// Index of the first streamed message: a streamed assistant line
+    /// merges into a streamed assistant message only.
+    streamed_from: usize,
+}
+
+impl Transcript {
+    fn create(messages: &[Message]) -> Result<Self> {
+        let path = tempfile::Builder::new()
+            .prefix("tengu-transcript-")
+            .tempfile()?
+            .into_temp_path();
+        let transcript = Self {
+            path,
+            messages: messages.to_vec(),
+            streamed_from: messages.len(),
+        };
+        transcript.write()?;
+        Ok(transcript)
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// One NDJSON line of the run; rewrites the file when it changed the
+    /// conversation. A failed write leaves the last one (warned).
+    fn absorb(&mut self, line: &str) {
+        if absorb_ndjson(&mut self.messages, self.streamed_from, line) {
+            if let Err(e) = self.write() {
+                warn!(error = %e, file = %self.path.display(), "Claude Code: transcript for the bridge not updated");
+            }
+        }
+    }
+
+    fn write(&self) -> Result<()> {
+        let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
+        let mut next = tempfile::NamedTempFile::new_in(dir)?;
+        serde_json::to_writer(&mut next, &self.messages)?;
+        next.persist(&*self.path)?;
+        Ok(())
+    }
+}
+
+/// One stream line into `messages` (see [`Transcript`]); `true` when it
+/// changed them. The CLI emits a line per content block, so consecutive
+/// streamed assistant lines — one API response — form one message, as the
+/// in-process loop's one assistant message per round.
+fn absorb_ndjson(messages: &mut Vec<Message>, streamed_from: usize, line: &str) -> bool {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    let Some(blocks) = json
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return false;
+    };
+    match str_field(&json, "type") {
+        "assistant" => {
+            let mut text = String::new();
+            let mut calls = Vec::new();
+            for block in blocks {
+                match str_field(block, "type") {
+                    "text" => text.push_str(str_field(block, "text")),
+                    "tool_use" => calls.push(ToolCall {
+                        id: str_field(block, "id").to_string(),
+                        name: tengu_tool_name(str_field(block, "name")).to_string(),
+                        arguments: block
+                            .get("input")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    }),
+                    _ => {}
+                }
+            }
+            if text.is_empty() && calls.is_empty() {
+                return false;
+            }
+            let merge = messages.len() > streamed_from
+                && matches!(messages.last().map(|m| &m.role), Some(Role::Assistant));
+            match messages.last_mut().filter(|_| merge) {
+                Some(last) => {
+                    if !text.is_empty() && !last.content.is_empty() {
+                        last.content.push('\n');
+                    }
+                    last.content.push_str(&text);
+                    if !calls.is_empty() {
+                        last.tool_calls.get_or_insert_with(Vec::new).extend(calls);
+                    }
+                }
+                None => messages.push(Message {
+                    role: Role::Assistant,
+                    content: text,
+                    tool_call_id: None,
+                    tool_calls: (!calls.is_empty()).then_some(calls),
+                }),
+            }
+            true
+        }
+        "user" => {
+            let before = messages.len();
+            for block in blocks {
+                if str_field(block, "type") != "tool_result" {
+                    continue;
+                }
+                let content = match block.get("content") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Array(parts)) => parts
+                        .iter()
+                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                messages.push(Message {
+                    role: Role::Tool,
+                    content,
+                    tool_call_id: Some(str_field(block, "tool_use_id").to_string()),
+                    tool_calls: None,
+                });
+            }
+            messages.len() > before
+        }
+        _ => false,
+    }
+}
+
+/// `value[key]` as a string, `""` when absent or not a string.
+fn str_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
+    value.get(key).and_then(|v| v.as_str()).unwrap_or_default()
+}
+
+/// The usage of one CLI run so far: each API response's
+/// `input_tokens` / `output_tokens` (`message.usage`, the last one seen per
+/// `message.id` — the CLI repeats a response's usage on each of its lines),
+/// summed — what the `result` line reports when the run ends on its own.
+#[derive(Default)]
+struct RunUsage {
+    by_message: std::collections::HashMap<String, (u32, u32)>,
+}
+
+impl RunUsage {
+    fn absorb(&mut self, line: &str) {
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+            return;
+        };
+        if str_field(&json, "type") != "assistant" {
+            return;
+        }
+        let Some(message) = json.get("message") else {
+            return;
+        };
+        let Some(usage) = message.get("usage") else {
+            return;
+        };
+        let tokens = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let id = str_field(message, "id");
+        let key = if id.is_empty() {
+            format!("#{}", self.by_message.len())
+        } else {
+            id.to_string()
+        };
+        self.by_message
+            .insert(key, (tokens("input_tokens"), tokens("output_tokens")));
+    }
+
+    fn total(&self) -> Option<(u32, u32)> {
+        let (input, output) = self
+            .by_message
+            .values()
+            .fold((0u32, 0u32), |(i, o), (a, b)| {
+                (i.saturating_add(*a), o.saturating_add(*b))
+            });
+        (input > 0 || output > 0).then_some((input, output))
+    }
 }
 
 /// Process a single NDJSON line from the Claude CLI stream.
@@ -703,7 +919,7 @@ impl Engine for ClaudeCodeEngine {
         _tools: &[ToolDef],
         context: &EngineContext,
     ) -> Result<Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>> {
-        let prompt = Self::format_prompt(messages);
+        let prompt = Self::format_prompt(messages, context.system_prompt.as_deref());
 
         if prompt.trim().is_empty() {
             return Ok(Box::pin(stream::iter(vec![StreamEvent::Error {
@@ -743,7 +959,9 @@ impl Engine for ClaudeCodeEngine {
 
         // MCP config for Tengu bridge tools — write to temp file, keep handle alive
         // The temp file is moved into the spawned task so it stays alive until the
-        // subprocess exits.
+        // subprocess exits. The run's transcript (the bridge's conversation
+        // for each call) likewise.
+        let mut transcript: Option<Transcript> = None;
         let mcp_temp =
             if let (Some(ref bridge_tools), Some(ref ws)) = (&context.bridge_tools, &workspace) {
                 if !bridge_tools.is_empty() {
@@ -752,12 +970,20 @@ impl Engine for ClaudeCodeEngine {
                         .to_string_lossy()
                         .to_string();
                     let mcp_limit = context.max_mcp_result_chars.unwrap_or(50_000);
+                    // Fail-soft: without it a bridged tool that reads the
+                    // conversation refuses (`skill_distill`), nothing else.
+                    transcript = Transcript::create(messages)
+                        .map_err(
+                            |e| warn!(error = %e, "Claude Code: no transcript file for the bridge"),
+                        )
+                        .ok();
                     let config = self.build_mcp_config_json(
                         &tengu_bin,
                         ws,
                         bridge_tools,
                         mcp_limit,
                         &context.mcp_servers,
+                        transcript.as_ref().map(Transcript::path),
                     );
                     let mut tmp = tempfile::NamedTempFile::new()?;
                     serde_json::to_writer(&mut tmp, &config)?;
@@ -814,8 +1040,9 @@ impl Engine for ClaudeCodeEngine {
 
         // Spawn async reader task that processes NDJSON lines and emits StreamEvents
         tokio::spawn(async move {
-            // Keep temp file alive until subprocess exits
+            // Keep temp files alive until subprocess exits
             let _mcp_temp = mcp_temp;
+            let mut transcript = transcript;
 
             let reader = tokio::io::BufReader::new(stdout);
             let mut lines = reader.lines();
@@ -826,6 +1053,13 @@ impl Engine for ClaudeCodeEngine {
 
             let mut timed_out = false;
             let mut tool_limit_hit = false;
+            // `compress_and_store` succeeded (a run-agent step's bridge stored
+            // the summary): the run ends once the round's calls are answered.
+            let mut summary_stored = false;
+            let mut step_done = false;
+            // Usage per API response: a run stopped early has no `result`
+            // line, whose cumulative usage the turn's metric would take.
+            let mut usage = RunUsage::default();
             loop {
                 match tokio::time::timeout(idle_timeout, lines.next_line()).await {
                     Ok(Ok(Some(line))) => {
@@ -838,10 +1072,21 @@ impl Engine for ClaudeCodeEngine {
                             &mut tool_call_count,
                             &mut tool_names,
                         );
+                        if let Some(t) = transcript.as_mut() {
+                            t.absorb(&line);
+                        }
+                        usage.absorb(&line);
+                        summary_stored |= events.iter().any(|e| {
+                            matches!(e, StreamEvent::ToolRan { name, ok: true } if name == compress_and_store::NAME)
+                        });
                         for event in events {
                             if tx.send(event).await.is_err() {
                                 break;
                             }
+                        }
+                        if summary_stored && tool_names.is_empty() {
+                            step_done = true;
+                            break;
                         }
                         // Enforce max tool rounds — kill subprocess if exceeded
                         if tool_call_count > max_tool_rounds {
@@ -861,7 +1106,24 @@ impl Engine for ClaudeCodeEngine {
                 }
             }
 
-            if tool_limit_hit {
+            if step_done {
+                info!(
+                    tool_call_count,
+                    "Claude Code: compress_and_store stored the step summary — ending the CLI run"
+                );
+                let _ = child.kill().await;
+                // What the `result` line would have carried: the run's usage
+                // so far (the turn takes the last `Usage` frame).
+                if let Some((input_tokens, output_tokens)) = usage.total() {
+                    let _ = tx
+                        .send(StreamEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                        })
+                        .await;
+                }
+                let _ = tx.send(StreamEvent::Done).await;
+            } else if tool_limit_hit {
                 error!(
                     tool_call_count,
                     max_tool_rounds, "Claude Code max tool rounds exceeded — killing subprocess"
@@ -898,7 +1160,8 @@ impl Engine for ClaudeCodeEngine {
                     if !stderr_str.is_empty() {
                         warn!(stderr = %stderr_str, "Claude CLI stderr");
                     }
-                    if !output.status.success() {
+                    // A step ended after `compress_and_store` was killed on purpose.
+                    if !output.status.success() && !step_done {
                         warn!(
                             exit_code = output.status.code(),
                             "Claude CLI exited with non-zero status"
@@ -1096,21 +1359,33 @@ mod tests {
             ClaudeCodeEngine::new(PathBuf::from("claude"), BuiltinToolsProfile::None, None, 60);
         let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
         let ws = std::path::Path::new("/tmp");
-        let plain = engine.build_mcp_config_json("tengu", ws, &tools, 1000, &[]);
+        let plain = engine.build_mcp_config_json("tengu", ws, &tools, 1000, &[], None);
         let env = &plain["mcpServers"]["tengu-tools"]["env"];
         assert!(env.get("TENGU_BRIDGE_AGENT").is_none());
         assert!(env.get("TENGU_CONFIG").is_none());
+        assert!(env.get("TENGU_BRIDGE_TRANSCRIPT_FILE").is_none());
 
         let engine = engine.with_bridge_agent(
             "xm_architect",
             std::path::Path::new("sandboxes/xmarket/config.toml"),
         );
-        let cfg = engine.build_mcp_config_json("tengu", ws, &tools, 1000, &[]);
+        let cfg = engine.build_mcp_config_json(
+            "tengu",
+            ws,
+            &tools,
+            1000,
+            &[],
+            Some(std::path::Path::new("/tmp/tengu-transcript-x")),
+        );
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
         assert_eq!(env["TENGU_BRIDGE_AGENT"], "xm_architect");
         let config = std::path::Path::new(env["TENGU_CONFIG"].as_str().unwrap());
         assert!(config.is_absolute(), "{}", config.display());
         assert!(config.ends_with("sandboxes/xmarket/config.toml"));
+        assert_eq!(
+            env["TENGU_BRIDGE_TRANSCRIPT_FILE"],
+            "/tmp/tengu-transcript-x"
+        );
     }
 
     /// Every key the engine may write into the temp `--mcp-config` env
@@ -1124,6 +1399,7 @@ mod tests {
         "TENGU_CONFIG",
         "TENGU_BRIDGE_GRANT_WORKSPACE",
         "TENGU_BRIDGE_SUMMARY_FILE",
+        "TENGU_BRIDGE_TRANSCRIPT_FILE",
         "TENGU_BRIDGE_MCP_SERVERS",
         "TENGU_EGRESS",
         "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
@@ -1132,9 +1408,11 @@ mod tests {
         "TENGU_SECRETS_LOADED",
     ];
 
-    /// The temp file holds the requested servers' config but no secret
-    /// value: no `$VAR` value of a server, no `OPENROUTER_API_KEY` — the
-    /// bridge inherits them (the CLI merges its env, `docs/mcp-bridge.md`).
+    /// The temp file names the requested servers but holds no secret value:
+    /// no `$VAR` value of a server, no value `Config::load` expanded from a
+    /// `${VAR}` (in `env`, `auth.token`, `url` or `command`), no
+    /// `OPENROUTER_API_KEY` — the bridge takes the servers from the config
+    /// it loads and inherits the env (the CLI merges it, `docs/mcp-bridge.md`).
     #[test]
     fn bridge_config_carries_requested_mcp_servers_and_no_secret_values() {
         let engine = ClaudeCodeEngine::new(
@@ -1145,32 +1423,62 @@ mod tests {
         );
         let tools = vec![
             ToolDef::new("fake__echo", "d", serde_json::json!({})),
+            ToolDef::new("web__fetch", "d", serde_json::json!({})),
             ToolDef::new("compress_and_store", "d", serde_json::json!({})),
         ];
-        // `$HOME` is always set: its value would be observable if forwarded.
-        let servers = vec![
-            server("fake", &[("TOKEN", "$HOME")]),
-            server("unused", &[("OTHER", "$PATH")]),
-        ];
+        // `${VAR}` is expanded by `Config::load` (the whole file, before
+        // parsing): the loaded servers hold the secret itself.
+        const SECRET: &str = "sk-dollar-brace-0123456789abcdef";
+        let var = format!("TENGU_TEST_MCP_SECRET_{}", uuid::Uuid::new_v4().simple()).to_uppercase();
+        std::env::set_var(&var, SECRET);
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            format!(
+                "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\n\
+                 [[mcp_servers]]\nname = \"fake\"\ntransport = \"stdio\"\n\
+                 command = [\"sh\", \"server.sh\", \"--key=${{{var}}}\"]\n\
+                 env = {{ TOKEN = \"${{{var}}}\", HOME_REF = \"$HOME\" }}\n\n\
+                 [[mcp_servers]]\nname = \"web\"\ntransport = \"http\"\n\
+                 url = \"https://mcp.example/${{{var}}}\"\n\
+                 auth = {{ type = \"bearer\", token = \"${{{var}}}\" }}\n\n\
+                 [[mcp_servers]]\nname = \"unused\"\ntransport = \"stdio\"\ncommand = [\"true\"]\n"
+            ),
+        )
+        .unwrap();
+        let loaded = crate::config::Config::load(&file).unwrap();
+        std::env::remove_var(&var);
+        assert_eq!(
+            loaded.mcp_servers[0].env["TOKEN"], SECRET,
+            "expanded at load"
+        );
+        assert_eq!(loaded.mcp_servers[1].auth.as_ref().unwrap().token, SECRET);
+
         let cfg = engine.build_mcp_config_json(
             "tengu",
             std::path::Path::new("/tmp"),
             &tools,
             1000,
-            &servers,
+            &loaded.mcp_servers,
+            None,
+        );
+        let text = cfg.to_string();
+        assert!(
+            !text.contains(SECRET),
+            "a `${{VAR}}` value reached the file: {text}"
         );
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
-        let passed: Vec<crate::config::McpServerConfig> = serde_json::from_str(
+        let passed: Vec<String> = serde_json::from_str(
             env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV]
                 .as_str()
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(passed.len(), 1);
-        assert_eq!(passed[0].name, "fake");
         assert_eq!(
-            passed[0].env["TOKEN"], "$HOME",
-            "the reference, not its value"
+            passed,
+            ["fake", "web"],
+            "names of the requested servers only"
         );
         let env = env.as_object().unwrap();
         let unknown: Vec<&String> = env
@@ -1195,7 +1503,8 @@ mod tests {
             std::path::Path::new("/tmp"),
             &[ToolDef::new("read_file", "d", serde_json::json!({}))],
             1000,
-            &servers,
+            &[server("fake", &[("TOKEN", "$HOME")])],
+            None,
         );
         assert!(none["mcpServers"]["tengu-tools"]["env"]
             .get(crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV)
@@ -1213,8 +1522,14 @@ mod tests {
                     summary_file: Some(PathBuf::from("/tmp/tengu-summary-x")),
                 });
         let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
-        let cfg =
-            engine.build_mcp_config_json("tengu", std::path::Path::new("/tmp"), &tools, 1000, &[]);
+        let cfg = engine.build_mcp_config_json(
+            "tengu",
+            std::path::Path::new("/tmp"),
+            &tools,
+            1000,
+            &[],
+            None,
+        );
         let env = &cfg["mcpServers"]["tengu-tools"]["env"];
         assert_eq!(env["TENGU_BRIDGE_GRANT_WORKSPACE"], "1");
         assert_eq!(env["TENGU_BRIDGE_SUMMARY_FILE"], "/tmp/tengu-summary-x");
@@ -1273,5 +1588,242 @@ mod tests {
         for bad in ["", "None", "shell", "editor-shell"] {
             assert_eq!(BuiltinToolsProfile::parse(bad), None, "{bad:?}");
         }
+    }
+
+    fn msg(role: Role, content: &str) -> Message {
+        Message {
+            role,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    /// The system prompt rides on `--system-prompt` only: a system message
+    /// equal to it is not repeated in the stdin prompt; other system
+    /// messages (a memory block) stay.
+    #[test]
+    fn format_prompt_sends_the_system_prompt_once() {
+        let messages = [
+            msg(Role::System, "SYS PROMPT"),
+            msg(Role::User, "goal"),
+            msg(Role::System, "memory block"),
+        ];
+        let once = ClaudeCodeEngine::format_prompt(&messages, Some("SYS PROMPT"));
+        assert!(!once.contains("SYS PROMPT"), "{once}");
+        assert_eq!(once, "User: goal\n\nmemory block");
+        let args = strings(cli_args(
+            BuiltinToolsProfile::None,
+            None,
+            Some("SYS PROMPT"),
+            None,
+        ));
+        assert_eq!(value_after(&args, "--system-prompt"), "SYS PROMPT");
+        // No context prompt: every system message is in the prompt.
+        let all = ClaudeCodeEngine::format_prompt(&messages, None);
+        assert!(all.starts_with("SYS PROMPT\n\nUser: goal"), "{all}");
+    }
+
+    /// The stream as the bridge's conversation: one assistant message per
+    /// API response (text + `tool_use` blocks of consecutive lines, tengu
+    /// names), a tool message per `tool_result`; lines that carry neither
+    /// change nothing, and a streamed line never merges into the given
+    /// history.
+    #[test]
+    fn transcript_follows_the_stream() {
+        let given = vec![
+            msg(Role::System, "sys"),
+            msg(Role::User, "earlier"),
+            msg(Role::Assistant, "earlier answer"),
+            msg(Role::User, "goal"),
+        ];
+        let lines = [
+            r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"listing"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__tengu-tools__list_directory","input":{"path":"."}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"a.txt"},{"type":"text","text":"b.txt"}]}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hm"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"Read","input":{}},{"type":"tool_use","id":"toolu_3","name":"mcp__tengu-tools__skill_distill","input":{"from_message_index":1}}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"denied"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"done"}"#,
+            "not json",
+        ];
+        let mut messages = given.clone();
+        let changed: Vec<bool> = lines
+            .iter()
+            .map(|l| absorb_ndjson(&mut messages, given.len(), l))
+            .collect();
+        assert_eq!(
+            changed,
+            [false, true, true, true, false, true, true, false, false]
+        );
+        assert_eq!(messages.len(), given.len() + 4);
+        let first = &messages[4];
+        assert!(matches!(first.role, Role::Assistant));
+        assert_eq!(
+            first.content, "listing",
+            "a new message, not merged into history"
+        );
+        let calls = first.tool_calls.as_ref().unwrap();
+        assert_eq!(
+            (calls[0].id.as_str(), calls[0].name.as_str()),
+            ("toolu_1", "list_directory")
+        );
+        assert_eq!(calls[0].arguments, serde_json::json!({"path": "."}));
+        let result = &messages[5];
+        assert!(matches!(result.role, Role::Tool));
+        assert_eq!(
+            (result.tool_call_id.as_deref(), result.content.as_str()),
+            (Some("toolu_1"), "a.txt\nb.txt")
+        );
+        let names: Vec<&str> = messages[6]
+            .tool_calls
+            .iter()
+            .flatten()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["Read", "skill_distill"]);
+        assert_eq!(messages[7].content, "denied");
+    }
+
+    /// The transcript file: mode 0600, the given messages first, rewritten
+    /// whole on every changing line, removed with the run.
+    #[test]
+    fn transcript_file_is_private_and_kept_current() {
+        let given = [msg(Role::System, "sys"), msg(Role::User, "goal")];
+        let mut transcript = Transcript::create(&given).unwrap();
+        let path = transcript.path().to_path_buf();
+        let read = |p: &Path| -> Vec<Message> {
+            serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
+        };
+        assert_eq!(read(&path).len(), 2);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        }
+        transcript.absorb(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__tengu-tools__read_file","input":{"path":"a"}}]}}"#,
+        );
+        let now = read(&path);
+        assert_eq!(now.len(), 3);
+        assert_eq!(now[2].tool_calls.as_ref().unwrap()[0].name, "read_file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "rewritten private: {mode:o}");
+        }
+        drop(transcript);
+        assert!(!path.exists(), "removed with the run");
+    }
+
+    /// A stand-in CLI: `script` after the prompt is read.
+    fn stub_cli(dir: &Path, script: &str) -> PathBuf {
+        let path = dir.join("claude");
+        std::fs::write(&path, format!("#!/bin/sh\ncat > /dev/null\n{script}")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    /// Events of one run of the stub, and how long it took.
+    async fn run_stub(script: &str) -> (Vec<StreamEvent>, Duration) {
+        use futures::StreamExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let engine = ClaudeCodeEngine::new(
+            stub_cli(dir.path(), script),
+            BuiltinToolsProfile::None,
+            None,
+            60,
+        );
+        let context = EngineContext {
+            workspace: Some(dir.path().to_path_buf()),
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: Some(10),
+            max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
+        };
+        let started = std::time::Instant::now();
+        let stream = engine
+            .run(&[msg(Role::User, "go")], &[], &context)
+            .await
+            .unwrap();
+        let events = tokio::time::timeout(Duration::from_secs(15), stream.collect::<Vec<_>>())
+            .await
+            .expect("the run ends");
+        (events, started.elapsed())
+    }
+
+    fn ran(events: &[StreamEvent]) -> Vec<(String, bool)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ToolRan { name, ok } => Some((name.clone(), *ok)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A successful `compress_and_store` ends the run (the CLI is stopped,
+    /// the run's summed usage, `Done`), once the round's other calls are
+    /// answered — the stub would otherwise keep going for 30 s; a refused
+    /// one does not.
+    #[tokio::test]
+    async fn compress_and_store_ends_the_run_after_its_round() {
+        const TEXT: &str = r#"echo '{"type":"assistant","message":{"id":"msg_0","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":7,"output_tokens":3}}}'"#;
+        const CALLS: &str = r#"echo '{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_a","name":"mcp__tengu-tools__read_file","input":{"path":"a"}},{"type":"tool_use","id":"toolu_c","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"done"}}],"usage":{"input_tokens":10,"output_tokens":5}}}'"#;
+        const STORED: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_c","content":"stored — stop now"}]}}'"#;
+        const READ: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"alpha"}]}}'"#;
+        const LATE: &str =
+            r#"echo '{"type":"assistant","message":{"content":[{"type":"text","text":"late"}]}}'"#;
+
+        // `exec`: the stopped stub leaves no child holding the pipes.
+        let (events, took) = run_stub(&format!(
+            "{TEXT}\n{CALLS}\n{STORED}\nsleep 0.3\n{READ}\nexec sleep 30\n"
+        ))
+        .await;
+        assert!(took < Duration::from_secs(10), "not stopped: {took:?}");
+        assert_eq!(
+            ran(&events),
+            [
+                ("compress_and_store".to_string(), true),
+                ("read_file".to_string(), true)
+            ],
+            "the round's other call is answered first"
+        );
+        assert!(
+            matches!(
+                &events[events.len() - 2..],
+                [
+                    StreamEvent::Usage {
+                        input_tokens: 17,
+                        output_tokens: 8
+                    },
+                    StreamEvent::Done
+                ]
+            ),
+            "the run's summed usage, then Done: {events:?}"
+        );
+
+        // Refused (no step bridge): the run goes on to its own end.
+        let refused = CALLS.replace("toolu_a", "toolu_x");
+        let error = STORED.replace(
+            r#""content":"stored — stop now""#,
+            r#""is_error":true,"content":"refused""#,
+        );
+        let (events, _) = run_stub(&format!("{refused}\n{error}\n{LATE}\n")).await;
+        assert_eq!(ran(&events), [("compress_and_store".to_string(), false)]);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::TextDelta { text } if text == "late")),
+            "{events:?}"
+        );
     }
 }

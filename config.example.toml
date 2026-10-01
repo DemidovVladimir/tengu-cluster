@@ -512,8 +512,12 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # what the planner LLM reads — say what it is good at AND what it is NOT for.
 # `tools` is the allow-list for its subprocess runs (empty = every base tool;
 # workspace-tool names listed here are opted in like `workspace_tools`).
-# `limits.max_tool_rounds` caps its LLM turns per step, `limits.step_timeout_secs`
-# the wall clock (default 600). No `workspace` = a temp dir per step.
+# `limits.max_tool_rounds` caps its LLM turns per step (tool calls on
+# `claude_code`), `limits.step_timeout_secs` the wall clock (default 600).
+# No `workspace` = a temp dir per step (and per webhook turn), removed after
+# it: files it writes go too; the memory store then sits at `[memory]
+# store_path`; load warns when the agent's tools write files or skills. Pin
+# `workspace` for anything that must persist.
 
 # [agents.researcher]
 # engine = "openrouter"

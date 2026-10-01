@@ -116,7 +116,7 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | Agent kind | Sees `[[mcp_servers]]` tools? | How |
 |---|---|---|
 | Plan-step subagent, `engine = "openrouter"` | yes | `run-agent` executor connects, advertises them |
-| Plan-step subagent, `engine = "claude_code"` | yes | engine passes the servers to the tengu bridge (`TENGU_BRIDGE_MCP_SERVERS`), which proxies them under the egress policy — as `mcp__tengu-tools__<server>__<tool>` |
+| Plan-step subagent, `engine = "claude_code"` | yes | engine names the servers to the tengu bridge (`TENGU_BRIDGE_MCP_SERVERS`, names only: the bridge takes them from its loaded config, so no `${VAR}`-expanded value sits in the temp `--mcp-config`), which proxies them under the egress policy — as `mcp__tengu-tools__<server>__<tool>` |
 | In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
 | Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`bootstrap::tools::bridge_inputs`) |
