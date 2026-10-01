@@ -1,5 +1,5 @@
 //! Runtime state port — what `tengu run` keeps in its state dir (the
-//! `[xmarket]` state dir, else `<TENGU_HOME>/state`): the single-runner lease
+//! `[xmarket]` state dir, else `<TENGU_HOME>/state`): the single-runner leases
 //! in `runtime.db` and the heartbeat file `run-<sandbox>.json`. Impl:
 //! `adapters::outbound::runtime_store`. Later waves add feed cursors, the
 //! ingest seen-set and timers (tracker convention 3).

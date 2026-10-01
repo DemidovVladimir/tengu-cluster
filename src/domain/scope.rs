@@ -135,6 +135,36 @@ pub(crate) fn protected_write(rel: &Path) -> Option<&'static str> {
         .or_else(|| rel.file_name().and_then(|name| named(name, &FILES)))
 }
 
+/// Instruction files tengu reads from an agent's workspace into its system
+/// prompt besides `AGENTS.md` (which [`protected_write`] refuses
+/// everywhere): `MemoryManager`'s builtin provider
+/// (`outbound/memory/builtin.rs`) and the skill registry's identity block
+/// (`application/skills/registry.rs`) — each loader's test keeps its list
+/// inside this one.
+pub(crate) const PROMPT_FILES: [&str; 5] = [
+    "MEMORY.md",
+    "USER.md",
+    "IDENTITY.md",
+    "PROFILE.md",
+    "CONTEXT.md",
+];
+
+/// [`protected_write`] for a writer in a hardened sandbox (`[risk]` or a
+/// `[solana]` signer: `AgentConfig::hardened`): also the [`PROMPT_FILES`],
+/// by name at any depth, case-insensitive — text an agent writes there
+/// would persist into every later system prompt (prompt injection). Not
+/// hardened: agents keep their profile files current.
+pub(crate) fn protected_write_in(rel: &Path, hardened: bool) -> Option<&'static str> {
+    protected_write(rel).or_else(|| {
+        let name = rel.file_name()?;
+        (hardened && PROMPT_FILES.iter().any(|f| name.eq_ignore_ascii_case(f))).then_some(
+            "a hardened sandbox ([risk] or a Solana signer) keeps the workspace prompt files \
+             (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — \
+             tengu loads them into the system prompt",
+        )
+    })
+}
+
 #[allow(dead_code)] // Phase A wires these into ToolCtx
 impl ToolScope {
     /// Every field empty: the scope grants nothing — an explicit deny
@@ -560,6 +590,45 @@ mod tests {
             "",
         ] {
             assert_eq!(protected_write(Path::new(rel)), None, "{rel}");
+        }
+    }
+
+    /// A hardened sandbox also keeps the system-prompt files out of
+    /// writers' reach (any depth, any case); elsewhere they stay writable.
+    /// The everywhere-names stay refused either way.
+    #[test]
+    fn hardened_writers_refuse_the_prompt_files() {
+        for rel in [
+            "MEMORY.md",
+            "USER.md",
+            "IDENTITY.md",
+            "PROFILE.md",
+            "CONTEXT.md",
+            "memory.md",
+            "project/Identity.MD",
+            "a/b/context.md",
+        ] {
+            let why = protected_write_in(Path::new(rel), true)
+                .unwrap_or_else(|| panic!("{rel} allowed when hardened"));
+            assert!(why.contains("hardened sandbox"), "{rel}: {why}");
+            assert_eq!(protected_write_in(Path::new(rel), false), None, "{rel}");
+        }
+        for rel in ["CLAUDE.md", ".tengu/x", "AGENTS.md"] {
+            for hardened in [false, true] {
+                assert_eq!(
+                    protected_write_in(Path::new(rel), hardened),
+                    protected_write(Path::new(rel)),
+                    "{rel}"
+                );
+            }
+        }
+        for rel in [
+            "memory.md.bak",
+            "MEMORY.md/notes.txt",
+            "user.txt",
+            "profiles.md",
+        ] {
+            assert_eq!(protected_write_in(Path::new(rel), true), None, "{rel}");
         }
     }
 }

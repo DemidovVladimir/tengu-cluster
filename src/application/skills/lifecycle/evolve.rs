@@ -207,11 +207,13 @@ pub(crate) fn validate_resource_path(rel_path: &str) -> Result<()> {
 
 /// [`validate_resource_path`] for a resource about to be written: also
 /// refuses what a CLI agent or tengu acts on by name
-/// (`domain::scope::protected_write`: `.claude/`, `CLAUDE.md`, `AGENTS.md`,
-/// …). Reads keep the plain check — a shipped skill may carry such a file.
-pub(crate) fn validate_resource_write_path(rel_path: &str) -> Result<()> {
+/// (`domain::scope::protected_write_in`: `.claude/`, `CLAUDE.md`,
+/// `AGENTS.md`, …; with `hardened` — the writer's `AgentConfig::hardened` —
+/// the system-prompt files too). Reads keep the plain check — a shipped
+/// skill may carry such a file.
+pub(crate) fn validate_resource_write_path(rel_path: &str, hardened: bool) -> Result<()> {
     validate_resource_path(rel_path)?;
-    if let Some(why) = crate::domain::scope::protected_write(Path::new(rel_path)) {
+    if let Some(why) = crate::domain::scope::protected_write_in(Path::new(rel_path), hardened) {
         bail!("resource path '{}' is not allowed: {}", rel_path, why);
     }
     Ok(())
@@ -221,15 +223,17 @@ pub(crate) fn validate_resource_write_path(rel_path: &str) -> Result<()> {
 /// temp-then-rename inside the `resources/` subdir of the skill. Creates
 /// parent dirs as needed. Refuses to overwrite an existing file unless
 /// `overwrite: true`. Returns the list of paths written, relative to the
-/// skill directory (e.g. `resources/genitive.md`).
+/// skill directory (e.g. `resources/genitive.md`). `hardened`: as
+/// [`validate_resource_write_path`].
 pub(crate) fn apply_proposal_resources(
     skill_dir: &Path,
     additions: &[ResourceFile],
+    hardened: bool,
 ) -> Result<Vec<PathBuf>> {
     let resources_root = skill_dir.join("resources");
     let mut written: Vec<PathBuf> = Vec::with_capacity(additions.len());
     for entry in additions {
-        validate_resource_write_path(&entry.path)
+        validate_resource_write_path(&entry.path, hardened)
             .with_context(|| format!("validate resource_additions[{}]", entry.path))?;
         let dest = resources_root.join(&entry.path);
         if dest.exists() && !entry.overwrite {
@@ -490,11 +494,25 @@ mod tests {
             ".claude/settings.json",
             ".tengu/x",
         ] {
-            assert!(validate_resource_write_path(bad).is_err(), "{bad}");
+            for hardened in [false, true] {
+                assert!(
+                    validate_resource_write_path(bad, hardened).is_err(),
+                    "{bad}"
+                );
+            }
             validate_resource_path(bad).unwrap();
         }
-        assert!(validate_resource_write_path("../escape.md").is_err());
-        validate_resource_write_path("verbs/strong.md").unwrap();
+        assert!(validate_resource_write_path("../escape.md", false).is_err());
+        validate_resource_write_path("verbs/strong.md", true).unwrap();
+        // The system-prompt files: refused only to a hardened writer.
+        for prompt in ["IDENTITY.md", "notes/memory.md"] {
+            let err = validate_resource_write_path(prompt, true).unwrap_err();
+            assert!(
+                err.to_string().contains("hardened sandbox"),
+                "{prompt}: {err}"
+            );
+            validate_resource_write_path(prompt, false).unwrap();
+        }
     }
 
     #[test]
@@ -514,7 +532,7 @@ mod tests {
                 overwrite: false,
             },
         ];
-        let written = apply_proposal_resources(&skill_dir, &additions).unwrap();
+        let written = apply_proposal_resources(&skill_dir, &additions, false).unwrap();
         assert_eq!(written.len(), 2);
         let f1 = skill_dir.join("resources").join("genitive.md");
         let f2 = skill_dir.join("resources").join("verbs").join("strong.md");
@@ -554,6 +572,7 @@ mod tests {
                 content: "NEW".into(),
                 overwrite: false,
             }],
+            false,
         )
         .unwrap_err();
         assert!(format!("{}", err).contains("refusing to overwrite"));
@@ -570,6 +589,7 @@ mod tests {
                 content: "NEW".into(),
                 overwrite: true,
             }],
+            false,
         )
         .unwrap();
         assert_eq!(

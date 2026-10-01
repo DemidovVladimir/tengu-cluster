@@ -2,7 +2,7 @@
 //! xmarket state dir, `<xm_state_dir>/ledger.db` (tracker convention 3:
 //! `<TENGU_HOME>/state/<xmarket.state>/`, outside every workspace and fs
 //! root; `tengu prune` spares `state/`). WAL + busy_timeout; `place`,
-//! `update_risk_state`, `accrue_funding` and `open_account` each run in one
+//! `update_risk_state`, `settle_funding`, `trigger_exit` and `open_account` each run in one
 //! `BEGIN IMMEDIATE` transaction, so two loops or processes never
 //! check-then-act on the same account (convention 9). Rows are never
 //! purged. No `[xmarket]` ⇒ [`open_paper_ledger`] refuses ⇒ the exec tools
@@ -10,7 +10,7 @@
 //!
 //! | Table | Key | Row |
 //! |---|---|---|
-//! | `accounts` | account | initial cash, created |
+//! | `accounts` | account | initial cash, created, `sandbox` = the owner (below; NULL until a sandbox's handle writes it) |
 //! | `cash` | id | journal: `deposit` / `fill` / `funding` movement + the running balance (the latest row is the cash) |
 //! | `positions` | (account, instrument) | `domain::xm::ledger::Position` + `exit_at_ms`; the venue facts kept for closes (`sz_decimals`, `taker_fee_bps`, `maker_fee_bps`, `facts_at_ms` — written by every sent order priced from a `mkt_instrument/1` row, never by an older one; review #6); a fired stop-loss / take-profit (`exit_trigger` + the `exit_trigger_opened_ms` it fired for + `exit_trigger_ms`); flat rows keep their P&L history |
 //! | `orders` | id · UNIQUE (account, client_order_id) | one per allowed order: status, reason, fill summary, the engine's `FillResult` (JSON), the id of the verdict that allowed it, the request's `fingerprint` (a replay asking for something else is refused `client_order_id_conflict`; NULL on older rows: not checked). The gate's order rate counts the rows that are not `reduce_only` (exits never count) |
@@ -30,6 +30,14 @@
 //! EXISTS`, new columns [`ADDED_COLUMNS`] (nullable) — a binary from before
 //! them keeps reading and writing the ledger (it leaves the new columns and
 //! `funding_owed` alone).
+//!
+//! Owners (review #13, `ports/paper.rs`): [`open_paper_ledger`] opens the
+//! handle as the sandbox's (`SandboxSections::owner`). Each write
+//! transaction (`open_account`, `place`, `update_risk_state`,
+//! `settle_funding`, `trigger_exit`) first runs [`check_owner`]: an account without an
+//! owner is claimed (`accounts.sandbox`), one another sandbox owns is
+//! refused `account_owner_mismatch` — nothing written. A handle without an
+//! owner (`tengu risk`) never checks or claims.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,7 +65,7 @@ use crate::domain::xm::risk::{Halt, HaltReason};
 use crate::domain::xm::risk_state::RiskState;
 use crate::ports::paper::{
     Decide, Decision, LedgerSnapshot, Outcome, PaperLedger, PlaceRequest, Placement, RiskUpdate,
-    StoredDecision, StoredOrder,
+    StoredDecision, StoredOrder, ACCOUNT_OWNER_MISMATCH,
 };
 
 /// The verdict mirror, under `<TENGU_HOME>/logs/`.
@@ -144,6 +152,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("positions", "exit_trigger", "TEXT"),
     ("positions", "exit_trigger_opened_ms", "INTEGER"),
     ("positions", "exit_trigger_ms", "INTEGER"),
+    ("accounts", "sandbox", "TEXT"),
 ];
 
 /// `<TENGU_HOME>/logs/risk.jsonl`.
@@ -154,7 +163,8 @@ pub(crate) fn risk_log_path() -> PathBuf {
 }
 
 /// The sandbox's ledger (`[xmarket]` state dir), mirroring its verdicts to
-/// [`risk_log_path`]; refused without `[xmarket]`.
+/// [`risk_log_path`] and writing as the sandbox (`SandboxSections::owner`,
+/// module doc: Owners); refused without `[xmarket]`.
 pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn PaperLedger>> {
     let dir = sections.xm_state_dir.as_deref().ok_or_else(|| {
         anyhow!(
@@ -163,7 +173,9 @@ pub(crate) fn open_paper_ledger(sections: &SandboxSections) -> Result<Arc<dyn Pa
         )
     })?;
     Ok(Arc::new(
-        SqlitePaperLedger::open(dir)?.with_audit(risk_log_path()),
+        SqlitePaperLedger::open(dir)?
+            .with_audit(risk_log_path())
+            .with_owner(sections.owner()),
     ))
 }
 
@@ -187,6 +199,11 @@ pub(crate) struct SqlitePaperLedger {
     conn: Arc<Mutex<Connection>>,
     /// `risk.jsonl` (module doc); `None` = verdicts are not mirrored.
     audit: Option<PathBuf>,
+    /// The sandbox this handle writes as (module doc: Owners); `None` = the
+    /// operator's handle: no owner check, no claim.
+    owner: Option<String>,
+    /// `<state_dir>/ledger.db`, for refusals.
+    path: PathBuf,
 }
 
 impl SqlitePaperLedger {
@@ -204,6 +221,8 @@ impl SqlitePaperLedger {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             audit: None,
+            owner: None,
+            path,
         })
     }
 
@@ -211,6 +230,20 @@ impl SqlitePaperLedger {
     pub(crate) fn with_audit(mut self, path: PathBuf) -> Self {
         self.audit = Some(path);
         self
+    }
+
+    /// Write as `sandbox` (module doc: Owners).
+    pub(crate) fn with_owner(mut self, sandbox: &str) -> Self {
+        self.owner = Some(sandbox.to_string());
+        self
+    }
+
+    /// What every write transaction needs for [`check_owner`].
+    fn owner_check(&self) -> OwnerCheck {
+        OwnerCheck {
+            owner: self.owner.clone(),
+            ledger: self.path.clone(),
+        }
     }
 
     async fn with_conn<T, F>(&self, f: F) -> Result<T>
@@ -225,6 +258,47 @@ impl SqlitePaperLedger {
         })
         .await
         .context("paper ledger task")?
+    }
+}
+
+/// A handle's owner, carried into its write transactions.
+struct OwnerCheck {
+    owner: Option<String>,
+    ledger: PathBuf,
+}
+
+/// Module doc, Owners — inside a write transaction on `account`: claim it
+/// when it has no owner yet, refuse it when another sandbox owns it (the
+/// caller's transaction then rolls back: nothing written). An unknown
+/// account passes (the write's own read refuses it); a handle without an
+/// owner never checks or claims.
+fn check_owner(c: &Connection, account: &str, check: &OwnerCheck) -> Result<()> {
+    let Some(owner) = check.owner.as_deref() else {
+        return Ok(());
+    };
+    let stored: Option<Option<String>> = c
+        .query_row(
+            "SELECT sandbox FROM accounts WHERE account = ?1",
+            params![account],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match stored {
+        None => Ok(()),
+        Some(None) => {
+            c.execute(
+                "UPDATE accounts SET sandbox = ?2 WHERE account = ?1 AND sandbox IS NULL",
+                params![account, owner],
+            )?;
+            Ok(())
+        }
+        Some(Some(s)) if s == owner => Ok(()),
+        Some(Some(s)) => bail!(
+            "{ACCOUNT_OWNER_MISMATCH}: paper account `{account}` in {} belongs to sandbox \
+             `{s}`; this process writes as sandbox `{owner}` — two sandboxes name the same \
+             [xmarket] state. Give each sandbox its own [xmarket] state; nothing was written",
+            check.ledger.display()
+        ),
     }
 }
 
@@ -417,8 +491,17 @@ fn load_snapshot(c: &Connection, account: &str, now_ms: i64) -> Result<LedgerSna
         "SELECT COUNT(*) FROM orders WHERE account = ?1 AND status = 'resting'",
         params![account],
     )?;
+    let owner: Option<String> = c
+        .query_row(
+            "SELECT sandbox FROM accounts WHERE account = ?1",
+            params![account],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
     Ok(LedgerSnapshot {
         risk: load_risk_state(c, account)?,
+        owner,
         account: account_now,
         exit_at_ms,
         exit_triggers,
@@ -922,11 +1005,17 @@ fn check_decision(req: &PlaceRequest, d: &Decision) -> Result<()> {
 }
 
 /// The `place` transaction (module table + port docs).
-fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<Placement> {
+fn place_tx(
+    conn: &mut Connection,
+    req: PlaceRequest,
+    decide: Decide,
+    check: &OwnerCheck,
+) -> Result<Placement> {
     if req.client_order_id.trim().is_empty() {
         bail!("client_order_id is empty: an order needs an idempotency key");
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    check_owner(&tx, &req.account, check)?;
     if let Some(order) = read_order(&tx, &req.account, &req.client_order_id)? {
         // Another request's order under this id: refused, never replayed.
         if let Some(why) = order.conflict(req.fingerprint.as_deref()) {
@@ -1074,12 +1163,13 @@ impl PaperLedger for SqlitePaperLedger {
     ) -> Result<PaperAccount> {
         PaperAccount::new(account, initial_cash_usd)?;
         let account = account.to_string();
+        let check = self.owner_check();
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let created = tx.execute(
-                "INSERT INTO accounts(account, initial_cash_usd, created_ms) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(account) DO NOTHING",
-                params![account, initial_cash_usd, now_ms],
+                "INSERT INTO accounts(account, initial_cash_usd, created_ms, sandbox)
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(account) DO NOTHING",
+                params![account, initial_cash_usd, now_ms, check.owner],
             )?;
             if created == 1 {
                 append_cash(
@@ -1092,6 +1182,8 @@ impl PaperLedger for SqlitePaperLedger {
                     initial_cash_usd,
                 )?;
             }
+            // An existing account: claimed if unowned, else its owner's.
+            check_owner(&tx, &account, &check)?;
             let a = load_account(&tx, &account)?.account;
             tx.commit()?;
             Ok(a)
@@ -1124,8 +1216,9 @@ impl PaperLedger for SqlitePaperLedger {
 
     async fn place(&self, req: PlaceRequest, decide: Decide) -> Result<Placement> {
         let audit = self.audit.clone();
+        let check = self.owner_check();
         self.with_conn(move |conn| {
-            let p = place_tx(conn, req, decide)?;
+            let p = place_tx(conn, req, decide, &check)?;
             // A replay wrote no verdict row.
             if let Some(path) = audit.as_deref().filter(|_| !p.replayed) {
                 mirror(path, &p);
@@ -1142,8 +1235,10 @@ impl PaperLedger for SqlitePaperLedger {
         update: RiskUpdate,
     ) -> Result<LedgerSnapshot> {
         let account = account.to_string();
+        let check = self.owner_check();
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            check_owner(&tx, &account, &check)?;
             let mut snapshot = load_snapshot(&tx, &account, now_ms)?;
             let next = update(&snapshot).map_err(|e| anyhow!("{e}"))?;
             if next != snapshot.risk {
@@ -1206,8 +1301,10 @@ impl PaperLedger for SqlitePaperLedger {
         now_ms: i64,
     ) -> Result<FundingSettlement> {
         let (account, instrument) = (account.to_string(), instrument.to_string());
+        let check = self.owner_check();
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            check_owner(&tx, &account, &check)?;
             let mut loaded = load_account(&tx, &account)?;
             let cash_before = loaded.account.cash_usd;
             let s = loaded.account.settle_funding(&instrument, rate, now_ms)?;
@@ -1244,8 +1341,10 @@ impl PaperLedger for SqlitePaperLedger {
             );
         }
         let (account, instrument) = (account.to_string(), instrument.to_string());
+        let check = self.owner_check();
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            check_owner(&tx, &account, &check)?;
             let loaded = load_account(&tx, &account)?;
             let Some(p) = loaded
                 .account
@@ -1937,6 +2036,138 @@ pub(crate) mod tests {
         assert!(
             e.to_string().contains("unknown paper account `nobody`"),
             "{e}"
+        );
+    }
+
+    /// `account_owner_mismatch` of `account`, owned by `owner`, written as
+    /// `writer`.
+    fn assert_refused(e: anyhow::Error, account: &str, owner: &str, writer: &str) {
+        let e = format!("{e:#}");
+        assert!(
+            e.starts_with(&format!(
+                "{ACCOUNT_OWNER_MISMATCH}: paper account `{account}`"
+            )),
+            "{e}"
+        );
+        assert!(
+            e.contains(&format!("belongs to sandbox `{owner}`"))
+                && e.contains(&format!("writes as sandbox `{writer}`"))
+                && e.contains("nothing was written"),
+            "{e}"
+        );
+    }
+
+    /// Review #13: an account belongs to the first sandbox whose handle
+    /// writes it. Another sandbox's handle is refused on every write —
+    /// nothing written, a replay included — while its reads work and its
+    /// new account is its own; the operator's handle (no owner) halts any
+    /// account and claims none.
+    #[tokio::test]
+    async fn an_account_belongs_to_the_sandbox_that_first_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mine = SqlitePaperLedger::open(dir.path())
+            .unwrap()
+            .with_owner("xmarket");
+        mine.open_account(ACCOUNT, 100.0, NOW - 60_000)
+            .await
+            .unwrap();
+        let o = buy("o-1", ACCOUNT, TSLA);
+        let p = mine
+            .place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        assert!(p.decision.verdict.allow);
+        let owner = |s: LedgerSnapshot| s.owner;
+        assert_eq!(
+            owner(mine.snapshot(ACCOUNT, NOW).await.unwrap()).as_deref(),
+            Some("xmarket")
+        );
+
+        let theirs = SqlitePaperLedger::open(dir.path())
+            .unwrap()
+            .with_owner("xmarket-copy");
+        let before = rows(dir.path());
+        let refused = |e| assert_refused(e, ACCOUNT, "xmarket", "xmarket-copy");
+        refused(theirs.open_account(ACCOUNT, 100.0, NOW).await.unwrap_err());
+        let o2 = buy("o-2", ACCOUNT, TSLA);
+        for o in [&o2, &o] {
+            let e = theirs
+                .place(req(o, NOW + 1_000), Box::new(|_| panic!("decided")))
+                .await
+                .unwrap_err();
+            refused(e);
+        }
+        refused(
+            theirs
+                .update_risk_state(ACCOUNT, NOW, Box::new(|s| Ok(s.risk.halt_operator(NOW))))
+                .await
+                .unwrap_err(),
+        );
+        let hour = NOW - NOW.rem_euclid(HOUR_MS) + HOUR_MS;
+        refused(
+            theirs
+                .settle_funding(ACCOUNT, TSLA, FundingRate::new(0.0001, MID), hour + 1)
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(rows(dir.path()), before, "nothing written");
+        // Reads never check.
+        assert_eq!(
+            owner(theirs.snapshot(ACCOUNT, NOW).await.unwrap()).as_deref(),
+            Some("xmarket")
+        );
+        assert!(theirs.stored(ACCOUNT, "o-1").await.unwrap().is_some());
+        // A new account is its first writer's.
+        theirs.open_account(SHADOW, 1_000.0, NOW).await.unwrap();
+        assert_eq!(
+            owner(theirs.snapshot(SHADOW, NOW).await.unwrap()).as_deref(),
+            Some("xmarket-copy")
+        );
+        assert_refused(
+            mine.open_account(SHADOW, 1_000.0, NOW).await.unwrap_err(),
+            SHADOW,
+            "xmarket-copy",
+            "xmarket",
+        );
+        // The operator's handle: no check, no claim.
+        let operator = SqlitePaperLedger::open(dir.path()).unwrap();
+        let s = operator
+            .update_risk_state(ACCOUNT, NOW, Box::new(|s| Ok(s.risk.halt_operator(NOW))))
+            .await
+            .unwrap();
+        assert!(s.risk.halt.is_some());
+        assert_eq!(s.owner.as_deref(), Some("xmarket"));
+        operator.open_account("fresh", 50.0, NOW).await.unwrap();
+        assert_eq!(owner(operator.snapshot("fresh", NOW).await.unwrap()), None);
+    }
+
+    /// An older ledger gains `accounts.sandbox` on open; its accounts have
+    /// no owner until a sandbox's handle writes one, which claims it.
+    #[tokio::test]
+    async fn an_older_ledgers_accounts_are_claimed_by_their_first_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        ledger(dir.path()).await;
+        Connection::open(ledger_db(dir.path()))
+            .unwrap()
+            .execute_batch("ALTER TABLE accounts DROP COLUMN sandbox")
+            .unwrap();
+        let l = SqlitePaperLedger::open(dir.path())
+            .unwrap()
+            .with_owner("xmarket-weekend");
+        assert_eq!(l.snapshot(ACCOUNT, NOW).await.unwrap().owner, None);
+        l.open_account(ACCOUNT, 100.0, NOW).await.unwrap();
+        assert_eq!(
+            l.snapshot(ACCOUNT, NOW).await.unwrap().owner.as_deref(),
+            Some("xmarket-weekend")
+        );
+        let other = SqlitePaperLedger::open(dir.path())
+            .unwrap()
+            .with_owner("xmarket");
+        assert_refused(
+            other.open_account(ACCOUNT, 100.0, NOW).await.unwrap_err(),
+            ACCOUNT,
+            "xmarket-weekend",
+            "xmarket",
         );
     }
 

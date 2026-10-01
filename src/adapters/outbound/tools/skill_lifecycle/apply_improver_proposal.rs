@@ -158,7 +158,10 @@ impl Tool for ApplyImproverProposalTool {
 
         // Apply resource files (each atomic temp+rename).
         let written: Vec<PathBuf> = match &args.resource_additions {
-            Some(adds) if !adds.is_empty() => apply_proposal_resources(&skill_dir, adds)?,
+            Some(adds) if !adds.is_empty() => {
+                let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
+                apply_proposal_resources(&skill_dir, adds, hardened)?
+            }
             _ => Vec::new(),
         };
 

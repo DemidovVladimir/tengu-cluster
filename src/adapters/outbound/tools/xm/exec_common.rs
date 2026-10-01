@@ -1753,4 +1753,55 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             "a rate from the future is no rate"
         );
     }
+
+    /// Review #13: two sandboxes on one ledger — an exec call on the account
+    /// the other sandbox owns is refused at step 4, before any book read,
+    /// nothing written; the owner's own call trades.
+    #[tokio::test]
+    async fn an_exec_call_on_another_sandboxs_account_is_refused() {
+        let rig = Rig::new(25).await;
+        let state = rig.dir.path().join("state");
+        let as_sandbox = |name: &str| {
+            let mut shared = rig.shared.clone();
+            let l = SqlitePaperLedger::open(&state).unwrap().with_owner(name);
+            shared.ledger = Ok(Arc::new(l) as Arc<dyn PaperLedger>);
+            shared
+        };
+        let io = ExecIo {
+            clock: rig.clock.as_ref(),
+            books: &rig.books,
+            rand01: 0.5,
+        };
+        let weekend = as_sandbox("xmarket-weekend");
+        let first = run_exec(&weekend, &rig.ctx(Some("mcp:n:1")), &io, rig.buy(20.0))
+            .await
+            .unwrap();
+        assert_eq!(first.status, ObsStatus::Ok, "{}", first.render_text(NOW));
+        let (reads, rows) = (rig.books.reads(), rig.rows());
+        let other = as_sandbox("xmarket");
+        for (order, id) in [(rig.buy(20.0), "mcp:n:2"), (rig.close(), "mcp:n:3")] {
+            let e = run_exec(&other, &rig.ctx(Some(id)), &io, order)
+                .await
+                .unwrap_err();
+            let e = format!("{e:#}");
+            assert!(
+                e.starts_with("account_owner_mismatch: paper account `xmarket`")
+                    && e.contains("belongs to sandbox `xmarket-weekend`"),
+                "{e}"
+            );
+        }
+        // The replay of the owner's order too.
+        let e = run_exec(&other, &rig.ctx(Some("mcp:n:1")), &io, rig.buy(20.0))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{e:#}").starts_with("account_owner_mismatch"),
+            "{e:#}"
+        );
+        assert_eq!((rig.books.reads(), rig.rows()), (reads, rows));
+        let again = run_exec(&weekend, &rig.ctx(Some("mcp:n:4")), &io, rig.close())
+            .await
+            .unwrap();
+        assert_eq!(again.status, ObsStatus::Ok, "{}", again.render_text(NOW));
+    }
 }

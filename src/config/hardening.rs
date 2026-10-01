@@ -71,6 +71,15 @@ pub(crate) fn dir_reach_errors(cfg: &Config, what: &str, dir: &Path, why: &str) 
     errors
 }
 
+/// The same check for one file (`tengu risk resume`'s secret file,
+/// `cli/risk.rs`): no `fs_roots` entry and no agent `workspace` contains
+/// `file` (symlinks resolved, `~` expanded). `why` ends each message.
+pub(crate) fn file_reach_errors(cfg: &Config, what: &str, file: &Path, why: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    path_errors(cfg, &[Protected::file(what, file)], why, &mut errors);
+    errors
+}
+
 fn claude_code_errors(cfg: &Config) -> Vec<String> {
     let mut agents: Vec<_> = cfg
         .agents

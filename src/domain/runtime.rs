@@ -1,5 +1,6 @@
 //! `tengu run` — pure data of the long-running process: the single-runner
-//! lease (one runner per sandbox), the heartbeat file, the `loop/1` /
+//! leases (one runner per sandbox, one owner per `[xmarket]` state dir),
+//! the heartbeat file, the `loop/1` /
 //! `feed/1` health rows and the `tengu doctor --live` verdict. No IO;
 //! `now_ms` is always an input. Composition `bootstrap/runtime.rs`; operator
 //! doc `docs/runtime-2026-09-30.md`.
@@ -17,9 +18,17 @@ pub const LEASE_TTL_MS: i64 = 30_000;
 /// Renewal period of a live runner (a third of the TTL).
 pub const LEASE_RENEW_MS: u64 = 10_000;
 
-/// `runtime:<sandbox>` — the lease one `tengu run` of a sandbox holds.
+/// `runtime:<sandbox>` — the lease one `tengu run` (or `tengu webhooks`) of
+/// a sandbox holds.
 pub fn lease_resource(sandbox: &str) -> String {
     format!("runtime:{sandbox}")
+}
+
+/// `state:<state dir name>` — the lease the process that owns an `[xmarket]`
+/// state dir (its `ledger.db`) holds beside `runtime:<sandbox>`: two
+/// sandboxes naming the same `[xmarket] state` never run at once.
+pub fn state_lease_resource(state_dir_name: &str) -> String {
+    format!("state:{state_dir_name}")
 }
 
 /// `run-<sandbox>.json` — the heartbeat file in the runtime state dir.
@@ -573,6 +582,10 @@ mod tests {
     #[test]
     fn resource_and_file_keep_the_full_sandbox_name() {
         assert_eq!(lease_resource("xmarket-weekend"), "runtime:xmarket-weekend");
+        assert_eq!(
+            state_lease_resource("xmarket-weekend"),
+            "state:xmarket-weekend"
+        );
         assert_eq!(
             heartbeat_file("xmarket-weekend"),
             "run-xmarket-weekend.json"

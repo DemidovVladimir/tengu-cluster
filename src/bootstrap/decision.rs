@@ -1,7 +1,9 @@
 //! Composition for `[decision_loops.<name>]`: Jev client + the loop agent's
 //! tool executor (same allow-list, scopes and workspace a `run-agent`
 //! subprocess of that agent gets; wrapped in `SanitizedToolExecutor` with the
-//! caller's `SecretRegistry`) + the agent workspace's observation store
+//! caller's `SecretRegistry`, then `egress::AttributedExecutor`: egress
+//! records name the loop's agent, the event's session and the call id) + the
+//! agent workspace's observation store
 //! (`open_observation_store`: `<workspace>/.tengu/observations.db`, source of
 //! `state.world`, + the history recorder when `[recorder]` is on; fail-soft)
 //! → `application::decision_loop::DecisionLoop`. [`agent_tool_executor`] also
@@ -16,6 +18,7 @@ use anyhow::{anyhow, Result};
 use tracing::warn;
 
 use crate::adapters::outbound::decisions::JevClient;
+use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
 use crate::adapters::outbound::noop::NoopActivity;
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
@@ -95,6 +98,13 @@ pub(crate) fn build_decision_loop(
         .map(|p| crate::config::paths::expand_tilde(p))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let (tools, _) = agent_tool_executor(config, agent, &workspace, &secrets);
+    // Egress records name the loop's agent + the event's session + the call
+    // id (every loop runs in one process: the env cannot).
+    let tools: Arc<dyn ToolExecutor> = Arc::new(AttributedExecutor::new(
+        tools,
+        &dl.agent,
+        CallSession::Loop(name.to_string()),
+    ));
 
     let observations = match open_observation_store(&workspace, &agent.sandbox) {
         Ok(s) => Some(s),

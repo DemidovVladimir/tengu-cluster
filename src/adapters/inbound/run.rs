@@ -134,8 +134,9 @@ fn webhooks_off(config: &Config, _rt: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-/// SIGINT + SIGTERM, registered up front (unix); Ctrl-C elsewhere.
-struct Signals {
+/// SIGINT + SIGTERM, registered up front (unix); Ctrl-C elsewhere. Also
+/// `tengu webhooks` (`webhooks.rs`).
+pub(super) struct Signals {
     #[cfg(unix)]
     int: tokio::signal::unix::Signal,
     #[cfg(unix)]
@@ -143,7 +144,7 @@ struct Signals {
 }
 
 impl Signals {
-    fn install() -> Result<Self> {
+    pub(super) fn install() -> Result<Self> {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
@@ -158,7 +159,7 @@ impl Signals {
         }
     }
 
-    async fn next(&mut self) -> &'static str {
+    pub(super) async fn next(&mut self) -> &'static str {
         #[cfg(unix)]
         {
             tokio::select! {

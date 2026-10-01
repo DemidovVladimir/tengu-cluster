@@ -15,9 +15,19 @@ use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
 
+/// Owner name of a config that is no `sandboxes/<name>/config.toml` file —
+/// as `tengu run` names its runner then.
+pub const DEFAULT_SANDBOX: &str = "default";
+
 /// Resolved sandbox sections (runtime only, never in TOML).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SandboxSections {
+    /// The sandbox of the config file (`paths::sandbox_of_config_file`:
+    /// `<name>` for `sandboxes/<name>/config.toml`, however it was loaded);
+    /// `None` = [`DEFAULT_SANDBOX`]. The paper ledger records it as the
+    /// owner of each account its tools write ([`SandboxSections::owner`],
+    /// `outbound/paper_store.rs`).
+    pub sandbox: Option<String>,
     /// `[xmarket]` present: `<TENGU_HOME>/state/<xmarket.state>` (absolute).
     /// The install-wide xmarket stores live here (tracker convention 3).
     pub xm_state_dir: Option<PathBuf>,
@@ -41,4 +51,12 @@ pub struct SandboxSections {
     /// `[xmarket.weekend_fade]` (`xm_weekend_fade`); its `calendar` is one
     /// of `calendars`.
     pub weekend_fade: Option<WeekendFadeConfig>,
+}
+
+impl SandboxSections {
+    /// The ledger owner these tools write as: [`SandboxSections::sandbox`],
+    /// else [`DEFAULT_SANDBOX`].
+    pub fn owner(&self) -> &str {
+        self.sandbox.as_deref().unwrap_or(DEFAULT_SANDBOX)
+    }
 }

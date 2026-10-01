@@ -12,8 +12,8 @@
 //!
 //! | Path | Holds | Opened by |
 //! |---|---|---|
-//! | `<state dir>/ledger.db` | paper ledger + risk verdicts | `outbound/paper_store.rs` |
-//! | `<state dir>/runtime.db` · `run-<sandbox>.json` | `tengu run` lease · heartbeat | `outbound/runtime_store.rs` |
+//! | `<state dir>/ledger.db` | paper ledger + risk verdicts; each account's owner sandbox | `outbound/paper_store.rs` |
+//! | `<state dir>/runtime.db` · `run-<sandbox>.json` | the `tengu run` / `tengu webhooks` leases (`runtime:<sandbox>`, `state:<dir>`: one owner per state dir) · heartbeat | `outbound/runtime_store.rs` |
 //! | `<state dir>/history/<YYYYMMDD>.db` | recorder day files (UTC) | `outbound/history_sqlite.rs` |
 //! | `<state dir>/{catalog,events,audit,spend}.db` | reserved: `kg-catalog-store` (M1), `info-store` (M4), `ops-audit-store` (M5), `ops-cost-guard` (M4) | — |
 //! | `<workspace>/.tengu/observations.db` | the workspace's only xmarket file: hot rows (`world`, `requires`) | `outbound/observations.rs` |

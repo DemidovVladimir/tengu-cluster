@@ -13,6 +13,18 @@ use crate::domain::memory::ChunkMetadata;
 use crate::ports::memory::MemoryProvider;
 use crate::ports::memory::VectorStore;
 
+/// Workspace-root files loaded into the system prompt, in order. A hardened
+/// sandbox's writers refuse every one (`domain::scope::protected_write_in`;
+/// test `every_prompt_file_is_write_protected_when_hardened`).
+const SYSTEM_PROMPT_FILES: [&str; 6] = [
+    "AGENTS.md",
+    "MEMORY.md",
+    "USER.md",
+    "IDENTITY.md",
+    "PROFILE.md",
+    "CONTEXT.md",
+];
+
 pub struct BuiltinMemoryProvider {
     // `workspace` and `system_block` are unused on the v2 path (the static
     // pre-load was replaced by RAG queries on demand). They remain wired
@@ -51,14 +63,7 @@ impl BuiltinMemoryProvider {
         // AGENTS.md, MEMORY.md, identity files, daily logs for today + yesterday.
         // Each file, if present and non-empty, gets a `## <name>` heading and is concatenated.
         let mut out = String::new();
-        for name in [
-            "AGENTS.md",
-            "MEMORY.md",
-            "USER.md",
-            "IDENTITY.md",
-            "PROFILE.md",
-            "CONTEXT.md",
-        ] {
+        for name in SYSTEM_PROMPT_FILES {
             if let Ok(body) = tokio::fs::read_to_string(self.workspace.join(name)).await {
                 if !body.trim().is_empty() {
                     out.push_str(&format!("## {}\n\n{}\n\n", name, body.trim()));
@@ -186,5 +191,19 @@ mod tests {
         let (_tmp, provider) = setup_workspace().await;
         let out = provider.prefetch("researcher", "anything").await;
         assert_eq!(out, "");
+    }
+
+    /// Every file this loader puts into the system prompt is one a hardened
+    /// sandbox's writers refuse (a new one here must join
+    /// `domain::scope::PROMPT_FILES`).
+    #[test]
+    fn every_prompt_file_is_write_protected_when_hardened() {
+        for name in SYSTEM_PROMPT_FILES {
+            assert!(
+                crate::domain::scope::protected_write_in(std::path::Path::new(name), true)
+                    .is_some(),
+                "{name}"
+            );
+        }
     }
 }

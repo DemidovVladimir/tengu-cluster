@@ -77,7 +77,8 @@ enum Commands {
     /// Run the inbound webhook listener (`[webhooks.endpoints.<name>]` blocks
     /// in the sandbox config bind URL paths to agents). Returns 202 Accepted
     /// on every authenticated POST and dispatches a one-shot orchestrator
-    /// turn in the background. Build with `--features webhooks`.
+    /// turn in the background. Takes the leases `tengu run` takes (never
+    /// beside it); SIGINT / SIGTERM drain it. Build with `--features webhooks`.
     Webhooks {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
@@ -117,7 +118,8 @@ enum Commands {
     },
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
-    /// account name). See docs/xmarket-risk-paper-2026-09-30.md.
+    /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
+    /// when that names a 0600 file). See docs/xmarket-risk-paper-2026-09-30.md.
     Risk {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]

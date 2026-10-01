@@ -493,7 +493,9 @@ These are not preferences. They're load-bearing.
   (Arti serves CONNECT on the SOCKS port). A bare `reqwest::Client::builder()`
   on a runtime path bypasses Tor. The *resolved* policy crosses to
   `run-agent` / `mcp-bridge` as `TENGU_EGRESS` (wins over the child's
-  config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl`. `tengu doctor
+  config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl` (`agent` /
+  `session` / `call_id`: a `tengu run` feed or loop call names its own —
+  `egress::AttributedExecutor` — else the process env). `tengu doctor
   --tor` verifies the exit; `make tor` runs the proxy (`deploy/tor/`: Arti +
   lyrebird-rs from `../lyrebird-rs`). Unit tests must not call
   `egress::install` (process-global).
@@ -559,9 +561,12 @@ These are not preferences. They're load-bearing.
   `new/../../x` used to land outside the workspace once `new` was created),
   then refuses `.tengu/`, `.claude/`, `.git/`, `skills/` at any depth and
   `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `.mcp.json` files
-  (case-insensitive) in every sandbox; `manage_skill` / `apply_improver_proposal`
-  resource paths and `agentic_memory` wiki titles refuse the same names
-  (`domain::scope::protected_write`).
+  (case-insensitive) in every sandbox; in a hardened one (`AgentConfig::hardened`)
+  also the system-prompt files `MEMORY.md` / `USER.md` / `IDENTITY.md` /
+  `PROFILE.md` / `CONTEXT.md` (`domain::scope::protected_write_in`; elsewhere
+  agents keep their profile files current); `manage_skill` /
+  `apply_improver_proposal` resource paths and `agentic_memory` wiki titles
+  refuse the same names (`domain::scope::protected_write`).
   Not covered: Claude Code built-ins (profiles other than `none`) and
   `run_command`.
 - **Telegram fails closed (2026-10-01)** — `tengu telegram` refuses to start
@@ -572,21 +577,27 @@ These are not preferences. They're load-bearing.
   team block (`telegram.rs::telegram_reachable`).
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
-  `fold_default_scopes`): `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
+  `fold_default_scopes`): the sandbox name (`<name>` of the file
+  `sandboxes/<name>/config.toml` however loaded, else `default` — the paper
+  ledger's account owner), `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
   install-wide stores), `[risk]` / `[paper]` (every field required,
   `config/risk.rs`), `[xmarket.calendars.*]`, `[rate_limits.<name>]`,
   `[recorder]`. A new section a tool reads goes there — never a new
   `#[serde(skip)]` field on `AgentConfig`. Every surface (in-process,
   `run-agent`, loops, `tengu run`, bridge) sees the same values.
 - **`tengu run --sandbox <s>` (2026-09-30, `docs/runtime-2026-09-30.md`)** —
-  one runner per sandbox (lease `runtime:<s>` in `<state dir>/runtime.db`,
-  TTL 30 s; a second instance exits 1); every `[decision_loops.*]` built once
+  one runner per sandbox and one owner per `[xmarket]` ledger (leases
+  `runtime:<s>` + `state:<dir>` in `<state dir>/runtime.db`, TTL 30 s;
+  `tengu webhooks` takes the same — a second process exits 1; each ledger
+  account records the sandbox that first wrote it, another sandbox's tools are
+  refused `account_owner_mismatch`); every `[decision_loops.*]` built once
   behind `LoopDispatch` (one event per loop at a time, `[runtime]
   max_decisions_in_flight`); `/webhooks/:name` with `--features webhooks`;
   SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
   `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
-  --sandbox <s> --live` is the Docker healthcheck. Never run `tengu webhooks`
-  beside `tengu run` for the same sandbox. Budgets: `[rate_limits.<name>]`
+  --sandbox <s> --live` is the Docker healthcheck. `tengu risk resume` may
+  also ask for a secret (`TENGU_RISK_RESUME_SECRET_FILE`, 0600; a terminal is
+  not a human). Budgets: `[rate_limits.<name>]`
   (`outbound/rate_limit.rs`, per process; unconfigured = unlimited); backoff
   `domain/backoff.rs`; HTTP errors classify through `outbound/http_class.rs`;
   Hyperliquid `POST /info` via `outbound/hyperliquid/info.rs` (`500 null` ⇒

@@ -4,12 +4,12 @@
 //! | Step | What |
 //! |---|---|
 //! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else `<TENGU_HOME>/state`; `runtime.db` lives there |
-//! | lease | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed) |
+//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
-//! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
+//! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
-//! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → lease released |
+//! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → leases released |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -22,6 +22,7 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::adapters::outbound::clock::SystemClock;
+use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::rate_limit::jitter01;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
@@ -33,7 +34,7 @@ use crate::config::feeds::{FeedConfig, FeedKind};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
-use crate::domain::runtime::{lease_resource, RunState, RunnerLease};
+use crate::domain::runtime::{lease_resource, state_lease_resource, RunState, RunnerLease};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
@@ -46,17 +47,193 @@ pub(crate) fn runner_name(config: &Config) -> String {
     config
         .sandbox_name
         .clone()
-        .unwrap_or_else(|| "default".to_string())
+        .unwrap_or_else(|| crate::config::sections::DEFAULT_SANDBOX.to_string())
+}
+
+/// The `[xmarket]` state dir every agent sees (`AgentConfig::sandbox`) —
+/// the ledger's — when the sandbox has one.
+fn xm_state_dir(config: &Config) -> Option<PathBuf> {
+    config
+        .agents
+        .values()
+        .find_map(|a| a.sandbox.xm_state_dir.clone())
 }
 
 /// Where `runtime.db` lives: the `[xmarket]` state dir every agent sees
 /// (`AgentConfig::sandbox`), else `<TENGU_HOME>/state`.
 pub(crate) fn runtime_state_dir(config: &Config) -> PathBuf {
-    let xm = config
-        .agents
-        .values()
-        .find_map(|a| a.sandbox.xm_state_dir.clone());
-    crate::config::runtime::state_dir(xm.as_deref(), &crate::config::paths::resolve_tengu_home())
+    crate::config::runtime::state_dir(
+        xm_state_dir(config).as_deref(),
+        &crate::config::paths::resolve_tengu_home(),
+    )
+}
+
+/// What a long-running process of a sandbox (`tengu run`, `tengu webhooks`)
+/// leases in `<state_dir>/runtime.db` (module table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeasePlan {
+    /// Runner name ([`runner_name`]): `runtime:<sandbox>`.
+    pub sandbox: String,
+    /// [`runtime_state_dir`].
+    pub state_dir: PathBuf,
+    /// The state dir is an `[xmarket]` one — it holds the ledger: also
+    /// `state:<dir name>`, so two sandboxes naming the same `[xmarket]
+    /// state` never run at once. `<TENGU_HOME>/state` (no `[xmarket]`) is
+    /// install-wide: no state lease there.
+    pub ledger: bool,
+}
+
+/// Which lease a refusal is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeaseKind {
+    Runner,
+    State,
+}
+
+impl LeasePlan {
+    pub(crate) fn of(config: &Config) -> Self {
+        let xm = xm_state_dir(config);
+        Self {
+            sandbox: runner_name(config),
+            ledger: xm.is_some(),
+            state_dir: runtime_state_dir(config),
+        }
+    }
+
+    /// The leases in the order they are taken.
+    fn resources(&self) -> Vec<(String, LeaseKind)> {
+        let mut out = vec![(lease_resource(&self.sandbox), LeaseKind::Runner)];
+        if self.ledger {
+            let name = self.state_dir.file_name().map_or_else(
+                || self.state_dir.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            out.push((state_lease_resource(&name), LeaseKind::State));
+        }
+        out
+    }
+
+    /// Why `lease` (refused) stops this process from starting — the holder
+    /// in full.
+    fn refusal(&self, kind: LeaseKind, db: &str, lease: &RunnerLease, now: i64) -> anyhow::Error {
+        let (resource, holder, secs) = (
+            &lease.resource,
+            &lease.current_holder,
+            lease.remaining_secs(now),
+        );
+        match kind {
+            LeaseKind::Runner => anyhow!(
+                "sandbox `{}` is already running: lease `{resource}` in {db} is held by \
+                 `{holder}` for {secs} s more. Stop that `tengu run` / `tengu webhooks` first \
+                 (SIGTERM drains it); if it crashed, retry once the lease expires.",
+                self.sandbox
+            ),
+            LeaseKind::State => anyhow!(
+                "state dir {} already has an owner: lease `{resource}` in {db} is held by \
+                 `{holder}` for {secs} s more — a `tengu run` or `tengu webhooks` of a sandbox \
+                 naming the same [xmarket] state owns its ledger, and a ledger has one owner. \
+                 Stop that process first (SIGTERM drains it), or give this sandbox its own \
+                 [xmarket] state; if it crashed, retry once the lease expires.",
+                self.state_dir.display()
+            ),
+        }
+    }
+}
+
+/// The leases a process holds ([`LeasePlan`]): taken all or none, renewed
+/// by [`OwnerLeases::keep`] on the process's supervisor, freed by
+/// [`OwnerLeases::release`]. `tengu run` ([`Runtime`]) and `tengu webhooks`
+/// hold the same set.
+pub(crate) struct OwnerLeases {
+    store: Arc<dyn RuntimeStore>,
+    holder: String,
+    leases: Vec<(RunnerLease, LeaseKind)>,
+}
+
+impl OwnerLeases {
+    /// Open `<state dir>/runtime.db` and take the plan's leases in order —
+    /// `runtime:<sandbox>`, then `state:<dir>` — for `ttl_ms`. A refusal
+    /// frees what was taken and names the holder in full.
+    pub(crate) async fn take(plan: &LeasePlan, ttl_ms: i64) -> Result<Self> {
+        let store = SqliteRuntimeStore::open(&plan.state_dir)?;
+        let db = store.path().display().to_string();
+        let store: Arc<dyn RuntimeStore> = Arc::new(store);
+        let mut taken = Self {
+            store,
+            holder: holder_id(),
+            leases: Vec::new(),
+        };
+        for (resource, kind) in plan.resources() {
+            let now = now_ms();
+            let lease = taken
+                .store
+                .acquire_lease(&resource, &taken.holder, ttl_ms, now)
+                .await
+                .with_context(|| format!("take lease `{resource}` in {db}"));
+            let refusal = match lease {
+                Ok(l) if l.granted => {
+                    taken.leases.push((l, kind));
+                    continue;
+                }
+                Ok(l) => plan.refusal(kind, &db, &l, now),
+                Err(e) => e,
+            };
+            taken.release().await;
+            return Err(refusal);
+        }
+        Ok(taken)
+    }
+
+    /// One renewal task per lease on `supervisor` (`keep_lease`): a lost
+    /// lease fires its stop signal (failed).
+    pub(crate) fn keep(&self, supervisor: &mut Supervisor, timing: LeaseTiming) {
+        for (lease, kind) in &self.leases {
+            let (store, lease, stopper) =
+                (Arc::clone(&self.store), lease.clone(), supervisor.stopper());
+            let name = match kind {
+                LeaseKind::Runner => "lease",
+                LeaseKind::State => "state lease",
+            };
+            supervisor.spawn(name, move |stop| {
+                keep_lease(store, lease, timing, stopper, stop)
+            });
+        }
+    }
+
+    /// `<host>:<pid>:<uuid>` — one id for every lease of this process.
+    pub(crate) fn holder(&self) -> &str {
+        &self.holder
+    }
+
+    /// The resources held, in the order taken.
+    pub(crate) fn resources(&self) -> Vec<&str> {
+        self.leases
+            .iter()
+            .map(|(l, _)| l.resource.as_str())
+            .collect()
+    }
+
+    fn store(&self) -> Arc<dyn RuntimeStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Free every lease (holder-scoped: someone else's stays), the last
+    /// taken first. `false` when a release failed — it expires by itself.
+    pub(crate) async fn release(&self) -> bool {
+        let mut all = true;
+        for (lease, _) in self.leases.iter().rev() {
+            if let Err(e) = self
+                .store
+                .release_lease(&lease.resource, &lease.holder)
+                .await
+            {
+                let error = format!("{e:#}");
+                warn!(resource = %lease.resource, %error, "lease release failed; it expires by itself");
+                all = false;
+            }
+        }
+        all
+    }
 }
 
 /// Workspace of `[agents.<agent>]` as its loop sees it: `workspace` (`~`
@@ -88,13 +265,13 @@ pub(crate) struct ShutdownReport {
     pub lease_released: bool,
 }
 
-/// One running `tengu run`: lease, loops, health, supervised tasks.
+/// One running `tengu run`: leases, loops, health, supervised tasks.
 pub(crate) struct Runtime {
     sandbox: String,
     state_dir: PathBuf,
     cfg: RuntimeConfig,
     store: Arc<dyn RuntimeStore>,
-    lease: RunnerLease,
+    owner: OwnerLeases,
     started_at_ms: i64,
     supervisor: Supervisor,
     loops: Arc<LoopDispatch>,
@@ -110,8 +287,7 @@ pub(crate) async fn start(
     escalator: Option<Arc<dyn Escalator>>,
 ) -> Result<Runtime> {
     let mut rt = Runtime::begin(
-        runner_name(config),
-        runtime_state_dir(config),
+        LeasePlan::of(config),
         config.runtime.clone(),
         LeaseTiming::default(),
     )
@@ -217,6 +393,12 @@ fn feed_spec(
                      the log above)"
                 );
             }
+            // Egress records name the feed's agent + `feed:<name>` + the call id.
+            let executor = Arc::new(AttributedExecutor::new(
+                executor,
+                &agent_name,
+                CallSession::Fixed(format!("feed:{name}")),
+            ));
             let job = FeedJob::Tool {
                 executor,
                 tool,
@@ -311,46 +493,35 @@ fn holder_id() -> String {
 }
 
 impl Runtime {
-    /// Open `<state_dir>/runtime.db`, take `runtime:<sandbox>` (refused ⇒
-    /// error naming the holder) and start renewing it. No loops yet.
+    /// Open `<state_dir>/runtime.db`, take the plan's leases (refused ⇒
+    /// error naming the holder, nothing held) and start renewing them. No
+    /// loops yet.
     pub(crate) async fn begin(
-        sandbox: String,
-        state_dir: PathBuf,
+        plan: LeasePlan,
         cfg: RuntimeConfig,
         timing: LeaseTiming,
     ) -> Result<Self> {
-        let store = SqliteRuntimeStore::open(&state_dir)?;
-        let db = store.path().display().to_string();
-        let store: Arc<dyn RuntimeStore> = Arc::new(store);
-        let (resource, holder) = (lease_resource(&sandbox), holder_id());
         let now = now_ms();
-        let lease = store
-            .acquire_lease(&resource, &holder, timing.ttl_ms, now)
-            .await
-            .with_context(|| format!("take lease `{resource}` in {db}"))?;
-        if !lease.granted {
-            anyhow::bail!(
-                "sandbox `{sandbox}` is already running: lease `{resource}` in {db} is held by \
-                 `{}` for {} s more. Stop that `tengu run` first (SIGTERM drains it); if it \
-                 crashed, retry once the lease expires.",
-                lease.current_holder,
-                lease.remaining_secs(now)
-            );
-        }
+        let owner = OwnerLeases::take(&plan, timing.ttl_ms).await?;
         let mut supervisor = Supervisor::new();
-        let (keeper_store, keeper_lease, stopper) =
-            (Arc::clone(&store), lease.clone(), supervisor.stopper());
-        supervisor.spawn("lease", move |stop| {
-            keep_lease(keeper_store, keeper_lease, timing, stopper, stop)
-        });
-        info!(%sandbox, %resource, %holder, state_dir = %state_dir.display(), "runtime lease taken");
+        owner.keep(&mut supervisor, timing);
+        let LeasePlan {
+            sandbox, state_dir, ..
+        } = plan;
+        info!(
+            %sandbox,
+            leases = ?owner.resources(),
+            holder = %owner.holder(),
+            state_dir = %state_dir.display(),
+            "runtime leases taken"
+        );
         let loops = Arc::new(LoopDispatch::new(
             BTreeMap::new(),
             cfg.max_decisions_in_flight,
         ));
         let health = Arc::new(HealthBoard::new(
             &sandbox,
-            &holder,
+            owner.holder(),
             now,
             cfg.heartbeat_secs,
             BTreeMap::new(),
@@ -359,8 +530,8 @@ impl Runtime {
             sandbox,
             state_dir,
             cfg,
-            store,
-            lease,
+            store: owner.store(),
+            owner,
             started_at_ms: now,
             supervisor,
             loops,
@@ -382,7 +553,7 @@ impl Runtime {
         ));
         self.health = Arc::new(HealthBoard::new(
             &self.sandbox,
-            &self.lease.holder,
+            self.owner.holder(),
             self.started_at_ms,
             self.cfg.heartbeat_secs,
             loop_stores,
@@ -412,7 +583,7 @@ impl Runtime {
 
     /// Lease holder id: `<host>:<pid>:<uuid>`.
     pub(crate) fn holder(&self) -> &str {
-        &self.lease.holder
+        self.owner.holder()
     }
 
     /// Where loop events go (webhook endpoints, tick feeds).
@@ -439,13 +610,13 @@ impl Runtime {
     }
 
     /// Stop (if not yet requested), drain loops and tasks until
-    /// `shutdown_grace_secs`, then release the lease. The heartbeat says
+    /// `shutdown_grace_secs`, then release the leases. The heartbeat says
     /// `stopping` during the drain and `stopped` after it.
     pub(crate) async fn shutdown(self) -> ShutdownReport {
         let Runtime {
             cfg,
             store,
-            lease,
+            owner,
             supervisor,
             loops,
             health,
@@ -471,14 +642,7 @@ impl Runtime {
         let (drained, aborted_tasks) =
             tokio::join!(loops.drain(deadline), supervisor.shutdown(deadline));
         beat(RunState::Stopped).await;
-        let lease_released = match store.release_lease(&lease.resource, &lease.holder).await {
-            Ok(()) => true,
-            Err(e) => {
-                let error = format!("{e:#}");
-                warn!(resource = %lease.resource, %error, "lease release failed; it expires by itself");
-                false
-            }
-        };
+        let lease_released = owner.release().await;
         ShutdownReport {
             stop,
             loops: drained,
@@ -505,14 +669,175 @@ mod tests {
         }
     }
 
+    /// `sandbox` on the `[xmarket]` state dir `dir` (`ledger`) or on an
+    /// install-wide one.
+    fn plan(sandbox: &str, dir: &Path, ledger: bool) -> LeasePlan {
+        LeasePlan {
+            sandbox: sandbox.into(),
+            state_dir: dir.to_path_buf(),
+            ledger,
+        }
+    }
+
+    async fn begin_as(plan: LeasePlan, timing: LeaseTiming) -> Result<Runtime> {
+        Runtime::begin(plan, RuntimeConfig::default(), timing).await
+    }
+
     async fn begin(dir: &Path, timing: LeaseTiming) -> Result<Runtime> {
-        Runtime::begin(
-            "xmarket-weekend".into(),
-            dir.to_path_buf(),
-            RuntimeConfig::default(),
-            timing,
-        )
-        .await
+        begin_as(plan("xmarket-weekend", dir, true), timing).await
+    }
+
+    /// `state:<dir name>` of the plan's state dir.
+    fn state_resource(dir: &Path) -> String {
+        state_lease_resource(&dir.file_name().unwrap().to_string_lossy())
+    }
+
+    /// Review #13: two sandboxes naming one `[xmarket] state` share a
+    /// ledger — the second process is refused (exit 1), names the holder in
+    /// full and leaves no lease behind; the first stops, the second runs.
+    #[tokio::test]
+    async fn two_sandboxes_on_one_xmarket_state_dir_never_run_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = begin_as(plan("xmarket", dir.path(), true), slow_timing())
+            .await
+            .unwrap();
+        let holder = first.holder().to_string();
+        let err = format!(
+            "{:#}",
+            begin_as(plan("xmarket-copy", dir.path(), true), slow_timing())
+                .await
+                .err()
+                .unwrap()
+        );
+        let resource = state_resource(dir.path());
+        assert!(err.contains("already has an owner"), "{err}");
+        assert!(err.contains(&format!("`{resource}`")), "{err}");
+        assert!(err.contains(&format!("`{holder}`")), "{err}");
+        assert!(err.contains("[xmarket] state"), "{err}");
+        // The refused process freed its `runtime:` lease.
+        let store = SqliteRuntimeStore::open(dir.path()).unwrap();
+        let r = lease_resource("xmarket-copy");
+        let probe = store
+            .acquire_lease(&r, "probe", 60_000, now_ms())
+            .await
+            .unwrap();
+        assert!(probe.granted, "{probe:?}");
+        store.release_lease(&r, "probe").await.unwrap();
+        let report = first.shutdown().await;
+        assert!(report.lease_released, "{report:?}");
+        let second = begin_as(plan("xmarket-copy", dir.path(), true), slow_timing())
+            .await
+            .unwrap();
+        second.shutdown().await;
+    }
+
+    /// `<TENGU_HOME>/state` (no `[xmarket]`) is install-wide: sandboxes
+    /// without a ledger take no state lease and run side by side.
+    #[tokio::test]
+    async fn sandboxes_without_a_ledger_share_the_install_state_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = begin_as(plan("lping", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        let b = begin_as(plan("jev-exec", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        assert_eq!(a.owner.resources(), ["runtime:lping"]);
+        a.shutdown().await;
+        b.shutdown().await;
+    }
+
+    /// `tengu webhooks` holds the same leases: refused beside a running
+    /// `tengu run` of the sandbox or of another sandbox on its ledger; once
+    /// that stops, taken, kept and freed.
+    #[tokio::test]
+    async fn webhooks_leases_are_refused_beside_a_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = begin(dir.path(), slow_timing()).await.unwrap();
+        let same = plan("xmarket-weekend", dir.path(), true);
+        let err = format!(
+            "{:#}",
+            OwnerLeases::take(&same, 60_000).await.err().unwrap()
+        );
+        assert!(
+            err.contains("sandbox `xmarket-weekend` is already running"),
+            "{err}"
+        );
+        let other = plan("xmarket", dir.path(), true);
+        let err = format!(
+            "{:#}",
+            OwnerLeases::take(&other, 60_000).await.err().unwrap()
+        );
+        assert!(err.contains("already has an owner"), "{err}");
+        rt.shutdown().await;
+        let owner = OwnerLeases::take(&same, 60_000).await.unwrap();
+        assert_eq!(
+            owner.resources(),
+            [
+                "runtime:xmarket-weekend".to_string(),
+                state_resource(dir.path())
+            ]
+        );
+        let mut supervisor = Supervisor::new();
+        owner.keep(&mut supervisor, slow_timing());
+        let aborted = supervisor
+            .shutdown(Instant::now() + Duration::from_secs(5))
+            .await;
+        assert!(aborted.is_empty(), "{aborted:?}");
+        assert!(owner.release().await);
+        let again = OwnerLeases::take(&other, 60_000).await.unwrap();
+        again.release().await;
+    }
+
+    #[tokio::test]
+    async fn losing_the_state_lease_stops_the_runtime_as_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let fast = LeaseTiming {
+            ttl_ms: 60_000,
+            renew_ms: 20,
+        };
+        let rt = begin(dir.path(), fast).await.unwrap();
+        let thief = SqliteRuntimeStore::open(dir.path()).unwrap();
+        let r = state_resource(dir.path());
+        thief.release_lease(&r, rt.holder()).await.unwrap();
+        assert!(
+            thief
+                .acquire_lease(&r, "thief:2:x", 60_000, now_ms())
+                .await
+                .unwrap()
+                .granted
+        );
+        let stop = tokio::time::timeout(Duration::from_secs(5), stopped(&mut rt.stop_rx()))
+            .await
+            .expect("state lease keeper noticed");
+        assert!(stop.failed);
+        assert!(stop.reason.contains(&format!("`{r}`")), "{}", stop.reason);
+        rt.shutdown().await;
+    }
+
+    #[test]
+    fn lease_plan_follows_the_xmarket_state_dir() {
+        let ws = tempfile::tempdir().unwrap();
+        let config = feed_config(ws.path(), "");
+        let p = LeasePlan::of(&config);
+        assert_eq!((p.sandbox.as_str(), p.ledger), ("default", false));
+        assert!(p.state_dir.ends_with("state"), "{p:?}");
+        let mut config = feed_config(ws.path(), "[xmarket]\nstate = \"xm-plan\"\n");
+        config.sandbox_name = Some("xmarket".into());
+        let p = LeasePlan::of(&config);
+        assert_eq!((p.sandbox.as_str(), p.ledger), ("xmarket", true));
+        assert_eq!(
+            Some(&p.state_dir),
+            config.agents["main"].sandbox.xm_state_dir.as_ref()
+        );
+        assert!(p.state_dir.ends_with("state/xm-plan"), "{p:?}");
+        assert_eq!(
+            p.resources(),
+            [
+                ("runtime:xmarket".to_string(), LeaseKind::Runner),
+                ("state:xm-plan".to_string(), LeaseKind::State)
+            ]
+        );
     }
 
     #[tokio::test]

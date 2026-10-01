@@ -807,7 +807,7 @@ order_types = ["market", "ioc"]
         let err = parse(&RISK_100.replace("[risk]", "[rsik]")).unwrap_err();
         assert!(err.contains("unknown field `rsik`"), "{err}");
         // Bare top-level keys too — a runtime-only field is not a TOML key.
-        for key in ["typo_key", "sandbox_name"] {
+        for key in ["typo_key", "sandbox_name", "loaded_from"] {
             let err = toml::from_str::<Config>(&format!("{key} = \"x\"\n{AGENT}")).unwrap_err();
             assert!(
                 err.to_string().contains(&format!("unknown field `{key}`")),

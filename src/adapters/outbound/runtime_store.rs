@@ -3,7 +3,7 @@
 //!
 //! | File | Holds |
 //! |---|---|
-//! | `runtime.db` | the single-runner lease of `tengu run` — WAL + busy_timeout, one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
+//! | `runtime.db` | the leases of `tengu run` / `tengu webhooks` (`runtime:<sandbox>`, `state:<dir>`; `bootstrap/runtime.rs::LeasePlan`) — WAL + busy_timeout, one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
 //! | `run-<sandbox>.json` | the heartbeat — written to a temp file, then renamed (readers never see a partial file); [`read_heartbeat`] serves `tengu doctor --live` |
 
 use std::path::{Path, PathBuf};

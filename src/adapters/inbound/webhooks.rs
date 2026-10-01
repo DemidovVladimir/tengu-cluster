@@ -81,12 +81,62 @@ type HmacSha256 = Hmac<Sha256>;
 /// (different prefix, identical shape).
 const SIG_HEADER: &str = "x-tengu-signature";
 
-/// Long-running entry point. Boots the axum server and never returns
-/// (until ctrl-c).
+/// Long-running entry point: takes the leases `tengu run` takes
+/// (`bootstrap::runtime::LeasePlan`: `runtime:<sandbox>`, and `state:<dir>`
+/// for an `[xmarket]` state dir — never beside `tengu run` of the sandbox or
+/// of another sandbox on its ledger; held ⇒ exit 1 naming the holder), then
+/// serves until SIGINT / SIGTERM (graceful: loop events drain ≤ `[runtime]
+/// shutdown_grace_secs`, the leases are freed; a second signal exits 130) or
+/// a lost lease (exit 1).
 pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
+    use crate::application::runtime::{LeaseTiming, Supervisor};
+    use crate::bootstrap::runtime::{LeasePlan, OwnerLeases};
+
     check_config(&config)?;
     let addr = bind_addr(&config)?;
+    // Before anything slow: a SIGTERM during boot must stop us cleanly.
+    let signals = super::run::Signals::install()?;
+    let plan = LeasePlan::of(&config);
+    let timing = LeaseTiming::default();
+    let owner = OwnerLeases::take(&plan, timing.ttl_ms).await?;
+    let mut supervisor = Supervisor::new();
+    owner.keep(&mut supervisor, timing);
+    info!(
+        sandbox = %plan.sandbox,
+        leases = ?owner.resources(),
+        holder = %owner.holder(),
+        state_dir = %plan.state_dir.display(),
+        "tengu webhooks leases taken"
+    );
+    let stopper = supervisor.stopper();
+    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
+    let served = serve_webhooks(config, secret_registry, addr, signals, stopper.clone()).await;
+    supervisor
+        .shutdown(tokio::time::Instant::now() + grace)
+        .await;
+    let released = owner.release().await;
+    let stop = stopper.cause();
+    info!(lease_released = released, stop = ?stop, "tengu webhooks stopped");
+    served?;
+    match stop {
+        Some(s) if s.failed => anyhow::bail!("tengu webhooks stopped: {}", s.reason),
+        _ => Ok(()),
+    }
+}
 
+/// The listener under the leases: every endpoint loop built once, served
+/// until the stop signal (a signal, a lost lease), then the loop events
+/// drained.
+async fn serve_webhooks(
+    config: Config,
+    secret_registry: Arc<SecretRegistry>,
+    addr: SocketAddr,
+    mut signals: super::run::Signals,
+    stopper: crate::application::runtime::Stopper,
+) -> Result<()> {
+    use crate::application::runtime::stopped;
+
+    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
     // Memory manager is shared across all requests — opening it per
     // request would be wasteful (store open + embedder per webhook).
     let memory_manager = Arc::new(MemoryManager::new());
@@ -116,7 +166,7 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
         config.runtime.max_decisions_in_flight,
     ));
 
-    let state = app_state(config, memory_manager, loops, secret_registry)?;
+    let state = app_state(config, memory_manager, Arc::clone(&loops), secret_registry)?;
     let endpoints_summary: Vec<&str> = state
         .config
         .webhooks
@@ -135,10 +185,35 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
         .await
         .with_context(|| format!("bind webhook listener to {}", addr))?;
 
-    axum::serve(listener, router(state))
+    let on_signal = stopper.clone();
+    let signal_task = tokio::spawn(async move {
+        let first = signals.next().await;
+        on_signal.stop(first, false);
+        let second = signals.next().await;
+        error!(
+            signal = second,
+            "second signal while draining — exiting now (code 130)"
+        );
+        std::process::exit(130);
+    });
+    let mut stop = stopper.subscribe();
+    let served = axum::serve(listener, router(state))
+        .with_graceful_shutdown(async move {
+            stopped(&mut stop).await;
+        })
         .await
-        .context("webhook server exited unexpectedly")?;
-    Ok(())
+        .context("webhook server exited unexpectedly");
+    // Not stopped yet ⇒ the server died on its own.
+    stopper.stop("webhook server exited", true);
+    let drained = loops.drain(tokio::time::Instant::now() + grace).await;
+    info!(
+        finished = drained.finished,
+        dropped = drained.dropped,
+        aborted = drained.aborted,
+        "webhook loop events drained"
+    );
+    signal_task.abort();
+    served
 }
 
 /// Refuse a config the listener cannot serve: disabled, no endpoints,

@@ -62,14 +62,17 @@ pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
 /// directories (`skills/` at any depth — an LLM-written skill would load on
 /// the next scan). Checked on the resolved path relative to the workspace,
 /// so `x/../.tengu/…`, a symlinked directory or `Skills/` on a case-folding
-/// filesystem cannot slip past. Every sandbox.
-pub fn validate_write_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
+/// filesystem cannot slip past. Every sandbox; a `hardened` one (the
+/// caller's `AgentConfig::hardened`) also refuses the system-prompt files
+/// (`domain::scope::protected_write_in`: `MEMORY.md`, `USER.md`,
+/// `IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`).
+pub fn validate_write_path(workspace: &Path, requested: &str, hardened: bool) -> Result<PathBuf> {
     let target = validate_path(workspace, requested)?;
     let root = workspace
         .canonicalize()
         .map_err(|e| anyhow!("Workspace directory not found: {}", e))?;
     let rel = target.strip_prefix(&root).unwrap_or(&target);
-    if let Some(why) = crate::domain::scope::protected_write(rel) {
+    if let Some(why) = crate::domain::scope::protected_write_in(rel, hardened) {
         bail!("Writing '{}' is not allowed: {}", requested, why);
     }
     if rel
@@ -155,13 +158,45 @@ mod tests {
             "Skills/evil/SKILL.md",
             "a/skills/b.md",
         ] {
-            assert!(validate_write_path(ws, bad).is_err(), "{bad} allowed");
+            for hardened in [false, true] {
+                assert!(
+                    validate_write_path(ws, bad, hardened).is_err(),
+                    "{bad} allowed"
+                );
+            }
         }
         let abs = ws.join(".tengu/x").display().to_string();
-        assert!(validate_write_path(ws, &abs).is_err());
+        assert!(validate_write_path(ws, &abs, false).is_err());
         for good in ["answer.txt", "out/new.txt", "skills.md", "notes/agents.txt"] {
-            validate_write_path(ws, good).unwrap_or_else(|e| panic!("{good}: {e:#}"));
+            for hardened in [false, true] {
+                validate_write_path(ws, good, hardened).unwrap_or_else(|e| panic!("{good}: {e:#}"));
+            }
         }
+    }
+
+    /// The system-prompt files: refused in a hardened sandbox — after
+    /// resolution, any case, any depth — and free elsewhere.
+    #[test]
+    fn validate_write_path_keeps_prompt_files_from_hardened_writers() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("notes")).unwrap();
+        for f in [
+            "MEMORY.md",
+            "USER.md",
+            "IDENTITY.md",
+            "PROFILE.md",
+            "CONTEXT.md",
+            "identity.md",
+            "notes/../Profile.md",
+            "project/CONTEXT.md",
+        ] {
+            let err = validate_write_path(ws, f, true).unwrap_err().to_string();
+            assert!(err.contains("hardened sandbox"), "{f}: {err}");
+            validate_write_path(ws, f, false).unwrap_or_else(|e| panic!("{f}: {e:#}"));
+        }
+        let abs = ws.join("MEMORY.md").display().to_string();
+        assert!(validate_write_path(ws, &abs, true).is_err());
     }
 
     /// A symlinked directory resolves first: `link/…` into `.tengu` is
@@ -173,9 +208,16 @@ mod tests {
         let ws = tmp.path();
         std::fs::create_dir_all(ws.join(".tengu")).unwrap();
         std::os::unix::fs::symlink(ws.join(".tengu"), ws.join("state")).unwrap();
-        let err = validate_write_path(ws, "state/observations.db")
+        let err = validate_write_path(ws, "state/observations.db", false)
             .unwrap_err()
             .to_string();
         assert!(err.contains("`.tengu/`"), "{err}");
+        // A file symlink named innocently resolves to the prompt file.
+        std::fs::write(ws.join("MEMORY.md"), "").unwrap();
+        std::os::unix::fs::symlink(ws.join("MEMORY.md"), ws.join("notes.txt")).unwrap();
+        let err = validate_write_path(ws, "notes.txt", true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("hardened sandbox"), "{err}");
     }
 }

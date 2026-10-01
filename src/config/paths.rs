@@ -38,6 +38,23 @@ pub(crate) fn absolute_path(path: &Path) -> PathBuf {
     })
 }
 
+/// The sandbox a config file belongs to: `<name>` for
+/// `…/sandboxes/<name>/config.toml` — what `--sandbox <name>` loads, and the
+/// same file through `-c` or `TENGU_CONFIG` (the MCP bridge, a `run-agent`
+/// child) — else `None`. Read on the canonical path when the file exists, so
+/// every process that loads the same file agrees (a symlinked `sandboxes/`
+/// entry included). `SandboxSections::sandbox` — the paper ledger's account
+/// owner.
+pub fn sandbox_of_config_file(path: &Path) -> Option<String> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if path.file_name()? != "config.toml" {
+        return None;
+    }
+    let dir = path.parent()?;
+    let name = dir.file_name()?.to_str()?;
+    (dir.parent()?.file_name()? == "sandboxes" && !name.is_empty()).then(|| name.to_string())
+}
+
 pub(crate) fn resolve_tengu_home() -> PathBuf {
     if let Ok(home) = std::env::var("TENGU_HOME") {
         if home.starts_with('~') {
@@ -65,5 +82,41 @@ mod tests {
         let missing = absolute_path(Path::new("sandboxes/none/config.toml"));
         assert!(missing.is_absolute(), "{}", missing.display());
         assert!(missing.ends_with("sandboxes/none/config.toml"));
+    }
+
+    /// `--sandbox <name>` and the same file by absolute path (the bridge's
+    /// `TENGU_CONFIG`) name one sandbox; any other file names none.
+    #[test]
+    fn a_config_file_names_its_sandbox() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("sandboxes/xmarket-weekend");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.toml");
+        std::fs::write(&file, "").unwrap();
+        let named = Some("xmarket-weekend".to_string());
+        assert_eq!(sandbox_of_config_file(&file), named);
+        assert_eq!(sandbox_of_config_file(&absolute_path(&file)), named);
+        // Relative, as `load_sandbox_or` passes it (lexical when missing).
+        assert_eq!(
+            sandbox_of_config_file(Path::new("sandboxes/nowhere-xyz/config.toml")),
+            Some("nowhere-xyz".to_string())
+        );
+        for other in [
+            tmp.path().join("config.toml"),
+            dir.join("other.toml"),
+            tmp.path().join("fixtures/xmarket/config.toml"),
+        ] {
+            assert_eq!(sandbox_of_config_file(&other), None, "{}", other.display());
+        }
+        #[cfg(unix)]
+        {
+            // A symlinked sandbox dir: named by where it resolves.
+            let real = tmp.path().join("elsewhere");
+            std::fs::create_dir_all(&real).unwrap();
+            std::fs::write(real.join("config.toml"), "").unwrap();
+            std::os::unix::fs::symlink(&real, tmp.path().join("sandboxes/linked")).unwrap();
+            let linked = tmp.path().join("sandboxes/linked/config.toml");
+            assert_eq!(sandbox_of_config_file(&linked), None);
+        }
     }
 }

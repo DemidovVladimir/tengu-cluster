@@ -15,6 +15,14 @@
 //! | [`PaperLedger::open_account`] | creates the account and its `deposit` cash row once |
 //! | reads | [`PaperLedger::snapshot`], [`PaperLedger::order`], [`PaperLedger::stored`] (a replay without the write lock), [`PaperLedger::decisions`], [`PaperLedger::accounts`] |
 //!
+//! Owners (review #13): a ledger handle opened for a sandbox (the tools':
+//! `open_paper_ledger`, owner `SandboxSections::owner`) writes only accounts
+//! that sandbox owns — every write above, inside its transaction, claims an
+//! account that has no owner yet (new, or stored before owners) and refuses
+//! one another sandbox owns ([`ACCOUNT_OWNER_MISMATCH`], nothing written).
+//! Reads never check. The operator's handle (`tengu risk`) has no owner: it
+//! neither checks nor claims, so a halt always lands.
+//!
 //! `decide` runs while the ledger's write lock is held: every read (books,
 //! ctx rows, the opportunity row, the kill-switch file) happens before
 //! `place`, so the closure only computes — but for one stat: an entry
@@ -38,11 +46,17 @@ use crate::domain::xm::paper::FillResult;
 use crate::domain::xm::risk::{OrderIntent, RiskVerdict};
 use crate::domain::xm::risk_state::RiskState;
 
+/// Refusal: the account belongs to another sandbox (module doc: Owners).
+pub(crate) const ACCOUNT_OWNER_MISMATCH: &str = "account_owner_mismatch";
+
 /// The account as stored — read inside `place`'s transaction, or by
 /// `snapshot`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LedgerSnapshot {
     pub account: PaperAccount,
+    /// The sandbox that owns the account (module doc: Owners); `None` until
+    /// a sandbox's handle writes it.
+    pub owner: Option<String>,
     /// Exit deadline per open position (full instrument id → ms).
     pub exit_at_ms: BTreeMap<String, i64>,
     /// The fired stop-loss / take-profit of each open position that has one
@@ -208,7 +222,9 @@ pub(crate) struct Placement {
 #[async_trait]
 pub(crate) trait PaperLedger: Send + Sync {
     /// Create `account` with `initial_cash_usd` (and its `deposit` cash row)
-    /// unless it exists; returns the stored account either way.
+    /// unless it exists; returns the stored account either way. `Err`
+    /// [`ACCOUNT_OWNER_MISMATCH`] when another sandbox owns it (module doc:
+    /// Owners).
     async fn open_account(
         &self,
         account: &str,

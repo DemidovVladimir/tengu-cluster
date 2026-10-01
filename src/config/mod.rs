@@ -250,6 +250,14 @@ pub struct Config {
     /// config doesn't leak it.
     #[serde(skip)]
     pub sandbox_name: Option<String>,
+
+    /// Runtime (never in TOML): the file `Config::load` read, as given.
+    /// `fold_default_scopes` names the sandbox from it
+    /// (`paths::sandbox_of_config_file` → `SandboxSections::sandbox`, the
+    /// paper ledger's account owner) — the same in every process that loads
+    /// the file, the MCP bridge included. `None` for a config built in code.
+    #[serde(skip)]
+    pub loaded_from: Option<PathBuf>,
 }
 
 /// A single external MCP server that tengu connects to as a client.
@@ -413,9 +421,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
     /// Runtime (never in TOML): set by `Config::fold_default_scopes` in a
-    /// hardened sandbox (`config/hardening.rs`: a `[solana]` signer) — tools
-    /// without a configured scope then get a fallback that runs no shell
-    /// (`bootstrap::tools::resolve_tool_scopes`).
+    /// hardened sandbox (`config/hardening.rs`: a `[solana]` signer or
+    /// `[risk]`) — tools without a configured scope then get a fallback that
+    /// runs no shell (`bootstrap::tools::resolve_tool_scopes`). Read as
+    /// [`AgentConfig::hardened`].
     #[serde(skip)]
     pub no_shell_fallback: bool,
     /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
@@ -432,6 +441,17 @@ pub struct AgentConfig {
 
 fn default_lens() -> String {
     "eco".to_string()
+}
+
+impl AgentConfig {
+    /// A hardened sandbox (`config/hardening.rs`: `[risk]` or a `[solana]`
+    /// signer) — `fold_default_scopes` marks every agent of one
+    /// (`no_shell_fallback`), the MCP bridge its fallback agent too. Its
+    /// writers also refuse the workspace's prompt files
+    /// (`domain::scope::protected_write_in`).
+    pub fn hardened(&self) -> bool {
+        self.no_shell_fallback
+    }
 }
 
 /// Optional identity metadata used for prompts/UI.
@@ -1092,6 +1112,7 @@ impl Config {
         for warning in config.validation_warnings() {
             tracing::warn!(path = %path.display(), "{warning}");
         }
+        config.loaded_from = Some(path.to_path_buf());
         config.fold_default_scopes();
         Ok(config)
     }
@@ -1132,6 +1153,10 @@ impl Config {
     fn sandbox_sections(&self) -> sections::SandboxSections {
         let home = crate::config::paths::resolve_tengu_home();
         sections::SandboxSections {
+            sandbox: self
+                .loaded_from
+                .as_deref()
+                .and_then(paths::sandbox_of_config_file),
             xm_state_dir: self.xmarket.as_ref().map(|x| x.state_dir(&home)),
             risk: self.risk.as_ref().map(risk::RiskConfig::resolved),
             paper: self.paper.clone(),
@@ -1554,6 +1579,7 @@ impl Default for Config {
             feeds: Default::default(),
             skill_lifecycle: None,
             sandbox_name: None,
+            loaded_from: None,
         }
     }
 }
@@ -1910,6 +1936,31 @@ ttl_days = 7
         let config: Config = toml::from_str(toml_str).expect("should parse");
         let scope = config.resolve_scope("main", "read_file").unwrap();
         assert_eq!(scope.fs_roots.len(), 1);
+    }
+
+    /// `Config::load` names the sandbox of the file in every agent's
+    /// sections — the paper ledger's account owner; another file is
+    /// `default`, a config built in code too.
+    #[test]
+    fn load_names_the_sandbox_of_the_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("sandboxes/xm-own");
+        std::fs::create_dir_all(&dir).unwrap();
+        let toml = "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\
+                    [agents.exec]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        std::fs::write(dir.join("config.toml"), toml).unwrap();
+        let c = Config::load(&dir.join("config.toml")).unwrap();
+        assert_eq!(c.loaded_from.as_deref(), Some(&*dir.join("config.toml")));
+        for agent in c.agents.values() {
+            assert_eq!(agent.sandbox.sandbox.as_deref(), Some("xm-own"));
+            assert_eq!(agent.sandbox.owner(), "xm-own");
+        }
+        std::fs::write(tmp.path().join("config.toml"), toml).unwrap();
+        let c = Config::load(&tmp.path().join("config.toml")).unwrap();
+        assert_eq!(c.agents["main"].sandbox.owner(), "default");
+        let mut c = Config::default();
+        c.fold_default_scopes();
+        assert_eq!(c.agents["main"].sandbox.owner(), "default");
     }
 
     #[test]

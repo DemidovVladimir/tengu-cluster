@@ -1113,6 +1113,11 @@ impl SkillSourcePort for FileSystemSkillSource {
 // System prompt building
 // ===========================================================================
 
+/// Workspace files the identity block loads, in order — each one a hardened
+/// sandbox's writers refuse (`domain::scope::PROMPT_FILES`; test
+/// `identity_files_are_write_protected_when_hardened`).
+const IDENTITY_FILES: [&str; 3] = ["IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
+
 /// Build bounded system prompt from config identity, role, custom instructions,
 /// workspace files, and optional skill context fragments.
 pub(crate) fn build_system_prompt(
@@ -1165,7 +1170,7 @@ pub(crate) fn build_system_prompt_with_tools(
 
     // 4. Workspace files — IDENTITY.md, PROFILE.md, CONTEXT.md.
     if let Some(ref workspace) = agent_config.workspace {
-        for filename in &["IDENTITY.md", "PROFILE.md", "CONTEXT.md"] {
+        for filename in &IDENTITY_FILES {
             let path = workspace.join(filename);
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if !content.trim().is_empty() {
@@ -1236,6 +1241,19 @@ pub(crate) fn build_system_prompt_with_tools(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every file the identity block loads is one a hardened sandbox's
+    /// writers refuse (a new one here must join `domain::scope::PROMPT_FILES`).
+    #[test]
+    fn identity_files_are_write_protected_when_hardened() {
+        for name in IDENTITY_FILES {
+            assert!(
+                crate::domain::scope::protected_write_in(std::path::Path::new(name), true)
+                    .is_some(),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn documentation_skill_parses_without_base_url_or_execution() {

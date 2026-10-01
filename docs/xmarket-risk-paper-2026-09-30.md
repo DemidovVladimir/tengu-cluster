@@ -19,6 +19,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | Config | `[risk]` + `[paper]`, the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
 | Agent | the caller is private again at call time (defence in depth: `run-agent` already refuses a `compose` that widens a routable agent in a `[risk]` sandbox, `bootstrap::tools::compose_agent`) | `exec_agent_not_private` |
 | Gate ↔ account (review #5) | the `[risk]` gate only on the `[risk]` account; the shadow gate (no budget) only with the paper engine's `PaperFills` proof (`[risk] mode = "paper"`: a live engine gets none) and never on the `[risk]` account | `gate_account_mismatch` · `shadow_not_paper` |
+| Owner (review #13) | the account belongs to the sandbox whose tools first wrote it (§ Ledger: owners); another sandbox's call is refused before any book read | `account_owner_mismatch` |
 | Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–256 chars, no whitespace; never random. An arg never starts with a reserved prefix — `exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:` (ids the exit rules, the weekend fade and the call paths make; review #11) | `no_client_order_id` · `invalid_client_order_id` |
 | Replay | an order stored under the key ⇒ its `paper_fill/1` row (`replayed`): no latency, no book read, nothing written — only when the request asks for the same order: its fingerprint (`tool account instrument close` · `… side notional USD`, stored with the order) must match; orders stored before the column are not checked | `client_order_id_conflict` |
 | Rows (never fetched) | `mkt_ctx/1` of the open positions, of closed ones owing funding, and of the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule) — a reduce-only order falls back to the facts kept with its position when that row is missing, older than them or partial (§ Funding and kept facts); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first; a close only without kept facts) |
@@ -92,7 +93,7 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 
 | Table | Holds |
 |---|---|
-| `accounts` · `cash` | several accounts (weekend: capped + shadow), created with `[paper] initial_cash_usd` · journal deposit / fill / funding + running balance |
+| `accounts` · `cash` | several accounts (weekend: capped + shadow), created with `[paper] initial_cash_usd`, `sandbox` = the owner (below; added on open, NULL until claimed) · journal deposit / fill / funding + running balance |
 | `positions` · `fills` | per (account, instrument) incl. `exit_at_ms`, the kept venue facts (`sz_decimals`, `taker_fee_bps`, `maker_fee_bps`, `facts_at_ms`) and a fired TP / SL (`exit_trigger`, `exit_trigger_opened_ms`, `exit_trigger_ms`) · VWAP fill per filled / partial order |
 | `funding` · `funding_owed` | one HL payment per (account, instrument, hour): rate, oracle, the size held at the hour · an hour settled without a fresh rate: the size held then, until a rate books it |
 | `orders` | allowed orders, `UNIQUE (account, client_order_id)`: a retry returns the stored result, writes nothing; `fingerprint` (added on open, NULL on older rows) = what the order asked for — a retry asking for another order is refused |
@@ -110,6 +111,16 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | Until booked | equity omits owed funding (cents on the budget); a weekend-fade name owing hours stays `closing` without a P&L; `tengu risk status` lists them |
 | Kept facts | every sent order priced from a `mkt_instrument/1` row keeps its `sz_decimals`, fee schedule and the row's time with the position (never an older row's over newer ones) |
 | Using them | a reduce-only order (`xm_exits`, `paper_close`, a shadow exit) fills on them when the row is missing (store unreadable, purged after 7 days), older than them, or partial; the `mkt_ctx/1` row still gives the listing and OI cap (none ⇒ `open`, the book decides). Entries always need the row. A position from before the columns has none: its close needs the row |
+
+| Owners (review #13) | Rule |
+|---|---|
+| Who | the tools' ledger handle writes as its sandbox: `<name>` of the config file `sandboxes/<name>/config.toml` — however loaded: `--sandbox`, `-c`, the MCP bridge's `TENGU_CONFIG` — else `default` (`config/paths.rs::sandbox_of_config_file` → `SandboxSections::owner`) |
+| Claim | every write (`open_account`, `place`, `update_risk_state`, `accrue_funding`) claims an account with no owner yet — new, or stored before the column — inside its transaction |
+| Refuse | an account another sandbox owns: `account_owner_mismatch`, nothing written (replays, `risk_status` rolls and funding included); reads never check |
+| Operator | `tengu risk` opens the ledger without an owner: status, halt and resume always work and claim nothing; `risk status` prints each account's owner |
+| First line | the `state:<dir>` lease (`docs/runtime-2026-09-30.md` § Single-runner lease): two sandboxes on one `[xmarket] state` never run at once |
+| Same sandbox, other path | the name comes from the file's directory: a config mounted elsewhere (Docker's `/opt/tengu/config.toml`) writes as `default` and is refused on accounts a `--sandbox <name>` run owns — run the sandbox's own file (`--sandbox <name>`; the image carries `/opt/tengu/sandboxes/`), or, as the operator with the run stopped, `sqlite3 <state dir>/ledger.db "UPDATE accounts SET sandbox = '<name>' WHERE account = '<account>'"` |
+| Older binaries | a binary from before 2026-10-01 (the frozen weekend `tengu-6fcb455`) neither checks nor claims; a newer one adds the column on open (additive) and claims on its first write |
 
 ## Audit — every verdict (`risk-audit-verdicts`)
 
@@ -213,7 +224,16 @@ Halted ⇒ entries deny, reduce-only exits pass. Day-start equity = the first va
 
 | Command / tool | Does | Guard |
 |---|---|---|
-| `tengu risk status [--sandbox s] [--account a]` | per account: halt, day start, cash, positions (full ids, exit deadlines, a fired TP / SL), funding owed (hours, since when), entries last 60 s (exits never count), last 5 verdicts, kill-switch file | read-only; never creates the ledger |
+| `tengu risk status [--sandbox s] [--account a]` | per account: owner sandbox, halt, day start, cash, positions (full ids, exit deadlines, a fired TP / SL), funding owed (hours, since when), entries last 60 s (exits never count), last 5 verdicts, kill-switch file | read-only; never creates the ledger |
 | `tengu risk halt [--account a]` | `operator` halt (default account `[risk] account`) | stdin + stdout a TTY; refused under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` |
-| `tengu risk resume [--account a]` | the operator types the account name; clears any halt | same + refused while the kill-switch file exists |
-| tool `risk_status` (opt-in) | row `risk_state/1:<[risk] account>` (TTL 2 s); marks from fresh `mkt_ctx/1` rows (never fetched: missing ⇒ `partial`, numbers omitted); each read rolls the UTC day + records trips | no `[risk]` ⇒ `risk_config_missing`; scope `fs_roots` = the workspace |
+| `tengu risk resume [--account a]` | the operator types the account name — and, with the resume guard, the secret; clears any halt | same + refused while the kill-switch file exists |
+| tool `risk_status` (opt-in) | row `risk_state/1:<[risk] account>` (TTL 2 s); marks from fresh `mkt_ctx/1` rows (never fetched: missing ⇒ `partial`, numbers omitted); each read rolls the UTC day + records trips | no `[risk]` ⇒ `risk_config_missing`; scope `fs_roots` = the workspace; another sandbox's account ⇒ `account_owner_mismatch` |
+
+**A terminal is not a human (review #16).** `halt` / `resume` only check that stdin and stdout are terminals and that no agent env is set. Inside tengu that holds: a hardened sandbox gives no agent a shell (no `shell_bins` scope, no-shell fallback, `claude_code` built-ins off). An agent *outside* tengu with a shell, running as the operator's user, could run `script -q /dev/null tengu risk resume` (a pseudo-terminal) and type the account name.
+
+| Resume guard (optional, `src/adapters/inbound/cli/risk.rs`) | Rule |
+|---|---|
+| On | `TENGU_RISK_RESUME_SECRET_FILE` names a file (`~/` expanded) in the operator's shell; unset or empty = off (default) |
+| Resume | after the account name, asks for the file's content (typed without echo, compared trimmed, in constant time); a mismatch changes nothing |
+| Refused before any prompt | the file is missing, not a regular file, readable by group / other (must be 0600), over 4 KiB, not UTF-8 or empty, or inside an agent's `fs_roots` / `workspace` (symlinks resolved); messages never carry the content |
+| Limit | stops an outside agent only while it cannot read the file: one whose file access is confined (a sandboxed CLI, a container without the path). An agent with an unrestricted shell as the operator's OS user can read a 0600 file — run such agents as another user, or not beside a live ledger. `halt` is never guarded |
