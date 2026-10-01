@@ -8,7 +8,9 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | `client_order_id` | the tool's arg, else `ToolCtx.call_id` — never a random id (a retry must deduplicate); 1–[`MAX_CLIENT_ORDER_ID`] chars, no whitespace or control chars |
+//! | `client_order_id` | the tool's arg, else `ToolCtx.call_id` — never a random id (a retry must deduplicate); 1–[`MAX_CLIENT_ORDER_ID`] chars, no whitespace or control chars; an arg never starts with a reserved prefix ([`RESERVED_CLIENT_ORDER_ID_PREFIXES`]: `exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:`) |
+//! | Fingerprint ([`order_fingerprint`]) | tool, account, full instrument id, `close` or side + notional — stored with the order; a replay asking for something else is refused |
+//! | Exit bound | an exit's IOC bound ≤ [`MAX_EXIT_SLIPPAGE_BPS`] (500 bps from mid) |
 //! | Underlying | the instrument's ledger position's (a close always matches it); none yet ⇒ the instrument id itself until the catalog maps underlyings (M1) — asset exposure then nets per instrument |
 //! | Venue facts | `mkt_instrument/1:<id>` (any age: static facts): a Hyperliquid perp, `sz_decimals`, the fee = the `[paper]` fee basis × HIP-3 deployer scale × growth mode on a USDC-quoted market (`hl_ctx`'s `taker_fee_bps` rule, `domain::hl::paper_fees`); `at_oi_cap` from the `mkt_ctx/1` row when there is one, else the instrument row's (unknown ⇒ opening refused) |
 //! | Market state of the fill | the `mkt_ctx/1` row: not listed ⇒ `delisted`; else `open` (no book ⇒ the book decides); no row ⇒ the instrument row's listing |
@@ -38,6 +40,21 @@ use crate::domain::xm::risk::{Check, HaltReason, OrderClass, RiskVerdict};
 /// leg `<base>:<instrument>`).
 pub(crate) const MAX_CLIENT_ORDER_ID: usize = 256;
 
+/// Prefixes of the ids the tools and the call paths make themselves: exit
+/// attempts, the weekend fade's entries, feed / bridge / chat call ids. A
+/// `client_order_id` argument may not start with one (review #11): it would
+/// replay, or block, an order it did not place.
+pub(crate) const RESERVED_CLIENT_ORDER_ID_PREFIXES: [&str; 6] =
+    ["exit:", "fade:", "fade-shadow:", "feed:", "mcp:", "chat:"];
+
+/// Hard ceiling of an exit's IOC bound (every reduce-only order: `xm_exits`,
+/// `paper_close`, a reduce-only `paper_order`, the shadow exits), bps from
+/// the mid (review #9): an argument above it is refused, a configured or
+/// default bound above it (`[risk] max_slippage_bps`, `[xmarket.weekend_fade]
+/// max_slippage_bps`) is cut to it. A `[risk.exits]` key may replace it
+/// after the weekend run.
+pub(crate) const MAX_EXIT_SLIPPAGE_BPS: f64 = 500.0;
+
 /// Why `id` cannot key an order; `None` when it can.
 pub(crate) fn client_order_id_error(id: &str) -> Option<String> {
     let n = id.chars().count();
@@ -51,6 +68,37 @@ pub(crate) fn client_order_id_error(id: &str) -> Option<String> {
         Some("client_order_id holds whitespace or a control character".into())
     } else {
         None
+    }
+}
+
+/// Why a `client_order_id` *argument* is refused: [`client_order_id_error`],
+/// or a reserved prefix ([`RESERVED_CLIENT_ORDER_ID_PREFIXES`]).
+pub(crate) fn client_order_id_arg_error(id: &str) -> Option<String> {
+    client_order_id_error(id).or_else(|| {
+        RESERVED_CLIENT_ORDER_ID_PREFIXES
+            .iter()
+            .find(|p| id.starts_with(*p))
+            .map(|p| {
+                format!(
+                    "client_order_id `{id}` starts with the reserved prefix `{p}` (ids the exit \
+                     rules, the weekend fade and the feed / bridge / chat call paths make)"
+                )
+            })
+    })
+}
+
+/// What an order asked for (review #11), stored with it: a replay under
+/// its `client_order_id` must ask for the same — `<tool> <account> <full
+/// instrument id> close` or `… <side> <notional> USD`.
+pub(crate) fn order_fingerprint(
+    tool: &str,
+    account: &str,
+    instrument: &str,
+    size: Option<(Side, f64)>,
+) -> String {
+    match size {
+        None => format!("{tool} {account} {instrument} close"),
+        Some((side, usd)) => format!("{tool} {account} {instrument} {} {usd} USD", side.as_str()),
     }
 }
 
@@ -479,6 +527,33 @@ mod tests {
             assert!(client_order_id_error(bad).is_some(), "{bad:?}");
         }
         assert_eq!(client_order_id_error(&"x".repeat(256)), None);
+        // Review #11: an argument may not take an id the tools make.
+        for reserved in [
+            "exit:xmarket:hyperliquid:xyz:TSLA:deadline:1",
+            "fade:xmarket:hyperliquid:xyz:TSLA:2026-10-02",
+            "fade-shadow:s:hyperliquid:xyz:TSLA:2026-10-02",
+            "feed:xm_exits:1790775352605:0",
+            COID,
+            "chat:0f1e:1:0:call_1",
+        ] {
+            let e = client_order_id_arg_error(reserved).unwrap();
+            assert!(e.contains("reserved prefix"), "{e}");
+            assert_eq!(client_order_id_error(reserved), None, "a tool's own id");
+        }
+        for ok in ["xm_entry:0001318605-26-000123:3", "my-exit:1", "feeder:1"] {
+            assert_eq!(client_order_id_arg_error(ok), None, "{ok}");
+        }
+        assert!(client_order_id_arg_error("a b")
+            .unwrap()
+            .contains("whitespace"));
+        assert_eq!(
+            order_fingerprint("paper_order", "xmarket", TSLA, Some((Side::Buy, 25.0))),
+            "paper_order xmarket hyperliquid:xyz:TSLA buy 25 USD"
+        );
+        assert_eq!(
+            order_fingerprint("xm_exits", "xmarket", TSLA, None),
+            "xm_exits xmarket hyperliquid:xyz:TSLA close"
+        );
     }
 
     /// `xyz:TSLA` tier 0: 4.5 × 2 (scale 1) × 0.1 (growth mode) = 0.9 bps —

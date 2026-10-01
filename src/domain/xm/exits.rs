@@ -18,6 +18,7 @@
 //! | Boundaries | at the deadline / the threshold is due; P&L compared with a 1e-9 bps tolerance (f64 residue) |
 //! | Order | time reasons first: once due they stay due, so a retried exit keeps its reason and its id |
 //! | Idempotency key ([`exit_client_order_id`]) | `exit:<account>:<instrument>:<reason>:<opened_ms>`; attempt n ≥ 2 — the earlier id's order is stored but left the position open (rejected, partial) — appends `:<n>` |
+//! | Retry ([`exit_retry`], review #3) | the latest stored attempt decides: none, filled or partial ⇒ the next attempt now; rejected for a reason that may pass later (`FillReason::is_transient`) ⇒ the next one [`exit_retry_wait_ms`] after it (15 s, 30 s, 1 min … 15 min for 1, 2, 3 … rejections in a row) — derived from the stored attempts, so a restart keeps it; rejected for a final reason (`delisted`, `invalid_order`, a lot / tick rule) ⇒ never placed again (`stuck`: the stored rejection is the marker, the operator decides) |
 //! | Row `xm_exits/1:<account>` (ttl 0) | `ok` nothing failed · `partial` some closes failed or a mark was stale · `error` every due close failed |
 
 use serde::{Deserialize, Serialize};
@@ -26,9 +27,73 @@ use crate::domain::observation::{
     set_int, ErrorClass, Features, Field, ObsStatus, Observed, ReadError, MAX_LINE1_CHARS,
 };
 use crate::domain::xm::ledger::Position;
+use crate::domain::xm::paper::{FillReason, FillStatus};
 
 /// Tolerance of the take-profit / stop-loss comparison, bps.
 const PNL_TOL_BPS: f64 = 1e-9;
+
+/// Wait after the first rejected attempt of an exit.
+pub const EXIT_RETRY_BASE_MS: i64 = 15_000;
+/// Longest wait between two attempts of one exit.
+pub const EXIT_RETRY_CAP_MS: i64 = 900_000;
+/// Rejections in a row that reach the cap: older attempts are never read.
+pub const EXIT_RETRY_STEPS: u32 = 7;
+
+/// The wait after `rejections` (≥ 1) rejected attempts in a row: 15 s,
+/// 30 s, 1 min, 2 min, 4 min, 8 min, then 15 min.
+pub fn exit_retry_wait_ms(rejections: u32) -> i64 {
+    let doublings = rejections.max(1).saturating_sub(1).min(EXIT_RETRY_STEPS);
+    EXIT_RETRY_BASE_MS
+        .saturating_mul(1i64 << doublings)
+        .min(EXIT_RETRY_CAP_MS)
+}
+
+/// One stored attempt of an exit, as [`exit_retry`] reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExitAttempt {
+    pub status: FillStatus,
+    /// The rejection reason (or why a partial fill's rest was canceled).
+    pub reason: Option<FillReason>,
+    /// When it was placed (the ledger's `orders.ts_ms`).
+    pub ts_ms: i64,
+}
+
+/// What the stored attempts say about the next one (module table).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExitRetry {
+    /// Place the next attempt now.
+    Now,
+    /// The latest attempt was rejected for a reason that may pass later:
+    /// the next one waits until `at_ms`.
+    Wait { at_ms: i64, rejections: u32 },
+    /// The latest attempt was rejected for a final reason: never again.
+    Final { reason: FillReason },
+}
+
+/// The retry rule on the latest stored attempts of one exit, newest first
+/// (at most [`EXIT_RETRY_STEPS`] are needed).
+pub fn exit_retry(latest_first: &[ExitAttempt], now_ms: i64) -> ExitRetry {
+    let Some(latest) = latest_first.first() else {
+        return ExitRetry::Now;
+    };
+    if latest.status != FillStatus::Rejected {
+        return ExitRetry::Now;
+    }
+    if let Some(reason) = latest.reason.filter(|r| !r.is_transient()) {
+        return ExitRetry::Final { reason };
+    }
+    let rejections = latest_first
+        .iter()
+        .take(EXIT_RETRY_STEPS as usize)
+        .take_while(|a| a.status == FillStatus::Rejected)
+        .count() as u32;
+    let at_ms = latest.ts_ms.saturating_add(exit_retry_wait_ms(rejections));
+    if now_ms >= at_ms {
+        ExitRetry::Now
+    } else {
+        ExitRetry::Wait { at_ms, rejections }
+    }
+}
 
 /// `[risk.exits]`, mapped by `ExitsConfig::rules`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -141,6 +206,13 @@ pub enum ExitStatus {
     Flat,
     /// Not placed (the message says why).
     Error,
+    /// Not placed: the latest attempt was rejected for a reason that may
+    /// pass later; the next one waits until `next_attempt_ms` ([`exit_retry`]).
+    Backoff,
+    /// Not placed: the latest attempt was rejected for a final reason
+    /// (`delisted`, `invalid_order`, …) — never retried; the operator
+    /// decides.
+    Stuck,
 }
 
 impl ExitStatus {
@@ -153,6 +225,8 @@ impl ExitStatus {
             ExitStatus::Denied => "denied",
             ExitStatus::Flat => "flat",
             ExitStatus::Error => "error",
+            ExitStatus::Backoff => "backoff",
+            ExitStatus::Stuck => "stuck",
         }
     }
 
@@ -160,7 +234,12 @@ impl ExitStatus {
     pub fn failed(self) -> bool {
         matches!(
             self,
-            ExitStatus::Partial | ExitStatus::Rejected | ExitStatus::Denied | ExitStatus::Error
+            ExitStatus::Partial
+                | ExitStatus::Rejected
+                | ExitStatus::Denied
+                | ExitStatus::Error
+                | ExitStatus::Backoff
+                | ExitStatus::Stuck
         )
     }
 }
@@ -197,6 +276,9 @@ pub struct ExitCheck {
     /// Why a close failed (the venue's reason, the refusal).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// `backoff`: when the next attempt may be placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_ms: Option<i64>,
 }
 
 /// `xm_exits/1:<account>` — one run of the exit rules. TTL 0.
@@ -227,6 +309,11 @@ impl XmExits {
 
     pub fn n_stale_marks(&self) -> usize {
         self.count(|c| c.mark_px.value().is_none())
+    }
+
+    /// Due positions whose latest attempt was rejected for a final reason.
+    pub fn n_stuck(&self) -> usize {
+        self.count(|c| c.status == ExitStatus::Stuck)
     }
 }
 
@@ -279,6 +366,7 @@ impl Observed for XmExits {
         set_int(&mut f, "n_closed", Some(self.n_closed() as i64));
         set_int(&mut f, "n_failed", Some(self.n_failed() as i64));
         set_int(&mut f, "n_stale_marks", Some(self.n_stale_marks() as i64));
+        set_int(&mut f, "n_stuck", Some(self.n_stuck() as i64));
         f
     }
 
@@ -535,7 +623,94 @@ mod tests {
             filled_qty: None,
             fill_px: None,
             error: None,
+            next_attempt_ms: None,
         }
+    }
+
+    fn attempt(status: FillStatus, reason: Option<FillReason>, ts_ms: i64) -> ExitAttempt {
+        ExitAttempt {
+            status,
+            reason,
+            ts_ms,
+        }
+    }
+
+    /// Review #3: a rejected exit waits 15 s, 30 s, 1 min … 15 min before
+    /// the next attempt; a fill or a partial fill never waits; a final
+    /// rejection is never retried.
+    #[test]
+    fn rejected_exits_back_off_and_final_ones_stop() {
+        let waits: Vec<i64> = (1..=9).map(exit_retry_wait_ms).collect();
+        assert_eq!(
+            waits,
+            [15_000, 30_000, 60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000]
+        );
+        assert_eq!(exit_retry_wait_ms(0), 15_000);
+        assert_eq!(exit_retry_wait_ms(u32::MAX), EXIT_RETRY_CAP_MS);
+        assert_eq!(exit_retry(&[], T0), ExitRetry::Now);
+        let stale = Some(FillReason::StaleBook);
+        let rejected = |ts| attempt(FillStatus::Rejected, stale, ts);
+        // One rejection at T0: wait until T0 + 15 s, then go.
+        assert_eq!(
+            exit_retry(&[rejected(T0)], T0 + 14_999),
+            ExitRetry::Wait {
+                at_ms: T0 + 15_000,
+                rejections: 1
+            }
+        );
+        assert_eq!(exit_retry(&[rejected(T0)], T0 + 15_000), ExitRetry::Now);
+        // Three in a row (newest first): 1 min after the latest.
+        let three = [rejected(T0 + 50_000), rejected(T0 + 20_000), rejected(T0)];
+        assert_eq!(
+            exit_retry(&three, T0 + 60_000),
+            ExitRetry::Wait {
+                at_ms: T0 + 110_000,
+                rejections: 3
+            }
+        );
+        // A partial fill in between restarts the count; the latest partial
+        // or fill never waits.
+        let after_partial = [
+            rejected(T0 + 50_000),
+            attempt(FillStatus::Partial, Some(FillReason::Depth), T0 + 20_000),
+            rejected(T0),
+        ];
+        assert_eq!(
+            exit_retry(&after_partial, T0 + 60_000),
+            ExitRetry::Wait {
+                at_ms: T0 + 65_000,
+                rejections: 1
+            }
+        );
+        let partial = attempt(FillStatus::Partial, Some(FillReason::Bound), T0);
+        assert_eq!(exit_retry(&[partial], T0 + 1), ExitRetry::Now);
+        assert_eq!(
+            exit_retry(&[attempt(FillStatus::Filled, None, T0)], T0 + 1),
+            ExitRetry::Now
+        );
+        // A final reason: never again, however long ago.
+        for reason in [
+            FillReason::Delisted,
+            FillReason::InvalidOrder,
+            FillReason::OrderType,
+            FillReason::Tick,
+        ] {
+            let latest = attempt(FillStatus::Rejected, Some(reason), T0);
+            assert_eq!(
+                exit_retry(&[latest, rejected(T0 - 1)], T0 + 86_400_000),
+                ExitRetry::Final { reason },
+                "{reason:?}"
+            );
+        }
+        // No reason recorded: judged as one that may pass.
+        assert_eq!(
+            exit_retry(&[attempt(FillStatus::Rejected, None, T0)], T0),
+            ExitRetry::Wait {
+                at_ms: T0 + 15_000,
+                rejections: 1
+            }
+        );
+        assert!(ExitStatus::Backoff.failed() && ExitStatus::Stuck.failed());
     }
 
     #[test]

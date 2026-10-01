@@ -38,7 +38,7 @@ use crate::domain::observation::{
     set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsStatus, Observed,
     ReadError, MAX_LINE1_CHARS,
 };
-use crate::domain::xm::ledger::{PaperAccount, Position};
+use crate::domain::xm::ledger::{future_stamp, stamp_age_ms, PaperAccount, Position};
 use crate::domain::xm::risk::EDGE_FEATURE;
 
 /// One replay candle: the price at an instant is the close of the 5 m
@@ -220,7 +220,13 @@ pub fn price_point(
         });
         return Field::err(ReadError::new(field, missing, why));
     }
-    let age = t_ms.saturating_sub(r.observed_at_ms).max(0) as u64;
+    let Some(age) = stamp_age_ms(t_ms, r.observed_at_ms) else {
+        return Field::err(ReadError::new(
+            field,
+            missing,
+            future_stamp("mkt_ctx/1 row", r.observed_at_ms, t_ms),
+        ));
+    };
     if age > max_age_ms {
         return Field::err(ReadError::new(
             field,
@@ -548,7 +554,8 @@ pub struct FadeOrder {
     pub client_order_id: String,
     /// `filled` · `partial` · `rejected` (venue) · `denied` (gate) · `error`
     /// (not placed: `position_open`, a refusal) · `flat` (a close found
-    /// nothing open).
+    /// nothing open) · `backoff` / `stuck` (a shadow exit the exits' retry
+    /// rule held back: waiting after a rejection / a final rejection).
     pub status: String,
     /// The gate's rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1553,6 +1560,31 @@ mod tests {
         assert_eq!(e.field, format!("entry:{TSLA}"));
         assert!(e.message.starts_with("stale"), "{e:?}");
         assert_eq!(e.class, ErrorClass::Transient);
+        // Review #12: a row stamped more than 1 s after the instant is
+        // stale, never age 0; within the grace it prices.
+        let ahead = price_point(
+            "entry",
+            TSLA,
+            Some(row(&with_mid, 2_001)),
+            1_000,
+            500,
+            ErrorClass::Transient,
+        );
+        let e = ahead.error().unwrap();
+        assert!(
+            e.message.starts_with("stale: mkt_ctx/1 row stamped"),
+            "{e:?}"
+        );
+        assert_eq!(e.class, ErrorClass::Transient);
+        let grace = price_point(
+            "entry",
+            TSLA,
+            Some(row(&with_mid, 2_000)),
+            1_000,
+            500,
+            ErrorClass::Transient,
+        );
+        assert_eq!(grace.value().unwrap().px, 347.2);
         let nothing = price_point("anchor", TSLA, None, 1_000, 500, ErrorClass::NotApplicable);
         assert_eq!(nothing.error().unwrap().class, ErrorClass::NotApplicable);
         let no_px = price_point(

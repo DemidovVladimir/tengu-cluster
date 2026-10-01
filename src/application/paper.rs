@@ -24,6 +24,7 @@
 //! | Value | `RiskState::value` at the plan's marks with the UTC day rolled |
 //! | Intent | the order's size at the post-latency book's mid (else the mark, else the position's entry); a close = the whole snapshot position, opposite side; underlying = the position's, else the instrument id |
 //! | Gate | `evaluate` against the plan's legs (the book read after the latency, the `mkt_ctx/1` row), opportunity row and kill-switch probe — `evaluate_shadow` for a shadow account (`ExecPlan.gate`) |
+//! | Kill switch (review #7) | an order that is not reduce-only probes the file again here, inside the transaction (`ExecPlan.kill_recheck`): present at either probe ⇒ present, so a `touch` while the order waited for the ledger lock still denies it; a reduce-only order keeps the probe made before `place` (`allow_reduce_degraded` decides, as before) |
 //! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; no book ⇒ refused `stale_book` (a degraded exit may be allowed without one) |
 //! | Trips | the verdict's halts recorded (`RiskState::trip`) |
 
@@ -116,8 +117,26 @@ pub(crate) async fn fill_with_latency(
     })
 }
 
+/// A kill-switch probe (`paper_store::kill_switch_state` on `[risk]
+/// kill_switch_file`): `Ok(true)` present, `Error` = could not tell.
+pub(crate) type KillProbe = Box<dyn Fn() -> Field<bool> + Send>;
+
+/// The more halting of the probe before `place` and the one inside it:
+/// present at either ⇒ present; else unknown at either ⇒ unknown.
+fn either_probe(before: &Field<bool>, inside: &Field<bool>) -> Field<bool> {
+    let present = |f: &Field<bool>| f.value() == Some(&true);
+    if present(inside) {
+        inside.clone()
+    } else if present(before) || inside.value().is_some() {
+        before.clone()
+    } else {
+        inside.clone()
+    }
+}
+
 /// Everything an exec order read before `PaperLedger::place`: the closure
-/// only computes (`ports/paper.rs`).
+/// only computes (`ports/paper.rs`) — but for the entries' second
+/// kill-switch probe.
 pub(crate) struct ExecPlan {
     /// `Risk` = every rule; `Shadow` = a measurement account's gate
     /// (`domain::xm::risk::evaluate_shadow`).
@@ -138,7 +157,11 @@ pub(crate) struct ExecPlan {
     /// `mkt_ctx/1` row), the hedge leg.
     pub legs: BTreeMap<String, LegMarket>,
     pub opportunity: Field<EdgeInput>,
+    /// The kill-switch file, probed before `place`.
     pub kill_switch: Field<bool>,
+    /// Probes the file again inside the transaction, for an order that is
+    /// not reduce-only (module table); `None` = no second probe.
+    pub kill_recheck: Option<KillProbe>,
     pub rules: VenueRules,
     pub fees: FeeSchedule,
     pub status: MarketStatus,
@@ -196,10 +219,14 @@ pub(crate) fn decide(plan: ExecPlan) -> Decide {
         let (valued, rolled) =
             snap.risk
                 .value(&snap.account, &plan.marks, now, limits.max_data_age_ms.ctx);
+        let kill_switch = match &plan.kill_recheck {
+            Some(probe) if !order.reduce_only => either_probe(&plan.kill_switch, &probe()),
+            _ => plan.kill_switch.clone(),
+        };
         let ctx = RiskContext {
             account: valued,
             halt: rolled.effective_halt(now).cloned(),
-            kill_switch: plan.kill_switch.clone(),
+            kill_switch,
             lifecycle: Field::Absent,
             orders_last_min: snap.orders_last_min,
             open_orders: snap.open_orders,
@@ -347,6 +374,27 @@ mod tests {
             max_book_age_ms: 5_000,
         };
         fill_with_latency(rig.clock.as_ref(), &rig.books, cfg, order, &env, rand01).await
+    }
+
+    /// Review #7: the probe inside the transaction and the one before it
+    /// combine fail-closed — present at either ⇒ present, else unknown at
+    /// either ⇒ unknown.
+    #[test]
+    fn the_kill_switch_probes_combine_fail_closed() {
+        let (yes, no) = (Field::ok(true), Field::ok(false));
+        let unknown = Field::err(ReadError::new("kill_switch", ErrorClass::Fatal, "eperm"));
+        for (before, inside, want) in [
+            (&no, &no, &no),
+            (&no, &yes, &yes),
+            (&yes, &no, &yes),
+            (&no, &unknown, &unknown),
+            (&unknown, &no, &unknown),
+            (&yes, &unknown, &yes),
+            (&unknown, &yes, &yes),
+            (&no, &Field::Absent, &Field::Absent),
+        ] {
+            assert_eq!(&either_probe(before, inside), want, "{before:?} {inside:?}");
+        }
     }
 
     #[tokio::test]

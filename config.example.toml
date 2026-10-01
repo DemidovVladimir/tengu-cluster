@@ -292,7 +292,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # anchor_max_age_secs = 600                 # recorded mkt_ctx/1 row at most this old at the anchor (≥ [recorder] heartbeat_secs)
 # entry_max_age_secs = 120                  # stored mkt_ctx/1 row at most this old at the entry (≥ the hl_ctx interval + jitter)
 # entry_lateness_max_secs = 600             # no snapshot by entry + this ⇒ missed_entry (no late entry)
-# max_slippage_bps = 100                    # IOC bound of every fade order (the shadow ledger has no slippage cap)
+# max_slippage_bps = 100                    # IOC bound of every fade order (the shadow ledger has no slippage cap; exits ≤ 500)
 
 # --- Risk + paper trading (xmarket, $100 budget — tracker § 7 #3) ---
 # The gate inside every exec tool enforces [risk]; no [risk] = every order is
@@ -458,9 +458,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [feeds.xm_exits]                          # the exit rules (x-exit-rules): no LLM, no Jev
 # kind = "tool"
 # agent = "xm_exec"                         # the private exec agent; its `tools` list xm_exits
-# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps); needs the hl_ctx feed
+# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps, ≤ 500 bps); needs the hl_ctx feed
 #                                           # (mkt_instrument/1 rows for closes, mkt_ctx/1 marks for TP / SL);
-#                                           # exits count toward max_orders_per_min
+#                                           # exits never count toward max_orders_per_min; a rejected close
+#                                           # waits 15 s … 15 min, a final rejection (delisted) is never retried
 # every_secs = 15
 # required = true
 #

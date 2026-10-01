@@ -135,14 +135,31 @@ fn is_secret_param(name: &str) -> bool {
 
 /// `url` for messages: `scheme://host/path` plus the query with
 /// credential-like parameter values replaced by `<redacted>`. For public
-/// APIs (Jupiter, datapi, Hyperliquid) — never for a URL that may embed a
-/// key in its path (RPC endpoints render the host only).
+/// APIs (Jupiter, datapi) — never for a URL that may embed a key in its path
+/// (RPC endpoints render the host only; an operator-set API base renders
+/// through [`Scrubber::for_keyed_path`]).
 pub(crate) fn display_url(url: &Url) -> String {
+    display_url_with_path(url, url.path())
+}
+
+/// `url.path()` with every segment of ≥ 8 chars `<redacted>` — the
+/// [`Scrubber::for_rpc`] rule for where a provider puts a key
+/// (`/<api-key>/info`); `/info` stays.
+pub(crate) fn redacted_path(url: &Url) -> String {
+    url.path()
+        .split('/')
+        .map(|seg| if seg.len() >= 8 { "<redacted>" } else { seg })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// [`display_url`] showing `path` instead of the URL's own.
+fn display_url_with_path(url: &Url, path: &str) -> String {
     let mut shown = format!(
         "{}://{}{}",
         url.scheme(),
         url.host_str().unwrap_or(""),
-        url.path()
+        path
     );
     let pairs: Vec<String> = url
         .query_pairs()
@@ -199,6 +216,34 @@ impl Scrubber {
     /// query (mints, pool pairs) are left intact.
     pub(crate) fn for_api(url: &Url) -> Self {
         let mut rules = vec![(url.as_str().to_string(), display_url(url))];
+        rules.extend(Self::query_rules(url));
+        Self::from_rules(rules)
+    }
+
+    /// An API base an operator sets (`HL_API_URL`: a node provider may key
+    /// its path): as [`Scrubber::for_api`], with every path segment of ≥ 8
+    /// chars `<redacted>` ([`redacted_path`], the [`Scrubber::for_rpc`]
+    /// rule) — in the rendered URL and wherever the path or a segment
+    /// appears alone. The public `https://api.hyperliquid.xyz/info` renders
+    /// unchanged.
+    pub(crate) fn for_keyed_path(url: &Url) -> Self {
+        let (path, shown) = (url.path(), redacted_path(url));
+        let mut rules = vec![(url.as_str().to_string(), display_url_with_path(url, &shown))];
+        if shown != path {
+            rules.push((path.to_string(), shown));
+            rules.extend(
+                path.split('/')
+                    .filter(|seg| seg.len() >= 8)
+                    .map(|seg| (seg.to_string(), "<redacted>".to_string())),
+            );
+        }
+        rules.extend(Self::query_rules(url));
+        Self::from_rules(rules)
+    }
+
+    /// Credential-like query values (and the whole query holding one).
+    fn query_rules(url: &Url) -> Vec<(String, String)> {
+        let mut rules = Vec::new();
         if let Some(q) = url.query().filter(|q| !q.is_empty()) {
             if url.query_pairs().any(|(k, _)| is_secret_param(&k)) {
                 rules.push((q.to_string(), "<query redacted>".to_string()));
@@ -209,7 +254,7 @@ impl Scrubber {
                 .filter(|(k, v)| is_secret_param(k) && !v.is_empty())
                 .map(|(_, v)| (v.into_owned(), "<redacted>".to_string())),
         );
-        Self::from_rules(rules)
+        rules
     }
 
     fn from_rules(mut rules: Vec<(String, String)>) -> Self {

@@ -8,7 +8,7 @@
 //!
 //! | Call | Transaction |
 //! |---|---|
-//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called); else the account and its risk state are re-read and `decide(&snapshot)` — synchronous and pure: the gate, then the fill simulation — returns a [`Decision`]. The verdict row and a changed risk state (the gate's trips, the day roll) are written always; order, fill, position and cash rows only when the order was `Sent` |
+//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called) — unless its fingerprint differs from the request's (`client_order_id_conflict`, nothing written); else the account and its risk state are re-read and `decide(&snapshot)` — synchronous: the gate, then the fill simulation; its one read is the kill-switch file, re-probed for entries (`application/paper.rs`) — returns a [`Decision`]. The verdict row and a changed risk state (the gate's trips, the day roll) are written always; order, fill, position and cash rows only when the order was `Sent` |
 //! | [`PaperLedger::update_risk_state`] | one `BEGIN IMMEDIATE`: `update(&snapshot)` returns the next risk state (the `risk_status` roll + trips, `tengu risk halt / resume`); `Err` writes nothing |
 //! | [`PaperLedger::accrue_funding`] | one `BEGIN IMMEDIATE`: the HL funding of one hour boundary, once per (account, instrument, hour) |
 //! | [`PaperLedger::open_account`] | creates the account and its `deposit` cash row once |
@@ -16,7 +16,8 @@
 //!
 //! `decide` runs while the ledger's write lock is held: every read (books,
 //! ctx rows, the opportunity row, the kill-switch file) happens before
-//! `place`, so the closure only computes.
+//! `place`, so the closure only computes — but for one stat: an entry
+//! re-probes the kill-switch file inside the transaction (review #7).
 //!
 //! Verdict rows (`risk-audit-verdicts`): each carries the request's
 //! `call_id` (joins the decision audit), `tool` and `session_id`; the
@@ -41,8 +42,9 @@ pub(crate) struct LedgerSnapshot {
     pub account: PaperAccount,
     /// Exit deadline per open position (full instrument id → ms).
     pub exit_at_ms: BTreeMap<String, i64>,
-    /// Orders stored in the 60 s before `now_ms` (the gate's
-    /// `orders_last_min`; a denied order stores none).
+    /// Entries — orders that are not reduce-only — stored in the 60 s before
+    /// `now_ms` (the gate's `orders_last_min`; a denied order stores none,
+    /// an exit never counts).
     pub orders_last_min: u32,
     /// Resting orders (the gate's `open_orders`): none until GTC / ALO (P1).
     pub open_orders: u32,
@@ -104,6 +106,11 @@ pub(crate) struct PlaceRequest {
     /// `run-agent` child, its bridge); loop and feed sessions are inside
     /// `call_id`.
     pub session_id: Option<String>,
+    /// What the order asks for (`domain::xm::exec::order_fingerprint`),
+    /// stored with it: a stored order under the `client_order_id` whose
+    /// fingerprint differs is refused (`client_order_id_conflict`), never
+    /// replayed. `None` = not checked.
+    pub fingerprint: Option<String>,
     pub now_ms: i64,
 }
 
@@ -140,9 +147,24 @@ pub(crate) struct StoredOrder {
     pub underlying: String,
     pub result: FillResult,
     pub exit_at_ms: Option<i64>,
+    /// `PlaceRequest::fingerprint`; `None` on orders stored before it.
+    pub fingerprint: Option<String>,
 }
 
 impl StoredOrder {
+    /// Refusal when `fingerprint` asks for something else than this order
+    /// did (`None` on either side: not checked — an older row, a caller
+    /// without one).
+    pub(crate) fn conflict(&self, fingerprint: Option<&str>) -> Option<String> {
+        match (self.fingerprint.as_deref(), fingerprint) {
+            (Some(stored), Some(asked)) if stored != asked => Some(format!(
+                "client_order_id_conflict: order {} of account {} was placed as `{stored}`; \
+                 this request is `{asked}` — use a new client_order_id",
+                self.client_order_id, self.account
+            )),
+            _ => None,
+        }
+    }
     /// The ledger fill this order applied (VWAP, fee); `None` when nothing
     /// filled.
     #[cfg_attr(not(test), allow(dead_code))] // the audit join (`risk-audit-verdicts`)

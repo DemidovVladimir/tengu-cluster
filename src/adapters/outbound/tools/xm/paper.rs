@@ -10,6 +10,11 @@
 //!
 //! Arguments parse strictly — an unknown key, a wrong type, a short id or
 //! `null` for a required key is a tool error naming it; nothing is placed.
+//! A `client_order_id` argument never starts with a reserved prefix
+//! (`exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:` — ids the
+//! tools and call paths make, review #11); an exit's `max_slippage_bps`
+//! (`paper_close`, a reduce-only `paper_order`) is ≤ 500 bps
+//! (`exec::MAX_EXIT_SLIPPAGE_BPS`, review #9).
 //! Exec orders run on the `[risk]` account with `[risk]` limits. Scopes:
 //! `fs_roots` = the workspace (store); `paper_order` / `paper_close` also
 //! `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]`
@@ -36,7 +41,9 @@ use crate::domain::market::InstrumentId;
 use crate::domain::message::ToolDef;
 use crate::domain::observation::{ObsSource, Observation};
 use crate::domain::tools as names;
-use crate::domain::xm::exec::{CloseLeg, PaperCloseAll, PaperFillRow};
+use crate::domain::xm::exec::{
+    client_order_id_arg_error, CloseLeg, PaperCloseAll, PaperFillRow, MAX_EXIT_SLIPPAGE_BPS,
+};
 use crate::domain::xm::paper::OrderKind;
 use crate::domain::xm::risk::RiskLimits;
 use crate::ports::clock::Clock;
@@ -125,6 +132,37 @@ fn req_num(tool: &str, o: &Map<String, Value>, key: &str, lo: f64, hi: f64) -> R
     opt_num(tool, o, key, lo, hi)?.ok_or_else(|| anyhow!("{tool}: '{key}' is required (number)"))
 }
 
+/// An exit's `max_slippage_bps` argument (`paper_close`, `xm_exits`, a
+/// reduce-only `paper_order`): a number in (0, `MAX_EXIT_SLIPPAGE_BPS`]
+/// (review #9); absent ⇒ `None`.
+pub(super) fn exit_bound_arg(tool: &str, o: &Map<String, Value>) -> Result<Option<f64>> {
+    match field(o, "max_slippage_bps") {
+        None => Ok(None),
+        Some(v) => match v
+            .as_f64()
+            .filter(|x| x.is_finite() && *x > 0.0 && *x <= MAX_EXIT_SLIPPAGE_BPS)
+        {
+            Some(x) => Ok(Some(x)),
+            None => bail!(
+                "{tool}: 'max_slippage_bps' of an exit must be a number > 0 and ≤ \
+                 {MAX_EXIT_SLIPPAGE_BPS} (the hard ceiling of an exit's IOC bound), got {v}"
+            ),
+        },
+    }
+}
+
+/// The `client_order_id` argument: an id no tool or call path makes
+/// (review #11: no reserved prefix).
+fn coid_arg(tool: &str, o: &Map<String, Value>) -> Result<Option<String>> {
+    let Some(id) = opt_str(tool, o, "client_order_id")? else {
+        return Ok(None);
+    };
+    if let Some(why) = client_order_id_arg_error(id) {
+        bail!("invalid_client_order_id: {tool}: {why}");
+    }
+    Ok(Some(id.to_string()))
+}
+
 fn opt_bool(tool: &str, o: &Map<String, Value>, key: &str) -> Result<Option<bool>> {
     match field(o, key) {
         None => Ok(None),
@@ -200,6 +238,14 @@ pub(crate) fn parse_order(args: &Value, limits: RiskLimits) -> Result<ExecOrder>
                 .ok_or_else(|| anyhow!("{tool}: 'exit_at_ms' must be epoch ms > 0, got {v}"))?,
         ),
     };
+    let reduce_only = opt_bool(tool, o, "reduce_only")?.unwrap_or(false);
+    let max_slippage_bps = if reduce_only {
+        // A reduce-only order is an exit: the gate skips slippage for it.
+        exit_bound_arg(tool, o)?
+            .ok_or_else(|| anyhow!("{tool}: 'max_slippage_bps' is required (number)"))?
+    } else {
+        req_num(tool, o, "max_slippage_bps", 0.0, 10_000.0)?
+    };
     Ok(ExecOrder {
         tool,
         gate: ExecGate::Risk,
@@ -209,12 +255,12 @@ pub(crate) fn parse_order(args: &Value, limits: RiskLimits) -> Result<ExecOrder>
         size: ExecSize::NotionalUsd(notional),
         kind,
         limit_px,
-        reduce_only: opt_bool(tool, o, "reduce_only")?.unwrap_or(false),
-        max_slippage_bps: req_num(tool, o, "max_slippage_bps", 0.0, 10_000.0)?,
+        reduce_only,
+        max_slippage_bps,
         strategy: strategy.map(str::to_string),
         hedge_instrument: hedge,
         opportunity_key: opt_str(tool, o, "opportunity")?.map(str::to_string),
-        client_order_id: opt_str(tool, o, "client_order_id")?.map(str::to_string),
+        client_order_id: coid_arg(tool, o)?,
         exit_at_ms,
     })
 }
@@ -240,11 +286,9 @@ pub(crate) fn parse_close(args: &Value) -> Result<(CloseTarget, f64, Option<Stri
         (Some(_), Some(true)) => bail!("{tool}: give 'instrument' or all = true, not both"),
         (None, _) => bail!("{tool}: give 'instrument' (full id) or all = true"),
     };
-    Ok((
-        target,
-        req_num(tool, o, "max_slippage_bps", 0.0, 10_000.0)?,
-        opt_str(tool, o, "client_order_id")?.map(str::to_string),
-    ))
+    let max_slippage_bps = exit_bound_arg(tool, o)?
+        .ok_or_else(|| anyhow!("{tool}: 'max_slippage_bps' is required (number)"))?;
+    Ok((target, max_slippage_bps, coid_arg(tool, o)?))
 }
 
 // ── Tools ─────────────────────────────────────────────────────────
@@ -576,6 +620,57 @@ mod tests {
         nulls["client_order_id"] = Value::Null;
         nulls["exit_at_ms"] = Value::Null;
         assert!(parse_order(&nulls, rig_limits()).is_ok());
+        // Review #11: no reserved id prefix in the argument.
+        for reserved in [
+            "exit:xmarket:x",
+            "fade:a:b",
+            "feed:xm_exits:1:0",
+            "mcp:n:2",
+            "chat:t:1",
+        ] {
+            let e = with("client_order_id", json!(reserved));
+            assert!(
+                e.starts_with("invalid_client_order_id: paper_order:") && e.contains("reserved"),
+                "{e}"
+            );
+        }
+        let mut own = buy_args(25.0);
+        own["client_order_id"] = json!("xm_entry:s:1");
+        assert_eq!(
+            parse_order(&own, rig_limits())
+                .unwrap()
+                .client_order_id
+                .as_deref(),
+            Some("xm_entry:s:1")
+        );
+        // Review #9: a reduce-only order is an exit — its bound ≤ 500 bps.
+        let mut exit = buy_args(25.0);
+        exit["reduce_only"] = json!(true);
+        exit["max_slippage_bps"] = json!(501);
+        let e = parse_order(&exit, rig_limits()).unwrap_err().to_string();
+        assert!(
+            e.contains("of an exit must be a number > 0 and ≤ 500"),
+            "{e}"
+        );
+        exit["max_slippage_bps"] = json!(500);
+        assert_eq!(
+            parse_order(&exit, rig_limits()).unwrap().max_slippage_bps,
+            500.0
+        );
+        // An entry keeps the (0, 10 000) range (the gate bounds its slippage).
+        assert_eq!(
+            parse_order(
+                &{
+                    let mut a = buy_args(25.0);
+                    a["max_slippage_bps"] = json!(900);
+                    a
+                },
+                rig_limits()
+            )
+            .unwrap()
+            .max_slippage_bps,
+            900.0
+        );
     }
 
     #[test]
@@ -598,9 +693,14 @@ mod tests {
             json!({"all": false, "max_slippage_bps": 50}),
             json!({"instrument": TSLA, "all": true, "max_slippage_bps": 50}),
             json!({"instrument": TSLA}),
+            // Review #9 / #11: over the exit ceiling; a reserved id.
+            json!({"instrument": TSLA, "max_slippage_bps": 501}),
+            json!({"all": true, "max_slippage_bps": 50, "client_order_id": "exit:x:1"}),
         ] {
             assert!(parse_close(&bad).is_err(), "{bad}");
         }
+        let (_, s, _) = parse_close(&json!({"instrument": TSLA, "max_slippage_bps": 500})).unwrap();
+        assert_eq!(s, 500.0);
     }
 
     /// `paper_order` → the gate → a fill; `paper_positions` shows it with its

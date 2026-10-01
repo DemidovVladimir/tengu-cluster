@@ -5,7 +5,8 @@
 //! | URL | `https://api.hyperliquid.xyz/info`; `$HL_API_URL` (testnet: `https://api.hyperliquid-testnet.xyz`) when the scope's `env_reads` allows it and it is set |
 //! | Gate | `egress::policy().check_url` + `scope.check_net_host(host)` on every request; a denial is `Fatal`, nothing is sent |
 //! | Budget | `[rate_limits.hyperliquid]` (`outbound/rate_limit.rs`): the request weight is acquired before sending (reads leave `exec_reserve`; ≤ 15 s wait, else `RateLimited`), the per-item extra is charged after the reply, a 429 drains the bucket; no section = unlimited (one debug line) |
-//! | Audit | one egress record per request: `tool = "hl_info"`, `info_type`, `host`, `path`, `weight`, `status`, `ms` |
+//! | Audit | one egress record per request: `tool = "hl_info"`, `info_type`, `host`, `path` (path segments ≥ 8 chars `<redacted>` — a keyed `HL_API_URL`, review #15), `weight`, `status`, `ms` |
+//! | Secrets | a keyed `HL_API_URL` path never renders: errors scrub through `Scrubber::for_keyed_path`, the egress line carries `redacted_path`, a malformed base is refused without echoing it |
 //! | Retry | none — callers cache (`observe()`) or schedule (`domain::backoff::next_delay`) |
 //!
 //! | Request `type` | Weight (HL docs, 1200 / min / IP) |
@@ -39,7 +40,8 @@ use serde_json::{json, Value};
 
 use crate::adapters::outbound::egress;
 use crate::adapters::outbound::http_class::{
-    body_snippet, http_status_error, reqwest_error, retry_after_ms, HttpError, Scrubber,
+    body_snippet, http_status_error, redacted_path, reqwest_error, retry_after_ms, HttpError,
+    Scrubber,
 };
 use crate::adapters::outbound::rate_limit::{limiters, Limiters, Priority};
 use crate::config::rate_limits::RateLimitConfig;
@@ -220,11 +222,12 @@ impl HlInfo {
         } else {
             format!("{base}/info")
         };
-        let url = Url::parse(&full).map_err(|e| anyhow!("{API_URL_ENV} `{base}`: {e}"))?;
+        // The value is never echoed: a provider URL may carry a key.
+        let url = Url::parse(&full).map_err(|e| anyhow!("{API_URL_ENV} is not a URL ({e})"))?;
         let host = url
             .host_str()
             .filter(|h| !h.is_empty())
-            .ok_or_else(|| anyhow!("{API_URL_ENV} `{base}` has no host"))?
+            .ok_or_else(|| anyhow!("{API_URL_ENV} has no host"))?
             .to_string();
         Ok(Self {
             http,
@@ -265,7 +268,7 @@ impl HlInfo {
     pub(crate) async fn post(&self, body: &Value) -> Result<InfoReply> {
         let info_type = body["type"].as_str().unwrap_or("").to_string();
         let weight = request_weight(&info_type);
-        let scrub = Scrubber::for_api(&self.url);
+        let scrub = Scrubber::for_keyed_path(&self.url);
 
         let gate = egress::policy()
             .check_url(&self.url)
@@ -338,11 +341,23 @@ impl HlInfo {
         outcome: std::result::Result<u16, &HttpError>,
         ms: Option<u64>,
     ) {
+        egress::policy().audit(self.audit_event(info_type, weight, outcome, ms));
+    }
+
+    /// The egress record of one request (module table: Audit) — the path
+    /// with a keyed segment `<redacted>` (review #15).
+    fn audit_event(
+        &self,
+        info_type: &str,
+        weight: u32,
+        outcome: std::result::Result<u16, &HttpError>,
+        ms: Option<u64>,
+    ) -> Value {
         let mut event = json!({
             "tool": "hl_info",
             "info_type": info_type,
             "host": self.host,
-            "path": self.url.path(),
+            "path": redacted_path(&self.url),
             "weight": weight,
             "ms": ms,
         });
@@ -360,7 +375,7 @@ impl HlInfo {
                 }
             }
         }
-        egress::policy().audit(event);
+        event
     }
 }
 
@@ -660,6 +675,49 @@ mod tests {
             assert_eq!(hl.host(), "api.hyperliquid.xyz");
         }
         assert!(HlInfo::new(test_client(), "not a url", ToolScope::default(), None).is_err());
+    }
+
+    /// Review #15: a keyed `HL_API_URL` path never reaches the egress line
+    /// or an error — path segments ≥ 8 chars are `<redacted>` (the
+    /// `Scrubber::for_rpc` rule); the public mainnet URL is unchanged.
+    #[tokio::test]
+    async fn a_keyed_api_path_is_redacted() {
+        let key = "0123456789abcdef0123456789abcdef";
+        let base = format!("https://hl.example.com/{key}");
+        let hl = HlInfo::new(test_client(), &base, ToolScope::default(), None).unwrap();
+        assert_eq!(hl.url.path(), format!("/{key}/info"));
+        let event = hl.audit_event("allMids", 2, Ok(200), Some(5));
+        assert_eq!(event["path"], "/<redacted>/info");
+        assert!(!event.to_string().contains(key), "{event}");
+        // A scope denial (nothing sent): the error, and its egress line.
+        let e = hl.post(&json!({"type": "allMids"})).await.unwrap_err();
+        assert!(!format!("{e:#}").contains(key), "{e:#}");
+        let err = HttpError::new(ErrorClass::Fatal, format!("refused for '{}'", hl.url));
+        let scrubbed = Scrubber::for_keyed_path(&hl.url).scrub(&err.message);
+        assert_eq!(
+            scrubbed,
+            "refused for 'https://hl.example.com/<redacted>/info'"
+        );
+        let alone = Scrubber::for_keyed_path(&hl.url).scrub(&format!("key {key} path /{key}/info"));
+        assert!(!alone.contains(key), "{alone}");
+        // The public URL renders as before.
+        let main = HlInfo::new(test_client(), MAINNET_URL, ToolScope::default(), None).unwrap();
+        assert_eq!(
+            main.audit_event("l2Book", 2, Ok(200), None)["path"],
+            "/info"
+        );
+        let text = "x https://api.hyperliquid.xyz/info y /info";
+        assert_eq!(Scrubber::for_keyed_path(&main.url).scrub(text), text);
+        // A malformed base is refused without echoing it.
+        let e = HlInfo::new(
+            test_client(),
+            &format!("not a url {key}"),
+            ToolScope::default(),
+            None,
+        )
+        .err()
+        .unwrap();
+        assert!(!e.to_string().contains(key), "{e}");
     }
 
     #[test]

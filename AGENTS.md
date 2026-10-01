@@ -583,7 +583,9 @@ These are not preferences. They're load-bearing.
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
-  exec tools key idempotency on a `client_order_id` arg, else `call_id`).
+  exec tools key idempotency on a `client_order_id` arg, else `call_id`; an
+  arg never starts with `exit:` `fade:` `fade-shadow:` `feed:` `mcp:` `chat:`,
+  and a replay asking for another order is refused — `client_order_id_conflict`).
   Jev retries once on 429 / 5xx and has a 30 s circuit breaker. Audit in
   `<TENGU_HOME>/logs/decisions.jsonl` — one `write_all` per line, a line for a
   failed Jev call (`outcome = "error"`), `ts_ms` / `latency_ms` / `sandbox` /

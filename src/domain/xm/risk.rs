@@ -7,7 +7,7 @@
 //!
 //! | Class | When | Gated by |
 //! |---|---|---|
-//! | exit | `reduce_only` and it reduces the open position without flipping | `intent`, `account`, `reduce_only`, `order_rate`, `open_orders`; `kill_switch`, `halted`, `book_age`, `ctx_age` are waived when `allow_reduce_degraded` (§ 7 #7: verdict `allow_reduce_degraded`) |
+//! | exit | `reduce_only` and it reduces the open position without flipping | `intent`, `account`, `reduce_only`, `open_orders`; `kill_switch`, `halted`, `book_age`, `ctx_age` are waived when `allow_reduce_degraded` (§ 7 #7: verdict `allow_reduce_degraded`); never `order_rate` (skipped: the rate cap never blocks an exit) |
 //! | entry | everything else — a `reduce_only` order that would open or flip is denied `reduce_only` | every rule |
 //!
 //! | Rule (code) | An entry passes when | Exit |
@@ -20,10 +20,10 @@
 //! | `venue` · `instrument` | venue in `venues`; id in `instruments_allow`, not in `instruments_deny` (M0 permission, convention 10) | pass: an open position can always be closed |
 //! | `lifecycle` | §29 state ≥ `min_lifecycle`; only when the limits set one (M1 — M0 maps it to none) | skipped |
 //! | `daily_loss` · `total_loss` | day-start equity − equity ≤ limit · initial cash − equity ≤ limit; a breach trips the halt (exits too) | not gated |
-//! | `order_rate` · `open_orders` | accepted orders in the last 60 s + 1 ≤ max · resting orders + 1 ≤ max | same |
-//! | `book_age` · `ctx_age` | row age ≤ `max_data_age_ms.book` / `.ctx`; a book is as old as the older of its row and venue time | waived |
+//! | `order_rate` · `open_orders` | entries stored in the last 60 s (`orders_last_min`: orders that are not reduce-only — exits never count) + 1 ≤ max · resting orders + 1 ≤ max | `order_rate` skipped · `open_orders` same |
+//! | `book_age` · `ctx_age` | row age ≤ `max_data_age_ms.book` / `.ctx`; a book is as old as the older of its row and venue time; a row stamped more than 1 s after now (`ledger::stamp_age_ms`) is stale, never age 0 | waived |
 //! | `market_status` | `mkt_ctx` listed with a book, not halted; at the OI cap only if the position does not grow; the growth ≤ `oi_cap_usd − oi_usd` when the row has both; a Hyperliquid row without `at_oi_cap` (the `perpsAtOpenInterestCap` read failed) only if the position does not grow, else `missing:at_oi_cap` — the fill would refuse it and store the refusal | skipped |
-//! | `min_edge` | `edge_after_costs_bps` of the `opportunity_key` row — its key names the order's instrument as whole `:` segments, any schema with that feature, within the row TTL — ≥ `min_edge_bps` | skipped |
+//! | `min_edge` | `edge_after_costs_bps` of the `opportunity_key` row — its key names the order's instrument as whole `:` segments, any schema with that feature, within the row TTL (stamped ≤ 1 s ahead of now) — ≥ `min_edge_bps` | skipped |
 //! | `depth` · `slippage` | taker-side depth within `max_slippage_bps` of mid ≥ `min_depth_usd` · the walk of `notional_usd` fills fully, VWAP ≤ `max_slippage_bps` from mid | skipped |
 //! | `order_notional` · `position_notional` · `asset_exposure` · `venue_exposure` · `gross_exposure` · `net_exposure` | after the fill ≤ cap: the order · \|position\| · \|net per underlying\| · gross per venue · gross · \|net\| | skipped |
 //! | `leverage` | gross after / equity ≤ `max_leverage`; equity ≤ 0 fails | skipped |
@@ -51,7 +51,9 @@ use serde_json::{json, Value};
 use crate::domain::book::{depth_within, L2Book, Side, WalkTarget};
 use crate::domain::market::{Listing, MarketCtx, HYPERLIQUID};
 use crate::domain::observation::{ErrorClass, Field, ObsStatus, Observation, ReadError};
-use crate::domain::xm::ledger::{Exposure, GroupExposure, PaperPositions};
+use crate::domain::xm::ledger::{
+    future_stamp, stamp_age_ms, Exposure, GroupExposure, PaperPositions,
+};
 
 /// Relative tolerance of every limit comparison (f64 residue of summed
 /// notionals): a value at the limit passes.
@@ -325,10 +327,15 @@ pub struct BookInput {
 }
 
 impl BookInput {
-    /// Age by the older of the row time and the venue time (saturating).
-    pub fn age_ms(&self, now_ms: i64) -> u64 {
-        let at = self.observed_at_ms.min(self.book.venue_ts_ms);
-        now_ms.saturating_sub(at).max(0) as u64
+    /// Age by the older of the row time and the venue time; `None` when
+    /// both are more than 1 s after now (`ledger::stamp_age_ms`: stale).
+    pub fn age_ms(&self, now_ms: i64) -> Option<u64> {
+        stamp_age_ms(now_ms, self.stamp_ms())
+    }
+
+    /// The older of the row time and the venue time.
+    pub fn stamp_ms(&self) -> i64 {
+        self.observed_at_ms.min(self.book.venue_ts_ms)
     }
 }
 
@@ -344,8 +351,10 @@ pub struct CtxInput {
 }
 
 impl CtxInput {
-    pub fn age_ms(&self, now_ms: i64) -> u64 {
-        now_ms.saturating_sub(self.observed_at_ms).max(0) as u64
+    /// `None` when stamped more than 1 s after now (`ledger::stamp_age_ms`:
+    /// stale).
+    pub fn age_ms(&self, now_ms: i64) -> Option<u64> {
+        stamp_age_ms(now_ms, self.observed_at_ms)
     }
 
     /// From a stored `mkt_ctx/1` row: `Error` for an error row or one whose
@@ -449,7 +458,8 @@ pub struct RiskContext {
     /// §29 state of the order's instrument; read only when the limits set
     /// `min_lifecycle`.
     pub lifecycle: Field<Lifecycle>,
-    /// Orders accepted in the last 60 s.
+    /// Entries (orders that are not reduce-only) stored in the last 60 s;
+    /// exits never count.
     pub orders_last_min: u32,
     /// Resting orders.
     pub open_orders: u32,
@@ -495,7 +505,7 @@ impl RiskContext {
             Field::Ok { value: o } => json!({
                 "key": o.key,
                 "observed_at_ms": o.observed_at_ms,
-                "age_ms": now_ms.saturating_sub(o.observed_at_ms).max(0),
+                "age_ms": stamp_age_ms(now_ms, o.observed_at_ms),
                 "ttl_ms": o.ttl_ms,
                 "edge_after_costs_bps": o.edge_after_costs_bps,
             }),
@@ -1035,17 +1045,26 @@ impl Gate<'_> {
 
     fn check_rates(&mut self) {
         let (n, max) = (self.ctx.orders_last_min, self.limits.max_orders_per_min);
-        self.headroom.orders_per_min = Some(i64::from(max) - i64::from(n) - 1);
-        if n < max {
-            self.pass(
+        if self.is_exit() {
+            // Review #3: the rate cap never blocks an exit (and exits never
+            // count: `orders_last_min` holds entries only).
+            self.skip(
                 rules::ORDER_RATE,
-                format!("{n} orders in the last 60 s, max {max}"),
+                format!("exit: never rate-limited ({n} entries in the last 60 s, max {max})"),
             );
         } else {
-            self.fail(
-                rules::ORDER_RATE,
-                format!("{n} orders in the last 60 s: another exceeds {max}"),
-            );
+            self.headroom.orders_per_min = Some(i64::from(max) - i64::from(n) - 1);
+            if n < max {
+                self.pass(
+                    rules::ORDER_RATE,
+                    format!("{n} entries in the last 60 s, max {max}"),
+                );
+            } else {
+                self.fail(
+                    rules::ORDER_RATE,
+                    format!("{n} entries in the last 60 s: another exceeds {max}"),
+                );
+            }
         }
         let (n, max) = (self.ctx.open_orders, self.limits.max_open_orders);
         self.headroom.open_orders = Some(i64::from(max) - i64::from(n) - 1);
@@ -1074,15 +1093,20 @@ impl Gate<'_> {
             .unwrap_or(Field::Absent);
         let ages = self.limits.max_data_age_ms;
         match &book {
-            Field::Ok { value: b } => {
-                let age = b.age_ms(self.now_ms);
-                let detail = format!("{} age {age} ms, max {} ms", b.key, ages.book);
-                if age <= ages.book {
-                    self.pass(rules::BOOK_AGE, detail);
-                } else {
-                    self.degradable(rules::BOOK_AGE, format!("stale: {detail}"));
-                }
-            }
+            Field::Ok { value: b } => match b.age_ms(self.now_ms) {
+                Some(age) if age <= ages.book => self.pass(
+                    rules::BOOK_AGE,
+                    format!("{} age {age} ms, max {} ms", b.key, ages.book),
+                ),
+                Some(age) => self.degradable(
+                    rules::BOOK_AGE,
+                    format!("stale: {} age {age} ms, max {} ms", b.key, ages.book),
+                ),
+                None => self.degradable(
+                    rules::BOOK_AGE,
+                    future_stamp(&b.key, b.stamp_ms(), self.now_ms),
+                ),
+            },
             other => {
                 let e = read_error(other, "book");
                 self.degradable(missing("book"), format!("{id}: {}", describe(&e)));
@@ -1099,15 +1123,20 @@ impl Gate<'_> {
             .unwrap_or(Field::Absent);
         let ages = self.limits.max_data_age_ms;
         match &ctx {
-            Field::Ok { value: c } => {
-                let age = c.age_ms(self.now_ms);
-                let detail = format!("{} age {age} ms, max {} ms", c.key, ages.ctx);
-                if age <= ages.ctx {
-                    self.pass(rules::CTX_AGE, detail);
-                } else {
-                    self.degradable(rules::CTX_AGE, format!("stale: {detail}"));
-                }
-            }
+            Field::Ok { value: c } => match c.age_ms(self.now_ms) {
+                Some(age) if age <= ages.ctx => self.pass(
+                    rules::CTX_AGE,
+                    format!("{} age {age} ms, max {} ms", c.key, ages.ctx),
+                ),
+                Some(age) => self.degradable(
+                    rules::CTX_AGE,
+                    format!("stale: {} age {age} ms, max {} ms", c.key, ages.ctx),
+                ),
+                None => self.degradable(
+                    rules::CTX_AGE,
+                    future_stamp(&c.key, c.observed_at_ms, self.now_ms),
+                ),
+            },
             other => {
                 let e = read_error(other, "ctx");
                 self.degradable(missing("ctx"), format!("{id}: {}", describe(&e)));
@@ -1211,7 +1240,13 @@ impl Gate<'_> {
                 format!("context row {} is not the order's {key}", o.key),
             ),
             Field::Ok { value: o } => {
-                let age = self.now_ms.saturating_sub(o.observed_at_ms).max(0) as u64;
+                let Some(age) = stamp_age_ms(self.now_ms, o.observed_at_ms) else {
+                    self.fail(
+                        missing(EDGE_FEATURE),
+                        future_stamp(&key, o.observed_at_ms, self.now_ms),
+                    );
+                    return;
+                };
                 if o.ttl_ms == 0 || age > o.ttl_ms {
                     self.fail(
                         missing(EDGE_FEATURE),
@@ -1540,9 +1575,12 @@ impl Gate<'_> {
         }
         match &leg.ctx {
             Field::Ok { value: c } => {
-                let age = c.age_ms(self.now_ms);
-                if age > ages.ctx {
-                    problems.push(format!("{} stale: {age} ms > {} ms", c.key, ages.ctx));
+                match c.age_ms(self.now_ms) {
+                    Some(age) if age > ages.ctx => {
+                        problems.push(format!("{} stale: {age} ms > {} ms", c.key, ages.ctx))
+                    }
+                    Some(_) => {}
+                    None => problems.push(future_stamp(&c.key, c.observed_at_ms, self.now_ms)),
                 }
                 if c.status != MarketStatus::Open {
                     problems.push(format!("{h} {}", c.status.as_str()));
@@ -1555,9 +1593,12 @@ impl Gate<'_> {
         }
         let hedge_book_at = match &leg.book {
             Field::Ok { value: b } => {
-                let age = b.age_ms(self.now_ms);
-                if age > ages.book {
-                    problems.push(format!("{} stale: {age} ms > {} ms", b.key, ages.book));
+                match b.age_ms(self.now_ms) {
+                    Some(age) if age > ages.book => {
+                        problems.push(format!("{} stale: {age} ms > {} ms", b.key, ages.book))
+                    }
+                    Some(_) => {}
+                    None => problems.push(future_stamp(&b.key, b.stamp_ms(), self.now_ms)),
                 }
                 let ((d_ok, d), (s_ok, s)) = self.liquidity(&h, b, side, self.order_usd);
                 if !d_ok {
@@ -2270,6 +2311,96 @@ mod tests {
         c.ctx.orders_last_min = 5;
         c.ctx.open_orders = 4;
         assert_deny(&c.run(), rules::OPEN_ORDERS);
+    }
+
+    /// Review #3: the rate cap never blocks an exit — skipped, however many
+    /// entries the last minute holds; an entry is still denied.
+    #[test]
+    fn exits_are_never_rate_limited() {
+        let mut exit = Case::exit();
+        exit.ctx.orders_last_min = 100;
+        let v = exit.run();
+        assert_allow(&v);
+        let check = v.check(rules::ORDER_RATE).unwrap();
+        assert_eq!(check.status, CheckStatus::Skipped);
+        assert!(
+            check.detail.starts_with("exit: never rate-limited"),
+            "{check:?}"
+        );
+        assert_eq!(v.headroom.orders_per_min, None);
+        // Strict exits too (no waiver involved).
+        exit.limits.allow_reduce_degraded = false;
+        assert_allow(&exit.run());
+        let mut entry = Case::entry();
+        entry.ctx.orders_last_min = 100;
+        let v = entry.run();
+        assert_deny(&v, rules::ORDER_RATE);
+        assert_eq!(v.headroom.orders_per_min, Some(6 - 100 - 1));
+    }
+
+    /// Review #12: a book, ctx or opportunity row stamped more than 1 s
+    /// after now is stale (unknown age), never age 0; within the 1 s grace
+    /// it is fresh. An exit waives the stale book / ctx (degraded).
+    #[test]
+    fn rows_stamped_in_the_future_are_stale() {
+        let ahead = NOW + 5_000;
+        let future_book = |c: &mut Case, at: i64| {
+            let leg = tsla_leg(c).unwrap();
+            leg.book = Field::ok(BookInput {
+                key: format!("hl_book/1:{TSLA}"),
+                observed_at_ms: at,
+                book: tsla_book(at),
+            });
+        };
+        let mut c = Case::entry();
+        future_book(&mut c, ahead);
+        let v = c.run();
+        assert_deny(&v, rules::BOOK_AGE);
+        let d = &v.failed().unwrap().detail;
+        assert!(
+            d.contains("stamped at") && d.contains("5000 ms after now"),
+            "{d}"
+        );
+        assert!(
+            c.ctx.digest(NOW)["legs"][TSLA]["book"]["age_ms"].is_null(),
+            "no age in the digest"
+        );
+        // One stamp in the past is enough: the older of row and venue time.
+        if let Field::Ok { value } = &mut tsla_leg(&mut c).unwrap().book {
+            value.book.venue_ts_ms = NOW - 1_000;
+        }
+        assert_allow(&c.run());
+        let mut c = Case::entry();
+        future_book(&mut c, NOW + 1_000);
+        assert_allow(&c.run());
+
+        let mut c = Case::entry();
+        if let Field::Ok { value } = &mut tsla_leg(&mut c).unwrap().ctx {
+            value.observed_at_ms = ahead;
+        }
+        assert_deny(&c.run(), rules::CTX_AGE);
+
+        let mut c = Case::entry();
+        if let Field::Ok { value } = &mut c.ctx.opportunity {
+            value.observed_at_ms = ahead;
+        }
+        let v = c.run();
+        assert_deny(&v, "missing:edge_after_costs_bps");
+        assert!(v.failed().unwrap().detail.contains("stamped at"), "{v:?}");
+
+        // An exit on a future-stamped book: waived, like any stale book.
+        let mut exit = Case::exit();
+        if let Field::Ok { value } = &mut exit.ctx.legs.get_mut(NVDA).unwrap().book {
+            value.observed_at_ms = ahead;
+            value.book.venue_ts_ms = ahead;
+        }
+        let v = exit.run();
+        assert_allow(&v);
+        assert_eq!(v.rule, rules::ALLOW_REDUCE_DEGRADED);
+        assert_eq!(
+            v.check(rules::BOOK_AGE).unwrap().status,
+            CheckStatus::Waived
+        );
     }
 
     #[test]

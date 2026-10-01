@@ -10,7 +10,7 @@
 //! | missed slots | never replayed: the next fire is computed when a run ends; a slot reached later than `late_grace_ms` after its time (system sleep) is skipped (`dropped`) |
 //! | tool run | one call per fan-out entry, `concurrency` at a time, started in order; `ToolCall.id` = `feed:<name>:<slot ms>:<i>` (→ `ToolCtx.call_id`) |
 //! | failed call | an observation with `status = error` (class of its most retry-worthy error, the longest `retry_after_ms`); text whose line 1 is `HTTP <non-2xx>`; an executor error (`fatal`: unknown tool, scope denial). Messages: no URLs, ≤ 200 chars cut at whole words (ids stay whole) |
-//! | backoff | `next_delay(class, runs in a row with a retryable failure, retry_after, FEED)` over the retryable failures: `Retry(ms)` ⇒ the failed calls again after `ms`, same ids — a slot due first runs every call instead; `Park(ms)` (quota, long rate limit) ⇒ also no slot before then; `auth_required` / `fatal` / `decode` / `not_applicable` wait for the next slot |
+//! | backoff | `next_delay(class, runs in a row with a retryable failure, retry_after, FEED)` over the retryable failures: `Retry(ms)` ⇒ the failed calls again after `ms`, same ids — a slot due first runs every call instead; `Park(ms)` (quota, long rate limit) ⇒ also no slot before then; `auth_required` / `fatal` / `decode` / `not_applicable` wait for the next slot — except on an at-tick slot (review #14: its next slot is a day or a week away), whose failed calls of any class are retried as `transient` until [`AT_RETRY_WINDOW_MS`] after the slot (an executor error — a busy or failing store — is `fatal`) |
 //! | health (`FeedWriter`) | a failed run reports its error first (`backoff` while retrying, else `down`), then one `item` per ok call (`live`) |
 //! | tick | `LoopDispatch::submit_tracked(target, event + ts_ms = slot, "<feed>:<slot ms>")`; an item per event sent |
 //! | stop | checked before every nap and every call; a call in progress finishes (bounded by `[runtime] shutdown_grace_secs`) |
@@ -38,6 +38,9 @@ use crate::ports::tool::ToolOutput;
 const MAX_NAP_MS: i64 = 60_000;
 /// Chars of a failure message kept for logs and health rows (whole words).
 const MAX_MESSAGE_CHARS: usize = 200;
+/// How long after an at-tick slot its failed calls are retried whatever
+/// their class (module table: backoff).
+pub(crate) const AT_RETRY_WINDOW_MS: i64 = 15 * 60_000;
 
 /// Uniform in [0, 1] (jitter, backoff): `rate_limit::jitter01` under
 /// `tengu run`, a constant in tests.
@@ -95,16 +98,21 @@ pub(crate) struct Next {
     /// A slot acted on later than `at_ms + late_ms` is skipped.
     pub late_ms: i64,
     pub run: Run,
+    /// An at-tick slot (or the start run of a feed with at-ticks only):
+    /// failures of any class are retried for [`AT_RETRY_WINDOW_MS`].
+    pub at_tick: bool,
 }
 
 impl Next {
-    /// `run_on_start`: a slot at `now_ms`.
-    fn start(now_ms: i64) -> Self {
+    /// `run_on_start`: a slot at `now_ms`; `at_tick` for a feed whose
+    /// schedule has no grid (its next slot may be a day away).
+    fn start(now_ms: i64, at_tick: bool) -> Self {
         Self {
             at_ms: now_ms,
             slot_ms: now_ms,
             late_ms: i64::MAX,
             run: Run::Slot,
+            at_tick,
         }
     }
 }
@@ -129,6 +137,7 @@ struct PendingRetry {
     slot_ms: i64,
     calls: Vec<usize>,
     at_ms: i64,
+    at_tick: bool,
 }
 
 /// One feed's state between runs (see the module table).
@@ -173,6 +182,7 @@ impl FeedRunner {
                     slot_ms: r.slot_ms,
                     late_ms: i64::MAX,
                     run: Run::Retry(r.calls.clone()),
+                    at_tick: r.at_tick,
                 });
             }
         }
@@ -182,6 +192,7 @@ impl FeedRunner {
             slot_ms: fire.at_ms,
             late_ms: late_grace_ms(fire),
             run: Run::Slot,
+            at_tick: fire.every_ms.is_none(),
         })
     }
 
@@ -241,11 +252,17 @@ impl FeedRunner {
             .collect()
             .await;
         let now = self.env.clock.now_ms();
-        self.settle(slot_ms, &results, now).await;
+        self.settle(slot_ms, next.at_tick, &results, now).await;
     }
 
     /// Backoff + health after a tool run (module table).
-    async fn settle(&mut self, slot_ms: i64, results: &[(usize, Outcome)], now_ms: i64) {
+    async fn settle(
+        &mut self,
+        slot_ms: i64,
+        at_tick: bool,
+        results: &[(usize, Outcome)],
+        now_ms: i64,
+    ) {
         let ok = results
             .iter()
             .filter(|(_, o)| matches!(o, Outcome::Ok))
@@ -257,17 +274,25 @@ impl FeedRunner {
                 _ => None,
             })
             .collect();
+        // An at-tick slot inside its window retries every failed call.
+        let window = at_tick && now_ms < slot_ms.saturating_add(AT_RETRY_WINDOW_MS);
         let retryable: Vec<(usize, &Failure)> = failed
             .iter()
             .copied()
-            .filter(|(_, f)| retry_rank(f.class).is_some())
+            .filter(|(_, f)| window || retry_rank(f.class).is_some())
             .collect();
         debug!(feed = %self.spec.name, slot_ms, ok, failed = failed.len(), "feed run");
         if let Some(&(_, lead)) = retryable.iter().max_by_key(|(_, f)| retry_rank(f.class)) {
             self.failures = self.failures.saturating_add(1);
             let retry_after = retryable.iter().filter_map(|(_, f)| f.retry_after_ms).max();
+            // A class the backoff stops on (the at-tick window) retries as
+            // transient: 1 s, 2 s, 4 s … 60 s.
+            let class = match retry_rank(lead.class) {
+                Some(_) => lead.class,
+                None => ErrorClass::Transient,
+            };
             let delay = next_delay(
-                lead.class,
+                class,
                 self.failures,
                 retry_after,
                 &BackoffPolicy::FEED,
@@ -284,6 +309,7 @@ impl FeedRunner {
                         slot_ms,
                         calls: retryable.iter().map(|(i, _)| *i).collect(),
                         at_ms,
+                        at_tick,
                     });
                     true
                 }
@@ -295,6 +321,7 @@ impl FeedRunner {
                 failed = failed.len(),
                 calls = results.len(),
                 class = lead.class.as_str(),
+                at_tick_window = window,
                 retry_in_ms = ?delay.ms(),
                 error = %lead.message,
                 "feed calls failed; backing off"
@@ -486,7 +513,8 @@ pub(crate) async fn run_feed(spec: FeedSpec, env: FeedEnv, mut stop: StopRx) {
     let mut feed = FeedRunner::new(spec, env);
     if feed.spec.run_on_start && stop.borrow().is_none() {
         let now = feed.env.clock.now_ms();
-        feed.run(Next::start(now), now, &stop).await;
+        let at_only = feed.spec.schedule.longest_interval_ms().is_none();
+        feed.run(Next::start(now, at_only), now, &stop).await;
     }
     loop {
         let stopping = stop.borrow().is_some();
@@ -751,6 +779,7 @@ mod tests {
             slot_ms: at_ms,
             late_ms: MIN,
             run: Run::Slot,
+            at_tick: false,
         }
     }
 
@@ -856,6 +885,7 @@ mod tests {
                 slot_ms: t,
                 late_ms: i64::MAX,
                 run: Run::Retry(vec![1]),
+                at_tick: false,
             }
         );
         exec.script.lock().unwrap().clear();
@@ -1061,6 +1091,80 @@ mod tests {
             assert_eq!(h.last_error_class, want);
             assert_eq!(h.items, u64::from(want.is_none()));
         }
+    }
+
+    /// Review #14: an at-tick slot's next run is a day away, so a failure
+    /// the backoff stops on (an executor error is `fatal`: a busy store, an
+    /// IO error) is retried as transient — same id, 1 s, 2 s … — until
+    /// 15 min after the slot; then it waits for the next tick. A grid feed
+    /// still waits for its next slot.
+    #[tokio::test]
+    async fn a_failed_at_tick_is_retried_within_a_bounded_window() {
+        let rig = Rig::at(utc("2026-10-04 00:00"));
+        let exec = Arc::new(FakeExec::new(&rig.clock));
+        exec.script(0, Reply::Fail("database is locked"));
+        let daily = Schedule {
+            zone: Zone::Utc,
+            every_ms: None,
+            windows: vec![],
+            at: vec![parse_at("daily 00:01").unwrap()],
+        };
+        let spec = tool_spec("risk_day", daily, &exec, &["A"]);
+        let mut feed = FeedRunner::new(spec, rig.env("risk_day", 1.0));
+        let stop = rig.stopper.subscribe();
+        let tick = utc("2026-10-04 00:01");
+        let next = feed.next(rig.clock.now_ms()).unwrap();
+        assert_eq!((next.slot_ms, next.at_tick), (tick, true));
+        rig.clock.set(tick);
+        feed.run(next, tick, &stop).await;
+        let h = rig.health("risk_day").await;
+        assert_eq!(
+            (h.state, h.last_error_class),
+            (FeedState::Backoff, Some(ErrorClass::Fatal))
+        );
+        let mut now = tick;
+        for want in [1_000, 2_000, 4_000] {
+            let r = feed.next(now).unwrap();
+            assert_eq!(
+                (r.at_ms - now, r.slot_ms, r.run.clone(), r.at_tick),
+                (want, tick, Run::Retry(vec![0]), true)
+            );
+            now = r.at_ms;
+            rig.clock.set(now);
+            feed.run(r, now, &stop).await;
+        }
+        assert!(exec
+            .ids()
+            .iter()
+            .all(|id| *id == format!("feed:risk_day:{tick}:0")));
+        // The window closes: a failure then waits for the next tick.
+        let r = feed.next(now).unwrap();
+        let late = tick + AT_RETRY_WINDOW_MS;
+        rig.clock.set(late);
+        feed.run(r, late, &stop).await;
+        let next = feed.next(late).unwrap();
+        assert_eq!(
+            (next.slot_ms, next.run.clone()),
+            (utc("2026-10-05 00:01"), Run::Slot)
+        );
+        assert_eq!(rig.health("risk_day").await.state, FeedState::Down);
+        // It succeeds: live, the count starts over.
+        exec.script.lock().unwrap().clear();
+        rig.clock.set(next.at_ms);
+        feed.run(next, utc("2026-10-05 00:01"), &stop).await;
+        assert_eq!(rig.health("risk_day").await.state, FeedState::Live);
+        assert!(feed.retry.is_none() && feed.failures == 0);
+
+        // A grid feed: an executor error waits for the next slot.
+        let grid = Arc::new(FakeExec::new(&rig.clock));
+        grid.script(0, Reply::Fail("database is locked"));
+        let t = t0();
+        let mut feed =
+            FeedRunner::new(tool_spec("g", every(MIN), &grid, &["A"]), rig.env("g", 1.0));
+        feed.run(slot(t), t, &stop).await;
+        assert_eq!(feed.next(t).unwrap(), slot(t + MIN));
+        // The start run of an at-only feed is retried like its ticks.
+        assert!(Next::start(t, true).at_tick && !Next::start(t, false).at_tick);
     }
 
     #[test]

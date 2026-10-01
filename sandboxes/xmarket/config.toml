@@ -171,7 +171,7 @@ min_depth_usd = 250
 require_hedge_for = ["convergence"]
 max_data_age_ms = { book = 5000, ctx = 20000, reference = 60000, quote = 20000 }   # ctx ≥ hl_ctx 15 s + jitter
 max_skew_ms = 5000
-max_orders_per_min = 6           # one instrument: its entry and exit fit
+max_orders_per_min = 6           # entries per minute (exits never count)
 max_open_orders = 4
 kill_switch_file = "~/.tengu/state/xmarket/KILL"   # present = halted
 allow_reduce_degraded = true     # stale data / halted: reduce-only closes still pass

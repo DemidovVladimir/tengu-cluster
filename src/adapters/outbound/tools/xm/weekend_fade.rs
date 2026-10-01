@@ -9,7 +9,7 @@
 //! |---|---|
 //! | Refuse | no `[risk]` / `[paper]` / ledger (`risk_config_missing` · `state_dir_missing` · `ledger_unavailable`); no `[xmarket.weekend_fade]` or its calendar not an `exchange` row (`weekend_fade_config_missing`); a caller that is not a private agent (`exec_agent_not_private`); any argument |
 //! | Funding | both accounts (`[risk] account`, `shadow_account`) book the hourly funding their open positions owe, at a fresh `mkt_ctx/1` rate + oracle |
-//! | Shadow exits | every open shadow position whose `exit_at_ms` passed, 4 at a time: a reduce-only market IOC of the whole position through the shadow gate (`risk::evaluate_shadow`), IOC bound `max_slippage_bps`, id `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` once a rejected / partial attempt is stored). The capped positions close through `xm_exits` (reason `deadline`) — never here |
+//! | Shadow exits | every open shadow position whose `exit_at_ms` passed, 4 at a time: a reduce-only market IOC of the whole position through the shadow gate (`risk::evaluate_shadow`; paper only — `shadow_not_paper` otherwise), IOC bound `max_slippage_bps` (≤ 500 bps, `exec::MAX_EXIT_SLIPPAGE_BPS`), id `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` once a rejected / partial attempt is stored), the exits' retry rule (`exits::plan_exit`: `backoff` 15 s … 15 min after a rejection, `stuck` after a final one). The capped positions close through `xm_exits` (reason `deadline`) — never here |
 //! | Previous window | its `xm_weekend/1` row, still `entered` / `closing`: each fade not filled in the row read from the ledger (below); open quantities from both ledgers; once every filled name is flat, `closed` with the P&L |
 //! | Current window, before the entry | `waiting` (`next_entry_s`) |
 //! | … entry ≤ now < entry + `entry_lateness_max_secs`, no snapshot | the snapshot: anchor prices from the history as of the anchor (`mkt_ctx/1` mid, else mark, ≤ `anchor_max_age_secs` old), entry prices from the store (≤ `entry_max_age_secs` old), signals, the capped set, each name's ledger bases — kept in the store first (compare-and-swap: one snapshot per window, across processes). Kept only complete (`WeekendFade::complete`): while a name (not excluded, with an anchor) has no entry row fresher than `entry_max_age_secs` (`stale`) and now < entry + 120 s (≤ half the lateness, `weekend_fade::snapshot_deadline_ms`), or no name is eligible, nothing is kept (an `error` row) and the next call reads again; from that deadline the `stale` names are left out. A fresh row without a usable price (`missing_entry`) holds nothing back |
@@ -31,9 +31,9 @@ use serde_json::Value;
 
 use super::exec_common::{
     accrue_due_funding, check_private_agent, live_books, run_exec, ExecGate, ExecIo, ExecOrder,
-    ExecSize, MarketRows,
+    ExecSize, MarketRows, PaperFills, SHADOW_NOT_PAPER,
 };
-use super::exits::first_unstored;
+use super::exits::{first_unstored, plan_exit, warn_final_exit};
 use super::paper::object;
 use super::{defs, XmShared};
 use crate::adapters::outbound::clock::SystemClock;
@@ -49,7 +49,7 @@ use crate::domain::observation::{ErrorClass, Field, ObsSource, Observation, Obse
 use crate::domain::tools as names;
 use crate::domain::xm::exec::{rejected_message, PaperFillRow};
 use crate::domain::xm::exits::{exit_client_order_id, ExitReason};
-use crate::domain::xm::ledger::{PaperAccount, Position};
+use crate::domain::xm::ledger::{stamp_age_ms, PaperAccount, Position};
 use crate::domain::xm::paper::{FillReason, FillResult, FillStatus, OrderKind};
 use crate::domain::xm::risk::RiskLimits;
 use crate::domain::xm::weekend_fade::{
@@ -110,10 +110,19 @@ impl Env<'_> {
         }
     }
 
-    fn shadow_gate(&self) -> ExecGate {
-        ExecGate::Shadow {
+    /// The shadow gate — paper only (review #5): no `PaperFills` proof
+    /// (`[risk] mode` other than `paper`) ⇒ `shadow_not_paper`.
+    fn shadow_gate(&self) -> Result<ExecGate> {
+        let paper = PaperFills::of(self.risk).ok_or_else(|| {
+            anyhow!(
+                "{SHADOW_NOT_PAPER}: the shadow ledger fills on the paper engine only ([risk] \
+                 mode = \"paper\")"
+            )
+        })?;
+        Ok(ExecGate::Shadow {
             initial_cash_usd: self.cfg.shadow_initial_cash_usd,
-        }
+            paper,
+        })
     }
 
     fn row_key(&self, w: &WeekendWindow) -> String {
@@ -238,15 +247,19 @@ impl XmWeekendFadeTool {
             let instrument = InstrumentId::parse(&p.instrument).map_err(|e| anyhow!("{e}"))?;
             let id =
                 |n| exit_client_order_id(shadow, &p.instrument, ExitReason::Deadline, opened_ms, n);
-            let attempt = first_unstored(|n| {
-                let coid = id(n);
-                async move { Ok(env.ledger.order(shadow, &coid).await?.is_some()) }
-            })
-            .await?;
-            let coid = id(attempt);
+            // The exits' retry rule (review #3): backoff after a rejection,
+            // never again after a final one.
+            let plan = plan_exit(env.ledger, shadow, &id, io.clock.now_ms()).await?;
+            if let Some((status, why)) = plan.held_back() {
+                let coid = plan.latest.as_ref().map_or("-", |(_, c, _)| c.as_str());
+                let mut held = not_placed(&p.instrument, coid, anyhow!("{why}"));
+                held.status = status.as_str().to_string();
+                return Ok(held);
+            }
+            let coid = id(plan.next);
             let order = ExecOrder {
                 tool: names::XM_WEEKEND_FADE,
-                gate: env.shadow_gate(),
+                gate: env.shadow_gate()?,
                 limits: env.shadow_limits(),
                 instrument,
                 // Ignored for a close: the position decides.
@@ -262,13 +275,14 @@ impl XmWeekendFadeTool {
                 client_order_id: Some(coid.clone()),
                 exit_at_ms: None,
             };
-            Ok::<_, anyhow::Error>((coid, run_exec(&self.shared, ctx, io, order).await))
+            let result = run_exec(&self.shared, ctx, io, order).await;
+            if let Ok(obs) = &result {
+                warn_final_exit(shadow, &p.instrument, obs);
+            }
+            Ok::<_, anyhow::Error>(fade_order(&p.instrument, &coid, result))
         }
         .await;
-        match placed {
-            Ok((coid, result)) => fade_order(&p.instrument, &coid, result),
-            Err(e) => not_placed(&p.instrument, base.as_deref().unwrap_or("-"), e),
-        }
+        placed.unwrap_or_else(|e| not_placed(&p.instrument, base.as_deref().unwrap_or("-"), e))
     }
 
     /// The current window's step (module table).
@@ -459,14 +473,17 @@ impl XmWeekendFadeTool {
                 continue;
             }
             let key = write_signal(env, &row.anchor_date, &signal, capped, stamp).await;
-            let order = FadeEntry {
-                gate: env.shadow_gate(),
-                limits: env.shadow_limits(),
-                notional_usd: cfg.shadow_notional_usd,
-                opportunity_key: key,
-                exit_at_ms,
-            };
-            match order.build(env, &signal, &coid) {
+            let order = env.shadow_gate().and_then(|gate| {
+                FadeEntry {
+                    gate,
+                    limits: env.shadow_limits(),
+                    notional_usd: cfg.shadow_notional_usd,
+                    opportunity_key: key,
+                    exit_at_ms,
+                }
+                .build(env, &signal, &coid)
+            });
+            match order {
                 Ok(order) => todo.push((i, coid, order)),
                 Err(e) => row.names[i].shadow = Some(not_placed(&id, &coid, e)),
             }
@@ -814,8 +831,9 @@ async fn snapshot(env: &Env<'_>, w: &WeekendWindow, now: i64) -> Result<WeekendF
                         features: &o.features,
                         error: o.errors.first(),
                     });
+                    // A row stamped in the future (a clock step) is stale too.
                     let stale = r.as_ref().is_none_or(|o| {
-                        now.saturating_sub(o.observed_at_ms).max(0) as u64 > entry_age
+                        stamp_age_ms(now, o.observed_at_ms).is_none_or(|age| age > entry_age)
                     });
                     (
                         price_point("entry", id, row, now, entry_age, ErrorClass::Transient),
@@ -1853,6 +1871,7 @@ max_slippage_bps = 50
             tool: names::PAPER_ORDER,
             gate: ExecGate::Shadow {
                 initial_cash_usd: 10_000.0,
+                paper: PaperFills::of(&risk).unwrap(),
             },
             limits: RiskLimits {
                 account: SHADOW.into(),

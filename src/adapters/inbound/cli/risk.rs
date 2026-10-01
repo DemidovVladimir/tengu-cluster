@@ -5,7 +5,7 @@
 //!
 //! | Command | Rule |
 //! |---|---|
-//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines), orders in the last 60 s, the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
+//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines), entries in the last 60 s (exits never count toward the order rate), the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
 //! | `halt` | operator only: an `operator` halt (a sticky halt stays as is) — entries deny `halted`, reduce-only exits still pass (`allow_reduce_degraded`). The `[risk]` account is opened first if new |
 //! | `resume` | operator only; refused while the kill-switch file exists (checked again inside the ledger transaction); the operator types the account name to confirm; clears any halt. A loss still over its limit halts again at the next valuation |
 //! | operator only | refused when stdin or stdout is not a terminal (a piped `y` is never accepted) or `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` is set (an agent process) |
@@ -204,7 +204,7 @@ async fn status(
         let s = ledger.snapshot(&name, now_ms).await?;
         let a = &s.account;
         console.say(&format!(
-            "account {name}: initial {:.2} USD, cash {:.2} USD, orders in the last 60 s {}, resting {}",
+            "account {name}: initial {:.2} USD, cash {:.2} USD, entries in the last 60 s {}, resting {}",
             a.initial_cash_usd, a.cash_usd, s.orders_last_min, s.open_orders
         ));
         let halt = match s.risk.effective_halt(now_ms) {

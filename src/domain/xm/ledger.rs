@@ -10,6 +10,7 @@
 //! | Fill (average cost) | same direction ⇒ `avg_px` re-weighted; opposite ⇒ realize `closed × (px − avg) × sign(qty)`; past zero (a flip) ⇒ close all, then open the rest at the fill px with a new `opened_ms` |
 //! | Cash | collateral: initial + Σ realized − Σ fees − Σ funding. A fill moves cash only by its realized P&L and fee (perp-style; a spot book gives the same equity) |
 //! | Mark | unrealized = qty × (mark − avg); a missing, stale or invalid mark ⇒ `Field::Error` (`mark:<instrument>`), never 0; flat ⇒ 0 |
+//! | Row age ([`stamp_age_ms`]) | now − stamp, 0 for a stamp ≤ 1 s ahead; a stamp further ahead (a clock step) is unknown = stale, never age 0 — marks, the gate's book / ctx / opportunity rows, funding rates |
 //! | Equity | cash + Σ unrealized (funding settles into cash each hour, as on HL) |
 //! | Exposure | at mark, total / per underlying / per venue: net = Σ qty × mark, gross = Σ \|qty × mark\|; a group with a failed mark is `Error` |
 //! | Leverage | gross / equity; equity ≤ 0 ⇒ `Error` |
@@ -320,8 +321,34 @@ fn mark_field(instrument: &str) -> String {
     format!("mark:{instrument}")
 }
 
+/// A row stamped more than this after now (a wall clock that stepped back,
+/// another host's clock) has an unknown age: stale, never age 0 — the
+/// feeds' clock-step grace (`domain::schedule::CLOCK_STEP_GRACE_MS`).
+pub const MAX_FUTURE_STAMP_MS: i64 = 1_000;
+
+/// Age at `now_ms` of a row stamped `at_ms`, 0 for a stamp up to
+/// [`MAX_FUTURE_STAMP_MS`] ahead; `None` (unknown — the caller treats it as
+/// stale) for one further ahead. Every freshness rule of the gate, the
+/// marks and the exits reads ages through it.
+pub fn stamp_age_ms(now_ms: i64, at_ms: i64) -> Option<u64> {
+    if at_ms > now_ms.saturating_add(MAX_FUTURE_STAMP_MS) {
+        None
+    } else {
+        Some(now_ms.saturating_sub(at_ms).max(0) as u64)
+    }
+}
+
+/// Why a row stamped `at_ms` has no age at `now_ms` (see [`stamp_age_ms`]).
+pub fn future_stamp(what: &str, at_ms: i64, now_ms: i64) -> String {
+    format!(
+        "stale: {what} stamped at {at_ms} ms, {} ms after now ({now_ms} ms) — a clock step?",
+        at_ms.saturating_sub(now_ms)
+    )
+}
+
 /// `Ok(px)` for a finite px > 0 at most `max_age_ms` old at `now_ms`;
-/// otherwise `Error` on field `mark:<instrument>` — never 0.
+/// otherwise `Error` on field `mark:<instrument>` — never 0. A mark stamped
+/// in the future ([`stamp_age_ms`]) is stale.
 pub fn fresh_mark(
     instrument: &str,
     mark: &Field<Mark>,
@@ -335,18 +362,19 @@ pub fn fresh_mark(
             ErrorClass::Decode,
             format!("mark px {} is not > 0", m.px),
         )),
-        Field::Ok { value: m } => {
-            let age_ms = now_ms.saturating_sub(m.at_ms).max(0) as u64;
-            if age_ms > max_age_ms {
-                Field::err(ReadError::new(
-                    field,
-                    ErrorClass::Transient,
-                    format!("stale: mark age {age_ms} ms > {max_age_ms} ms"),
-                ))
-            } else {
-                Field::ok(m.px)
-            }
-        }
+        Field::Ok { value: m } => match stamp_age_ms(now_ms, m.at_ms) {
+            None => Field::err(ReadError::new(
+                field,
+                ErrorClass::Transient,
+                future_stamp("mark", m.at_ms, now_ms),
+            )),
+            Some(age_ms) if age_ms > max_age_ms => Field::err(ReadError::new(
+                field,
+                ErrorClass::Transient,
+                format!("stale: mark age {age_ms} ms > {max_age_ms} ms"),
+            )),
+            Some(_) => Field::ok(m.px),
+        },
         Field::Absent => Field::err(ReadError::new(field, ErrorClass::Transient, "no mark")),
         Field::Error { error } => Field::err(ReadError {
             field,
@@ -1024,6 +1052,27 @@ mod tests {
         );
         assert!(e.message.contains("stale"), "{}", e.message);
         assert!(fresh_mark(TSLA_HL, &Field::Absent, now, 5_000).is_error());
+        // Review #12: a mark stamped in the future is stale, never age 0;
+        // up to 1 s ahead (a clock-step grace) is age 0.
+        assert_eq!(
+            fresh_mark(TSLA_HL, &m(now + MAX_FUTURE_STAMP_MS), now, 5_000),
+            Field::ok(96.0)
+        );
+        let ahead = fresh_mark(TSLA_HL, &m(now + MAX_FUTURE_STAMP_MS + 1), now, 5_000);
+        let e = ahead.error().unwrap();
+        assert_eq!(
+            (e.class, e.field.as_str()),
+            (ErrorClass::Transient, "mark:hyperliquid:xyz:TSLA")
+        );
+        assert!(
+            e.message.starts_with("stale: mark stamped"),
+            "{}",
+            e.message
+        );
+        assert_eq!(stamp_age_ms(now, now - 7), Some(7));
+        assert_eq!(stamp_age_ms(now, now + 1_000), Some(0));
+        assert_eq!(stamp_age_ms(now, now + 1_001), None);
+        assert_eq!(stamp_age_ms(i64::MAX, i64::MIN), Some(u64::MAX >> 1));
         let timeout = Field::err(ReadError::new("mkt_ctx", ErrorClass::Timeout, "slow"));
         let e = fresh_mark(TSLA_HL, &timeout, now, 5_000);
         assert_eq!(e.error().unwrap().class, ErrorClass::Timeout);

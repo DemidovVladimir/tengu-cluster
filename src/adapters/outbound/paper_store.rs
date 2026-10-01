@@ -13,7 +13,7 @@
 //! | `accounts` | account | initial cash, created |
 //! | `cash` | id | journal: `deposit` / `fill` / `funding` movement + the running balance (the latest row is the cash) |
 //! | `positions` | (account, instrument) | `domain::xm::ledger::Position` + `exit_at_ms`; flat rows keep their P&L history |
-//! | `orders` | id · UNIQUE (account, client_order_id) | one per allowed order: status, reason, fill summary, the engine's `FillResult` (JSON), the id of the verdict that allowed it |
+//! | `orders` | id · UNIQUE (account, client_order_id) | one per allowed order: status, reason, fill summary, the engine's `FillResult` (JSON), the id of the verdict that allowed it, the request's `fingerprint` (a replay asking for something else is refused `client_order_id_conflict`; NULL on older rows: not checked). The gate's order rate counts the rows that are not `reduce_only` (exits never count) |
 //! | `fills` | id | the ledger fill (VWAP) of a filled / partial order: qty, px, fee, realized P&L, qty before / after |
 //! | `funding` | (account, instrument, hour_ms) | one HL funding payment |
 //! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id, the exec tool, the session id |
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS orders (
   decision_id INTEGER NOT NULL, ts_ms INTEGER NOT NULL, instrument TEXT NOT NULL,
   underlying TEXT NOT NULL, side TEXT NOT NULL, kind TEXT NOT NULL, reduce_only INTEGER NOT NULL,
   status TEXT NOT NULL, reason TEXT, filled_qty REAL NOT NULL, avg_px REAL,
-  fee_usd REAL NOT NULL, exit_at_ms INTEGER, result TEXT NOT NULL,
+  fee_usd REAL NOT NULL, exit_at_ms INTEGER, result TEXT NOT NULL, fingerprint TEXT,
   UNIQUE (account, client_order_id));
 CREATE INDEX IF NOT EXISTS orders_recent ON orders(account, ts_ms);
 CREATE TABLE IF NOT EXISTS fills (
@@ -106,17 +106,20 @@ ON CONFLICT(account, instrument) DO UPDATE SET underlying = excluded.underlying,
   last_funding_hour_ms = excluded.last_funding_hour_ms, exit_at_ms = excluded.exit_at_ms,
   updated_ms = excluded.updated_ms";
 
-const ORDER_COLUMNS: &str =
-    "id, account, client_order_id, call_id, decision_id, ts_ms, underlying, exit_at_ms, result";
+const ORDER_COLUMNS: &str = "id, account, client_order_id, call_id, decision_id, ts_ms, \
+     underlying, exit_at_ms, result, fingerprint";
 
 const DECISION_COLUMNS: &str = "id, ts_ms, account, client_order_id, call_id, tool, session_id, \
      instrument, verdict, intent, context";
 
 /// Columns added after their table first shipped: (table, column, type).
 /// `CREATE TABLE IF NOT EXISTS` leaves an older ledger's table as it was.
+/// Additive only (nullable, no default rewrite): a binary from before a
+/// column keeps reading and writing a ledger that has it.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("risk_decisions", "tool", "TEXT"),
     ("risk_decisions", "session_id", "TEXT"),
+    ("orders", "fingerprint", "TEXT"),
 ];
 
 /// `<TENGU_HOME>/logs/risk.jsonl`.
@@ -286,9 +289,11 @@ fn count<P: rusqlite::Params>(c: &Connection, sql: &str, p: P) -> Result<u32> {
 
 fn load_snapshot(c: &Connection, account: &str, now_ms: i64) -> Result<LedgerSnapshot> {
     let (account_now, exit_at_ms) = load_account(c, account)?;
+    // Entries only: a stored reduce-only order was an exit (the gate denies
+    // one that would open or flip), and exits never count (review #3).
     let orders_last_min = count(
         c,
-        "SELECT COUNT(*) FROM orders WHERE account = ?1 AND ts_ms > ?2",
+        "SELECT COUNT(*) FROM orders WHERE account = ?1 AND ts_ms > ?2 AND reduce_only = 0",
         params![account, now_ms.saturating_sub(ORDER_RATE_WINDOW_MS)],
     )?;
     // No order rests before GTC / ALO (P1); counted so they are once added.
@@ -375,6 +380,7 @@ type OrderRow = (
     String,
     Option<i64>,
     String,
+    Option<String>,
 );
 
 fn order_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
@@ -388,12 +394,23 @@ fn order_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
         r.get(6)?,
         r.get(7)?,
         r.get(8)?,
+        r.get(9)?,
     ))
 }
 
 fn parse_order(row: OrderRow) -> Result<StoredOrder> {
-    let (id, account, client_order_id, call_id, decision_id, ts_ms, underlying, exit_at_ms, json) =
-        row;
+    let (
+        id,
+        account,
+        client_order_id,
+        call_id,
+        decision_id,
+        ts_ms,
+        underlying,
+        exit_at_ms,
+        json,
+        fingerprint,
+    ) = row;
     let result = serde_json::from_str(&json).with_context(|| {
         format!("order {client_order_id} of {account}: stored result does not parse")
     })?;
@@ -407,6 +424,7 @@ fn parse_order(row: OrderRow) -> Result<StoredOrder> {
         underlying,
         result,
         exit_at_ms,
+        fingerprint,
     })
 }
 
@@ -584,8 +602,9 @@ fn insert_order(
     c.execute(
         "INSERT INTO orders(account, client_order_id, call_id, decision_id, ts_ms, instrument,
            underlying, side, kind, reduce_only, status, reason, filled_qty, avg_px, fee_usd,
-           exit_at_ms, result)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+           exit_at_ms, result, fingerprint)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+           ?18)",
         params![
             req.account,
             req.client_order_id,
@@ -604,6 +623,7 @@ fn insert_order(
             result.fee_usd,
             exit_at_ms,
             serde_json::to_string(result)?,
+            req.fingerprint,
         ],
     )?;
     Ok(c.last_insert_rowid())
@@ -699,6 +719,10 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(order) = read_order(&tx, &req.account, &req.client_order_id)? {
+        // Another request's order under this id: refused, never replayed.
+        if let Some(why) = order.conflict(req.fingerprint.as_deref()) {
+            bail!("{why}");
+        }
         let decision = read_decision(&tx, order.decision_id)?;
         let (account, _) = load_account(&tx, &req.account)?;
         tx.commit()?;
@@ -1097,8 +1121,18 @@ pub(crate) mod tests {
             call_id: Some(format!("call-{}", o.coid)),
             tool: "paper_order".into(),
             session_id: None,
+            fingerprint: Some(fingerprint(o)),
             now_ms,
         }
+    }
+
+    /// What `run_exec` stores with `o` (`order_fingerprint`).
+    fn fingerprint(o: &Order) -> String {
+        let size = match o.size {
+            OrderSize::NotionalUsd(n) => Some((o.side, n)),
+            OrderSize::Qty(_) => None,
+        };
+        crate::domain::xm::exec::order_fingerprint("paper_order", &o.account, &o.instrument, size)
     }
 
     /// What `risk-gate-enforcement` runs inside `place`: value the snapshot
@@ -1348,6 +1382,114 @@ pub(crate) mod tests {
         assert_eq!(again.decision, first.decision);
         assert_eq!(again.account, first.account);
         assert_eq!(rows(dir.path()), before, "a replay writes nothing");
+    }
+
+    /// Review #11: a request under a stored `client_order_id` that asks for
+    /// another order is refused — nothing written, never the foreign order;
+    /// the same request (or one without a fingerprint) still replays.
+    #[tokio::test]
+    async fn a_replay_asking_for_another_order_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("dup-1", ACCOUNT, TSLA);
+        let first = l
+            .place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        assert_eq!(
+            first.order.as_ref().unwrap().fingerprint.as_deref(),
+            Some("paper_order xmarket hyperliquid:xyz:TSLA buy 25 USD")
+        );
+        let before = rows(dir.path());
+        let mut sell = buy("dup-1", ACCOUNT, TSLA);
+        sell.side = Side::Sell;
+        let e = l
+            .place(
+                req(&sell, NOW + 1_000),
+                Box::new(|_| panic!("a conflict never decides")),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "client_order_id_conflict: order dup-1 of account xmarket was placed as \
+             `paper_order xmarket hyperliquid:xyz:TSLA buy 25 USD`; this request is \
+             `paper_order xmarket hyperliquid:xyz:TSLA sell 25 USD` — use a new client_order_id"
+        );
+        assert_eq!(rows(dir.path()), before, "nothing written");
+        let mut unchecked = req(&o, NOW + 2_000);
+        unchecked.fingerprint = None;
+        for r in [unchecked, req(&o, NOW + 3_000)] {
+            let p = l.place(r, Box::new(|_| panic!("replayed"))).await.unwrap();
+            assert!(p.replayed && p.order == first.order);
+        }
+    }
+
+    /// Review #3: exits never count toward the order rate — only entries
+    /// (orders that are not reduce-only) stored in the last 60 s do.
+    #[tokio::test]
+    async fn exits_never_count_toward_the_order_rate() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("e-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        // Two reduce-only closes of half the position each.
+        for i in 1..=2 {
+            let c = close(&format!("x-{i}"), 0.036);
+            let p = l
+                .place(req(&c, NOW + i * 1_000), gate(&c, limits(), None))
+                .await
+                .unwrap();
+            assert!(
+                p.decision.verdict.allow,
+                "{:?}",
+                p.decision.verdict.failed()
+            );
+        }
+        assert_eq!(rows(dir.path())["orders"], 3);
+        let s = l.snapshot(ACCOUNT, NOW + 5_000).await.unwrap();
+        assert_eq!(s.orders_last_min, 1, "the entry only");
+        assert_eq!(s.account.positions[TSLA].qty, 0.0);
+    }
+
+    /// An `orders` table from before review #11 gains `fingerprint` on open
+    /// (twice is a no-op): its rows read without one and are never checked;
+    /// new rows carry it.
+    #[tokio::test]
+    async fn an_older_ledger_gains_the_fingerprint_column() {
+        let dir = tempfile::tempdir().unwrap();
+        let o = buy("old-1", ACCOUNT, TSLA);
+        {
+            let l = ledger(dir.path()).await;
+            l.place(req(&o, NOW), gate(&o, limits(), None))
+                .await
+                .unwrap();
+        }
+        Connection::open(ledger_db(dir.path()))
+            .unwrap()
+            .execute_batch("ALTER TABLE orders DROP COLUMN fingerprint")
+            .unwrap();
+        let l = SqlitePaperLedger::open(dir.path()).unwrap();
+        SqlitePaperLedger::open(dir.path()).expect("a second open adds nothing");
+        let old = l.order(ACCOUNT, "old-1").await.unwrap().unwrap();
+        assert_eq!(old.fingerprint, None);
+        let mut other = buy("old-1", ACCOUNT, TSLA);
+        other.side = Side::Sell;
+        let p = l
+            .place(req(&other, NOW + 1_000), Box::new(|_| panic!("replayed")))
+            .await
+            .unwrap();
+        assert!(p.replayed, "an old row is never checked");
+        let n = buy("new-1", ACCOUNT, TSLA);
+        let mut lim = limits();
+        lim.max_gross_exposure_usd = 100.0;
+        l.place(req(&n, NOW + 2_000), gate(&n, lim, None))
+            .await
+            .unwrap();
+        let new = l.order(ACCOUNT, "new-1").await.unwrap().unwrap();
+        assert_eq!(new.fingerprint, Some(fingerprint(&n)));
     }
 
     /// A deny writes exactly one verdict row — no order, fill, position or

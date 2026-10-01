@@ -8,14 +8,14 @@
 //! | Step | Rule | Refused (tool error, nothing written) |
 //! |---|---|---|
 //! | 1 | `[risk]` + `[paper]` and the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
-//! | 2 | the calling agent is private — no `description`, not `default` (the load rule again: a planner step's `compose.tools` can hand any tool to a routable agent) | `exec_agent_not_private` |
-//! | 3 | `client_order_id` = the arg, else `ToolCtx.call_id` (bridge: `mcp:<process nonce>:<JSON-RPC id>`) — never random | `no_client_order_id` · `invalid_client_order_id` |
-//! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd` (a shadow account, `ExecGate::Shadow`: its own cash); an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written | — |
+//! | 2 | the calling agent is private — no `description`, not `default` (the load rule again: a planner step's `compose.tools` can hand any tool to a routable agent); the gate fits the account (review #5): `ExecGate::Shadow` only with the paper engine's [`PaperFills`] (`[risk] mode = "paper"`) and never on the `[risk]` account, `ExecGate::Risk` only on it | `exec_agent_not_private` · `shadow_not_paper` · `gate_account_mismatch` |
+//! | 3 | `client_order_id` = the arg, else `ToolCtx.call_id` (bridge: `mcp:<process nonce>:<JSON-RPC id>`) — never random; the request's fingerprint (`exec::order_fingerprint`: tool, account, full id, `close` or side + notional) is stored with the order | `no_client_order_id` · `invalid_client_order_id` |
+//! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd` (a shadow account, `ExecGate::Shadow`: its own cash); an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written — unless it was placed with another fingerprint (review #11) | `client_order_id_conflict` |
 //! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions + the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::venue_facts`), the `opportunity` row | `missing:mkt_instrument` |
-//! | 6 | funding the open positions owe booked first: every due hour at a fresh `mkt_ctx/1` rate + oracle (`ledger::due_funding_hours`) | — |
-//! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position | `order_type` · `invalid_order` · `no_position` |
+//! | 6 | funding the open positions owe booked first: every due hour at a fresh `mkt_ctx/1` rate + oracle (`ledger::due_funding_hours`; a row stamped > 1 s ahead is not fresh) | — |
+//! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position; a reduce-only order's IOC bound cut to `exec::MAX_EXIT_SLIPPAGE_BPS` (500 bps, review #9) | `order_type` · `invalid_order` · `no_position` |
 //! | 8 | `fill_with_latency` on the `Clock` + `BookSource` (live: `SystemClock`, `hyperliquid::book::HlBookSource`, the `hl_book/1` read recorded + stored); a hedge leg's book right after | — a failed read is the gate's `missing:book` |
-//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate (`[risk]`, or the shadow gate for `ExecGate::Shadow`), fill, write — a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
+//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate (`[risk]`, or the shadow gate for `ExecGate::Shadow`), fill, write — an entry probes the kill-switch file again inside the transaction (review #7); a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
 //! | 10 | row `paper_fill/1:<account>:<client_order_id>` (ttl 0: recorded, never cached) — `domain/xm/exec.rs` | — |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,15 +28,20 @@ use super::XmShared;
 use crate::adapters::outbound::paper_store::kill_switch_state;
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::application::paper::{decide, fill_with_latency, ExecPlan, PaperFill};
-use crate::config::risk::PaperConfig;
+use crate::config::risk::{PaperConfig, RiskConfig, RiskMode};
 use crate::domain::book::Side;
 use crate::domain::hl::FeeBasis;
 use crate::domain::market::{InstrumentId, MarketCtx, MarketInstrument, HYPERLIQUID};
 use crate::domain::observation::{
     ErrorClass, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
-use crate::domain::xm::exec::{client_order_id_error, venue_facts, GateSummary, PaperFillRow};
-use crate::domain::xm::ledger::{due_funding_hours, Mark, PaperAccount, PaperPositions, Position};
+use crate::domain::xm::exec::{
+    client_order_id_error, order_fingerprint, venue_facts, GateSummary, PaperFillRow,
+    MAX_EXIT_SLIPPAGE_BPS,
+};
+use crate::domain::xm::ledger::{
+    due_funding_hours, stamp_age_ms, Mark, PaperAccount, PaperPositions, Position,
+};
 use crate::domain::xm::paper::{
     jittered_latency_ms, FillEnv, OrderKind, OrderSize, PaperOrder, Tif,
 };
@@ -63,16 +68,35 @@ pub(crate) enum ExecSize {
     Close,
 }
 
+/// Proof that `run_exec` fills on the paper engine (`application/paper.rs`:
+/// the latency on the clock, the book after it, `simulate_fill`, the paper
+/// ledger) — what a shadow order needs (review #5). Only [`PaperFills::of`]
+/// makes one, and only for `[risk] mode = "paper"`: a live engine (M3b) gets
+/// none, so the uncapped shadow gate can never send a venue order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaperFills(());
+
+impl PaperFills {
+    /// `Some` only when `[risk] mode = "paper"` (the paper engine fills).
+    pub(crate) fn of(risk: &RiskConfig) -> Option<Self> {
+        (risk.mode == RiskMode::Paper).then_some(Self(()))
+    }
+}
+
 /// Which gate an exec order passes and how its account opens.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ExecGate {
-    /// The `[risk]` gate, every rule; a new account opens with `[paper]
-    /// initial_cash_usd`.
+    /// The `[risk]` gate, every rule, on the `[risk]` account; a new account
+    /// opens with `[paper] initial_cash_usd`.
     Risk,
     /// A measurement account (the weekend fade's shadow ledger):
     /// `domain::xm::risk::evaluate_shadow`; a new account opens with this
-    /// cash.
-    Shadow { initial_cash_usd: f64 },
+    /// cash. Paper only (`paper`), never the `[risk]` account — `run_exec`
+    /// checks both.
+    Shadow {
+        initial_cash_usd: f64,
+        paper: PaperFills,
+    },
 }
 
 impl ExecGate {
@@ -81,6 +105,35 @@ impl ExecGate {
             ExecGate::Risk => GateKind::Risk,
             ExecGate::Shadow { .. } => GateKind::Shadow,
         }
+    }
+}
+
+/// Refusal: a shadow order off the paper engine.
+pub(crate) const SHADOW_NOT_PAPER: &str = "shadow_not_paper";
+/// Refusal: a gate on the wrong account (a shadow order on the `[risk]`
+/// account, a `[risk]` order on another).
+pub(crate) const GATE_ACCOUNT_MISMATCH: &str = "gate_account_mismatch";
+
+/// Review #5: the shadow gate runs only on the paper engine and never on
+/// the `[risk]` account; the `[risk]` gate only on it.
+fn check_gate(order: &ExecOrder, risk: &RiskConfig) -> Result<()> {
+    let account = &order.limits.account;
+    match order.gate {
+        ExecGate::Shadow { .. } if PaperFills::of(risk).is_none() => bail!(
+            "{SHADOW_NOT_PAPER}: a shadow order fills on the paper engine only — [risk] mode is \
+             {:?}",
+            risk.mode
+        ),
+        ExecGate::Shadow { .. } if *account == risk.account => bail!(
+            "{GATE_ACCOUNT_MISMATCH}: shadow account `{account}` is the [risk] account — the \
+             shadow gate skips the budget, so it never trades the capped account"
+        ),
+        ExecGate::Risk if *account != risk.account => bail!(
+            "{GATE_ACCOUNT_MISMATCH}: the [risk] gate trades the [risk] account `{}`, not \
+             `{account}`",
+            risk.account
+        ),
+        _ => Ok(()),
     }
 }
 
@@ -132,20 +185,40 @@ pub(crate) async fn run_exec(
 ) -> Result<Observation> {
     let (risk, paper, ledger) = shared.parts()?;
     check_private_agent(ctx)?;
+    check_gate(&order, risk)?;
     let coid = client_order_id(order.client_order_id.as_deref(), ctx.call_id)?;
     let call_id = ctx.call_id.map(str::to_string);
     let account = order.limits.account.clone();
     let id = order.instrument.to_string();
     let max_ctx_ms = order.limits.max_data_age_ms.ctx;
     let store = shared.store.as_deref();
+    let fingerprint = order_fingerprint(
+        order.tool,
+        &account,
+        &id,
+        match order.size {
+            ExecSize::Close => None,
+            ExecSize::NotionalUsd(n) => Some((order.side, n)),
+        },
+    );
 
     let now = io.clock.now_ms();
     let initial_cash_usd = match order.gate {
         ExecGate::Risk => paper.initial_cash_usd,
-        ExecGate::Shadow { initial_cash_usd } => initial_cash_usd,
+        ExecGate::Shadow {
+            initial_cash_usd, ..
+        } => initial_cash_usd,
     };
     ledger.open_account(&account, initial_cash_usd, now).await?;
     if let Some(p) = ledger.stored(&account, &coid).await? {
+        // Review #11: another request's order under this id is refused.
+        if let Some(why) = p
+            .order
+            .as_ref()
+            .and_then(|o| o.conflict(Some(&fingerprint)))
+        {
+            bail!("{why}");
+        }
         let ids = open_ids(&p.account);
         let rows = MarketRows::read(store, &ids, None, None).await;
         let row = row_of(
@@ -188,6 +261,14 @@ pub(crate) async fn run_exec(
         },
         ExecSize::NotionalUsd(n) => (order.side, OrderSize::NotionalUsd(n), false),
     };
+    let reduce_only = order.reduce_only || close;
+    // Review #9: an exit's IOC bound never passes the hard ceiling (the
+    // gate skips slippage for exits; the arg parsers refuse a larger one).
+    let max_slippage_bps = if reduce_only {
+        order.max_slippage_bps.min(MAX_EXIT_SLIPPAGE_BPS)
+    } else {
+        order.max_slippage_bps
+    };
     let paper_order = PaperOrder {
         client_order_id: coid.clone(),
         instrument: order.instrument.clone(),
@@ -196,8 +277,8 @@ pub(crate) async fn run_exec(
         kind: order.kind,
         tif: Tif::Ioc,
         limit_px: order.limit_px,
-        reduce_only: order.reduce_only || close,
-        max_slippage_bps: order.max_slippage_bps,
+        reduce_only,
+        max_slippage_bps,
         ref_mid: None,
     };
     let underlying = held.map_or_else(|| id.clone(), |p| p.underlying.clone());
@@ -272,6 +353,11 @@ pub(crate) async fn run_exec(
         legs,
         opportunity,
         kill_switch: kill_switch_state(&risk.kill_switch_file),
+        // Review #7: an entry probes the file again inside the transaction.
+        kill_recheck: Some({
+            let file = risk.kill_switch_file.clone();
+            Box::new(move || kill_switch_state(&file))
+        }),
         rules: facts.rules,
         fees: facts.fees,
         status: facts.status,
@@ -283,6 +369,7 @@ pub(crate) async fn run_exec(
         call_id: call_id.clone(),
         tool: order.tool.to_string(),
         session_id: std::env::var("TENGU_SESSION_ID").ok(),
+        fingerprint: Some(fingerprint),
         now_ms: now,
     };
     let placement = ledger.place(req, decide(plan)).await?;
@@ -439,10 +526,11 @@ impl MarketRows {
             .and_then(|r| r.typed::<MarketCtx>().ok())
     }
 
-    /// The instrument's context, fresh at `now_ms` within `max_age_ms`.
+    /// The instrument's context, fresh at `now_ms` within `max_age_ms`; a
+    /// row stamped more than 1 s ahead is never fresh (`stamp_age_ms`).
     fn fresh_ctx(&self, id: &str, now_ms: i64, max_age_ms: u64) -> Option<MarketCtx> {
         let row = self.ctx.get(id)?;
-        let age = now_ms.saturating_sub(row.observed_at_ms).max(0) as u64;
+        let age = stamp_age_ms(now_ms, row.observed_at_ms)?;
         (age <= max_age_ms).then(|| self.ctx_of(id)).flatten()
     }
 
@@ -1086,6 +1174,239 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         assert!(
             snap.account.positions[TSLA].funding_paid > 0.0,
             "a long pays"
+        );
+    }
+
+    fn io(rig: &Rig) -> ExecIo<'_> {
+        ExecIo {
+            clock: rig.clock.as_ref(),
+            books: &rig.books,
+            rand01: 0.5,
+        }
+    }
+
+    /// Review #5: the shadow gate (no budget) runs only on the paper engine
+    /// and never on the `[risk]` account; the `[risk]` gate only on it.
+    /// Refusals write nothing.
+    #[tokio::test]
+    async fn the_shadow_gate_is_paper_only_and_never_the_risk_account() {
+        let rig = Rig::new(25).await;
+        let risk = rig.shared.risk.clone().unwrap();
+        let paper = PaperFills::of(&risk).expect("[risk] mode = paper");
+        let shadow = |account: &str| ExecOrder {
+            gate: ExecGate::Shadow {
+                initial_cash_usd: 10_000.0,
+                paper,
+            },
+            limits: RiskLimits {
+                account: account.into(),
+                ..risk.limits()
+            },
+            ..rig.buy(20.0)
+        };
+        let err = |r: Result<Observation>| r.unwrap_err().to_string();
+        let e = err(rig.run(shadow("xmarket"), "s:1").await);
+        assert!(
+            e.starts_with("gate_account_mismatch: shadow account `xmarket` is the [risk] account"),
+            "{e}"
+        );
+        let mut elsewhere = rig.buy(20.0);
+        elsewhere.limits.account = "elsewhere".into();
+        let e = err(rig.run(elsewhere, "s:2").await);
+        assert!(
+            e.starts_with("gate_account_mismatch: the [risk] gate trades the [risk] account"),
+            "{e}"
+        );
+        // Off the paper engine: no proof is handed out, and one made before
+        // is refused at run time.
+        let mut live = rig.shared.clone();
+        live.risk.as_mut().unwrap().mode = crate::config::risk::RiskMode::Live;
+        assert_eq!(PaperFills::of(live.risk.as_ref().unwrap()), None);
+        let e = err(run_exec(&live, &rig.ctx(Some("s:3")), &io(&rig), shadow("xm-shadow")).await);
+        assert!(e.starts_with("shadow_not_paper"), "{e}");
+        let n = rig.rows();
+        assert_eq!((n["orders"], n["risk_decisions"]), (0, 0), "nothing judged");
+        assert_eq!(
+            rig.ledger.accounts().await.unwrap(),
+            Vec::<String>::new(),
+            "no account opened"
+        );
+        // A shadow account on the paper engine: placed through its gate.
+        let o = rig.run(shadow("xm-shadow"), "s:4").await.unwrap();
+        let r = row(&o);
+        assert!(r.gate.allow, "{:?}", r.gate);
+        assert_eq!(r.account, "xm-shadow");
+        assert_eq!(rig.ledger.accounts().await.unwrap(), ["xm-shadow"]);
+    }
+
+    /// A ledger whose `place` first creates the kill-switch file: the
+    /// operator `touch`es it while the order waits for the write lock.
+    struct KillOnPlace {
+        inner: Arc<SqlitePaperLedger>,
+        kill: std::path::PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl PaperLedger for KillOnPlace {
+        async fn open_account(&self, a: &str, cash: f64, now: i64) -> Result<PaperAccount> {
+            self.inner.open_account(a, cash, now).await
+        }
+        async fn accounts(&self) -> Result<Vec<String>> {
+            self.inner.accounts().await
+        }
+        async fn snapshot(&self, a: &str, now: i64) -> Result<crate::ports::paper::LedgerSnapshot> {
+            self.inner.snapshot(a, now).await
+        }
+        async fn place(
+            &self,
+            req: PlaceRequest,
+            decide: crate::ports::paper::Decide,
+        ) -> Result<Placement> {
+            std::fs::write(&self.kill, "").unwrap();
+            self.inner.place(req, decide).await
+        }
+        async fn update_risk_state(
+            &self,
+            a: &str,
+            now: i64,
+            update: crate::ports::paper::RiskUpdate,
+        ) -> Result<crate::ports::paper::LedgerSnapshot> {
+            self.inner.update_risk_state(a, now, update).await
+        }
+        async fn order(
+            &self,
+            a: &str,
+            id: &str,
+        ) -> Result<Option<crate::ports::paper::StoredOrder>> {
+            self.inner.order(a, id).await
+        }
+        async fn stored(&self, a: &str, id: &str) -> Result<Option<Placement>> {
+            self.inner.stored(a, id).await
+        }
+        async fn decisions(
+            &self,
+            a: &str,
+            limit: usize,
+        ) -> Result<Vec<crate::ports::paper::StoredDecision>> {
+            self.inner.decisions(a, limit).await
+        }
+        async fn accrue_funding(
+            &self,
+            a: &str,
+            i: &str,
+            rate: f64,
+            oracle: f64,
+            hour: i64,
+            now: i64,
+        ) -> Result<Option<f64>> {
+            self.inner
+                .accrue_funding(a, i, rate, oracle, hour, now)
+                .await
+        }
+    }
+
+    /// Review #7: the kill-switch file `touch`ed after the probe before
+    /// `place` still denies an entry — probed again inside the transaction —
+    /// and trips the sticky `file` halt; a reduce-only exit keeps the probe
+    /// made before `place` (today's semantics).
+    #[tokio::test]
+    async fn the_kill_switch_is_probed_again_inside_the_transaction() {
+        let rig = Rig::new(25).await;
+        rig.run(rig.buy(20.0), "k:1").await.unwrap();
+        let kill = rig.dir.path().join("KILL");
+        let mut late = rig.shared.clone();
+        late.ledger = Ok(Arc::new(KillOnPlace {
+            inner: rig.ledger.clone(),
+            kill: kill.clone(),
+        }) as Arc<dyn PaperLedger>);
+        let o = run_exec(&late, &rig.ctx(Some("k:2")), &io(&rig), rig.close())
+            .await
+            .unwrap();
+        let r = row(&o);
+        assert!(r.gate.allow && !r.gate.degraded, "{:?}", r.gate);
+        assert_eq!((r.gate.rule.as_str(), r.position_qty_after), ("ok", 0.0));
+        assert!(kill.exists());
+        std::fs::remove_file(&kill).unwrap();
+        let o = run_exec(&late, &rig.ctx(Some("k:3")), &io(&rig), rig.buy(20.0))
+            .await
+            .unwrap();
+        let r = row(&o);
+        assert_eq!(r.gate.rule, rules::KILL_SWITCH, "{:?}", r.gate);
+        assert_eq!(
+            r.gate.trips,
+            vec![crate::domain::xm::risk::HaltReason::File]
+        );
+        let snap = rig.ledger.snapshot("xmarket", NOW + 10_000).await.unwrap();
+        assert_eq!(
+            snap.risk.halt.map(|h| h.reason),
+            Some(crate::domain::xm::risk::HaltReason::File)
+        );
+    }
+
+    /// Review #11: an id stored by another request is refused, never
+    /// replayed as the foreign order — nothing read or written; the same
+    /// request still replays.
+    #[tokio::test]
+    async fn a_replay_of_another_request_is_refused() {
+        let rig = Rig::new(25).await;
+        let first = row(&rig.run(rig.buy(20.0), "mcp:n:9").await.unwrap());
+        let (reads, rows) = (rig.books.reads(), rig.rows());
+        let e = rig
+            .run(rig.buy(25.0), "mcp:n:9")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "client_order_id_conflict: order mcp:n:9 of account xmarket was placed as \
+             `paper_order xmarket hyperliquid:xyz:TSLA buy 20 USD`; this request is \
+             `paper_order xmarket hyperliquid:xyz:TSLA buy 25 USD` — use a new client_order_id"
+        );
+        let mut close = rig.close();
+        close.client_order_id = Some("mcp:n:9".into());
+        let e = rig.run(close, "c:1").await.unwrap_err().to_string();
+        assert!(
+            e.contains("this request is `paper_close xmarket hyperliquid:xyz:TSLA close`"),
+            "{e}"
+        );
+        assert_eq!((rig.books.reads(), rig.rows()), (reads, rows));
+        let again = row(&rig.run(rig.buy(20.0), "mcp:n:9").await.unwrap());
+        assert!(again.replayed && again.fill == first.fill);
+    }
+
+    /// Review #9: an exit's IOC bound is cut to 500 bps from mid, whatever
+    /// the order asked.
+    #[tokio::test]
+    async fn an_exit_bound_is_cut_to_the_ceiling() {
+        let rig = Rig::new(25).await;
+        rig.run(rig.buy(20.0), "b:1").await.unwrap();
+        let mut close = rig.close();
+        close.max_slippage_bps = 5_000.0;
+        let r = row(&rig.run(close, "b:2").await.unwrap());
+        let f = r.fill.unwrap();
+        assert_eq!(f.status, FillStatus::Filled);
+        // Sell bound = mid 347.195 × (1 − 500 bps) = 329.835…, rounded up
+        // on the tick grid — not × (1 − 5 000 bps) = 173.6.
+        let bound = f.bound_px.unwrap();
+        assert!((329.8..329.9).contains(&bound), "{bound}");
+        assert_eq!(MAX_EXIT_SLIPPAGE_BPS, 500.0);
+    }
+
+    /// Review #12: a funding rate stamped in the future books nothing.
+    #[tokio::test]
+    async fn a_future_stamped_ctx_row_books_no_funding() {
+        let rig = Rig::new(25).await;
+        rig.run(rig.buy(20.0), "f:1").await.unwrap();
+        let later = NOW + 2 * 3_600_000;
+        rig.clock.set(later);
+        for r in market_rows(347.2, later + 5_000) {
+            rig.store.put(&r).await.unwrap();
+        }
+        rig.run(rig.buy(10.0), "f:2").await.unwrap();
+        assert_eq!(
+            rig.rows()["funding"],
+            0,
+            "a rate from the future is no rate"
         );
     }
 }
