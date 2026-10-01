@@ -13,6 +13,7 @@
 //! | `interval` | `1m 5m 15m 1h 4h 1d`; window kinds ≤ 1h (their instants are local wall-clock times) |
 //! | `notional_usd` | per trade, 0 < x ≤ 1 000 000 (default `[backtest] notional_usd`) |
 //! | `exclude` | full ids never traded (≤ 1000) |
+//! | `min_entry_trades` | optional, 1..=1 000 000: a candidate whose entry bar (the bar ending at the decision) counts fewer trades is skipped (`thin_entry`); a bar without a trade count passes |
 //! | `costs` | `CostSpec` override (`costs.rs`); else `[backtest.costs."<prefix>"]` |
 //!
 //! | Kind | Params — default | Bounds |
@@ -59,6 +60,7 @@ const MAX_OFFSET_MINS: i64 = 1_440;
 const MAX_DELAY_MINS: u32 = 10_080;
 const MAX_EXIT_AFTER_MINS: u32 = 43_200;
 const MAX_HOLD_HOURS: u32 = 8_760;
+const MAX_ENTRY_TRADES: u64 = 1_000_000;
 /// Event problems listed before "… and N more".
 const MAX_EVENT_ERRORS: usize = 20;
 const MIN_MS: i64 = 60_000;
@@ -74,13 +76,14 @@ pub const KINDS: [&str; 6] = [
     "pair_spread",
     "event_window",
 ];
-const COMMON_FIELDS: [&str; 7] = [
+const COMMON_FIELDS: [&str; 8] = [
     "name",
     "kind",
     "universe",
     "interval",
     "notional_usd",
     "exclude",
+    "min_entry_trades",
     "costs",
 ];
 
@@ -373,6 +376,8 @@ struct CommonWire {
     #[serde(default)]
     exclude: Vec<String>,
     #[serde(default)]
+    min_entry_trades: Option<u64>,
+    #[serde(default)]
     costs: Option<CostSpec>,
 }
 
@@ -384,6 +389,8 @@ pub struct StrategySpec {
     pub interval: Interval,
     pub notional_usd: Option<f64>,
     pub exclude: Vec<String>,
+    /// Trades the entry bar must count (module table); `None` = no filter.
+    pub min_entry_trades: Option<u64>,
     pub costs: Option<CostSpec>,
     pub kind: StrategyKind,
 }
@@ -440,6 +447,7 @@ impl StrategySpec {
             interval: c.interval,
             notional_usd: c.notional_usd,
             exclude: c.exclude,
+            min_entry_trades: c.min_entry_trades,
             costs: c.costs,
             kind,
         };
@@ -472,6 +480,9 @@ impl StrategySpec {
         }
         if !self.exclude.is_empty() {
             m.insert("exclude".into(), json!(self.exclude));
+        }
+        if let Some(n) = self.min_entry_trades {
+            m.insert("min_entry_trades".into(), json!(n));
         }
         if let Some(c) = &self.costs {
             m.insert(
@@ -617,6 +628,13 @@ impl StrategySpec {
             }
         }
         check_ids(&mut e, "exclude", &self.exclude);
+        if let Some(n) = self.min_entry_trades {
+            if !(1..=MAX_ENTRY_TRADES).contains(&n) {
+                e.push(format!(
+                    "min_entry_trades must be within 1..={MAX_ENTRY_TRADES} (leave it out for no filter)"
+                ));
+            }
+        }
         if let Some(c) = &self.costs {
             e.extend(c.validation_errors("costs"));
         }
@@ -990,7 +1008,8 @@ mod tests {
             json!({"kind": "move_trigger", "universe": "hyperliquid:BTC", "interval": "5m",
                    "lookback_bars": 12, "threshold_bps": 150, "min_volume_ratio": 2,
                    "volume_baseline_bars": 288, "direction": "fade", "hold_bars": 24,
-                   "take_profit_bps": 100, "stop_loss_bps": 80, "notional_usd": 25}),
+                   "take_profit_bps": 100, "stop_loss_bps": 80, "notional_usd": 25,
+                   "min_entry_trades": 50}),
             json!({"kind": "funding_carry", "universe": ["hyperliquid:SOL"], "interval": "1h",
                    "min_apr_pct": 30, "exit_apr_pct": 10, "hold_hours": 72,
                    "costs": {"taker_fee_bps": 4.5, "funding": true}}),
@@ -1029,6 +1048,10 @@ mod tests {
             Some(Universe::Ids(vec!["hyperliquid:BTC".into()]))
         );
         assert_eq!(m.notional(100.0), 25.0);
+        assert_eq!(m.min_entry_trades, Some(50));
+        assert_eq!(m.to_value()["min_entry_trades"], json!(50));
+        assert_eq!(s.min_entry_trades, None);
+        assert!(s.to_value().get("min_entry_trades").is_none());
         let StrategyKind::MoveTrigger(p) = &m.kind else {
             panic!()
         };
@@ -1202,11 +1225,17 @@ mod tests {
             ),
             (
                 json!({"kind": "funding_carry", "interval": "1h", "min_apr_pct": 10, "hold_hours": 1,
-                       "costs": {"taker_fee_bps": -1}}),
+                       "costs": {"taker_fee_bps": -1}, "min_entry_trades": 0}),
                 &[
                     "universe is required for funding_carry",
                     "costs.taker_fee_bps",
+                    "min_entry_trades must be within 1..=1000000",
                 ],
+            ),
+            (
+                json!({"kind": "funding_carry", "universe": "@x", "interval": "1h", "min_apr_pct": 10,
+                       "hold_hours": 1, "min_entry_trades": -5}),
+                &["integer `-5`, expected u64"],
             ),
         ];
         for (v, wants) in cases {

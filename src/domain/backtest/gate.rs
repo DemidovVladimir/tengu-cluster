@@ -10,10 +10,7 @@
 //! | [`GateClass::of`] | `Stopped` `take` ⇒ take · `Stopped` `ask_architect` ⇒ ask_architect · any other `Stopped` ⇒ skip · `Escalated` (below `act_at`) ⇒ unsure · `Rejected` ⇒ rejected · a failed call ⇒ error ([`GateDecision::failed`]); a tool outcome (never from a terminal-only loop) ⇒ rejected. Only take trades |
 //! | [`p_take`] | `probabilities["take"]`, else the confidence when the action is `take`, else 0 |
 //! | [`GateSummary`] | counts per class; take rate = take ÷ answered (decided − errors); the run's cache hits / misses / errors; est. cost = misses × the price per decision ([`COST_PER_DECISION_USD`]; the caller passes 0 offline); calibration — [`CALIBRATION_BINS`] bins of p(take) against the candidate's research trade winning (net bps > 0), Brier — over answered verdicts but rejected ones, joined by `seq`; jev − rules = `paired_diff_ci` of the taken candidates' trades against every decided candidate's (research; capped too when given) |
-//! | Renders | [`GateSummary::render_markdown`] — the gate section of `report.md` (counts, cache, cost, differences, Brier; the bins are the report's `## Calibration`); [`GateSummary::render_compact`] — two CLI lines; [`GateSummary::add_features`] — `jev_*` keys of the `backtest/1` row, into free slots only (≤ 32 keys) |
-
-// The CLI (`tengu backtest --gate`) wires the gate arm; drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
+//! | Renders | [`GateSummary::render_markdown`] — the gate section of `report.md` (counts, cache, cost, differences, Brier; the bins are the report's `## Calibration`); [`GateSummary::render_compact`] — two CLI lines; [`GateSummary::add_features`] — `jev_*` keys of the `backtest/1` row, into free slots only (≤ 32 keys). `BacktestReport` carries the summary (`gate`) and calls all three |
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -37,8 +34,9 @@ pub const RULES_ARM: &str = "rules";
 pub const JEV_ARM: &str = "jev";
 pub const RULES_CAPPED_ARM: &str = "rules_capped";
 pub const JEV_CAPPED_ARM: &str = "jev_capped";
-/// Spend estimate per live decision (USD), `docs/xlab-2026-10-01.md` § 7.
-pub const COST_PER_DECISION_USD: f64 = 0.00014;
+/// Spend estimate per live decision (USD), `docs/xlab-2026-10-01.md` § 7:
+/// measured 2026-10-01, Σ `usage.cost` $0.000321 over 10 live decisions.
+pub const COST_PER_DECISION_USD: f64 = 0.00004;
 /// Reliability bins of p(take) over [0, 1].
 pub const CALIBRATION_BINS: usize = 5;
 
@@ -84,6 +82,7 @@ pub enum GateClass {
 }
 
 impl GateClass {
+    #[cfg(test)]
     pub const ALL: [GateClass; 6] = [
         GateClass::Take,
         GateClass::Skip,
@@ -740,7 +739,7 @@ mod tests {
         );
         assert_eq!((s.unsure, s.rejected, s.errors, s.answered()), (1, 1, 1, 6));
         assert_eq!(s.take_rate, Some(2.0 / 6.0));
-        assert!((s.est_cost_usd - 3.0 * 0.00014).abs() < 1e-15);
+        assert!((s.est_cost_usd - 3.0 * 0.00004).abs() < 1e-15);
         // Points: (0.9 won) (0.15 lost) (0.5 won) (0.0 lost).
         let c = &s.calibration;
         assert_eq!(c.n, 4);

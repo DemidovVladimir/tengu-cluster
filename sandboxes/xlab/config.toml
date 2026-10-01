@@ -11,7 +11,8 @@
 #                tengu history backfill --sandbox xlab --instruments @crypto --interval 1h --from 2026-03-01 --funding
 #                tengu history coverage --sandbox xlab
 #   2. rules     tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
-#   3. + Jev     tengu backtest --sandbox xlab --strategy weekend_fade_top4 --gate xl_gate --max-decisions 300
+#   3. + Jev     tengu backtest --sandbox xlab --strategy weekend_fade_top4 --gate --max-decisions 200
+#                (rerun with --offline: the same decisions from the cache, nothing called)
 #   4. Architect tengu chat --sandbox xlab      ("test a weekend follow placebo on the holdout split")
 # State: ~/.tengu/state/xlab/ (market.db, backtests/<run>/, ledger.db, KILL = halt);
 # workspace ~/xlab-ws (only .tengu/observations.db).
@@ -107,6 +108,13 @@ xyz_stocks = [                   # 75 xyz single stocks (= sandboxes/xmarket-wee
 ]
 crypto = ["hyperliquid:BTC", "hyperliquid:ETH", "hyperliquid:SOL", "hyperliquid:HYPE"]
 
+# Share splits: a run divides the loaded bars before `at` by `ratio` (volume ×
+# ratio) and says so in report.md's data notes. KIOXIA 3-for-1, verified in
+# market.db: the 07:00 UTC bar of 2026-09-28 is a no-trade halt at 340.79, the
+# 08:00 bar opens at 114.93 (340.79 / 113.9 ≈ 2.99).
+[backtest.splits]
+"hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]
+
 # Rule W exactly (docs/xmarket-feasibility-2026-09-30.md): Sun 18:00 NY fade the
 # move since Fri 20:00, exit Mon 09:00 — every eligible name (the shadow ledger).
 [backtest.strategies.weekend_fade]
@@ -116,6 +124,20 @@ interval = "1h"
 calendar = "us_equity"
 direction = "fade"
 min_abs_signal_bps = 0
+
+# Rule W on liquid entries only: a name whose entry hour (the bar closing Sun
+# 18:00 NY) counted < 50 trades is skipped (`thin_entry`). HL keeps no-trade
+# hours as flat bars at the previous close (n = 0) — stale prices; thin xyz
+# names have hundreds (xyz:DKNG 1 278 of 4 561 hourly bars). The feasibility
+# study's "entry bars with ≥ 50 trades" cut.
+[backtest.strategies.weekend_fade_liquid]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+min_entry_trades = 50
 
 # The capped ledger's selection: the 4 largest |s| ≥ 50 bps.
 [backtest.strategies.weekend_fade_top4]
@@ -197,8 +219,13 @@ max_hold_bars = 72
 # Replayed on history by `tengu backtest --gate xl_gate`: one decision per rule
 # candidate, terminal actions only, no tools; decisions cached in
 # ~/.tengu/state/xlab/backtests/decision-cache.db (a rerun is free + identical).
+# The pinned build (not ~typesafe/jev-latest): the cache key names it, so a
+# model bump re-decides cleanly instead of mixing builds. act_at 0.01: Jev's
+# menu-normalised confidence ran 0.13–0.48 live, so 0.6 made every decision
+# `unsure`; at 0.01 the gate acts on Jev's argmax and the calibration reads
+# p(take) (docs/xlab-2026-10-01.md § 7).
 [decision_loops.xl_gate]
-model = "~typesafe/jev-latest"
+model = "typesafe/jev-1.13-20260917"
 agent = "xl_jev"
 goal = """Gate for trades a deterministic rule proposes on Hyperliquid perps (paper research, \
 $100 book). The event carries the rule, the instrument, the trade side, the signal size in bps \
@@ -208,7 +235,7 @@ Take the trade only when it looks like the dislocation the rule bets on and is c
 skip it when the market is thin (few trades, wide spread), the move looks like news the price \
 should keep, or volatility makes the edge noise. Ask the architect when the event needs \
 research you cannot do from these numbers."""
-act_at = 0.6
+act_at = 0.01
 max_steps = 1
 escalate = false
 dry_run = true

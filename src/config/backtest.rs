@@ -12,6 +12,7 @@
 //! | `costs."<prefix>"` | — | `CostSpec` (`domain/backtest/costs.rs`) for ids starting with the prefix; the longest prefix wins; an instrument without one is refused |
 //! | `universes.<name>` | — | full instrument ids, `@<name>` in specs and on the CLI |
 //! | `strategies.<name>` | — | strategy specs (`domain/backtest/spec.rs`), the operator's named capabilities |
+//! | `splits."<full id>"` | — | share splits `[{ at = "<RFC 3339>", ratio = <new shares per old> }]`: a run adjusts that instrument's loaded bars opening before `at` (prices ÷ ratio, volume × ratio; ctx prices too; funding never) and says so in the report's data notes |
 //! | `gate` | — | the `[decision_loops.<name>]` the Jev gate arm runs by default |
 //!
 //! | Load rule (`validation_errors`; a violation fails `Config::load`) | The error starts |
@@ -20,6 +21,7 @@
 //! | its `@<universe>` is a `universes` entry | `backtest.strategies.<name>: universe: …` |
 //! | its `calendar` (`weekend_window`; `daily_window` with `days = "trading"`) is an exchange `[xmarket.calendars.<id>]` | `backtest.strategies.<name>: calendar …` |
 //! | every instrument it trades (universe or named ids, minus `exclude`) has a `costs` prefix, unless the spec sets `costs` | `backtest.strategies.<name>: no [backtest.costs] prefix matches <ids, in full>` |
+//! | every `splits` key is a full instrument id; each entry's `at` is RFC 3339, its `ratio` finite, > 0 and ≠ 1; entries sorted by `at`, each instant once (unknown fields refused) | `backtest.splits."<id>"` |
 
 use std::collections::BTreeMap;
 
@@ -27,8 +29,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::backtest::costs::{cost_for, CostSpec};
-use crate::domain::backtest::spec::{valid_name, StrategySpec, Universe};
+use crate::domain::backtest::spec::{parse_rfc3339, valid_name, StrategySpec, Universe};
 use crate::domain::market::InstrumentId;
+use crate::domain::marketdata::StockSplit;
+
+/// One `[backtest.splits."<id>"]` entry (module table).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplitEntry {
+    /// RFC 3339: the first instant at the new share count (bars opening
+    /// before it are adjusted).
+    pub at: String,
+    /// New shares per old share: 3.0 = 3-for-1, 0.1 = 1-for-10 reverse.
+    pub ratio: f64,
+}
 
 /// `[backtest]` section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,6 +62,9 @@ pub struct BacktestConfig {
     /// (`domain::backtest::spec`), `validation_errors` all of them at load.
     #[serde(default)]
     pub strategies: BTreeMap<String, Value>,
+    /// Share splits by full instrument id (module table).
+    #[serde(default)]
+    pub splits: BTreeMap<String, Vec<SplitEntry>>,
     #[serde(default)]
     pub gate: Option<String>,
 }
@@ -61,6 +78,7 @@ impl Default for BacktestConfig {
             costs: BTreeMap::new(),
             universes: BTreeMap::new(),
             strategies: BTreeMap::new(),
+            splits: BTreeMap::new(),
             gate: None,
         }
     }
@@ -124,6 +142,9 @@ impl BacktestConfig {
         }
         for name in self.strategies.keys() {
             errors.extend(self.strategy_errors(name, calendars));
+        }
+        for (id, entries) in &self.splits {
+            errors.extend(split_errors(id, entries));
         }
         if let Some(gate) = &self.gate {
             if !loops.contains(&gate.as_str()) {
@@ -220,6 +241,70 @@ impl BacktestConfig {
             None => InstrumentId::parse(item).map(|_| vec![item.to_string()]),
         }
     }
+
+    /// `[backtest.splits]` as `StockSplit`s by full id — the entries that
+    /// pass the load rule (`Config::load` refuses the rest).
+    pub fn stock_splits(&self) -> BTreeMap<String, Vec<StockSplit>> {
+        self.splits
+            .iter()
+            .map(|(id, entries)| {
+                let splits = entries
+                    .iter()
+                    .filter_map(|e| {
+                        let s = StockSplit {
+                            at_ms: parse_rfc3339(&e.at)?,
+                            ratio: e.ratio,
+                        };
+                        s.is_valid().then_some(s)
+                    })
+                    .collect();
+                (id.clone(), splits)
+            })
+            .collect()
+    }
+}
+
+/// The load rule of one `splits."<id>"` list (module table).
+fn split_errors(id: &str, entries: &[SplitEntry]) -> Vec<String> {
+    let at = format!("backtest.splits.\"{id}\"");
+    let mut errors = Vec::new();
+    if let Err(e) = InstrumentId::parse(id) {
+        errors.push(format!("{at}: {e}"));
+    }
+    if entries.is_empty() {
+        errors.push(format!(
+            "{at} lists no split: [{{ at = \"<RFC 3339>\", ratio = <new shares per old> }}]"
+        ));
+    }
+    let mut last: Option<i64> = None;
+    for (i, e) in entries.iter().enumerate() {
+        match parse_rfc3339(&e.at) {
+            None => errors.push(format!(
+                "{at}[{i}].at `{}` is not RFC 3339 (2026-09-28T08:00:00Z)",
+                e.at
+            )),
+            Some(t) => {
+                if last.is_some_and(|l| t <= l) {
+                    errors.push(format!(
+                        "{at}[{i}].at `{}`: list the splits by `at`, each instant once",
+                        e.at
+                    ));
+                }
+                last = Some(t);
+            }
+        }
+        let valid = StockSplit {
+            at_ms: 0,
+            ratio: e.ratio,
+        }
+        .is_valid();
+        if !valid {
+            errors.push(format!(
+                "{at}[{i}].ratio must be finite, > 0 and ≠ 1 (new shares per old share: 3.0 = 3-for-1)"
+            ));
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -322,6 +407,91 @@ mod tests {
             "{e:?}"
         );
         assert!(e.iter().any(|m| m.contains("missing_loop")), "{e:?}");
+    }
+
+    /// `[backtest.splits]`: the KIOXIA entry loads into a `StockSplit`; each
+    /// load rule names the id (in full) and the entry.
+    #[test]
+    fn splits_load_and_their_rules_name_the_entry() {
+        let c = parse(
+            r#"
+            [splits]
+            "hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]
+            "#,
+        );
+        assert!(c.validation_errors(true, &[], &[]).is_empty());
+        assert_eq!(
+            c.stock_splits(),
+            BTreeMap::from([(
+                "hyperliquid:xyz:KIOXIA".to_string(),
+                vec![StockSplit {
+                    at_ms: parse_rfc3339("2026-09-28T08:00:00Z").unwrap(),
+                    ratio: 3.0
+                }]
+            )])
+        );
+        assert!(
+            toml::from_str::<BacktestConfig>(
+                "[splits]\n\"hyperliquid:xyz:KIOXIA\" = [{ at = \"2026-09-28T08:00:00Z\", ratio = 3.0, note = \"x\" }]"
+            )
+            .is_err(),
+            "unknown fields are refused"
+        );
+        // (the list, the errors it must give)
+        let cases: [(&str, &[&str]); 7] = [
+            (
+                r#""KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]"#,
+                &[r#"backtest.splits."KIOXIA": "#],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28", ratio = 3.0 }]"#,
+                &[r#"backtest.splits."hyperliquid:xyz:KIOXIA"[0].at `2026-09-28` is not RFC 3339"#],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 1.0 }]"#,
+                &[
+                    r#"backtest.splits."hyperliquid:xyz:KIOXIA"[0].ratio must be finite, > 0 and ≠ 1"#,
+                ],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = -3.0 }]"#,
+                &["[0].ratio must be finite, > 0"],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = nan }]"#,
+                &["[0].ratio must be finite"],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = [
+                    { at = "2026-09-28T08:00:00Z", ratio = 3.0 },
+                    { at = "2026-03-02T14:30:00Z", ratio = 2.0 },
+                    { at = "2026-03-02T14:30:00Z", ratio = 2.0 }]"#,
+                &[
+                    "[1].at `2026-03-02T14:30:00Z`: list the splits by `at`, each instant once",
+                    "[2].at `2026-03-02T14:30:00Z`: list the splits by `at`",
+                ],
+            ),
+            (
+                r#""hyperliquid:xyz:KIOXIA" = []"#,
+                &[r#"backtest.splits."hyperliquid:xyz:KIOXIA" lists no split"#],
+            ),
+        ];
+        for (list, wants) in cases {
+            let c = parse(&format!("[splits]\n{list}"));
+            let e = c.validation_errors(true, &[], &[]);
+            for want in wants {
+                assert!(
+                    e.iter().any(|m| m.contains(want)),
+                    "want `{want}` for {list}: {e:?}"
+                );
+            }
+            // What load refuses never reaches a run.
+            assert!(c
+                .stock_splits()
+                .values()
+                .flatten()
+                .all(|s| s.is_valid() && s.at_ms > 0));
+        }
     }
 
     /// Every library strategy is checked at load: a bad spec, a missing

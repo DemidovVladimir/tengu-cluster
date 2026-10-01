@@ -14,6 +14,12 @@
 //! given wins); readers take prices only through [`BarSeries::close_at`] /
 //! [`BarSeries::observable_at`], so a decision at `t` never sees a bar that
 //! closes after `t`.
+//!
+//! | Share split ([`StockSplit`], `[backtest.splits]`) | Adjusted rows (before `at_ms`) |
+//! |---|---|
+//! | [`BarSeries::adjust_for_split`] | bars opening before it: o / h / l / c ÷ ratio, volume × ratio; `n` (trades) stays |
+//! | [`CtxSeries::adjust_for_split`] | rows before it: mark / oracle / mid / impact bid / ask ÷ ratio, open interest (base units) × ratio; funding, premium, notional volume stay |
+//! | Funding | never (a rate per hour, not a price) |
 
 use std::fmt;
 
@@ -205,16 +211,43 @@ impl BarSeries {
         }
     }
 
-    /// The close of the bar ending exactly at `instant_ms` (`t_open =
-    /// instant − interval`); `None` when that bar is missing or its close is
-    /// not > 0.
-    pub fn close_at(&self, instant_ms: i64) -> Option<f64> {
+    /// The bar ending exactly at `instant_ms` (`t_open = instant −
+    /// interval`): a decision's entry bar.
+    pub fn bar_ending_at(&self, instant_ms: i64) -> Option<&Bar> {
         let t_open = instant_ms.checked_sub(self.interval.ms())?;
         self.bars
             .binary_search_by_key(&t_open, |b| b.t_open_ms)
             .ok()
-            .map(|i| self.bars[i].c)
+            .map(|i| &self.bars[i])
+    }
+
+    /// The close of the bar ending exactly at `instant_ms` (`t_open =
+    /// instant − interval`); `None` when that bar is missing or its close is
+    /// not > 0.
+    pub fn close_at(&self, instant_ms: i64) -> Option<f64> {
+        self.bar_ending_at(instant_ms)
+            .map(|b| b.c)
             .filter(|c| c.is_finite() && *c > 0.0)
+    }
+
+    /// Adjust for `split` (module table): every bar opening before
+    /// `split.at_ms` gets its prices ÷ ratio and its volume × ratio, as if the
+    /// post-split share had always traded; returns how many bars changed. A
+    /// ratio that is not finite and > 0 changes nothing.
+    pub fn adjust_for_split(&mut self, split: StockSplit) -> usize {
+        if !split.is_valid() {
+            return 0;
+        }
+        let r = split.ratio;
+        let n = self.bars.partition_point(|b| b.t_open_ms < split.at_ms);
+        for b in &mut self.bars[..n] {
+            b.o /= r;
+            b.h /= r;
+            b.l /= r;
+            b.c /= r;
+            b.v *= r;
+        }
+        n
     }
 
     /// The bars observable at `t_ms` (close ≤ t), oldest first.
@@ -290,6 +323,51 @@ impl CtxSeries {
     pub fn last_at(&self, t_ms: i64) -> Option<&CtxPoint> {
         let n = self.points.partition_point(|p| p.t_ms <= t_ms);
         n.checked_sub(1).map(|i| &self.points[i])
+    }
+
+    /// Adjust for `split` (module table): rows before `split.at_ms` get
+    /// their prices ÷ ratio and open interest × ratio; returns how many rows
+    /// changed. A ratio that is not finite and > 0 changes nothing.
+    pub fn adjust_for_split(&mut self, split: StockSplit) -> usize {
+        if !split.is_valid() {
+            return 0;
+        }
+        let r = split.ratio;
+        let n = self.points.partition_point(|p| p.t_ms < split.at_ms);
+        for p in &mut self.points[..n] {
+            for px in [
+                &mut p.mark,
+                &mut p.oracle,
+                &mut p.mid,
+                &mut p.impact_bid,
+                &mut p.impact_ask,
+            ] {
+                if let Some(x) = px.as_mut() {
+                    *x /= r;
+                }
+            }
+            if let Some(oi) = p.oi.as_mut() {
+                *oi *= r;
+            }
+        }
+        n
+    }
+}
+
+/// A share split (module table): from `at_ms` on, `ratio` new shares per old
+/// share — 3.0 is a 3-for-1 split, 0.1 a 1-for-10 reverse split.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StockSplit {
+    /// The first instant at the new share count: rows before it are adjusted.
+    pub at_ms: i64,
+    pub ratio: f64,
+}
+
+impl StockSplit {
+    /// A ratio finite, > 0 and ≠ 1 (`[backtest.splits]` refuses the rest at
+    /// load).
+    pub fn is_valid(&self) -> bool {
+        self.ratio.is_finite() && self.ratio > 0.0 && self.ratio != 1.0
     }
 }
 
@@ -379,6 +457,180 @@ mod tests {
         assert_eq!(s.observable_at(2 * H).len(), 2);
         assert_eq!(s.last_at(3 * H).map(|b| b.c), Some(102.0));
         assert!(s.last_at(H - 1).is_none());
+    }
+
+    /// Bars opening before the split: prices ÷ ratio, volume × ratio, trades
+    /// kept; the bar opening at `at` and later untouched; an invalid ratio
+    /// changes nothing; two splits compound.
+    #[test]
+    fn splits_adjust_the_bars_before_them() {
+        let raw = |c: f64, v: f64, n: u64| Bar {
+            v,
+            n: Some(n),
+            ..bar(0, c)
+        };
+        let series = || {
+            BarSeries::new(
+                "hyperliquid:xyz:KIOXIA",
+                Interval::H1,
+                [
+                    (0, 340.79, 10.0, 7),
+                    (H, 340.79, 0.0, 0),
+                    (2 * H, 114.0, 30.0, 9),
+                ]
+                .iter()
+                .map(|&(t, c, v, n)| Bar {
+                    t_open_ms: t,
+                    ..raw(c, v, n)
+                })
+                .collect(),
+            )
+        };
+        let split = |at_ms: i64, ratio: f64| StockSplit { at_ms, ratio };
+        // (splits, bars changed per split, closes, volumes)
+        let cases: Vec<(Vec<StockSplit>, Vec<usize>, [f64; 3], [f64; 3])> = vec![
+            (
+                vec![split(2 * H, 3.0)],
+                vec![2],
+                [340.79 / 3.0, 340.79 / 3.0, 114.0],
+                [30.0, 0.0, 30.0],
+            ),
+            // At the first bar's open: nothing opens before it.
+            (
+                vec![split(0, 3.0)],
+                vec![0],
+                [340.79, 340.79, 114.0],
+                [10.0, 0.0, 30.0],
+            ),
+            // After every bar: all adjusted (returns unchanged).
+            (
+                vec![split(10 * H, 2.0)],
+                vec![3],
+                [340.79 / 2.0, 340.79 / 2.0, 57.0],
+                [20.0, 0.0, 60.0],
+            ),
+            // Reverse 1-for-10.
+            (
+                vec![split(H, 0.1)],
+                vec![1],
+                [340.79 / 0.1, 340.79, 114.0],
+                [1.0, 0.0, 30.0],
+            ),
+            // Two splits compound on the bars before both.
+            (
+                vec![split(H, 2.0), split(2 * H, 3.0)],
+                vec![1, 2],
+                [340.79 / 6.0, 340.79 / 3.0, 114.0],
+                [60.0, 0.0, 30.0],
+            ),
+            // Not a split: ratio 1, ≤ 0, not finite.
+            (
+                vec![split(2 * H, 1.0), split(2 * H, 0.0), split(2 * H, -2.0)],
+                vec![0, 0, 0],
+                [340.79, 340.79, 114.0],
+                [10.0, 0.0, 30.0],
+            ),
+            (
+                vec![split(2 * H, f64::NAN)],
+                vec![0],
+                [340.79, 340.79, 114.0],
+                [10.0, 0.0, 30.0],
+            ),
+        ];
+        for (splits, changed, closes, volumes) in cases {
+            let mut s = series();
+            let got: Vec<usize> = splits.iter().map(|x| s.adjust_for_split(*x)).collect();
+            assert_eq!(got, changed, "{splits:?}");
+            for (i, b) in s.bars.iter().enumerate() {
+                assert!((b.c - closes[i]).abs() < 1e-9, "{splits:?} bar {i}: {b:?}");
+                assert!((b.v - volumes[i]).abs() < 1e-9, "{splits:?} bar {i}: {b:?}");
+                assert!(b.o == b.c && b.h == b.c && b.l == b.c, "{b:?}");
+                assert!(b.validate().is_ok(), "{b:?}");
+            }
+            assert_eq!(
+                s.bars.iter().map(|b| b.n).collect::<Vec<_>>(),
+                vec![Some(7), Some(0), Some(9)],
+                "trade counts stay"
+            );
+        }
+        // The entry bar of an instant.
+        let s = series();
+        assert_eq!(s.bar_ending_at(2 * H).map(|b| b.n), Some(Some(0)));
+        assert!(s.bar_ending_at(2 * H + 1).is_none());
+        assert!(s.bar_ending_at(i64::MIN).is_none());
+        assert!(StockSplit {
+            at_ms: 0,
+            ratio: 3.0
+        }
+        .is_valid());
+        assert!(!StockSplit {
+            at_ms: 0,
+            ratio: 1.0
+        }
+        .is_valid());
+    }
+
+    #[test]
+    fn splits_adjust_ctx_prices_and_open_interest_only() {
+        let p = |t_ms: i64| CtxPoint {
+            t_ms,
+            mark: Some(300.0),
+            oracle: Some(301.0),
+            mid: Some(300.5),
+            impact_bid: Some(299.0),
+            impact_ask: Some(302.0),
+            oi: Some(1_000.0),
+            day_ntl_vlm: Some(5e6),
+            funding_1h: Some(1e-5),
+            premium: Some(0.001),
+        };
+        let mut s = CtxSeries::new(
+            "x",
+            vec![
+                p(0),
+                p(60_000),
+                CtxPoint {
+                    t_ms: 1,
+                    ..Default::default()
+                },
+            ],
+        );
+        assert_eq!(
+            s.adjust_for_split(StockSplit {
+                at_ms: 60_000,
+                ratio: 3.0
+            }),
+            2
+        );
+        let a = s.points[0];
+        assert_eq!(
+            (a.mark, a.oracle, a.mid, a.impact_bid, a.impact_ask),
+            (
+                Some(100.0),
+                Some(301.0 / 3.0),
+                Some(300.5 / 3.0),
+                Some(299.0 / 3.0),
+                Some(302.0 / 3.0)
+            )
+        );
+        assert_eq!(a.oi, Some(3_000.0));
+        assert_eq!(
+            (a.day_ntl_vlm, a.funding_1h, a.premium),
+            (Some(5e6), Some(1e-5), Some(0.001)),
+            "USD volume, rates and premium are not per share"
+        );
+        assert_eq!(
+            s.points[1],
+            CtxPoint {
+                t_ms: 1,
+                ..Default::default()
+            },
+            "absent stays absent"
+        );
+        assert_eq!(s.points[2], p(60_000), "at the split: post-split already");
+        // Half the impact spread in bps of the mid is unchanged by a split.
+        let before = p(0).impact_half_spread_bps().unwrap();
+        assert!((a.impact_half_spread_bps().unwrap() - before).abs() < 1e-9);
     }
 
     #[test]

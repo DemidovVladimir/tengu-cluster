@@ -19,10 +19,12 @@
 //! | As-of | `data_asof_ms` = the latest observation a candidate read (price bars, funding row, features) ≤ `decided_at_ms`; `simulate` drops one that is not (`future_data`) |
 //! | Order | candidates by (decided_at, instrument key), `seq` = the index; a pair's key = `<a>/<b>` |
 //! | Re-entry | `funding_carry` / `pair_spread` re-enter only after the rule's own exit — known by the next decision, so still time-honest |
+//! | Entry liquidity (`min_entry_trades`) | a candidate whose entry bar (the bar ending at the decision) counts fewer trades (`n`) is skipped (`thin_entry`) before any ranking, cooldown or position; a bar without `n` passes — HL keeps a no-trade hour as a flat bar at the last close (n = 0): a stale price |
 //! | Fill | entry and exit at the instant's close; gross bps = side × ln(exit / entry) × 10⁴; net bps = gross − (entry + exit cost) + funding; USD = net bps × notional / 10⁴; a pair: each leg `notional` / 2, the trade's bps the legs' mean |
-//! | `research` arm | every candidate at the spec's notional, no caps |
-//! | `capped` arm ([`RiskCaps`]) | in time order; positions open until their exit, exits at an instant before entries; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed |
-//! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no exit bar: the trade is dropped) · future_data |
+//! | `research` arm | every candidate at the spec's notional, no caps; candidates of one instant by instrument key; drawdown in USD and bps of one trade's notional (`max_drawdown_bps`) — no %: it keeps no cash book |
+//! | `capped` arm ([`RiskCaps`]) | in time order, the candidates of one instant by descending \|signal\| (ties: instrument key) — the caps keep the highest-conviction trades; positions open until their exit, exits at an instant before entries; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed; drawdown in USD and % of `initial_cash_usd` |
+//! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · thin_entry · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no exit bar: the trade is dropped) · future_data |
+//! | Share splits ([`MarketData::adjust_for_splits`]) | before any decision: each instrument's bars (and ctx rows) before each of its splits split-adjusted (`marketdata::StockSplit`); one data note per split that changed a row |
 
 use std::collections::BTreeMap;
 
@@ -38,7 +40,7 @@ use crate::domain::backtest::spec::{StrategyKind, StrategySpec};
 use crate::domain::backtest::stats::{StatsParams, Summary};
 use crate::domain::book::Side;
 use crate::domain::calendar::Calendar;
-use crate::domain::marketdata::{fmt_time, BarSeries, CtxSeries, FundingSeries};
+use crate::domain::marketdata::{fmt_time, BarSeries, CtxSeries, FundingSeries, StockSplit};
 use crate::domain::xm::weekend_fade::Skip as FadeSkip;
 
 const DAY_MS: i64 = 86_400_000;
@@ -51,6 +53,43 @@ pub struct MarketData {
     pub bars: BTreeMap<String, BarSeries>,
     pub funding: BTreeMap<String, FundingSeries>,
     pub ctx: BTreeMap<String, CtxSeries>,
+}
+
+impl MarketData {
+    /// Split-adjust the series (module table): for each instrument's
+    /// splits, its bars and ctx rows before the split (`adjust_for_split`;
+    /// funding is a rate, untouched). Returns one data note per split that
+    /// changed a row, ids in full.
+    pub fn adjust_for_splits(&mut self, splits: &BTreeMap<String, Vec<StockSplit>>) -> Vec<String> {
+        let mut notes = Vec::new();
+        for (id, list) in splits {
+            for split in list {
+                let bars = self
+                    .bars
+                    .get_mut(id)
+                    .map_or(0, |s| s.adjust_for_split(*split));
+                let ctx = self
+                    .ctx
+                    .get_mut(id)
+                    .map_or(0, |s| s.adjust_for_split(*split));
+                if bars + ctx == 0 {
+                    continue;
+                }
+                let r = split.ratio;
+                let ctx_text = if ctx > 0 {
+                    format!(" and {ctx} ctx rows")
+                } else {
+                    String::new()
+                };
+                notes.push(format!(
+                    "split-adjusted {id}: ratio {r} (new shares per old) at {} — {bars} bars{ctx_text} \
+                     before it: prices ÷ {r}, volume × {r}",
+                    fmt_time(split.at_ms)
+                ));
+            }
+        }
+        notes
+    }
 }
 
 /// What a run needs besides the spec and the series (the application fills
@@ -72,9 +111,6 @@ pub struct RunParams {
     /// `[backtest] bootstrap` / `seed`.
     pub bootstrap: u32,
     pub seed: u64,
-    /// The research arm's start equity for drawdown % (`[paper]
-    /// initial_cash_usd`); the capped arm uses its caps'.
-    pub start_equity_usd: Option<f64>,
 }
 
 /// One leg of a decision.
@@ -147,6 +183,8 @@ pub enum SkipReason {
     Flat,
     BelowMinSignal,
     NotTopN,
+    /// The entry bar counts fewer trades than `min_entry_trades`.
+    ThinEntry,
     NoCosts,
     MissingExit,
     FutureData,
@@ -162,6 +200,7 @@ impl SkipReason {
             SkipReason::Flat => "flat",
             SkipReason::BelowMinSignal => "below_min_signal",
             SkipReason::NotTopN => "not_top_n",
+            SkipReason::ThinEntry => "thin_entry",
             SkipReason::NoCosts => "no_costs",
             SkipReason::MissingExit => "missing_exit",
             SkipReason::FutureData => "future_data",
@@ -318,7 +357,8 @@ pub struct Refusal {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArmResult {
     pub arm: String,
-    /// In decision order.
+    /// In the order the arm took them: by decision time, then (research) the
+    /// instrument key or (capped) descending \|signal\| — module table.
     pub trades: Vec<Trade>,
     pub refusals: Vec<Refusal>,
     /// Candidates dropped while filling (`missing_exit`, `no_costs`,
@@ -604,7 +644,17 @@ fn build_trade(
     })
 }
 
-/// One arm over `candidates` (module table): trades in decision order, the
+/// |signal| — how far a candidate's move went; not a number ⇒ 0 (taken last).
+fn conviction(c: &Candidate) -> f64 {
+    let s = c.signal_bps.abs();
+    if s.is_nan() {
+        0.0
+    } else {
+        s
+    }
+}
+
+/// One arm over `candidates` (module table): trades in the order taken, the
 /// capped arm's refusals, candidates dropped while filling, the summary.
 pub fn simulate(
     spec: &StrategySpec,
@@ -616,8 +666,13 @@ pub fn simulate(
     let notional = spec.notional(params.notional_usd);
     let mut order: Vec<&Candidate> = candidates.iter().collect();
     order.sort_by(|a, b| {
-        a.decided_at_ms
-            .cmp(&b.decided_at_ms)
+        let at = a.decided_at_ms.cmp(&b.decided_at_ms);
+        // The caps keep the highest-conviction trades of an instant.
+        let ranked = match &arm {
+            Arm::Capped(_) => at.then_with(|| conviction(b).total_cmp(&conviction(a))),
+            Arm::Research => at,
+        };
+        ranked
             .then_with(|| a.instrument.cmp(&b.instrument))
             .then(a.seq.cmp(&b.seq))
     });
@@ -667,14 +722,18 @@ pub fn simulate(
             }),
         }
     }
+    // Drawdown: the capped arm's of its own cash book (%), the research
+    // arm's of one trade (bps) — it trades every candidate, with no book.
+    let (start_equity_usd, trade_notional_usd) = match &arm {
+        Arm::Capped(caps) => (Some(caps.initial_cash_usd), None),
+        Arm::Research => (None, Some(notional)),
+    };
     let stats = StatsParams {
         bootstrap: params.bootstrap,
         seed: params.seed,
         periods_per_year: spec.period_kind().per_year(),
-        start_equity_usd: match &arm {
-            Arm::Capped(caps) => Some(caps.initial_cash_usd),
-            Arm::Research => params.start_equity_usd,
-        },
+        start_equity_usd,
+        trade_notional_usd,
     };
     let summary = Summary::compute(&trades, &stats);
     ArmResult {
@@ -692,7 +751,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::domain::backtest::testkit::{market, run_params, sparse, spec, utc, H};
+    use crate::domain::backtest::testkit::{market, run_params, series, sparse, spec, utc, H};
     use crate::domain::marketdata::Interval;
 
     const A: &str = "hyperliquid:xyz:AAA";
@@ -800,6 +859,177 @@ mod tests {
             (Arm::Research.name(), Arm::Capped(caps()).name()),
             ("research", "capped")
         );
+    }
+
+    /// The capped arm takes an instant's candidates by descending |signal|
+    /// (ties: instrument key; not a number: last), so a $100 gross cap keeps
+    /// the two largest moves; the research arm keeps instrument order; seqs
+    /// never change.
+    #[test]
+    fn the_capped_arm_takes_the_largest_moves_of_an_instant_first() {
+        let t = utc("2026-09-28 10:00");
+        let flat = |id| sparse(id, Interval::H1, &[(t - H, 100.0), (t + H, 100.0)]);
+        let md = market(vec![flat(A), flat(B), flat(C), flat(D)]);
+        let p = run_params(t - 10 * H, t + 10 * H);
+        let mut c = caps();
+        c.max_net_exposure_usd = 100.0; // gross binds: two $50 positions
+                                        // signals of A, B, C, D (seq 0–3) → capped trades in the order taken.
+        let cases: [([f64; 4], [&str; 2]); 5] = [
+            ([10.0, -300.0, 200.0, 50.0], [B, C]),
+            ([-5.0, 5.0, 4.0, -4.0], [A, B]),
+            ([100.0, 100.0, -100.0, 5.0], [A, B]),
+            ([f64::NAN, 1.0, 2.0, 3.0], [D, C]),
+            ([0.0, 0.0, 0.0, 0.0], [A, B]),
+        ];
+        for (signals, want) in cases {
+            let cs: Vec<Candidate> = [A, B, C, D]
+                .iter()
+                .zip(signals)
+                .enumerate()
+                .map(|(seq, (id, s))| {
+                    let mut d = decision(seq, id, Side::Buy, t, 100.0, t + 2 * H);
+                    d.signal_bps = s;
+                    d
+                })
+                .collect();
+            let r = simulate(&flat_spec(), &md, &p, &cs, Arm::Capped(c.clone()));
+            let taken: Vec<&str> = r.trades.iter().map(|t| t.instrument.as_str()).collect();
+            assert_eq!(taken, want, "{signals:?}");
+            assert_eq!(r.refusals.len(), 2, "{signals:?}");
+            assert!(r
+                .refusals
+                .iter()
+                .all(|x| x.rule == "max_gross_exposure_usd"));
+            for tr in &r.trades {
+                assert_eq!(cs[tr.seq].instrument, tr.instrument, "seq unchanged");
+            }
+            let research = simulate(&flat_spec(), &md, &p, &cs, Arm::Research);
+            let order: Vec<usize> = research.trades.iter().map(|t| t.seq).collect();
+            assert_eq!(order, vec![0, 1, 2, 3], "research: instrument order");
+        }
+        // Instants stay in time order: a later instant's big move never
+        // jumps an earlier one.
+        let mut early = decision(0, A, Side::Buy, t, 100.0, t + 2 * H);
+        early.signal_bps = 1.0;
+        let mut late = decision(1, B, Side::Buy, t + H, 100.0, t + 2 * H);
+        late.signal_bps = 900.0;
+        let md2 = market(vec![
+            sparse(A, Interval::H1, &[(t - H, 100.0), (t + H, 100.0)]),
+            sparse(B, Interval::H1, &[(t, 100.0), (t + H, 100.0)]),
+        ]);
+        let mut one = caps();
+        one.max_gross_exposure_usd = 50.0;
+        let r = simulate(&flat_spec(), &md2, &p, &[late, early], Arm::Capped(one));
+        assert_eq!(r.trades.iter().map(|t| t.seq).collect::<Vec<_>>(), vec![0]);
+        assert_eq!(r.refusals[0].seq, 1);
+    }
+
+    /// A 3-for-1 split between entry and exit: the raw series books the
+    /// split as a −ln 3 move; adjusted, the candidate, its features and the
+    /// trade equal the unsplit series' (KIOXIA, weekend of 2026-09-25).
+    #[test]
+    fn a_split_mid_hold_gives_the_unsplit_trade() {
+        let t0 = utc("2026-09-17 00:00");
+        let at = utc("2026-09-28 08:00");
+        // A wave, then a Sunday jump the rule fades.
+        let closes: Vec<f64> = (0..(12 * 24))
+            .map(|h| {
+                let t = t0 + h as i64 * H;
+                let jump = if (utc("2026-09-27 12:00")..at).contains(&t) {
+                    1.05
+                } else {
+                    1.0
+                };
+                (300.0 + 10.0 * ((h as f64) / 7.0).sin()) * jump
+            })
+            .collect();
+        let unsplit = market(vec![series(A, Interval::H1, t0, &closes)]);
+        // What the venue stored: pre-split prices 3× higher, a third of the volume.
+        let mut raw = unsplit.clone();
+        for b in raw.bars.get_mut(A).unwrap().bars.iter_mut() {
+            if b.t_open_ms < at {
+                (b.o, b.h, b.l, b.c, b.v) = (b.o * 3.0, b.h * 3.0, b.l * 3.0, b.c * 3.0, b.v / 3.0);
+            }
+        }
+        let s = spec(
+            json!({"kind": "weekend_window", "universe": [A], "interval": "1h",
+            "calendar": "us_equity", "direction": "fade"}),
+        );
+        let p = run_params(utc("2026-09-21 00:00"), utc("2026-09-29 00:00"));
+        let trade = |md: &MarketData| {
+            let set = candidates(&s, md, &p).unwrap();
+            assert_eq!(set.candidates.len(), 1, "{:?}", set.skipped);
+            let r = simulate(&s, md, &p, &set.candidates, Arm::Research);
+            (set.candidates[0].clone(), r.trades[0].clone())
+        };
+        let (c0, t_unsplit) = trade(&unsplit);
+        assert!(
+            t_unsplit.entry_ms < at && at < t_unsplit.exit_ms,
+            "mid-hold"
+        );
+        // Raw: the split reads as a ln 3 fall the short books as profit.
+        let (_, t_raw) = trade(&raw);
+        assert!((t_raw.gross_bps - t_unsplit.gross_bps - 3f64.ln() * 1e4).abs() < 1e-6);
+
+        let mut adjusted = raw.clone();
+        let splits = BTreeMap::from([(
+            A.to_string(),
+            vec![StockSplit {
+                at_ms: at,
+                ratio: 3.0,
+            }],
+        )]);
+        let notes = adjusted.adjust_for_splits(&splits);
+        assert_eq!(notes.len(), 1);
+        assert!(
+            notes[0].starts_with(&format!(
+                "split-adjusted {A}: ratio 3 (new shares per old) at 2026-09-28T08:00:00Z — 272 bars"
+            )),
+            "{}",
+            notes[0]
+        );
+        let (c1, t_adjusted) = trade(&adjusted);
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9 * a.abs().max(1.0);
+        assert_eq!(
+            (c1.side, c1.decided_at_ms, c1.seq),
+            (c0.side, c0.decided_at_ms, c0.seq)
+        );
+        assert!(close(c1.signal_bps, c0.signal_bps));
+        assert_eq!(
+            c1.features.keys().collect::<Vec<_>>(),
+            c0.features.keys().collect::<Vec<_>>()
+        );
+        for (k, v) in &c0.features {
+            assert!(close(c1.features[k], *v), "{k}: {} vs {v}", c1.features[k]);
+        }
+        for (a, b) in [
+            (t_adjusted.gross_bps, t_unsplit.gross_bps),
+            (t_adjusted.net_bps, t_unsplit.net_bps),
+            (t_adjusted.legs[0].entry_px, t_unsplit.legs[0].entry_px),
+            (t_adjusted.legs[0].exit_px, t_unsplit.legs[0].exit_px),
+        ] {
+            assert!(close(a, b), "{a} vs {b}");
+        }
+        // An id without splits, or a split before its data, changes nothing.
+        let mut none = raw.clone();
+        let later = BTreeMap::from([
+            (
+                B.to_string(),
+                vec![StockSplit {
+                    at_ms: at,
+                    ratio: 3.0,
+                }],
+            ),
+            (
+                A.to_string(),
+                vec![StockSplit {
+                    at_ms: t0,
+                    ratio: 3.0,
+                }],
+            ),
+        ]);
+        assert!(none.adjust_for_splits(&later).is_empty());
+        assert_eq!(none, raw);
     }
 
     #[test]

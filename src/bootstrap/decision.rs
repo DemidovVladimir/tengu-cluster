@@ -227,7 +227,6 @@ pub(crate) fn cached_decision_engine(
 /// own `SimClock`, every audit line to `audit_path` (the run's
 /// `decisions.jsonl`). Refused: concurrency 0, an unknown loop, a loop that
 /// is not terminal-only.
-#[cfg_attr(not(test), allow(dead_code))] // `tengu backtest --gate` calls it (xlab CLI)
 pub(crate) fn build_gate(
     config: &Config,
     loop_name: &str,

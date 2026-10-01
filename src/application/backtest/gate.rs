@@ -15,19 +15,22 @@
 //! | Failures | a failed call (offline miss, Jev error, open circuit) ⇒ class `error`, counted, one warn line at the end; the run goes on |
 //! | Cache | `DecisionEngine::cache_stats` after − before: the run's hits / misses / errors |
 //! | [`gate_arms`] | rules = `simulate` of the decided candidates, jev = of the taken ones — research, and capped when caps are given; calibration (p(take) vs the rules arm's trade winning, by `seq`) + paired differences → `GateSummary` |
-//! | [`GateArms::add_to_report`] | arms `rules` · `jev` (+ `rules_capped` · `jev_capped`), comparisons jev − rules put first (the row's `diff_bps`), the calibration |
-
-// The CLI (`tengu backtest --gate`) wires the gate arm; drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
+//! | [`GateArms::add_to_report`] | arms `rules` · `jev` (+ `rules_capped` · `jev_capped`), comparisons jev − rules put first (the row's `diff_bps`), the calibration, the summary (`BacktestReport::gate`: `report.md`'s gate section, the CLI lines, the row's `jev_*`) |
+//! | [`GateArms::add_to_run`] | the same into a run, + the four arms' trades (`trades-<arm>.jsonl`) — one source of truth: `gate_arms`' simulations, never re-run |
+//! | [`GateAudit`] | the replay loops audit to a temp file outside the state dir (removed on drop: a failed run leaves nothing behind); [`evaluate_gated`] moves its lines, ordered by seq, into the run dir's `decisions.jsonl` (`write_run_dir` claims the dir) |
+//! | [`evaluate_gated`] | `tengu backtest --gate`'s step 3: `evaluate` (research, capped) + [`gate_arms`] → [`GateArms::add_to_run`] + `decisions.jsonl` |
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use futures::future::join_all;
+use serde_json::Value;
 use tracing::{debug, warn};
 
+use super::{evaluate, BacktestRun, Prepared};
 use crate::application::decision_loop::DecisionLoop;
 use crate::domain::backtest::engine::{
     simulate, Arm, ArmResult, Candidate, MarketData, RiskCaps, RunParams,
@@ -272,9 +275,9 @@ pub(crate) fn gate_arms(
 
 impl GateArms {
     /// Put the gate into `report` (module table): the four arms, jev − rules
-    /// first among the comparisons (research, then capped) and the
-    /// calibration. The gate's counts are `summary.render_markdown()` /
-    /// `summary.add_features(..)`.
+    /// first among the comparisons (research, then capped), the calibration
+    /// and the summary (`report.gate`: its `report.md` section, CLI lines and
+    /// `jev_*` row features).
     pub(crate) fn add_to_report(&self, report: &mut BacktestReport) {
         report.add_arm(RULES_ARM, self.decided.len(), &self.rules);
         report.add_arm(JEV_ARM, self.taken.len(), &self.jev);
@@ -303,7 +306,104 @@ impl GateArms {
             .chain(earlier)
             .collect();
         report.calibration = Some(self.summary.calibration.clone());
+        report.gate = Some(self.summary.clone());
     }
+
+    /// [`add_to_report`](Self::add_to_report) on `run.report`, and the four
+    /// simulations into `run.arms` (their `trades-<arm>.jsonl`, `skips.json`
+    /// rows) — the report and the files read the same `ArmResult`s.
+    pub(crate) fn add_to_run(self, run: &mut BacktestRun) {
+        self.add_to_report(&mut run.report);
+        let capped = match (self.rules_capped, self.jev_capped) {
+            (Some(r), Some(j)) => vec![(RULES_CAPPED_ARM, r), (JEV_CAPPED_ARM, j)],
+            _ => Vec::new(),
+        };
+        for (name, arm) in [(RULES_ARM, self.rules), (JEV_ARM, self.jev)]
+            .into_iter()
+            .chain(capped)
+        {
+            run.arms.insert(name.to_string(), arm);
+        }
+    }
+}
+
+/// `decisions.jsonl` — the gate's audit in the run dir.
+pub(crate) const DECISIONS_FILE: &str = "decisions.jsonl";
+
+/// The gate's audit while the run dir is unclaimed (module table): a temp
+/// file outside the state dir, deleted on drop.
+pub(crate) struct GateAudit {
+    file: tempfile::NamedTempFile,
+}
+
+impl GateAudit {
+    pub(crate) fn new() -> Result<Self> {
+        let file = tempfile::Builder::new()
+            .prefix("tengu-gate-")
+            .suffix(".jsonl")
+            .tempfile()
+            .context("create the jev gate's temp audit file")?;
+        Ok(Self { file })
+    }
+
+    /// Where the replay loops append (`build_gate`'s `audit_path`).
+    pub(crate) fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    /// The audit lines, verbatim, ordered by their decision's seq (session
+    /// `backtest:<strategy>:<seq>`; K workers append in completion order); a
+    /// line without one keeps its place after them.
+    pub(crate) fn lines_by_seq(&self, strategy: &str) -> Result<String> {
+        let path = self.path();
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let prefix = format!("backtest:{strategy}:");
+        let seq = |line: &str| -> Option<usize> {
+            let v: Value = serde_json::from_str(line).ok()?;
+            v.get("session_id")?
+                .as_str()?
+                .strip_prefix(&prefix)?
+                .parse()
+                .ok()
+        };
+        let mut lines: Vec<(Option<usize>, &str)> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| (seq(l), l))
+            .collect();
+        // Stable: `None` sorts after every seq, in file order.
+        lines.sort_by_key(|(s, _)| s.unwrap_or(usize::MAX));
+        Ok(lines.into_iter().map(|(_, l)| format!("{l}\n")).collect())
+    }
+}
+
+/// `tengu backtest --gate`'s step 3 (module table): `evaluate`'s base arms,
+/// then the gate's arms, comparisons, calibration and summary over the
+/// candidates `gate` decided, and its audit as `decisions.jsonl`.
+/// `cost_per_decision_usd`: `COST_PER_DECISION_USD` online, 0 offline.
+pub(crate) fn evaluate_gated(
+    p: &Prepared,
+    gate: &GateRun,
+    audit: &GateAudit,
+    cost_per_decision_usd: f64,
+) -> Result<BacktestRun> {
+    let mut run = evaluate(p, Vec::new())?;
+    gate_arms(
+        gate,
+        &p.set.candidates,
+        &p.spec,
+        &p.md,
+        &p.params,
+        p.caps.as_ref(),
+        cost_per_decision_usd,
+    )
+    .add_to_run(&mut run);
+    run.extra_files.insert(
+        DECISIONS_FILE.to_string(),
+        audit.lines_by_seq(&gate.strategy)?,
+    );
+    Ok(run)
 }
 
 /// One decision as a line — seq, class, action, confidence, p(take), a
@@ -356,8 +456,9 @@ mod tests {
         "hyperliquid:xyz:CCC",
     ];
 
-    /// `xl_gate` as the xlab sandbox has it (`act_at` 0.6, `history = 1`):
-    /// the replay loop must not carry that history between candidates.
+    /// `xl_gate` shaped like the xlab sandbox's, `history = 1` (the replay
+    /// loop must not carry it between candidates); `act_at` 0.6 so the fake's
+    /// 0.4 confidence is `unsure` (the sandbox runs 0.01).
     fn config() -> Config {
         toml::from_str(
             r#"
@@ -775,8 +876,9 @@ mod tests {
         );
         assert_eq!(report.comparisons[1].a, "jev_capped");
         assert_eq!(report.calibration.as_ref(), Some(&sum.calibration));
-        let mut md_text = report.render_markdown();
-        md_text.push_str(&sum.render_markdown());
+        assert_eq!(report.gate.as_ref(), Some(sum));
+        // The report alone renders the gate: its section, CLI lines, row.
+        let md_text = report.render_markdown();
         for want in [
             "| jev − rules |",
             "## Calibration (n",
@@ -784,15 +886,58 @@ mod tests {
         ] {
             assert!(md_text.contains(want), "missing `{want}`");
         }
-        let mut obs = Observation::of("backtest", &report, 0, 0, ObsSource::Live);
+        assert_eq!(md_text.matches("## Jev gate").count(), 1);
+        assert!(report
+            .render_compact()
+            .contains(&sum.render_compact().lines().next().unwrap().to_string()));
+        let obs = Observation::of("backtest", &report, 0, 0, ObsSource::Live);
         assert_eq!(
             obs.features["diff_bps"],
             json!(sum.diff_ci.as_ref().unwrap().diff_bps)
         );
-        sum.add_features(&mut obs.features);
         assert!(obs.features.len() <= MAX_FEATURES);
         assert!(obs.features.contains_key("jev_take_rate"));
         assert_features_ok(&obs.features);
+    }
+
+    /// The audit moves into the run dir by seq, lines verbatim; a line
+    /// without a parsable session keeps its place after them; the temp file
+    /// is gone once the audit drops.
+    #[test]
+    fn the_audit_is_ordered_by_seq_and_removed() {
+        let audit = GateAudit::new().unwrap();
+        let path = audit.path().to_path_buf();
+        assert!(!path.starts_with(std::env::current_dir().unwrap()));
+        let line = |seq: &str| format!(r#"{{"session_id":"backtest:w:{seq}","ts_ms":1}}"#);
+        let text = [
+            line("10"),
+            line("2"),
+            "not json".to_string(),
+            line("0"),
+            r#"{"session_id":"backtest:other:1"}"#.to_string(),
+            String::new(),
+            line("1"),
+        ]
+        .join("\n");
+        std::fs::write(&path, text).unwrap();
+        let sorted = audit.lines_by_seq("w").unwrap();
+        assert_eq!(
+            sorted,
+            [
+                line("0"),
+                line("1"),
+                line("2"),
+                line("10"),
+                "not json".to_string(),
+                r#"{"session_id":"backtest:other:1"}"#.to_string(),
+            ]
+            .iter()
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+        );
+        drop(audit);
+        assert!(!path.exists());
+        assert_eq!(DECISIONS_FILE, "decisions.jsonl");
     }
 
     #[tokio::test]

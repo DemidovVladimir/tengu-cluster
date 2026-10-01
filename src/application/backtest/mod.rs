@@ -8,10 +8,10 @@
 //!
 //! | Step | Call | Rule |
 //! |---|---|---|
-//! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
-//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `RunParams` from `[backtest]`, `[xmarket.calendars]`, `[paper]`; `engine::candidates`; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
-//! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: reads [`Prepared::set`] (candidates in decision order, features as-of) and picks the ones Jev takes |
-//! | 3 | [`evaluate`] | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` — **the gate arm's entry point** — simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split |
+//! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each — the `backtest` tool's spec check); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
+//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars before each split ÷ ratio, volume × ratio; a data note each, listed first); `RunParams` from `[backtest]`, `[xmarket.calendars]`; `engine::candidates`; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
+//! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
+//! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
 //! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`) |
 //!
 //! | Rule | Value |
@@ -316,7 +316,9 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         bail!("from {} is not before to {}", fmt_time(from), fmt_time(to));
     }
     let window = r.data_window(&bt.costs, from, to);
-    let md = load(env.store.as_ref(), &r, &bt.costs, window).await?;
+    let mut md = load(env.store.as_ref(), &r, &bt.costs, window).await?;
+    // Share splits before any decision reads a price.
+    let split_notes = md.adjust_for_splits(&bt.stock_splits());
     let params = RunParams {
         from_ms: from,
         to_ms: to,
@@ -326,10 +328,10 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         calendars: env.sections.calendars.clone(),
         bootstrap: bt.bootstrap,
         seed: bt.seed,
-        start_equity_usd: env.sections.paper.as_ref().map(|p| p.initial_cash_usd),
     };
-    let set = candidates(&r.spec, &md, &params)
+    let mut set = candidates(&r.spec, &md, &params)
         .map_err(|e| anyhow!("strategy `{}`: {e}", r.spec.name))?;
+    set.notes.splice(0..0, split_notes);
     let run_id_base = run_dir::run_id_base(env.now_ms, &r.spec.name);
     let run_id = run_dir::propose_run_id(&env.backtests_dir, &run_id_base);
     Ok(Prepared {
@@ -408,7 +410,7 @@ pub(crate) fn evaluate(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use serde_json::json;
 
@@ -609,7 +611,6 @@ mod tests {
         assert_eq!(p.params.to_ms, utc("2026-09-29 00:00"));
         assert_eq!(p.instruments, vec![AAA, BBB, CCC]);
         assert_eq!(p.params.universe, vec![AAA, BBB, CCC]);
-        assert_eq!(p.params.start_equity_usd, Some(100.0));
         assert_eq!(p.run_id, "20261001T120034Z-weekend_fade");
         assert_eq!(p.spec_sha256.len(), 64);
         assert_eq!(p.spec_value["name"], "weekend_fade");
@@ -655,7 +656,8 @@ mod tests {
             .all(|t| (t.fee_bps + t.spread_bps - 3.8).abs() < 1e-9));
         assert!(research.trades.iter().all(|t| t.funding_complete));
         // Capped: $25 orders; two at a time fit under $60 gross, so the
-        // third name of each window is refused.
+        // smallest move of each window is refused (not the alphabetically
+        // last name).
         let capped = &run.arms["capped"];
         assert!(capped.trades.iter().all(|t| t.notional_usd == 25.0));
         assert_eq!(capped.trades.len() + capped.refusals.len(), 12);
@@ -664,6 +666,26 @@ mod tests {
             .iter()
             .all(|r| r.rule == "max_gross_exposure_usd"));
         assert_eq!(capped.refusals.len(), 4);
+        for r in &capped.refusals {
+            let refused = p.set.candidates[r.seq].signal_bps.abs();
+            let window: Vec<f64> = p
+                .set
+                .candidates
+                .iter()
+                .filter(|c| c.decided_at_ms == r.decided_at_ms)
+                .map(|c| c.signal_bps.abs())
+                .collect();
+            assert_eq!(window.len(), 3);
+            assert!(window.iter().all(|s| *s >= refused), "{r:?}: {window:?}");
+        }
+        // Drawdown units: research in bps of a $100 trade, capped in % of
+        // its $100 cash.
+        let rs = &run.report.arms["research"].summary;
+        assert_eq!(rs.max_drawdown_pct, None);
+        assert!((rs.max_drawdown_bps.unwrap() - rs.max_drawdown_usd * 100.0).abs() < 1e-9);
+        let cs = &run.report.arms["capped"].summary;
+        assert_eq!(cs.max_drawdown_bps, None);
+        assert!((cs.max_drawdown_pct.unwrap() - cs.max_drawdown_usd).abs() < 1e-9);
         // The split: in-sample = the windows decided before 09-15.
         let halves = run.report.arms["research"].split.as_ref().unwrap();
         assert_eq!((halves.in_sample.n, halves.holdout.n), (6, 6));
@@ -804,6 +826,297 @@ mod tests {
         let mut bad = evaluate(&p, Vec::new()).unwrap();
         bad.extra_files.insert("../x".into(), String::new());
         assert!(write_run_dir(&p, &mut bad).is_err());
+    }
+
+    /// `[backtest.splits]`: CCC stored with a 2-for-1 split inside the
+    /// 09-13 weekend's hold (pre-split prices doubled) trades like the
+    /// unsplit series once the split is configured; the note leads the data
+    /// notes of the report and `skips.json`.
+    #[tokio::test]
+    async fn a_configured_split_adjusts_the_loaded_bars_and_is_noted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let unsplit = seeded(&tmp.path().join("unsplit")).await;
+        let at = utc("2026-09-14 08:00");
+        let raw = SqliteMarketData::open(&tmp.path().join("raw")).unwrap();
+        let all = unsplit
+            .bars(CCC, Interval::H1, 0, utc("2026-10-02 00:00"))
+            .await
+            .unwrap();
+        let doubled: Vec<Bar> = all
+            .bars
+            .iter()
+            .map(|b| match b.t_open_ms < at {
+                true => Bar {
+                    o: b.o * 2.0,
+                    h: b.h * 2.0,
+                    l: b.l * 2.0,
+                    c: b.c * 2.0,
+                    v: b.v / 2.0,
+                    ..*b
+                },
+                false => *b,
+            })
+            .collect();
+        raw.put_bars(CCC, Interval::H1, "test", &doubled)
+            .await
+            .unwrap();
+        let raw: Arc<dyn MarketDataStore> = Arc::new(raw);
+        let spec = SpecSource::Json {
+            value: json!({"name": "w", "kind": "weekend_window", "universe": [CCC],
+                "interval": "1h", "calendar": "us_equity", "direction": "fade",
+                "costs": {"taker_fee_bps": 0.9, "funding": false}}),
+            fallback_name: None,
+        };
+        let mut j = job(spec);
+        j.from_ms = Some(utc("2026-09-10 00:00"));
+        let window_trade = |run: &BacktestRun| {
+            run.arms["research"]
+                .trades
+                .iter()
+                .find(|t| t.decided_at_ms == utc("2026-09-13 22:00"))
+                .unwrap()
+                .clone()
+        };
+        let base = env(unsplit, &tmp.path().join("b1"));
+        let p0 = prepare(&base, j.clone()).await.unwrap();
+        let want = window_trade(&evaluate(&p0, Vec::new()).unwrap());
+        assert!(
+            want.entry_ms < at && at < want.exit_ms,
+            "the split is mid-hold"
+        );
+
+        // Not configured: the split books as a ln 2 fall.
+        let mut e = env(raw.clone(), &tmp.path().join("b2"));
+        let p = prepare(&e, j.clone()).await.unwrap();
+        let t = window_trade(&evaluate(&p, Vec::new()).unwrap());
+        assert!((t.gross_bps - want.gross_bps - 2f64.ln() * 1e4).abs() < 1e-6);
+        assert!(p.set.notes.iter().all(|n| !n.contains("split-adjusted")));
+
+        // Configured: the same trade, and said.
+        let mut s = sections();
+        let bt = s.backtest.as_mut().unwrap();
+        bt.splits = toml::from_str::<BTreeMap<String, Vec<crate::config::backtest::SplitEntry>>>(
+            r#""hyperliquid:xyz:CCC" = [{ at = "2026-09-14T08:00:00Z", ratio = 2.0 }]"#,
+        )
+        .unwrap();
+        e.sections = Arc::new(s);
+        let p = prepare(&e, j).await.unwrap();
+        let mut run = evaluate(&p, Vec::new()).unwrap();
+        let t = window_trade(&run);
+        for (a, b) in [
+            (t.gross_bps, want.gross_bps),
+            (t.net_bps, want.net_bps),
+            (t.signal_bps, want.signal_bps),
+            (t.legs[0].entry_px, want.legs[0].entry_px),
+        ] {
+            assert!((a - b).abs() < 1e-9 * a.abs().max(1.0), "{a} vs {b}");
+        }
+        let note =
+            format!("split-adjusted {CCC}: ratio 2 (new shares per old) at 2026-09-14T08:00:00Z");
+        assert!(p.set.notes[0].starts_with(&note), "{:?}", p.set.notes);
+        assert!(run.report.data_notes[0].starts_with(&note));
+        let dir = write_run_dir(&p, &mut run).unwrap();
+        let skips: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("skips.json")).unwrap())
+                .unwrap();
+        assert!(skips["data_notes"][0].as_str().unwrap().starts_with(&note));
+        let md = std::fs::read_to_string(dir.join("report.md")).unwrap();
+        assert!(md.contains(&format!("- {note}")), "{md}");
+    }
+
+    /// Takes every candidate but BBB's; p(take) 0.8 / 0.2.
+    struct AllButB;
+
+    #[async_trait::async_trait]
+    impl crate::ports::decision::DecisionEngine for AllButB {
+        fn model(&self) -> &str {
+            "typesafe/jev-1.13-20260917"
+        }
+        async fn decide(
+            &self,
+            state: &Value,
+            _q: &BTreeMap<String, crate::domain::decision::Question>,
+        ) -> Result<crate::domain::decision::Decision> {
+            use crate::domain::decision::{Answer, Decision};
+            let take = state["event"]["instrument"] != json!(BBB);
+            let (choice, p) = if take { ("take", 0.8) } else { ("skip", 0.2) };
+            Ok(Decision {
+                id: format!("gen-dec-{}", state["event"]["instrument"]),
+                model: self.model().into(),
+                answers: BTreeMap::from([(
+                    "next_action".to_string(),
+                    Answer {
+                        kind: "choice".into(),
+                        choice: Some(choice.into()),
+                        probabilities: BTreeMap::from([("take".to_string(), p)]),
+                        confidence: Some(0.9),
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            })
+        }
+    }
+
+    /// `tengu backtest --gate`'s path on a temp store: build (K = 3 replay
+    /// loops auditing to a temp file) → `run_gate` (9 of 12 decided) →
+    /// `evaluate_gated` → `write_run_dir`: the gate's arms, comparisons,
+    /// calibration and summary in the report, `decisions.jsonl` by seq in the
+    /// claimed dir, nothing left outside it.
+    #[tokio::test]
+    async fn the_gate_arm_end_to_end() {
+        use crate::application::backtest::gate::{
+            evaluate_gated, run_gate, Gate, GateAudit, DECISIONS_FILE,
+        };
+        use crate::bootstrap::decision::build_replay_loop;
+        use crate::ports::clock::SimClock;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        let env = env(store, &backtests);
+        let p = prepare(&env, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        assert_eq!(p.set.candidates.len(), 12);
+        let config: crate::config::Config = toml::from_str(
+            r#"
+            [agents.xl_jev]
+            engine = "openrouter"
+            model = "m"
+            tools = ["read_file"]
+            [decision_loops.xl_gate]
+            goal = "Gate the trades a rule proposes"
+            agent = "xl_jev"
+            act_at = 0.01
+            max_steps = 1
+            escalate = false
+            [decision_loops.xl_gate.actions.take]
+            description = "Trade it"
+            [decision_loops.xl_gate.actions.skip]
+            description = "Do not trade it"
+            "#,
+        )
+        .unwrap();
+        let audit = GateAudit::new().unwrap();
+        let audit_path = audit.path().to_path_buf();
+        let engine: Arc<dyn crate::ports::decision::DecisionEngine> = Arc::new(AllButB);
+        let workers = (0..3)
+            .map(|_| {
+                let clock = Arc::new(SimClock::at(0));
+                let l = build_replay_loop(
+                    &config,
+                    "xl_gate",
+                    Arc::clone(&engine),
+                    clock.clone(),
+                    audit.path(),
+                )
+                .unwrap();
+                (clock, l)
+            })
+            .collect();
+        let gate = Gate {
+            loop_name: "xl_gate".into(),
+            engine,
+            workers,
+        };
+        let decided = run_gate(&p.set.candidates, &p.spec.name, &gate, 9)
+            .await
+            .unwrap();
+        assert_eq!((decided.decided, decided.cut), (9, 3));
+        let mut run = evaluate_gated(&p, &decided, &audit, 0.00004).unwrap();
+        drop(audit);
+        assert!(!audit_path.exists(), "the temp audit is gone");
+
+        // The report: base arms over all 12, the gate's over the 9 decided.
+        let r = &run.report;
+        assert_eq!(
+            r.arms.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "capped",
+                "jev",
+                "jev_capped",
+                "research",
+                "rules",
+                "rules_capped"
+            ]
+        );
+        assert_eq!(
+            (
+                r.arms["research"].n_candidates,
+                r.arms["rules"].n_candidates
+            ),
+            (12, 9)
+        );
+        assert_eq!(r.arms["jev"].n_candidates, 6, "AAA and CCC, three windows");
+        let rules_seqs: BTreeSet<usize> = run.arms["rules"].trades.iter().map(|t| t.seq).collect();
+        assert_eq!(rules_seqs, (0..9).collect());
+        assert!(run.arms["jev"]
+            .trades
+            .iter()
+            .all(|t| p.set.candidates[t.seq].instrument != BBB));
+        let pairs: Vec<(&str, &str)> = r
+            .comparisons
+            .iter()
+            .map(|c| (c.a.as_str(), c.b.as_str()))
+            .collect();
+        assert_eq!(pairs, [("jev", "rules"), ("jev_capped", "rules_capped")]);
+        let g = r.gate.clone().unwrap();
+        assert_eq!((g.decided, g.cut, g.take, g.skip), (9, 3, 6, 3));
+        assert_eq!(g.model, "typesafe/jev-1.13-20260917");
+        assert_eq!(r.calibration.as_ref().unwrap().n, 9);
+        assert!(r.render_compact().contains(
+            "jev gate xl_gate (typesafe/jev-1.13-20260917): decided 9 (cut 3 past --max-decisions)"
+        ));
+
+        let dir = write_run_dir(&p, &mut run).unwrap();
+        // decisions.jsonl: one line per decision, by seq, trigger backtest.
+        let lines = lines(&dir.join(DECISIONS_FILE));
+        let sessions: Vec<String> = lines
+            .iter()
+            .map(|l| l["session_id"].as_str().unwrap().to_string())
+            .collect();
+        let want: Vec<String> = (0..9)
+            .map(|i| format!("backtest:weekend_fade:{i}"))
+            .collect();
+        assert_eq!(sessions, want);
+        assert!(lines.iter().all(|l| l["trigger"] == json!("backtest")));
+        for arm in ["jev", "jev_capped", "rules", "rules_capped"] {
+            assert!(dir.join(format!("trades-{arm}.jsonl")).exists(), "{arm}");
+        }
+        let md = std::fs::read_to_string(dir.join("report.md")).unwrap();
+        for want in [
+            "## Jev gate `xl_gate`",
+            "| Decided · cut | 9 of 12 · 3 past `--max-decisions`",
+            "| jev − rules |",
+            "## Calibration (n 9",
+        ] {
+            assert!(md.contains(want), "missing `{want}` in:\n{md}");
+        }
+        // report.json carries the summary (floats may move a last digit on
+        // the way back: compare the counts).
+        let back: BacktestReport =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("report.json")).unwrap())
+                .unwrap();
+        let bg = back.gate.unwrap();
+        assert_eq!(
+            (
+                bg.loop_name.as_str(),
+                bg.model.as_str(),
+                bg.decided,
+                bg.cut,
+                bg.take,
+                bg.skip
+            ),
+            ("xl_gate", g.model.as_str(), 9, 3, 6, 3)
+        );
+        assert_eq!(bg.calibration.n, g.calibration.n);
+        // Nothing outside the claimed run dir.
+        let entries: Vec<String> = std::fs::read_dir(&backtests)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(entries, vec![run.report.run_id.clone()]);
     }
 
     #[tokio::test]

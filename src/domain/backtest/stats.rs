@@ -8,7 +8,7 @@
 //! | n · mean · median · sd · t | over the trades' net bps (sd sample, n − 1; t = mean / (sd / √n)); mean summed in trade order |
 //! | hit rate | share of trades with net bps > 0 |
 //! | Σ net / gross / fees / spread / slippage / funding USD | bps × filled notional / 10⁴, summed |
-//! | max drawdown | realized equity in exit order (exit, then decision, then trade order) from the start equity: the deepest fall from a running peak, USD and % of the start equity |
+//! | max drawdown | realized equity in exit order (exit, then decision, then trade order): the deepest fall from a running peak, USD; + % of the start equity when the arm keeps one (capped: `initial_cash_usd`); + bps of one trade's notional when it trades a fixed one (research: every candidate at `notional_usd`, no cash book — a % would be of cash it never holds) |
 //! | Sharpe | per period (Σ net USD of its trades), mean / sd × √(periods per year): weekend 52 · trading day 252 · weekday 261 · day 365; periods with trades only |
 //! | 95 % CI of the mean | cluster bootstrap over periods (B = `[backtest] bootstrap`): each resample draws as many periods with replacement and takes the pooled mean net bps; the 2.5 / 97.5 % quantiles (linear); ≥ 2 periods |
 //! | mean without the best 5 | mean net bps after dropping the 5 largest (n > 5) |
@@ -99,10 +99,14 @@ pub struct StatsParams {
     pub bootstrap: u32,
     pub seed: u64,
     pub periods_per_year: f64,
-    /// The capped arm's `initial_cash_usd`; the research arm's when the
-    /// sandbox has `[paper]`.
+    /// The capped arm's `initial_cash_usd` (drawdown %); `None` for a
+    /// research arm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_equity_usd: Option<f64>,
+    /// A research arm's per-trade notional (drawdown bps); `None` for the
+    /// capped arm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trade_notional_usd: Option<f64>,
 }
 
 /// One instrument key's trades.
@@ -139,8 +143,12 @@ pub struct Summary {
     /// Trades with a settlement hour of their hold missing.
     pub funding_incomplete: usize,
     pub max_drawdown_usd: f64,
+    /// % of the start equity (capped arms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_drawdown_pct: Option<f64>,
+    /// bps of one trade's notional (research arms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_drawdown_bps: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_equity_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,6 +318,10 @@ impl Summary {
                 .start_equity_usd
                 .filter(|s| *s > 0.0)
                 .map(|s| dd / s * 100.0),
+            max_drawdown_bps: p
+                .trade_notional_usd
+                .filter(|x| *x > 0.0)
+                .map(|x| dd / x * 10_000.0),
             start_equity_usd: p.start_equity_usd,
             sharpe,
             periods_per_year: p.periods_per_year,
@@ -410,7 +422,6 @@ pub struct Calibration {
 
 /// `points` = (p, won) per decision; `bins` equal-width bins over [0, 1]
 /// (at least 1); p is clamped to [0, 1], a non-finite p is left out.
-#[cfg_attr(not(test), allow(dead_code))] // readers: the Jev gate arm (`application/backtest/gate.rs`)
 pub fn calibration(points: &[(f64, bool)], bins: usize) -> Calibration {
     let k = bins.max(1);
     let mut acc = vec![(0usize, 0.0f64, 0usize); k];
@@ -455,6 +466,7 @@ mod tests {
             seed,
             periods_per_year: 52.0,
             start_equity_usd: Some(100.0),
+            trade_notional_usd: None,
         }
     }
 
@@ -548,6 +560,52 @@ mod tests {
         let s = Summary::compute(&ts, &no_start);
         assert_eq!(s.max_drawdown_pct, None);
         assert!((s.max_drawdown_usd - 32.0).abs() < 1e-9, "from 0");
+    }
+
+    /// The drawdown's units by arm: a capped arm's % of its cash, a research
+    /// arm's bps of one trade's notional — never a % of cash it does not
+    /// hold (the old research % read 161 % on rule W).
+    #[test]
+    fn drawdown_units_follow_the_arm() {
+        // −$161 realized over three trades of $100 (1 bps = $0.01).
+        let ts = vec![
+            trade("p", "x", -10_000.0, 100.0, 10),
+            trade("p", "x", -6_100.0, 100.0, 20),
+            trade("p", "x", 500.0, 100.0, 30),
+        ];
+        // (start equity, trade notional) → (pct, bps)
+        let cases = [
+            ((Some(100.0), None), (Some(161.0), None)),
+            ((None, Some(100.0)), (None, Some(16_100.0))),
+            ((None, Some(25.0)), (None, Some(64_400.0))),
+            ((Some(0.0), Some(0.0)), (None, None)),
+            ((None, None), (None, None)),
+        ];
+        for ((start, notional), (pct, bps)) in cases {
+            let mut p = params(7);
+            p.start_equity_usd = start;
+            p.trade_notional_usd = notional;
+            let s = Summary::compute(&ts, &p);
+            assert!(
+                (s.max_drawdown_usd - 161.0).abs() < 1e-9,
+                "{start:?} {notional:?}"
+            );
+            let close = |a: Option<f64>, b: Option<f64>| match (a, b) {
+                (Some(a), Some(b)) => (a - b).abs() < 1e-6,
+                (a, b) => a == b,
+            };
+            assert!(
+                close(s.max_drawdown_pct, pct),
+                "{start:?}: {:?}",
+                s.max_drawdown_pct
+            );
+            assert!(
+                close(s.max_drawdown_bps, bps),
+                "{notional:?}: {:?}",
+                s.max_drawdown_bps
+            );
+            assert_eq!(s.start_equity_usd, start);
+        }
     }
 
     fn many_periods() -> Vec<Trade> {

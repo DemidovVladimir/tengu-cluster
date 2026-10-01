@@ -6,11 +6,12 @@
 //!
 //! | Piece | Holds |
 //! |---|---|
-//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, instruments, candidates, arms, skips by reason, data notes; Jev comparisons and calibration when the gate arm ran |
+//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, instruments, candidates, arms, skips by reason, data notes (incl. applied share splits); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
 //! | [`ArmReport`] | candidates offered, summary, split halves (in-sample / holdout), refusals by rule, drops by reason |
-//! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison; `partial` with an error per data gap kind (missing prices, missing exits, funding hours without a row) |
-//! | [`render_markdown`](BacktestReport::render_markdown) | `report.md`: run table, summary per arm, split comparison, per-instrument top / bottom 10, refusals and skips, Jev vs rules, calibration, data notes, limits (§ 11) |
-//! | [`render_compact`](BacktestReport::render_compact) | CLI / tool text ≤ [`COMPACT_MAX_CHARS`]: line 1, one line per arm, the split, the best and worst instruments, skips |
+//! | Drawdown | research arms (`research`, `rules`, `jev`): USD + bps of one trade's notional; capped arms: USD + % of `initial_cash_usd` (`stats.rs`) |
+//! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left; `partial` with an error per data gap kind (missing prices, missing exits, funding hours without a row) |
+//! | [`render_markdown`](BacktestReport::render_markdown) | `report.md`: run table, summary per arm, split comparison, per-instrument top / bottom 10, refusals and skips, the Jev gate, Jev vs rules, calibration, data notes, limits (§ 11) |
+//! | [`render_compact`](BacktestReport::render_compact) | CLI / tool text ≤ [`COMPACT_MAX_CHARS`]: line 1, one line per arm, the gate's two lines, the split, the best and worst instruments, skips |
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::backtest::engine::{count_skips, ArmResult, CandidateSet, RunParams, Trade};
+use crate::domain::backtest::gate::GateSummary;
 use crate::domain::backtest::spec::{SplitSpec, StrategySpec, Universe};
 use crate::domain::backtest::stats::{paired_diff_ci, Calibration, DiffCi, InstrumentRow, Summary};
 use crate::domain::marketdata::fmt_time;
@@ -102,6 +104,10 @@ pub struct BacktestReport {
     pub comparisons: Vec<ArmComparison>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration: Option<Calibration>,
+    /// The Jev gate arm's counts, cache and cost, when it ran
+    /// (`application/backtest/gate.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<GateSummary>,
 }
 
 fn opt(x: Option<f64>, decimals: usize) -> String {
@@ -165,6 +171,7 @@ impl BacktestReport {
             data_notes: set.notes.clone(),
             comparisons: Vec::new(),
             calibration: None,
+            gate: None,
         }
     }
 
@@ -226,8 +233,14 @@ impl BacktestReport {
 
     fn arm_line(name: &str, a: &ArmReport) -> String {
         let s = &a.summary;
+        // Research arms: bps of a trade; capped arms: % of their cash.
+        let dd_unit = match (s.max_drawdown_bps, s.max_drawdown_pct) {
+            (Some(bps), _) => format!(" dd_bps={bps:.0}"),
+            (None, Some(pct)) => format!(" dd_pct={pct:.1}"),
+            (None, None) => String::new(),
+        };
         let mut line = format!(
-            "{name} n={} mean_net_bps={} ci95={} hit={} net_usd={:+.2} dd_usd={:.2} sharpe={}",
+            "{name} n={} mean_net_bps={} ci95={} hit={} net_usd={:+.2} dd_usd={:.2}{dd_unit} sharpe={}",
             s.n,
             signed(s.mean_net_bps, 2),
             ci(s),
@@ -275,17 +288,17 @@ impl BacktestReport {
         let _ = writeln!(m, "\n## Summary\n");
         let _ = writeln!(
             m,
-            "| Arm | n | periods | mean net bps | 95 % CI | median | t | hit | Σ net USD | costs USD | funding USD | max DD USD | max DD % | Sharpe | mean ex best 5 | best-2 share |"
+            "| Arm | n | periods | mean net bps | 95 % CI | median | t | hit | Σ net USD | costs USD | funding USD | max DD USD | max DD bps of a trade | max DD % of cash | Sharpe | mean ex best 5 | best-2 share |"
         );
         let _ = writeln!(
             m,
-            "|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+            "|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
         );
         for (name, a) in &self.arms {
             let s = &a.summary;
             let _ = writeln!(
                 m,
-                "| {name} | {} | {} | {} | {} | {} | {} | {} | {:+.2} | {:.2} | {:+.2} | {:.2} | {} | {} | {} | {} |",
+                "| {name} | {} | {} | {} | {} | {} | {} | {} | {:+.2} | {:.2} | {:+.2} | {:.2} | {} | {} | {} | {} | {} |",
                 s.n,
                 s.n_periods,
                 signed(s.mean_net_bps, 2),
@@ -297,12 +310,19 @@ impl BacktestReport {
                 s.fees_usd + s.spread_usd + s.slippage_usd,
                 s.funding_usd,
                 s.max_drawdown_usd,
+                opt(s.max_drawdown_bps, 0),
                 opt(s.max_drawdown_pct, 1),
                 opt(s.sharpe, 2),
                 signed(s.mean_ex_best5_bps, 2),
                 opt(s.best2_periods_share, 2)
             );
         }
+        let _ = writeln!(
+            m,
+            "\nMax drawdown on realized equity: research arms in bps of one trade's notional \
+             (they take every candidate at `notional_usd` and keep no cash book); capped arms in \
+             % of `[paper] initial_cash_usd`."
+        );
         if let Some(split) = &self.split {
             let _ = writeln!(m, "\n## Split `{split}`\n");
             let _ = writeln!(m, "| Arm | half | n | mean net bps | 95 % CI | hit | Σ net USD |\n|---|---|---:|---:|---|---:|---:|");
@@ -383,6 +403,9 @@ impl BacktestReport {
                 }
             }
         }
+        if let Some(g) = &self.gate {
+            m.push_str(&g.render_markdown());
+        }
         if !self.comparisons.is_empty() {
             let _ = writeln!(
                 m,
@@ -439,6 +462,9 @@ impl BacktestReport {
         let mut lines = vec![self.headline()];
         for (name, a) in &self.arms {
             lines.push(Self::arm_line(name, a));
+        }
+        if let Some(g) = &self.gate {
+            lines.extend(g.render_compact().lines().map(str::to_string));
         }
         if let Some(split) = &self.split {
             for (name, a) in &self.arms {
@@ -574,6 +600,8 @@ impl Observed for BacktestReport {
                 ),
                 ("funding_usd", Some(s.funding_usd)),
                 ("max_drawdown_usd", Some(s.max_drawdown_usd)),
+                // Research: bps of a trade; a capped primary: % of its cash.
+                ("max_drawdown_bps", s.max_drawdown_bps),
                 ("max_drawdown_pct", s.max_drawdown_pct),
                 ("sharpe", s.sharpe),
                 ("mean_ex_best5_bps", s.mean_ex_best5_bps),
@@ -596,6 +624,11 @@ impl Observed for BacktestReport {
                 "capped_max_drawdown_usd",
                 Some(c.summary.max_drawdown_usd),
             );
+            set_num(
+                &mut f,
+                "capped_max_drawdown_pct",
+                c.summary.max_drawdown_pct,
+            );
             set_int(
                 &mut f,
                 "capped_refusals",
@@ -604,6 +637,10 @@ impl Observed for BacktestReport {
         }
         if let Some(c) = self.comparisons.first() {
             set_num(&mut f, "diff_bps", Some(c.diff.diff_bps));
+        }
+        // Last: the gate's jev_* fill the slots left (≤ 32 keys).
+        if let Some(g) = &self.gate {
+            g.add_features(&mut f);
         }
         f
     }
@@ -711,8 +748,7 @@ mod tests {
             "calendar": "us_equity", "direction": "fade",
             "costs": {"taker_fee_bps": 1, "funding": true}}),
         );
-        let mut p = run_params(utc("2026-09-14 00:00"), utc("2026-09-29 00:00"));
-        p.start_equity_usd = Some(1_000.0);
+        let p = run_params(utc("2026-09-14 00:00"), utc("2026-09-29 00:00"));
         let set = candidates(&s, &md, &p).unwrap();
         let split = SplitSpec::parse("time:2026-09-24").ok();
         let mut r = BacktestReport::new(run_id, &s, s.to_value(), "ab".repeat(32), &p, split, &set);
@@ -765,6 +801,9 @@ mod tests {
             "capped_refusals",
             "diff_bps",
             "n_trades",
+            "max_drawdown_usd",
+            "max_drawdown_bps",
+            "capped_max_drawdown_pct",
         ] {
             assert!(
                 o.features.contains_key(key),
@@ -772,6 +811,18 @@ mod tests {
                 o.features.keys()
             );
         }
+        // The research arm keeps no cash book: no drawdown %.
+        assert!(!o.features.contains_key("max_drawdown_pct"));
+        let research = &r.arms["research"].summary;
+        let dd_bps = research.max_drawdown_usd / 100.0 * 1e4;
+        assert!((research.max_drawdown_bps.unwrap() - dd_bps).abs() < 1e-9);
+        assert_eq!(research.max_drawdown_pct, None);
+        let capped = &r.arms["capped"].summary;
+        assert_eq!(capped.max_drawdown_bps, None);
+        assert!(
+            (capped.max_drawdown_pct.unwrap() - capped.max_drawdown_usd).abs() < 1e-9,
+            "of $100"
+        );
         assert_eq!(o.features["holdout_n"], 3);
         // Missing anchors are a data gap: partial, said once.
         assert_eq!(o.status, ObsStatus::Partial);
@@ -811,9 +862,12 @@ mod tests {
             "## Calibration (n 2",
             "## Limits",
             &format!("`{}`", "ab".repeat(32)),
+            "| max DD USD | max DD bps of a trade | max DD % of cash |",
+            "research arms in bps of one trade's notional",
         ] {
             assert!(md.contains(want), "missing `{want}` in:\n{md}");
         }
+        assert!(!md.contains("## Jev gate"), "no gate ran");
         let c = r.render_compact();
         assert!(c.chars().count() <= COMPACT_MAX_CHARS);
         assert_eq!(c.lines().next().unwrap(), r.headline());
@@ -821,6 +875,15 @@ mod tests {
             c.contains("\nresearch n=6 ") && c.contains("\ncapped n="),
             "{c}"
         );
+        let line = |arm: &str| {
+            c.lines()
+                .find(|l| l.starts_with(&format!("{arm} n=")))
+                .unwrap()
+                .to_string()
+        };
+        assert!(line("research").contains(" dd_bps="), "{c}");
+        assert!(!line("research").contains("dd_pct"), "{c}");
+        assert!(line("capped").contains(" dd_pct="), "{c}");
         assert!(
             c.contains("split time:2026-09-24T00:00:00Z research: in-sample n=3"),
             "{c}"

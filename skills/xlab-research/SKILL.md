@@ -47,7 +47,7 @@ When a result fails, say which: no edge (gross ≈ 0) · edge eaten by costs (gr
 | `pair_spread` | `legs` (2 ids), `lookback_bars`, `entry_z`, `exit_z`, `max_hold_bars` |
 | `event_window` | `events` [{instrument, t (publication time), label}], `entry_delay_mins`, `direction`, `exit_after_mins` or `exit_at` + `tz` |
 
-Every spec also takes `name`, `universe` (ids or `"@xyz_stocks"`, `"@crypto"`), `interval` (`1h` default for stock perps), optional `notional_usd`, `exclude`, `costs`.
+Every spec also takes `name`, `universe` (ids or `"@xyz_stocks"`, `"@crypto"`), `interval` (`1h` default for stock perps), optional `notional_usd`, `exclude`, `costs`, `min_entry_trades` (skip a candidate whose entry bar counted fewer trades — thin xyz names keep no-trade hours as flat, stale bars; skips show as `thin_entry`).
 
 ## Rules
 

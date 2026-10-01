@@ -519,6 +519,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [backtest.universes]
 # xyz_stocks = ["hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]   # the xlab sandbox lists 75
 #
+# [backtest.splits]                         # share splits by full id: bars opening before `at` ÷ ratio (volume × ratio)
+# "hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]   # RFC 3339; new shares per old (≠ 1), sorted by at
+#
 # [backtest.strategies.weekend_fade]        # rule W: Sun 18:00 NY fade the move since Fri 20:00, exit Mon 09:00
 # kind = "weekend_window"                   # | daily_window | move_trigger | funding_carry | pair_spread | event_window
 # universe = "@xyz_stocks"
@@ -527,6 +530,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # direction = "fade"                        # | follow
 # min_abs_signal_bps = 0
 # top_n = 4                                 # optional: the 4 largest |s| per window
+# min_entry_trades = 50                     # optional: skip a name whose entry bar counted fewer trades (`thin_entry`)
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`

@@ -174,7 +174,6 @@ pub(crate) fn run_params(from_ms: i64, to_ms: i64) -> RunParams {
         calendars: BTreeMap::from([("us_equity".to_string(), Calendar::Exchange(nyse()))]),
         bootstrap: 200,
         seed: 7,
-        start_equity_usd: None,
     }
 }
 

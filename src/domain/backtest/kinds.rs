@@ -8,6 +8,7 @@
 //! | Window kinds | `weekend_window` (instants from `weekend_fade::fade_window` + offsets) and `daily_window` (local `HH:MM` per day of `days`), each window judged by rule W's `signal_of` + `select_capped` |
 //! | Bar kinds | `move_trigger` per bar close (cooldown), `funding_carry` per funding row, `pair_spread` per close both legs have, `event_window` per event; `funding_carry` / `pair_spread` hold one position at a time (re-entry after the rule's own exit) |
 //! | A candidate | legs, side, signal, exit plan, period; the first leg's features as-of the decision (`features.rs`, with the cost model's half-spread at t); `data_asof_ms` = the latest observation read |
+//! | `min_entry_trades` | a would-be candidate whose entry bar (any leg's: the bar ending at the decision, observable then) counts fewer trades is a `thin_entry` skip — windows: before `top_n` ranking (the next liquid name moves up); `move_trigger`: no cooldown starts; `funding_carry` / `pair_spread`: no position opens; a bar without `n` passes |
 //! | Skips | per window and name (window / event kinds), per instrument (excluded, no costs) for the bar kinds; an instrument without bars or funding rows is a data note |
 
 use std::collections::BTreeSet;
@@ -91,6 +92,21 @@ impl<'a> Builder<'a> {
 
     fn is_excluded(&self, id: &str) -> bool {
         self.excluded.contains(id)
+    }
+
+    /// `min_entry_trades` (module table): the bar of `id` ending at `t` counts
+    /// fewer trades. No such bar, or one without `n`, is not thin (a missing
+    /// bar is the price checks' skip).
+    fn thin_entry(&self, id: &str, t: i64) -> bool {
+        let Some(min) = self.spec.min_entry_trades else {
+            return false;
+        };
+        self.md
+            .bars
+            .get(id)
+            .and_then(|s| s.bar_ending_at(t))
+            .and_then(|b| b.n)
+            .is_some_and(|n| n < min)
     }
 
     fn universe(&self) -> Result<Vec<String>, String> {
@@ -211,6 +227,10 @@ impl<'a> Builder<'a> {
                 Err(skip) => self.skip(id, entry, period, SkipReason::of_fade(skip)),
                 Ok(_) if self.cost(id).is_none() => {
                     self.skip(id, entry, period, SkipReason::NoCosts)
+                }
+                // Before the ranking: a thin name never takes a top_n slot.
+                Ok(_) if self.thin_entry(id, entry) => {
+                    self.skip(id, entry, period, SkipReason::ThinEntry)
                 }
                 Ok(s) => signals.push(s),
             }
@@ -407,6 +427,11 @@ impl<'a> Builder<'a> {
                 let Some(side) = p.direction.side(r) else {
                     continue;
                 };
+                // A thin trigger is skipped and starts no cooldown.
+                if self.thin_entry(id, t) {
+                    self.skip(id, t, &utc_day(t), SkipReason::ThinEntry);
+                    continue;
+                }
                 last = Some(t);
                 self.push(Draft {
                     legs: vec![Leg {
@@ -465,6 +490,10 @@ impl<'a> Builder<'a> {
                     self.skip(id, d, &utc_day(d), SkipReason::MissingPrice);
                     continue;
                 };
+                if self.thin_entry(id, d) {
+                    self.skip(id, d, &utc_day(d), SkipReason::ThinEntry);
+                    continue;
+                }
                 let max_exit = ceil_grid(d + i64::from(p.hold_hours) * HOUR_MS, iv);
                 open_until = walk_funding_exit(f, d, max_exit, p.exit_apr_pct, iv).0;
                 self.push(Draft {
@@ -527,6 +556,10 @@ impl<'a> Builder<'a> {
                 continue;
             };
             if z.abs() < p.entry_z {
+                continue;
+            }
+            if self.thin_entry(a, pt.t_ms) || self.thin_entry(b, pt.t_ms) {
+                self.skip(&key, pt.t_ms, &utc_day(pt.t_ms), SkipReason::ThinEntry);
                 continue;
             }
             let side = if z > 0.0 { Side::Sell } else { Side::Buy };
@@ -612,6 +645,10 @@ impl<'a> Builder<'a> {
             let mv = ln_bps(px, anchor_px).unwrap_or(0.0);
             if mv.abs() < p.min_abs_move_bps {
                 self.skip(id, entry, &period, SkipReason::BelowMinSignal);
+                continue;
+            }
+            if self.thin_entry(id, entry) {
+                self.skip(id, entry, &period, SkipReason::ThinEntry);
                 continue;
             }
             let exit = match (p.exit_after_mins, exit_at) {
@@ -829,6 +866,161 @@ mod tests {
             .skipped
             .iter()
             .any(|k| k.reason == SkipReason::MissingEntry && k.decided_at_ms == entry + H));
+    }
+
+    /// `min_entry_trades` per kind (module table): `(kind, filter) → (decided
+    /// instants, thin_entry skips)`; windows filter before `top_n`, a thin
+    /// trigger starts no cooldown, a thin carry or pair opens no position; a
+    /// bar without a trade count passes.
+    #[test]
+    fn thin_entries_are_skipped_before_ranking_cooldown_and_positions() {
+        fn set_n(md: &mut MarketData, id: &str, t_open: i64, n: Option<u64>) {
+            let s = md.bars.get_mut(id).unwrap();
+            let b = s.bars.iter_mut().find(|b| b.t_open_ms == t_open).unwrap();
+            b.n = n;
+        }
+        let with = |mut v: serde_json::Value, min: Option<u64>| {
+            if let Some(m) = min {
+                v["min_entry_trades"] = json!(m);
+            }
+            spec(v)
+        };
+        let run = |s: &StrategySpec, md: &MarketData, p: &RunParams| {
+            let set = candidates(s, md, p).unwrap();
+            let decided: Vec<(String, i64)> = set
+                .candidates
+                .iter()
+                .map(|c| (c.instrument.clone(), c.decided_at_ms))
+                .collect();
+            let thin: Vec<(String, i64)> = set
+                .skipped
+                .iter()
+                .filter(|k| k.reason == SkipReason::ThinEntry)
+                .map(|k| (k.instrument.clone(), k.decided_at_ms))
+                .collect();
+            (decided, thin)
+        };
+        let pair = |id: &str, t: i64| (id.to_string(), t);
+
+        // Weekend window, top 1: A moved most but its entry hour traded 3
+        // times; B (100 trades) takes the slot. Without n, A passes.
+        let (w, mut md, p) = weekend_case(json!({"top_n": 1}));
+        let entry = utc("2026-09-27 22:00");
+        set_n(&mut md, A, entry - H, Some(3));
+        set_n(&mut md, B, entry - H, Some(100));
+        let wv = w.to_value();
+        assert_eq!(
+            run(&with(wv.clone(), None), &md, &p),
+            (vec![pair(A, entry)], vec![])
+        );
+        assert_eq!(
+            run(&with(wv.clone(), Some(50)), &md, &p),
+            (vec![pair(B, entry)], vec![pair(A, entry)])
+        );
+        set_n(&mut md, A, entry - H, None);
+        assert_eq!(
+            run(&with(wv, Some(50)), &md, &p),
+            (vec![pair(A, entry)], vec![])
+        );
+
+        // Move trigger, cooldown 3: bars 4 (+295 bps, 2 trades) and 5 (+334).
+        let t0 = utc("2026-09-28 00:00");
+        let closes = [
+            100.0, 100.0, 100.0, 100.0, 103.0, 106.5, 106.5, 106.5, 106.5,
+        ];
+        let mut md = market(vec![series(A, Interval::H1, t0, &closes)]);
+        for i in 0..closes.len() as i64 {
+            set_n(&mut md, A, t0 + i * H, Some(if i == 4 { 2 } else { 50 }));
+        }
+        let mv = json!({"kind": "move_trigger", "universe": [A], "interval": "1h", "lookback_bars": 1,
+            "threshold_bps": 200, "direction": "fade", "hold_bars": 2, "cooldown_bars": 3});
+        let p = run_params(t0, t0 + 12 * H);
+        assert_eq!(
+            run(&with(mv.clone(), None), &md, &p),
+            (vec![pair(A, t0 + 5 * H)], vec![])
+        );
+        assert_eq!(
+            run(&with(mv, Some(10)), &md, &p),
+            (vec![pair(A, t0 + 6 * H)], vec![pair(A, t0 + 5 * H)]),
+            "the thin trigger starts no cooldown"
+        );
+
+        // Funding carry: the 02:00 entry bar is thin — the 03:00 settlement
+        // enters instead (no position was open), then 06:00 as before.
+        let mut closes = vec![100.0; 30];
+        closes[4] = 99.0;
+        let mut md = market(vec![series(A, Interval::H1, t0, &closes)]);
+        let rates = [0.00001, 0.0001, 0.0001, 0.0001, 0.000001, 0.0001, 0.0001];
+        let rows: Vec<(i64, f64)> = rates
+            .iter()
+            .enumerate()
+            .map(|(k, r)| (t0 + k as i64 * H + 37, *r))
+            .collect();
+        md.funding.insert(A.into(), funding(A, &rows));
+        set_n(&mut md, A, t0 + H, Some(0));
+        let fc = json!({"kind": "funding_carry", "universe": [A], "interval": "1h", "min_apr_pct": 50,
+            "exit_apr_pct": 10, "hold_hours": 24});
+        let p = run_params(t0, t0 + 24 * H);
+        assert_eq!(
+            run(&with(fc.clone(), None), &md, &p),
+            (vec![pair(A, t0 + 2 * H), pair(A, t0 + 6 * H)], vec![])
+        );
+        assert_eq!(
+            run(&with(fc, Some(1)), &md, &p),
+            (
+                vec![pair(A, t0 + 3 * H), pair(A, t0 + 6 * H)],
+                vec![pair(A, t0 + 2 * H)]
+            )
+        );
+
+        // Pair spread: leg b's entry bar is thin — the pair is skipped.
+        let d = 0.01f64;
+        let a: Vec<f64> = [d, -d, d, -d, 5.0 * d, d, d]
+            .iter()
+            .map(|s| 100.0 * s.exp())
+            .collect();
+        let mut md = market(vec![
+            series(A, Interval::H1, t0, &a),
+            series(B, Interval::H1, t0, &[100.0; 7]),
+        ]);
+        set_n(&mut md, B, t0 + 4 * H, Some(4));
+        let ps = json!({"kind": "pair_spread", "interval": "1h", "legs": [A, B], "lookback_bars": 4,
+            "entry_z": 2, "exit_z": 0.5, "max_hold_bars": 10});
+        let p = run_params(t0, t0 + 10 * H);
+        let key = format!("{A}/{B}");
+        assert_eq!(
+            run(&with(ps.clone(), None), &md, &p),
+            (vec![pair(&key, t0 + 5 * H)], vec![])
+        );
+        assert_eq!(
+            run(&with(ps, Some(5)), &md, &p),
+            (vec![], vec![pair(&key, t0 + 5 * H)])
+        );
+
+        // Event window: the 14:00 entry bar (opening 13:00) traded once.
+        let day = |h: &str| utc(&format!("2026-09-29 {h}"));
+        let mut md = market(vec![sparse(
+            A,
+            Interval::H1,
+            &[
+                (day("12:00"), 100.0),
+                (day("13:00"), 101.0),
+                (day("15:00"), 102.0),
+            ],
+        )]);
+        let ev = json!({"kind": "event_window", "interval": "1h", "direction": "follow",
+            "events": [{"instrument": A, "t": "2026-09-29T13:30:00Z"}],
+            "entry_delay_mins": 30, "exit_after_mins": 120});
+        let p = run_params(utc("2026-09-29 00:00"), utc("2026-09-30 00:00"));
+        assert_eq!(
+            run(&with(ev.clone(), Some(1)), &md, &p),
+            (vec![pair(A, day("14:00"))], vec![])
+        );
+        set_n(&mut md, A, day("13:00"), Some(0));
+        assert_eq!(
+            run(&with(ev, Some(1)), &md, &p),
+            (vec![], vec![pair(A, day("14:00"))])
+        );
     }
 
     #[test]

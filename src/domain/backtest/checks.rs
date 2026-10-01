@@ -2,7 +2,7 @@
 //!
 //! | Check | Holds |
 //! |---|---|
-//! | Time integrity (`docs/xlab-2026-10-01.md` § 39) | on a deterministic random market, every kind's candidates and skips at or before an instant t are unchanged when the bar right after t jumps 50 %, and when every bar, funding row and ctx row after t moves; `data_asof_ms ≤ decided_at_ms` for every candidate and trade of every kind, both arms |
+//! | Time integrity (`docs/xlab-2026-10-01.md` § 39) | on a deterministic random market, every kind's candidates and skips (incl. `thin_entry`: two kinds set `min_entry_trades`) at or before an instant t are unchanged when the bar right after t jumps 50 %, and when every bar, funding row and ctx row after t moves; `data_asof_ms ≤ decided_at_ms` for every candidate and trade of every kind, both arms |
 //! | Rule W golden | `weekend_window` on the 2026-09-26 golden candles (`weekend_fade::golden`, 5 m) with half the round-trip cost per side, no spread, slippage or funding = `weekend_fade::replay`: the same 74 names, prices, signals, sides and gross bps, net within 1e-9, the same mean; `top_n` 4 / 50 bps = the replay's capped four |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::domain::backtest::costs::{CostSpec, HalfSpread};
 use crate::domain::backtest::engine::{
     candidates, simulate, Arm, Candidate, CandidateSet, MarketData, RiskCaps, RunParams, Skip,
+    SkipReason,
 };
 use crate::domain::backtest::spec::StrategySpec;
 use crate::domain::backtest::testkit::{et, nyse, random_market, run_params, utc, H};
@@ -66,10 +67,11 @@ fn every_kind(p: &RunParams) -> Vec<StrategySpec> {
                "direction": "fade"}),
         json!({"kind": "daily_window", "universe": IDS, "interval": "1h", "days": "weekdays",
                "tz": "America/New_York", "anchor": "16:00", "entry": "20:00", "exit": "10:00",
-               "direction": "follow", "top_n": 2}),
+               "direction": "follow", "top_n": 2, "min_entry_trades": 3}),
         json!({"kind": "move_trigger", "universe": IDS, "interval": "1h", "lookback_bars": 3,
                "threshold_bps": 150, "min_volume_ratio": 0.5, "volume_baseline_bars": 24,
-               "direction": "fade", "hold_bars": 6, "take_profit_bps": 100, "stop_loss_bps": 100}),
+               "direction": "fade", "hold_bars": 6, "take_profit_bps": 100, "stop_loss_bps": 100,
+               "min_entry_trades": 3}),
         json!({"kind": "funding_carry", "universe": IDS, "interval": "1h", "min_apr_pct": 60,
                "exit_apr_pct": 20, "hold_hours": 24}),
         json!({"kind": "pair_spread", "interval": "1h", "legs": [IDS[0], IDS[1]], "lookback_bars": 24,
@@ -136,10 +138,16 @@ fn upto(set: &CandidateSet, t: i64) -> (Vec<&Candidate>, Vec<&Skip>) {
 #[test]
 fn a_jump_after_a_decision_changes_nothing_at_or_before_it() {
     let (md, p) = world();
+    let mut thin = 0;
     for s in every_kind(&p) {
         let kind = s.kind_name();
         let base = candidates(&s, &md, &p).unwrap();
         assert!(!base.candidates.is_empty(), "{kind} decided nothing");
+        thin += base
+            .skipped
+            .iter()
+            .filter(|k| k.reason == SkipReason::ThinEntry)
+            .count();
         let instants: BTreeSet<i64> = base.candidates.iter().map(|c| c.decided_at_ms).collect();
         let step = (instants.len() / 10).max(1);
         let mut future_read = false;
@@ -160,6 +168,7 @@ fn a_jump_after_a_decision_changes_nothing_at_or_before_it() {
             "{kind}: moving the future changed no later decision — the check proves nothing"
         );
     }
+    assert!(thin > 0, "no thin_entry skip: the filter went unchecked");
 }
 
 /// § 39 (b): `data_asof_ms ≤ decided_at_ms` for every candidate and trade;
