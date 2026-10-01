@@ -19,7 +19,7 @@
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //! | `xlab` | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z → `backtest` the fixtures' library strategy `matrix_fade` (rule W on `xyz:TSLA`) → `backtest` an inline spec (`matrix_move`, a move trigger) over the same window — no network: the leg's warehouse (`<TENGU_HOME>/state/engine-matrix/market.db`) is seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | the answer quotes the last close (360.2), `ret_bps` (−331.2, within 0.05) and each run's research mean net bps (+76.43, −27.39, within 0.005); both run dirs under `<TENGU_HOME>/state/engine-matrix/backtests/` |
-//! | `xlab_holdout` | `backtest` `{"run_id": "20261001T182112Z-conf_rows", "view": "trades", "holdout": true}` (a stored split run's rows by id, its holdout shown: a read; first, before any other run id is in the conversation) → `matrix_move` with `split = time:2026-09-27` (the holdout hidden: the in-sample run) → the same + `holdout = true` (both halves: a second read) — the xlab warehouse + the stored run from `tests/fixtures/xlab/run_conf_rows/` seeded first; a set of its own: weak models misread five results in one turn | the answer quotes the hidden run's mean (+2.07), the holdout half's mean (−56.86) and the worst trade's gross bps (−53.02, only in the `trades` rows) within 0.005; `holdout-reads.jsonl` holds both scripted reads (`backtest` · `matrix_move`, `rows` · `conf_rows`; any order — a repeated or extra read of the split is one more line) and no read of another split |
+//! | `xlab_holdout` | `backtest` `{"run_id": "20261001T182112Z-conf_rows", "view": "trades", "holdout": true}` (a stored split run's rows by id, its holdout shown: a read; first, before any other run id is in the conversation) → `matrix_move` with `split = time:2026-09-27` (the holdout hidden: the in-sample run) → the same + `holdout = true` (both halves: a second read) — the xlab warehouse + the stored run from `tests/fixtures/xlab/run_conf_rows/` seeded first; a set of its own: weak models misread five results in one turn | the answer quotes the hidden run's mean (+2.07), the holdout half's mean (−56.86) and the worst trade's gross bps (−52.88, only in the `trades` rows) within 0.005; `holdout-reads.jsonl` holds both scripted reads (`backtest` · `matrix_move`, `rows` · `conf_rows`; any order — a repeated or extra read of the split is one more line) and no read of another split |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
@@ -107,8 +107,7 @@ const XLAB_FADE_MEAN_BPS: f64 = 76.43;
 const XLAB_MOVE_MEAN_BPS: f64 = -27.39;
 /// The xlab_holdout set's split of [`xlab_spec`], between its two trades
 /// (decided 2026-09-26T01:00Z, +2.07 net bps · 2026-09-27T23:00Z, −56.86 net
-/// bps — simple-return P&L; the stored run in the fixture was written by the log-return engine:
-/// its rows keep gross −53.02, −57.00 net): the hidden run's in-sample mean and the holdout read's
+/// bps, gross −52.88 — simple-return P&L; the stored run in the fixture was written by the same engine): the hidden run's in-sample mean and the holdout read's
 /// holdout half.
 const XLAB_SPLIT: &str = "time:2026-09-27T00:00:00Z";
 const XLAB_IN_SAMPLE_MEAN_BPS: f64 = 2.07;
@@ -123,7 +122,7 @@ const XLAB_STORED_RUN_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/xlab/run_conf_rows"
 );
-const XLAB_WORST_GROSS_BPS: f64 = -53.02;
+const XLAB_WORST_GROSS_BPS: f64 = -52.88;
 
 /// The xlab set's inline strategy spec (the Architect's level-2 capability):
 /// fade a ≥ 25 bps hourly move on `xyz:TSLA`, out after 3 bars.
@@ -2418,7 +2417,7 @@ fn offline_local_xlab_holdout() {
         )) && rows.contains(
             "\nsplit time:2026-09-27T00:00:00Z: both halves shown (1 holdout trade(s)) · holdout \
              read #1 for this spec · 1 read(s) of split"
-        ) && rows.contains(" gross_bps=-53.02 ")
+        ) && rows.contains(" gross_bps=-52.88 ")
             && rows.contains("\nall 2 trade(s) by Σ net USD, best first:"),
         "{rows}"
     );
