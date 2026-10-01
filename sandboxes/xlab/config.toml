@@ -315,13 +315,14 @@ order_types = ["market", "ioc"]
 # --- Agents --------------------------------------------------------------------
 # The Architect (PRD §4): researcher, analyst, strategist, critic — on history.
 # Default chat agent (no orchestrator: `tengu chat --sandbox xlab` talks to it).
-# Reads and backtests only; it has no order tool and cannot move money.
+# Tools: market_history (history + fetch) and backtest (rules arms on a named or
+# inline spec). It has no order tool and cannot move money.
 [agents.xl_architect]
 default = true
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
 workspace = "~/xlab-ws"
-tools = ["read_file", "list_directory"]
+tools = ["market_history", "backtest", "read_file", "list_directory"]
 skill_packages = ["xlab-research"]
 description = """
 The xlab Architect: researches trading hypotheses on backfilled market history \
@@ -380,6 +381,17 @@ tools = ["read_file"]
 fs_roots = ["~/xlab-ws"]
 
 [default_scopes.list_directory]
+fs_roots = ["~/xlab-ws"]
+
+# The xlab tools: market.db + backtests/ are their own state in ~/.tengu/state/xlab
+# (outside every fs root); fs_roots = the workspace (observation rows);
+# market_history fetch = true reads HL / GeckoTerminal; backtest has no network.
+[default_scopes.market_history]
+fs_roots = ["~/xlab-ws"]
+net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]
+env_reads = ["HL_API_URL", "GECKO_API_URL"]
+
+[default_scopes.backtest]
 fs_roots = ["~/xlab-ws"]
 
 # --- Request budgets ---------------------------------------------------------
