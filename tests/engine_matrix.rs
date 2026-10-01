@@ -485,7 +485,7 @@ impl Set {
                                "split": XLAB_SPLIT, "holdout": true}),
                     ),
                 ],
-                "the gross_bps of the worst trade step 1 listed, then the mean_net_bps= value step 2 returned on its first line, then the holdout mean_net_bps= value step 3 printed on its `split ... research:` line, exactly as printed",
+                "the gross_bps of the worst trade step 1 listed, then the mean_net_bps= value step 2 returned on its first line, then the mean_net_bps= value step 3 printed on its first line (the HOLDOUT line), exactly as printed",
                 "",
             ),
             Set::Shell => (
@@ -2431,8 +2431,11 @@ fn offline_local_xlab_holdout() {
     assert!(!hidden.contains("holdout n="), "{hidden}");
     let read = &latest(3);
     for want in [
-        "\nsplit time:2026-09-27T00:00:00Z research: in-sample n=1 mean_net_bps=+2.07",
-        &format!("· holdout n=1 mean_net_bps={XLAB_HOLDOUT_MEAN_BPS:+.2}"),
+        &format!(
+            " matrix_move move_trigger 1h HOLDOUT of time:2026-09-27T00:00:00Z (out-of-sample) \
+             research: n=1 mean_net_bps={XLAB_HOLDOUT_MEAN_BPS:+.2} "
+        ),
+        "\nin-sample (already seen while tuning — reference only) research: n=1 mean_net_bps=+2.07",
         "\nholdout read #1 for this spec · 2 read(s) of split time:2026-09-27T00:00:00Z",
     ] {
         assert!(read.contains(want), "{want}: {read}");

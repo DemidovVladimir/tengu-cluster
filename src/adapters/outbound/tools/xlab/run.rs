@@ -515,27 +515,122 @@ fn period_lines(ran: &Ran) -> Vec<String> {
 }
 
 /// The tool's text (module table); `read` = a recorded holdout read.
-/// `OUT-OF-SAMPLE (holdout of <split>) research: n=… mean_net_bps=… ci95=[…]
-/// · in-sample n=… mean_net_bps=… ci95=[…]` — the result a holdout read is
-/// judged on; `None` when the research arm has no split halves.
-fn out_of_sample_line(report: &BacktestReport, split: &SplitSpec) -> Option<String> {
-    let halves = report.arms.get(PRIMARY_ARM)?.split.as_ref()?;
-    let half = |s: &crate::domain::backtest::stats::Summary| {
-        let mean = s
-            .mean_net_bps
-            .map_or_else(|| "—".to_string(), |m| format!("{m:+.2}"));
-        let ci = match (s.ci95_lo_bps, s.ci95_hi_bps) {
-            (Some(lo), Some(hi)) => format!("[{lo:+.1}, {hi:+.1}]"),
-            _ => "—".to_string(),
-        };
-        format!("n={} mean_net_bps={mean} ci95={ci}", s.n)
+/// One arm half: `n=… mean_net_bps=… ci95=[…] hit=… net_usd=… sharpe=…`.
+fn half_line(s: &crate::domain::backtest::stats::Summary) -> String {
+    let mean = s
+        .mean_net_bps
+        .map_or_else(|| "—".to_string(), |m| format!("{m:+.2}"));
+    let ci = match (s.ci95_lo_bps, s.ci95_hi_bps) {
+        (Some(lo), Some(hi)) => format!("[{lo:+.1}, {hi:+.1}]"),
+        _ => "—".to_string(),
     };
-    Some(format!(
-        "OUT-OF-SAMPLE (holdout of {split}) research: {} · in-sample {} — judge the holdout on \
-         this line; line 1 and the arm lines cover the whole window (in-sample + holdout)",
-        half(&halves.holdout),
-        half(&halves.in_sample)
-    ))
+    let hit = s
+        .hit_rate
+        .map_or_else(|| "—".to_string(), |h| format!("{h:.2}"));
+    let sharpe = s
+        .sharpe
+        .map_or_else(|| "—".to_string(), |x| format!("{x:.2}"));
+    format!(
+        "n={} mean_net_bps={mean} ci95={ci} hit={hit} net_usd={:+.2} sharpe={sharpe}",
+        s.n, s.net_usd
+    )
+}
+
+/// A holdout read's text (module table): out-of-sample figures only up
+/// front — line 1 is the holdout half of the research arm, then its capped
+/// half, the in-sample half as a labelled reference, the holdout's best and
+/// worst periods, the read count, data gaps, the window, `spec_sha256` and
+/// the rows hint. No whole-window figure and no features dump (the typed row
+/// keeps them for programs): a live Architect quoted a whole-window line 1
+/// as the holdout result twice, also with a labelled holdout line under it.
+fn holdout_text(
+    obs: &Observation,
+    ran: &Ran,
+    split: &SplitSpec,
+    read: Option<ReadCount>,
+) -> String {
+    let report = &ran.run.report;
+    let halves = |arm: &str| report.arms.get(arm).and_then(|a| a.split.as_ref());
+    let mut lines = Vec::new();
+    let head = format!(
+        "backtest {} {} {} {} HOLDOUT of {split} (out-of-sample)",
+        report.run_id, report.strategy, report.kind, report.interval
+    );
+    match halves(PRIMARY_ARM) {
+        Some(h) => lines.push(format!(
+            "{head} research: {} | {}",
+            half_line(&h.holdout),
+            obs.status.as_str()
+        )),
+        None => lines.push(format!("{head}: no split halves | {}", obs.status.as_str())),
+    }
+    for (name, a) in &report.arms {
+        if name.as_str() == PRIMARY_ARM {
+            continue;
+        }
+        if let Some(h) = &a.split {
+            lines.push(format!("HOLDOUT {name}: {}", half_line(&h.holdout)));
+        }
+    }
+    if let Some(h) = halves(PRIMARY_ARM) {
+        lines.push(format!(
+            "in-sample (already seen while tuning — reference only) research: {}",
+            half_line(&h.in_sample)
+        ));
+    }
+    if let Some(arm) = ran.run.arms.get(PRIMARY_ARM) {
+        let rows = rows::per_key(
+            arm.trades
+                .iter()
+                .filter(|t| {
+                    let legs: Vec<&str> = t.legs.iter().map(|l| l.instrument.as_str()).collect();
+                    split.is_holdout(t.decided_at_ms, &legs)
+                })
+                .map(|t| (t.period.as_str(), t.net_usd, t.net_bps)),
+        );
+        if !rows.is_empty() {
+            let k = rows.len().min(TEXT_PERIODS);
+            let show = |rs: &mut dyn Iterator<Item = &(String, usize, f64, f64)>| {
+                rs.map(|(p, n, usd, _)| format!("{p} {usd:+.2} usd (n {n})"))
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            };
+            lines.push(format!(
+                "holdout best periods: {}",
+                show(&mut rows[..k].iter())
+            ));
+            lines.push(format!(
+                "holdout worst periods: {} ({} holdout periods)",
+                show(&mut rows[rows.len() - k..].iter().rev()),
+                rows.len()
+            ));
+        }
+    }
+    if let Some(count) = read {
+        lines.push(holdout::read_line(count, split));
+    }
+    for e in &obs.errors {
+        lines.push(format!(
+            "error {}: {} {}",
+            e.field,
+            e.class.as_str(),
+            e.message
+        ));
+    }
+    lines.push(format!(
+        "decisions {} → {} (to exclusive) · {} instrument(s) · {} candidate(s)",
+        fmt_time(report.from_ms),
+        fmt_time(report.to_ms),
+        report.n_instruments,
+        report.n_candidates
+    ));
+    lines.push(format!("spec_sha256 {}", report.spec_sha256));
+    lines.push(format!(
+        "rows: backtest {{\"run_id\": \"{}\", \"view\": \"periods\"}} shows the in-sample rows; \
+         + \"holdout\": true shows the holdout rows too (another counted read)",
+        report.run_id
+    ));
+    lines.join("\n")
 }
 
 pub(crate) fn render(
@@ -545,21 +640,13 @@ pub(crate) fn render(
     now_ms: i64,
     read: Option<ReadCount>,
 ) -> String {
+    if let Halves::Both(split) = &ran.halves {
+        return holdout_text(obs, ran, split, read);
+    }
     let mut head = obs.clone();
     head.data = Value::Null;
     let report = &ran.run.report;
-    let head_text = head.render_text(now_ms);
-    let mut head_lines = head_text.lines();
-    let mut lines: Vec<String> = head_lines.next().map(str::to_string).into_iter().collect();
-    // A holdout read: line 1 and the arm lines cover the whole window; the
-    // out-of-sample result goes right under line 1, labelled (a live
-    // Architect quoted the whole-window CI as the holdout's).
-    if let Halves::Both(split) = &ran.halves {
-        if let Some(line) = out_of_sample_line(report, split) {
-            lines.push(line);
-        }
-    }
-    lines.extend(head_lines.map(str::to_string));
+    let mut lines = vec![head.render_text(now_ms)];
     // Its line 1 is the row's headline, already in line 1 above; its data
     // notes are read with the notes view, not in report.md.
     let compact = report.render_compact();
@@ -580,7 +667,6 @@ pub(crate) fn render(
         (Halves::Hidden { split, left_out }, _) => {
             lines.push(holdout::hidden_line(split, *left_out));
         }
-        (Halves::Both(split), Some(count)) => lines.push(holdout::read_line(count, split)),
         _ => {}
     }
     lines.push(format!(
@@ -1100,29 +1186,49 @@ mod tests {
         }
         assert_eq!(obs.features["holdout_reads"], 1);
         assert!(obs.features.contains_key("holdout_mean_net_bps"));
-        // The out-of-sample result sits right under line 1, labelled, with
-        // the holdout half's own n / mean (line 1 covers the whole window).
-        let oos = out.text.lines().nth(1).unwrap();
-        let holdout = &full.arms["research"].split.as_ref().unwrap().holdout;
+        // A holdout read shows out-of-sample figures only: line 1 is the
+        // research arm's holdout half; no whole-window figure anywhere (a
+        // live Architect quoted a whole-window line 1 as the holdout's).
+        let line1 = out.text.lines().next().unwrap();
+        let research = full.arms["research"].split.as_ref().unwrap();
         assert!(
-            oos.starts_with(&format!(
-                "OUT-OF-SAMPLE (holdout of time:2026-09-15T00:00:00Z) research: n={} \
-                 mean_net_bps={:+.2} ci95=",
-                holdout.n,
-                holdout.mean_net_bps.unwrap()
+            line1.starts_with(&format!(
+                "backtest {} weekend_fade weekend_window 1h HOLDOUT of time:2026-09-15T00:00:00Z \
+                 (out-of-sample) research: n={} mean_net_bps={:+.2} ci95=",
+                full.run_id,
+                research.holdout.n,
+                research.holdout.mean_net_bps.unwrap()
             )),
-            "{oos}"
+            "{line1}"
         );
-        assert!(oos.contains("judge the holdout on this line"), "{oos}");
+        let whole = &full.arms["research"].summary;
         assert!(
-            !text.contains("OUT-OF-SAMPLE"),
-            "a hidden run has no out-of-sample line: {text}"
-        );
-        assert!(
+            !out.text.contains(&format!(" n={} ", whole.n)),
+            "no whole-window n in a holdout read: {}",
             out.text
-                .contains("\nsplit time:2026-09-15T00:00:00Z research: in-sample n="),
+        );
+        assert!(
+            !out.text.contains("\nresearch n=") && !out.text.contains("\nsplit "),
+            "no whole-window arm or split lines: {}",
+            out.text
+        );
+        assert!(
+            out.text.contains(&format!(
+                "\nin-sample (already seen while tuning — reference only) research: n={} ",
+                research.in_sample.n
+            )),
             "{}",
             out.text
+        );
+        assert!(out.text.contains("\nHOLDOUT capped: n="), "{}", out.text);
+        assert!(
+            out.text.contains("\nholdout best periods: "),
+            "{}",
+            out.text
+        );
+        assert!(
+            !text.contains("HOLDOUT"),
+            "a hidden run shows no holdout: {text}"
         );
         assert!(
             out.text.contains(
@@ -1631,17 +1737,35 @@ mod tests {
             split: 67_890,
         };
         assert_eq!(split, SplitSpec::Time(utc("2026-09-15 00:00")));
-        let text = render(&obs, &ran, &backtest_config(), 0, Some(count));
         let cap = tool_result_char_budget(16_384);
+        assert!(TEXT_MAX_CHARS < cap * 3 / 4);
+        // The crowded holdout read: out-of-sample lines only, within bound.
+        let read = render(&obs, &ran, &backtest_config(), 0, Some(count));
         assert!(
-            text.chars().count() <= TEXT_MAX_CHARS && TEXT_MAX_CHARS < cap * 3 / 4,
+            read.chars().count() <= TEXT_MAX_CHARS,
+            "{} chars of a {cap} cap:\n{read}",
+            read.chars().count()
+        );
+        for want in [
+            " HOLDOUT of time:2026-09-15T00:00:00Z (out-of-sample) research: n=",
+            "\nholdout read #12345 for this spec",
+            "\nholdout best periods: ",
+            "\nrows: backtest {\"run_id\": ",
+        ] {
+            assert!(read.contains(want), "{want}: {read}");
+        }
+        // The same crowded run without a read (whole window): the arm,
+        // split, period, notes and no_costs lines, within bound.
+        ran.halves = Halves::Whole;
+        let text = render(&obs, &ran, &backtest_config(), 0, None);
+        assert!(
+            text.chars().count() <= TEXT_MAX_CHARS,
             "{} chars of a {cap} cap:\n{text}",
             text.chars().count()
         );
         for want in [
             "\nsplit time:2026-09-15T00:00:00Z research: in-sample n=",
             "\nbest periods: ",
-            "\nholdout read #12345 for this spec",
             "\ndata notes: 500 (view notes)",
             "\nrows: backtest {\"run_id\": ",
         ] {
