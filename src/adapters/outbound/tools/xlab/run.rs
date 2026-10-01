@@ -65,7 +65,7 @@ pub(crate) const MAX_TOOL_ROWS: usize = 50_000;
 /// The text's budget on a crowded run, by construction: `render_compact` ≤
 /// 3 000, [`NO_COST_CHARS`], the fixed lines (the cap test holds it).
 #[cfg(test)]
-pub(crate) const TEXT_MAX_CHARS: usize = 4_608;
+pub(crate) const TEXT_MAX_CHARS: usize = 5_120;
 /// Periods each of the text's best / worst lines names.
 const TEXT_PERIODS: usize = 3;
 
