@@ -182,6 +182,29 @@ Budget: a live read of one HIP-3 dex = 20, + 20 per minute per dex (at-cap), + 4
 
 Scope per tool: `fs_roots` = the workspace (store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (example: `config.example.toml`).
 
+## Market history (xlab, 2026-10-01)
+
+Tool `market_history` (opt-in, `xlab` plugin, `adapters/outbound/tools/xlab/`); row and math `domain/marketdata_stats.rs::MarketHistory`; the warehouse `<state dir>/market.db` (`docs/xlab-2026-10-01.md` § 4, § 8). Read-only.
+
+| Key | TTL | Row | Status |
+|---|---|---|---|
+| `mkt_history/1:<instrument>:<interval>` (full id: `mkt_history/1:hyperliquid:xyz:TSLA:1h`) | 0 — a history read, never cached; recorded when `[recorder]` takes `mkt_history/1` | features `n_bars`, `from_ms` / `to_ms` (the window), `points` (bars in `data`), `gaps`, `funding_points`, `funding_mean_apr_pct`; with a bar `first_ms` / `last_ms` (bar opens), `last_close`, `avg_volume`; with ≥ 2 bars `ret_bps`, `max_drawdown_bps`; with ≥ 3 `vol_bps`; after a fetch `fetched_bars` (+ `fetched_funding` on HL); `data` = the window, the stats, the sampled bars (`t_open_ms`, `o`, `h`, `l`, `c`, `v`, `n`), every stored series of the instrument (`kind`, `interval`, `first_ms`, `last_ms`, `rows`, `sources`), the fetch (rows, source, notes) | `ok` bars, nothing failed · `partial` bars, a fetch failed (`fetch_bars` / `fetch_funding` / `fetch`, with its class) · `absent` no bar in the window · `error` no bar and a failure, or the store read failed (`market_db`) |
+
+| Number | Rule — too few rows ⇒ omitted, never 0 |
+|---|---|
+| `ret_bps` | ln(last close / first close) × 10⁴ |
+| `vol_bps` | sample standard deviation of the log returns between consecutive stored bars × 10⁴ |
+| `max_drawdown_bps` | largest (running peak close − close) / peak × 10⁴ |
+| `funding_mean_apr_pct` | mean `rate_1h` × 24 × 365 × 100 |
+| `gaps` | grid slots `t` with `from ≤ t < to`, closed at the read (`t + interval ≤ now`), without a stored bar: no-trade hours (HL skips them), an unfilled head or tail, the time before a listing |
+| sample | `points` (1–200, default 48) stored bars evenly by index, the first and the last kept, never re-aggregated; every stat uses every bar |
+
+| Tool | Args (** required) | Reads | Writes |
+|---|---|---|---|
+| `market_history` | `instrument`** (full id), `interval` (`1m 5m 15m 1h 4h 1d`, default `1h`), `from` / `to` (epoch ms, RFC 3339 or `YYYY-MM-DD`; default the 7 days before now; ≤ 100 000 bars), `fetch` (default false), `pool` (GeckoTerminal pool, `solana:` / `robinhood:` ids only; required with `fetch` there), `points` — strict (an unknown key is an error) | `market.db`: the window's bars + funding, the instrument's coverage; with `fetch` first the part not stored: HL `candleSnapshot` + `fundingHistory` (`hyperliquid:` ids, `HlInfo`) or GeckoTerminal OHLCV (`solana:` / `robinhood:` ids), each through the egress gate + `net_hosts`, `[rate_limits.hyperliquid]` / `[rate_limits.geckoterminal]`, `Retry::TOOL` | with `fetch`: `market.db` rows under the backfill rules (closed bars only, resume after the last stored row, HL's newest 5 000 bars per interval) |
+
+Text: line 1, features and errors as `render_text` gives them but without `data` (200 bars would not fit a small window); then what a fetch wrote, a table of ≤ 48 of the sampled bars (numbers as stored, ≤ 8 significant digits), one line per stored series — ≈ 5 KB at most, whole under a 16k local window's 8 192-char cap (`engine_matrix::offline_local_xlab`). No `[xmarket]` ⇒ refused `state_dir_missing`. Scope: `fs_roots` = the workspace; a fetch: `net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, `env_reads = ["HL_API_URL", "GECKO_API_URL"]` (unset = the public hosts).
+
 ## Risk + paper rows (xmarket, 2026-09-30)
 
 Operator reference: [`xmarket-risk-paper-2026-09-30.md`](xmarket-risk-paper-2026-09-30.md) (gate rules, ledger, halts, `tengu risk`). Subject = the ledger account (`[risk] account`, `[A-Za-z0-9._-]`), in full.

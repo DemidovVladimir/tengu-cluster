@@ -50,6 +50,22 @@ pub(crate) const PAGE_LIMIT: usize = 1_000;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BUDGET_WAIT: Duration = Duration::from_secs(120);
 
+/// The API base for a tool call (`market_history`): `$GECKO_API_URL` when
+/// the scope's `env_reads` allows it and it is set, else the public base —
+/// as `hyperliquid::info::api_url` reads `HL_API_URL`.
+pub(crate) fn api_url(scope: &ToolScope) -> String {
+    match scope.check_env_read(GECKO_API_ENV) {
+        Ok(()) => api_url_from(std::env::var(GECKO_API_ENV).ok()),
+        Err(_) => GECKO_API_URL.to_string(),
+    }
+}
+
+fn api_url_from(env: Option<String>) -> String {
+    env.map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| GECKO_API_URL.to_string())
+}
+
 /// GeckoTerminal network of an instrument venue.
 pub(crate) fn network_of(venue: &str) -> Result<&'static str, String> {
     match venue {
@@ -90,11 +106,7 @@ pub(crate) struct GeckoClient {
 /// `[egress]` policy stays the ceiling), the sandbox's
 /// `[rate_limits.geckoterminal]`.
 pub(crate) fn operator_gecko(sections: &SandboxSections) -> Result<GeckoClient> {
-    let base = std::env::var(GECKO_API_ENV)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| GECKO_API_URL.to_string());
+    let base = api_url_from(std::env::var(GECKO_API_ENV).ok());
     let host = Url::parse(&base)
         .ok()
         .and_then(|u| u.host_str().map(str::to_string))
@@ -331,7 +343,7 @@ pub(crate) async fn gecko_bars(
         (Err(e), _) | (_, Err(e)) => Err(anyhow!(e)),
     };
     if let Err(e) = fetched {
-        row.errors.push(format!("{e:#}"));
+        row.fail(&e);
     }
     row
 }
@@ -614,5 +626,16 @@ mod tests {
             r.message
         );
         assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_tool_reads_the_base_override_only_through_its_scope() {
+        assert_eq!(api_url(&ToolScope::default()), GECKO_API_URL);
+        assert_eq!(
+            api_url_from(Some(" http://127.0.0.1:9/api/v2 ".into())),
+            "http://127.0.0.1:9/api/v2"
+        );
+        assert_eq!(api_url_from(Some("  ".into())), GECKO_API_URL);
+        assert_eq!(api_url_from(None), GECKO_API_URL);
     }
 }

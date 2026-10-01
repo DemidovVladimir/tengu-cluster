@@ -34,9 +34,13 @@
 //! (`Reply::Gma`), or an `l2Book` capture stamped now (`Reply::Book`: a
 //! live book the paper gate accepts). Tools with a base-URL override reach
 //! it through `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`: `POST /info`
-//! routes by body `type`, captured replies in `tests/fixtures/hyperliquid/`).
-//! `.row(..)` seeds the workspace observation store (the opportunity row a
-//! paper entry names).
+//! routes by body `type`, captured replies in `tests/fixtures/hyperliquid/`;
+//! `GECKO_API_URL`: GeckoTerminal OHLCV). `market_history` fetches into the
+//! side's `<TENGU_HOME>/state/conf/market.db`: its HL case replays the
+//! `xyz:TSLA` candle + funding captures moved to the current hours
+//! (`recent_tsla_history`: HL's newest-5 000-bars reach), then reads them
+//! back. `.row(..)` seeds the workspace observation store (the opportunity
+//! row a paper entry names).
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -394,6 +398,108 @@ fn hl_xyz(c: Case) -> Case {
     )
     .route(info("perpDexs").file("hyperliquid/perpDexs.json"))
     .route(info("perpCategories").file("hyperliquid/perpCategories.json"))
+}
+
+/// A GeckoTerminal SOL / USDC pool (`docs/xlab-2026-10-01.md` § 4), in full.
+const GECKO_POOL: &str = "Gf7sXMoP8iRw4iiXmJ1nq4vxcRycbGXy5RL8a8LnTd3v";
+/// Its OHLCV path on the mock (`GECKO_API_URL` = the mock root).
+const GECKO_OHLCV_PATH: &str =
+    "/networks/solana/pools/Gf7sXMoP8iRw4iiXmJ1nq4vxcRycbGXy5RL8a8LnTd3v/ohlcv/hour";
+
+/// The xlab warehouse (`market.db`) in `<TENGU_HOME>/state/conf/`.
+const XLAB_TOML: &str = "[xmarket]\nstate = \"conf\"\n";
+
+/// The `xyz:TSLA` captures (`hyperliquid/candleSnapshot_xyz_TSLA_1h.json`:
+/// 67 hourly bars from Fri 2026-09-25 20:00Z; `fundingHistory_xyz_TSLA.json`:
+/// 68 settlements) moved by whole hours so the last bar closes two hours
+/// before the current one — HL serves only its newest 5 000 bars, so fixed
+/// dates would one day fall out of reach and be clamped. Returns the two
+/// replies and the window `[from, to)` they fill.
+fn recent_tsla_history() -> (String, String, i64, i64) {
+    const H: i64 = 3_600_000;
+    let mut candles: Value =
+        serde_json::from_str(&fixture("hyperliquid/candleSnapshot_xyz_TSLA_1h.json")).unwrap();
+    let mut funding: Value =
+        serde_json::from_str(&fixture("hyperliquid/fundingHistory_xyz_TSLA.json")).unwrap();
+    let bars = candles.as_array_mut().unwrap();
+    let first = bars[0]["t"].as_i64().unwrap();
+    let last = bars[bars.len() - 1]["t"].as_i64().unwrap();
+    let shift = (now_ms() / H * H - 3 * H) - last;
+    let moved = |v: &Value| json!(v.as_i64().unwrap() + shift);
+    for b in bars.iter_mut() {
+        b["t"] = moved(&b["t"]);
+        b["T"] = moved(&b["T"]);
+    }
+    for f in funding.as_array_mut().unwrap() {
+        f["time"] = moved(&f["time"]);
+    }
+    (
+        candles.to_string(),
+        funding.to_string(),
+        first + shift,
+        last + shift + H,
+    )
+}
+
+/// `market_history` with `fetch = true` (HL bars + funding through the mock
+/// into `market.db`), then the same window read back without a fetch.
+fn market_history_hl() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let window = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                        "from": from, "to": to});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .scoped("HL_API_URL")
+        .route(info("candleSnapshot").has("\"coin\":\"xyz:TSLA\"").json(&candles))
+        .route(info("fundingHistory").has("\"coin\":\"xyz:TSLA\"").json(&funding))
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("market_history", window)
+        .ok("mkt_history hyperliquid:xyz:TSLA 1h bars=67 <TIME> … <TIME> last_close=360.2 ret_bps=-331.2 | ok <AGE>s live")
+}
+
+/// `market_history` on a Solana mint: GeckoTerminal pool bars through the
+/// mock (`GECKO_API_URL`), then read back.
+fn market_history_gecko() -> Case {
+    let id = format!("solana:{WSOL}");
+    let window = json!({"instrument": id, "from": "2026-09-25T07:00:00Z",
+                        "to": "2026-09-25T10:00:00Z"});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    fetch["pool"] = json!(GECKO_POOL);
+    // 07:00 … 09:00 UTC, newest first as Gecko sends them.
+    let ohlcv: Vec<Value> = [(9, 117.66), (8, 117.41), (7, 117.52)]
+        .iter()
+        .map(|(h, c)| {
+            json!([
+                1_790_319_600 + (h - 7) * 3600,
+                117.5,
+                117.9,
+                117.3,
+                c,
+                250_000.5
+            ])
+        })
+        .collect();
+    let page = json!({"data": {"id": "x", "type": "ohlcv_request_response",
+                      "attributes": {"ohlcv_list": ohlcv}}, "meta": {}});
+    case("market_history", fetch)
+        .named("gecko")
+        .toml(XLAB_TOML)
+        .scoped("GECKO_API_URL")
+        .route(
+            get(GECKO_OHLCV_PATH)
+                .has(&format!("token={WSOL}"))
+                .json(&page.to_string()),
+        )
+        .ok(&format!(
+            "fetched: 3 bar(s) written from gecko:solana:{GECKO_POOL}"
+        ))
+        .then("market_history", window)
+        .ok(&format!(
+            "mkt_history {id} 1h bars=3 <TIME> … <TIME> last_close=117.66 ret_bps=11.9"
+        ))
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -916,6 +1022,16 @@ fn cases() -> Vec<Case> {
             .toml(&weekend_fade_toml())
             .scoped("HL_API_URL")
             .ok(" waiting next_entry_s=<COUNTDOWN> universe=1 excluded=0 | ok <AGE>s live"),
+        // ── xlab research reads: `[xmarket]` → `market.db` in the state dir
+        market_history_hl(),
+        market_history_gecko(),
+        // Without `[xmarket]` there is no warehouse: refused alike.
+        case(
+            "market_history",
+            json!({"instrument": "hyperliquid:xyz:TSLA"}),
+        )
+        .named("no_xmarket")
+        .err("state_dir_missing: market data unavailable: no [xmarket] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

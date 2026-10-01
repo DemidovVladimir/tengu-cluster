@@ -13,6 +13,7 @@ pub(crate) mod lp;
 pub(crate) mod market;
 pub(crate) mod marketdata;
 pub(crate) mod marketdata_decode;
+pub(crate) mod marketdata_stats;
 pub(crate) mod memory;
 pub(crate) mod message;
 pub(crate) mod metrics;

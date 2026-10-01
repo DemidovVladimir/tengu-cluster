@@ -35,6 +35,7 @@ use crate::adapters::outbound::http_class::read_error;
 use crate::adapters::outbound::rate_limit::jitter01;
 use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
 use crate::domain::marketdata::{fmt_time, Interval};
+use crate::domain::observation::ErrorClass;
 use crate::ports::market_data::MarketDataStore;
 
 /// Retry of one backfill request (module doc).
@@ -57,6 +58,19 @@ impl Retry {
             quota_park_ms: 3_600_000,
         },
         max_park_ms: 300_000,
+    };
+
+    /// A tool call's backfill (`market_history` `fetch`): a model waits for
+    /// it — 2 retries, 250 ms … 5 s, parks ≤ 10 s.
+    pub(crate) const TOOL: Retry = Retry {
+        policy: BackoffPolicy {
+            base_ms: 500,
+            cap_ms: 5_000,
+            min_ms: 250,
+            max_attempts: 2,
+            quota_park_ms: 3_600_000,
+        },
+        max_park_ms: 10_000,
     };
 
     /// `call` until it succeeds or `next_delay` stops (the error is then
@@ -114,6 +128,10 @@ pub(crate) struct ReportRow {
     /// Clamped start, resume, up to date.
     pub notes: Vec<String>,
     pub errors: Vec<String>,
+    /// The class of each of `errors` recorded by [`ReportRow::fail`]
+    /// (`http_class::read_error`; a tool reports it per field).
+    #[serde(skip)]
+    pub classes: Vec<ErrorClass>,
 }
 
 impl ReportRow {
@@ -134,7 +152,14 @@ impl ReportRow {
             last_ms: None,
             notes: Vec::new(),
             errors: Vec::new(),
+            classes: Vec::new(),
         }
+    }
+
+    /// Record a failed fetch: its text (`{e:#}`) and its class.
+    pub(crate) fn fail(&mut self, e: &anyhow::Error) {
+        self.errors.push(format!("{e:#}"));
+        self.classes.push(read_error(self.kind, e).class);
     }
 
     /// Count `n` rows written spanning `times` (any order).
@@ -489,6 +514,21 @@ mod tests {
             .await
             .is_err());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_failure_keeps_its_text_and_class() {
+        let mut row = ReportRow::new("hyperliquid:xyz:TSLA", "bars", Some(Interval::H1), "hl");
+        row.fail(
+            &HttpError::new(ErrorClass::RateLimited, "HTTP 429 from api.hyperliquid.xyz").into(),
+        );
+        row.fail(&anyhow::anyhow!("candleSnapshot xyz:TSLA 1h row 0: bad"));
+        assert_eq!(
+            row.classes,
+            vec![ErrorClass::RateLimited, ErrorClass::Fatal]
+        );
+        assert!(row.errors[0].contains("HTTP 429"), "{:?}", row.errors);
+        assert_eq!(row.errors[1], "candleSnapshot xyz:TSLA 1h row 0: bad");
     }
 
     #[test]

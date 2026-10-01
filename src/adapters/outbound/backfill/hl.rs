@@ -114,7 +114,7 @@ pub(crate) async fn hl_bars(
         &hl_source(hl.host()),
     );
     if let Err(e) = fetch_bars(&mut row, hl, store, plan, retry, now_ms).await {
-        row.errors.push(format!("{e:#}"));
+        row.fail(&e);
     }
     row
 }
@@ -184,7 +184,7 @@ pub(crate) async fn hl_funding_history(
 ) -> ReportRow {
     let mut row = ReportRow::new(&plan.instrument, "funding", None, &hl_source(hl.host()));
     if let Err(e) = fetch_funding(&mut row, hl, store, plan, retry, now_ms).await {
-        row.errors.push(format!("{e:#}"));
+        row.fail(&e);
     }
     row
 }

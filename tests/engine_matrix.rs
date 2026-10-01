@@ -10,7 +10,7 @@
 //!
 //! | Fixture family | Files | Sandbox | Sets |
 //! |---|---|---|---|
-//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm` |
+//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab` |
 //! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
@@ -18,6 +18,7 @@
 //! | `workspace` | `list_directory` `.` → `read_file` the `token-*` file → `write_file` `answer.txt` = the token → `read_file` `second.txt` | the answer holds the token (its file name is only in the listing, its value only in the file); `answer.txt` = the token; `second.txt` holds a registered secret (`TENGU_SECRETS_LOADED`): the answer quotes `REDACTED`; Claude Code: the bridge's result for it, logged by the engine, is `[REDACTED]` |
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
+//! | `xlab` | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z — no network: the leg's warehouse (`<TENGU_HOME>/state/engine-matrix/market.db`) is seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | the answer quotes the last close (360.2) and `ret_bps` (−331.2, within 0.05) |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
@@ -47,7 +48,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell` (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -83,6 +84,18 @@ const XM_STATE: &str = "engine-matrix";
 const OPPORTUNITY: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
 /// The xm set's instrument.
 const INSTRUMENT: &str = "hyperliquid:xyz:TSLA";
+/// The xlab set's warehouse seed (`tengu history import-json`): 67 hourly
+/// `xyz:TSLA` bars from 2026-09-25T20:00Z + 68 funding rows, captured from HL.
+const XLAB_DATASET: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/xlab/dataset_xyz_TSLA_1h.json"
+);
+/// The xlab set's window: every seeded bar.
+const XLAB_FROM: &str = "2026-09-25T20:00:00Z";
+const XLAB_TO: &str = "2026-09-28T15:00:00Z";
+/// The seed's first and last close: `last_close=` and `ret_bps=` of the row.
+const XLAB_FIRST_CLOSE: f64 = 372.33;
+const XLAB_LAST_CLOSE: f64 = 360.2;
 /// `xm_exits`' id for the second buy (its `exit_at_ms` is in the past),
 /// up to the position's `opened_ms`.
 const EXIT_ID_PREFIX: &str = "exit:matrix:hyperliquid:xyz:TSLA:deadline:";
@@ -172,6 +185,7 @@ enum Set {
     Workspace,
     Hyperliquid,
     Xm,
+    Xlab,
     Shell,
     Memory,
     Skills,
@@ -185,10 +199,11 @@ enum Set {
 }
 
 impl Set {
-    const ALL: [Set; 13] = [
+    const ALL: [Set; 14] = [
         Set::Workspace,
         Set::Hyperliquid,
         Set::Xm,
+        Set::Xlab,
         Set::Shell,
         Set::Memory,
         Set::Skills,
@@ -206,6 +221,7 @@ impl Set {
             Set::Workspace => "workspace",
             Set::Hyperliquid => "hyperliquid",
             Set::Xm => "xm",
+            Set::Xlab => "xlab",
             Set::Shell => "shell",
             Set::Memory => "memory",
             Set::Skills => "skills",
@@ -221,7 +237,10 @@ impl Set {
 
     /// The hardened fixtures (`[risk]`) or the open ones.
     fn hardened(self) -> bool {
-        matches!(self, Set::Workspace | Set::Hyperliquid | Set::Xm)
+        matches!(
+            self,
+            Set::Workspace | Set::Hyperliquid | Set::Xm | Set::Xlab
+        )
     }
 
     fn fixture(self, target: Target) -> &'static str {
@@ -247,6 +266,7 @@ impl Set {
                 "risk_status",
                 "xm_weekend_fade",
             ],
+            Set::Xlab => &["market_history"],
             Set::Shell => &["run_command", "matrix__token"],
             Set::Memory => &["memory_ingest", "memory_search", "persistent_store"],
             Set::Skills => &[
@@ -388,6 +408,15 @@ impl Set {
                     "",
                 )
             }
+            Set::Xlab => (
+                vec![call(
+                    "market_history",
+                    json!({"instrument": INSTRUMENT, "interval": "1h",
+                           "from": XLAB_FROM, "to": XLAB_TO}),
+                )],
+                "the last_close= value and the ret_bps= value market_history returned, exactly as printed",
+                "",
+            ),
             Set::Shell => (
                 vec![
                     call("run_command", json!({"command": "cat shell-token.txt"})),
@@ -587,6 +616,7 @@ live_legs! {
     openrouter_gemini_workspace => GEMINI, Set::Workspace;
     openrouter_gemini_hyperliquid => GEMINI, Set::Hyperliquid;
     openrouter_gemini_xm => GEMINI, Set::Xm;
+    openrouter_gemini_xlab => GEMINI, Set::Xlab;
     openrouter_gemini_shell => GEMINI, Set::Shell;
     openrouter_gemini_memory => GEMINI, Set::Memory;
     openrouter_gemini_skills => GEMINI, Set::Skills;
@@ -600,6 +630,7 @@ live_legs! {
     openrouter_haiku_workspace => HAIKU, Set::Workspace;
     openrouter_haiku_hyperliquid => HAIKU, Set::Hyperliquid;
     openrouter_haiku_xm => HAIKU, Set::Xm;
+    openrouter_haiku_xlab => HAIKU, Set::Xlab;
     openrouter_haiku_shell => HAIKU, Set::Shell;
     openrouter_haiku_memory => HAIKU, Set::Memory;
     openrouter_haiku_skills => HAIKU, Set::Skills;
@@ -613,6 +644,7 @@ live_legs! {
     claude_code_workspace => CLAUDE, Set::Workspace;
     claude_code_hyperliquid => CLAUDE, Set::Hyperliquid;
     claude_code_xm => CLAUDE, Set::Xm;
+    claude_code_xlab => CLAUDE, Set::Xlab;
     claude_code_shell => CLAUDE, Set::Shell;
     claude_code_memory => CLAUDE, Set::Memory;
     claude_code_skills => CLAUDE, Set::Skills;
@@ -626,6 +658,7 @@ live_legs! {
     local_workspace => GEMMA, Set::Workspace;
     local_hyperliquid => GEMMA, Set::Hyperliquid;
     local_xm => GEMMA, Set::Xm;
+    local_xlab => GEMMA, Set::Xlab;
     local_shell => GEMMA, Set::Shell;
     local_memory => GEMMA, Set::Memory;
     local_skills => GEMMA, Set::Skills;
@@ -872,6 +905,7 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
     };
     match set {
         Set::Xm => seed_opportunity(ws),
+        Set::Xlab => seed_market_history(target, ws, envs),
         Set::Shell => {
             write("shell-token.txt", &ws.shell_token);
             write("skill-token.txt", &ws.skill_token);
@@ -1205,6 +1239,34 @@ fn seed_opportunity(ws: &Workspace) {
     .unwrap();
 }
 
+/// The xlab set's warehouse: `tengu history import-json` of [`XLAB_DATASET`]
+/// into the leg's `<TENGU_HOME>/state/engine-matrix/market.db` — the CLI an
+/// operator runs. Loaded through the openrouter fixture whatever the
+/// target: the hardened fixtures share `[xmarket]` (`fixtures_load_and_agree`).
+fn seed_market_history(target: Target, ws: &Workspace, envs: &[(&str, String)]) {
+    let config = fixture("openrouter.toml").display().to_string();
+    let args = [
+        "-c",
+        &config,
+        "history",
+        "import-json",
+        "--file",
+        XLAB_DATASET,
+    ];
+    let out = leg_command(target, ws, envs, &args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn tengu history import-json");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success() && stdout.contains("135 rows written, 0 error(s)"),
+        "seeding market.db failed:\n{stdout}\n{stderr}"
+    );
+}
+
 /// One order in the leg's ledger.
 #[derive(Debug)]
 struct LedgerOrder {
@@ -1398,6 +1460,21 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
             }
         }
         Set::Xm => assert_xm(&label, leg, ws, &answer),
+        Set::Xlab => {
+            assert!(
+                quotes_any(&answer, &[XLAB_LAST_CLOSE]),
+                "{label}: the answer does not quote the last close {XLAB_LAST_CLOSE}\n{}",
+                leg.context()
+            );
+            // Line 1 prints it to 0.1 bps, the features line to 6 digits;
+            // a model may drop the sign.
+            let ret = (XLAB_LAST_CLOSE / XLAB_FIRST_CLOSE).ln() * 10_000.0;
+            assert!(
+                quotes_within(&answer, ret.abs(), 0.051),
+                "{label}: the answer does not quote ret_bps {ret:.1}\n{}",
+                leg.context()
+            );
+        }
         Set::Shell => {
             quotes("the run_command token", &ws.shell_token);
             quotes("the matrix_cat (shell skill) token", &ws.skill_token);
@@ -1657,6 +1734,16 @@ fn headline_numbers(headline: &str) -> Vec<f64> {
         })
         .filter_map(|c| c[1].parse().ok())
         .collect()
+}
+
+/// `text` holds a number within `tol` of `value` (unsigned: the digits).
+fn quotes_within(text: &str, value: f64, tol: f64) -> bool {
+    let re = regex::Regex::new(r"\d+(?:\.\d+)?").unwrap();
+    let quoted: Vec<f64> = re
+        .find_iter(text)
+        .filter_map(|m| m.as_str().parse().ok())
+        .collect();
+    quoted.iter().any(|q| (q - value).abs() <= tol)
 }
 
 /// `text` holds one of `numbers` (numerically: `347.10` = `347.1`).
@@ -1992,6 +2079,61 @@ fn offline_local_shell() {
     {
         assert!(results[i].contains(want.as_str()), "{results:?}");
     }
+}
+
+/// The xlab set on the local engine, scripted, through `run-agent` on the
+/// hardened fixture: `market_history` reads the seeded warehouse (configured
+/// scope + the run-agent grant, no network) with the most points a call may
+/// ask; its text — the table cut to 48 rows, the bars in `data` — reaches
+/// the model whole under the 16k agent's 8 192-char cap, line 1 with the
+/// full instrument id, and the model sees only the composed set.
+#[test]
+fn offline_local_xlab() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::Xlab, &ws, &[]);
+    let (leg, bodies) = offline_leg(
+        Set::Xlab,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply(
+                "c1",
+                "market_history",
+                &json!({"instrument": INSTRUMENT, "interval": "1h", "from": XLAB_FROM,
+                        "to": XLAB_TO, "points": 200}),
+            ),
+            text_reply("last_close=360.2 ret_bps=-331.2"),
+        ],
+    );
+    assert_leg(MOCK, Set::Xlab, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 2, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(names, ["compress_and_store", "market_history"]);
+    let result = &tool_messages(&bodies[1])[0];
+    assert!(
+        result.starts_with(
+            "mkt_history hyperliquid:xyz:TSLA 1h bars=67 2026-09-25T20:00:00Z … \
+             2026-09-28T14:00:00Z last_close=360.2 ret_bps=-331.2 | ok "
+        ),
+        "{result}"
+    );
+    assert!(
+        result.contains("bars (48 of 67, evenly sampled") && result.contains("; data holds 67"),
+        "{result}"
+    );
+    assert!(
+        result.contains("2026-09-28T14:00:00Z  363.54"),
+        "the last bar: {result}"
+    );
+    assert!(result.contains("funding_points=67"), "{result}");
+    assert!(
+        result.len() < 8_192
+            && !result.contains("bytes in observation")
+            && !result.contains("[truncated"),
+        "{} chars: {result}",
+        result.len()
+    );
 }
 
 /// Each fixture family's files share every section but `[agents.*]`; each

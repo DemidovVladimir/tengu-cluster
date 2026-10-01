@@ -145,6 +145,14 @@ fs_roots = ["/nonexistent/tengu-engine-matrix"]
 net_hosts = ["api.hyperliquid.xyz"]
 env_reads = ["HL_API_URL"]
 
+# The xlab set: `market_history` reads <TENGU_HOME>/state/engine-matrix/
+# market.db (seeded per leg by `tengu history import-json`, no network); a
+# `fetch` would reach the history hosts only.
+[default_scopes.market_history]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]
+env_reads = ["HL_API_URL", "GECKO_API_URL"]
+
 # The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
 # require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
 # workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
@@ -179,7 +187,7 @@ env_reads = ["HL_API_URL"]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
 description = "Engine-matrix fixture: OpenRouter google/gemini-2.5-flash-lite."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemini.limits]
@@ -189,7 +197,7 @@ max_tool_rounds = 10
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
 description = "Engine-matrix fixture: OpenRouter anthropic/claude-haiku-4.5."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.haiku.limits]

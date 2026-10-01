@@ -182,6 +182,7 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 | workspace (hardened) | `list_directory`, `read_file` (token file), `write_file` `answer.txt`, `read_file` (a registered secret, `TENGU_SECRETS_LOADED`) | the token in the answer and in `answer.txt`; `REDACTED` in the answer, the value nowhere in stdout / stderr; Claude Code: the bridge's result logged as `[REDACTED]` |
 | hyperliquid (hardened) | `hl_ctx` `{"coins": ["xyz:TSLA"]}`, `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | a number of each stored row's headline (`mkt_ctx/1`, `hl_book/1`) |
 | xm (hardened) | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend) — `[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, a new ledger in a temp `TENGU_HOME`; paper only | the first buy's `avg_px` in the answer; the ledger holds both filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, each keyed on its `chat:` / `mcp:` call id, no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict |
+| xlab (hardened) | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z — no network: the leg's `market.db` (`<TENGU_HOME>/state/engine-matrix/`) seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | `last_close` 360.2 and `ret_bps` −331.2 (± 0.05) in the answer |
 | shell (open) | `run_command` `cat shell-token.txt`, the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`), the proxy `matrix__token` | three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the child / the bridge) |
 | memory (open) | `memory_ingest`, `memory_search`, `persistent_store` `store` + `search` — embeddings via `OPENROUTER_API_KEY` | `memo.txt`'s token |
 | skills (open) | `view_skill`, `skill_resource` (workspace skill `matrix-doc`), `manage_skill` `create`, `skill_distill` (`from_message_index` 1), `apply_improver_proposal` | the doc + resource tokens; the new skills under `<ws>/.tengu/skills/`, a fixture from the goal in the distilled skill's `evals/prompts.yaml` (Claude Code: from the engine's transcript), the improved body |
@@ -195,8 +196,8 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 
 | Command | Runs |
 |---|---|
-| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (52: 13 sets × 4 targets); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it in chunks of ≤ 13 legs (e.g. the `openrouter_gemini_` filter) to stay under a 10-minute call |
-| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace and shell sets via `run-agent`; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
+| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (56: 14 sets × 4 targets); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it in chunks of ≤ 14 legs (e.g. the `openrouter_gemini_` filter) to stay under a 10-minute call |
+| `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace, shell and xlab sets via `run-agent` — xlab: the `market_history` text whole under the 16k cap; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
 | `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
 
 Results 2026-10-01, final pass of `x-engine-parity-audit` (Mac; Claude CLI 2.1.286; OpenRouter list prices; secs per leg):
@@ -220,7 +221,8 @@ Results 2026-10-01, final pass of `x-engine-parity-audit` (Mac; Claude CLI 2.1.2
 
 | Also | Result |
 |---|---|
-| local · `gemma4:latest` | 13 legs skipped (`TENGU_MATRIX_LOCAL_BASE_URL` not set) — run on the operator's PC (below); offline mock legs pass |
+| xlab set (2026-10-01, `xlab-tools`, after that pass) | gemini-2.5-flash-lite ✅ 4.3 s (5 447 / 571 tokens) · claude-haiku-4.5 ✅ 3.4 s (5 051 / 226) · Claude CLI `claude-haiku-4-5` ✅ 7.7 s; local skipped (offline `offline_local_xlab` passes) |
+| local · `gemma4:latest` | 14 legs skipped (`TENGU_MATRIX_LOCAL_BASE_URL` not set) — run on the operator's PC (below); offline mock legs pass |
 | `tengu doctor --engines` | `claude_code.toml`: claude ✅ 5.6 s, xm_claude ✅ 6.2 s (bridge grant via `StepOpts`, no process-wide env); `openrouter.toml`: gemini ✅ 1.8 s, haiku ✅ 4.9 s, xm_gemini ✅ 1.5 s, xm_haiku ✅ 3.3 s |
 
 | Seen | Detail |
