@@ -295,7 +295,10 @@ These are not preferences. They're load-bearing.
   has per-minute contexts + L2 books for main-dex perps only (no `xyz:*`); HL keeps
   no-trade hours as flat bars (`n = 0`, stale price). Engine time integrity: a bar
   is observable only at its close; `data_asof_ms ≤ decided_at_ms` is asserted and
-  `domain/backtest/checks.rs` proves a future bar changes nothing. Jev on history:
+  `domain/backtest/checks.rs` proves no move after t (bars scaled, deleted or cut;
+  funding; ctx) changes a decision, an admission or a closed trade at or before t
+  (15m across DST, 1h, 4h, 1d, split worlds); P&L is a linear perp's simple return,
+  never ln; capped admissions never read whether a later bar exists. Jev on history:
   the replay loop runs with `history = 0` and every answer is cached by the full
   sha256 of (model, state, questions) — Jev answers vary call to call, the cache
   makes reruns identical; pin the Jev build in the gate loop.

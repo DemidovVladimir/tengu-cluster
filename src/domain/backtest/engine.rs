@@ -20,11 +20,13 @@
 //! | Order | candidates by (decided_at, instrument key), `seq` = the index; a pair's key = `<a>/<b>` |
 //! | Re-entry | `funding_carry` / `pair_spread` re-enter only after the rule's own exit — known by the next decision, so still time-honest |
 //! | Entry liquidity (`min_entry_trades`) | a candidate whose entry bar (the bar ending at the decision) counts fewer trades (`n`) is skipped (`thin_entry`) before any ranking, cooldown or position; a bar without `n` passes — HL keeps a no-trade hour as a flat bar at the last close (n = 0): a stale price |
-//! | Fill | entry and exit at the instant's close; gross bps = side × ln(exit / entry) × 10⁴; net bps = gross − (entry + exit cost) + funding; USD = net bps × notional / 10⁴; a pair: each leg `notional` / 2, the trade's bps the legs' mean |
-//! | `research` arm | every candidate at the spec's notional, no caps; candidates of one instant by instrument key; drawdown in USD and bps of one trade's notional (`max_drawdown_bps`) — no %: it keeps no cash book |
-//! | `capped` arm ([`RiskCaps`]) | in time order, the candidates of one instant by descending \|signal\| (ties: instrument key) — the caps keep the highest-conviction trades; positions open until their exit, exits at an instant before entries; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed; drawdown in USD and % of `initial_cash_usd` |
-//! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · thin_entry · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no exit bar: the trade is dropped) · future_data |
-//! | Share splits ([`MarketData::adjust_for_splits`]) | before any decision: each instrument's bars (and ctx rows) before each of its splits split-adjusted (`marketdata::StockSplit`); one data note per split that changed a row |
+//! | Fill | entry and exit at the instant's close; gross bps = side × (exit / entry − 1) × 10⁴ — a linear USD perp's simple return (signals stay log moves); net bps = gross − (entry + exit cost) + funding, all in bps of the entry notional; USD = net bps × notional / 10⁴; a pair: each leg `notional` / 2, the trade's bps the legs' mean |
+//! | Per candidate (`simulate`) | 1. what the decision shows: read past it (`future_data`), no leg, a leg without a cost (`no_costs`) ⇒ dropped, never in a book; 2. the capped book as of the decision (exits ≤ it realized, then the caps); 3. the fill: the exit plan walked, prices at its exit — none ⇒ `missing_exit` |
+//! | `research` arm | every candidate at the spec's notional, no caps; candidates of one instant by instrument key; a plan whose horizon (planned exit, or the max hold of a TP / SL, funding or z exit) passes the end of a leg's data is `missing_exit` even when its path exited earlier — keeping only the early exits there would pick trades by outcome; drawdown in USD and bps of one trade's notional (`max_drawdown_bps`) — no %: it keeps no cash book |
+//! | `capped` arm ([`RiskCaps`]) | a ledger: in time order, the candidates of one instant by descending \|signal\| (ties: instrument key) — the caps keep the highest-conviction trades; positions open until their exit, exits at an instant before entries; an admitted candidate whose exit has no price (a gap, or still open where the data ends) holds its exposure until its exit instant, P&L unknown and never booked (`missing_exit`) — admissions read only the book as of the decision, never whether a later bar exists; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good; equity read once per exit instant, after every exit of it) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed; drawdown in USD and % of `initial_cash_usd` |
+//! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · thin_entry · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no price at the exit, or the data ends before the plan's horizon: not a trade) · future_data; an arm's drop carries its candidate's `seq` |
+//! | Share splits ([`MarketData::adjust_for_splits`]) | before any decision: each instrument's bars closed before each of its splits (and ctx rows before it) split-adjusted (`marketdata::StockSplit`); a bar straddling the split (a day bar around an intraday split) dropped — its prices mix both share counts; one data note per split that changed a row |
+//! | `max_candidates` ([`RunParams`]) | [`candidates`] stops with an error once a run passes it — nothing simulated or written (`[backtest] max_candidates`) |
 
 use std::collections::BTreeMap;
 
@@ -57,22 +59,26 @@ pub struct MarketData {
 
 impl MarketData {
     /// Split-adjust the series (module table): for each instrument's
-    /// splits, its bars and ctx rows before the split (`adjust_for_split`;
-    /// funding is a rate, untouched). Returns one data note per split that
-    /// changed a row, ids in full.
+    /// splits, its bars closed before the split and its ctx rows before it
+    /// (`adjust_for_split`; funding is a rate, untouched); a bar straddling
+    /// the split is dropped. Returns one data note per split that changed a
+    /// row, ids in full.
     pub fn adjust_for_splits(&mut self, splits: &BTreeMap<String, Vec<StockSplit>>) -> Vec<String> {
         let mut notes = Vec::new();
         for (id, list) in splits {
             for split in list {
-                let bars = self
-                    .bars
-                    .get_mut(id)
-                    .map_or(0, |s| s.adjust_for_split(*split));
+                let (bars, dropped, iv) = match self.bars.get_mut(id) {
+                    Some(s) => {
+                        let a = s.adjust_for_split(*split);
+                        (a.adjusted, a.dropped_open_ms, s.interval.ms())
+                    }
+                    None => (0, Vec::new(), 0),
+                };
                 let ctx = self
                     .ctx
                     .get_mut(id)
                     .map_or(0, |s| s.adjust_for_split(*split));
-                if bars + ctx == 0 {
+                if bars + ctx == 0 && dropped.is_empty() {
                     continue;
                 }
                 let r = split.ratio;
@@ -81,9 +87,23 @@ impl MarketData {
                 } else {
                     String::new()
                 };
+                let dropped_text = if dropped.is_empty() {
+                    String::new()
+                } else {
+                    let spans: Vec<String> = dropped
+                        .iter()
+                        .map(|t| format!("{} → {}", fmt_time(*t), fmt_time(t + iv)))
+                        .collect();
+                    format!(
+                        "; dropped the bar {} — it opens before the split and closes after it \
+                         (its open, high, low and volume mix both share counts): a decision \
+                         priced there is skipped as missing",
+                        spans.join(", ")
+                    )
+                };
                 notes.push(format!(
                     "split-adjusted {id}: ratio {r} (new shares per old) at {} — {bars} bars{ctx_text} \
-                     before it: prices ÷ {r}, volume × {r}",
+                     before it: prices ÷ {r}, volume × {r}{dropped_text}",
                     fmt_time(split.at_ms)
                 ));
             }
@@ -111,6 +131,9 @@ pub struct RunParams {
     /// `[backtest] bootstrap` / `seed`.
     pub bootstrap: u32,
     pub seed: u64,
+    /// `[backtest] max_candidates`: [`candidates`] stops with an error once
+    /// a run passes it — before any arm, file or byte of output.
+    pub max_candidates: usize,
 }
 
 /// One leg of a decision.
@@ -144,6 +167,19 @@ pub enum ExitPlan {
     },
     /// `pair_spread`: \|z\| ≤ `exit_z`, else `max_exit_ms`.
     Spread { max_exit_ms: i64, exit_z: f64 },
+}
+
+impl ExitPlan {
+    /// The latest instant the plan can exit at: the planned instant, else
+    /// the longest hold (a TP / SL, funding or z exit may come earlier).
+    pub fn horizon_ms(&self) -> i64 {
+        match self {
+            ExitPlan::At { exit_ms } => *exit_ms,
+            ExitPlan::Bars { max_exit_ms, .. }
+            | ExitPlan::Funding { max_exit_ms, .. }
+            | ExitPlan::Spread { max_exit_ms, .. } => *max_exit_ms,
+        }
+    }
 }
 
 /// One decision of the rule, before caps (module table).
@@ -239,6 +275,10 @@ pub struct Skip {
     pub decided_at_ms: i64,
     pub period: String,
     pub reason: SkipReason,
+    /// The candidate's `seq` — an arm's drop (`simulate`); a candidate-level
+    /// skip has none (no candidate was made).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<usize>,
 }
 
 /// [`candidates`]' result.
@@ -405,10 +445,11 @@ pub fn candidates(
 #[derive(Debug, Clone, Copy)]
 struct Open {
     exit_ms: i64,
-    seq: usize,
     gross: f64,
     net: f64,
-    net_usd: f64,
+    /// `None`: admitted, but its exit has no price (`missing_exit`) — it
+    /// holds its exposure until `exit_ms`; its P&L is unknown, never booked.
+    net_usd: Option<f64>,
 }
 
 /// The capped arm's ledger (module table).
@@ -431,23 +472,25 @@ impl<'a> Book<'a> {
         }
     }
 
-    /// Close every position with exit ≤ `t`, in exit order.
+    /// Close every position with exit ≤ `t`. Equity moves once per exit
+    /// instant — every exit of an instant fills at the same close — and the
+    /// total-loss halt reads it then, never between two exits of one
+    /// instant (the order inside an instant is only the seq).
     fn realize(&mut self, t: i64) {
-        let mut done: Vec<Open> = Vec::new();
+        let mut by_instant: BTreeMap<i64, f64> = BTreeMap::new();
         self.open.retain(|p| {
             let closed = p.exit_ms <= t;
             if closed {
-                done.push(*p);
+                *by_instant.entry(p.exit_ms).or_insert(0.0) += p.net_usd.unwrap_or(0.0);
             }
             !closed
         });
-        done.sort_by_key(|p| (p.exit_ms, p.seq));
-        for p in done {
-            self.equity += p.net_usd;
+        for (exit_ms, usd) in by_instant {
+            self.equity += usd;
             *self
                 .day_pnl
-                .entry(p.exit_ms.div_euclid(DAY_MS))
-                .or_insert(0.0) += p.net_usd;
+                .entry(exit_ms.div_euclid(DAY_MS))
+                .or_insert(0.0) += usd;
             if self.equity <= self.caps.initial_cash_usd - self.caps.total_loss_limit_usd {
                 self.total_halt = true;
             }
@@ -499,51 +542,78 @@ impl<'a> Book<'a> {
         None
     }
 
-    fn open(&mut self, t: &Trade) {
+    /// Hold `exposure` (signed leg notionals) until `exit_ms`; `net_usd`
+    /// is booked then — `None` when the exit has no price: the P&L is
+    /// unknown and never booked, the exposure still counts until `exit_ms`.
+    fn open(&mut self, exposure: &[f64], exit_ms: i64, net_usd: Option<f64>) {
         self.open.push(Open {
-            exit_ms: t.exit_ms,
-            seq: t.seq,
-            gross: t.legs.iter().map(|l| l.notional_usd).sum(),
-            net: t.legs.iter().map(|l| l.side.sign() * l.notional_usd).sum(),
-            net_usd: t.net_usd,
+            exit_ms,
+            gross: exposure.iter().map(|x| x.abs()).sum(),
+            net: exposure.iter().sum(),
+            net_usd,
         });
     }
 }
 
-/// Fill `c` at `notional` (module table); `Err` = why it is dropped.
-fn build_trade(
-    spec: &StrategySpec,
-    md: &MarketData,
-    params: &RunParams,
+/// An admitted candidate without a trade: why, and until when the capped
+/// book holds its exposure (its exit instant, priced or not).
+struct Unfilled {
+    reason: SkipReason,
+    hold_until: i64,
+}
+
+/// What the decision itself shows (module table): a candidate that read
+/// past its decision, has no leg or a leg without a cost is dropped before
+/// any cap — it never enters a book. `Ok` = each leg's cost.
+fn admissible<'a>(
+    spec: &'a StrategySpec,
+    params: &'a RunParams,
     c: &Candidate,
-    notional: f64,
-) -> Result<Trade, SkipReason> {
+) -> Result<Vec<&'a CostSpec>, SkipReason> {
     if c.data_asof_ms > c.decided_at_ms {
         return Err(SkipReason::FutureData);
     }
-    let first = c.legs.first().ok_or(SkipReason::MissingPrice)?;
+    if c.legs.is_empty() {
+        return Err(SkipReason::MissingPrice);
+    }
+    c.legs
+        .iter()
+        .map(|leg| {
+            spec.costs
+                .as_ref()
+                .or_else(|| cost_for(&params.costs, &leg.instrument))
+                .ok_or(SkipReason::NoCosts)
+        })
+        .collect()
+}
+
+/// The close of the last bar of `id` — where its data ends.
+fn data_end(md: &MarketData, id: &str) -> Option<i64> {
+    let s = md.bars.get(id)?;
+    s.bars.last().map(|b| b.t_close_ms(s.interval))
+}
+
+/// Where `c`'s exit plan exits (module table): the planned instant, or the
+/// walk of its TP / SL, funding or z exit over the data; `None` without
+/// the series the walk reads.
+fn exit_of(spec: &StrategySpec, md: &MarketData, c: &Candidate) -> Option<(i64, ExitReason)> {
+    let first = c.legs.first()?;
     let entry = c.decided_at_ms;
-    let (exit_ms, exit_reason) = match &c.exit {
+    Some(match &c.exit {
         ExitPlan::At { exit_ms } => (*exit_ms, ExitReason::Window),
         ExitPlan::Bars {
             max_exit_ms,
             take_profit_bps,
             stop_loss_bps,
-        } => {
-            let s = md
-                .bars
-                .get(&first.instrument)
-                .ok_or(SkipReason::MissingExit)?;
-            walk_bars_exit(
-                s,
-                entry,
-                first.entry_px,
-                first.side,
-                *max_exit_ms,
-                *take_profit_bps,
-                *stop_loss_bps,
-            )
-        }
+        } => walk_bars_exit(
+            md.bars.get(&first.instrument)?,
+            entry,
+            first.entry_px,
+            first.side,
+            *max_exit_ms,
+            *take_profit_bps,
+            *stop_loss_bps,
+        ),
         ExitPlan::Funding {
             max_exit_ms,
             exit_apr_pct,
@@ -556,33 +626,53 @@ fn build_trade(
             exit_z,
         } => {
             let (StrategyKind::PairSpread(p), [a, b]) = (&spec.kind, c.legs.as_slice()) else {
-                return Err(SkipReason::MissingExit);
+                return None;
             };
-            let (Some(sa), Some(sb)) = (md.bars.get(&a.instrument), md.bars.get(&b.instrument))
-            else {
-                return Err(SkipReason::MissingExit);
-            };
+            let (sa, sb) = (md.bars.get(&a.instrument)?, md.bars.get(&b.instrument)?);
             let pts = spread_points(sa, sb, p.lookback_bars as usize);
             walk_spread_exit(&pts, entry, *max_exit_ms, *exit_z)
         }
+    })
+}
+
+/// Fill an admitted `c` at `notional` with its legs' `costs` (module
+/// table). `censor` (research arms): a plan whose horizon passes the end
+/// of a leg's data is unfilled even when its path exited earlier — keeping
+/// only the early exits there would pick trades by their outcome.
+fn fill(
+    spec: &StrategySpec,
+    md: &MarketData,
+    c: &Candidate,
+    costs: &[&CostSpec],
+    notional: f64,
+    censor: bool,
+) -> Result<Trade, Unfilled> {
+    let entry = c.decided_at_ms;
+    let missing = |hold_until: i64| Unfilled {
+        reason: SkipReason::MissingExit,
+        hold_until,
     };
+    let (exit_ms, exit_reason) = exit_of(spec, md, c).ok_or(missing(c.exit.horizon_ms()))?;
     if exit_ms <= entry {
-        return Err(SkipReason::MissingExit);
+        return Err(missing(exit_ms));
+    }
+    if censor {
+        let end = c
+            .legs
+            .iter()
+            .map(|l| data_end(md, &l.instrument))
+            .min()
+            .flatten();
+        if end.is_none_or(|e| c.exit.horizon_ms() > e) {
+            return Err(missing(exit_ms));
+        }
     }
     let leg_notional = notional / c.legs.len() as f64;
     let mut legs = Vec::with_capacity(c.legs.len());
-    for leg in &c.legs {
-        let cost = spec
-            .costs
-            .as_ref()
-            .or_else(|| cost_for(&params.costs, &leg.instrument))
-            .ok_or(SkipReason::NoCosts)?;
-        let series = md
-            .bars
-            .get(&leg.instrument)
-            .ok_or(SkipReason::MissingExit)?;
-        let exit_px = series.close_at(exit_ms).ok_or(SkipReason::MissingExit)?;
-        let gross = gross_bps(leg.side, leg.entry_px, exit_px).ok_or(SkipReason::MissingExit)?;
+    for (leg, cost) in c.legs.iter().zip(costs) {
+        let series = md.bars.get(&leg.instrument).ok_or(missing(exit_ms))?;
+        let exit_px = series.close_at(exit_ms).ok_or(missing(exit_ms))?;
+        let gross = gross_bps(leg.side, leg.entry_px, exit_px).ok_or(missing(exit_ms))?;
         let ctx = md.ctx.get(&leg.instrument);
         let (on_entry, on_exit) = (
             side_cost(cost, series, ctx, entry),
@@ -655,7 +745,11 @@ fn conviction(c: &Candidate) -> f64 {
 }
 
 /// One arm over `candidates` (module table): trades in the order taken, the
-/// capped arm's refusals, candidates dropped while filling, the summary.
+/// capped arm's refusals, candidates dropped at the decision or unfilled,
+/// the summary. Per candidate: what the decision shows (`admissible`), then
+/// the capped book as of the decision (`realize` + `refusal`), then the
+/// fill — an unfilled admitted candidate keeps its exposure in the book
+/// until its exit instant, so no admission ever depends on a later bar.
 pub fn simulate(
     spec: &StrategySpec,
     md: &MarketData,
@@ -681,19 +775,34 @@ pub fn simulate(
         Arm::Capped(caps) => Some(Book::new(caps)),
         Arm::Research => None,
     };
+    let censor = matches!(arm, Arm::Research);
     for c in order {
         let size = match &arm {
             Arm::Capped(caps) => notional.min(caps.max_order_notional_usd),
             Arm::Research => notional,
         };
+        let drop = |reason: SkipReason| Skip {
+            instrument: c.instrument.clone(),
+            decided_at_ms: c.decided_at_ms,
+            period: c.period.clone(),
+            reason,
+            seq: Some(c.seq),
+        };
+        let costs = match admissible(spec, params, c) {
+            Ok(costs) => costs,
+            Err(reason) => {
+                skipped.push(drop(reason));
+                continue;
+            }
+        };
+        let exposure: Vec<f64> = c
+            .legs
+            .iter()
+            .map(|l| l.side.sign() * size / c.legs.len() as f64)
+            .collect();
         if let Some(book) = book.as_mut() {
             book.realize(c.decided_at_ms);
-            let legs: Vec<f64> = c
-                .legs
-                .iter()
-                .map(|l| l.side.sign() * size / c.legs.len() as f64)
-                .collect();
-            if let Some((rule, detail)) = book.refusal(c.decided_at_ms, &legs) {
+            if let Some((rule, detail)) = book.refusal(c.decided_at_ms, &exposure) {
                 refusals.push(Refusal {
                     seq: c.seq,
                     instrument: c.instrument.clone(),
@@ -707,19 +816,19 @@ pub fn simulate(
                 continue;
             }
         }
-        match build_trade(spec, md, params, c, size) {
+        match fill(spec, md, c, &costs, size, censor) {
             Ok(t) => {
                 if let Some(book) = book.as_mut() {
-                    book.open(&t);
+                    book.open(&exposure, t.exit_ms, Some(t.net_usd));
                 }
                 trades.push(t);
             }
-            Err(reason) => skipped.push(Skip {
-                instrument: c.instrument.clone(),
-                decided_at_ms: c.decided_at_ms,
-                period: c.period.clone(),
-                reason,
-            }),
+            Err(Unfilled { reason, hold_until }) => {
+                if let Some(book) = book.as_mut() {
+                    book.open(&exposure, hold_until, None);
+                }
+                skipped.push(drop(reason));
+            }
         }
     }
     // Drawdown: the capped arm's of its own cash book (%), the research
@@ -732,6 +841,7 @@ pub fn simulate(
         bootstrap: params.bootstrap,
         seed: params.seed,
         periods_per_year: spec.period_kind().per_year(),
+        decided_ms: Some((params.from_ms, params.to_ms)),
         start_equity_usd,
         trade_notional_usd,
     };
@@ -752,7 +862,7 @@ mod tests {
 
     use super::*;
     use crate::domain::backtest::testkit::{market, run_params, series, sparse, spec, utc, H};
-    use crate::domain::marketdata::Interval;
+    use crate::domain::marketdata::{BarSeries, Interval};
 
     const A: &str = "hyperliquid:xyz:AAA";
     const B: &str = "hyperliquid:xyz:BBB";
@@ -925,7 +1035,7 @@ mod tests {
     }
 
     /// A 3-for-1 split between entry and exit: the raw series books the
-    /// split as a −ln 3 move; adjusted, the candidate, its features and the
+    /// split as a fall to a third; adjusted, the candidate, its features and the
     /// trade equal the unsplit series' (KIOXIA, weekend of 2026-09-25).
     #[test]
     fn a_split_mid_hold_gives_the_unsplit_trade() {
@@ -967,9 +1077,16 @@ mod tests {
             t_unsplit.entry_ms < at && at < t_unsplit.exit_ms,
             "mid-hold"
         );
-        // Raw: the split reads as a ln 3 fall the short books as profit.
+        // Raw: the split reads as a fall to a third the short books as
+        // profit — entry 3×, exit as is.
         let (_, t_raw) = trade(&raw);
-        assert!((t_raw.gross_bps - t_unsplit.gross_bps - 3f64.ln() * 1e4).abs() < 1e-6);
+        let (e, x) = (t_unsplit.legs[0].entry_px, t_unsplit.legs[0].exit_px);
+        assert_eq!(
+            (t_raw.legs[0].entry_px, t_raw.legs[0].exit_px),
+            (e * 3.0, x)
+        );
+        assert!((t_raw.gross_bps - (1.0 - x / (3.0 * e)) * 1e4).abs() < 1e-6);
+        assert!(t_raw.gross_bps > 6_000.0, "{}", t_raw.gross_bps);
 
         let mut adjusted = raw.clone();
         let splits = BTreeMap::from([(
@@ -1036,8 +1153,8 @@ mod tests {
     fn a_daily_loss_halts_until_the_next_utc_day_and_a_total_loss_for_good() {
         let d0 = utc("2026-09-28 00:00");
         let day = 24 * H;
-        // −$15 a trade on $100: exit = entry × e^−0.15.
-        let lose = 100.0 * (-0.15f64).exp();
+        // −$15 a trade on $100: exit = entry × 0.85 (simple return).
+        let lose = 85.0;
         let mut bars = Vec::new();
         for k in 0..6 {
             bars.push((d0 + k * day, 100.0)); // close at 01:00 = entry
@@ -1104,6 +1221,239 @@ mod tests {
         );
         assert!((r.summary.max_drawdown_usd - 30.0).abs() < 1e-9);
         assert!((r.summary.max_drawdown_pct.unwrap() - 30.0).abs() < 1e-9);
+    }
+
+    /// Regression (review: split straddling a bar): KIOXIA's 3-for-1 split
+    /// at 2026-09-28 08:00 UTC on 1d bars — the day bar opening 00:00 opens
+    /// pre-split (356.5) and closes post-split (114.12). Dividing its close
+    /// by 3 (38.04) booked a fake −68 % / +190 % pair of moves; the bar is
+    /// dropped instead (noted), so no decision prices on a mixed bar.
+    #[test]
+    fn a_split_inside_a_bar_never_fabricates_a_move() {
+        let d0 = utc("2026-09-20 00:00");
+        let day = 24 * H;
+        let at = utc("2026-09-28 08:00");
+        // Raw venue bars: pre-split ~357–362 until the 09-28 bar, which
+        // opens before the split and closes after it; post-split ~111–113.
+        let closes = [
+            360.0, 362.0, 358.0, 361.0, 359.0, 357.0, 356.0, 356.5, 114.12, 110.63, 112.0, 111.0,
+            113.0,
+        ];
+        let bars: Vec<crate::domain::marketdata::Bar> = closes
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let t = d0 + i as i64 * day;
+                if t == utc("2026-09-28 00:00") {
+                    crate::domain::backtest::testkit::ohlc(t, 356.5, 360.0, 110.0, *c)
+                } else {
+                    crate::domain::backtest::testkit::ohlc(t, *c, *c, *c, *c)
+                }
+            })
+            .collect();
+        let mut md = market(vec![BarSeries::new(A, Interval::D1, bars)]);
+        let splits = BTreeMap::from([(
+            A.to_string(),
+            vec![StockSplit {
+                at_ms: at,
+                ratio: 3.0,
+            }],
+        )]);
+        let notes = md.adjust_for_splits(&splits);
+        let s = spec(
+            json!({"kind": "move_trigger", "universe": [A], "interval": "1d", "lookback_bars": 1,
+            "threshold_bps": 300, "direction": "fade", "hold_bars": 1}),
+        );
+        let p = run_params(d0 + 2 * day, d0 + 12 * day);
+        let set = candidates(&s, &md, &p).unwrap();
+        // Every adjusted close is on the post-split scale; nothing moved 3 %.
+        assert!(
+            set.candidates.is_empty(),
+            "a fabricated move: {:?}",
+            set.candidates
+                .iter()
+                .map(|c| (fmt_time(c.decided_at_ms), c.signal_bps))
+                .collect::<Vec<_>>()
+        );
+        let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
+        assert!(r.trades.is_empty());
+        // The straddling bar is gone, said in the note; the rest adjusted.
+        let series = &md.bars[A];
+        assert!(series.bar_ending_at(utc("2026-09-29 00:00")).is_none());
+        let pre = series.close_at(utc("2026-09-28 00:00")).unwrap();
+        assert!((pre - 356.5 / 3.0).abs() < 1e-9, "{pre}");
+        assert_eq!(series.close_at(utc("2026-09-30 00:00")), Some(110.63));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("8 bars") && notes[0].contains("2026-09-28T00:00:00Z"),
+            "{}",
+            notes[0]
+        );
+    }
+
+    /// Regression (review: capped admission read a future exit bar): A
+    /// (|s| 300) and B (|s| 200) at one instant, room for one $50
+    /// position. A's exit bar is missing; the book cannot know that at the
+    /// decision, so A keeps its slot until its planned exit (reported
+    /// `missing_exit`, P&L unknown) and B is refused — not traded in A's
+    /// place. A later candidate after A's planned exit gets the room.
+    #[test]
+    fn a_fill_drop_never_frees_capacity() {
+        let t = utc("2026-09-28 10:00");
+        let md = market(vec![
+            // A: entry close, no bar at t + 2h (its exit), bars after.
+            sparse(
+                A,
+                Interval::H1,
+                &[(t - H, 100.0), (t + 3 * H, 101.0), (t + 4 * H, 101.0)],
+            ),
+            sparse(B, Interval::H1, &[(t - H, 100.0), (t + H, 99.0)]),
+            sparse(C, Interval::H1, &[(t + 2 * H, 100.0), (t + 4 * H, 102.0)]),
+        ]);
+        let p = run_params(t - 10 * H, t + 10 * H);
+        let mut a = decision(0, A, Side::Buy, t, 100.0, t + 2 * H);
+        a.signal_bps = 300.0;
+        let mut b = decision(1, B, Side::Buy, t, 100.0, t + 2 * H);
+        b.signal_bps = 200.0;
+        let mut c = decision(2, C, Side::Buy, t + 3 * H, 100.0, t + 5 * H);
+        c.signal_bps = 10.0;
+        let mut one = caps();
+        one.max_gross_exposure_usd = 50.0;
+        let r = simulate(&flat_spec(), &md, &p, &[a, b, c], Arm::Capped(one));
+        let refused: Vec<(&str, &str)> = r
+            .refusals
+            .iter()
+            .map(|x| (x.instrument.as_str(), x.rule.as_str()))
+            .collect();
+        assert_eq!(refused, vec![(B, "max_gross_exposure_usd")]);
+        assert_eq!(
+            r.skipped
+                .iter()
+                .map(|k| (k.instrument.as_str(), k.reason))
+                .collect::<Vec<_>>(),
+            vec![(A, SkipReason::MissingExit)]
+        );
+        assert_eq!(
+            r.trades
+                .iter()
+                .map(|x| x.instrument.as_str())
+                .collect::<Vec<_>>(),
+            vec![C],
+            "after A's planned exit the room is back"
+        );
+        // The research arm has no book: B trades, A is dropped.
+        let research = simulate(
+            &flat_spec(),
+            &md,
+            &p,
+            &[
+                decision(0, A, Side::Buy, t, 100.0, t + 2 * H),
+                decision(1, B, Side::Buy, t, 100.0, t + 2 * H),
+            ],
+            Arm::Research,
+        );
+        assert_eq!(research.trades.len(), 1);
+        assert_eq!(research.skipped[0].reason, SkipReason::MissingExit);
+    }
+
+    /// Regression (review: transient equity between same-instant exits):
+    /// four −5 % days leave $100 at ~$80; then a −6 % and a +6 % position
+    /// exit at the same instant (the loser first by seq). Equity never sits
+    /// at ~$74 — the instant nets ~0 — so the next day's entry is taken,
+    /// not refused for a total-loss halt that never happened.
+    #[test]
+    fn a_total_loss_halt_reads_equity_after_all_exits_of_an_instant() {
+        let d0 = utc("2026-09-21 00:00");
+        let day = 24 * H;
+        let mut a_bars = Vec::new();
+        let mut b_bars = Vec::new();
+        for k in 0..6 {
+            let exit_px = match k {
+                0..=3 => 95.0,
+                4 => 94.0,
+                _ => 100.0,
+            };
+            a_bars.push((d0 + k * day, 100.0)); // closes 01:00 = entry
+            a_bars.push((d0 + k * day + 2 * H, exit_px)); // closes 03:00 = exit
+            b_bars.push((d0 + k * day, 100.0));
+            b_bars.push((d0 + k * day + 2 * H, if k == 4 { 106.0 } else { 100.0 }));
+        }
+        let md = market(vec![
+            sparse(A, Interval::H1, &a_bars),
+            sparse(B, Interval::H1, &b_bars),
+        ]);
+        let p = run_params(d0, d0 + 7 * day);
+        let c = RiskCaps {
+            initial_cash_usd: 100.0,
+            max_order_notional_usd: 100.0,
+            max_gross_exposure_usd: 300.0,
+            max_net_exposure_usd: 300.0,
+            daily_loss_limit_usd: 1_000.0,
+            total_loss_limit_usd: 25.0,
+        };
+        let mut cs: Vec<Candidate> = (0..5)
+            .map(|k| {
+                decision(
+                    k as usize,
+                    A,
+                    Side::Buy,
+                    d0 + k * day + H,
+                    100.0,
+                    d0 + k * day + 3 * H,
+                )
+            })
+            .collect();
+        // Day 4: B (+6 %) exits with A (−6 %); A's seq is lower: realized first.
+        cs.push(decision(
+            5,
+            B,
+            Side::Buy,
+            d0 + 4 * day + H,
+            100.0,
+            d0 + 4 * day + 3 * H,
+        ));
+        cs.push(decision(
+            6,
+            A,
+            Side::Buy,
+            d0 + 5 * day + H,
+            100.0,
+            d0 + 5 * day + 3 * H,
+        ));
+        let r = simulate(&flat_spec(), &md, &p, &cs, Arm::Capped(c));
+        assert!(r.refusals.is_empty(), "{:?}", r.refusals);
+        assert_eq!(r.trades.len(), 7);
+        let total: f64 = r.trades.iter().map(|t| t.net_usd).sum();
+        assert!(total > -25.0 && total < -15.0, "{total}");
+    }
+
+    /// Regression (review: Sharpe annualised by √365 over active days only):
+    /// a year-long decision range with trades on 10 days. The Sharpe of the
+    /// per-period USD is annualised by the observed rate of periods with
+    /// trades (10 a year), not by 365 calendar days a year.
+    #[test]
+    fn sharpe_is_annualised_by_the_rate_of_periods_with_trades() {
+        let t0 = utc("2026-01-05 00:00");
+        let year_ms: i64 = 31_557_600_000; // 365.25 days
+        let rets = [1.0, -0.5, 2.0, 0.5, -1.0, 1.5, 0.25, 1.0, -0.25, 0.75];
+        let mut bars = Vec::new();
+        let mut cs = Vec::new();
+        for (k, r) in rets.iter().enumerate() {
+            let entry = t0 + k as i64 * 30 * 24 * H + H;
+            bars.push((entry - H, 100.0));
+            bars.push((entry + H, 100.0 * (1.0 + r / 100.0)));
+            cs.push(decision(k, A, Side::Buy, entry, 100.0, entry + 2 * H));
+        }
+        let md = market(vec![sparse(A, Interval::H1, &bars)]);
+        let p = run_params(t0, t0 + year_ms);
+        let r = simulate(&flat_spec(), &md, &p, &cs, Arm::Research);
+        assert_eq!((r.summary.n, r.summary.n_periods), (10, 10));
+        let usd: Vec<f64> = r.trades.iter().map(|t| t.net_usd).collect();
+        let m = usd.iter().sum::<f64>() / 10.0;
+        let sd = (usd.iter().map(|x| (x - m).powi(2)).sum::<f64>() / 9.0).sqrt();
+        let want = m / sd * 10f64.sqrt();
+        let got = r.summary.sharpe.unwrap();
+        assert!((got - want).abs() < 1e-9, "sharpe {got} vs {want}");
     }
 
     #[test]

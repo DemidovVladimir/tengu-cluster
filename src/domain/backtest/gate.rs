@@ -9,7 +9,7 @@
 //! | [`gate_event`] | `{strategy, instrument, side, signal_bps, decided_at, features}` — `decided_at` RFC 3339 UTC; numbers rounded to 0.01, whole ones as integers (a short, stable cache key); nothing known only after the decision: no exit, period, anchor, label (free text an operator may write with hindsight), data time or outcome |
 //! | [`GateClass::of`] | `Stopped` `take` ⇒ take · `Stopped` `ask_architect` ⇒ ask_architect · any other `Stopped` ⇒ skip · `Escalated` (below `act_at`) ⇒ unsure · `Rejected` ⇒ rejected · a failed call ⇒ error ([`GateDecision::failed`]); a tool outcome (never from a terminal-only loop) ⇒ rejected. Only take trades |
 //! | [`p_take`] | `probabilities["take"]`, else the confidence when the action is `take`, else 0 |
-//! | [`GateSummary`] | counts per class; take rate = take ÷ answered (decided − errors); the run's cache hits / misses / errors; est. cost = misses × the price per decision ([`COST_PER_DECISION_USD`]; the caller passes 0 offline); calibration — [`CALIBRATION_BINS`] bins of p(take) against the candidate's research trade winning (net bps > 0), Brier — over answered verdicts but rejected ones, joined by `seq`; jev − rules = `paired_diff_ci` of the taken candidates' trades against every decided candidate's (research; capped too when given) |
+//! | [`GateSummary`] | counts per class; take rate = take ÷ answered (decided − errors); the run's cache hits / misses / errors; est. cost = misses × the price per decision ([`COST_PER_DECISION_USD`]; the caller passes 0 offline); calibration — [`CALIBRATION_BINS`] bins of p(take) against the candidate's research trade winning (net bps > 0), Brier — over answered verdicts but rejected ones, joined by `seq`; jev − rules = `paired_diff_ci` of the taken candidates' trades against every decided candidate's (research; capped too when given) — none when an arm traded in fewer than 2 periods or misses over 1 % of the resamples (`stats.rs`) |
 //! | Renders | [`GateSummary::render_markdown`] — the gate section of `report.md` (counts, cache, cost, differences, Brier; the bins are the report's `## Calibration`); [`GateSummary::render_compact`] — two CLI lines; [`GateSummary::add_features`] — `jev_*` keys of the `backtest/1` row, into free slots only (≤ 32 keys). `BacktestReport` carries the summary (`gate`) and calls all three |
 
 use std::collections::BTreeMap;
@@ -254,7 +254,7 @@ fn signed(x: Option<f64>, decimals: usize) -> String {
 
 fn diff_text(d: Option<&DiffCi>) -> String {
     d.map_or_else(
-        || "— (an arm without trades, or fewer than 2 periods)".to_string(),
+        || "— (an arm with trades in fewer than 2 periods, or missing from over 1 % of the resamples: no CI)".to_string(),
         |d| {
             format!(
                 "{:+.2} bps, 95 % CI [{:+.1}, {:+.1}], {} periods",
@@ -718,21 +718,24 @@ mod tests {
             seq_trade(5, "p1", 7.0, t0 + 6 * H),
         ];
         let jev = vec![rules[0].clone()];
-        let s = GateSummary::new(&GateInputs {
-            loop_name: "xl_gate",
-            model: "~typesafe/jev-latest",
-            decisions: &decisions,
-            cut: 25,
-            cache_hits: 4,
-            cache_misses: 3,
-            cache_errors: 1,
-            cost_per_decision_usd: COST_PER_DECISION_USD,
-            rules: &rules,
-            jev: &jev,
-            capped: None,
-            bootstrap: 500,
-            seed: 7,
-        });
+        let summary = |jev: &[Trade]| {
+            GateSummary::new(&GateInputs {
+                loop_name: "xl_gate",
+                model: "~typesafe/jev-latest",
+                decisions: &decisions,
+                cut: 25,
+                cache_hits: 4,
+                cache_misses: 3,
+                cache_errors: 1,
+                cost_per_decision_usd: COST_PER_DECISION_USD,
+                rules: &rules,
+                jev,
+                capped: None,
+                bootstrap: 500,
+                seed: 7,
+            })
+        };
+        let s = summary(&jev);
         assert_eq!(
             (s.decided, s.cut, s.take, s.skip, s.ask_architect),
             (7, 25, 2, 1, 1)
@@ -750,10 +753,15 @@ mod tests {
         assert_eq!((c.bins[4].n, c.bins[4].mean_p), (1, Some(0.9)));
         let brier = (0.01 + 0.0225 + 0.25 + 0.0) / 4.0;
         assert!((c.brier.unwrap() - brier).abs() < 1e-12);
-        // jev − rules: 10 − mean(10, −5, 3, −2, 7, 7).
-        let d = s.diff_ci.as_ref().unwrap();
-        assert!((d.diff_bps - (10.0 - 20.0 / 6.0)).abs() < 1e-12, "{d:?}");
-        assert_eq!(d.n_periods, 2);
+        // jev − rules: the jev arm traded in one period — no CI (it would be
+        // the rules arm's spread alone); over two periods: 6.5 − mean(10,
+        // −5, 3, −2, 7, 7).
+        assert_eq!(s.diff_ci, None);
+        let two = vec![rules[0].clone(), rules[2].clone()];
+        let s2 = summary(&two);
+        let d = s2.diff_ci.as_ref().unwrap();
+        assert!((d.diff_bps - (6.5 - 20.0 / 6.0)).abs() < 1e-12, "{d:?}");
+        assert_eq!((d.n_periods, d.resamples), (2, 500));
         assert_eq!((s.capped, &s.diff_ci_capped), (false, &None));
         assert_eq!((s.rules_n, s.jev_n), (6, 1));
         assert_eq!(s.jev_mean_net_bps, Some(10.0));
@@ -798,7 +806,7 @@ mod tests {
             "| Take rate | 1.00 of 1 answered |",
             "| Cache | 1 hits · 1 misses · 1 errors |",
             "| Est. cost | $0.0000 (1 misses × $0) |",
-            "| jev − rules (research) | — (an arm without trades, or fewer than 2 periods) |",
+            "| jev − rules (research) | — (an arm with trades in fewer than 2 periods, or missing from over 1 % of the resamples: no CI) |",
             "| jev − rules (capped) | — ",
             "| Calibration | n 1 · Brier 0.0400",
         ] {

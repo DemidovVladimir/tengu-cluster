@@ -17,7 +17,7 @@
 //!
 //! | Share split ([`StockSplit`], `[backtest.splits]`) | Adjusted rows (before `at_ms`) |
 //! |---|---|
-//! | [`BarSeries::adjust_for_split`] | bars opening before it: o / h / l / c ÷ ratio, volume × ratio; `n` (trades) stays |
+//! | [`BarSeries::adjust_for_split`] | bars closed at or before it: o / h / l / c ÷ ratio, volume × ratio; `n` (trades) stays. A bar opening before it and closing after it (a day bar around an intraday split) is dropped: its open / high / low / volume mix both share counts — a decision priced there is skipped as missing ([`SplitAdjusted`]) |
 //! | [`CtxSeries::adjust_for_split`] | rows before it: mark / oracle / mid / impact bid / ask ÷ ratio, open interest (base units) × ratio; funding, premium, notional volume stay |
 //! | Funding | never (a rate per hour, not a price) |
 
@@ -230,16 +230,30 @@ impl BarSeries {
             .filter(|c| c.is_finite() && *c > 0.0)
     }
 
-    /// Adjust for `split` (module table): every bar opening before
+    /// Adjust for `split` (module table): every bar closed at or before
     /// `split.at_ms` gets its prices ÷ ratio and its volume × ratio, as if the
-    /// post-split share had always traded; returns how many bars changed. A
-    /// ratio that is not finite and > 0 changes nothing.
-    pub fn adjust_for_split(&mut self, split: StockSplit) -> usize {
+    /// post-split share had always traded; a bar opening before the split
+    /// and closing after it is dropped — its open, high, low and volume mix
+    /// both share counts, and a half-adjusted bar reads as a fake move (the
+    /// KIOXIA day bar of 2026-09-28: open 356.5 pre-split, close 114.12
+    /// post). A decision priced on it is skipped as missing, never guessed.
+    /// A ratio that is not finite and > 0 changes nothing.
+    pub fn adjust_for_split(&mut self, split: StockSplit) -> SplitAdjusted {
         if !split.is_valid() {
-            return 0;
+            return SplitAdjusted::default();
         }
-        let r = split.ratio;
-        let n = self.bars.partition_point(|b| b.t_open_ms < split.at_ms);
+        let (r, at, iv) = (split.ratio, split.at_ms, self.interval.ms());
+        let mut dropped = Vec::new();
+        self.bars.retain(|b| {
+            let straddles = b.t_open_ms < at && at < b.t_open_ms.saturating_add(iv);
+            if straddles {
+                dropped.push(b.t_open_ms);
+            }
+            !straddles
+        });
+        let n = self
+            .bars
+            .partition_point(|b| b.t_open_ms.saturating_add(iv) <= at);
         for b in &mut self.bars[..n] {
             b.o /= r;
             b.h /= r;
@@ -247,7 +261,10 @@ impl BarSeries {
             b.c /= r;
             b.v *= r;
         }
-        n
+        SplitAdjusted {
+            adjusted: n,
+            dropped_open_ms: dropped,
+        }
     }
 
     /// The bars observable at `t_ms` (close ≤ t), oldest first.
@@ -352,6 +369,17 @@ impl CtxSeries {
         }
         n
     }
+}
+
+/// What [`BarSeries::adjust_for_split`] did to one series.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SplitAdjusted {
+    /// Bars closed at or before the split: prices ÷ ratio, volume × ratio.
+    pub adjusted: usize,
+    /// Open times of the bars that straddled the split (opened before it,
+    /// closed after it): dropped. At most one on a bar grid — a day bar
+    /// around an intraday split; none when the split is on the grid.
+    pub dropped_open_ms: Vec<i64>,
 }
 
 /// A share split (module table): from `at_ms` on, `ratio` new shares per old
@@ -539,7 +567,14 @@ mod tests {
         ];
         for (splits, changed, closes, volumes) in cases {
             let mut s = series();
-            let got: Vec<usize> = splits.iter().map(|x| s.adjust_for_split(*x)).collect();
+            let got: Vec<usize> = splits
+                .iter()
+                .map(|x| {
+                    let a = s.adjust_for_split(*x);
+                    assert!(a.dropped_open_ms.is_empty(), "on the grid: none straddles");
+                    a.adjusted
+                })
+                .collect();
             assert_eq!(got, changed, "{splits:?}");
             for (i, b) in s.bars.iter().enumerate() {
                 assert!((b.c - closes[i]).abs() < 1e-9, "{splits:?} bar {i}: {b:?}");
@@ -568,6 +603,56 @@ mod tests {
             ratio: 1.0
         }
         .is_valid());
+    }
+
+    /// A day bar around an intraday split (KIOXIA 2026-09-28 08:00 UTC):
+    /// the days before are adjusted, the day bar that opened pre-split and
+    /// closed post-split is dropped, the days after stay — never a close ÷ 3
+    /// on a bar that closed post-split.
+    #[test]
+    fn a_bar_straddling_a_split_is_dropped_not_half_adjusted() {
+        const D: i64 = 86_400_000;
+        let day = |i: i64, o: f64, c: f64| Bar {
+            t_open_ms: i * D,
+            o,
+            h: o.max(c),
+            l: o.min(c),
+            c,
+            v: 30.0,
+            n: Some(9),
+        };
+        let mut s = BarSeries::new(
+            "hyperliquid:xyz:KIOXIA",
+            Interval::D1,
+            vec![
+                day(0, 360.0, 356.5),
+                day(1, 356.5, 114.12),
+                day(2, 114.12, 110.63),
+            ],
+        );
+        let split = StockSplit {
+            at_ms: D + 8 * H,
+            ratio: 3.0,
+        };
+        assert_eq!(
+            s.adjust_for_split(split),
+            SplitAdjusted {
+                adjusted: 1,
+                dropped_open_ms: vec![D],
+            }
+        );
+        let closes: Vec<(i64, f64)> = s.bars.iter().map(|b| (b.t_open_ms, b.c)).collect();
+        assert_eq!(closes, vec![(0, 356.5 / 3.0), (2 * D, 110.63)]);
+        assert_eq!(s.bars[0].v, 90.0);
+        // The same split on hourly bars is on the grid: nothing dropped.
+        let mut h = BarSeries::new(
+            "hyperliquid:xyz:KIOXIA",
+            Interval::H1,
+            (0..12).map(|i| bar(D + i * H, 300.0)).collect(),
+        );
+        let a = h.adjust_for_split(split);
+        assert_eq!((a.adjusted, a.dropped_open_ms.len()), (8, 0));
+        assert_eq!(h.bars.len(), 12);
     }
 
     #[test]

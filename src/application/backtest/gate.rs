@@ -14,7 +14,7 @@
 //! | Determinism | replay loops keep no history (`build_replay_loop`): a request is a function of its candidate alone, so verdicts, cache keys and their order never depend on K |
 //! | Failures | a failed call (offline miss, Jev error, open circuit) ⇒ class `error`, counted, one warn line at the end; the run goes on |
 //! | Cache | `DecisionEngine::cache_stats` after − before: the run's hits / misses / errors |
-//! | [`gate_arms`] | rules = `simulate` of the decided candidates, jev = of the taken ones — research, and capped when caps are given; calibration (p(take) vs the rules arm's trade winning, by `seq`) + paired differences → `GateSummary` |
+//! | [`gate_arms`] | rules = `simulate` of the decided candidates, jev = of the taken ones — research, and capped when caps are given; with a cut, their decision range ends at the first candidate never asked (what their Sharpe annualises over); calibration (p(take) vs the rules arm's trade winning, by `seq`) + paired differences → `GateSummary` |
 //! | [`GateArms::add_to_report`] | arms `rules` · `jev` (+ `rules_capped` · `jev_capped`), comparisons jev − rules put first (the row's `diff_bps`), the calibration, the summary (`BacktestReport::gate`: `report.md`'s gate section, the CLI lines, the row's `jev_*`) |
 //! | [`GateArms::add_to_run`] | the same into a run, + the four arms' trades (`trades-<arm>.jsonl`) — one source of truth: `gate_arms`' simulations, never re-run |
 //! | [`GateAudit`] | the replay loops audit to a temp file outside the state dir (removed on drop: a failed run leaves nothing behind); [`evaluate_gated`] moves its lines, ordered by seq, into the run dir's `decisions.jsonl` (`write_run_dir` claims the dir) |
@@ -230,6 +230,18 @@ pub(crate) fn gate_arms(
             .collect()
     };
     let (on_decided, on_taken) = (pick(&decided), pick(&taken));
+    // A cut gate decided only the earliest candidates: its arms' decision
+    // range ends at the first one it never asked (Sharpe's annualisation).
+    let mut params = params.clone();
+    if let Some(first_cut) = candidates
+        .iter()
+        .filter(|c| !decided.contains(&c.seq))
+        .map(|c| c.decided_at_ms)
+        .min()
+    {
+        params.to_ms = params.to_ms.min(first_cut);
+    }
+    let params = &params;
     let arm = |cs: &[Candidate], a: Arm| simulate(spec, md, params, cs, a);
     let rules = arm(&on_decided, Arm::Research);
     let jev = arm(&on_taken, Arm::Research);

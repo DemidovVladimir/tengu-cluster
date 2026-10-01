@@ -563,7 +563,7 @@ fn backtest_hl() -> Case {
             "backtest",
             json!({"strategy": "conf_move", "from": from, "to": to}),
         )
-        .ok("backtest <TIME>-conf_move conf_move move_trigger 1h research n=2 mean_net_bps=-27.47")
+        .ok("backtest <TIME>-conf_move conf_move move_trigger 1h research n=2 mean_net_bps=-27.39")
         .then(
             "backtest",
             json!({"spec": conf_follow_spec(), "from": from, "to": to}),

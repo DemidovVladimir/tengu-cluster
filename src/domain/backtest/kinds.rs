@@ -5,11 +5,12 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | Window kinds | `weekend_window` (instants from `weekend_fade::fade_window` + offsets) and `daily_window` (local `HH:MM` per day of `days`), each window judged by rule W's `signal_of` + `select_capped` |
+//! | Window kinds | `weekend_window` (instants from `weekend_fade::fade_window` + offsets) and `daily_window` (local `HH:MM` per day of `days`), each window judged by rule W's `signal_of` + `select_capped`; a window whose anchor, entry and exit are not in that order in UTC is skipped with a note — offsets, or a `daily_window` time in a DST gap (`domain::tz` reads it with the standard offset: New York 02:30 on the spring-forward Sunday is 03:30 EDT, after a 03:00 entry); `data_asof_ms` records the anchor read too |
 //! | Bar kinds | `move_trigger` per bar close (cooldown), `funding_carry` per funding row, `pair_spread` per close both legs have, `event_window` per event; `funding_carry` / `pair_spread` hold one position at a time (re-entry after the rule's own exit) |
 //! | A candidate | legs, side, signal, exit plan, period; the first leg's features as-of the decision (`features.rs`, with the cost model's half-spread at t); `data_asof_ms` = the latest observation read |
 //! | `min_entry_trades` | a would-be candidate whose entry bar (any leg's: the bar ending at the decision, observable then) counts fewer trades is a `thin_entry` skip — windows: before `top_n` ranking (the next liquid name moves up); `move_trigger`: no cooldown starts; `funding_carry` / `pair_spread`: no position opens; a bar without `n` passes |
 //! | Skips | per window and name (window / event kinds), per instrument (excluded, no costs) for the bar kinds; an instrument without bars or funding rows is a data note |
+//! | `max_candidates` | a run whose candidates pass `RunParams::max_candidates` stops with an error naming the guard and the kind's knobs to tighten — before features of the rest are computed |
 
 use std::collections::BTreeSet;
 
@@ -30,7 +31,7 @@ use crate::domain::backtest::spec::{
 };
 use crate::domain::book::Side;
 use crate::domain::calendar::{parse_hm, Calendar, ExchangeCalendar};
-use crate::domain::marketdata::{Bar, BarSeries};
+use crate::domain::marketdata::{fmt_time, Bar, BarSeries};
 use crate::domain::tz::Zone;
 use crate::domain::xm::weekend_fade::{
     anchor_date, fade_window, select_capped, signal_of, FadeRule,
@@ -147,6 +148,7 @@ impl<'a> Builder<'a> {
             decided_at_ms,
             period: period.to_string(),
             reason,
+            seq: None,
         });
     }
 
@@ -156,10 +158,15 @@ impl<'a> Builder<'a> {
         }
     }
 
-    fn push(&mut self, d: Draft) {
+    /// Attach features and record the decision; `Err` once the run passes
+    /// `max_candidates` (module table) — the run stops there.
+    fn push(&mut self, d: Draft) -> Result<(), String> {
+        if self.out.candidates.len() >= self.p.max_candidates {
+            return Err(too_many(self.spec, self.p.max_candidates));
+        }
         let first = d.legs[0].instrument.as_str();
         let Some(series) = self.md.bars.get(first) else {
-            return;
+            return Ok(());
         };
         let ctx = self.md.ctx.get(first);
         let half = self
@@ -187,6 +194,7 @@ impl<'a> Builder<'a> {
             features: traced.features,
             label: d.label,
         });
+        Ok(())
     }
 
     fn finish(mut self) -> CandidateSet {
@@ -206,14 +214,15 @@ impl<'a> Builder<'a> {
         self.out
     }
 
-    /// Rule W's judging of `ids` over one window (module table).
+    /// Rule W's judging of `ids` over one window (module table); the
+    /// caller keeps `anchor < entry < exit` (UTC).
     fn judge_window(
         &mut self,
         ids: &[String],
         period: &str,
         (anchor, entry, exit): (i64, i64, i64),
         rule: &WindowRule,
-    ) {
+    ) -> Result<(), String> {
         let mut signals = Vec::new();
         for id in ids {
             let series = self.md.bars.get(id);
@@ -278,9 +287,11 @@ impl<'a> Builder<'a> {
                 anchor_px: Some(s.anchor_px),
                 exit: ExitPlan::At { exit_ms: exit },
                 label: None,
-                used_ms: entry,
-            });
+                // Both reads: the anchor's close and the entry's.
+                used_ms: anchor.max(entry),
+            })?;
         }
+        Ok(())
     }
 
     fn weekend(&mut self, p: &WeekendWindowParams) -> Result<(), String> {
@@ -314,7 +325,7 @@ impl<'a> Builder<'a> {
                 ));
                 continue;
             }
-            self.judge_window(&ids, &period, (anchor, entry, exit), &rule);
+            self.judge_window(&ids, &period, (anchor, entry, exit), &rule)?;
         }
         Ok(())
     }
@@ -358,7 +369,23 @@ impl<'a> Builder<'a> {
                 let exit_day = if xm > em { Some(d) } else { next(d) };
                 if let (Some(ad), Some(xd)) = (anchor_day, exit_day) {
                     let period = d.format("%Y-%m-%d").to_string();
-                    self.judge_window(&ids, &period, (at(ad, am), entry, at(xd, xm)), &rule);
+                    let (anchor, exit) = (at(ad, am), at(xd, xm));
+                    // A wall time in a DST gap reads with the standard
+                    // offset (`domain::tz`): the anchor can land after the
+                    // entry (New York 02:30 → 03:30 EDT on the spring-forward
+                    // Sunday) — reading it would read the future.
+                    if anchor < entry && entry < exit {
+                        self.judge_window(&ids, &period, (anchor, entry, exit), &rule)?;
+                    } else {
+                        self.note(format!(
+                            "day {period}: anchor {}, entry {} and exit {} are out of order in UTC \
+                             (a DST switch in {}) — skipped",
+                            fmt_time(anchor),
+                            fmt_time(entry),
+                            fmt_time(exit),
+                            zone.name()
+                        ));
+                    }
                 }
             }
             let Some(n) = d.succ_opt() else {
@@ -451,7 +478,7 @@ impl<'a> Builder<'a> {
                     },
                     label: None,
                     used_ms: t,
-                });
+                })?;
             }
         }
         Ok(())
@@ -513,7 +540,7 @@ impl<'a> Builder<'a> {
                     },
                     label: None,
                     used_ms: d.max(pt.t_ms),
-                });
+                })?;
             }
         }
         Ok(())
@@ -589,7 +616,7 @@ impl<'a> Builder<'a> {
                 },
                 label: None,
                 used_ms: pt.t_ms,
-            });
+            })?;
         }
         Ok(())
     }
@@ -672,10 +699,31 @@ impl<'a> Builder<'a> {
                 exit: ExitPlan::At { exit_ms: exit },
                 label: ev.label.clone(),
                 used_ms: entry,
-            });
+            })?;
         }
         Ok(())
     }
+}
+
+/// The `max_candidates` error (module table): the cap and how to narrow
+/// the spec of this kind.
+fn too_many(spec: &StrategySpec, max: usize) -> String {
+    let narrow = match &spec.kind {
+        StrategyKind::WeekendWindow(_) | StrategyKind::DailyWindow(_) => {
+            "raise min_abs_signal_bps or set top_n"
+        }
+        StrategyKind::MoveTrigger(_) => {
+            "raise threshold_bps or cooldown_bars, or add min_volume_ratio"
+        }
+        StrategyKind::FundingCarry(_) => "raise min_apr_pct",
+        StrategyKind::PairSpread(_) => "raise entry_z",
+        StrategyKind::EventWindow(_) => "list fewer events",
+    };
+    format!(
+        "more than {max} candidates (the [backtest] max_candidates guard) — nothing was \
+         simulated or written: {narrow}, narrow the universe or from / to, or raise [backtest] \
+         max_candidates"
+    )
 }
 
 /// `move_trigger`'s volume filter (module table): bars opening in the
@@ -748,8 +796,9 @@ mod tests {
     const C: &str = "hyperliquid:xyz:CCC";
     const D: &str = "hyperliquid:xyz:DDD";
 
-    fn bps(x: f64) -> f64 {
-        x.ln() * 10_000.0
+    /// A long's simple return on exit / entry = `x`, bps (a short's: −ret).
+    fn ret(x: f64) -> f64 {
+        (x - 1.0) * 10_000.0
     }
 
     /// The 2026-09-26 → 28 window on 1 h bars: A rose (faded short), B fell
@@ -813,7 +862,7 @@ mod tests {
         let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
         assert_eq!(r.trades.len(), 2);
         let ta = &r.trades[0];
-        assert_eq!(ta.gross_bps, -1.0 * (101.0f64 / 102.0).ln() * 10_000.0);
+        assert_eq!(ta.gross_bps, -1.0 * (101.0f64 / 102.0 - 1.0) * 10_000.0);
         assert_eq!(
             (ta.fee_bps, ta.spread_bps, ta.slippage_bps),
             (4.0, 2.0, 1.0)
@@ -828,7 +877,7 @@ mod tests {
         );
         assert_eq!((ta.legs[0].entry_px, ta.legs[0].exit_px), (102.0, 101.0));
         let tb = &r.trades[1];
-        assert!((tb.gross_bps - bps(50.0 / 49.5)).abs() < 1e-9);
+        assert!((tb.gross_bps - ret(50.0 / 49.5)).abs() < 1e-9);
         assert_eq!(r.summary.n, 2);
         assert_eq!(r.summary.n_periods, 1);
         assert_eq!(r.summary.periods_per_year, 52.0);
@@ -1055,7 +1104,7 @@ mod tests {
             }
         );
         let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
-        assert!((r.trades[0].gross_bps - bps(104.0 / 103.0)).abs() < 1e-9);
+        assert!((r.trades[0].gross_bps - ret(104.0 / 103.0)).abs() < 1e-9);
         assert_eq!(r.summary.periods_per_year, 261.0);
 
         // Trading days around Labor Day (Mon 2026-09-07): anchor 21:00 ≥ the
@@ -1101,6 +1150,54 @@ mod tests {
         );
     }
 
+    /// Regression (review: a DST-gap anchor after the entry): anchor 02:30,
+    /// entry 03:00, exit 04:00 New York on 15m bars. On 2026-03-08 (spring
+    /// forward) 02:30 does not exist and reads as 07:30Z — after the 07:00Z
+    /// entry. That day is skipped with a note; the days around it decide,
+    /// each on an anchor before its entry and recorded in `data_asof_ms`.
+    #[test]
+    fn a_daily_anchor_in_the_spring_forward_gap_never_follows_the_entry() {
+        let t0 = utc("2026-03-06 00:00");
+        let closes: Vec<f64> = (0..(4 * 24 * 4))
+            .map(|i| 100.0 * (1.0 + 0.002 * ((i as f64) / 3.0).sin()))
+            .collect();
+        let md = market(vec![series(A, Interval::M15, t0, &closes)]);
+        let s = spec(
+            json!({"kind": "daily_window", "universe": [A], "interval": "15m", "days": "all",
+            "tz": "America/New_York", "anchor": "02:30", "entry": "03:00", "exit": "04:00",
+            "direction": "fade"}),
+        );
+        let p = run_params(utc("2026-03-07 00:00"), utc("2026-03-10 00:00"));
+        let set = candidates(&s, &md, &p).unwrap();
+        let days: Vec<(String, i64)> = set
+            .candidates
+            .iter()
+            .map(|c| (c.period.clone(), c.decided_at_ms))
+            .collect();
+        assert_eq!(
+            days,
+            vec![
+                ("2026-03-07".to_string(), utc("2026-03-07 08:00")),
+                ("2026-03-09".to_string(), utc("2026-03-09 07:00")),
+            ],
+            "{:?}",
+            set.notes
+        );
+        assert!(
+            set.notes
+                .iter()
+                .any(|n| n.contains("2026-03-08") && n.contains("out of order")),
+            "{:?}",
+            set.notes
+        );
+        for c in &set.candidates {
+            // The anchor's close is 30 min before the entry, on every day.
+            let anchor_at = c.decided_at_ms - 30 * 60_000;
+            assert_eq!(c.anchor_px, md.bars[A].close_at(anchor_at), "{}", c.period);
+            assert!(c.data_asof_ms <= c.decided_at_ms);
+        }
+    }
+
     #[test]
     fn move_trigger_take_profit_hold_stop_loss_and_cooldown() {
         let t0 = utc("2026-09-28 00:00");
@@ -1143,9 +1240,9 @@ mod tests {
                 (t0 + 14 * H, ExitReason::StopLoss)
             ]
         );
-        assert!((r.trades[0].gross_bps - bps(106.5 / 103.0)).abs() < 1e-9);
-        assert!((r.trades[1].gross_bps - bps(101.0 / 100.0)).abs() < 1e-9);
-        assert!((r.trades[2].gross_bps + bps(98.0 / 96.0)).abs() < 1e-9);
+        assert!((r.trades[0].gross_bps - ret(106.5 / 103.0)).abs() < 1e-9);
+        assert!((r.trades[1].gross_bps + ret(100.0 / 101.0)).abs() < 1e-9);
+        assert!((r.trades[2].gross_bps + ret(98.0 / 96.0)).abs() < 1e-9);
         assert_eq!(r.trades[0].period, "2026-09-28");
 
         // Volume: only bar 4 trades 3× its 3-bar baseline.
@@ -1205,7 +1302,7 @@ mod tests {
             (t0 + 5 * H, ExitReason::FundingBelowExit)
         );
         assert!(
-            (t.gross_bps - bps(100.0 / 99.0)).abs() < 1e-9,
+            (t.gross_bps + ret(99.0 / 100.0)).abs() < 1e-9,
             "short from 100 to 99"
         );
         // Settlements at 03, 04, 05 h: the short receives.
@@ -1225,11 +1322,14 @@ mod tests {
     fn pair_spread_by_hand() {
         let t0 = utc("2026-09-28 00:00");
         let d = 0.01f64;
-        let spreads = [d, -d, d, -d, 5.0 * d, d, d];
+        // Flat at d after the jump, past the 10-bar max hold: the research
+        // arm censors a plan the data cannot finish.
+        let mut spreads = vec![d, -d, d, -d, 5.0 * d, d, d];
+        spreads.resize(16, d);
         let a: Vec<f64> = spreads.iter().map(|s| 100.0 * s.exp()).collect();
         let md = market(vec![
             series(A, Interval::H1, t0, &a),
-            series(B, Interval::H1, t0, &[100.0; 7]),
+            series(B, Interval::H1, t0, &[100.0; 16]),
         ]);
         let s = spec(
             json!({"kind": "pair_spread", "interval": "1h", "legs": [A, B], "lookback_bars": 4,
@@ -1250,18 +1350,44 @@ mod tests {
         let t = &r.trades[0];
         assert_eq!((t.exit_ms, t.exit_reason), (t0 + 6 * H, ExitReason::ExitZ));
         assert_eq!(t.legs[0].notional_usd, 50.0);
+        // Short a from 100·e^{5d} to 100·e^{d}: 1 − e^{−4d} = +392.1 bps of
+        // its $50 (the log spread moved 400); b flat.
+        let short_a = (1.0 - (-4.0 * d).exp()) * 10_000.0;
         assert!(
-            (t.legs[0].gross_bps - 400.0).abs() < 1e-6,
+            (t.legs[0].gross_bps - short_a).abs() < 1e-6,
             "{}",
             t.legs[0].gross_bps
         );
         assert!(t.legs[1].gross_bps.abs() < 1e-9);
-        assert!((t.gross_bps - 200.0).abs() < 1e-6);
+        assert!((t.gross_bps - short_a / 2.0).abs() < 1e-6);
         assert!(
-            (t.net_bps - (200.0 - 2.0)).abs() < 1e-6,
+            (t.net_bps - (short_a / 2.0 - 2.0)).abs() < 1e-6,
             "each leg pays 2 bps"
         );
-        assert!((t.net_usd - 1.98).abs() < 1e-6);
+        assert!((t.net_usd - (short_a / 2.0 - 2.0) / 100.0).abs() < 1e-6);
+        // The data cut after the 7th close: the z exit (06:00) is in it, the
+        // 10-bar max hold is not. The research arm drops the trade —
+        // keeping only the plans that happened to exit early would pick by
+        // outcome; the capped ledger books what happened.
+        let mut short = md.clone();
+        for series in short.bars.values_mut() {
+            series.bars.truncate(7);
+        }
+        let set = candidates(&s, &short, &p).unwrap();
+        let research = simulate(&s, &short, &p, &set.candidates, Arm::Research);
+        assert!(research.trades.is_empty());
+        assert_eq!(research.skipped[0].reason, SkipReason::MissingExit);
+        let caps = crate::domain::backtest::engine::RiskCaps {
+            initial_cash_usd: 100.0,
+            max_order_notional_usd: 100.0,
+            max_gross_exposure_usd: 100.0,
+            max_net_exposure_usd: 100.0,
+            daily_loss_limit_usd: 10.0,
+            total_loss_limit_usd: 25.0,
+        };
+        let capped = simulate(&s, &short, &p, &set.candidates, Arm::Capped(caps));
+        assert_eq!(capped.trades.len(), 1);
+        assert_eq!(capped.trades[0].exit_reason, ExitReason::ExitZ);
     }
 
     #[test]
@@ -1315,7 +1441,7 @@ mod tests {
             "D is out of range"
         );
         let r = simulate(&spec(base.clone()), &md, &p, &set.candidates, Arm::Research);
-        assert!((r.trades[0].gross_bps - bps(102.0 / 101.0)).abs() < 1e-9);
+        assert!((r.trades[0].gross_bps - ret(102.0 / 101.0)).abs() < 1e-9);
         assert_eq!(r.trades[0].label.as_deref(), Some("cpi"));
         // exit_at 12:00 New York (EDT) after 10:00 EDT = 16:00 UTC too.
         let mut at = base.clone();

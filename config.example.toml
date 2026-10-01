@@ -509,17 +509,19 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # bootstrap = 2000                          # resamples per 95 % CI (100–100000)
 # seed = 7                                  # bootstrap seed: a rerun prints the same numbers
 # gate = "xl_gate"                          # the [decision_loops.<name>] the Jev gate arm runs
+# max_candidates = 50000                    # a run past it stops before any arm or file (1–1000000)
+# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache)
 #
 # [backtest.costs."hyperliquid:xyz:"]       # per side; the longest id prefix wins
 # taker_fee_bps = 0.9
-# half_spread = { model = "fixed", bps = 1.0 }   # or { model = "abdi_ranaldo", window_bars = 48, floor_bps = 2.0 } / { model = "ctx", fallback_bps = 1.0 }
+# half_spread = { model = "fixed", bps = 1.0 }   # or { model = "abdi_ranaldo", window_bars = 48, floor_bps = 2.0 } / { model = "ctx", fallback_bps = 1.0 } — only the model's keys
 # slippage_bps = 0
 # funding = true                            # book funding over the hold
 #
 # [backtest.universes]
 # xyz_stocks = ["hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]   # the xlab sandbox lists 75
 #
-# [backtest.splits]                         # share splits by full id: bars opening before `at` ÷ ratio (volume × ratio)
+# [backtest.splits]                         # share splits by full id: bars closed before `at` ÷ ratio (volume × ratio); a bar straddling `at` is dropped
 # "hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]   # RFC 3339; new shares per old (≠ 1), sorted by at
 #
 # [backtest.strategies.weekend_fade]        # rule W: Sun 18:00 NY fade the move since Fri 20:00, exit Mon 09:00

@@ -8,7 +8,8 @@
 //! | Cost per side ([`side_cost`]) | `taker_fee_bps` + half-spread + `slippage_bps`; half-spread `fixed` · `abdi_ranaldo` over the last `window_bars` bars closed before the instant (none ⇒ the floor) · `ctx`: the latest ctx row ≤ the instant (`impact_half_spread_bps`), else the fallback |
 //! | Abdi–Ranaldo ([`abdi_ranaldo_half_bps`]) | c = ln close, η = (ln high + ln low) / 2 over adjacent bars; s² = max(0, 4 · mean[(c_t − η_t)(c_t − η_{t+1})]); half = √s² / 2 × 10⁴ bps |
 //! | Funding ([`funding_over`]) | a row's settlement hour = its `t_ms` to the nearest hour (HL stamps a few ms late); Σ over hours in (entry, exit] of −side × rate_1h × 10⁴ bps; complete = every hour of the grid in (entry, exit] has a row; `funding = false` ⇒ 0, complete |
-//! | `move_trigger` exit ([`walk_bars_exit`]) | each bar close after the entry up to `hold_bars`: take-profit (gross ≥ tp) or stop-loss (gross ≤ −sl), else the hold |
+//! | Gross ([`gross_bps`]) | side × (exit / entry − 1) × 10⁴, bps of the entry notional — a linear USD perp's P&L (not ln: that overstates a short and understates a long by ≈ r² / 2); costs and funding in bps of the entry notional too |
+//! | `move_trigger` exit ([`walk_bars_exit`]) | each bar close after the entry up to `hold_bars`: take-profit (gross ≥ tp) or stop-loss (gross ≤ −sl), else the hold — the simple return, as the live exits (`domain/xm/exits.rs`) |
 //! | `funding_carry` exit ([`walk_funding_exit`]) | the first settlement after the entry with \|rate\| APR < `exit_apr_pct` → the next bar close, else `hold_hours` |
 //! | `pair_spread` ([`spread_points`], [`walk_spread_exit`]) | s = ln(a / b) at every close both legs have; z against the mean and sample sd of the `lookback_bars` previous points (sd ≈ 0 ⇒ no z); exit at the first point with \|z\| ≤ `exit_z`, else `max_hold_bars` |
 
@@ -77,10 +78,13 @@ pub(crate) fn ln_bps(a: f64, b: f64) -> Option<f64> {
     (a.is_finite() && b.is_finite() && a > 0.0 && b > 0.0).then(|| (a / b).ln() * 10_000.0)
 }
 
-/// side × ln(exit / entry) × 10⁴ — the trade's gross, bps of its notional.
+/// side × (exit / entry − 1) × 10⁴ — the trade's gross, bps of its entry
+/// notional: what a linear USD perp of a fixed size pays (`domain/xm/
+/// ledger.rs` books the same). Signals stay log moves (`ln_bps`); never
+/// derive USD from a log return (it overstates a short by ≈ r² / 2).
 pub fn gross_bps(side: Side, entry_px: f64, exit_px: f64) -> Option<f64> {
     (entry_px.is_finite() && exit_px.is_finite() && entry_px > 0.0 && exit_px > 0.0)
-        .then(|| side.sign() * (exit_px / entry_px).ln() * 10_000.0)
+        .then(|| side.sign() * (exit_px / entry_px - 1.0) * 10_000.0)
 }
 
 /// |rate_1h| annualised, percent.
@@ -560,6 +564,43 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(r).unwrap(), r.as_str());
         }
+    }
+
+    /// Regression (review: log-return P&L on a linear perp): a USD perp
+    /// held from entry to exit pays side × (exit / entry − 1) on its
+    /// notional — the doc's KIOXIA short 121.713 → 114.48 books +594.3 bps
+    /// (not ln's +612.7), a long 144.53 → 114.36 −2 087.5 (not −2 341.4);
+    /// take-profit / stop-loss judge the same simple return (as the live
+    /// exits, `domain/xm/exits.rs`).
+    #[test]
+    fn gross_is_the_simple_return_of_a_linear_perp() {
+        let cases = [
+            (Side::Sell, 121.713, 114.48, 594.267),
+            (Side::Buy, 144.53, 114.36, -2_087.456),
+            (Side::Buy, 100.0, 103.0, 300.0),
+            (Side::Sell, 100.0, 103.0, -300.0),
+        ];
+        for (side, entry, exit, want) in cases {
+            let g = gross_bps(side, entry, exit).unwrap();
+            assert!((g - want).abs() < 1e-3, "{side:?} {entry} → {exit}: {g}");
+            assert_eq!(g, side.sign() * (exit / entry - 1.0) * 10_000.0);
+        }
+        // TP 300 on a long fires at +3 % exactly (simple), where ln needs
+        // +3.05 %.
+        let t0 = utc("2026-09-28 00:00");
+        let s = BarSeries::new(
+            ID,
+            Interval::H1,
+            [100.0, 102.0, 103.0, 104.0]
+                .iter()
+                .enumerate()
+                .map(|(i, c)| bar(t0 + i as i64 * H, *c))
+                .collect(),
+        );
+        assert_eq!(
+            walk_bars_exit(&s, t0 + H, 100.0, Side::Buy, t0 + 4 * H, Some(300.0), None),
+            (t0 + 3 * H, ExitReason::TakeProfit)
+        );
     }
 
     #[test]

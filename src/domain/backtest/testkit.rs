@@ -5,10 +5,11 @@
 //! | `utc` / `et` | `YYYY-MM-DD HH:MM` in UTC / New York → epoch ms |
 //! | `bar` / `ohlc` / `series` / `sparse` / `market` / `funding` | bars, series and a `MarketData` |
 //! | `nyse` | the `us_equity` row of `tests/fixtures/xmarket/calendars.toml` (holidays 2026–2028) |
-//! | `run_params` | `[from, to)`, $100 a trade, free costs for `hyperliquid:`, the NYSE calendar as `us_equity`, B = 200, seed 7 |
+//! | `run_params` | `[from, to)`, $100 a trade, free costs for `hyperliquid:`, the NYSE calendar as `us_equity`, B = 200, seed 7, no candidate cap |
 //! | `spec` | a spec named `t` from JSON (panics on errors) |
 //! | `trade` | a hand-made trade for the statistics |
 //! | `random_market` | a deterministic random market: correlated hourly bars with jumps, gaps and volume spikes, hourly funding (AR(1), stamped 37 ms late), ctx rows for the last id |
+//! | `random_intraday` · `aggregate` | the same kind of market at 1m–1h bars (hourly funding); bars re-cut to 4h / 1d (o first, h max, l min, c last, v / n summed) |
 
 use std::collections::BTreeMap;
 
@@ -174,6 +175,7 @@ pub(crate) fn run_params(from_ms: i64, to_ms: i64) -> RunParams {
         calendars: BTreeMap::from([("us_equity".to_string(), Calendar::Exchange(nyse()))]),
         bootstrap: 200,
         seed: 7,
+        max_candidates: usize::MAX,
     }
 }
 
@@ -214,6 +216,91 @@ pub(crate) fn trade(
         exit_reason: ExitReason::Window,
         label: None,
     }
+}
+
+/// `md`'s bars re-cut to `iv` (a multiple of theirs): per UTC `iv` bucket,
+/// o = the first open, h = the highest high, l = the lowest low, c = the
+/// last close, v and n summed — a 4h / 1d venue series of the same market.
+/// Funding and ctx rows are kept.
+pub(crate) fn aggregate(md: &MarketData, iv: Interval) -> MarketData {
+    let mut out = md.clone();
+    for (id, s) in &md.bars {
+        let mut bars: Vec<Bar> = Vec::new();
+        for b in &s.bars {
+            let t = b.t_open_ms - b.t_open_ms.rem_euclid(iv.ms());
+            match bars.last_mut() {
+                Some(a) if a.t_open_ms == t => {
+                    a.h = a.h.max(b.h);
+                    a.l = a.l.min(b.l);
+                    a.c = b.c;
+                    a.v += b.v;
+                    a.n = a.n.zip(b.n).map(|(x, y)| x + y);
+                }
+                _ => bars.push(Bar { t_open_ms: t, ..*b }),
+            }
+        }
+        out.bars
+            .insert(id.clone(), BarSeries::new(id.clone(), iv, bars));
+    }
+    out
+}
+
+/// `n` bars of `iv` (≤ 1h) from `t0` per id, seeded: a random walk with
+/// jumps (per-bar size ∝ √iv), a missing bar now and then, hourly funding
+/// stamped 37 ms late.
+pub(crate) fn random_intraday(
+    ids: &[&str],
+    t0: i64,
+    n: usize,
+    iv: Interval,
+    seed: u64,
+) -> MarketData {
+    let mut rng = SplitMix64::new(seed);
+    let scale = (iv.ms() as f64 / H as f64).sqrt();
+    let mut md = MarketData::default();
+    for (k, id) in ids.iter().enumerate() {
+        let mut log = (100.0 + 10.0 * k as f64).ln();
+        let mut rate = 0.0f64;
+        let (mut bars, mut rows) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let t = t0 + i as i64 * iv.ms();
+            let o = log.exp();
+            let jump = if rng.unit() < 0.02 {
+                (rng.unit() - 0.5) * 0.06
+            } else {
+                0.0
+            };
+            log += ((rng.unit() - 0.5) * 0.014) * scale + jump;
+            let c = log.exp();
+            let wiggle = 1.0 + rng.unit() * 0.002;
+            let v = 1.0 + rng.unit() * 4.0 + if jump != 0.0 { 20.0 } else { 0.0 };
+            if t.rem_euclid(H) == 0 {
+                rate = (rate * 0.9 + (rng.unit() - 0.5) * 0.0002).clamp(-0.0003, 0.0003);
+                rows.push(FundingPoint {
+                    t_ms: t + 37,
+                    rate_1h: rate,
+                    premium: None,
+                });
+            }
+            if rng.unit() < 0.02 {
+                continue;
+            }
+            bars.push(Bar {
+                t_open_ms: t,
+                o,
+                h: o.max(c) * wiggle,
+                l: o.min(c) / wiggle,
+                c,
+                v,
+                n: Some(1 + v as u64),
+            });
+        }
+        md.bars
+            .insert(id.to_string(), BarSeries::new(*id, iv, bars));
+        md.funding
+            .insert(id.to_string(), FundingSeries::new(*id, rows));
+    }
+    md
 }
 
 /// `hours` hourly bars from `t0` per id (module table), seeded.

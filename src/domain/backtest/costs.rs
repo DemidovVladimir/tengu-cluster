@@ -6,7 +6,7 @@
 //! | Field | Meaning |
 //! |---|---|
 //! | `taker_fee_bps` | fee per side |
-//! | `half_spread` | `{ model = "fixed", bps }` · `{ model = "abdi_ranaldo", window_bars, floor_bps }` (from bars closed before the decision) · `{ model = "ctx", fallback_bps }` (archive impact prices, else the fallback) |
+//! | `half_spread` | `{ model = "fixed", bps }` · `{ model = "abdi_ranaldo", window_bars, floor_bps }` (from bars closed before the decision) · `{ model = "ctx", fallback_bps }` (archive impact prices, else the fallback) — an unknown key in it is refused, as in the cost itself |
 //! | `slippage_bps` | extra per side |
 //! | `funding` | book funding over the hold (default true) |
 
@@ -25,9 +25,11 @@ pub struct CostSpec {
     pub funding: bool,
 }
 
-/// How the half-spread paid per side is set (module table).
+/// How the half-spread paid per side is set (module table). Unknown keys
+/// are refused like `CostSpec`'s — a knob nested here by mistake
+/// (`slippage_bps`) would otherwise vanish from the run and its hash.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "model", rename_all = "snake_case")]
+#[serde(tag = "model", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HalfSpread {
     Fixed {
         bps: f64,
@@ -147,6 +149,44 @@ mod tests {
             r#"{"taker_fee_bps": 1, "half_spread": {"model": "magic"}}"#
         )
         .is_err());
+    }
+
+    /// Regression (review: a misplaced knob silently dropped): a key
+    /// `half_spread` does not know — `slippage_bps` nested in it, a typo —
+    /// is refused, in a spec's JSON and in `[backtest.costs]` TOML alike,
+    /// and the error names it.
+    #[test]
+    fn half_spread_refuses_unknown_fields() {
+        for json in [
+            r#"{"taker_fee_bps": 0.9, "half_spread": {"model": "fixed", "bps": 1.0, "slippage_bps": 500}}"#,
+            r#"{"taker_fee_bps": 0.9, "half_spread": {"model": "abdi_ranaldo", "window_bars": 48, "floor_bps": 2, "flor_bps": 9}}"#,
+            r#"{"taker_fee_bps": 0.9, "half_spread": {"model": "ctx", "fallback_bps": 1, "bps": 3}}"#,
+        ] {
+            let e = serde_json::from_str::<CostSpec>(json)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("unknown field"), "{json}: {e}");
+        }
+        let e = toml::from_str::<CostSpec>(
+            "taker_fee_bps = 0.9\nhalf_spread = { model = \"fixed\", bps = 1.0, slippage_bps = 500 }",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("slippage_bps"), "{e}");
+        // Through a strategy spec: refused, the field named.
+        let v = serde_json::json!({"kind": "move_trigger", "universe": ["hyperliquid:BTC"],
+            "interval": "1h", "lookback_bars": 1, "threshold_bps": 50, "direction": "fade",
+            "hold_bars": 1, "costs": {"taker_fee_bps": 0.9,
+            "half_spread": {"model": "fixed", "bps": 1.0, "slippage_bps": 500}}});
+        let e = crate::domain::backtest::spec::StrategySpec::from_value("s", &v)
+            .unwrap_err()
+            .join("\n");
+        assert!(e.contains("unknown field `slippage_bps`"), "{e}");
+        // The good shapes still parse.
+        assert!(serde_json::from_str::<CostSpec>(
+            r#"{"taker_fee_bps": 0.9, "half_spread": {"model": "fixed", "bps": 1.0}, "slippage_bps": 500}"#
+        )
+        .is_ok());
     }
 
     #[test]

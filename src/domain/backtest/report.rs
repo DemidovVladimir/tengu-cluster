@@ -9,7 +9,7 @@
 //! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, instruments, candidates, arms, skips by reason, data notes (incl. applied share splits); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
 //! | [`ArmReport`] | candidates offered, summary, split halves (in-sample / holdout), refusals by rule, drops by reason |
 //! | Drawdown | research arms (`research`, `rules`, `jev`): USD + bps of one trade's notional; capped arms: USD + % of `initial_cash_usd` (`stats.rs`) |
-//! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left; `partial` with an error per data gap kind (missing prices, missing exits, funding hours without a row) |
+//! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left (`t_stat` is clustered by period, `sharpe` annualised by the rate of periods with trades — `stats.rs`); `partial` with an error per data gap kind (missing prices, exits without a price, funding hours without a row) |
 //! | [`render_markdown`](BacktestReport::render_markdown) | `report.md`: run table, summary per arm, split comparison, per-instrument top / bottom 10, refusals and skips, the Jev gate, Jev vs rules, calibration, data notes, limits (§ 11) |
 //! | [`render_compact`](BacktestReport::render_compact) | CLI / tool text ≤ [`COMPACT_MAX_CHARS`]: line 1, one line per arm, the gate's two lines, the split, the best and worst instruments, skips |
 
@@ -176,7 +176,8 @@ impl BacktestReport {
     }
 
     /// Record arm `name`: its summary, the split halves (with the arm's own
-    /// statistics parameters), refusals and drops.
+    /// statistics parameters; a time split's halves over their own part of
+    /// the arm's decision range), refusals and drops.
     pub fn add_arm(&mut self, name: &str, n_candidates: usize, result: &ArmResult) {
         let split = self.split.as_ref().map(|s| {
             let (holdout, in_sample): (Vec<Trade>, Vec<Trade>) =
@@ -184,9 +185,17 @@ impl BacktestReport {
                     let legs: Vec<&str> = t.legs.iter().map(|l| l.instrument.as_str()).collect();
                     s.is_holdout(t.decided_at_ms, &legs)
                 });
+            let stats = &result.stats;
+            let (in_p, out_p) = match (s, stats.decided_ms) {
+                (SplitSpec::Time(at), Some((from, to))) => {
+                    let at = (*at).clamp(from, to);
+                    (stats.over(from, at), stats.over(at, to))
+                }
+                _ => (*stats, *stats),
+            };
             SplitHalves {
-                in_sample: Summary::compute(&in_sample, &result.stats),
-                holdout: Summary::compute(&holdout, &result.stats),
+                in_sample: Summary::compute(&in_sample, &in_p),
+                holdout: Summary::compute(&holdout, &out_p),
             }
         });
         let mut refusals = BTreeMap::new();
@@ -288,7 +297,7 @@ impl BacktestReport {
         let _ = writeln!(m, "\n## Summary\n");
         let _ = writeln!(
             m,
-            "| Arm | n | periods | mean net bps | 95 % CI | median | t | hit | Σ net USD | costs USD | funding USD | max DD USD | max DD bps of a trade | max DD % of cash | Sharpe | mean ex best 5 | best-2 share |"
+            "| Arm | n | periods | mean net bps | 95 % CI | median | t (by period) | hit | Σ net USD | costs USD | funding USD | max DD USD | max DD bps of a trade | max DD % of cash | Sharpe | mean ex best 5 | best-2 share |"
         );
         let _ = writeln!(
             m,
@@ -319,9 +328,12 @@ impl BacktestReport {
         }
         let _ = writeln!(
             m,
-            "\nMax drawdown on realized equity: research arms in bps of one trade's notional \
-             (they take every candidate at `notional_usd` and keep no cash book); capped arms in \
-             % of `[paper] initial_cash_usd`."
+            "\nP&L: simple returns of a linear perp (side × (exit / entry − 1)). t: clustered by \
+             period (trades of one period are not independent). Sharpe: per period, annualised \
+             by the rate of periods with trades. Max drawdown on realized equity, once per exit \
+             instant: research arms in bps of one trade's notional (they take every candidate at \
+             `notional_usd` and keep no cash book); capped arms in % of `[paper] \
+             initial_cash_usd`."
         );
         if let Some(split) = &self.split {
             let _ = writeln!(m, "\n## Split `{split}`\n");
@@ -678,7 +690,10 @@ impl Observed for BacktestReport {
                 out.push(ReadError::new(
                     format!("{name}.exits"),
                     ErrorClass::NotApplicable,
-                    format!("{n} trades dropped: no bar at their exit instant"),
+                    format!(
+                        "{n} candidates without an exit price (no bar at the exit, or the data \
+                         ends before the exit plan does): P&L unknown, not in the figures"
+                    ),
                 ));
             }
             if a.summary.funding_incomplete > 0 {

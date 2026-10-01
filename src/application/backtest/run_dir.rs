@@ -9,20 +9,23 @@
 //! | `report.md` | `render_markdown` |
 //! | `trades-<arm>.jsonl` | one `Trade` per line (legs, fills, costs, funding, exit reason), decision order — one file per arm |
 //! | `candidates.jsonl` | one `Candidate` per line: legs, side, signal, decided / data-as-of, exit plan, features as-of |
-//! | `skips.json` | `candidates` (skips by reason), `data_notes`, `skipped` (every skip); per arm `dropped_counts` / `dropped` (fill drops) and `refusals_by_rule` / `refusals` (`[risk]` caps) |
+//! | `skips.json` | one compact JSON object (it lists every skip and refusal): `candidates` (skips by reason), `data_notes`, `skipped` (every skip); per arm `dropped_counts` / `dropped` (drops at the decision and unfilled exits, each with its candidate's `seq`) and `refusals_by_rule` / `refusals` (`[risk]` caps) |
 //! | `BacktestRun::extra_files` | e.g. the gate arm's `decisions.jsonl` |
 //!
 //! | Rule | Value |
 //! |---|---|
 //! | Run id | `<YYYYMMDDTHHMMSSZ>-<strategy>` (UTC); taken ⇒ `-2`, `-3`, …; claimed with `create_dir` (never two runs in one dir) |
 //! | An extra file's name | `[A-Za-z0-9._-]`, ≤ 128 chars, not starting with `.`, none of the files above |
+//! | Writes | the `.jsonl` files and `skips.json` stream through a buffer (a big run never holds a file's text in memory); size is bounded upstream by `[backtest] max_candidates` |
+//! | Retention ([`prune_runs`], `[backtest] keep_runs`) | after a run is written: the run dirs under the root beyond the newest `keep_runs` go, oldest first by the id's UTC stamp, then its suffix; never the run just written (it counts as kept, whatever its stamp), never a file (the decision cache `decision-cache.db*`), never a dir whose name is not a run id (rename one — `keep-<run id>` — to pin it), never a symlink; 0 = keep all; a failed delete is a warning, never the run's error |
 
 use std::collections::BTreeMap;
-use std::io::ErrorKind;
+use std::io::{BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use tracing::{info, warn};
 
 use super::{BacktestRun, Prepared};
 use crate::domain::backtest::engine::{count_skips, Refusal, Skip};
@@ -100,14 +103,79 @@ pub(crate) fn check_file_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// One JSON value per line.
-fn jsonl<T: Serialize>(rows: &[T]) -> Result<String> {
-    let mut out = String::new();
+/// A buffered writer of `dir/name`.
+fn create(dir: &Path, name: &str) -> Result<BufWriter<std::fs::File>> {
+    let path = dir.join(name);
+    let file = std::fs::File::create(&path).with_context(|| format!("write {}", path.display()))?;
+    Ok(BufWriter::new(file))
+}
+
+/// `rows` as `dir/name`, one JSON value per line, streamed.
+fn write_jsonl<T: Serialize>(dir: &Path, name: &str, rows: &[T]) -> Result<()> {
+    let mut w = create(dir, name)?;
     for row in rows {
-        out.push_str(&serde_json::to_string(row)?);
-        out.push('\n');
+        serde_json::to_writer(&mut w, row)?;
+        w.write_all(b"\n")?;
     }
-    Ok(out)
+    w.flush()
+        .with_context(|| format!("write {}", dir.join(name).display()))
+}
+
+/// `value` as `dir/name`, one compact JSON object + a newline, streamed.
+fn write_json<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<()> {
+    let mut w = create(dir, name)?;
+    serde_json::to_writer(&mut w, value)?;
+    w.write_all(b"\n")?;
+    w.flush()
+        .with_context(|| format!("write {}", dir.join(name).display()))
+}
+
+/// A run id's age key — its `YYYYMMDDTHHMMSSZ` stamp and suffix (1 for
+/// none) — or `None` for a name that is not `<stamp>-<strategy>[-N]`.
+fn run_age(name: &str) -> Option<(&str, u32)> {
+    let stamp = name.get(..16)?;
+    let b = stamp.as_bytes();
+    let digits = |r: std::ops::Range<usize>| b[r].iter().all(u8::is_ascii_digit);
+    if !(digits(0..8) && b[8] == b'T' && digits(9..15) && b[15] == b'Z') {
+        return None;
+    }
+    let rest = name[16..].strip_prefix('-')?;
+    let (strategy, suffix) = match rest.rsplit_once('-') {
+        Some((s, n)) if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) => {
+            (s, n.parse().ok()?)
+        }
+        _ => (rest, 1),
+    };
+    valid_name(strategy).then_some((stamp, suffix))
+}
+
+/// Retention (module table): delete the run dirs under `root` beyond the
+/// newest `keep` — never `current`, a file, a symlink or a name that is not
+/// a run id. Returns the ids deleted, oldest first; a failed delete is a
+/// warning.
+pub(crate) fn prune_runs(root: &Path, keep: usize, current: &str) -> Result<Vec<String>> {
+    if keep == 0 {
+        return Ok(Vec::new());
+    }
+    let mut runs: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.file_type()?.is_dir() && run_age(&name).is_some() && name != current {
+            runs.push(name);
+        }
+    }
+    // Newest first; the run just written is kept and counts.
+    runs.sort_by(|a, b| run_age(b).cmp(&run_age(a)).then_with(|| b.cmp(a)));
+    let mut gone: Vec<String> = Vec::new();
+    for name in runs.into_iter().skip(keep.saturating_sub(1)) {
+        match std::fs::remove_dir_all(root.join(&name)) {
+            Ok(()) => gone.push(name),
+            Err(e) => warn!(run = %name, error = %e, "backtest: could not prune an old run dir"),
+        }
+    }
+    gone.reverse();
+    Ok(gone)
 }
 
 /// One arm's part of `skips.json`.
@@ -161,8 +229,9 @@ fn write(dir: &Path, name: &str, text: &str) -> Result<()> {
     std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))
 }
 
-/// Step 4 (`backtest/mod.rs`): claim the run id (the report takes it) and
-/// write every file of the module table; returns the run dir.
+/// Step 4 (`backtest/mod.rs`): claim the run id (the report takes it),
+/// write every file of the module table, then prune the oldest run dirs
+/// beyond `keep_runs`; returns the run dir.
 pub(crate) fn write_run_dir(p: &Prepared, run: &mut BacktestRun) -> Result<PathBuf> {
     for name in run.extra_files.keys() {
         check_file_name(name)?;
@@ -171,7 +240,7 @@ pub(crate) fn write_run_dir(p: &Prepared, run: &mut BacktestRun) -> Result<PathB
         bail!("arm name `{name}`: [a-z0-9_], 1-48 characters (it names trades-<arm>.jsonl)");
     }
     let (run_id, dir) = claim_run_dir(&p.backtests_dir, &p.run_id_base)?;
-    run.report.run_id = run_id;
+    run.report.run_id = run_id.clone();
     write(
         &dir,
         REPORT_JSON,
@@ -179,16 +248,22 @@ pub(crate) fn write_run_dir(p: &Prepared, run: &mut BacktestRun) -> Result<PathB
     )?;
     write(&dir, REPORT_MD, &run.report.render_markdown())?;
     for (name, arm) in &run.arms {
-        write(&dir, &format!("trades-{name}.jsonl"), &jsonl(&arm.trades)?)?;
+        write_jsonl(&dir, &format!("trades-{name}.jsonl"), &arm.trades)?;
     }
-    write(&dir, CANDIDATES, &jsonl(&p.set.candidates)?)?;
-    write(
-        &dir,
-        SKIPS,
-        &(serde_json::to_string_pretty(&skips_file(p, run))? + "\n"),
-    )?;
+    write_jsonl(&dir, CANDIDATES, &p.set.candidates)?;
+    write_json(&dir, SKIPS, &skips_file(p, run))?;
     for (name, text) in &run.extra_files {
         write(&dir, name, text)?;
+    }
+    match prune_runs(&p.backtests_dir, p.keep_runs, &run_id) {
+        Ok(gone) if !gone.is_empty() => info!(
+            keep_runs = p.keep_runs,
+            pruned = %gone.join(", "),
+            "backtest: pruned {} old run dir(s)",
+            gone.len()
+        ),
+        Ok(_) => {}
+        Err(e) => warn!(error = %format!("{e:#}"), "backtest: run-dir retention skipped"),
     }
     Ok(dir)
 }
@@ -215,6 +290,34 @@ mod tests {
         assert_eq!(claim_run_dir(&root, &base).unwrap().0, format!("{base}-2"));
         std::fs::create_dir(root.join(format!("{base}-3"))).unwrap();
         assert_eq!(claim_run_dir(&root, &base).unwrap().0, format!("{base}-4"));
+    }
+
+    /// Retention reads only names shaped like a run id: the stamp, then the
+    /// suffix, orders them; anything else is never a candidate to delete.
+    #[test]
+    fn only_run_ids_have_an_age() {
+        assert_eq!(
+            run_age("20261001T171021Z-weekend_fade"),
+            Some(("20261001T171021Z", 1))
+        );
+        assert_eq!(
+            run_age("20261001T171021Z-weekend_fade-12"),
+            Some(("20261001T171021Z", 12))
+        );
+        assert!(run_age("20261001T171021Z-weekend_fade-2") > run_age("20261001T171021Z-x"));
+        assert!(run_age("20261001T171022Z-a") > run_age("20261001T171021Z-z-9"));
+        for not_a_run in [
+            "decision-cache.db",
+            "decision-cache.db-wal",
+            "keep-20261001T171021Z-weekend_fade",
+            "20261001T171021Z",
+            "20261001T171021Z-",
+            "20261001T171021Z-Bad-Name",
+            "2026100XT171021Z-w",
+            "notes.txt",
+        ] {
+            assert_eq!(run_age(not_a_run), None, "{not_a_run}");
+        }
     }
 
     #[test]

@@ -9,10 +9,10 @@
 //! | Step | Call | Rule |
 //! |---|---|---|
 //! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each — the `backtest` tool's spec check); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
-//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars before each split ÷ ratio, volume × ratio; a data note each, listed first); `RunParams` from `[backtest]`, `[xmarket.calendars]`; `engine::candidates`; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
+//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
 //! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
-//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`) |
+//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache) |
 //!
 //! | Rule | Value |
 //! |---|---|
@@ -149,6 +149,9 @@ pub(crate) struct Prepared {
     /// `[risk]` + `[paper]` ⇒ the capped arm's caps.
     pub caps: Option<RiskCaps>,
     pub backtests_dir: PathBuf,
+    /// `[backtest] keep_runs`: [`write_run_dir`] prunes the oldest run dirs
+    /// beyond it (0 = keep all).
+    pub keep_runs: usize,
 }
 
 /// What [`evaluate`] produced; [`write_run_dir`] writes it.
@@ -328,6 +331,7 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         calendars: env.sections.calendars.clone(),
         bootstrap: bt.bootstrap,
         seed: bt.seed,
+        max_candidates: bt.max_candidates,
     };
     let mut set = candidates(&r.spec, &md, &params)
         .map_err(|e| anyhow!("strategy `{}`: {e}", r.spec.name))?;
@@ -347,6 +351,7 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         set,
         caps: risk_caps(&env.sections),
         backtests_dir: env.backtests_dir.clone(),
+        keep_runs: bt.keep_runs,
     })
 }
 
@@ -885,11 +890,20 @@ mod tests {
             "the split is mid-hold"
         );
 
-        // Not configured: the split books as a ln 2 fall.
+        // Not configured: the split books as a fall to half — the raw entry
+        // is the doubled pre-split price.
         let mut e = env(raw.clone(), &tmp.path().join("b2"));
         let p = prepare(&e, j.clone()).await.unwrap();
         let t = window_trade(&evaluate(&p, Vec::new()).unwrap());
-        assert!((t.gross_bps - want.gross_bps - 2f64.ln() * 1e4).abs() < 1e-6);
+        let (entry, exit) = (want.legs[0].entry_px, want.legs[0].exit_px);
+        assert_eq!(t.legs[0].entry_px, entry * 2.0);
+        let raw_gross = t.side.sign() * (exit / (2.0 * entry) - 1.0) * 1e4;
+        assert!((t.gross_bps - raw_gross).abs() < 1e-6);
+        assert!(
+            t.gross_bps > 4_000.0,
+            "the short books the split: {}",
+            t.gross_bps
+        );
         assert!(p.set.notes.iter().all(|n| !n.contains("split-adjusted")));
 
         // Configured: the same trade, and said.
@@ -1117,6 +1131,101 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert_eq!(entries, vec![run.report.run_id.clone()]);
+    }
+
+    /// `sections()` with `[backtest]` = `extra` lines + [`BACKTEST`].
+    fn sections_with(extra: &str) -> SandboxSections {
+        let mut s = sections();
+        s.backtest = Some(toml::from_str(&format!("{extra}\n{BACKTEST}")).unwrap());
+        s
+    }
+
+    /// Regression (review: unbounded output): a run whose candidates pass
+    /// `[backtest] max_candidates` stops in `prepare` — before any arm, run
+    /// dir or file — with a message naming the guard and how to narrow it.
+    #[tokio::test]
+    async fn a_run_past_max_candidates_fails_before_any_arm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        let mut e = env(store, &backtests);
+        e.sections = Arc::new(sections_with("max_candidates = 11"));
+        let err = prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("strategy `weekend_fade`: more than 11 candidates")
+                && err.contains("[backtest] max_candidates")
+                && err.contains("min_abs_signal_bps"),
+            "{err}"
+        );
+        assert!(!backtests.exists(), "nothing written");
+        // At the cap: runs.
+        e.sections = Arc::new(sections_with("max_candidates = 12"));
+        let p = prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        assert_eq!(p.set.candidates.len(), 12);
+    }
+
+    /// Regression (review: run dirs never pruned): with `keep_runs` the
+    /// oldest run dirs beyond the count go when a run is written — never
+    /// the run just written (even when the clock reads older than a kept
+    /// one), never the decision cache or anything not named like a run.
+    #[tokio::test]
+    async fn old_run_dirs_are_pruned_on_write_never_the_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        std::fs::create_dir_all(&backtests).unwrap();
+        for f in ["decision-cache.db", "decision-cache.db-wal", "notes.txt"] {
+            std::fs::write(backtests.join(f), "x").unwrap();
+        }
+        let old: Vec<String> = (1..=11)
+            .map(|d| format!("202609{d:02}T120000Z-old_run"))
+            .collect();
+        for (i, id) in old.iter().enumerate() {
+            std::fs::create_dir(backtests.join(id)).unwrap();
+            std::fs::write(backtests.join(id).join("report.json"), i.to_string()).unwrap();
+        }
+        // Same second, suffixed: -2 is newer than the plain id.
+        std::fs::create_dir(backtests.join("20260911T120000Z-old_run-2")).unwrap();
+        // A run from a clock ahead of this one, and a dir an operator pinned.
+        std::fs::create_dir(backtests.join("20991231T000000Z-future")).unwrap();
+        std::fs::create_dir(backtests.join("keep-20260901T120000Z-old_run")).unwrap();
+        let mut e = env(store, &backtests);
+        e.sections = Arc::new(sections_with("keep_runs = 10"));
+        let p = prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        let mut run = evaluate(&p, Vec::new()).unwrap();
+        let dir = write_run_dir(&p, &mut run).unwrap();
+        assert!(dir.join("report.json").is_file(), "the new run stays");
+        let mut left: Vec<String> = std::fs::read_dir(&backtests)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        let mut want: Vec<String> = vec![
+            "20260905T120000Z-old_run".into(),
+            "20260906T120000Z-old_run".into(),
+            "20260907T120000Z-old_run".into(),
+            "20260908T120000Z-old_run".into(),
+            "20260909T120000Z-old_run".into(),
+            "20260910T120000Z-old_run".into(),
+            "20260911T120000Z-old_run".into(),
+            "20260911T120000Z-old_run-2".into(),
+            "20991231T000000Z-future".into(),
+            run.report.run_id.clone(),
+            "decision-cache.db".into(),
+            "decision-cache.db-wal".into(),
+            "keep-20260901T120000Z-old_run".into(),
+            "notes.txt".into(),
+        ];
+        want.sort();
+        // 10 run dirs: the future one, the new one and the 8 newest old ones.
+        assert_eq!(left, want);
     }
 
     #[tokio::test]

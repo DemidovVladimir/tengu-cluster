@@ -108,8 +108,9 @@ xyz_stocks = [                   # 75 xyz single stocks (= sandboxes/xmarket-wee
 ]
 crypto = ["hyperliquid:BTC", "hyperliquid:ETH", "hyperliquid:SOL", "hyperliquid:HYPE"]
 
-# Share splits: a run divides the loaded bars before `at` by `ratio` (volume ×
-# ratio) and says so in report.md's data notes. KIOXIA 3-for-1, verified in
+# Share splits: a run divides the loaded bars closed before `at` by `ratio`
+# (volume × ratio), drops a bar straddling `at` (a 1d bar here) and says so in
+# report.md's data notes. KIOXIA 3-for-1, verified in
 # market.db: the 07:00 UTC bar of 2026-09-28 is a no-trade halt at 340.79, the
 # 08:00 bar opens at 114.93 (340.79 / 113.9 ≈ 2.99).
 [backtest.splits]

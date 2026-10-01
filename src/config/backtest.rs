@@ -12,8 +12,10 @@
 //! | `costs."<prefix>"` | — | `CostSpec` (`domain/backtest/costs.rs`) for ids starting with the prefix; the longest prefix wins; an instrument without one is refused |
 //! | `universes.<name>` | — | full instrument ids, `@<name>` in specs and on the CLI |
 //! | `strategies.<name>` | — | strategy specs (`domain/backtest/spec.rs`), the operator's named capabilities |
-//! | `splits."<full id>"` | — | share splits `[{ at = "<RFC 3339>", ratio = <new shares per old> }]`: a run adjusts that instrument's loaded bars opening before `at` (prices ÷ ratio, volume × ratio; ctx prices too; funding never) and says so in the report's data notes |
+//! | `splits."<full id>"` | — | share splits `[{ at = "<RFC 3339>", ratio = <new shares per old> }]`: a run adjusts that instrument's loaded bars closed before `at` (prices ÷ ratio, volume × ratio; ctx prices too; funding never), drops a bar straddling `at` (a day bar around an intraday split) and says so in the report's data notes |
 //! | `gate` | — | the `[decision_loops.<name>]` the Jev gate arm runs by default |
+//! | `max_candidates` | `50000` | a run whose candidates pass it stops before any arm or file, with an error naming the guard and the spec's knobs to narrow (1–1 000 000). 50 000 ≈ 4× the library's largest run (`xyz_funding_carry`, 13 000) and room for an hourly 50 bps fade on 75 names (30 330 candidates: a 47 MB run dir, 120 MB RSS); it refuses the always-in specs (0.01 bps hourly on 75 names: 244 688 candidates, a 392 MiB run dir, 876 MB RSS — now an error in under 2 s at 113 MB); a run at the cap writes ≈ 80 MB |
+//! | `keep_runs` | `100` | run dirs kept under `<state dir>/backtests/`: writing a run prunes the oldest beyond it (by the id's UTC stamp, then suffix); never the run just written, the decision cache or anything not named like a run id (rename a dir — `keep-<run id>` — to pin it); 0 = keep all, else ≥ 10. 100 ≈ 2.5 forty-round Architect turns or ≈ 2.5 days at the 2026-10-01 pace (41 runs a day): ≈ 0.3 GB at a typical 2.9 MB a run, ≤ ≈ 8 GB if every run sat at the `max_candidates` cap |
 //!
 //! | Load rule (`validation_errors`; a violation fails `Config::load`) | The error starts |
 //! |---|---|
@@ -22,6 +24,8 @@
 //! | its `calendar` (`weekend_window`; `daily_window` with `days = "trading"`) is an exchange `[xmarket.calendars.<id>]` | `backtest.strategies.<name>: calendar …` |
 //! | every instrument it trades (universe or named ids, minus `exclude`) has a `costs` prefix, unless the spec sets `costs` | `backtest.strategies.<name>: no [backtest.costs] prefix matches <ids, in full>` |
 //! | every `splits` key is a full instrument id; each entry's `at` is RFC 3339, its `ratio` finite, > 0 and ≠ 1; entries sorted by `at`, each instant once (unknown fields refused) | `backtest.splits."<id>"` |
+//! | `max_candidates` within 1–1 000 000; `keep_runs` 0 or ≥ 10 | `backtest.max_candidates` · `backtest.keep_runs` |
+//! | a cost's `half_spread` takes only its model's keys (`domain/backtest/costs.rs`): a knob nested there by mistake fails the parse, naming it | the TOML error |
 
 use std::collections::BTreeMap;
 
@@ -67,6 +71,14 @@ pub struct BacktestConfig {
     pub splits: BTreeMap<String, Vec<SplitEntry>>,
     #[serde(default)]
     pub gate: Option<String>,
+    /// A run whose candidates pass this stops before any arm or file
+    /// (module table).
+    #[serde(default = "default_max_candidates")]
+    pub max_candidates: usize,
+    /// Run dirs kept under `<state dir>/backtests/`: writing one prunes the
+    /// oldest beyond it (0 = keep all); never the decision cache.
+    #[serde(default = "default_keep_runs")]
+    pub keep_runs: usize,
 }
 
 impl Default for BacktestConfig {
@@ -80,8 +92,32 @@ impl Default for BacktestConfig {
             strategies: BTreeMap::new(),
             splits: BTreeMap::new(),
             gate: None,
+            max_candidates: default_max_candidates(),
+            keep_runs: default_keep_runs(),
         }
     }
+}
+
+/// `max_candidates` bounds (module table).
+pub const MAX_CANDIDATES_RANGE: std::ops::RangeInclusive<usize> = 1..=1_000_000;
+/// The least non-zero `keep_runs`: a concurrent run's fresh dir is never
+/// among the oldest.
+pub const MIN_KEEP_RUNS: usize = 10;
+
+/// 50 000: ≈ 4× the library's largest run (`xyz_funding_carry`, 13 000),
+/// room for an hourly 50 bps fade on 75 names (30 330: a 47 MB run dir,
+/// 120 MB RSS); refuses the always-in specs (0.01 bps hourly: 244 688
+/// candidates, a 392 MiB run dir, 876 MB RSS — now an error in under 2 s at
+/// 113 MB). A run at the cap writes ≈ 80 MB.
+fn default_max_candidates() -> usize {
+    50_000
+}
+
+/// 100: 2.5 forty-round Architect turns, or ≈ 2.5 days at the 2026-10-01
+/// pace (41 runs a day); ≈ 0.3 GB at a typical 2.9 MB a run, ≤ ≈ 8 GB if
+/// every run sat at the `max_candidates` cap (≈ 80 MB).
+fn default_keep_runs() -> usize {
+    100
 }
 
 fn default_notional_usd() -> f64 {
@@ -118,6 +154,18 @@ impl BacktestConfig {
         }
         if !(100..=100_000).contains(&self.bootstrap) {
             errors.push("backtest.bootstrap must be within 100..=100000".to_string());
+        }
+        if !MAX_CANDIDATES_RANGE.contains(&self.max_candidates) {
+            errors.push(format!(
+                "backtest.max_candidates must be within {}..={}",
+                MAX_CANDIDATES_RANGE.start(),
+                MAX_CANDIDATES_RANGE.end()
+            ));
+        }
+        if self.keep_runs != 0 && self.keep_runs < MIN_KEEP_RUNS {
+            errors.push(format!(
+                "backtest.keep_runs must be 0 (keep every run dir) or ≥ {MIN_KEEP_RUNS}"
+            ));
         }
         for (prefix, cost) in &self.costs {
             if prefix.trim().is_empty() {
@@ -383,6 +431,44 @@ mod tests {
         assert!(
             e.contains("no [backtest.strategies.nope]; the sandbox has: dex_move, sol_eth_spread, weekend_fade"),
             "{e}"
+        );
+    }
+
+    /// Regression (review: `[backtest.costs]` dropped a knob nested in
+    /// `half_spread`): the load refuses it, naming the key.
+    #[test]
+    fn a_cost_knob_nested_in_half_spread_fails_the_load() {
+        let e = toml::from_str::<BacktestConfig>(
+            "[costs.\"hyperliquid:xyz:\"]\ntaker_fee_bps = 0.9\n\
+             half_spread = { model = \"fixed\", bps = 1.0, slippage_bps = 500 }",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("slippage_bps"), "{e}");
+    }
+
+    /// Regression (review: unbounded run output): the run guards load with
+    /// their defaults — `max_candidates` 50 000, `keep_runs` 100 — and a
+    /// value out of range is a load error naming the field.
+    #[test]
+    fn the_run_guards_load_with_their_defaults() {
+        let c = parse("");
+        assert_eq!((c.max_candidates, c.keep_runs), (50_000, 100));
+        assert_eq!(BacktestConfig::default(), c);
+        let c = parse("max_candidates = 1000\nkeep_runs = 0");
+        assert_eq!((c.max_candidates, c.keep_runs), (1_000, 0));
+        assert!(c.validation_errors(true, &[], &[]).is_empty());
+        let c = parse("max_candidates = 0\nkeep_runs = 3");
+        let e = c.validation_errors(true, &[], &[]);
+        assert!(
+            e.iter()
+                .any(|m| m.starts_with("backtest.max_candidates must be within")),
+            "{e:?}"
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.starts_with("backtest.keep_runs must be 0")),
+            "{e:?}"
         );
     }
 

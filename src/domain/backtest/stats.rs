@@ -5,16 +5,17 @@
 //!
 //! | Figure | Rule |
 //! |---|---|
-//! | n · mean · median · sd · t | over the trades' net bps (sd sample, n − 1; t = mean / (sd / √n)); mean summed in trade order |
+//! | n · mean · median · sd | over the trades' net bps (sd sample, n − 1); mean summed in trade order |
+//! | t | clustered by period (CR1): mean / SE, SE² = G / (G − 1) × Σ_g (Σ_{i∈g} (x_i − x̄))² / n² over the G periods (≥ 2) — trades of one period (a weekend's 75 names fading one move) are not independent. `t_stat_iid` = mean / (sd / √n), trades as independent: kept for comparison only (it overstates the evidence when trades cluster: rule W 6.5 vs 2.9) |
 //! | hit rate | share of trades with net bps > 0 |
 //! | Σ net / gross / fees / spread / slippage / funding USD | bps × filled notional / 10⁴, summed |
-//! | max drawdown | realized equity in exit order (exit, then decision, then trade order): the deepest fall from a running peak, USD; + % of the start equity when the arm keeps one (capped: `initial_cash_usd`); + bps of one trade's notional when it trades a fixed one (research: every candidate at `notional_usd`, no cash book — a % would be of cash it never holds) |
-//! | Sharpe | per period (Σ net USD of its trades), mean / sd × √(periods per year): weekend 52 · trading day 252 · weekday 261 · day 365; periods with trades only |
+//! | max drawdown | realized equity per exit instant (the net USD of every trade exiting at one instant, summed — they fill at one close; no equity ever stood between them): the deepest fall from a running peak, USD; + % of the start equity when the arm keeps one (capped: `initial_cash_usd`); + bps of one trade's notional when it trades a fixed one (research: every candidate at `notional_usd`, no cash book — a % would be of cash it never holds) |
+//! | Sharpe | per period (Σ net USD of its trades), mean / sd over the periods with trades × √(their observed rate: periods with trades ÷ `years` of the decision range) — the sample and the annualisation agree (√(365) over the 54 active days of 208 read ≈ 2× too high); `periods_per_year` (weekend 52 · trading day 252 · weekday 261 · day 365) is the calendar's, for reference |
 //! | 95 % CI of the mean | cluster bootstrap over periods (B = `[backtest] bootstrap`): each resample draws as many periods with replacement and takes the pooled mean net bps; the 2.5 / 97.5 % quantiles (linear); ≥ 2 periods |
 //! | mean without the best 5 | mean net bps after dropping the 5 largest (n > 5) |
 //! | best-2-period share | Σ net USD of the 2 best periods ÷ Σ net USD (total > 0) |
 //! | per instrument | n, mean net bps, Σ net USD, hit rate per instrument key |
-//! | [`paired_diff_ci`] | mean net bps of arm A − arm B, resampling the union of their periods (a resample without trades in an arm is dropped) |
+//! | [`paired_diff_ci`] | mean net bps of arm A − arm B, resampling the union of their periods; only when each arm has trades in ≥ 2 periods and ≥ 99 % of the resamples hold trades of both — else none: a CI from the resamples that happen to keep a thin arm is the other arm's spread alone (a 1-trade jev arm read −553.8 [−695.4, −412.3]) |
 //! | [`calibration`] | equal-width bins of p over [0, 1]: n, mean p, hit rate; Brier = mean (p − win)² |
 //!
 //! A figure that cannot be computed (too few trades / periods, sd 0) is
@@ -99,6 +100,11 @@ pub struct StatsParams {
     pub bootstrap: u32,
     pub seed: u64,
     pub periods_per_year: f64,
+    /// The arm's decision range `[from, to)`, ms: Sharpe annualises by the
+    /// observed rate of periods with trades over its years (365.25 days);
+    /// `None` = no Sharpe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decided_ms: Option<(i64, i64)>,
     /// The capped arm's `initial_cash_usd` (drawdown %); `None` for a
     /// research arm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,6 +113,26 @@ pub struct StatsParams {
     /// capped arm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trade_notional_usd: Option<f64>,
+}
+
+/// A year in ms (365.25 days): the span Sharpe annualises over.
+pub const YEAR_MS: f64 = 365.25 * 86_400_000.0;
+
+impl StatsParams {
+    /// The decision range in years; `None` without one (or an empty one).
+    pub fn years(&self) -> Option<f64> {
+        self.decided_ms
+            .filter(|(from, to)| to > from)
+            .map(|(from, to)| (to - from) as f64 / YEAR_MS)
+    }
+
+    /// The same statistics over `[from, to)` — a split half's range.
+    pub fn over(&self, from_ms: i64, to_ms: i64) -> StatsParams {
+        StatsParams {
+            decided_ms: Some((from_ms, to_ms)),
+            ..*self
+        }
+    }
 }
 
 /// One instrument key's trades.
@@ -130,8 +156,13 @@ pub struct Summary {
     pub median_net_bps: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sd_net_bps: Option<f64>,
+    /// Clustered by period (module table); ≥ 2 periods.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t_stat: Option<f64>,
+    /// Trades as independent — overstates when they cluster by period;
+    /// for comparison only (report.json).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_stat_iid: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hit_rate: Option<f64>,
     pub net_usd: f64,
@@ -153,7 +184,12 @@ pub struct Summary {
     pub start_equity_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sharpe: Option<f64>,
+    /// The calendar's periods a year (reference).
     pub periods_per_year: f64,
+    /// What Sharpe is annualised by: periods with trades ÷ years of the
+    /// decision range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_periods_per_year: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci95_lo_bps: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,19 +280,16 @@ impl Summary {
                 .map(|t| bps(t) * t.notional_usd / 10_000.0)
                 .sum()
         };
-        // Realized equity in exit order.
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by(|&a, &b| {
-            let (x, y) = (&trades[a], &trades[b]);
-            x.exit_ms
-                .cmp(&y.exit_ms)
-                .then(x.decided_at_ms.cmp(&y.decided_at_ms))
-                .then(a.cmp(&b))
-        });
+        // Realized equity once per exit instant (in trade order inside one:
+        // the sum does not depend on it).
+        let mut by_exit: BTreeMap<i64, f64> = BTreeMap::new();
+        for t in trades {
+            *by_exit.entry(t.exit_ms).or_insert(0.0) += t.net_usd;
+        }
         let start = p.start_equity_usd.unwrap_or(0.0);
         let (mut equity, mut peak, mut dd) = (start, start, 0.0f64);
-        for i in order {
-            equity += trades[i].net_usd;
+        for usd in by_exit.into_values() {
+            equity += usd;
             peak = peak.max(equity);
             dd = dd.max(peak - equity);
         }
@@ -268,12 +301,25 @@ impl Summary {
             c.n += 1;
             c.usd += t.net_usd;
         }
+        // t clustered by period (module table): residual sums per period.
+        let t_clustered = mean_net.and_then(|m| {
+            let mut resid: BTreeMap<&str, f64> = BTreeMap::new();
+            for t in trades {
+                *resid.entry(t.period.as_str()).or_insert(0.0) += t.net_bps - m;
+            }
+            let g = resid.len() as f64;
+            let ss: f64 = resid.values().map(|s| s * s).sum();
+            let se = (g / (g - 1.0) * ss).sqrt() / n as f64;
+            (resid.len() >= 2 && se > 0.0).then(|| m / se)
+        });
         let cells: Vec<Cell> = cells.into_values().collect();
         let period_usd: Vec<f64> = cells.iter().map(|c| c.usd).collect();
-        let sharpe = mean(&period_usd).and_then(|m| {
+        // Annualised by the observed rate of the periods it is computed on.
+        let active_rate = p.years().map(|y| cells.len() as f64 / y);
+        let sharpe = mean(&period_usd).zip(active_rate).and_then(|(m, rate)| {
             sample_sd(&period_usd, m)
                 .filter(|sd| *sd > 0.0)
-                .map(|sd| m / sd * p.periods_per_year.sqrt())
+                .map(|sd| m / sd * rate.sqrt())
         });
         let ci = bootstrap_ci(&cells, p.bootstrap, p.seed);
         let mean_ex_best5 = (n > 5).then(|| {
@@ -302,7 +348,8 @@ impl Summary {
             mean_net_bps: mean_net,
             median_net_bps: median(&nets),
             sd_net_bps: sd,
-            t_stat: mean_net
+            t_stat: t_clustered,
+            t_stat_iid: mean_net
                 .zip(sd)
                 .and_then(|(m, sd)| (sd > 0.0).then(|| m / (sd / (n as f64).sqrt()))),
             hit_rate: (n > 0).then(|| nets.iter().filter(|x| **x > 0.0).count() as f64 / n as f64),
@@ -325,6 +372,7 @@ impl Summary {
             start_equity_usd: p.start_equity_usd,
             sharpe,
             periods_per_year: p.periods_per_year,
+            active_periods_per_year: active_rate,
             ci95_lo_bps: ci.map(|c| c.0),
             ci95_hi_bps: ci.map(|c| c.1),
             bootstrap: p.bootstrap,
@@ -356,8 +404,14 @@ pub struct DiffCi {
     pub resamples: usize,
 }
 
-/// The module table's paired difference; `None` when an arm has no trade,
-/// the union has < 2 periods or no resample holds both arms.
+/// The share of the resamples that must hold trades of both arms for
+/// [`paired_diff_ci`] to give a CI (module table).
+pub const MIN_PAIRED_COVERAGE: f64 = 0.99;
+
+/// The module table's paired difference; `None` when an arm has trades in
+/// fewer than 2 periods, or fewer than [`MIN_PAIRED_COVERAGE`] of the
+/// resamples hold trades of both arms (the rest would condition the CI on
+/// the thin arm being drawn).
 pub fn paired_diff_ci(a: &[Trade], b: &[Trade], bootstrap: u32, seed: u64) -> Option<DiffCi> {
     let net = |ts: &[Trade]| ts.iter().map(|t| t.net_bps).collect::<Vec<_>>();
     let diff = mean(&net(a))? - mean(&net(b))?;
@@ -370,7 +424,8 @@ pub fn paired_diff_ci(a: &[Trade], b: &[Trade], bootstrap: u32, seed: u64) -> Op
         }
     }
     let cells: Vec<[Cell; 2]> = per.into_values().collect();
-    if cells.len() < 2 {
+    let periods_of = |arm: usize| cells.iter().filter(|c| c[arm].n > 0).count();
+    if periods_of(0) < 2 || periods_of(1) < 2 {
         return None;
     }
     let mut rng = SplitMix64::new(seed);
@@ -388,6 +443,9 @@ pub fn paired_diff_ci(a: &[Trade], b: &[Trade], bootstrap: u32, seed: u64) -> Op
         if acc[0].n > 0 && acc[1].n > 0 {
             diffs.push(acc[0].sum_bps / acc[0].n as f64 - acc[1].sum_bps / acc[1].n as f64);
         }
+    }
+    if (diffs.len() as f64) < MIN_PAIRED_COVERAGE * f64::from(bootstrap) {
+        return None;
     }
     diffs.sort_by(f64::total_cmp);
     Some(DiffCi {
@@ -465,6 +523,7 @@ mod tests {
             bootstrap: 2_000,
             seed,
             periods_per_year: 52.0,
+            decided_ms: None,
             start_equity_usd: Some(100.0),
             trade_notional_usd: None,
         }
@@ -497,7 +556,12 @@ mod tests {
             trade("w3", "b", -5.0, 100.0, 5),
             trade("w3", "c", 40.0, 100.0, 6),
         ];
-        let s = Summary::compute(&ts, &params(7));
+        // Three weekly periods over 3 / 52 of a year: 52 a year with trades.
+        let p = StatsParams {
+            decided_ms: Some((0, (YEAR_MS * 3.0 / 52.0).round() as i64)),
+            ..params(7)
+        };
+        let s = Summary::compute(&ts, &p);
         assert_eq!((s.n, s.n_periods), (6, 3));
         let m = 60.0 / 6.0;
         assert_eq!(s.mean_net_bps, Some(m));
@@ -508,7 +572,15 @@ mod tests {
             .sum::<f64>()
             / 5.0;
         assert!((s.sd_net_bps.unwrap() - var.sqrt()).abs() < 1e-12);
-        assert!((s.t_stat.unwrap() - m / (var.sqrt() / 6f64.sqrt())).abs() < 1e-12);
+        // t clusters by period (CR1): residual sums per period −30, +15,
+        // +15 ⇒ SE² = 3/2 × 1 350 / 6² = 56.25, SE 7.5, t = 10 / 7.5 — the
+        // iid t (trades as independent) is kept apart, labelled.
+        assert!(
+            (s.t_stat.unwrap() - 10.0 / 7.5).abs() < 1e-12,
+            "{:?}",
+            s.t_stat
+        );
+        assert!((s.t_stat_iid.unwrap() - m / (var.sqrt() / 6f64.sqrt())).abs() < 1e-12);
         assert_eq!(s.hit_rate, Some(4.0 / 6.0));
         // $100 each: 1 bps = $0.01.
         assert!((s.net_usd - 0.60).abs() < 1e-12);
@@ -521,6 +593,9 @@ mod tests {
         let pm = pu.iter().sum::<f64>() / 3.0;
         let psd = (pu.iter().map(|x| (x - pm).powi(2)).sum::<f64>() / 2.0).sqrt();
         assert!((s.sharpe.unwrap() - pm / psd * 52f64.sqrt()).abs() < 1e-9);
+        assert!((s.active_periods_per_year.unwrap() - 52.0).abs() < 1e-6);
+        // No decision range, no annualisation: no Sharpe.
+        assert_eq!(Summary::compute(&ts, &params(7)).sharpe, None);
         // Per instrument.
         let a = &s.per_instrument[0];
         assert_eq!((a.instrument.as_str(), a.n), ("a", 3));
@@ -560,6 +635,78 @@ mod tests {
         let s = Summary::compute(&ts, &no_start);
         assert_eq!(s.max_drawdown_pct, None);
         assert!((s.max_drawdown_usd - 32.0).abs() < 1e-9, "from 0");
+    }
+
+    /// Regression (review: drawdown walked the trades of one exit instant
+    /// one at a time): +30 and −20 exit together, then −15. Equity never
+    /// stood at +30 — the first instant nets +10 — so the deepest fall is
+    /// 10 → −5 = 15, not 30 → −5 = 35 (which depended on the trades'
+    /// order inside the instant).
+    #[test]
+    fn drawdown_is_measured_once_per_exit_instant() {
+        let ts = vec![
+            trade("p", "a", 30.0, 10_000.0, 10),
+            trade("p", "b", -20.0, 10_000.0, 10),
+            trade("p", "c", -15.0, 10_000.0, 20),
+        ];
+        let mut p = params(7);
+        p.start_equity_usd = None;
+        let s = Summary::compute(&ts, &p);
+        assert!(
+            (s.max_drawdown_usd - 15.0).abs() < 1e-9,
+            "{}",
+            s.max_drawdown_usd
+        );
+        let mut swapped = ts.clone();
+        swapped.swap(0, 1);
+        assert_eq!(
+            Summary::compute(&swapped, &p).max_drawdown_usd,
+            s.max_drawdown_usd
+        );
+    }
+
+    /// Regression (review: a confident CI from one period): the jev arm
+    /// took one trade (one period), rules 20 over 5 periods. Every resample
+    /// that keeps the jev arm repeats that one trade, so a CI would be the
+    /// rules arm's spread alone — none is given. Nor when an arm is so thin
+    /// that more than 1 % of the resamples miss it.
+    #[test]
+    fn paired_difference_needs_each_arm_in_two_periods() {
+        let rules: Vec<Trade> = (0..20)
+            .map(|i| {
+                trade(
+                    &format!("p{}", i / 4),
+                    "x",
+                    ((i * 53) % 41) as f64 * 10.0 - 50.0,
+                    100.0,
+                    i,
+                )
+            })
+            .collect();
+        let jev = vec![trade("p2", "x", -329.84, 100.0, 9)];
+        assert_eq!(paired_diff_ci(&jev, &rules, 2_000, 7), None);
+        // Two periods of 29: ~12 % of the resamples draw neither — no CI.
+        let wide: Vec<Trade> = (0..58)
+            .map(|i| {
+                trade(
+                    &format!("w{:02}", i / 2),
+                    "x",
+                    (i % 7) as f64 - 2.0,
+                    100.0,
+                    i,
+                )
+            })
+            .collect();
+        let thin: Vec<Trade> = wide
+            .iter()
+            .filter(|t| t.period == "w03" || t.period == "w17")
+            .cloned()
+            .collect();
+        assert_eq!(paired_diff_ci(&thin, &wide, 2_000, 7), None);
+        // Most periods: a CI from (almost) every resample.
+        let most: Vec<Trade> = wide.iter().step_by(2).cloned().collect();
+        let d = paired_diff_ci(&most, &wide, 2_000, 7).unwrap();
+        assert!(d.resamples >= 1_980, "{d:?}");
     }
 
     /// The drawdown's units by arm: a capped arm's % of its cash, a research
