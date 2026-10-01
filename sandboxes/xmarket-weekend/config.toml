@@ -8,7 +8,7 @@
 # docs/runtime-2026-09-30.md § Weekend run.
 #
 # RUNBOOK — commands run from the repo root (`--sandbox` resolves
-# sandboxes/<name>/ from the cwd; its .env sets TENGU_HOME=~/.tengu). Each tengu
+# sandboxes/<name>/ from the cwd; the repo-root .env sets TENGU_HOME=~/.tengu). Each tengu
 # command asks for the vault password at a terminal: Enter skips it (nothing
 # here needs a secret). Never start `tengu run` with `&`: the prompt stops a
 # background job — run it in the foreground of a tmux pane.
@@ -28,12 +28,12 @@
 #          ~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json state "stopped"
 #   P&L    sqlite3 ~/xmarket-weekend-ws/.tengu/observations.db "select body from observations where key = 'xm_weekend/1:2026-10-02'" | jq .features
 #          (once closed, the tool call above already shows the next window)
-#   timeline  America/New_York        UTC                 UTC+5
-#     start   ≤ Fri 2026-10-02 19:30  ≤ Fri 23:30         ≤ Sat 04:30   recording before the anchor, or nothing enters
-#     anchor    Fri 2026-10-02 20:00    Sat 00:00           Sat 05:00   mkt_ctx/1 recorded (the anchor price)
-#     entry     Sun 2026-10-04 18:00    Sun 22:00           Mon 03:00   snapshot, 4 capped + every shadow fade
-#     exit      Mon 2026-10-05 09:00    Mon 13:00           Mon 18:00   xm_exits closes capped, the fade tool shadow
-#     stop      Mon 2026-10-05 10:00    Mon 14:00           Mon 19:00   once the fade row says closed (else keep running)
+#   timeline  America/New_York        UTC          Mac (Europe/Berlin)  Almaty (UTC+5)
+#     start   ≤ Fri 2026-10-02 19:30  ≤ Fri 23:30  ≤ Sat 01:30         ≤ Sat 04:30   recording before the anchor, or nothing enters
+#     anchor    Fri 2026-10-02 20:00    Sat 00:00    Sat 02:00           Sat 05:00   mkt_ctx/1 recorded (the anchor price)
+#     entry     Sun 2026-10-04 18:00    Sun 22:00    Mon 00:00           Mon 03:00   snapshot, 4 capped + every shadow fade
+#     exit      Mon 2026-10-05 09:00    Mon 13:00    Mon 15:00           Mon 18:00   xm_exits closes capped, the fade tool shadow
+#     stop      Mon 2026-10-05 10:00    Mon 14:00    Mon 16:00           Mon 19:00   once the fade row says closed (else keep running)
 # State: ~/.tengu/state/xmarket-weekend/ (ledger.db, runtime.db, history/, KILL = halt);
 # workspace ~/xmarket-weekend-ws (only .tengu/observations.db).
 
