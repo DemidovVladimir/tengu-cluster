@@ -44,6 +44,8 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 
 `cargo test --bin tengu schema_lint` (`tools/schema_lint.rs`) checks every definition an engine can receive — every catalog row (opt-ins, memory, `agentic_memory` under `postgres_memory`), `compress_and_store`, `[[mcp_servers]]` tools (fixture server) and shell-skill tools (fixture SKILL.md) — and lists every violation at once.
 
+Real `[[mcp_servers]]` tools are linted at runtime, on every discovery path (`mcp_client::linted_tool`: the executor's `McpPlugin`, the bridge, `enumerate_tools` for the planner registry and the Claude Code bridge list): a violator is dropped with a warn naming the server, the tool and each rule, so one bad external schema cannot break a Gemini or Ollama turn.
+
 | Rule | Rejected live (2026-09-30) | Otherwise why |
 |---|---|---|
 | Name `[a-zA-Z0-9_-]`, first a letter or `_`, ≤ 64, unique per agent | `.`: OpenAI, Claude · leading digit: Gemini · duplicate: Claude, Gemini | 64 = OpenAI-style limit (Claude, Gemini: 128) |
@@ -109,7 +111,7 @@ command = ["npx", "-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }
 ```
 
-List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one. A server tool outside a non-empty `tools` runs on no surface (in-process or bridged).
+List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one. A server tool outside a non-empty `tools` runs on no surface (in-process or bridged). A server tool whose schema leaves § Tool schema subset is dropped at discovery with a warn (`mcp: tool schema outside the subset …`, naming server, tool and rule).
 
 | Agent kind | Sees `[[mcp_servers]]` tools? | How |
 |---|---|---|
@@ -117,6 +119,7 @@ List them in an agent's `tools` like any other tool (`tools = ["github__create_i
 | Plan-step subagent, `engine = "claude_code"` | yes | engine passes the servers to the tengu bridge (`TENGU_BRIDGE_MCP_SERVERS`), which proxies them under the egress policy — as `mcp__tengu-tools__<server>__<tool>` |
 | In-process OpenRouter agent (TUI, Telegram) | yes | same executor |
 | In-process Claude Code agent (TUI, Telegram) | yes | servers listed once at agent setup and added to the bridge list; bridge proxies them |
-| Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`webhooks.rs::bridge_inputs`) |
+| Webhook agent, `engine = "claude_code"` | yes | webhook turn hands its executor's tool list + servers to the bridge (`bootstrap::tools::bridge_inputs`) |
+| Eval / evolve agent, `engine = "claude_code"` | yes | same (`bridge_inputs`); its bridge loads the expanded eval config (`eval.rs::bridge_config_file`); stubbed rows refused (`docs/mcp-bridge.md` § Known Limitations) |
 
 Names use `__` because model APIs reject `.` in tool names.

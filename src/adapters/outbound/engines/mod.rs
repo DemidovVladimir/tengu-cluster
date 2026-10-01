@@ -66,14 +66,20 @@ pub(crate) fn build_planner_engine(
     }
 }
 
-/// What a `run-agent` step asks of a Claude Code engine's bridge
-/// (`claude_code::StepBridge`): the workspace grant and the
-/// `compress_and_store` summary file. Ignored by the other engines.
+/// What a caller asks of a Claude Code engine's bridge beyond the defaults:
+/// a `run-agent` step's workspace grant and `compress_and_store` summary
+/// file (`claude_code::StepBridge`), and the config file the bridge loads.
+/// Ignored by the other engines.
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
 pub(crate) struct StepOpts {
     pub grant_workspace: bool,
     pub summary_file: Option<std::path::PathBuf>,
+    /// The config the bridge loads (`TENGU_CONFIG`) and takes
+    /// `[agents.<agent_id>]` from; `None` = the config in effect
+    /// (`config::paths::default_config_path`). `tengu eval` passes its
+    /// expanded eval config (`eval.rs::bridge_config_file`).
+    pub config_file: Option<std::path::PathBuf>,
 }
 
 /// Build configured engine instance for one agent. `agent_id` names the
@@ -129,9 +135,12 @@ pub(crate) fn build_step_engine(
                 };
                 let timeout = agent_config.limits.stream_event_timeout_secs;
                 // The MCP bridge subprocess loads `[agents.<agent_id>]` from
-                // the config in effect (TENGU_BRIDGE_AGENT + TENGU_CONFIG) so
-                // Claude Code tools see what in-process ones do; the scope
-                // map (TENGU_BRIDGE_SCOPES) is its fallback.
+                // the config in effect, or `step.config_file` (TENGU_BRIDGE_AGENT
+                // + TENGU_CONFIG), so Claude Code tools see what in-process
+                // ones do; the scope map (TENGU_BRIDGE_SCOPES) is its fallback.
+                let config_file = step
+                    .config_file
+                    .unwrap_or_else(crate::config::paths::default_config_path);
                 Ok(Box::new(
                     crate::adapters::outbound::engines::claude_code::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
@@ -140,7 +149,7 @@ pub(crate) fn build_step_engine(
                         timeout,
                     )
                     .with_scopes(agent_config.scopes.clone())
-                    .with_bridge_agent(agent_id, &crate::config::paths::default_config_path())
+                    .with_bridge_agent(agent_id, &config_file)
                     .with_step_bridge(
                         crate::adapters::outbound::engines::claude_code::StepBridge {
                             grant_workspace: step.grant_workspace,

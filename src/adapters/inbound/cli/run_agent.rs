@@ -269,6 +269,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         crate::adapters::outbound::engines::StepOpts {
             grant_workspace: true,
             summary_file: summary_file.as_ref().map(|f| f.path().to_path_buf()),
+            config_file: None,
         },
     )
     .with_context(|| {

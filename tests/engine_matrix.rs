@@ -18,7 +18,7 @@
 //! | `workspace` | `list_directory` `.` → `read_file` the `token-*` file → `write_file` `answer.txt` = the token → `read_file` `second.txt` | the answer holds the token (its file name is only in the listing, its value only in the file); `answer.txt` = the token; `second.txt` holds a registered secret (`TENGU_SECRETS_LOADED`): the answer quotes `REDACTED`; Claude Code: the bridge's result for it, logged by the engine, is `[REDACTED]` |
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
-//! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_TOKEN`, resolved by the run-agent child or the step's bridge) |
+//! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, `matrix-doc` holds the improved body |
 //! | `util` | `shared_cache` `put` + `get` → `http_request` GET a loopback endpoint → `abi_encode` → `hex_to_uint256` | the answer holds the endpoint's token and the decimal of a random hex; the endpoint was hit |
@@ -47,7 +47,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`), `offline_local_shell` (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell` (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -1042,7 +1042,7 @@ fn leg_command(target: Target, ws: &Workspace, envs: &[(&str, String)], args: &[
         .env("TENGU_CONFIG", fixture(target.fixture))
         .env("TENGU_MATRIX_WORKSPACE", &ws.path)
         .env("TENGU_MATRIX_FIXTURES", FIXTURES)
-        .env("TENGU_MATRIX_MCP_TOKEN", &ws.mcp_token)
+        .env("TENGU_MATRIX_MCP_VALUE", &ws.mcp_token)
         .env("TENGU_SECRETS_LOADED", SECRET_VAR)
         .env(SECRET_VAR, &ws.secret)
         .env_remove("TENGU_EGRESS")
@@ -1262,6 +1262,28 @@ fn open_qty(ws: &Workspace) -> Option<f64> {
         |r| r.get(0),
     )
     .ok()
+}
+
+/// An open long in `INSTRUMENT` on the leg's account, written straight into
+/// the ledger a leg already created (no network: `paper_order` needs a live
+/// book); returns its exit deadline (`exit_at_ms`, an hour ahead).
+fn seed_open_position(ws: &Workspace) -> i64 {
+    let conn = rusqlite::Connection::open(ledger_path(ws)).expect("ledger");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let exit_at_ms = now + 3_600_000;
+    conn.execute(
+        "INSERT INTO positions(account, instrument, underlying, venue, qty, avg_px,
+           realized_pnl_usd, fees_usd, funding_usd, opened_ms, last_funding_hour_ms,
+           exit_at_ms, updated_ms)
+         VALUES ('matrix', ?1, 'company:tesla', 'hyperliquid', 0.043, 347.2, 0, 0.0015, 0,
+           ?2, NULL, ?3, ?2)",
+        rusqlite::params![INSTRUMENT, now, exit_at_ms],
+    )
+    .expect("seed position");
+    exit_at_ms
 }
 
 /// `<TENGU_HOME>/logs/risk.jsonl`, one verdict per line.
@@ -1813,6 +1835,10 @@ fn offline_local_workspace() {
 /// turn`, scripted: `[xmarket]` + `[risk]` + `[paper]` load for the private
 /// `xm_gemma` agent, `risk_status` opens a new account in the leg's
 /// `TENGU_HOME`, `paper_positions` reads it; both rows reach the model.
+/// Then, with an open position in that ledger, a second turn's
+/// `paper_positions` row (under the 16k agent's 8 192-char cap) reaches the
+/// model whole: the full instrument id and exit deadline a `paper_close`
+/// needs, not a store pointer.
 #[test]
 fn offline_local_xm() {
     let ws = workspace();
@@ -1865,6 +1891,44 @@ fn offline_local_xm() {
     );
     let ledger = ws.home.join("state").join(XM_STATE).join("ledger.db");
     assert!(ledger.exists(), "no {}", ledger.display());
+
+    let exit_at_ms = seed_open_position(&ws);
+    let (leg, bodies) = offline_leg(
+        Set::Xm,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply("c1", "paper_positions", &json!({})),
+            text_reply(&format!("matrix open position {INSTRUMENT}")),
+        ],
+    );
+    assert_eq!(
+        (leg.code, leg.ipc["status"].as_str()),
+        (Some(0), Some("ok")),
+        "{}",
+        leg.context()
+    );
+    assert_eq!(
+        leg.runs(),
+        [("paper_positions".to_string(), true)],
+        "{}",
+        leg.context()
+    );
+    assert_eq!(bodies.len(), 2, "{}", leg.context());
+    let row = &tool_messages(&bodies[1])[0];
+    assert!(
+        row.contains("paper_positions account=matrix open=1"),
+        "{row}"
+    );
+    assert!(
+        row.contains(&format!("\"instrument\":\"{INSTRUMENT}\"")),
+        "the model must see the position's full instrument id: {row}"
+    );
+    assert!(
+        row.contains(&format!("\"exit_at_ms\":{exit_at_ms}")),
+        "{row}"
+    );
+    assert!(!row.contains("bytes in observation"), "{row}");
 }
 
 /// The shell set on the local engine, scripted, through `run-agent` on the
@@ -2001,7 +2065,7 @@ fn fixtures_load_and_agree() {
                 .env("TENGU_HOME", &ws.home)
                 .env("TENGU_MATRIX_WORKSPACE", &ws.path)
                 .env("TENGU_MATRIX_FIXTURES", FIXTURES)
-                .env("TENGU_MATRIX_MCP_TOKEN", &ws.mcp_token)
+                .env("TENGU_MATRIX_MCP_VALUE", &ws.mcp_token)
                 .env_remove("TENGU_CONFIG")
                 .env_remove("TENGU_EGRESS")
                 .env_remove("TENGU_SECRETS_LOADED")

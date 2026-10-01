@@ -21,7 +21,8 @@ pub const MAX_FEATURE_STR: usize = 64;
 /// only line 1 of older tool results, capped at 200 chars).
 pub const MAX_LINE1_CHARS: usize = 200;
 /// `render_text` omits `data` above this many chars (never cut mid-JSON);
-/// `compact_text` (local engines) replaces it at any size.
+/// `compact_text` replaces it when a local engine's per-result cap is
+/// exceeded (`application/chat/tool_loop.rs::fit_tool_result`).
 pub const MAX_DATA_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,7 +337,9 @@ impl Observation {
     }
 
     /// Compact LLM text for small context windows (`engine = "local"`,
-    /// `application/chat/tool_loop.rs::fit_tool_result`): `text` — this
+    /// `application/chat/tool_loop.rs::fit_tool_result` — only when the full
+    /// text exceeds the engine's per-result cap; a row that fits reaches the
+    /// model whole): `text` — this
     /// row's `render_text` plus anything the tool appended (the `lp_decide`
     /// commit note) — with the `data` line replaced by
     /// `data: <n> bytes in observation <key>` (full key). Line 1, features,

@@ -1304,7 +1304,8 @@ pub(crate) mod tests {
             json!({"coin": "xyz:URANIUM", "status": "absent", "delisted": true})
         );
         // Bounded text: the whole data line (10 720 chars) fits the render
-        // limit; local engines get a store pointer instead (`compact_text`).
+        // limit; a local engine whose per-result cap it exceeds (16k window:
+        // 8 192 chars) gets a store pointer instead (`compact_text`).
         let text = o.render_text(NOW);
         assert!(text.len() < 12_000, "{} chars", text.len());
         let compact = o.compact_text(&text);

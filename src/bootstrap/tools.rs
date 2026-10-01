@@ -306,6 +306,24 @@ pub(crate) async fn with_mcp_bridge_tools(
     base
 }
 
+/// What a Claude Code engine (one that manages its own workspace) needs to
+/// reach tengu tools on a per-turn surface: the tool list for its MCP bridge
+/// — catalog, skills and `[[mcp_servers]]` tools, i.e. exactly what the
+/// executor advertises — plus the servers behind `{server}__{tool}` entries.
+/// Other engines get tools through the model API and need neither. An empty
+/// list (an orchestrator agent) means no bridge. Webhook turns and
+/// `tengu eval` / `tengu skill evolve` rows build their engine context with it.
+pub(crate) fn bridge_inputs(
+    manages_own_workspace: bool,
+    tool_defs: &[ToolDef],
+    mcp_servers: &[McpServerConfig],
+) -> (Option<Vec<ToolDef>>, Vec<McpServerConfig>) {
+    if !manages_own_workspace || tool_defs.is_empty() {
+        return (None, Vec::new());
+    }
+    (Some(tool_defs.to_vec()), mcp_servers.to_vec())
+}
+
 /// Compute the base tool list from workspace primitives and memory subsystem tools.
 ///
 /// This is the set of tools available before skill tools are added.
@@ -915,6 +933,30 @@ mod golden_tests {
         let listed = advertised(&["read_file", "fake__echo"]);
         assert!(listed.contains(&"fake__echo".to_string()));
         assert!(listed.contains(&"read_file".to_string()));
+    }
+
+    // Claude Code webhook and eval agents used to get `bridge_tools: None` —
+    // no tengu tools and no `[[mcp_servers]]` tools at all.
+    #[test]
+    fn bridge_inputs_go_to_engines_that_manage_their_workspace() {
+        let tools = vec![
+            ToolDef::new("http_request", "d", serde_json::json!({})),
+            ToolDef::new("fake__echo", "d", serde_json::json!({})),
+        ];
+        let servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+
+        let (bridge, passed) = bridge_inputs(true, &tools, &servers);
+        let names: Vec<String> = bridge.unwrap().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["http_request", "fake__echo"]);
+        assert_eq!(passed.len(), 1);
+
+        // OpenRouter-style engines: tools go through the model API instead.
+        let (bridge, passed) = bridge_inputs(false, &tools, &servers);
+        assert!(bridge.is_none() && passed.is_empty());
+        // Orchestrator agent (no tools): no bridge.
+        assert!(bridge_inputs(true, &[], &servers).0.is_none());
     }
 
     // In-process Claude Code agents (TUI / Telegram): the bridge tool list

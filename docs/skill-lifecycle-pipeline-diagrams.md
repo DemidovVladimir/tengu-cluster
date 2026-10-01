@@ -814,7 +814,7 @@ instructions = "Execute the fixture; call tools as needed."
 max_tokens_per_flow = 50_000
 ```
 
-`tengu eval <skill> --sandbox <name>` overrides this file with `sandboxes/<name>/config.toml`. `load_eval_config` refuses `engine = "claude_code"` — a skill distilled from a Claude Code agent inherits that engine, so run its eval with `--sandbox` pointing at an OpenRouter config (or edit the seeded file).
+`tengu eval <skill> --sandbox <name>` overrides this file with `sandboxes/<name>/config.toml`. A skill distilled from a Claude Code agent inherits `engine = "claude_code"`: its eval runs the tools through the MCP bridge, which loads the expanded file with `Config::load` (`eval.rs::bridge_config_file`) — keep `workspace_tools` to opt-in names (catalog tools go in `tools`), and give rows with `stubs` an OpenRouter / local agent (the bridge has no stub layer; such a row is refused).
 
 ---
 

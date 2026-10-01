@@ -5,7 +5,7 @@
 //! | Engine | Tool result entering the context |
 //! |---|---|
 //! | `tool_result_char_cap() = None` (OpenRouter, Claude Code) | text capped at `limits.max_tool_result_chars` |
-//! | `Some(cap)` (local) | `fit_tool_result`: typed row `data` → store-key pointer, then ≤ `min(cap, max_tool_result_chars)` footer included |
+//! | `Some(cap)` (local) | `fit_tool_result`, ≤ `min(cap, max_tool_result_chars)` footer included: a result that fits stays whole; above it a typed row's `data` → store-key pointer, then the cut |
 //!
 //! Activity: `EngineResponse.tool_runs` lists every call with its outcome —
 //! the ones run here and the ones the engine ran itself
@@ -394,14 +394,22 @@ pub(crate) fn compact_older_tool_results(older: &mut [Message], limit: usize) {
 }
 
 /// Context text of one tool result for an engine with a per-result cap
-/// (`Engine::tool_result_char_cap` — local models): a typed row's `data`
-/// swapped for its store-key pointer (`Observation::compact_text`), then the
-/// whole — truncation footer included — within `max_chars`.
+/// (`Engine::tool_result_char_cap` — local models), truncation footer
+/// included, within `max_chars`:
+///
+/// | Result | Context text |
+/// |---|---|
+/// | fits | whole — a typed row keeps its `data` (the ids, sides, sizes and deadlines a follow-up call needs: no tool reads a row back by key) |
+/// | typed row above the cap | `data` swapped for its store-key pointer (`Observation::compact_text`), then cut if still above |
+/// | other text above the cap | cut |
 pub(crate) fn fit_tool_result(
     text: &str,
     observation: Option<&Observation>,
     max_chars: usize,
 ) -> String {
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
     let text = match observation {
         Some(obs) => obs.compact_text(text),
         None => text.to_string(),
@@ -930,6 +938,42 @@ mod tests {
         assert_eq!(fit_tool_result("short", None, 8_192), "short");
         // Uncapped engines keep the footer-after-cut behaviour.
         assert!(truncate_tool_result(&text, 100).len() > 100);
+    }
+
+    /// A typed row that fits the cap reaches the model whole — its `data`
+    /// holds the ids a follow-up call targets (a position's instrument,
+    /// size, exit deadline); only a row above the cap gets the store-key
+    /// pointer, and the pointer version then fits.
+    #[test]
+    fn fit_compacts_a_typed_row_only_above_the_cap() {
+        let mut small = typed_obs();
+        small.data = serde_json::json!({"positions": [{
+            "instrument": "hyperliquid:xyz:TSLA", "qty": 0.043, "exit_at_ms": 1_790_779_000_000_i64
+        }]});
+        let text = small.render_text(0);
+        let cap = tool_result_char_budget(16_384);
+        assert!(text.len() < cap, "{} chars", text.len());
+        let fitted = fit_tool_result(&text, Some(&small), cap);
+        assert_eq!(fitted, text, "a row that fits stays whole");
+        assert!(fitted.contains("\"instrument\":\"hyperliquid:xyz:TSLA\""));
+        assert!(!fitted.contains("bytes in observation"), "{fitted}");
+
+        let large = typed_obs();
+        let text = large.render_text(0);
+        assert!(text.len() > cap, "{} chars", text.len());
+        let fitted = fit_tool_result(&text, Some(&large), cap);
+        assert!(fitted.len() <= cap, "{} chars", fitted.len());
+        assert_eq!(fitted.lines().next(), text.lines().next(), "line 1 intact");
+        assert!(
+            fitted.ends_with(&format!(
+                "data: {} bytes in observation {KEY}",
+                large.data.to_string().len()
+            )),
+            "{fitted}"
+        );
+        // Exactly at the cap is still a fit.
+        let fitted = fit_tool_result(&text, Some(&large), text.len());
+        assert_eq!(fitted, text);
     }
 
     #[test]

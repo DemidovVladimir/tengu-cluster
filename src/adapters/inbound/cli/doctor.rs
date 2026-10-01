@@ -398,6 +398,7 @@ async fn smoke_agent(
         StepOpts {
             grant_workspace: true,
             summary_file: None,
+            config_file: None,
         },
     )
     .context("build engine")?;

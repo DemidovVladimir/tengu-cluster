@@ -3,6 +3,12 @@
 //! Spec: `docs/skill-lifecycle-validation.md (the 2026-04-19 eval-runner design spec was not archived)`.
 //! Replays `skills/<skill>/evals/prompts.{md,yaml}` through a live agent,
 //! scores each row pass/fail via an LLM judge, and writes a report.
+//! `tengu skill evolve` scores through the same `run_skill`.
+//!
+//! | Row agent | Tools |
+//! |---|---|
+//! | `openrouter` / `local` | in-process executor (eval config folded like `Config::load`) → `SanitizedToolExecutor` (`process_secret_registry`) → the row's `StubbedExecutor` |
+//! | `claude_code` | the MCP bridge (`bootstrap::tools::bridge_inputs`), loading the expanded eval config (`bridge_config_file`, validated first); a row with `stubs` is refused (`refuse_stubs_on_bridge`) |
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -661,23 +667,121 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
     }
 }
 
-pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Config> {
+/// The eval config text with `{TMP_WORKSPACE}` replaced by `tmp_workspace`.
+fn expanded_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<String> {
     let raw = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let expanded = raw.replace("{TMP_WORKSPACE}", &tmp_workspace.to_string_lossy());
-    let cfg: Config =
-        toml::from_str(&expanded).with_context(|| format!("parse {}", path.display()))?;
+    Ok(raw.replace("{TMP_WORKSPACE}", &tmp_workspace.to_string_lossy()))
+}
 
-    for (name, agent) in &cfg.agents {
-        if agent.engine == "claude_code" {
-            anyhow::bail!(
-                "agent '{}': claude_code engine not supported by eval runner in v1 \
-                 (spec §3 non-goal). Switch to engine = \"openrouter\" or pass --sandbox \
-                 with an openrouter config.",
-                name
-            );
-        }
-    }
+/// The eval config (skill-local `evals/config.toml` or `--sandbox`) with
+/// `{TMP_WORKSPACE}` expanded. Parsed leniently (seeded configs list any
+/// tool in `workspace_tools`), then folded like `Config::load` does —
+/// `[default_scopes]`, sandbox sections, `no_shell_fallback` in a hardened
+/// sandbox — so an eval agent's tools run under the scopes every other
+/// surface applies. A `claude_code` agent also needs [`bridge_config_file`].
+pub fn load_eval_config(path: &Path, tmp_workspace: &Path) -> anyhow::Result<Config> {
+    let expanded = expanded_eval_config(path, tmp_workspace)?;
+    let mut cfg: Config =
+        toml::from_str(&expanded).with_context(|| format!("parse {}", path.display()))?;
+    cfg.fold_default_scopes();
     Ok(cfg)
+}
+
+/// The agents a row may run, by name: its config's default agent (direct
+/// dispatch), or every orchestrator worker — the planner gets no tools.
+fn runnable_agents<'a>(
+    cfg: &'a Config,
+    default: (&'a str, &'a AgentConfig),
+) -> Vec<(&'a str, &'a AgentConfig)> {
+    let Some(orchestrator) = cfg.orchestrator.as_ref() else {
+        return vec![default];
+    };
+    cfg.agents
+        .iter()
+        .filter(|(name, _)| **name != orchestrator.agent)
+        .map(|(name, agent)| (name.as_str(), agent))
+        .collect()
+}
+
+/// The expanded eval config as a file for a `claude_code` agent's MCP bridge
+/// (`TENGU_CONFIG`), so the bridge runs tools as that `[agents.<a>]` block of
+/// this config — not of the base config in the env. `None` when no agent the
+/// row may run (`runnable`) is a `claude_code` one. The bridge loads it
+/// strictly (`Config::load`: validated + folded; an invalid file stops the
+/// bridge), so it is loaded here first and refused with the reason. Keep the
+/// handle alive for the row.
+fn bridge_config_file(
+    path: &Path,
+    tmp_workspace: &Path,
+    runnable: &[(&str, &AgentConfig)],
+) -> anyhow::Result<Option<tempfile::NamedTempFile>> {
+    let Some((agent, _)) = runnable.iter().find(|(_, a)| a.engine == "claude_code") else {
+        return Ok(None);
+    };
+    let mut file = tempfile::Builder::new()
+        .prefix("tengu-eval-config-")
+        .suffix(".toml")
+        .tempfile()
+        .context("create the eval config file for the MCP bridge")?;
+    std::io::Write::write_all(
+        &mut file,
+        expanded_eval_config(path, tmp_workspace)?.as_bytes(),
+    )
+    .context("write the eval config file for the MCP bridge")?;
+    Config::load(file.path()).with_context(|| {
+        format!(
+            "agent '{agent}' runs claude_code: its MCP bridge loads {} with `Config::load` \
+             (validated), which refuses it",
+            path.display()
+        )
+    })?;
+    Ok(Some(file))
+}
+
+/// The engine of eval agent `agent_id`: a `claude_code` agent's MCP bridge
+/// loads `bridge_config` (the eval config, [`bridge_config_file`]) and runs
+/// tools as that agent; other engines ignore it.
+fn build_eval_engine(
+    agent_id: &str,
+    agent: &AgentConfig,
+    cfg: &Config,
+    bridge_config: Option<&Path>,
+) -> anyhow::Result<Box<dyn Engine>> {
+    crate::adapters::outbound::engines::build_step_engine(
+        agent_id,
+        agent,
+        cfg.claude_code.as_ref(),
+        crate::adapters::outbound::engines::StepOpts {
+            config_file: bridge_config.map(Path::to_path_buf),
+            ..Default::default()
+        },
+    )
+}
+
+/// A row's stubs replace tool results inside this process
+/// (`StubbedExecutor`). A `claude_code` agent's tools run in its MCP bridge
+/// — a process the Claude CLI starts, which has no stub layer (a stub hook
+/// in the production bridge would fake results wherever its env leaked) —
+/// so a stubbed row on such an agent would call the real tools: refused
+/// instead. `runnable` = the agents the row may run ([`runnable_agents`]).
+fn refuse_stubs_on_bridge(
+    row: &PromptRow,
+    runnable: &[(&str, &AgentConfig)],
+) -> anyhow::Result<()> {
+    if row.stubs.is_empty() {
+        return Ok(());
+    }
+    let Some((name, _)) = runnable.iter().find(|(_, a)| a.engine == "claude_code") else {
+        return Ok(());
+    };
+    let tools: Vec<&str> = row.stubs.iter().map(|s| s.tool.as_str()).collect();
+    anyhow::bail!(
+        "row '{}': stubs ({}) need an engine whose tool calls run in this process — \
+         agent '{name}' runs claude_code, whose tools run in its MCP bridge (no stub \
+         layer); run the row on an openrouter / local agent or drop its stubs",
+        row.id,
+        tools.join(", ")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -886,10 +990,10 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 // Per-row driver
 // ---------------------------------------------------------------------------
+use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
 use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
-use crate::domain::secrets::SecretRegistry;
 use crate::ports::tool_activity::ToolActivityPort;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
@@ -1321,7 +1425,8 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let ws = tempfile::tempdir_in(std::env::temp_dir()).context("create per-row tmp workspace")?;
     let ws_path = ws.path().to_path_buf();
 
-    // 2. Load the eval config with this workspace substituted.
+    // 2. Load the eval config with this workspace substituted (+ the file a
+    //    `claude_code` agent's bridge loads).
     let config_path = ctx.config_path_override.unwrap_or(&ctx.skill.config_path);
     let cfg = load_eval_config(config_path, &ws_path)?;
     let agent: &AgentConfig = cfg
@@ -1330,25 +1435,28 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         .find(|a| a.default)
         .or_else(|| cfg.agents.values().next())
         .ok_or_else(|| anyhow::anyhow!("eval config has no agent defined"))?;
-
-    // 2b. Branch: orchestrator vs direct dispatch.
-    if cfg.orchestrator.is_some() {
-        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg).await;
-    }
-
-    // 3. Build the engine.
     let agent_id = cfg
         .agents
         .iter()
         .find(|(_, v)| std::ptr::eq(*v, agent))
         .map(|(k, _)| k.as_str())
         .unwrap_or("default");
-    let engine_box = crate::adapters::outbound::engines::build_engine(
+    let runnable = runnable_agents(&cfg, (agent_id, agent));
+    refuse_stubs_on_bridge(ctx.row, &runnable)?;
+    let bridge_config = bridge_config_file(config_path, &ws_path, &runnable)?;
+
+    // 2b. Branch: orchestrator vs direct dispatch.
+    if cfg.orchestrator.is_some() {
+        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg, bridge_config).await;
+    }
+
+    // 3. Build the engine.
+    let engine: Arc<dyn Engine> = Arc::from(build_eval_engine(
         agent_id,
         agent,
-        cfg.claude_code.as_ref(),
-    )?;
-    let engine: Arc<dyn Engine> = Arc::from(engine_box);
+        &cfg,
+        bridge_config.as_ref().map(|f| f.path()),
+    )?);
 
     // 4. Build tool executor using the orchestrator.rs pattern.
     // Tilde expansion required — sandbox configs commonly write
@@ -1362,7 +1470,10 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         .map(|p| crate::config::paths::expand_tilde(p))
         .unwrap_or_else(|| ws_path.clone());
 
-    let secret_registry = Arc::new(SecretRegistry::new());
+    // The process registry (vault names, `.env` credentials, never prompts):
+    // tool output reaches the model and the judge redacted, as on every
+    // surface.
+    let secret_registry = Arc::new(process_secret_registry(None));
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
     // The agent's `tools` list, as on every surface.
@@ -1404,14 +1515,18 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 if !extra.is_empty() {
                     tool_defs.extend(extra);
                 }
-                Arc::new(executor) as Arc<dyn crate::ports::engine::ToolExecutor>
+                Arc::new(SanitizedToolExecutor::new(
+                    Arc::new(executor),
+                    Arc::clone(&secret_registry),
+                )) as Arc<dyn crate::ports::engine::ToolExecutor>
             }
             None => {
                 Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>
             }
         };
 
-    // 5. Wrap in StubbedExecutor for this row.
+    // 5. Wrap in StubbedExecutor for this row (in-process engines only:
+    //    `refuse_stubs_on_bridge` above).
     let stubbed = StubbedExecutor::new(&*inner_executor, &ctx.row.stubs);
 
     // 6. Observation tap.
@@ -1447,13 +1562,20 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         },
     ];
 
+    // A Claude Code agent reaches its tools through the MCP bridge: the
+    // executor's tool list + the `[[mcp_servers]]` behind it, as webhooks do.
+    let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
+        engine.manages_own_workspace(),
+        &tool_defs,
+        &cfg.mcp_servers,
+    );
     let engine_context = EngineContext {
         workspace: Some(workspace_path.clone()),
         system_prompt: Some(system_prompt.clone()),
-        bridge_tools: None,
+        bridge_tools,
         max_tool_rounds: Some(agent.limits.max_tool_rounds),
         max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
-        mcp_servers: Vec::new(),
+        mcp_servers,
     };
 
     let driver_fut = collect_engine_response(
@@ -1664,6 +1786,9 @@ struct EvalChatServiceFactory {
     cfg: Arc<Config>,
     ws_path: PathBuf,
     accum: Arc<EvalRowAccum>,
+    /// The eval config file a `claude_code` worker's MCP bridge loads
+    /// (`bridge_config_file`; the row keeps it alive).
+    bridge_config: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -1677,12 +1802,12 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
 
         // Per-step engine + tools + system prompt. Mirrors the direct
         // eval path (run_row steps 3–5), parameterized by agent name.
-        let engine_box = crate::adapters::outbound::engines::build_engine(
+        let engine: Arc<dyn Engine> = Arc::from(build_eval_engine(
             agent_name,
             agent,
-            self.cfg.claude_code.as_ref(),
-        )?;
-        let engine: Arc<dyn Engine> = Arc::from(engine_box);
+            &self.cfg,
+            self.bridge_config.as_deref(),
+        )?);
         {
             let mut eid = self.accum.engine_id.lock().unwrap();
             if eid.is_empty() {
@@ -1697,7 +1822,8 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
             .map(|p| crate::config::paths::expand_tilde(p))
             .unwrap_or_else(|| self.ws_path.clone());
 
-        let secret_registry = Arc::new(SecretRegistry::new());
+        // Redacted like the direct path (`process_secret_registry`).
+        let secret_registry = Arc::new(process_secret_registry(None));
         let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
         // Orchestrator agent gets NO tools — its job is to emit JSON only.
@@ -1757,7 +1883,10 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
                     if !extra.is_empty() {
                         tool_defs.extend(extra);
                     }
-                    Arc::new(executor) as Arc<dyn crate::ports::engine::ToolExecutor>
+                    Arc::new(SanitizedToolExecutor::new(
+                        Arc::new(executor),
+                        Arc::clone(&secret_registry),
+                    )) as Arc<dyn crate::ports::engine::ToolExecutor>
                 }
                 None => {
                     Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>
@@ -1794,13 +1923,18 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
             },
         ];
 
+        let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
+            engine.manages_own_workspace(),
+            &tool_defs,
+            &self.cfg.mcp_servers,
+        );
         let engine_context = EngineContext {
             workspace: Some(workspace_path.clone()),
             system_prompt: Some(system_prompt.clone()),
-            bridge_tools: None,
+            bridge_tools,
             max_tool_rounds: Some(agent.limits.max_tool_rounds),
             max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
-            mcp_servers: Vec::new(),
+            mcp_servers,
         };
 
         let response = crate::application::chat::tool_loop::collect_engine_response(
@@ -1835,6 +1969,9 @@ async fn run_row_via_orchestrator(
     _ws: tempfile::TempDir,
     ws_path: PathBuf,
     cfg: Config,
+    // `run_row` refused stubs on a `claude_code` worker and wrote this file
+    // for one; it stays alive until the row ends.
+    bridge_config: Option<tempfile::NamedTempFile>,
 ) -> anyhow::Result<RowResult> {
     // Shared state threaded through every worker step the orchestrator
     // spawns for this row.
@@ -1852,6 +1989,7 @@ async fn run_row_via_orchestrator(
             cfg: Arc::clone(&cfg_arc),
             ws_path: ws_path.clone(),
             accum: Arc::clone(&accum),
+            bridge_config: bridge_config.as_ref().map(|f| f.path().to_path_buf()),
         });
 
     // Evals run without a live memory backend — register an empty
@@ -2418,27 +2556,397 @@ skill_packages = ["orchestration"]
         assert_eq!(agent.workspace.as_deref(), Some(ws.as_path()));
     }
 
+    /// `[default_scopes]` reach eval agents as on every other surface.
     #[test]
-    fn eval_config_rejects_claude_code_engine() {
+    fn eval_config_folds_default_scopes() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("config.toml");
         std::fs::write(
             &config_path,
             r#"
+[default_scopes.read_file]
+fs_roots = ["/nonexistent/eval-scope"]
+
 [agents.main]
-engine = "claude_code"
-model = "sonnet"
+engine = "openrouter"
+model = "x/y"
 default = true
 workspace = "{TMP_WORKSPACE}"
 "#,
         )
         .unwrap();
+        let cfg = load_eval_config(&config_path, tmp.path()).unwrap();
+        let scope = &cfg.agents["main"].scopes["read_file"];
+        assert_eq!(
+            scope.fs_roots,
+            [std::path::PathBuf::from("/nonexistent/eval-scope")]
+        );
+    }
 
-        let err = load_eval_config(&config_path, tmp.path()).unwrap_err();
+    const CLAUDE_EVAL: &str = r#"
+[agents.cc-eval]
+engine = "claude_code"
+model = "claude-haiku-4-5"
+default = true
+workspace = "{TMP_WORKSPACE}"
+tools = ["read_file", "list_directory"]
+
+[agents.cc-eval.claude_code]
+builtin_tools_profile = "none"
+"#;
+
+    /// A `claude_code` eval agent loads (it used to be refused): its bridge
+    /// gets the expanded eval config as a file; a config `Config::load`
+    /// refuses fails with the reason; no `claude_code` agent = no file.
+    #[test]
+    fn claude_code_eval_agent_gets_a_bridge_config_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.toml");
+        let ws = tmp.path().join("row-ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        // The file the bridge of the row's default agent (direct dispatch)
+        // would get.
+        let file_for = |body: &str| {
+            std::fs::write(&config_path, body).unwrap();
+            let cfg = load_eval_config(&config_path, &ws).expect("the eval config loads");
+            let (name, agent) = cfg
+                .agents
+                .iter()
+                .find(|(_, a)| a.default)
+                .map(|(n, a)| (n.as_str(), a))
+                .unwrap();
+            let runnable = runnable_agents(&cfg, (name, agent));
+            bridge_config_file(&config_path, &ws, &runnable)
+        };
+        let file = file_for(CLAUDE_EVAL)
+            .unwrap()
+            .expect("a bridge config file");
+        let loaded = Config::load(file.path()).unwrap();
+        assert_eq!(
+            loaded.agents["cc-eval"].workspace.as_deref(),
+            Some(ws.as_path())
+        );
+
+        // `workspace_tools` takes opt-in names only: the bridge would exit.
+        let invalid = CLAUDE_EVAL.replace(
+            "tools = [\"read_file\", \"list_directory\"]",
+            "workspace_tools = [\"http_request\"]",
+        );
+        let err = format!("{:#}", file_for(&invalid).unwrap_err());
         assert!(
-            err.to_string().contains("claude_code engine not supported"),
-            "got: {}",
-            err
+            err.contains("agent 'cc-eval' runs claude_code") && err.contains("http_request"),
+            "{err}"
+        );
+
+        // The row runs only the default (openrouter) agent: no bridge, so a
+        // claude_code agent beside it is never checked.
+        let openrouter =
+            "[agents.main]\nengine = \"openrouter\"\nmodel = \"x/y\"\ndefault = true\n";
+        assert!(file_for(openrouter).unwrap().is_none());
+        let beside = format!(
+            "{openrouter}\n{}",
+            invalid.replace("default = true", "default = false")
+        );
+        assert!(file_for(&beside).unwrap().is_none());
+    }
+
+    /// Judge stand-in: every row passes.
+    struct PassJudge;
+
+    #[async_trait]
+    impl Engine for PassJudge {
+        fn id(&self) -> &str {
+            "pass-judge"
+        }
+        fn context_window(&self) -> usize {
+            8_000
+        }
+        fn supports_tool_use(&self) -> bool {
+            false
+        }
+        fn manages_own_workspace(&self) -> bool {
+            false
+        }
+        fn available_models(&self) -> Vec<crate::domain::message::ModelInfo> {
+            Vec::new()
+        }
+        async fn run(
+            &self,
+            _messages: &[Message],
+            _tools: &[crate::domain::message::ToolDef],
+            _context: &EngineContext,
+        ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+        {
+            Ok(Box::pin(futures::stream::iter(vec![
+                StreamEvent::TextDelta {
+                    text: r#"{"verdict": "pass", "rationale": "ok"}"#.into(),
+                },
+                StreamEvent::Done,
+            ])))
+        }
+    }
+
+    /// `run_row` on `config` (no transcript, no metrics), the judge passing.
+    async fn run_one_row(
+        config: &Path,
+        out_dir: &Path,
+        stubs: Vec<StubSpec>,
+    ) -> anyhow::Result<RowResult> {
+        let skill = SkillUnderTest {
+            name: "probe".into(),
+            tier: SkillTier::Project,
+            evals_dir: out_dir.to_path_buf(),
+            prompts_path: out_dir.join("prompts.yaml"),
+            prompts_format: "yaml".into(),
+            config_path: config.to_path_buf(),
+            skill_md_path: out_dir.join("SKILL.md"),
+            skill_dir: out_dir.to_path_buf(),
+        };
+        let row = PromptRow {
+            id: "r1".into(),
+            prompt: "read secret.txt".into(),
+            expected: "the file is read".into(),
+            timeout_secs: 20,
+            stubs,
+        };
+        let judge: Arc<dyn Engine> = Arc::new(PassJudge);
+        run_row(RowCtx {
+            skill: &skill,
+            row: &row,
+            judge: Arc::clone(&judge),
+            out_dir,
+            keep_workspace: false,
+            config_path_override: None,
+            skill_metrics: &[],
+            judge_client: Arc::new(EvalJudgeClient { engine: judge }),
+            persist_transcript: false,
+        })
+        .await
+    }
+
+    /// A stubbed row never reaches a `claude_code` agent: its tools run in
+    /// the MCP bridge, which has no stub layer — refused before any engine
+    /// runs, naming the stubbed tools.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stubbed_row_on_a_claude_code_agent_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config.toml");
+        std::fs::write(&config, CLAUDE_EVAL).unwrap();
+        let stubs = vec![StubSpec {
+            tool: "http_request".into(),
+            responses: vec![serde_json::json!({"status": 200})],
+        }];
+        let err = run_one_row(&config, tmp.path(), stubs)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("stubs (http_request)")
+                && err.contains("agent 'cc-eval' runs claude_code"),
+            "{err}"
+        );
+    }
+
+    /// OpenAI-compatible mock on a loopback port: answers `replies` in order
+    /// (one connection each) and returns the request bodies.
+    async fn mock_chat_server(
+        replies: Vec<String>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for reply in replies {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 16_384];
+                let body = loop {
+                    let n = sock.read(&mut chunk).await.unwrap();
+                    if n == 0 {
+                        break String::new();
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+                    let len: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse().unwrap());
+                    if buf.len() >= end + 4 + len {
+                        break String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).into_owned();
+                    }
+                };
+                bodies.push(body);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+                sock.write_all(resp.as_bytes()).await.unwrap();
+                sock.shutdown().await.ok();
+            }
+            bodies
+        });
+        (url, handle)
+    }
+
+    /// Tool output reaches the eval model redacted: a `local` agent (scripted
+    /// mock server) reads a file holding a `.env`-style credential
+    /// (`*_API_KEY` in the env, no vault); the next request carries
+    /// `[REDACTED]`, never the value.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn eval_tool_output_reaches_the_model_redacted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let secret = format!("eval-probe-{}", uuid::Uuid::new_v4().simple());
+        let var = format!("TENGU_EVAL_PROBE_{}_API_KEY", uuid::Uuid::new_v4().simple());
+        std::env::set_var(&var, &secret);
+        std::fs::write(ws.join("secret.txt"), format!("key={secret}\n")).unwrap();
+        let (url, server) = mock_chat_server(vec![
+            serde_json::json!({"choices": [{"message": {"content": null, "tool_calls": [{
+                "id": "c1", "type": "function",
+                "function": {"name": "read_file", "arguments": "{\"path\": \"secret.txt\"}"}
+            }]}, "finish_reason": "tool_calls"}]})
+            .to_string(),
+            serde_json::json!({"choices": [{"message": {"content": "read it"}, "finish_reason": "stop"}]})
+                .to_string(),
+        ])
+        .await;
+        let config = tmp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[agents.main]\nengine = \"local\"\nmodel = \"mock\"\ndefault = true\n\
+                 workspace = \"{}\"\ntools = [\"read_file\"]\n\n\
+                 [agents.main.local]\nbase_url = \"{url}\"\napi_key_env = \"\"\n\n\
+                 [agents.main.limits]\ncontext_window = 16384\n",
+                ws.display()
+            ),
+        )
+        .unwrap();
+        let row = run_one_row(&config, tmp.path(), Vec::new()).await;
+        std::env::remove_var(&var);
+        let row = row.unwrap();
+        assert_eq!(row.verdict, "pass");
+        let bodies = server.await.unwrap();
+        assert_eq!(bodies.len(), 2);
+        let second: serde_json::Value = serde_json::from_str(&bodies[1]).unwrap();
+        let tool_msg = second["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "tool")
+            .and_then(|m| m["content"].as_str())
+            .unwrap()
+            .to_string();
+        assert!(
+            tool_msg.contains("key=[REDACTED]") && !tool_msg.contains(&secret),
+            "{tool_msg}"
+        );
+        assert!(!bodies[1].contains(&secret));
+    }
+
+    /// A `claude_code` eval agent gets its tengu tools through the MCP
+    /// bridge, like webhooks: a stub `claude` CLI logs its argv and the
+    /// `--mcp-config` it was handed — `--mcp-config` + `--allowedTools` for
+    /// the agent's tools, the bridge running as `cc-eval` of the expanded
+    /// eval config (not the base config in the env).
+    #[cfg(all(feature = "claude_code", unix))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn claude_code_eval_agent_gets_its_tools_through_the_bridge() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("cli.log");
+        let cli = tmp.path().join("fake-claude.sh");
+        std::fs::write(
+            &cli,
+            format!(
+                r#"#!/bin/sh
+LOG="{log}"
+: > "$LOG"
+next=""
+cfg=""
+for a in "$@"; do
+  printf 'arg=%s\n' "$a" >> "$LOG"
+  if [ "$next" = "mcp" ]; then cfg="$a"; fi
+  next=""
+  if [ "$a" = "--mcp-config" ]; then next="mcp"; fi
+done
+if [ -n "$cfg" ]; then
+  printf 'mcp-config=%s\n' "$(cat "$cfg")" >> "$LOG"
+  conf=$(sed -n 's/.*"TENGU_CONFIG":"\([^"]*\)".*/\1/p' "$cfg")
+  printf -- '--- tengu-config\n' >> "$LOG"
+  cat "$conf" >> "$LOG"
+fi
+cat > /dev/null
+echo '{{"type":"result","subtype":"success","result":"done","is_error":false,"num_turns":1}}'
+"#,
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = tmp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[claude_code]\ncli_path = \"{}\"\n{CLAUDE_EVAL}",
+                cli.display()
+            ),
+        )
+        .unwrap();
+
+        let row = run_one_row(&config, tmp.path(), Vec::new()).await.unwrap();
+        assert_eq!(row.verdict, "pass");
+        let logged = std::fs::read_to_string(&log).unwrap();
+        let args: Vec<&str> = logged
+            .lines()
+            .filter_map(|l| l.strip_prefix("arg="))
+            .collect();
+        for want in [
+            "--strict-mcp-config",
+            "--mcp-config",
+            "--allowedTools",
+            "mcp__tengu-tools__read_file",
+            "mcp__tengu-tools__list_directory",
+        ] {
+            assert!(args.contains(&want), "{want} missing: {args:?}");
+        }
+        let mcp: serde_json::Value = serde_json::from_str(
+            logged
+                .lines()
+                .find_map(|l| l.strip_prefix("mcp-config="))
+                .expect("the CLI got an --mcp-config"),
+        )
+        .unwrap();
+        let env = &mcp["mcpServers"]["tengu-tools"]["env"];
+        assert_eq!(env["TENGU_BRIDGE_AGENT"], "cc-eval");
+        let bridged: Vec<String> = serde_json::from_str::<Vec<crate::domain::message::ToolDef>>(
+            env["TENGU_BRIDGE_TOOLS"].as_str().unwrap(),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+        assert!(
+            bridged.contains(&"read_file".to_string())
+                && bridged.contains(&"list_directory".to_string()),
+            "{bridged:?}"
+        );
+        let tengu_config = env["TENGU_CONFIG"].as_str().unwrap();
+        assert_ne!(
+            std::path::Path::new(tengu_config),
+            crate::config::paths::default_config_path(),
+            "the bridge must load the eval config"
+        );
+        let bridge_config = logged.split("--- tengu-config\n").nth(1).unwrap_or("");
+        assert!(bridge_config.contains("[agents.cc-eval]"), "{logged}");
+        assert!(
+            !bridge_config.contains("{TMP_WORKSPACE}"),
+            "{bridge_config}"
         );
     }
 

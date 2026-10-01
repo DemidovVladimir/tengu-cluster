@@ -6,12 +6,13 @@
 //! evidence behind them: `docs/tools.md` § Tool schema subset. Every
 //! violation is reported at once.
 //!
-//! | Source | Covers |
-//! |---|---|
-//! | `advertised_defs(true, WORKSPACE_TOOLS)` | every catalog row, opt-ins and memory included (`agentic_memory` under `postgres_memory`) |
-//! | `compress_and_store::definition()` | appended to every subagent |
-//! | `mcp_client::enumerate_tools` on the fake stdio server | `[[mcp_servers]]` tools as `{server}__{tool}` |
-//! | `SkillRegistry` over a fixture SKILL.md | shell-skill tools (`skill_to_tool_def`) |
+//! | Source | Covers | When |
+//! |---|---|---|
+//! | `advertised_defs(true, WORKSPACE_TOOLS)` | every catalog row, opt-ins and memory included (`agentic_memory` under `postgres_memory`) | CI (test below) |
+//! | `compress_and_store::definition()` | appended to every subagent | CI |
+//! | `mcp_client::enumerate_tools` on the fake stdio server | `[[mcp_servers]]` tools as `{server}__{tool}` | CI |
+//! | `SkillRegistry` over a fixture SKILL.md | shell-skill tools (`skill_to_tool_def`) | CI |
+//! | every tool a real `[[mcp_servers]]` entry lists (`mcp_client::linted_tool`: `McpPlugin::tools`, `enumerate_tools`) | external schemas tengu does not control | runtime: a violator is dropped with a warn naming the server, the tool and each rule |
 
 use serde_json::{Map, Value};
 
@@ -43,7 +44,7 @@ const FORBIDDEN: [&str; 8] = [
 ];
 
 /// Every rule `def` breaks, one line each: `<tool>: <where>: <problem>`.
-pub(super) fn violations(def: &ToolDef) -> Vec<String> {
+pub(crate) fn violations(def: &ToolDef) -> Vec<String> {
     let mut lint = Lint {
         tool: &def.name,
         out: Vec::new(),

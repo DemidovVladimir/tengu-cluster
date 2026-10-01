@@ -267,6 +267,7 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<(String, String)>
 /// | `TENGU_SECRETS_LOADED` set (an ancestor `tengu` opened the vault) | the env value of each name it lists — never prompts again |
 /// | else `vault` given and present (the CLI) | the vault, unlocked (prompt / `TENGU_MASTER_PASSWORD`), loaded into the env; names published in `TENGU_SECRETS_LOADED` |
 /// | always | `TENGU_MASTER_PASSWORD` |
+/// | always | every env var named `*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_PRIVATE_KEY` whose value passes `domain::secrets::is_env_secret` (≥ 8 chars, no placeholder / number / template, never a public on-chain id) — `.env` (loaded by `main`) and exported keys, inherited by `run-agent` and the bridge, so every surface registers the same values |
 ///
 /// `tengu mcp-bridge` and `run-agent` pass `None`: their stdin is a protocol
 /// channel, so they never prompt.
@@ -289,7 +290,25 @@ pub(crate) fn process_secret_registry(vault: Option<&Path>) -> SecretRegistry {
     if let Ok(pw) = std::env::var("TENGU_MASTER_PASSWORD") {
         registry.register(pw);
     }
+    register_env_secrets(&mut registry, std::env::vars_os());
     registry
+}
+
+/// Register the value of every `name = value` in `vars` that
+/// `domain::secrets::is_env_secret` calls a credential (trimmed); a name
+/// or value that is not UTF-8 is skipped.
+fn register_env_secrets(
+    registry: &mut SecretRegistry,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    for (name, value) in vars {
+        let (Some(name), Some(value)) = (name.to_str(), value.to_str()) else {
+            continue;
+        };
+        if crate::domain::secrets::is_env_secret(name, value) {
+            registry.register(value.trim().to_string());
+        }
+    }
 }
 
 /// Register the value of each var named in the comma-separated `names`
@@ -544,6 +563,58 @@ mod tests {
         });
         assert_eq!(reg.redact("k=alpha-0123456789;"), "k=[REDACTED];");
         assert_eq!(reg.redact("nothing else"), "nothing else");
+    }
+
+    /// `.env` / exported credentials by name (`domain::secrets::is_env_secret`):
+    /// keys redacted, a token mint and a short value left alone, non-UTF-8
+    /// skipped.
+    #[test]
+    fn env_credentials_register_by_name() {
+        use std::ffi::OsString;
+        const MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+        let mut vars: Vec<(OsString, OsString)> = [
+            ("OPENROUTER_API_KEY", "sk-or-v1-0123456789abcdef"),
+            ("PRIVY_APP_SECRET", " privy-app-secret-0123 "),
+            ("USDC_TOKEN", MINT),
+            ("POSTGRES_PASSWORD", "tengu"),
+            ("PATH", "/usr/bin:/bin"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v.into()))
+        .collect();
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            vars.push((
+                "BINARY_SECRET".into(),
+                OsString::from_vec(vec![0xff, 0xfe, b'a', b'b', b'c', b'd', b'e', b'f', b'g']),
+            ));
+        }
+        let mut reg = SecretRegistry::new();
+        register_env_secrets(&mut reg, vars);
+        let out = reg.redact(&format!(
+            "k=sk-or-v1-0123456789abcdef p=privy-app-secret-0123 mint={MINT} db=tengu path=/usr/bin:/bin"
+        ));
+        assert_eq!(
+            out,
+            format!("k=[REDACTED] p=[REDACTED] mint={MINT} db=tengu path=/usr/bin:/bin")
+        );
+    }
+
+    /// The process registry picks credentials up from the live env, so
+    /// every surface (CLI, `run-agent`, the bridge, webhooks, eval) redacts
+    /// a `.env` key without a vault.
+    #[test]
+    fn process_registry_reads_env_credentials() {
+        let name = format!(
+            "TENGU_REDACT_PROBE_{}_API_KEY",
+            uuid::Uuid::new_v4().simple()
+        );
+        let value = format!("probe-{}", uuid::Uuid::new_v4().simple());
+        std::env::set_var(&name, &value);
+        let reg = process_secret_registry(None);
+        std::env::remove_var(&name);
+        assert_eq!(reg.redact(&format!("key {value}")), "key [REDACTED]");
     }
 
     #[tokio::test]

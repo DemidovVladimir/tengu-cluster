@@ -2,7 +2,7 @@
 # routable agent per model. tests/engine_matrix.rs runs `tengu run-agent` on
 # it once per open tool set (the IPC `compose` picks the set; the shell set
 # composes the fixture skill tests/fixtures/skills/matrix_cat). The test sets
-# TENGU_MATRIX_WORKSPACE, TENGU_MATRIX_FIXTURES (../), TENGU_MATRIX_MCP_TOKEN
+# TENGU_MATRIX_WORKSPACE, TENGU_MATRIX_FIXTURES (../), TENGU_MATRIX_MCP_VALUE
 # and TENGU_HOME; OPENROUTER_API_KEY comes from the env or the repo's .env.
 #
 # The sets that need a sandbox without [risk] (a shell, [[mcp_servers]],
@@ -30,7 +30,7 @@ enabled = true
 name = "matrix"
 transport = "stdio"
 command = ["sh", "${TENGU_MATRIX_FIXTURES}/token_mcp_server.sh"]
-env = { MATRIX_TOKEN = "$TENGU_MATRIX_MCP_TOKEN" }
+env = { MATRIX_VALUE = "$TENGU_MATRIX_MCP_VALUE" }
 
 # Configured scopes that do NOT cover the workspace: they work only through
 # the workspace grant of a run-agent step (the bridge's too, for Claude Code).

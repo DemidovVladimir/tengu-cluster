@@ -224,10 +224,11 @@ Each tool result char-capped at `max_tool_result_chars` (default
 `[truncated — showing X of Y chars]`. UTF-8 boundary safe.
 
 **Local engines** (`Engine::tool_result_char_cap` = `Some`, only
-`LocalEngine`): `fit_tool_result` instead — a typed row's `data` line becomes
+`LocalEngine`): `fit_tool_result` instead — a result within
+`min(context_window / 8 × 4 chars, max_tool_result_chars)` (16 384 tokens →
+8 192 chars) stays whole; above it a typed row's `data` line becomes
 `data: <n> bytes in observation <key>` (`Observation::compact_text`), then the
-result, footer included, fits `min(context_window / 8 × 4 chars,
-max_tool_result_chars)` (16 384 tokens → 8 192 chars). `run-agent` applies the
+result, footer included, is cut to fit. `run-agent` applies the
 same fit plus `compact_tool_result` of older rounds for local agents only
 (other engines: results enter as returned there).
 

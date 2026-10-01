@@ -9,7 +9,7 @@
 //! | Auth | `Authorization: Bearer $<api_key_env>` when that env is set (Unsloth `sk-unsloth-…`); none otherwise |
 //! | Network | Direct connection, never via the `[egress]` proxy — the server is on this host, not the internet |
 //! | Config | `[agents.<n>.local] base_url`, `api_key_env` (`config::AgentLocalConfig`) |
-//! | Context fit | One tool result ≤ 1/8 of `limits.context_window` (`tool_result_char_cap`; typed rows compact); a system message repeating the system prompt is sent once |
+//! | Context fit | One tool result ≤ 1/8 of `limits.context_window` (`tool_result_char_cap`; a typed row above it compacts, one that fits arrives whole); a system message repeating the system prompt is sent once |
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;

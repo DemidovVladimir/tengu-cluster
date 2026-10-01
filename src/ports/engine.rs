@@ -65,7 +65,8 @@ pub trait Engine: Send + Sync {
     }
     /// Max chars of one tool result fed back to this engine. `Some` also
     /// swaps a typed row's `data` for its store key
-    /// (`Observation::compact_text`) in both tool loops (`chat/tool_loop.rs`,
+    /// (`Observation::compact_text`) when the row exceeds the cap — a row
+    /// that fits arrives whole — in both tool loops (`chat/tool_loop.rs`,
     /// `run-agent`). `None` = the agent's `limits.max_tool_result_chars`
     /// only. `LocalEngine`: `domain::token::tool_result_char_budget`.
     fn tool_result_char_cap(&self) -> Option<usize> {

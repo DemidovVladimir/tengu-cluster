@@ -415,8 +415,9 @@ These are not preferences. They're load-bearing.
   `limits.context_window` — the 1_000_000 default is wrong for local models
   (load warns) and must equal the served window (Ollama:
   `OLLAMA_CONTEXT_LENGTH`). Local agents get each tool result capped at 1/8
-  of the window and typed rows compacted (`data` → a pointer to the store
-  key; `Engine::tool_result_char_cap`, `Observation::compact_text`);
+  of the window; a typed row above that cap is compacted (`data` → a pointer
+  to the store key), one that fits arrives whole
+  (`Engine::tool_result_char_cap`, `Observation::compact_text`);
   `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
 - **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
   exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
@@ -444,7 +445,10 @@ These are not preferences. They're load-bearing.
   engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
 - **`[[mcp_servers]]` tools are named `{server}__{tool}` (2026-09-23)** — was
   `{server}.{tool}`; model APIs reject `.`. They reach plan-step subagents
-  (both engines), in-process TUI/Telegram agents and webhook agents.
+  (both engines), in-process TUI/Telegram agents, webhook and eval agents. A
+  tool whose schema leaves the engine subset (`tools/schema_lint.rs`) is
+  dropped at discovery with a warn naming server, tool and rule
+  (`mcp_client::linted_tool`, 2026-10-01).
 - **Layering is lint-enforced (2026-09-23)** — `tests/layering_lint.rs` fails
   when `domain` / `ports` / `config` / `application` import an adapter, or
   outbound imports inbound/bootstrap. Need something from an adapter in a use
@@ -506,8 +510,11 @@ These are not preferences. They're load-bearing.
   scopes, `AgentConfig::sandbox` sections, `no_shell_fallback`, `[memory]`,
   shell skills (`skill_packages` + the requested names) — behind
   `SanitizedToolExecutor` (text, observations and errors redacted, on every
-  surface), call id `mcp:<nonce>:<id>`; no config / unknown agent → default
-  `main` + `TENGU_BRIDGE_SCOPES` with a warn. A `run-agent` step's engine
+  surface — vault values, `TENGU_MASTER_PASSWORD` and env vars named
+  `*_API_KEY` `*_SECRET` `*_TOKEN` `*_PASSWORD` `*_PRIVATE_KEY`, `.env` too;
+  never a public on-chain id: `domain::secrets::is_env_secret`), call id
+  `mcp:<nonce>:<id>`; no config / unknown agent → default `main` +
+  `TENGU_BRIDGE_SCOPES` with a warn. A `run-agent` step's engine
   (`engines::build_step_engine`) writes `TENGU_BRIDGE_GRANT_WORKSPACE=1` +
   `TENGU_BRIDGE_SUMMARY_FILE` into the bridge env: the workspace grant, and
   `compress_and_store` served into that file (the step's IPC summary);
