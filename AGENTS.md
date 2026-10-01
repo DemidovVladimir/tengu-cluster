@@ -142,6 +142,16 @@ config, channels) — it is the index into everything below.
     holds the rules for every task and the definition of done. Read BEFORE any xmarket work: `tengu run`, feeds,
     `[risk]` / paper trading, Hyperliquid / Robinhood / news tools, or the
     MCP-bridge parity items.
+12. **`docs/xlab-2026-10-01.md`** — the `xlab` sandbox (operator PRD v0.5: Architect +
+    TypeSafe JEV + deterministic layer + risk), **history first**: the market-data
+    warehouse `<state dir>/market.db` + backfill (HL candles / funding,
+    GeckoTerminal, the HL S3 archive), strategy specs (the Architect's level-2
+    capabilities: data, never code), the pure backtest engine (`domain/backtest/`,
+    time-integrity checks), Jev replayed on history (gate arm + decision cache),
+    tools `market_history` / `backtest`. Read BEFORE touching
+    `domain/{marketdata*,backtest/,canonical.rs}`, `ports/market_data.rs`,
+    `adapters/outbound/{market_data.rs,backfill/,decision_cache.rs,tools/xlab/}`,
+    `application/backtest/`, `config/backtest.rs` or `sandboxes/xlab`.
 
 ---
 
@@ -169,6 +179,7 @@ flow, audit these for staleness **before declaring done**:
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
 | `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, a Solana tool's args, key, TTL, hosts or knobs, or a write tool's send rules (signer, `config/solana.rs`, lease / pending / fence). |
 | `docs/xmarket-tracker-2026-09-29.md` (+ PRD addendum) | If you worked on an xmarket item: tick it (✅ + commit), update § 0 "Where to begin" when the next step changes, and keep the conventions, decisions and PRD addendum current when a rule changes. |
+| `docs/xlab-2026-10-01.md` | If you changed `market.db` / backfill sources, the strategy-spec kinds, the engine's fill / cost / funding / time rules, the Jev gate arm, the run-dir files or the xlab tools. Keep its "as built" rows current. |
 | `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
@@ -274,6 +285,20 @@ These are not preferences. They're load-bearing.
 
 ## Key gotchas (compiled from SESSION_HANDOFF + scars)
 
+- **History first (operator rule 2026-10-01)** — answer trading / strategy
+  questions by backfilling public history and backtesting it (`tengu history
+  backfill`, `tengu backtest`, sandbox `xlab`, `docs/xlab-2026-10-01.md`) — never
+  make the operator wait days for live recording. Live recording only for data
+  with no historical source (e.g. executable xyz weekend books), said so, never a
+  blocking step. HL serves the newest 5 000 bars per interval (1h ≈ 208 days) and
+  funding since listing; its S3 archive (`hyperliquid-archive`, requester pays)
+  has per-minute contexts + L2 books for main-dex perps only (no `xyz:*`); HL keeps
+  no-trade hours as flat bars (`n = 0`, stale price). Engine time integrity: a bar
+  is observable only at its close; `data_asof_ms ≤ decided_at_ms` is asserted and
+  `domain/backtest/checks.rs` proves a future bar changes nothing. Jev on history:
+  the replay loop runs with `history = 0` and every answer is cached by the full
+  sha256 of (model, state, questions) — Jev answers vary call to call, the cache
+  makes reruns identical; pin the Jev build in the gate loop.
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
   the Solana, Hyperliquid and xmarket families — read the list there, don't
@@ -426,7 +451,8 @@ These are not preferences. They're load-bearing.
 - **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
   exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
   `network = "open"`; `xmarket` (M0 stage) and `xmarket-weekend` run `open`
-  with `allow_hosts = ["api.hyperliquid.xyz"]` and must stay switchable to Tor
+  with `allow_hosts = ["api.hyperliquid.xyz"]`, `xlab` with
+  `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, and must stay switchable to Tor
   (every transport through `egress.rs`). `tor-check`, `storage-test` and the
   base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI
@@ -673,7 +699,8 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. Next up (2026-09-30): the
+See `docs/SESSION_HANDOFF.md` for the running list. Next up (2026-10-01): `xlab` — history-first
+research (`docs/xlab-2026-10-01.md` § 12 Next); then the
 `xmarket` sandbox — start at `docs/xmarket-build-plan-2026-09-30.md` (kickoff
 prompt at its end) and `docs/xmarket-tracker-2026-09-29.md` § 0.
 As of 2026-05-14, the
@@ -710,7 +737,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-10-01 (W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-01 (xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames
